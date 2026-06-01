@@ -31,8 +31,8 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
   }
 
   build(): void {
-    const otResource = OpenTelemetrySDKNode.resources.Resource.default().merge(
-      new OpenTelemetrySDKNode.resources.Resource({
+    const otResource = OpenTelemetrySDKNode.resources.defaultResource().merge(
+      OpenTelemetrySDKNode.resources.resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: this.options.serviceName,
       }),
     )

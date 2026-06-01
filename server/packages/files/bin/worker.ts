@@ -7,7 +7,8 @@ import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { DomainEventSubscriberInterface } from '@standardnotes/domain-events'
 import * as dayjs from 'dayjs'
-import * as utc from 'dayjs/plugin/utc'
+import * as utcPlugin from 'dayjs/plugin/utc'
+const utc = (utcPlugin as { default?: dayjs.PluginFunc }).default ?? (utcPlugin as unknown as dayjs.PluginFunc)
 
 const container = new ContainerConfigLoader('worker')
 void container.load().then((container) => {

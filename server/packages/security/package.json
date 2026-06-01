@@ -31,14 +31,14 @@
     "test": "jest --coverage --no-cache --maxWorkers=2"
   },
   "dependencies": {
-    "jsonwebtoken": "^9.0.0",
-    "reflect-metadata": "^0.2.1"
+    "jsonwebtoken": "^9.0.3",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.1",
-    "@types/jsonwebtoken": "^9.0.1",
-    "jest": "^29.5.0",
-    "ts-jest": "^29.1.0",
-    "typescript": "^5.0.4"
+    "@types/jest": "^30.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11",
+    "typescript": "^6.0.3"
   }
 }

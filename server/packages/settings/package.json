@@ -30,10 +30,10 @@
     "lint": "eslint . --ext .ts"
   },
   "devDependencies": {
-    "typescript": "^5.0.4"
+    "typescript": "^6.0.3"
   },
   "dependencies": {
     "@standardnotes/domain-core": "workspace:^",
-    "reflect-metadata": "^0.2.1"
+    "reflect-metadata": "^0.2.2"
   }
 }

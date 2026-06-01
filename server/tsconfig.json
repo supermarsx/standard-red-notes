@@ -8,6 +8,7 @@
     "experimentalDecorators": true,
     "module": "commonjs",
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "noFallthroughCasesInSwitch": true,
     "noImplicitAny": true,
     "noImplicitOverride": true,
@@ -20,6 +21,7 @@
     "strict": true,
     "strictNullChecks": true,
     "target": "es2022",
+    "types": ["node"],
   },
   "exclude": ["**/*.spec.ts", "dist", "test-setup.ts"],
   "references": [

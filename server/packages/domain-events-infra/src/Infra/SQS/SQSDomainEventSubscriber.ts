@@ -31,14 +31,15 @@ export class SQSDomainEventSubscriber implements DomainEventSubscriberInterface 
   }
 
   stop(): void {
-    if (this.consumer && this.consumer.isRunning) {
+    if (this.consumer && this.consumer.status.isRunning) {
       this.logger.info('Stopping SQS consumer...')
       this.consumer.stop()
     }
   }
 
-  async handleMessage(message: Message): Promise<void> {
+  async handleMessage(message: Message): Promise<Message | undefined> {
     await this.domainEventMessageHandler.handleMessage(<string>message.Body)
+    return undefined
   }
 
   handleError(error: Error): void {

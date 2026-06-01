@@ -25,7 +25,8 @@ import * as grpc from '@grpc/grpc-js'
 import { urlencoded, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 import * as dayjs from 'dayjs'
-import * as utc from 'dayjs/plugin/utc'
+import * as utcPlugin from 'dayjs/plugin/utc'
+const utc = (utcPlugin as { default?: dayjs.PluginFunc }).default ?? (utcPlugin as unknown as dayjs.PluginFunc)
 
 import { InversifyExpressServer } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'

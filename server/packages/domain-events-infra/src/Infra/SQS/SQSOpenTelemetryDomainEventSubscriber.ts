@@ -35,7 +35,7 @@ export class SQSOpenTelemetryDomainEventSubscriber implements DomainEventSubscri
   }
 
   stop(): void {
-    if (this.consumer && this.consumer.isRunning) {
+    if (this.consumer && this.consumer.status.isRunning) {
       this.logger.info('Stopping SQS consumer...')
       this.consumer.stop()
     }
@@ -47,13 +47,15 @@ export class SQSOpenTelemetryDomainEventSubscriber implements DomainEventSubscri
     this.currentSpan = tracer.startSpan(this.serviceName, { kind: OpenTelemetryApi.SpanKind.CONSUMER })
   }
 
-  async handleMessage(message: Message): Promise<void> {
+  async handleMessage(message: Message): Promise<Message | undefined> {
     await this.domainEventMessageHandler.handleMessage(<string>message.Body)
 
     if (this.currentSpan) {
       this.currentSpan.end()
       this.currentSpan = undefined
     }
+
+    return undefined
   }
 
   handleError(error: Error): void {

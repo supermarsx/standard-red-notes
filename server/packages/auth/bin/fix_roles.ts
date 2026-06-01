@@ -2,7 +2,8 @@ import 'reflect-metadata'
 
 import { Logger } from 'winston'
 import * as dayjs from 'dayjs'
-import * as utc from 'dayjs/plugin/utc'
+import * as utcPlugin from 'dayjs/plugin/utc'
+const utc = (utcPlugin as { default?: dayjs.PluginFunc }).default ?? (utcPlugin as unknown as dayjs.PluginFunc)
 import { Uuid } from '@standardnotes/domain-core'
 
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
