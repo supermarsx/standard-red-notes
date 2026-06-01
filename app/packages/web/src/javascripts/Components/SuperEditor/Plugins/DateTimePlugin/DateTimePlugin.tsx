@@ -1,5 +1,4 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
 import {
   COMMAND_PRIORITY_EDITOR,
   $createTextNode,
@@ -9,7 +8,7 @@ import {
   $isParagraphNode,
   LexicalNode,
 } from 'lexical'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { INSERT_DATETIME_COMMAND } from '../Commands'
 import { mergeRegister } from '@lexical/utils'
 import { $createHeadingNode } from '@lexical/rich-text'

@@ -1,5 +1,4 @@
-import { FunctionComponent, ReactNode, useRef, useState } from 'react'
-import React from 'react'
+import React, { FunctionComponent, ReactNode, useRef, useState } from 'react'
 import { ArrowDownCheckmarkIcon } from '@standardnotes/icons'
 import { Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import { classNames } from '@standardnotes/snjs'

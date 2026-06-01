@@ -1,5 +1,4 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
 import {
   COMMAND_PRIORITY_EDITOR,
   $createTextNode,
@@ -7,7 +6,7 @@ import {
   $isRangeSelection,
   $createParagraphNode,
 } from 'lexical'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { INSERT_PASSWORD_COMMAND } from '../Commands'
 import { mergeRegister } from '@lexical/utils'
 import { generatePassword } from './Generator'

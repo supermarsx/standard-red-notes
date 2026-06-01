@@ -1,6 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { $createCodeNode } from '@lexical/code'
 import { $createTextNode, $getRoot } from 'lexical'
 import { MarkdownTransformers } from '../../MarkdownTransformers'

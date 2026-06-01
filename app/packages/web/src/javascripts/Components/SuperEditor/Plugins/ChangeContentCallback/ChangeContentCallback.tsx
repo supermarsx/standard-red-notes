@@ -1,6 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 
 export type ChangeEditorFunction = (jsonContent: string) => void
 type ChangeEditorFunctionProvider = (changeEditorFunction: ChangeEditorFunction) => void

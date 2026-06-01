@@ -1,6 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { $getSelection, COMMAND_PRIORITY_NORMAL, PASTE_COMMAND } from 'lexical'
 import { $insertDataTransferForRichText } from '@lexical/clipboard'
 

@@ -1,6 +1,5 @@
 import { observer } from 'mobx-react-lite'
-import React from 'react'
-import { startTransition, useCallback, useEffect, useState } from 'react'
+import React, { startTransition, useCallback, useEffect, useState } from 'react'
 import { useKeyboardService } from '../KeyboardServiceProvider'
 import { PlatformedKeyboardShortcut, TOGGLE_COMMAND_PALETTE } from '@standardnotes/ui-services'
 import {

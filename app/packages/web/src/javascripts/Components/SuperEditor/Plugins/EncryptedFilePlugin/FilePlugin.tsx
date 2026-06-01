@@ -1,8 +1,7 @@
 import { INSERT_FILE_COMMAND, UPLOAD_AND_INSERT_FILE_COMMAND } from '../Commands'
-import React from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { FileNode } from './Nodes/FileNode'
 import {
   $createParagraphNode,

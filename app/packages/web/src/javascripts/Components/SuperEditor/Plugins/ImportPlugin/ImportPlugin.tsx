@@ -1,6 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import React from 'react'
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { $createParagraphNode, $createRangeSelection, LexicalEditor } from 'lexical'
 import { handleEditorChange } from '../../Utils'
 import { SuperNotePreviewCharLimit } from '../../SuperEditor'
