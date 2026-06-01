@@ -1,0 +1,182 @@
+$content-horizontal-padding: 16px;
+
+#navigation {
+  user-select: none;
+  -moz-user-select: none;
+  -khtml-user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  flex-direction: column;
+
+  @media screen and (min-width: 768px) {
+    border-right: 1px solid var(--items-column-border-right-color);
+  }
+
+  &,
+  #navigation-content {
+    background-color: var(--navigation-column-background-color);
+  }
+
+  .section-title-bar {
+    color: var(--navigation-section-title-color);
+    padding-top: 0.8125rem;
+    padding-bottom: 8px;
+    padding-left: $content-horizontal-padding;
+    padding-right: $content-horizontal-padding;
+    font-size: 0.75rem;
+  }
+
+  .root-drop {
+    width: '100%';
+    padding: 12px;
+    opacity: 0;
+    transition: opacity 0.3s ease-in;
+
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+
+    &.active {
+      opacity: 1;
+    }
+  }
+
+  .tag {
+    border: 0;
+    background-color: transparent;
+
+    &:focus:not(.selected) {
+      background-color: var(--navigation-item-selected-background-color);
+    }
+  }
+
+  .tag,
+  .root-drop {
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: height 0.1s ease-in-out;
+    width: 100%;
+
+    &:focus {
+      border: 0;
+      outline: 0;
+      box-shadow: none;
+    }
+
+    > .tag-info {
+      align-items: center;
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      min-height: 35px;
+
+      @media screen and (min-width: 768px) {
+        min-height: 31px;
+      }
+
+      @media screen and (min-width: 1024px) {
+        min-height: 29.5px;
+      }
+
+      .sn-icon {
+        display: block;
+        margin: 0 auto;
+      }
+
+      > .tag-icon {
+        display: flex;
+        align-items: center;
+        height: 100%;
+      }
+
+      > .title {
+        background-color: transparent;
+        font-weight: 600;
+        color: var(--navigation-item-text-color);
+        -webkit-text-fill-color: var(--navigation-item-text-color);
+        border: none;
+        cursor: pointer;
+        text-overflow: ellipsis;
+        flex-grow: 1;
+
+        // Required for Safari to avoid highlighting when dragging panel resizers
+        // Make sure to undo if it's selected (for editing)
+        user-select: none;
+        -moz-user-select: none;
+        -khtml-user-select: none;
+        -webkit-user-select: none;
+
+        pointer-events: none;
+
+        &.editing {
+          pointer-events: auto;
+          user-select: text;
+          -moz-user-select: text;
+          -khtml-user-select: text;
+          -webkit-user-select: text;
+        }
+
+        &:focus {
+          outline: 0;
+          box-shadow: 0;
+        }
+      }
+
+      .count {
+        padding-right: 4px;
+        padding-top: 1px;
+        font-weight: 400;
+        color: var(--navigation-item-count-color);
+        min-width: 15px;
+        text-align: right;
+      }
+    }
+
+    .meta {
+      > .menu {
+        font-size: 0.6875rem;
+
+        > .item {
+          margin-right: 4px;
+        }
+
+        opacity: 0.5;
+        font-weight: bold;
+        clear: both;
+        margin-bottom: 2px;
+        padding-bottom: 5px;
+
+        &:hover {
+          opacity: 1;
+        }
+      }
+    }
+
+    &.selected {
+      > .tag-info {
+        .title {
+          cursor: text;
+        }
+
+        .count {
+          --navigation-item-count-color: var(--sn-stylekit-foreground-color);
+          font-weight: 700;
+        }
+      }
+    }
+
+    @media screen and (hover: hover) {
+      &:hover:not(.selected) {
+        background-color: var(--navigation-item-selected-background-color);
+      }
+    }
+
+    &:active,
+    &.selected,
+    &.is-drag-over {
+      background-color: var(--navigation-item-selected-background-color);
+    }
+  }
+}

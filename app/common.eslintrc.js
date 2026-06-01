@@ -1,0 +1,68 @@
+// Recommended: https://github.com/typescript-eslint/typescript-eslint/blob/main/packages/eslint-plugin/src/configs/recommended-type-checked.ts
+
+module.exports = {
+  root: true,
+  parser: '@typescript-eslint/parser',
+  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended', 'prettier'],
+  parserOptions: {
+    project: './tsconfig.json',
+    tsconfigRootDir: __dirname,
+  },
+  plugins: ['@typescript-eslint', 'prettier'],
+  ignorePatterns: ['**/*.spec.ts'],
+  rules: {
+    'prettier/prettier': [
+      'error',
+      {
+        singleQuote: true,
+        trailingComma: 'all',
+        printWidth: 120,
+        semi: false,
+      },
+      {
+        usePrettierrc: false,
+      },
+    ],
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-for-in-array': 'error',
+    '@typescript-eslint/no-var-requires': 'error',
+    '@typescript-eslint/prefer-as-const': 'error',
+    '@typescript-eslint/no-array-constructor': 'error',
+    '@typescript-eslint/no-duplicate-enum-values': 'error',
+    '@typescript-eslint/restrict-template-expressions': 'error',
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      {
+        vars: 'all',
+        args: 'after-used',
+        ignoreRestSiblings: false,
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+      },
+    ],
+    '@typescript-eslint/no-floating-promises': ['error'],
+    'block-scoped-var': 'error',
+    'comma-dangle': ['error', 'always-multiline'],
+    'eol-last': 'error',
+    'no-confusing-arrow': 'error',
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'no-constructor-return': 'error',
+    'no-duplicate-imports': 'error',
+    'no-inline-comments': 'warn',
+    'no-invalid-this': 'error',
+    'no-multiple-empty-lines': ['error', { max: 1, maxEOF: 0 }],
+    'no-return-assign': 'warn',
+    'no-self-compare': 'error',
+    'no-throw-literal': 0,
+    'no-trailing-spaces': 'error',
+    'no-unmodified-loop-condition': 'error',
+    'no-unused-private-class-members': 'error',
+    'object-curly-spacing': ['error', 'always'],
+    'sort-imports': 'off',
+    'standard/no-callback-literal': 0, // Disable this as we have too many callbacks relying on literals
+    camelcase: 'off',
+    curly: ['error', 'all'],
+    quotes: ['error', 'single', { avoidEscape: true }],
+    semi: ['error', 'never'],
+  },
+}

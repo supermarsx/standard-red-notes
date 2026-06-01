@@ -1,0 +1,21 @@
+name: Auth Server
+
+concurrency:
+  group: auth
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - '*standardnotes/auth-server*'
+  workflow_dispatch:
+
+jobs:
+  call_server_application_workflow:
+    name: Server Application
+    uses: standardnotes/server/.github/workflows/common-server-application.yml@main
+    with:
+      service_name: auth
+      workspace_name: "@standardnotes/auth-server"
+      package_path: packages/auth
+    secrets: inherit

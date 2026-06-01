@@ -1,0 +1,26 @@
+{
+  "name": "@standardnotes/toast",
+  "version": "1.5.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "scripts": {
+    "start": "tsc -p tsconfig.json --watch",
+    "tsc": "tsc --project tsconfig.json",
+    "lint": "eslint ./src"
+  },
+  "dependencies": {
+    "@nanostores/react": "^0.7.1",
+    "@standardnotes/icons": "workspace:*",
+    "nanoid": "^4.0.0",
+    "nanostores": "^0.9.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.39",
+    "@types/react-dom": "^18.2.17",
+    "eslint": "*",
+    "prettier": "*",
+    "typescript": "*"
+  }
+}

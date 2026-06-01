@@ -1,0 +1,78 @@
+{
+  "compilerOptions": {
+    "alwaysStrict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "incremental": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitAny": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "removeComments": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "target": "es2022",
+  },
+  "exclude": ["**/*.spec.ts", "dist", "test-setup.ts"],
+  "references": [
+    {
+      "path": "./packages/analytics"
+    },
+    {
+      "path": "./packages/api-gateway"
+    },
+    {
+      "path": "./packages/auth"
+    },
+    {
+      "path": "./packages/common"
+    },
+    {
+      "path": "./packages/domain-core"
+    },
+    {
+      "path": "./packages/domain-events"
+    },
+    {
+      "path": "./packages/domain-events-infra"
+    },
+    {
+      "path": "./packages/files"
+    },
+    {
+      "path": "./packages/grpc"
+    },
+    {
+      "path": "./packages/predicates"
+    },
+    {
+      "path": "./packages/revisions"
+    },
+    {
+      "path": "./packages/scheduler"
+    },
+    {
+      "path": "./packages/security"
+    },
+    {
+      "path": "./packages/settings"
+    },
+    {
+      "path": "./packages/syncing-server"
+    },
+    {
+      "path": "./packages/time"
+    },
+    {
+      "path": "./packages/websockets"
+    }
+  ]
+}

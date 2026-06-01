@@ -1,0 +1,21 @@
+#footer-bar {
+  position: relative;
+}
+
+#account-panel,
+#sync-resolution-menu {
+  width: 400px;
+}
+
+.sk-panel {
+  cursor: default;
+}
+
+a.disabled {
+  pointer-events: none;
+}
+
+#footer-lock-icon {
+  margin-left: 5px;
+  padding-left: 5px;
+}

@@ -1,0 +1,121 @@
+:root {
+  --sn-desktop-titlebar-height: 35px;
+  --sn-desktop-titlebar-icon-font-size: 16px;
+}
+
+/* To offset frameless window nav buttons on Mac */
+.mac-desktop #editor-column,
+.mac-desktop #items-column {
+  transition: 0.15s padding ease;
+}
+
+@media screen and (max-width: 768px) {
+  .mac-desktop .app-pane {
+    padding-top: 25px;
+  }
+  .mac-desktop [data-dialog] [data-mobile-modal-header] {
+    padding-top: 25px;
+  }
+}
+
+@media screen and (min-width: 768px) {
+  .mac-desktop .app-pane-1 {
+    padding-top: 25px;
+  }
+}
+
+#desktop-title-bar {
+  -webkit-app-region: drag;
+  padding: 0;
+  margin: 0;
+  height: var(--sn-desktop-titlebar-height);
+  line-height: var(--sn-desktop-titlebar-height);
+  vertical-align: middle;
+  background: var(--sn-stylekit-contrast-background-color) !important;
+  border-bottom: 1px solid var(--sn-stylekit-contrast-border-color);
+  display: flex;
+  justify-content: space-between;
+  z-index: 99999;
+  width: 100%;
+  top: 0;
+}
+
+#desktop-title-bar button {
+  -webkit-app-region: no-drag;
+  margin: 0;
+  background: none;
+  border: none;
+  padding: 0 10px;
+  color: var(--sn-stylekit-contrast-foreground-color);
+  vertical-align: middle;
+  height: 100%;
+}
+
+#desktop-title-bar button svg {
+  max-width: var(--sn-desktop-titlebar-icon-font-size);
+}
+
+#desktop-title-bar button:hover svg,
+#desktop-title-bar button:focus svg {
+  color: var(--sn-stylekit-info-color);
+}
+#desktop-title-bar button:focus {
+  box-shadow: none;
+}
+
+#desktop-title-bar .title-bar-left-buttons,
+#desktop-title-bar .title-bar-right-buttons {
+  font-size: 0;
+}
+
+/* https://github.com/electron/electron/issues/37789 */
+.mac-desktop #navigation,
+.mac-desktop #items-column,
+.mac-desktop #editor-column,
+.mac-desktop #items-title-bar,
+.mac-desktop #editor-title-bar,
+.mac-desktop [data-preferences-header] {
+  -webkit-app-region: drag;
+}
+
+.mac-desktop #items-column > *:not(#items-title-bar),
+.mac-desktop #editor-column > *:not(#editor-title-bar) {
+  -webkit-app-region: no-drag;
+}
+
+.mac-desktop.focus-mode #editor-title-bar {
+  -webkit-app-region: no-drag;
+}
+
+.mac-desktop [data-dialog-portal]:has([data-dialog])::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 32px;
+  -webkit-app-region: drag;
+}
+
+.mac-desktop [data-dialog-portal]:has([data-preferences-header])::after {
+  height: 0;
+}
+
+button,
+input,
+#navigation #navigation-content,
+.panel-resizer,
+panel-resizer {
+  -webkit-app-region: no-drag;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+#app-group-root {
+  min-height: 0;
+}

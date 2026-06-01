@@ -1,0 +1,42 @@
+{
+  "name": "@standardnotes/services",
+  "version": "1.72.3",
+  "engines": {
+    "node": ">=16.0.0 <17.0.0"
+  },
+  "description": "Services for Standard Notes SNJS library",
+  "main": "./src/index.ts",
+  "author": "Standard Notes",
+  "private": true,
+  "license": "AGPL-3.0",
+  "scripts": {
+    "tsc": "tsc --project tsconfig.json",
+    "lint": "eslint src --ext .ts && yarn tsc",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@standardnotes/api": "workspace:^",
+    "@standardnotes/common": "^1.50.0",
+    "@standardnotes/domain-core": "^1.40.0",
+    "@standardnotes/encryption": "workspace:^",
+    "@standardnotes/features": "workspace:^",
+    "@standardnotes/files": "workspace:^",
+    "@standardnotes/models": "workspace:^",
+    "@standardnotes/responses": "workspace:*",
+    "@standardnotes/sncrypto-common": "workspace:^",
+    "@standardnotes/utils": "workspace:*",
+    "reflect-metadata": "^0.1.13"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.2.3",
+    "@types/node": "^20.2.5",
+    "@typescript-eslint/eslint-plugin": "*",
+    "@typescript-eslint/parser": "*",
+    "eslint": "*",
+    "eslint-plugin-prettier": "*",
+    "jest": "^29.3.1",
+    "ts-jest": "^29.0.3",
+    "typescript": "*"
+  }
+}

@@ -1,0 +1,278 @@
+@import 'lists';
+
+.Lexical__ltr {
+  text-align: left;
+}
+.Lexical__rtl {
+  text-align: right;
+}
+.Lexical__code {
+  white-space: pre;
+}
+.Lexical__paragraph {
+  margin: 0;
+  position: relative;
+}
+.Lexical__quote {
+  margin: 0;
+  margin-left: 20px;
+  margin-bottom: 10px;
+  color: var(--sn-stylekit-passive-color-1);
+  border-left-color: var(--sn-stylekit-passive-color-1);
+  border-left-width: 4px;
+  border-left-style: solid;
+  padding-left: 16px;
+
+  &.Lexical__rtl {
+    margin-left: 0;
+    margin-right: 20px;
+    border-left-color: transparent;
+    border-right-color: var(--sn-stylekit-passive-color-1);
+    border-right-width: 4px;
+    border-right-style: solid;
+    padding-right: 16px;
+  }
+}
+.Lexical__h1 {
+  font-size: 1.625rem;
+  color: var(--sn-stylekit-editor-foreground-color);
+  font-weight: 700;
+  margin: 0;
+}
+.Lexical__h2 {
+  font-size: 1.375rem;
+  color: var(--sn-stylekit-editor-foreground-color);
+  font-weight: 700;
+  margin: 0;
+}
+.Lexical__h3 {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  margin: 0;
+}
+.Lexical__textBold {
+  font-weight: bold;
+}
+.Lexical__textItalic {
+  font-style: italic;
+}
+.Lexical__textUnderline {
+  text-decoration: underline;
+}
+.Lexical__textStrikethrough {
+  text-decoration: line-through;
+}
+.Lexical__textUnderlineStrikethrough {
+  text-decoration: underline line-through;
+}
+.Lexical__textSubscript {
+  font-size: 0.8em;
+  vertical-align: sub !important;
+}
+.Lexical__textSuperscript {
+  font-size: 0.8em;
+  vertical-align: super;
+}
+.Lexical__textCode {
+  background-color: var(--sn-stylekit-secondary-background-color);
+  color: var(--sn-stylekit-info-color);
+  padding: 5px;
+  border-radius: 5px;
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 85%;
+}
+.Lexical__hashtag {
+  background-color: rgba(88, 144, 255, 0.15);
+  border-bottom: 1px solid rgba(88, 144, 255, 0.3);
+}
+.Lexical__link {
+  color: var(--sn-stylekit-info-color);
+  text-decoration: none;
+}
+.Lexical__link:hover {
+  text-decoration: underline;
+}
+.Lexical__code {
+  background-color: var(--sn-stylekit-contrast-background-color);
+  font-family: var(--sn-stylekit-monospace-font), monospace;
+  display: block;
+  padding: 1.25rem 1.35rem;
+  margin: 0.5rem 0;
+  tab-size: 2;
+  overflow-x: auto;
+  position: relative;
+  border-radius: 0.25rem;
+
+  .Collapsible__container & {
+    background-color: var(--sn-stylekit-background-color);
+    border: 1px solid var(--sn-stylekit-contrast-border-color);
+  }
+}
+.Lexical__table {
+  border-collapse: collapse;
+  border-spacing: 0;
+  max-width: 100%;
+  overflow-y: scroll;
+  table-layout: fixed;
+  width: calc(100% - 25px);
+  margin: 0.5rem 0;
+  color: var(--sn-stylekit-contrast-foreground-color);
+}
+.Lexical__tableSelection *::selection {
+  background-color: transparent !important;
+}
+.Lexical__tableSelected {
+  outline: 2px solid rgb(60, 132, 244);
+}
+.Lexical__tableCell {
+  border: 1px solid var(--sn-stylekit-border-color);
+  min-width: 75px;
+  vertical-align: top;
+  text-align: start;
+  padding: 6px 8px;
+  position: relative;
+  cursor: default;
+  outline: none;
+}
+.Lexical__tableCellSortedIndicator {
+  display: block;
+  opacity: 0.5;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background-color: #999;
+}
+.Lexical__tableCellResizer {
+  position: absolute;
+  right: -4px;
+  height: 100%;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 10;
+  top: 0;
+}
+.Lexical__tableCellHeader {
+  background-color: var(--sn-stylekit-contrast-background-color);
+  border-color: var(--sn-stylekit-contrast-border-color);
+  text-align: start;
+}
+.Lexical__tableCellSelected {
+  background-color: #c9dbf0;
+}
+.Lexical__tableCellPrimarySelected {
+  border: 2px solid rgb(60, 132, 244);
+  display: block;
+  height: calc(100% - 2px);
+  position: absolute;
+  width: calc(100% - 2px);
+  left: -1px;
+  top: -1px;
+  z-index: 2;
+}
+.Lexical__tableCellEditing {
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.4);
+  border-radius: 3px;
+}
+.Lexical__tableCellResizeRuler {
+  display: block;
+  position: absolute;
+  width: 1px;
+  background-color: rgb(60, 132, 244);
+  height: 100%;
+  top: 0;
+}
+.Lexical__tableCellActionButtonContainer {
+  display: block;
+  right: 5px;
+  top: 6px;
+  position: absolute;
+  z-index: 4;
+  width: 20px;
+  height: 20px;
+}
+.Lexical__tableCellActionButton {
+  background-color: #eee;
+  display: block;
+  border: 0;
+  border-radius: 20px;
+  width: 20px;
+  height: 20px;
+  color: #222;
+  cursor: pointer;
+}
+.Lexical__tableCellActionButton:hover {
+  background-color: #ddd;
+}
+.Lexical__characterLimit {
+  display: inline;
+  background-color: #ffbbbb !important;
+}
+.Lexical__tokenComment {
+  color: slategray;
+}
+.Lexical__tokenPunctuation {
+  color: #999;
+}
+.Lexical__tokenProperty {
+  color: #905;
+}
+.Lexical__tokenSelector {
+  color: #690;
+}
+.Lexical__tokenOperator {
+  color: #9a6e3a;
+}
+.Lexical__tokenAttr {
+  color: #07a;
+}
+.Lexical__tokenVariable {
+  color: #e90;
+}
+.Lexical__tokenFunction {
+  color: #dd4a68;
+}
+.Lexical__mark {
+  background: rgba(255, 212, 0, 0.14);
+  border-bottom: 2px solid rgba(255, 212, 0, 0.3);
+  padding-bottom: 2px;
+}
+.Lexical__markOverlap {
+  background: rgba(255, 212, 0, 0.3);
+  border-bottom: 2px solid rgba(255, 212, 0, 0.7);
+}
+.Lexical__mark.selected {
+  background: rgba(255, 212, 0, 0.5);
+  border-bottom: 2px solid rgba(255, 212, 0, 1);
+}
+.Lexical__markOverlap.selected {
+  background: rgba(255, 212, 0, 0.7);
+  border-bottom: 2px solid rgba(255, 212, 0, 0.7);
+}
+.Lexical__embedBlock {
+  user-select: none;
+}
+.embedBlockFocused {
+  outline: 2px solid var(--sn-stylekit-info-color);
+}
+
+.Lexical__blockCursor {
+  display: block;
+  pointer-events: none;
+  position: absolute;
+}
+.Lexical__blockCursor:after {
+  content: '';
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--sn-stylekit-editor-foreground-color);
+  animation: CursorBlink 1.1s steps(2, start) infinite;
+}
+@keyframes CursorBlink {
+  to {
+    visibility: hidden;
+  }
+}

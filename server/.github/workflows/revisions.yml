@@ -1,0 +1,21 @@
+name: Revisions Server
+
+concurrency:
+  group: revisions_server
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - '*standardnotes/revisions-server*'
+  workflow_dispatch:
+
+jobs:
+  call_server_application_workflow:
+    name: Server Application
+    uses: standardnotes/server/.github/workflows/common-server-application.yml@main
+    with:
+      service_name: revisions
+      workspace_name: "@standardnotes/revisions-server"
+      package_path: packages/revisions
+    secrets: inherit

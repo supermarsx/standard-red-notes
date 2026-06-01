@@ -1,0 +1,33 @@
+name: E2E Test Suite
+
+run-name: E2E ${{ inputs.suite }} Test Suite against ${{ inputs.ref_name }} by ${{ inputs.author }}
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+    inputs:
+      snjs_image_tag:
+        type: string
+        default: latest
+        description: The Docker image tag used for SNJS container
+      suite:
+        type: string
+        default: all
+        description: The test suite to run
+      author:
+        type: string
+        default: unknown
+        description: The author that triggered the workflow
+      ref_name:
+        type: string
+        default: unknown
+        description: The ref name from which the workflow was triggered
+
+jobs:
+  e2e:
+    name: E2E
+    uses: standardnotes/server/.github/workflows/common-e2e.yml@main
+    with:
+      snjs_image_tag: ${{ inputs.snjs_image_tag || 'latest' }}
+      suite: ${{ inputs.suite || 'all' }}

@@ -1,0 +1,22 @@
+name: Scheduler Server
+
+concurrency:
+  group: scheduler
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - '*standardnotes/scheduler-server*'
+  workflow_dispatch:
+
+jobs:
+  call_server_application_workflow:
+    name: Server Application
+    uses: standardnotes/server/.github/workflows/common-server-application.yml@main
+    with:
+      service_name: scheduler
+      workspace_name: "@standardnotes/scheduler-server"
+      deploy_web: false
+      package_path: packages/scheduler
+    secrets: inherit

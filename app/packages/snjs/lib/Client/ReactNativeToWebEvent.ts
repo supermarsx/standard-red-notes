@@ -1,0 +1,17 @@
+export enum ReactNativeToWebEvent {
+  EnteringBackground = 'EnteringBackground',
+  ResumingFromBackground = 'ResumingFromBackground',
+  GainingFocus = 'GainingFocus',
+  LosingFocus = 'LosingFocus',
+  AndroidBackButtonPressed = 'AndroidBackButtonPressed',
+  ColorSchemeChanged = 'ColorSchemeChanged',
+  KeyboardSizeChanged = 'KeyboardSizeChanged',
+  KeyboardWillShow = 'KeyboardWillShow',
+  KeyboardWillHide = 'KeyboardWillHide',
+  KeyboardDidShow = 'KeyboardDidShow',
+  KeyboardDidHide = 'KeyboardDidHide',
+  ReceivedFile = 'ReceivedFile',
+  ReceivedLink = 'ReceivedLink',
+  ReceivedText = 'ReceivedText',
+  OpenFilePreview = 'OpenFilePreview',
+}

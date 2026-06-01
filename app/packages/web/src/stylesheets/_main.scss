@@ -1,0 +1,194 @@
+:root {
+  --z-index-editor-content: 10;
+  --z-index-editor-title-bar: 100;
+  --z-index-resizer-overlay: 1000;
+  --z-index-component-view: 1000;
+  --z-index-panel-resizer: 1001;
+  --z-index-tooltip: 2000;
+  --z-index-footer-bar: 2000;
+  --z-index-footer-bar-item: 2000;
+  --z-index-footer-bar-item-panel: 2000;
+  --z-index-dropdown-menu: 2500;
+  --z-index-preferences: 3000;
+  --z-index-purchase-flow: 4000;
+  --z-index-lock-screen: 10000;
+  --z-index-modal: 10000;
+  --z-index-toast: 11000;
+
+  --sn-stylekit-base-font-size: 0.813rem;
+  --sn-stylekit-simplified-chinese-font: 'Microsoft Yahei', '微软雅黑体';
+  --sn-stylekit-monospace-font: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, 'Ubuntu Mono', 'Courier New',
+    monospace;
+  --sn-stylekit-sans-serif-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', var(--sn-stylekit-simplified-chinese-font), sans-serif;
+  --sn-stylekit-editor-font-family: var(--sn-stylekit-sans-serif-font);
+
+  --reach-checkbox: 1;
+
+  --safe-area-inset-top: env(safe-area-inset-top, 0);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0);
+  --safe-area-inset-left: env(safe-area-inset-left, 0);
+  --safe-area-inset-right: env(safe-area-inset-right, 0);
+
+  --sn-stylekit-font-size-editor: 0.9375rem;
+
+  @media screen and (max-width: 768px) {
+    --sn-stylekit-font-size-editor: 1rem;
+  }
+}
+
+html {
+  font-size: 100%;
+}
+
+body {
+  font-size: var(--sn-stylekit-base-font-size);
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-foreground-color);
+}
+
+html,
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans',
+    'Droid Sans', 'Helvetica Neue', sans-serif;
+  -moz-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
+  line-height: normal;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.uppercase {
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: var(--sn-stylekit-font-size-h1);
+}
+
+h2 {
+  font-size: var(--sn-stylekit-font-size-h2);
+}
+
+h3 {
+  font-size: var(--sn-stylekit-font-size-h3);
+}
+
+input,
+button,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: normal;
+}
+
+a {
+  text-decoration: none;
+
+  &.no-decoration {
+    color: inherit;
+  }
+
+  &:hover {
+    text-decoration: underline;
+
+    &.no-decoration {
+      text-decoration: none;
+    }
+  }
+}
+
+::selection {
+  background: var(--text-selection-background-color) !important;
+  color: var(--text-selection-color);
+}
+
+::-moz-selection {
+  background: var(--text-selection-background-color) !important;
+  color: var(--text-selection-color);
+}
+
+p {
+  color: var(--sn-stylekit-paragraph-text-color);
+  margin: 0;
+}
+
+html,
+body,
+.main-ui-view {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+
+  display: block;
+
+  @media screen and (min-width: 768px) {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.main-ui-view {
+  position: relative;
+  overflow: auto;
+  background-color: var(--editor-header-bar-background-color);
+}
+
+#resizer-overlay {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  z-index: var(--z-index-resizer-overlay);
+  opacity: 0;
+}
+
+.app {
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  vertical-align: top;
+  width: 100%;
+
+  .section {
+    overflow: hidden;
+
+    .section-title-bar {
+      .add-button {
+        font-size: 0.75rem;
+      }
+
+      .section-title-bar-header {
+        display: flex;
+        justify-content: space-between;
+        // This was causing problems with tags + button cutting off on right when the panel is a certain size
+        // overflow: hidden;
+
+        > .title {
+          white-space: nowrap;
+          text-overflow: ellipsis;
+          width: 80%;
+          overflow: hidden;
+        }
+      }
+    }
+  }
+}
+
+.icon {
+  margin-right: 4px;
+}
+
+input,
+textarea,
+button,
+select,
+label,
+a {
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}

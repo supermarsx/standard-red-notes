@@ -1,0 +1,55 @@
+{
+  "name": "@standardnotes/scheduler-server",
+  "version": "1.27.24",
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
+  },
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:standardnotes/server.git",
+    "directory": "packages/scheduler"
+  },
+  "description": "Scheduler Server",
+  "main": "dist/src/index.js",
+  "typings": "dist/src/index.d.ts",
+  "author": "Karol Sójko <karol@standardnotes.com>",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "jest --coverage --no-cache --config=./jest.config.js --maxWorkers=2",
+    "worker": "yarn node dist/bin/worker.js",
+    "verify:jobs": "yarn node dist/bin/verify.js",
+    "setup:env": "cp .env.sample .env",
+    "typeorm": "typeorm-ts-node-commonjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sns": "^3.484.0",
+    "@aws-sdk/client-sqs": "^3.484.0",
+    "@standardnotes/common": "workspace:^",
+    "@standardnotes/domain-core": "workspace:^",
+    "@standardnotes/domain-events": "workspace:*",
+    "@standardnotes/domain-events-infra": "workspace:*",
+    "@standardnotes/predicates": "workspace:*",
+    "@standardnotes/time": "workspace:*",
+    "dayjs": "^1.11.6",
+    "dotenv": "^16.0.1",
+    "inversify": "^6.0.1",
+    "ioredis": "^5.2.4",
+    "mysql2": "^3.9.7",
+    "reflect-metadata": "^0.2.1",
+    "typeorm": "^0.3.26",
+    "winston": "^3.8.1"
+  },
+  "devDependencies": {
+    "@types/ioredis": "^5.0.0",
+    "@types/jest": "^29.5.1",
+    "@types/node": "^20.5.7",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
+  }
+}

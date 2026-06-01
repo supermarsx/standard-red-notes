@@ -1,0 +1,31 @@
+{
+  "name": "@standardnotes/releases",
+  "version": "1.4.894",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/standardnotes/app",
+    "directory": "packages/releases"
+  },
+  "license": "AGPL-3.0",
+  "main": "dist/releases.json",
+  "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Standard Notes.",
+  "description": "Standard Notes client release versions",
+  "engines": {
+    "node": ">=12.19.0 <17.0.0"
+  },
+  "scripts": {
+    "build": "yarn tsc && node src/build-json.mjs",
+    "version": "yarn build"
+  },
+  "devDependencies": {
+    "@standardnotes/desktop": "workspace:*",
+    "@standardnotes/mobile": "workspace:*",
+    "@standardnotes/web": "workspace:*",
+    "@types/node": "*",
+    "typescript": "*"
+  }
+}

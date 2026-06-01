@@ -1,0 +1,233 @@
+@use 'sass:math';
+
+.sn-dropdown-popover {
+  z-index: 3001;
+  max-height: 40%;
+  overflow: auto;
+
+  &[data-reach-listbox-popover] {
+    background: var(--sn-stylekit-background-color);
+
+    &:focus-within {
+      outline: none;
+      box-shadow: none;
+      border: 1px solid var(--sn-stylekit-border-color);
+    }
+  }
+}
+
+.accordion-contents-container {
+  transition: all 0.23s ease-out;
+  transform-origin: top;
+  transform: scaleY(0);
+  height: 0;
+
+  &[data-is-expanded='true'] {
+    height: auto;
+    transform-origin: top;
+    transform: none;
+  }
+}
+
+.sn-component .sk-app-bar .sk-app-bar-item {
+  justify-content: flex-start;
+}
+
+.sn-icon-button {
+  &:focus {
+    border-color: transparent !important;
+  }
+
+  &.toggled {
+    background-color: var(--sn-stylekit-info-color) !important;
+    color: var(--sn-stylekit-info-contrast-color) !important;
+    border-color: transparent !important;
+
+    &:focus {
+      background-color: var(--sn-stylekit-info-color) !important;
+      border: none;
+    }
+
+    &:hover {
+      background-color: var(--sn-stylekit-contrast-background-color) !important;
+      color: var(--sn-stylekit-info-color) !important;
+      border-color: var(--sn-stylekit-info-color) !important;
+    }
+
+    &:focus:hover {
+      background-color: var(--sn-stylekit-contrast-background-color) !important;
+    }
+  }
+}
+
+.sn-button {
+  &.normal-focus-brightness {
+    &:hover,
+    &:focus {
+      filter: brightness(100%);
+    }
+  }
+}
+
+.break-word {
+  word-break: break-word;
+}
+
+.shadow-overlay-light {
+  box-shadow: 0px 4px 24px 0px rgba(0, 0, 0, 0.05);
+}
+
+.appearance-none {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sn-component .progress-bar {
+  border-radius: 0.5rem;
+  background-color: var(--sn-stylekit-contrast-background-color);
+  border: 0;
+
+  &::-webkit-progress-bar {
+    background-color: var(--sn-stylekit-contrast-background-color);
+    border-radius: 0.5rem;
+  }
+
+  &::-webkit-progress-value {
+    background-color: var(--sn-stylekit-info-color);
+    border-radius: 0.5rem;
+  }
+
+  &::-moz-progress-bar {
+    background-color: var(--sn-stylekit-info-color);
+    border-radius: 0.5rem;
+  }
+}
+
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@mixin DimmedBackground($color, $opacity) {
+  position: relative;
+  z-index: 1;
+
+  &::after {
+    content: '';
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    background-color: $color;
+    opacity: $opacity;
+    z-index: -1;
+    pointer-events: none;
+  }
+}
+
+.bg-warning-faded {
+  @include DimmedBackground(var(--sn-stylekit-warning-color), 0.08);
+}
+
+.bg-danger-faded {
+  @include DimmedBackground(var(--sn-stylekit-danger-color), 0.08);
+}
+
+.bg-info-faded {
+  @include DimmedBackground(var(--sn-stylekit-info-color), 0.08);
+}
+
+svg.sk-circular-progress {
+  $pi: 3.14159265358979;
+
+  $circle-size: 18px;
+  $stroke-width: $circle-size * math.div(0.1, 100) * 100 + 1;
+  $radius: math.div($circle-size - $stroke-width, 2);
+  $circumference: ($radius * $pi * 2);
+
+  height: $circle-size;
+  width: $circle-size;
+
+  circle.background {
+    cx: math.div($circle-size, 2);
+    cy: math.div($circle-size, 2);
+    r: $radius;
+    fill: none;
+    stroke: var(--sn-stylekit-contrast-border-color);
+    stroke-width: $stroke-width;
+  }
+
+  circle.progress {
+    cx: math.div($circle-size, 2);
+    cy: math.div($circle-size, 2);
+    r: $radius;
+    fill: none;
+    stroke: var(--sn-stylekit-info-color);
+    stroke-linecap: round;
+    stroke-width: $stroke-width;
+    transition: all 0.5s;
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+
+    @mixin set-progress($progress) {
+      $dash: math.div($progress * $circumference, 100);
+      stroke-dasharray: $dash $circumference - $dash;
+    }
+
+    &.p-0 {
+      @include set-progress(0);
+    }
+
+    &.p-10 {
+      @include set-progress(10);
+    }
+
+    &.p-20 {
+      @include set-progress(20);
+    }
+
+    &.p-30 {
+      @include set-progress(30);
+    }
+
+    &.p-40 {
+      @include set-progress(40);
+    }
+
+    &.p-50 {
+      @include set-progress(50);
+    }
+
+    &.p-60 {
+      @include set-progress(60);
+    }
+
+    &.p-70 {
+      @include set-progress(70);
+    }
+
+    &.p-80 {
+      @include set-progress(80);
+    }
+
+    &.p-90 {
+      @include set-progress(90);
+    }
+
+    &.p-100 {
+      @include set-progress(100);
+    }
+  }
+}
+
+.animation-fill-forwards {
+  animation-fill-mode: forwards;
+}

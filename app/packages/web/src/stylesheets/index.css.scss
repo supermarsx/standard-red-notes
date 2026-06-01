@@ -1,0 +1,31 @@
+@import '../../../styles/src/Styles/_colors.scss';
+@import '../../../styles/src/Styles/_panels.scss';
+@import '../../../styles/src/Styles/_scrollbar.scss';
+@import '../../../styles/src/Styles/utils/_animation.scss';
+@import 'theme';
+@import 'main';
+@import 'ui';
+@import 'footer';
+@import 'navigation';
+@import 'items-column';
+@import 'editor';
+@import 'menus';
+@import 'modals';
+@import 'stylekit-sub';
+@import 'sessions-modal';
+@import 'preferences';
+@import 'focused';
+@import 'sn';
+@import 'animation';
+@import '../javascripts/Components/SuperEditor/Lexical/Theme/lexical.scss';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  ul,
+  ol {
+    list-style-type: revert;
+  }
+}

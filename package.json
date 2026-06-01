@@ -1,0 +1,35 @@
+{
+  "name": "standard-red-notes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standard Red Notes monorepo for the app, server, and MCP bridge.",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "yarn@4.15.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "mcp"
+  ],
+  "scripts": {
+    "build": "yarn build:mcp && yarn build:app && yarn build:server",
+    "build:app": "yarn --cwd app build:all",
+    "build:mcp": "yarn workspace @standard-red-notes/mcp build",
+    "build:server": "yarn --cwd server build",
+    "deps:audit": "yarn deps:audit:app && yarn deps:audit:server",
+    "deps:audit:app": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd app",
+    "deps:audit:server": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd server",
+    "lint": "yarn lint:mcp && yarn lint:app && yarn lint:server",
+    "lint:app": "yarn --cwd app lint",
+    "lint:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
+    "lint:server": "yarn --cwd server lint",
+    "start:mcp": "yarn workspace @standard-red-notes/mcp start",
+    "test": "yarn test:app && yarn test:server",
+    "test:app": "yarn --cwd app test",
+    "test:server": "yarn --cwd server test"
+  },
+  "devDependencies": {
+    "npm-check-updates": "^22.2.1",
+    "turbo": "^2.9.16"
+  }
+}

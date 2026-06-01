@@ -1,0 +1,41 @@
+{
+  "name": "@standardnotes/models",
+  "version": "1.58.3",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Models used in SNJS library",
+  "author": "Standard Notes",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "AGPL-3.0",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "prestart": "yarn clean",
+    "start": "tsc -p tsconfig.json --watch",
+    "prebuild": "yarn clean",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@standardnotes/common": "^1.50.0",
+    "@standardnotes/domain-core": "^1.40.0",
+    "@standardnotes/features": "workspace:*",
+    "@standardnotes/responses": "workspace:*",
+    "@standardnotes/sncrypto-common": "workspace:^",
+    "@standardnotes/utils": "workspace:^",
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.2.3",
+    "@types/lodash": "^4.14.189",
+    "@typescript-eslint/eslint-plugin": "*",
+    "eslint": "*",
+    "eslint-plugin-prettier": "*",
+    "jest": "^29.3.1",
+    "reflect-metadata": "^0.1.13",
+    "ts-jest": "^29.0.3",
+    "typescript": "*"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "files-demo",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "AGPL-3.0",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "prestart": "yarn clean",
+    "start": "webpack-dev-server --config webpack.config.js",
+    "watch": "webpack -w --config webpack.config.js",
+    "prebuild": "yarn clean",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint . --ext .ts"
+  },
+  "devDependencies": {
+    "@babel/core": "*",
+    "@babel/preset-env": "*",
+    "@babel/preset-typescript": "^7.15.0",
+    "@standardnotes/config": "^2.2.0",
+    "@types/wicg-native-file-system": "^2020.6.0",
+    "babel-loader": "^8.2.3",
+    "html-webpack-plugin": "^5.5.0",
+    "ts-loader": "^9.2.6",
+    "typescript": "*",
+    "typescript-eslint": "0.0.1-alpha.0",
+    "webpack": "*",
+    "webpack-cli": "*",
+    "webpack-dev-server": "^4.3.1"
+  },
+  "dependencies": {
+    "@standardnotes/sncrypto-web": "workspace:*",
+    "@standardnotes/snjs": "workspace:*",
+    "regenerator-runtime": "^0.13.9"
+  }
+}

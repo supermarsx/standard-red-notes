@@ -1,0 +1,16 @@
+{
+  "name": "@standardnotes/inner-desktop",
+  "productName": "Standard Red Notes",
+  "private": true,
+  "version": "3.108.192",
+  "description": "A self-hosted-first end-to-end encrypted notes app.",
+  "author": "Standard Red Notes",
+  "main": "./dist/index.js",
+  "installConfig": {
+    "selfReferences": true
+  },
+  "dependencies": {
+    "@standardnotes/home-server": "^1.23.0",
+    "keytar": "^7.9.0"
+  }
+}

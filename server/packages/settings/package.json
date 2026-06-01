@@ -1,0 +1,39 @@
+{
+  "name": "@standardnotes/settings",
+  "version": "1.23.5",
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
+  },
+  "description": "Settings SDK for Standard Notes projects",
+  "main": "dist/src/index.js",
+  "author": "Standard Notes",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:standardnotes/server.git",
+    "directory": "packages/settings"
+  },
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "prestart": "yarn clean",
+    "start": "tsc -p tsconfig.json --watch",
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.4"
+  },
+  "dependencies": {
+    "@standardnotes/domain-core": "workspace:^",
+    "reflect-metadata": "^0.2.1"
+  }
+}

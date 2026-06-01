@@ -1,0 +1,44 @@
+import { DomainEventHandlerInterface, UserRegisteredEvent } from '@standardnotes/domain-events'
+import { inject, injectable, optional } from 'inversify'
+import { Mixpanel } from 'mixpanel'
+
+import TYPES from '../../Bootstrap/Types'
+import { AnalyticsActivity } from '../Analytics/AnalyticsActivity'
+import { AnalyticsStoreInterface } from '../Analytics/AnalyticsStoreInterface'
+import { AnalyticsEntity } from '../Entity/AnalyticsEntity'
+import { AnalyticsEntityRepositoryInterface } from '../Entity/AnalyticsEntityRepositoryInterface'
+import { Period } from '../Time/Period'
+
+@injectable()
+export class UserRegisteredEventHandler implements DomainEventHandlerInterface {
+  constructor(
+    @inject(TYPES.AnalyticsEntityRepository) private analyticsEntityRepository: AnalyticsEntityRepositoryInterface,
+    @inject(TYPES.AnalyticsStore) private analyticsStore: AnalyticsStoreInterface,
+    @inject(TYPES.MixpanelClient) @optional() private mixpanelClient: Mixpanel | null,
+  ) {}
+
+  async handle(event: UserRegisteredEvent): Promise<void> {
+    let analyticsEntity = new AnalyticsEntity()
+    analyticsEntity.userUuid = event.payload.userUuid
+    analyticsEntity.username = event.payload.email
+    analyticsEntity = await this.analyticsEntityRepository.save(analyticsEntity)
+
+    await this.analyticsStore.markActivity([AnalyticsActivity.Register], analyticsEntity.id, [
+      Period.Today,
+      Period.ThisWeek,
+      Period.ThisMonth,
+    ])
+
+    if (this.mixpanelClient !== null) {
+      this.mixpanelClient.track(event.type, {
+        distinct_id: analyticsEntity.id.toString(),
+        protocol_version: event.payload.protocolVersion,
+      })
+
+      this.mixpanelClient.people.set(analyticsEntity.id.toString(), {
+        subscription: 'free',
+        protocol_version: event.payload.protocolVersion,
+      })
+    }
+  }
+}

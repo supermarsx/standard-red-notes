@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "lib": ["ES2022"],
+    "target": "ES2019",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "noEmit": true,
+    "strict": true,
+    "isolatedModules": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "newLine": "lf",
+    "declarationDir": "dist/@types",
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "typeRoots": ["./src/javascripts/Types/External", "../../node_modules/@types", "node_modules/@types"],
+    "paths": {
+      "@/*": ["./src/javascripts/*"],
+      "@Controllers/*": ["src/javascripts/Controllers/*"]
+    }
+  },
+  "include": ["src/javascripts"]
+}

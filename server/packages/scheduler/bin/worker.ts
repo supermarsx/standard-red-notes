@@ -1,0 +1,32 @@
+import 'reflect-metadata'
+
+import { Logger } from 'winston'
+import { DomainEventSubscriberInterface } from '@standardnotes/domain-events'
+import * as dayjs from 'dayjs'
+import * as utc from 'dayjs/plugin/utc'
+
+import { ContainerConfigLoader } from '../src/Bootstrap/Container'
+import TYPES from '../src/Bootstrap/Types'
+import { Env } from '../src/Bootstrap/Env'
+
+const container = new ContainerConfigLoader()
+void container.load().then((container) => {
+  dayjs.extend(utc)
+
+  const env: Env = new Env()
+  env.load()
+
+  const logger: Logger = container.get(TYPES.Logger)
+
+  logger.info('Starting worker...')
+
+  const subscriber = container.get<DomainEventSubscriberInterface>(TYPES.DomainEventSubscriber)
+
+  process.on('SIGTERM', () => {
+    logger.info('SIGTERM received. Stopping worker...')
+    subscriber.stop()
+    logger.info('Worker stopped.')
+  })
+
+  subscriber.start()
+})

@@ -1,0 +1,58 @@
+@import 'normalize';
+@import 'colors';
+
+:root {
+  --sn-stylekit-base-font-size: 0.8125rem;
+
+  --sn-stylekit-font-size-p: 0.8125rem;
+  --sn-stylekit-font-size-editor: 0.9375rem;
+
+  --sn-stylekit-font-size-h6: 0.65rem;
+  --sn-stylekit-font-size-h5: 0.73125rem;
+  --sn-stylekit-font-size-h4: 0.8125rem;
+  --sn-stylekit-font-size-h3: 0.89375rem;
+  --sn-stylekit-font-size-h2: 0.975rem;
+  --sn-stylekit-font-size-h1: 1.05625rem;
+
+  --sn-stylekit-menu-border: none;
+
+  --sn-stylekit-general-border-radius: 2px;
+
+  --sn-stylekit-simplified-chinese-font: 'Microsoft Yahei', '微软雅黑体';
+  --sn-stylekit-monospace-font: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, 'Ubuntu Mono', 'Courier New',
+    monospace;
+  --sn-stylekit-sans-serif-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', var(--sn-stylekit-simplified-chinese-font), sans-serif;
+  --sn-stylekit-editor-font-family: var(--sn-stylekit-sans-serif-font);
+}
+
+.sn-component {
+  @import 'panels';
+  @import 'menu-panel';
+  @import 'ui';
+  @import 'app-bar';
+  @import 'table';
+  @import 'modal';
+  @import 'utils';
+  @import 'sn';
+  @import 'reach-overrides';
+
+  font-family: var(--sn-stylekit-sans-serif-font);
+  -webkit-font-smoothing: antialiased;
+
+  &.no-select,
+  .select-none {
+    user-select: none;
+  }
+
+  color: var(--sn-stylekit-foreground-color);
+}
+
+/* Goes outside of .sn-component declaration, as following properties are global */
+input,
+textarea,
+[contenteditable] {
+  caret-color: var(--sn-stylekit-editor-foreground-color);
+}
+
+@import 'scrollbar';

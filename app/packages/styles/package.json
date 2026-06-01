@@ -1,0 +1,25 @@
+{
+  "name": "@standardnotes/styles",
+  "version": "1.8.4",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "webpack --mode='production' && yarn run tsc",
+    "start": "webpack --watch --mode='development'",
+    "lint": "prettier --check *.js"
+  },
+  "devDependencies": {
+    "css-loader": "*",
+    "eslint": "*",
+    "mini-css-extract-plugin": "^2.6.1",
+    "prettier": "*",
+    "sass": "^1.77.6",
+    "sass-loader": "*",
+    "style-loader": "~3.3.1",
+    "typescript": "*",
+    "webpack": "*"
+  }
+}

@@ -1,0 +1,137 @@
+import { PaymentType, SubscriptionBillingFrequency, SubscriptionName } from '@standardnotes/common'
+import { DomainEventHandlerInterface, PaymentSuccessEvent } from '@standardnotes/domain-events'
+import { inject, injectable, optional } from 'inversify'
+import { Mixpanel } from 'mixpanel'
+import { Logger } from 'winston'
+
+import TYPES from '../../Bootstrap/Types'
+import { AnalyticsActivity } from '../Analytics/AnalyticsActivity'
+import { AnalyticsStoreInterface } from '../Analytics/AnalyticsStoreInterface'
+import { StatisticMeasureName } from '../Statistics/StatisticMeasureName'
+import { StatisticsStoreInterface } from '../Statistics/StatisticsStoreInterface'
+import { Period } from '../Time/Period'
+import { GetUserAnalyticsId } from '../UseCase/GetUserAnalyticsId/GetUserAnalyticsId'
+
+@injectable()
+export class PaymentSuccessEventHandler implements DomainEventHandlerInterface {
+  private readonly DETAILED_MEASURES = new Map([
+    [
+      SubscriptionName.PlusPlan,
+      new Map([
+        [
+          PaymentType.Initial,
+          new Map([
+            [
+              SubscriptionBillingFrequency.Monthly,
+              StatisticMeasureName.NAMES.PlusSubscriptionInitialMonthlyPaymentsIncome,
+            ],
+            [
+              SubscriptionBillingFrequency.Annual,
+              StatisticMeasureName.NAMES.PlusSubscriptionInitialAnnualPaymentsIncome,
+            ],
+          ]),
+        ],
+        [
+          PaymentType.Renewal,
+          new Map([
+            [
+              SubscriptionBillingFrequency.Monthly,
+              StatisticMeasureName.NAMES.PlusSubscriptionRenewingMonthlyPaymentsIncome,
+            ],
+            [
+              SubscriptionBillingFrequency.Annual,
+              StatisticMeasureName.NAMES.PlusSubscriptionRenewingAnnualPaymentsIncome,
+            ],
+          ]),
+        ],
+      ]),
+    ],
+    [
+      SubscriptionName.ProPlan,
+      new Map([
+        [
+          PaymentType.Initial,
+          new Map([
+            [
+              SubscriptionBillingFrequency.Monthly,
+              StatisticMeasureName.NAMES.ProSubscriptionInitialMonthlyPaymentsIncome,
+            ],
+            [
+              SubscriptionBillingFrequency.Annual,
+              StatisticMeasureName.NAMES.ProSubscriptionInitialAnnualPaymentsIncome,
+            ],
+          ]),
+        ],
+        [
+          PaymentType.Renewal,
+          new Map([
+            [
+              SubscriptionBillingFrequency.Monthly,
+              StatisticMeasureName.NAMES.ProSubscriptionRenewingMonthlyPaymentsIncome,
+            ],
+            [
+              SubscriptionBillingFrequency.Annual,
+              StatisticMeasureName.NAMES.ProSubscriptionRenewingAnnualPaymentsIncome,
+            ],
+          ]),
+        ],
+      ]),
+    ],
+  ])
+
+  constructor(
+    @inject(TYPES.GetUserAnalyticsId) private getUserAnalyticsId: GetUserAnalyticsId,
+    @inject(TYPES.AnalyticsStore) private analyticsStore: AnalyticsStoreInterface,
+    @inject(TYPES.StatisticsStore) private statisticsStore: StatisticsStoreInterface,
+    @inject(TYPES.Logger) private logger: Logger,
+    @inject(TYPES.MixpanelClient) @optional() private mixpanelClient: Mixpanel | null,
+  ) {}
+
+  async handle(event: PaymentSuccessEvent): Promise<void> {
+    const analyticsMetadataOrError = await this.getUserAnalyticsId.execute({ userEmail: event.payload.userEmail })
+    if (analyticsMetadataOrError.isFailed()) {
+      return
+    }
+    const { analyticsId } = analyticsMetadataOrError.getValue()
+    await this.analyticsStore.markActivity([AnalyticsActivity.PaymentSuccess], analyticsId, [
+      Period.Today,
+      Period.ThisWeek,
+      Period.ThisMonth,
+    ])
+
+    const statisticMeasures = [StatisticMeasureName.NAMES.Income]
+
+    const detailedMeasure = this.DETAILED_MEASURES.get(event.payload.subscriptionName as SubscriptionName)
+      ?.get(event.payload.paymentType as PaymentType)
+      ?.get(event.payload.billingFrequency as SubscriptionBillingFrequency)
+    if (detailedMeasure !== undefined) {
+      statisticMeasures.push(detailedMeasure)
+    } else {
+      this.logger.warn(
+        `Could not find detailed measure for: subscription - ${event.payload.subscriptionName}, payment type - ${event.payload.paymentType}, billing frequency - ${event.payload.billingFrequency}`,
+      )
+    }
+
+    for (const measure of statisticMeasures) {
+      await this.statisticsStore.incrementMeasure(measure, event.payload.amount, [
+        Period.Today,
+        Period.ThisWeek,
+        Period.ThisMonth,
+      ])
+    }
+
+    if (this.mixpanelClient !== null) {
+      this.mixpanelClient.track(event.type, {
+        distinct_id: analyticsId.toString(),
+        amount: event.payload.amount,
+        billing_frequency: event.payload.billingFrequency,
+        payment_type: event.payload.paymentType,
+        subscription_name: event.payload.subscriptionName,
+      })
+
+      this.mixpanelClient.people.track_charge(analyticsId.toString(), event.payload.amount)
+
+      this.mixpanelClient.people.set(analyticsId.toString(), 'subscription', event.payload.subscriptionName)
+    }
+  }
+}

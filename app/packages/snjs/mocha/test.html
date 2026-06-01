@@ -1,0 +1,88 @@
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Mocha Tests</title>
+  <link href="assets/mocha.css" rel="stylesheet" />
+  <script src="https://unpkg.com/chai@4.3.6/chai.js"></script>
+  <script src="./vendor/chai-as-promised-built.js"></script>
+  <script src="https://unpkg.com/regenerator-runtime@0.13.9/runtime.js"></script>
+  <script src="https://unpkg.com/mocha@9.2.2/mocha.js"></script>
+  <script src="https://unpkg.com/chai-subset@1.6.0/lib/chai-subset.js"></script>
+  <script src="https://unpkg.com/sinon@13.0.2/pkg/sinon.js"></script>
+  <script src="https://unpkg.com/@standardnotes/sncrypto-web@1.14.11/dist/sncrypto-web.js"></script>
+  <script src="../dist/snjs.js"></script>
+
+  <script type="module">
+    Object.assign(window, SNCrypto);
+    Object.assign(window, SNLibrary);
+
+    SNLog.onLog = (message) => {
+      console.log(message);
+    };
+
+    SNLog.onError = (error) => {
+      console.error(error);
+    };
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const bail = urlParams.get('bail') === 'false' ? false : true;
+
+    mocha.setup({
+      ui: 'bdd',
+      timeout: 5000,
+      bail: bail,
+    });
+  </script>
+
+  <script type="module">
+    import MainRegistry from './TestRegistry/MainRegistry.js'
+
+    const urlSearchParams = new URLSearchParams(window.location.search);
+    const testSuite = urlSearchParams.get('suite');
+    if (testSuite === 'vaults') {
+      MainRegistry.VaultTests.exclusive = true;
+    } else if (testSuite === 'base') {
+      MainRegistry.BaseTests.exclusive = true;
+    }
+
+    const loadTest = (fileName) => {
+      return new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.type = 'module';
+        script.src = fileName;
+        script.async = false;
+        script.defer = false;
+        script.addEventListener('load', resolve);
+        document.head.append(script);
+      })
+    }
+
+    const loadTests = async (fileNames) => {
+      for (const fileName of fileNames) {
+        await loadTest(fileName);
+      }
+    }
+
+    InternalFeatureService.get().enableFeature(InternalFeature.Vaults);
+
+    if (MainRegistry.VaultTests.exclusive) {
+      await loadTests(MainRegistry.VaultTests.files);
+    } else if (MainRegistry.BaseTests.exclusive) {
+      await loadTests(MainRegistry.BaseTests.files);
+    } else {
+      await loadTests([
+        ...MainRegistry.BaseTests.files,
+        ...MainRegistry.VaultTests.files
+      ]);
+    }
+
+    mocha.run()
+  </script>
+</head>
+
+<body>
+  <div id="mocha"></div>
+</body>
+
+</html>

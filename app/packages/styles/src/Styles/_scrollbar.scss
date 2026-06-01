@@ -1,0 +1,51 @@
+.windows-web,
+.windows-desktop,
+.linux-web,
+.linux-desktop,
+.force-custom-scrollbar {
+  $thumb-width: 4px;
+
+  ::-webkit-scrollbar {
+    width: 14px;
+    height: 18px;
+    border-left: none;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: $thumb-width solid rgba(0, 0, 0, 0);
+    background-clip: padding-box;
+    -webkit-border-radius: 10px;
+    background-color: var(--sn-stylekit-scrollbar-thumb-color);
+    -webkit-box-shadow:
+      inset -1px -1px 0px rgba(0, 0, 0, 0.05),
+      inset 1px 1px 0px rgba(0, 0, 0, 0.05);
+  }
+
+  ::-webkit-scrollbar-button {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background-color: transparent;
+  }
+
+  .super-toolbar {
+    &::-webkit-scrollbar {
+      height: 0;
+    }
+
+    @media screen and (min-width: 768px) {
+      &::-webkit-scrollbar {
+        height: 13px;
+      }
+    }
+  }
+}
+
+body:not(.chromium),
+.mac-desktop {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sn-stylekit-scrollbar-thumb-color) transparent;
+}

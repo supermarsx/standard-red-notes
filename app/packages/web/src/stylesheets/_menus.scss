@@ -1,0 +1,18 @@
+.sk-app-bar {
+  .sk-app-bar-item {
+    position: relative;
+  }
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  float: left;
+  min-width: 160px;
+  z-index: var(--z-index-dropdown-menu);
+
+  margin-top: 5px;
+  width: 280px;
+  max-height: calc(85vh - 90px);
+}

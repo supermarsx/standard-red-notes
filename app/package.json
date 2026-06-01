@@ -1,0 +1,81 @@
+{
+  "name": "@standard-red-notes/app-monorepo",
+  "version": "0.0.1",
+  "private": true,
+  "author": "Standard Red Notes",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/supermarsx/standard-red-notes",
+    "directory": "app"
+  },
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ]
+  },
+  "engines": {
+    "node": ">=12.19.0 <17.0.0"
+  },
+  "scripts": {
+    "lint": "yarn workspaces foreach -t --verbose run lint",
+    "test": "yarn workspaces foreach -pt --jobs 10 --verbose run test",
+    "clean": "lerna run clean",
+    "build:all": "yarn workspaces foreach -pt --topological-dev --verbose --exclude '{@standardnotes/docs}' run build",
+    "build:web": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web run build",
+    "build:desktop": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/desktop run build",
+    "build:mobile": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/mobile run build",
+    "build:snjs": "yarn workspaces foreach -p --topological-dev --verbose -R --from @standardnotes/snjs run build",
+    "build:services": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/services run build",
+    "build:api": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/api run build",
+    "start:web": "yarn workspace @standardnotes/web start",
+    "e2e": "lerna run start:test-server --scope=@standardnotes/snjs",
+    "e2e:test": "yarn dlx mocha-headless-chrome --timeout 3600000 -f http://localhost:9001/mocha/test.html",
+    "reset": "find . -type dir -name node_modules | xargs rm -rf && rm -rf yarn.lock && yarn install",
+    "release:prod": "lerna version --conventional-commits --yes -m \"chore(release): publish\"",
+    "publish:prod": "lerna publish from-git --yes --loglevel verbose --registry https://registry.npmjs.org",
+    "version": "yarn install --no-immutable && git add yarn.lock && yarn changelog:json",
+    "changelog:json": "node scripts/ChangelogToJson.js && git add .",
+    "postversion": "./scripts/push-tags-one-by-one.sh",
+    "workspace:list": " yarn lerna list -all",
+    "upgrade:snjs": "ncu -u '@standardnotes/*' && yarn workspaces foreach --verbose run upgrade:snjs"
+  },
+  "resolutions": {
+    "@types/styled-components/@types/react": "17.0.2",
+    "@types/styled-components-react-native/@types/react": "17.0.2",
+    "@types/react-native-vector-icons/@types/react": "17.0.2",
+    "@types/react-native/@types/react": "17.0.2",
+    "@types/hoist-non-react-statics/@types/react": "17.0.2",
+    "node-abi": "^4.2.0"
+  },
+  "dependencies": {
+    "@standardnotes/snjs": "workspace:*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.22.9",
+    "@babel/preset-env": "^7.22.9",
+    "@commitlint/cli": "^17.6.7",
+    "@commitlint/config-conventional": "^17.6.7",
+    "@lerna-lite/cli": "^4.10.5",
+    "@lerna-lite/list": "^4.10.5",
+    "@lerna-lite/publish": "^4.10.5",
+    "@lerna-lite/run": "^4.10.5",
+    "@lerna-lite/version": "^4.10.5",
+    "@standardnotes/config": "^2.4.3",
+    "@typescript-eslint/eslint-plugin": "^6.2.0",
+    "@typescript-eslint/parser": "^6.2.0",
+    "changelog-parser": "^2.8.1",
+    "css-loader": "^6.8.1",
+    "eslint": "^8.45.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "lint-staged": "^13.2.3",
+    "npm-check-updates": "^16.10.17",
+    "prettier": "3.0.0",
+    "sass-loader": "^13.3.2",
+    "typescript": "5.8.3",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1",
+    "webpack-merge": "^5.9.0"
+  },
+  "packageManager": "yarn@3.2.1"
+}

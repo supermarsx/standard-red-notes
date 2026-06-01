@@ -1,0 +1,40 @@
+{
+  "name": "@standardnotes/responses",
+  "version": "1.13.57",
+  "engines": {
+    "node": ">=16.0.0 <17.0.0"
+  },
+  "description": "Common http responses used between Standard Notes clients and servers",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "AGPL-3.0",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "prestart": "yarn clean",
+    "start": "tsc -p tsconfig.json --watch",
+    "prebuild": "yarn clean",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "test": "jest spec --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.2.3",
+    "@typescript-eslint/eslint-plugin": "*",
+    "eslint": "*",
+    "eslint-plugin-prettier": "*",
+    "jest": "^29.3.1",
+    "ts-jest": "^29.0.3",
+    "typescript": "*"
+  },
+  "dependencies": {
+    "@standardnotes/common": "^1.50.0",
+    "@standardnotes/features": "workspace:*",
+    "reflect-metadata": "^0.1.13"
+  }
+}

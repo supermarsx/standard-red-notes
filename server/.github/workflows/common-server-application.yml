@@ -1,0 +1,67 @@
+name: Reusable Server Application Workflow
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      deploy_web:
+        required: false
+        default: true
+        type: boolean
+      deploy_worker:
+        required: false
+        default: true
+        type: boolean
+      package_path:
+        required: true
+        type: string
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+      CI_PAT_TOKEN:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+jobs:
+  publish:
+    name: Publish Docker Image
+    uses: standardnotes/server/.github/workflows/common-docker-image.yml@main
+    with:
+      service_name: ${{ inputs.service_name }}
+      package_path: ${{ inputs.package_path }}
+      workspace_name: ${{ inputs.workspace_name }}
+    secrets: inherit
+
+  # deploy-web:
+  #   if: ${{ inputs.deploy_web }}
+
+  #   needs: publish
+
+  #   name: Deploy Web
+  #   uses: standardnotes/server/.github/workflows/common-deploy.yml@main
+  #   with:
+  #     service_name: ${{ inputs.service_name }}
+  #     docker_image: ${{ inputs.service_name }}:${{ github.sha }}
+  #   secrets: inherit
+
+  # deploy-worker:
+  #   if: ${{ inputs.deploy_worker }}
+
+  #   needs: publish
+
+  #   name: Deploy Worker
+  #   uses: standardnotes/server/.github/workflows/common-deploy.yml@main
+  #   with:
+  #     service_name: ${{ inputs.service_name }}-worker
+  #     docker_image: ${{ inputs.service_name }}:${{ github.sha }}
+  #   secrets: inherit

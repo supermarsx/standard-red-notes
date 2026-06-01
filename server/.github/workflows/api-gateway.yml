@@ -1,0 +1,22 @@
+name: Api Gateway
+
+concurrency:
+  group: api_gateway
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - '*standardnotes/api-gateway*'
+  workflow_dispatch:
+
+jobs:
+  call_server_application_workflow:
+    name: Server Application
+    uses: standardnotes/server/.github/workflows/common-server-application.yml@main
+    with:
+      service_name: api-gateway
+      workspace_name: "@standardnotes/api-gateway"
+      deploy_worker: false
+      package_path: packages/api-gateway
+    secrets: inherit

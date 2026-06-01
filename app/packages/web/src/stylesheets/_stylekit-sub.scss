@@ -1,0 +1,92 @@
+.sn-component {
+  .sk-app-bar {
+    &.dynamic-height {
+      min-height: 1.625rem !important;
+      height: inherit !important;
+      padding-top: 0.40625rem;
+      padding-bottom: 0.40625rem;
+    }
+
+    &.no-top-edge {
+      border-top: 0;
+    }
+  }
+}
+
+.sk-horizontal-group.tight > *:not(:first-child) {
+  margin-left: 0.24375rem;
+}
+
+.sk-horizontal-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.sk-panel-section {
+  &:last-child {
+    padding-bottom: 0.8125rem;
+  }
+}
+
+.sk-panel {
+  .sk-panel-header {
+    .close-button {
+      border-radius: var(--sn-stylekit-general-border-radius);
+      &:hover {
+        text-decoration: none;
+      }
+    }
+  }
+
+  .sk-button-group.stretch {
+    .sk-button:not(.featured) {
+      // Default buttons that are not featured and stretched should have larger vertical padding
+      padding: 9px;
+    }
+  }
+}
+
+.sk-menu-panel-header {
+  a {
+    cursor: pointer;
+  }
+}
+
+.sk-menu-panel .sk-menu-panel-row .sk-sublabel.opaque {
+  opacity: 1;
+}
+
+button.sk-button {
+  border: none;
+}
+
+a,
+.sk-a {
+  background: none;
+  border: none;
+  color: var(--link-element-color);
+}
+
+button.sk-a {
+  min-height: 24px;
+}
+
+*:focus-visible {
+  outline: none;
+}
+
+*:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+input:focus {
+  box-shadow: 0 0 0 1px var(--sn-stylekit-info-color);
+}
+
+.sk-button:focus-visible,
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--sn-stylekit-background-color), 0 0 0 4px var(--sn-stylekit-info-color);
+}

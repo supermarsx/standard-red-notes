@@ -1,0 +1,15 @@
+export enum AnalyticsActivity {
+  Register = 'register',
+  DeleteAccount = 'DeleteAccount',
+  SubscriptionPurchased = 'subscription-purchased',
+  SubscriptionRenewed = 'subscription-renewed',
+  SubscriptionRefunded = 'subscription-refunded',
+  SubscriptionCancelled = 'subscription-cancelled',
+  SubscriptionExpired = 'subscription-expired',
+  SubscriptionReactivated = 'subscription-reactivated',
+  LimitedDiscountOfferPurchased = 'limited-discount-offer-purchased',
+  PaymentFailed = 'payment-failed',
+  PaymentSuccess = 'payment-success',
+  NewCustomersChurn = 'new-customers-churn',
+  ExistingCustomersChurn = 'existing-customers-churn',
+}

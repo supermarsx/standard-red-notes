@@ -1,0 +1,26 @@
+name: Reusable Run E2E Test Suite Workflow
+
+on:
+  workflow_call:
+    inputs:
+      snjs_image_tag:
+        type: string
+        default: latest
+        description: The Docker image tag used for SNJS container
+      suite:
+        type: string
+        default: all
+        description: The test suite to run
+
+jobs:
+  e2e-self-hosted:
+    uses: standardnotes/server/.github/workflows/e2e-self-hosted.yml@main
+    with:
+      snjs_image_tag: ${{ inputs.snjs_image_tag }}
+      suite: ${{ inputs.suite }}
+
+  e2e-home-server:
+    uses: standardnotes/server/.github/workflows/e2e-home-server.yml@main
+    with:
+      snjs_image_tag: ${{ inputs.snjs_image_tag }}
+      suite: ${{ inputs.suite }}

@@ -1,0 +1,108 @@
+import { DomainEventHandlerInterface, SubscriptionCancelledEvent } from '@standardnotes/domain-events'
+import { inject, injectable, optional } from 'inversify'
+import { Logger } from 'winston'
+import { Username } from '@standardnotes/domain-core'
+import { Mixpanel } from 'mixpanel'
+
+import TYPES from '../../Bootstrap/Types'
+import { AnalyticsActivity } from '../Analytics/AnalyticsActivity'
+import { AnalyticsStoreInterface } from '../Analytics/AnalyticsStoreInterface'
+import { StatisticsStoreInterface } from '../Statistics/StatisticsStoreInterface'
+import { SubscriptionEventType } from '../Subscription/SubscriptionEventType'
+import { SubscriptionPlanName } from '../Subscription/SubscriptionPlanName'
+import { Period } from '../Time/Period'
+import { GetUserAnalyticsId } from '../UseCase/GetUserAnalyticsId/GetUserAnalyticsId'
+import { SaveRevenueModification } from '../UseCase/SaveRevenueModification/SaveRevenueModification'
+import { StatisticMeasureName } from '../Statistics/StatisticMeasureName'
+import { TimerInterface } from '@standardnotes/time'
+
+@injectable()
+export class SubscriptionCancelledEventHandler implements DomainEventHandlerInterface {
+  constructor(
+    @inject(TYPES.GetUserAnalyticsId) private getUserAnalyticsId: GetUserAnalyticsId,
+    @inject(TYPES.AnalyticsStore) private analyticsStore: AnalyticsStoreInterface,
+    @inject(TYPES.StatisticsStore) private statisticsStore: StatisticsStoreInterface,
+    @inject(TYPES.SaveRevenueModification) private saveRevenueModification: SaveRevenueModification,
+    @inject(TYPES.Logger) private logger: Logger,
+    @inject(TYPES.MixpanelClient) @optional() private mixpanelClient: Mixpanel | null,
+    @inject(TYPES.Timer) private timer: TimerInterface,
+  ) {}
+
+  async handle(event: SubscriptionCancelledEvent): Promise<void> {
+    const analyticsMetadataOrError = await this.getUserAnalyticsId.execute({ userEmail: event.payload.userEmail })
+    if (analyticsMetadataOrError.isFailed()) {
+      return
+    }
+    const { analyticsId, userUuid } = analyticsMetadataOrError.getValue()
+    await this.analyticsStore.markActivity([AnalyticsActivity.SubscriptionCancelled], analyticsId, [
+      Period.Today,
+      Period.ThisWeek,
+      Period.ThisMonth,
+    ])
+
+    await this.trackSubscriptionStatistics(event)
+
+    const result = await this.saveRevenueModification.execute({
+      billingFrequency: event.payload.billingFrequency,
+      eventType: SubscriptionEventType.create(event.type).getValue(),
+      newSubscriber: event.payload.userExistingSubscriptionsCount === 1,
+      payedAmount: event.payload.payAmount,
+      planName: SubscriptionPlanName.create(event.payload.subscriptionName).getValue(),
+      subscriptionId: event.payload.subscriptionId,
+      username: Username.create(event.payload.userEmail).getValue(),
+      userUuid,
+    })
+
+    if (result.isFailed()) {
+      this.logger.error(
+        `[${event.type}][${event.payload.subscriptionId}] Could not save revenue modification: ${result.getError()}`,
+      )
+    }
+
+    if (this.mixpanelClient !== null) {
+      this.mixpanelClient.track(event.type, {
+        distinct_id: analyticsId.toString(),
+        subscription_name: event.payload.subscriptionName,
+        subscription_created_at: this.timer.convertMicrosecondsToDate(event.payload.subscriptionCreatedAt),
+        subscription_updated_at: this.timer.convertMicrosecondsToDate(event.payload.subscriptionUpdatedAt),
+        last_payed_at: this.timer.convertMicrosecondsToDate(event.payload.lastPayedAt),
+        subscription_ends_at: this.timer.convertMicrosecondsToDate(event.payload.subscriptionEndsAt),
+        offline: event.payload.offline,
+        replaced: event.payload.replaced,
+        user_existing_subscriptions_count: event.payload.userExistingSubscriptionsCount,
+        billing_frequency: event.payload.billingFrequency,
+        pay_amount: event.payload.payAmount,
+      })
+    }
+  }
+
+  private async trackSubscriptionStatistics(event: SubscriptionCancelledEvent) {
+    if (this.isLegacy5yearSubscriptionPlan(event.payload.subscriptionEndsAt, event.payload.subscriptionCreatedAt)) {
+      return
+    }
+
+    const subscriptionLength = event.payload.timestamp - event.payload.subscriptionCreatedAt
+    await this.statisticsStore.incrementMeasure(StatisticMeasureName.NAMES.SubscriptionLength, subscriptionLength, [
+      Period.Today,
+      Period.ThisWeek,
+      Period.ThisMonth,
+    ])
+
+    const remainingSubscriptionTime = event.payload.subscriptionEndsAt - event.payload.timestamp
+    const totalSubscriptionTime = event.payload.subscriptionEndsAt - event.payload.lastPayedAt
+
+    const remainingSubscriptionPercentage = Math.floor((remainingSubscriptionTime / totalSubscriptionTime) * 100)
+
+    await this.statisticsStore.incrementMeasure(
+      StatisticMeasureName.NAMES.RemainingSubscriptionTimePercentage,
+      remainingSubscriptionPercentage,
+      [Period.Today, Period.ThisWeek, Period.ThisMonth],
+    )
+  }
+
+  private isLegacy5yearSubscriptionPlan(subscriptionEndsAt: number, subscriptionCreatedAt: number) {
+    const fourYearsInMicroseconds = 126_230_400_000_000
+
+    return subscriptionEndsAt - subscriptionCreatedAt > fourYearsInMicroseconds
+  }
+}

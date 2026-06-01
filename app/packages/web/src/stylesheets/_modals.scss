@@ -1,0 +1,157 @@
+.challenge-modal {
+  width: auto;
+
+  .prompt,
+  .subprompt {
+    text-align: center;
+  }
+}
+
+#account-switcher {
+  min-width: 400px;
+  max-width: 580px;
+  input,
+  input:disabled {
+    width: 100%;
+    border: none;
+    background-color: transparent !important;
+    color: inherit;
+    margin-left: -2px;
+  }
+
+  input.clickable:hover {
+    cursor: pointer;
+  }
+}
+
+#item-preview-modal {
+  > .sk-modal-content {
+    width: 800px;
+    height: 500px;
+  }
+}
+
+.header .subtitle {
+  font-size: 0.89375rem;
+}
+
+.sk-modal {
+  position: absolute;
+  margin-left: auto;
+  margin-right: auto;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: var(--z-index-modal);
+  width: 100%;
+  height: 100vh;
+
+  padding-left: 1rem;
+  padding-right: 1rem;
+
+  background-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+
+  .sk-panel {
+    border-color: var(--popover-border-color);
+    background-color: var(--popover-background-color);
+    backdrop-filter: var(--popover-backdrop-filter);
+    -webkit-backdrop-filter: var(--popover-backdrop-filter);
+  }
+
+  .sn-component {
+    height: 100%;
+    .sk-panel {
+      border-radius: 0.25rem;
+      height: 100%;
+    }
+  }
+
+  &.auto-height {
+    > .sk-modal-content {
+      height: auto !important;
+    }
+  }
+
+  &.large {
+    > .sk-modal-content {
+      width: 900px;
+      height: 600px;
+    }
+  }
+
+  &.medium {
+    > .sk-modal-content {
+      width: 700px;
+      height: 500px;
+    }
+  }
+
+  &.small {
+    > .sk-modal-content {
+      width: 700px;
+      height: 344px;
+    }
+  }
+
+  .sk-modal-background {
+    position: absolute;
+    z-index: -1;
+    width: 100%;
+    height: 100%;
+    background-color: var(--sn-stylekit-contrast-background-color);
+    opacity: 0.7;
+  }
+
+  > .sk-modal-content {
+    overflow-y: auto;
+    width: auto;
+    padding: 0;
+    padding-bottom: 0;
+    min-width: 300px;
+    border-radius: 0.25rem;
+
+    -webkit-box-shadow: 0px 2px 35px 0px rgba(0, 0, 0, 0.19);
+    -moz-box-shadow: 0px 2px 35px 0px rgba(0, 0, 0, 0.19);
+    box-shadow: 0px 2px 35px 0px rgba(0, 0, 0, 0.19);
+  }
+}
+
+.component-view {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+
+  // required so that .loading-overlay absolute works properly wrt to modal components. However, seems to break #note-tags-component-container.
+  // I couldn't find any solution to this other than to customize .component-view position back to inherit for note-tags-component-container.
+  position: relative;
+
+  // not sure why we need this. Removed because it creates unncessary scroll bars. Tested on folders extension, creates horizontal scrollbar at bottom on windows
+  // overflow: auto;
+  // Update: we needed that because when we display the expired Extended view, it allows it to scroll vertically.
+  overflow-y: auto;
+
+  .sn-component {
+    min-width: 100%;
+    z-index: var(--z-index-component-view);
+  }
+
+  .loading-overlay {
+    position: absolute;
+    background-color: var(--sn-stylekit-editor-background-color);
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+  }
+}
+
+[data-mobile-popover],
+[data-dialog-portal] {
+  max-height: none;
+  max-height: var(--ios-viewport-height, none);
+}

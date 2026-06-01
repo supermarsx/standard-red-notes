@@ -1,0 +1,181 @@
+{
+  "name": "@standardnotes/desktop",
+  "main": "./app/dist/index.js",
+  "version": "3.110.192",
+  "license": "AGPL-3.0",
+  "author": "Standard Red Notes.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/supermarsx/standard-red-notes",
+    "directory": "app/packages/desktop"
+  },
+  "workspaces": {
+    "packages": [
+      "app"
+    ]
+  },
+  "scripts": {
+    "build:remove-unpacked": "rimraf dist/{linux-*,mac,win-*}",
+    "build": "yarn run webpack --config desktop.webpack.prod.js",
+    "clean:build": "rimraf app/dist/",
+    "clean:tests": "rimraf test/data/tmp/",
+    "dev": "NODE_ENV=development webpack --config desktop.webpack.dev.js --watch",
+    "format": "prettier --write .",
+    "lint:eslint": "eslint app/index.ts app/application.ts app/javascripts/**/*.ts",
+    "lint:formatting": "prettier --check app",
+    "lint": "yarn lint:formatting && yarn lint:eslint app && yarn tsc",
+    "tsc": "tsc --noEmit",
+    "release:mac": "node scripts/build.mjs mac",
+    "start": "electron ./app --enable-logging --icon _icon/icon.png",
+    "ava": "rimraf test/data/tmp && ava --serial",
+    "rebuild:keytar": "yarn app/node_modules/keytar build ",
+    "rebuild:home-server": "electron-rebuild -f -w @standardnotes/home-server -m ./app"
+  },
+  "installConfig": {
+    "hoistingLimits": "workspaces"
+  },
+  "dependencies": {
+    "@electron/remote": "^2.1.2",
+    "@standardnotes/domain-core": "^1.40.0",
+    "@standardnotes/electron-clear-data": "1.1.1",
+    "@standardnotes/snjs": "workspace:*",
+    "@standardnotes/utils": "workspace:*",
+    "@standardnotes/web": "workspace:*",
+    "axios": "^1.4.0",
+    "compare-versions": "^6.1.0",
+    "decrypt": "github:standardnotes/decrypt#master",
+    "dotenv": "^16.3.1",
+    "electron": "35.2.0",
+    "electron-log": "^4.4.8",
+    "electron-updater": "^6.1.4",
+    "fs-extra": "^11.1.1",
+    "lodash": "^4.17.21",
+    "mime-types": "^2.1.35",
+    "mobx": "^6.10.2"
+  },
+  "devDependencies": {
+    "@babel/core": "*",
+    "@babel/preset-env": "*",
+    "@electron/notarize": "^3.0.0",
+    "@electron/rebuild": "3.6.1",
+    "@types/fs-extra": "^11.0.1",
+    "@types/lodash": "^4.14.189",
+    "@types/mime-types": "^2.1.1",
+    "@types/node": "18",
+    "@types/proxyquire": "^1.3.28",
+    "@types/yauzl": "^2.10.0",
+    "ava": "^5.1.0",
+    "babel-loader": "^9.1.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "electron-builder": "^24.9.1",
+    "eslint": "*",
+    "eslint-config-prettier": "^8.9.0",
+    "eslint-plugin-import": "^2.26.0",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-promise": "^6.1.1",
+    "file-loader": "^6.2.0",
+    "mime-types": "^2.1.35",
+    "prettier": "*",
+    "proxyquire": "^2.1.3",
+    "rimraf": "^3.0.2",
+    "terser-webpack-plugin": "^5.3.6",
+    "ts-loader": "^9.4.1",
+    "ts-node": "^10.9.1",
+    "typescript": "*",
+    "webpack": "*",
+    "webpack-merge": "*"
+  },
+  "build": {
+    "appId": "org.standardrednotes.app",
+    "artifactName": "standard-red-notes-${version}-${os}-${arch}.${ext}",
+    "afterSign": "scripts/notarizeMac.js",
+    "files": [
+      "compiled/**/*",
+      "dist/**/*",
+      "stylesheets/**/*",
+      "assets/**/*",
+      "icon/**/*"
+    ],
+    "protocols": [
+      {
+        "name": "Standard Red Notes",
+        "schemes": [
+          "standardrednotes"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "./build/entitlements.mac.inherit.plist",
+      "entitlementsInherit": "./build/entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Standard Red Notes requires access to your camera to enable the Moments feature."
+      },
+      "asarUnpack": [
+        "node_modules/keytar",
+        "node_modules/@standardnotes/home-server"
+      ],
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "certificateSubjectName": "Standard Red Notes",
+      "publisherName": "Standard Red Notes",
+      "signDlls": true,
+      "sign": "./scripts/windowsSign.js"
+    },
+    "nsis": {
+      "deleteAppDataOnUninstall": true
+    },
+    "linux": {
+      "category": "Office",
+      "icon": "build/icon/",
+      "executableName": "standard-red-notes",
+      "desktop": {
+        "StartupWMClass": "standard red notes"
+      },
+      "target": [
+        "AppImage",
+        "snap",
+        "deb"
+      ]
+    },
+    "snap": {
+      "base": "core22",
+      "buildPackages": [
+        "python3",
+        "libpython3.10"
+      ],
+      "stagePackages": [
+        "default",
+        "python3",
+        "libpython3.10"
+      ],
+      "plugs": [
+        "default",
+        "password-manager-service",
+        "network-bind"
+      ]
+    }
+  },
+  "ava": {
+    "concurrency": 0,
+    "extensions": [
+      "ts"
+    ],
+    "files": [
+      "test/*.spec.ts"
+    ],
+    "require": [
+      "ts-node/register/transpile-only"
+    ],
+    "verbose": true
+  },
+  "pre-push": [
+    "lint"
+  ]
+}

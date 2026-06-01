@@ -1,0 +1,43 @@
+{
+  "name": "@standardnotes/domain-core",
+  "version": "1.41.4",
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
+  },
+  "description": "Domain Core SDK used in SN projects",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:standardnotes/server.git",
+    "directory": "packages/domain-core"
+  },
+  "author": "Standard Notes",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "jest --coverage --no-cache --passWithNoTests --maxWorkers=2"
+  },
+  "dependencies": {
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.1",
+    "@types/node": "^20.5.7",
+    "@types/uuid": "^9.0.3",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
+  }
+}

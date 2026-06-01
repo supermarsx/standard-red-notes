@@ -1,0 +1,39 @@
+{
+  "name": "@standardnotes/files",
+  "version": "1.20.17",
+  "engines": {
+    "node": ">=16.0.0 <17.0.0"
+  },
+  "description": "Client-side files library",
+  "main": "./src/index.ts",
+  "author": "Standard Notes",
+  "types": "./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "private": true,
+  "license": "AGPL-3.0",
+  "scripts": {
+    "lint": "eslint src --ext .ts",
+    "test": "jest",
+    "build": "echo 'Empty build script required for yarn topological install'"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.2.3",
+    "@typescript-eslint/eslint-plugin": "*",
+    "eslint": "*",
+    "eslint-plugin-prettier": "*",
+    "jest": "^29.3.1",
+    "ts-jest": "^29.0.3",
+    "typescript": "*"
+  },
+  "dependencies": {
+    "@standardnotes/common": "^1.50.0",
+    "@standardnotes/encryption": "workspace:*",
+    "@standardnotes/models": "workspace:*",
+    "@standardnotes/responses": "workspace:*",
+    "@standardnotes/sncrypto-common": "workspace:*",
+    "@standardnotes/utils": "workspace:*",
+    "reflect-metadata": "^0.1.13"
+  }
+}
