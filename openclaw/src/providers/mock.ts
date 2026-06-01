@@ -1,4 +1,4 @@
-import type { Provider, ProviderRequest, ProviderEvent } from './types.js'
+import type { Provider, ProviderRequest, ProviderEvent } from "./types.js";
 
 /**
  * Deterministic provider for tests and `openclaw doctor`. Plays back a
@@ -7,20 +7,20 @@ import type { Provider, ProviderRequest, ProviderEvent } from './types.js'
  * stop reasons) without an LLM.
  */
 export class MockProvider implements Provider {
-  readonly id = 'mock'
-  private cursor = 0
+  readonly id = "mock";
+  private cursor = 0;
 
   constructor(private readonly script: ProviderEvent[][]) {}
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async *send(_req: ProviderRequest): AsyncIterable<ProviderEvent> {
-    const turn = this.script[this.cursor++]
+    const turn = this.script[this.cursor++];
     if (!turn) {
-      yield { kind: 'finish', stopReason: 'end_turn' }
-      return
+      yield { kind: "finish", stopReason: "end_turn" };
+      return;
     }
     for (const ev of turn) {
-      yield ev
+      yield ev;
     }
   }
 }

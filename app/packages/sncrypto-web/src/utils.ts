@@ -157,7 +157,9 @@ export function base64Decode(base64String: string): string {
 const RFC4648 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
 export function base32Encode(input: ArrayBufferLike | ArrayBufferView): string {
-  const buffer = ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength) : new Uint8Array(input)
+  const buffer = ArrayBuffer.isView(input)
+    ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+    : new Uint8Array(input)
   const length = buffer.byteLength
 
   let bitIdx = 0

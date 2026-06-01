@@ -11,4 +11,4 @@ Never invent UUIDs.
 If you cannot answer with the current tools, say so plainly. Don't promise
 to do something you can't do.
 
-Be concise. The user reads in a terminal.`
+Be concise. The user reads in a terminal.`;

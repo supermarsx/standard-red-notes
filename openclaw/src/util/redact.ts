@@ -1,21 +1,24 @@
 // Redaction helpers for the audit log. Note bodies, raw API responses, and
 // anything that looks like a token must never hit the audit file.
 
-const TOKEN_RE = /(?:sk|pk|tok|key|bearer)[-_]?[a-z0-9_]{8,}/gi
+const TOKEN_RE = /(?:sk|pk|tok|key|bearer)[-_]?[a-z0-9_]{8,}/gi;
 
 export function redactToken(input: string): string {
-  return input.replace(TOKEN_RE, '<redacted-token>')
+  return input.replace(TOKEN_RE, "<redacted-token>");
 }
 
 export interface NoteRef {
-  uuid?: string
-  title?: string
+  uuid?: string;
+  title?: string;
 }
 
-export function noteSummary(content: string | undefined, ref: NoteRef = {}): string {
-  if (!content) return `<note:${ref.uuid ?? 'unknown'} empty>`
-  const len = content.length
-  return `<note:${ref.uuid ?? 'unknown'} ${len} chars>`
+export function noteSummary(
+  content: string | undefined,
+  ref: NoteRef = {},
+): string {
+  if (!content) return `<note:${ref.uuid ?? "unknown"} empty>`;
+  const len = content.length;
+  return `<note:${ref.uuid ?? "unknown"} ${len} chars>`;
 }
 
 /**
@@ -24,20 +27,25 @@ export function noteSummary(content: string | undefined, ref: NoteRef = {}): str
  * replaced wholesale.
  */
 export function redactForAudit<T>(value: T): unknown {
-  if (value == null) return value
-  if (typeof value === 'string') return redactToken(value)
-  if (Array.isArray(value)) return value.map((v) => redactForAudit(v))
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {}
+  if (value == null) return value;
+  if (typeof value === "string") return redactToken(value);
+  if (Array.isArray(value)) return value.map((v) => redactForAudit(v));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const lower = k.toLowerCase()
-      if (lower === 'body' || lower === 'content' || lower === 'text' || lower === 'password') {
-        out[k] = typeof v === 'string' ? noteSummary(v) : '<redacted>'
+      const lower = k.toLowerCase();
+      if (
+        lower === "body" ||
+        lower === "content" ||
+        lower === "text" ||
+        lower === "password"
+      ) {
+        out[k] = typeof v === "string" ? noteSummary(v) : "<redacted>";
       } else {
-        out[k] = redactForAudit(v)
+        out[k] = redactForAudit(v);
       }
     }
-    return out
+    return out;
   }
-  return value
+  return value;
 }
