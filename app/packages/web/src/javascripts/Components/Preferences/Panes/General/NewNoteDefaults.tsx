@@ -103,7 +103,7 @@ const NewNoteDefaults = () => {
     [application],
   )
 
-  const debounceTimeoutRef = useRef<number>()
+  const debounceTimeoutRef = useRef<number | undefined>(undefined)
 
   const handleCustomFormatInputChange: ChangeEventHandler<HTMLInputElement> = (event) => {
     const newFormat = event.currentTarget.value

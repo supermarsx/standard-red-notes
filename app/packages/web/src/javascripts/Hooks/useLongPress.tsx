@@ -4,13 +4,13 @@ import { RefObject, useCallback, useMemo, useRef } from 'react'
 const ReactNativeLongpressDelay = 370
 
 export const useLongPressEvent = (
-  elementRef: RefObject<HTMLElement>,
+  elementRef: RefObject<HTMLElement | null>,
   listener: (x: number, y: number) => void,
   clearOnPointerMove = false,
   delay = ReactNativeLongpressDelay,
 ) => {
-  const longPressTimeout = useRef<number>()
-  const pointerPosition = useRef<{ x: number; y: number }>()
+  const longPressTimeout = useRef<number | undefined>(undefined)
+  const pointerPosition = useRef<{ x: number; y: number } | undefined>(undefined)
 
   const clearLongPressTimeout = useCallback(() => {
     if (longPressTimeout.current) {

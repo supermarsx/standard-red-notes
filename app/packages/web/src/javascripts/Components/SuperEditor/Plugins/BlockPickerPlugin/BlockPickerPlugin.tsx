@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import { LexicalTypeaheadMenuPlugin, useBasicTypeaheadTriggerMatch } from '@lexical/react/LexicalTypeaheadMenuPlugin'
 import { TextNode } from 'lexical'
 import { useCallback, useMemo, useState } from 'react'
@@ -30,7 +31,7 @@ import { GetDividerBlockOption } from '../Blocks/Divider'
 import { GetCollapsibleBlockOption } from '../Blocks/Collapsible'
 import { GetUploadFileOption } from '../Blocks/File'
 
-export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): JSX.Element {
+export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const application = useApplication()
   const [modal, showModal] = useModal()

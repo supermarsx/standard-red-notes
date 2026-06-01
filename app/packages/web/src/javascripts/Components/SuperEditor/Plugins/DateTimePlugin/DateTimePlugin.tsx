@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import {
   COMMAND_PRIORITY_EDITOR,
   $createTextNode,
@@ -15,7 +16,7 @@ import { $createHeadingNode } from '@lexical/rich-text'
 import { formatDateAndTimeForNote, dateToHoursAndMinutesTimeString } from '@/Utils/DateUtils'
 import { INSERT_HORIZONTAL_RULE_COMMAND } from '@lexical/react/LexicalHorizontalRuleNode'
 
-export default function DatetimePlugin(): JSX.Element | null {
+export default function DatetimePlugin(): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

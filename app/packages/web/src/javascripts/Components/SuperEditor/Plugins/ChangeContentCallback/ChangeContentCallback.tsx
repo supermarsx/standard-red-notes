@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import { useEffect } from 'react'
 
 export type ChangeEditorFunction = (jsonContent: string) => void
@@ -8,7 +9,7 @@ export function ChangeContentCallbackPlugin({
   providerCallback,
 }: {
   providerCallback: ChangeEditorFunctionProvider
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

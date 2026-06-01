@@ -66,7 +66,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
   onBlur,
 }) => {
   const note = useRef(controller.item)
-  const changeEditorFunction = useRef<ChangeEditorFunction>()
+  const changeEditorFunction = useRef<ChangeEditorFunction | undefined>(undefined)
   const ignoreNextChange = useRef(false)
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
   const getMarkdownPlugin = useRef<GetMarkdownPluginInterface | null>(null)

@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import { useEffect } from 'react'
 import { $createParagraphNode, $createRangeSelection, LexicalEditor } from 'lexical'
 import { handleEditorChange } from '../../Utils'
@@ -18,7 +19,7 @@ export default function ImportPlugin({
   format: 'md' | 'html'
   onChange: (value: string, preview: string) => void
   customImportFunction?: (editor: LexicalEditor, text: string) => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

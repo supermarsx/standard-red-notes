@@ -65,8 +65,8 @@ const LinkEditor = ({
 
   const linkInputRef = useRef<HTMLInputElement>(null)
   const linkEditorRef = useRef<HTMLDivElement>(null)
-  const rangeRect = useRef<DOMRect>()
-  const positionUpdateRAF = useRef<number>()
+  const rangeRect = useRef<DOMRect | undefined>(undefined)
+  const positionUpdateRAF = useRef<number | undefined>(undefined)
 
   const updateLinkEditorPosition = useCallback(() => {
     if (positionUpdateRAF.current) {

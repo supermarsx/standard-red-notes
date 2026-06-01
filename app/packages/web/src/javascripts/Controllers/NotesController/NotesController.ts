@@ -657,7 +657,7 @@ export class NotesController
               actions: [
                 {
                   label: 'Open',
-                  handler: (toastId) => {
+                  handler: (toastId: string) => {
                     this.application.itemListController.selectUuids([duplicated.uuid], true).catch(console.error)
                     dismissToast(toastId)
                   },

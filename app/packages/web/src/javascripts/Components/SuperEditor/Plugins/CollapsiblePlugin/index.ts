@@ -38,7 +38,7 @@ import { $createCollapsibleTitleNode, $isCollapsibleTitleNode, CollapsibleTitleN
 
 export const INSERT_COLLAPSIBLE_COMMAND = createCommand<void>()
 
-export default function CollapsiblePlugin(): JSX.Element | null {
+export default function CollapsiblePlugin(): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
   useEffect(() => {
     if (!editor.hasNodes([CollapsibleContainerNode, CollapsibleTitleNode, CollapsibleContentNode])) {

@@ -6,7 +6,8 @@
     "outDir": "./dist",
     "ignoreDeprecations": "5.0",
     "lib": ["es2020", "dom"],
-    "types": ["node", "jest"]
+    "types": ["node", "jest"],
+    "esModuleInterop": true
   },
   "include": ["src/**/*"],
   "references": [],

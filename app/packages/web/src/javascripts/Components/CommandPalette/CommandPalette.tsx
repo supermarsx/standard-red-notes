@@ -1,4 +1,5 @@
 import { observer } from 'mobx-react-lite'
+import React from 'react'
 import { startTransition, useCallback, useEffect, useState } from 'react'
 import { useKeyboardService } from '../KeyboardServiceProvider'
 import { PlatformedKeyboardShortcut, TOGGLE_COMMAND_PALETTE } from '@standardnotes/ui-services'
@@ -37,7 +38,7 @@ import { requestCloseAllOpenModalsAndPopovers } from '../../Utils/CloseOpenModal
 type CommandPaletteItem = {
   id: string
   description: string
-  icon: JSX.Element
+  icon: React.JSX.Element
   shortcut?: PlatformedKeyboardShortcut
   resultRange?: [number, number]
 } & ({ section: 'notes' | 'files' | 'tags'; itemUuid: string } | { section: 'commands' })

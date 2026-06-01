@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import { $wrapNodeInElement } from '@lexical/utils'
 import { COMMAND_PRIORITY_EDITOR, $createParagraphNode, $insertNodes, $isRootOrShadowRoot } from 'lexical'
 import { useEffect } from 'react'
@@ -6,7 +7,7 @@ import { INSERT_BUBBLE_COMMAND } from '../Commands'
 import { BubbleNode } from './Nodes/BubbleNode'
 import { $createBubbleNode } from './Nodes/BubbleUtils'
 
-export default function ItemBubblePlugin(): JSX.Element | null {
+export default function ItemBubblePlugin(): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

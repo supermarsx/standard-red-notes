@@ -208,7 +208,7 @@ function hideTargetLine(targetLineElem: HTMLElement | null) {
   }
 }
 
-function useDraggableBlockMenu(editor: LexicalEditor, anchorElem: HTMLElement, isEditable: boolean): JSX.Element {
+function useDraggableBlockMenu(editor: LexicalEditor, anchorElem: HTMLElement, isEditable: boolean): React.JSX.Element {
   const scrollerElem = anchorElem.parentElement
 
   const menuRef = useRef<HTMLDivElement>(null)
@@ -480,7 +480,7 @@ export default function DraggableBlockPlugin({
   anchorElem = document.body,
 }: {
   anchorElem?: HTMLElement
-}): JSX.Element {
+}): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   return useDraggableBlockMenu(editor, anchorElem, editor._editable)
 }

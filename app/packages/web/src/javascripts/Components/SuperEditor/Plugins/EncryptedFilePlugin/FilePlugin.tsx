@@ -1,4 +1,5 @@
 import { INSERT_FILE_COMMAND, UPLOAD_AND_INSERT_FILE_COMMAND } from '../Commands'
+import React from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 
 import { useEffect, useState } from 'react'
@@ -59,7 +60,7 @@ function UploadFileDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-export default function FilePlugin({ currentNote }: { currentNote: SNNote }): JSX.Element | null {
+export default function FilePlugin({ currentNote }: { currentNote: SNNote }): React.JSX.Element | null {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
   const filesController = useFilesController()

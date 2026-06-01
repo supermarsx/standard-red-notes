@@ -36,7 +36,7 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
     return editor.getElementByKey(linkNode.getKey())
   }, [editor, linkNode])
 
-  const rangeRect = useRef<DOMRect>()
+  const rangeRect = useRef<DOMRect | undefined>(undefined)
   const updateLinkEditorPosition = useCallback(() => {
     if (isMobile) {
       return

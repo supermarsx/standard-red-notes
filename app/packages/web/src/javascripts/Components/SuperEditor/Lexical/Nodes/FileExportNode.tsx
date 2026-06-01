@@ -1,4 +1,5 @@
 import { DecoratorBlockNode, SerializedDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
+import React from 'react'
 import { parseAndCreateZippableFileName } from '@standardnotes/utils'
 import { DOMExportOutput, ElementFormatType, NodeKey, Spread } from 'lexical'
 
@@ -78,7 +79,7 @@ export class FileExportNode extends DecoratorBlockNode {
     return { element: object }
   }
 
-  decorate(): JSX.Element {
+  decorate(): React.JSX.Element {
     // Doesn't need to actually render anything since this is only used for export
     return <></>
   }

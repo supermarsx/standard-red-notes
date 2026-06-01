@@ -1,9 +1,5 @@
-import * as DOMPurifyLib from 'dompurify'
-import { JSDOM } from 'jsdom'
+import DOMPurify from 'dompurify'
 import { sortByKey, withoutLastElement, compareArrayReferences } from './Utils'
-
-const window = new JSDOM('').window
-const DOMPurify = DOMPurifyLib(window as never)
 
 describe('Utils', () => {
   describe('compareArrayReferences', () => {

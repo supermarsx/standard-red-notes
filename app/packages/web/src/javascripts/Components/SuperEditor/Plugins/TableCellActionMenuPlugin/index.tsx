@@ -374,7 +374,7 @@ function TableActionMenu({ onClose, tableCellNode: _tableCellNode, cellMerge }: 
     [editor, tableCellNode, clearTableSelection, onClose],
   )
 
-  let mergeCellButton: null | JSX.Element = null
+  let mergeCellButton: null | React.JSX.Element = null
   if (cellMerge) {
     if (canMergeCells) {
       mergeCellButton = <MenuItem onClick={mergeTableCellsAtSelection}>Merge cells</MenuItem>
@@ -435,7 +435,7 @@ function TableCellActionMenuContainer({
 }: {
   anchorElem: HTMLElement
   cellMerge: boolean
-}): JSX.Element {
+}): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
 
   const menuButtonRef = useRef(null)

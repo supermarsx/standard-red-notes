@@ -1,10 +1,11 @@
 import { DOMConversionMap, DOMExportOutput, DecoratorNode, LexicalEditor, NodeKey } from 'lexical'
+import React from 'react'
 import { $createBubbleNode, convertToBubbleElement } from './BubbleUtils'
 import { BubbleComponent } from './BubbleComponent'
 import { SerializedBubbleNode } from './SerializedBubbleNode'
 import { ItemNodeInterface } from '../../ItemNodeInterface'
 
-export class BubbleNode extends DecoratorNode<JSX.Element> implements ItemNodeInterface {
+export class BubbleNode extends DecoratorNode<React.JSX.Element> implements ItemNodeInterface {
   __id: string
 
   static getType(): string {
@@ -69,7 +70,7 @@ export class BubbleNode extends DecoratorNode<JSX.Element> implements ItemNodeIn
     return `[Item: ${this.__id}]`
   }
 
-  decorate(_editor: LexicalEditor): JSX.Element {
+  decorate(_editor: LexicalEditor): React.JSX.Element {
     return <BubbleComponent node={this} itemUuid={this.__id} />
   }
 }

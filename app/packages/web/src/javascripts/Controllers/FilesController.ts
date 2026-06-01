@@ -637,7 +637,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
             actions: [
               {
                 label: 'Open',
-                handler: (toastId) => {
+                handler: (toastId: string) => {
                   void this.handleFileAction({
                     type: FileItemActionType.PreviewFile,
                     payload: { file: uploadedFile },
@@ -726,7 +726,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       return
     }
 
-    const directoryHandle = await window.showDirectoryPicker({
+    const directoryHandle = await window.showDirectoryPicker!({
       startIn: 'downloads',
     })
 
@@ -791,7 +791,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       }
     }
 
-    const zipFileHandle = await window.showSaveFilePicker({
+    const zipFileHandle = await window.showSaveFilePicker!({
       types: [
         {
           description: 'ZIP file',

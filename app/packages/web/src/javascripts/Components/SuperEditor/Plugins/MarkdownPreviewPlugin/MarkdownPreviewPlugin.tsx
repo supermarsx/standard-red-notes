@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import { useEffect } from 'react'
 import { $createCodeNode } from '@lexical/code'
 import { $createTextNode, $getRoot } from 'lexical'
@@ -9,7 +10,7 @@ type Props = {
   onMarkdown: (markdown: string) => void
 }
 
-export default function MarkdownPreviewPlugin({ onMarkdown }: Props): JSX.Element | null {
+export default function MarkdownPreviewPlugin({ onMarkdown }: Props): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

@@ -31,7 +31,7 @@ export class StreamingFileSaver {
     try {
       const downloadHandle = handle
         ? handle
-        : await window.showSaveFilePicker({
+        : await window.showSaveFilePicker!({
             suggestedName: this.name,
           })
 

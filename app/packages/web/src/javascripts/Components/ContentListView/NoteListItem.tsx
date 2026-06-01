@@ -97,7 +97,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
 
   const hasOffsetBorder = !isNextItemTiled
 
-  const dragPreview = useRef<HTMLDivElement>()
+  const dragPreview = useRef<HTMLDivElement | undefined>(undefined)
 
   const createDragPreview = () => {
     if (!listItemRef.current) {

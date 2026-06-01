@@ -50,14 +50,14 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
     const responsiveFontSize = useResponsiveEditorFontSize(fontSize || EditorFontSize.Normal)
     const previousSpellcheck = usePrevious(spellcheck)
 
-    const lastEditorFocusEventSource = useRef<EditorEventSource | undefined>()
+    const lastEditorFocusEventSource = useRef<EditorEventSource | undefined>(undefined)
     const needsAdjustMobileCursor = useRef(false)
     const isAdjustingMobileCursor = useRef(false)
     const note = useRef(controller.item)
 
     const [isPendingLocalPropagation, setIsPendingLocalPropagation] = useState(false)
 
-    const tabObserverDisposer = useRef<Disposer>()
+    const tabObserverDisposer = useRef<Disposer | undefined>(undefined)
     const mutationObserver = useRef<MutationObserver | null>(null)
 
     useImperativeHandle(ref, () => ({

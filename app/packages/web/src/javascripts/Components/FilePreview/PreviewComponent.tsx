@@ -28,7 +28,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
   alignment,
   changeAlignment,
 }) => {
-  const objectUrlRef = useRef<string>()
+  const objectUrlRef = useRef<string | undefined>(undefined)
 
   const objectUrl = useMemo(() => {
     return createObjectURLWithRef(file.mimeType, bytes, objectUrlRef)

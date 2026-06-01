@@ -41,11 +41,11 @@ const LinkedItemBubble = ({
   readonly,
   wrappable,
 }: Props) => {
-  const ref = useRef<HTMLElement>()
+  const ref = useRef<HTMLElement | undefined>(undefined)
   const application = useApplication()
 
   const [showUnlinkButton, setShowUnlinkButton] = useState(false)
-  const unlinkButtonRef = useRef<HTMLElement>()
+  const unlinkButtonRef = useRef<HTMLElement | undefined>(undefined)
 
   const [wasClicked, setWasClicked] = useState(false)
 
@@ -108,7 +108,7 @@ const LinkedItemBubble = ({
   if (wrappable) {
     return (
       <a
-        ref={(el) => (ref.current = el as HTMLElement)}
+        ref={(el) => { ref.current = el as HTMLElement }}
         tabIndex={0}
         className={classNames(
           'group cursor-pointer rounded',
@@ -131,7 +131,7 @@ const LinkedItemBubble = ({
         <span>{getItemTitleInContextOfLinkBubble(link.item)}</span>
         {showUnlinkButton && !readonly && (
           <button
-            ref={(el) => (unlinkButtonRef.current = el as HTMLElement)}
+            ref={(el) => { unlinkButtonRef.current = el as HTMLElement }}
             role="button"
             className="-mr-1 ml-2 inline-flex h-[1.15em] cursor-pointer border-0 bg-transparent p-0 align-middle"
             onClick={onUnlinkClick}
@@ -145,7 +145,7 @@ const LinkedItemBubble = ({
 
   return (
     <button
-      ref={(el) => (ref.current = el as HTMLElement)}
+      ref={(el) => { ref.current = el as HTMLElement }}
       className={classNames(
         'group h-6 cursor-pointer items-center rounded bg-passive-4-opacity-variant py-2 pl-1 pr-2 align-middle text-sm',
         'text-text hover:bg-contrast focus:bg-contrast lg:text-xs',
@@ -170,7 +170,7 @@ const LinkedItemBubble = ({
       </span>
       {showUnlinkButton && !readonly && (
         <a
-          ref={(el) => (unlinkButtonRef.current = el as HTMLElement)}
+          ref={(el) => { unlinkButtonRef.current = el as HTMLElement }}
           role="button"
           className="-mr-1 ml-2 flex cursor-pointer border-0 bg-transparent p-0"
           onClick={onUnlinkClick}

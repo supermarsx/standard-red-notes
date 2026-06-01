@@ -65,7 +65,7 @@ export const ReadonlyNoteContent = ({
   }, [application, componentViewer])
 
   const containerRef = useRef<HTMLDivElement>(null)
-  const scrollerRef = useRef<HTMLElement | null>()
+  const scrollerRef = useRef<HTMLElement | null>(undefined)
 
   const setScroller = useCallback(() => {
     if (scrollerRef.current) {

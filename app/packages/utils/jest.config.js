@@ -3,7 +3,7 @@ const base = require('../../common.jest.json')
 
 module.exports = {
   ...base,
-  testPathIgnorePatterns: ['/node_modules/', 'Utils.spec.ts'],
+  testEnvironment: 'jsdom',
   coverageThreshold: {
     global: {
       branches: 4,

@@ -1,10 +1,11 @@
 import { FunctionComponent, ReactNode, useRef, useState } from 'react'
+import React from 'react'
 import { ArrowDownCheckmarkIcon } from '@standardnotes/icons'
 import { Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import { classNames } from '@standardnotes/snjs'
 
 type Props = {
-  title: string | JSX.Element
+  title: string | React.JSX.Element
   className?: string
   children?: ReactNode
   onClick?: (expanded: boolean) => void

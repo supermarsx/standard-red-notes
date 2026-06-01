@@ -1,4 +1,5 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import React from 'react'
 import {
   COMMAND_PRIORITY_EDITOR,
   $createTextNode,
@@ -11,7 +12,7 @@ import { INSERT_PASSWORD_COMMAND } from '../Commands'
 import { mergeRegister } from '@lexical/utils'
 import { generatePassword } from './Generator'
 
-export default function PasswordPlugin(): JSX.Element | null {
+export default function PasswordPlugin(): React.JSX.Element | null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {

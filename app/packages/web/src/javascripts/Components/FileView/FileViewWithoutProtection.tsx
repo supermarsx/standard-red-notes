@@ -40,7 +40,7 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
     })
   }, [application.vaultUsers, vault])
 
-  const syncTimeoutRef = useRef<number>()
+  const syncTimeoutRef = useRef<number | undefined>(undefined)
   const fileInfoButtonRef = useRef<HTMLButtonElement>(null)
 
   const [isFileInfoPanelOpen, setIsFileInfoPanelOpen] = useState(false)

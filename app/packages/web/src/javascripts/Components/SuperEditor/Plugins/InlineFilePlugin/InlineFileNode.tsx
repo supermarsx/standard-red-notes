@@ -1,4 +1,5 @@
 import { DecoratorBlockNode, SerializedDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
+import React from 'react'
 import {
   DOMConversionMap,
   DOMExportOutput,
@@ -161,7 +162,7 @@ export class InlineFileNode extends DecoratorBlockNode {
     return `${this.__mimeType.startsWith('image/') ? '!' : ''}[${this.__fileName}](${this.__src})`
   }
 
-  decorate(_editor: LexicalEditor, config: EditorConfig): JSX.Element {
+  decorate(_editor: LexicalEditor, config: EditorConfig): React.JSX.Element {
     const embedBlockTheme = config.theme.embedBlock || {}
     const className = {
       base: embedBlockTheme.base || '',

@@ -204,7 +204,7 @@ const FileDragNDropProvider = ({ application, children }: Props) => {
       if (event.dataTransfer?.items.length) {
         Array.from(event.dataTransfer.items).forEach(async (item) => {
           const fileOrHandle = StreamingFileReader.available()
-            ? ((await item.getAsFileSystemHandle()) as FileSystemFileHandle)
+            ? ((await item.getAsFileSystemHandle!()) as FileSystemFileHandle)
             : item.getAsFile()
 
           if (!fileOrHandle) {
