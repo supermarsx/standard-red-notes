@@ -26,8 +26,8 @@ import '../src/Controller/v2/ActionsControllerV2'
 import '../src/Controller/v2/RevisionsControllerV2'
 
 import helmet from 'helmet'
-import * as cors from 'cors'
-import * as cookieParser from 'cookie-parser'
+import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 

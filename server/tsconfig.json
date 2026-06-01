@@ -21,7 +21,9 @@
     "strict": true,
     "strictNullChecks": true,
     "target": "es2022",
-    "types": ["node"],
+    "types": ["node", "jest"],
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
   },
   "exclude": ["**/*.spec.ts", "dist", "test-setup.ts"],
   "references": [

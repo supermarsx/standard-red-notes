@@ -11,7 +11,6 @@ import {
   SubscriptionInviteListResponseBody,
   SubscriptionInviteRequestParams,
   SubscriptionInviteResponseBody,
-  SubscriptionServerInterface,
 } from '@standardnotes/api'
 import { HttpResponse, HttpStatusCode } from '@standardnotes/responses'
 import { inject, injectable } from 'inversify'
@@ -24,7 +23,7 @@ import { InviteToSharedSubscription } from '../Domain/UseCase/InviteToSharedSubs
 import { ListSharedSubscriptionInvitations } from '../Domain/UseCase/ListSharedSubscriptionInvitations/ListSharedSubscriptionInvitations'
 
 @injectable()
-export class SubscriptionInvitesController implements SubscriptionServerInterface {
+export class SubscriptionInvitesController {
   constructor(
     @inject(TYPES.Auth_InviteToSharedSubscription) private inviteToSharedSubscription: InviteToSharedSubscription,
     @inject(TYPES.Auth_AcceptSharedSubscriptionInvitation)

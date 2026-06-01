@@ -19,14 +19,13 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedInternalController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedFeaturesController'
 
-import * as cors from 'cors'
-import * as cookieParser from 'cookie-parser'
+import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import * as grpc from '@grpc/grpc-js'
 import { urlencoded, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
-import * as dayjs from 'dayjs'
-import * as utcPlugin from 'dayjs/plugin/utc'
-const utc = (utcPlugin as { default?: dayjs.PluginFunc }).default ?? (utcPlugin as unknown as dayjs.PluginFunc)
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 
 import { InversifyExpressServer } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'

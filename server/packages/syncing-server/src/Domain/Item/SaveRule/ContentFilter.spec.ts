@@ -8,7 +8,7 @@ import { ContentType } from '@standardnotes/domain-core'
 import { ItemHash } from '../ItemHash'
 
 describe('ContentFilter', () => {
-  let existingItem: Item
+  let existingItem!: Item
   const createFilter = () => new ContentFilter()
 
   it('should filter out items with invalid content', async () => {

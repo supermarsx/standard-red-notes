@@ -1,5 +1,5 @@
 import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
-import { FeatureIdentifier } from '@standardnotes/features'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 
 import { Authenticator } from '../../Authenticator/Authenticator'
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
@@ -28,7 +28,7 @@ export class ListAuthenticators implements UseCaseInterface<Authenticator[]> {
 
     const userIsEntitledToU2F = await this.featureService.userIsEntitledToFeature(
       user,
-      FeatureIdentifier.UniversalSecondFactor,
+      NativeFeatureIdentifier.TYPES.UniversalSecondFactor,
     )
 
     if (!userIsEntitledToU2F) {

@@ -1,5 +1,5 @@
 import * as crypto from 'crypto'
-import * as dayjs from 'dayjs'
+import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
 import { UAParserInstance } from 'ua-parser-js'
 import { TimerInterface } from '@standardnotes/time'

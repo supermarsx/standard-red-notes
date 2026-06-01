@@ -300,7 +300,7 @@ describe('RoleService', () => {
     it('should indicate if a user does not have a given permission', async () => {
       const userHasPermission = await createService().userHasPermission(
         '00000000-0000-0000-0000-000000000000',
-        PermissionName.MarkdownProEditor,
+        PermissionName.DeprecatedMarkdownProEditor,
       )
 
       expect(userHasPermission).toBeFalsy()
@@ -311,7 +311,7 @@ describe('RoleService', () => {
 
       const userHasPermission = await createService().userHasPermission(
         '00000000-0000-0000-0000-000000000000',
-        PermissionName.MarkdownProEditor,
+        PermissionName.DeprecatedMarkdownProEditor,
       )
 
       expect(userHasPermission).toBeFalsy()

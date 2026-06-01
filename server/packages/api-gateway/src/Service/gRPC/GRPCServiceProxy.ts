@@ -467,10 +467,8 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
   }
 
   private responseShouldNotBeDecorated(serviceResponse: AxiosResponse): boolean {
-    return (
-      serviceResponse.headers['content-type'] !== undefined &&
-      serviceResponse.headers['content-type'].toLowerCase().includes('text/html')
-    )
+    const contentType = serviceResponse.headers['content-type']
+    return typeof contentType === 'string' && contentType.toLowerCase().includes('text/html')
   }
 
   private applyResponseHeaders(serviceResponse: AxiosResponse, response: Response): void {

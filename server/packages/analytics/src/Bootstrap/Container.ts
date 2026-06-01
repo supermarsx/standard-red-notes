@@ -9,8 +9,8 @@ import {
 } from '@standardnotes/domain-events'
 import { MapperInterface } from '@standardnotes/domain-core'
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Mixpanel = require('mixpanel')
+import * as Mixpanel from 'mixpanel'
+type Mixpanel = ReturnType<typeof Mixpanel.init>
 
 import { Env } from './Env'
 import TYPES from './Types'

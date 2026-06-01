@@ -1,12 +1,12 @@
 import 'reflect-metadata'
 
 import { ValetTokenOperation } from '@standardnotes/security'
-import { BadRequestErrorMessageResult } from 'inversify-express-utils/lib/results'
+import { results } from 'inversify-express-utils'
+const { BadRequestErrorMessageResult } = results
 import { Result } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 import { Request, Response } from 'express'
 import { Writable, Readable } from 'stream'
-import { results } from 'inversify-express-utils'
 
 import { CreateUploadSession } from '../../Domain/UseCase/CreateUploadSession/CreateUploadSession'
 import { FinishUploadSession } from '../../Domain/UseCase/FinishUploadSession/FinishUploadSession'

@@ -5,7 +5,7 @@ import { GenerateAuthenticatorRegistrationOptionsDTO } from './GenerateAuthentic
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
 import { AuthenticatorChallengeRepositoryInterface } from '../../Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallenge'
-import { FeatureIdentifier } from '@standardnotes/features'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { AuthenticatorTransportFuture, PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/typescript-types'
@@ -44,7 +44,7 @@ export class GenerateAuthenticatorRegistrationOptions
 
     const userIsEntitledToU2F = await this.featureService.userIsEntitledToFeature(
       user,
-      FeatureIdentifier.UniversalSecondFactor,
+      NativeFeatureIdentifier.TYPES.UniversalSecondFactor,
     )
 
     if (!userIsEntitledToU2F) {

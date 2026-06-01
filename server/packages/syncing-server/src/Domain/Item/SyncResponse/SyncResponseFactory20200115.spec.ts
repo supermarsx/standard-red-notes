@@ -23,7 +23,7 @@ describe('SyncResponseFactory20200115', () => {
   let itemConflictMapper: MapperInterface<ItemConflict, ItemConflictHttpRepresentation>
   let itemProjection: ItemHttpRepresentation
   let savedItemHttpRepresentation: SavedItemHttpRepresentation
-  let itemConflictProjection: ItemConflictHttpRepresentation
+  let itemConflictProjection!: ItemConflictHttpRepresentation
   let item1: Item
   let item2: Item
   let itemConflict: ItemConflict

@@ -3,7 +3,7 @@ import 'reflect-metadata'
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedWebSocketsController'
 
-import * as cors from 'cors'
+import cors from 'cors'
 import { urlencoded, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 

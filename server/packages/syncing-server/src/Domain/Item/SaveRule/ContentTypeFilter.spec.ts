@@ -7,7 +7,7 @@ import { ContentTypeFilter } from './ContentTypeFilter'
 import { ItemHash } from '../ItemHash'
 
 describe('ContentTypeFilter', () => {
-  let existingItem: Item
+  let existingItem!: Item
   const createFilter = () => new ContentTypeFilter()
 
   it('should filter out items with invalid content type', async () => {

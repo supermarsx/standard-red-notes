@@ -1,11 +1,9 @@
-import * as dayjs from 'dayjs'
-import * as utcPlugin from 'dayjs/plugin/utc'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import * as microtime from 'microtime'
 import { Time } from './Time'
 import { TimerInterface } from './TimerInterface'
 import { TimeStructure } from './TimeStructure'
-
-const utc = (utcPlugin as { default?: dayjs.PluginFunc }).default ?? (utcPlugin as unknown as dayjs.PluginFunc)
 
 export class Timer implements TimerInterface {
   constructor() {

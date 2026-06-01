@@ -1,6 +1,6 @@
 import { SubscriptionName } from '@standardnotes/common'
 import { RoleName } from '@standardnotes/domain-core'
-import { FeatureDescription, GetFeatures } from '@standardnotes/features'
+import { AnyFeatureDescription, GetFeatures } from '@standardnotes/features'
 import { TimerInterface } from '@standardnotes/time'
 
 import { RoleToSubscriptionMapInterface } from '../Role/RoleToSubscriptionMapInterface'
@@ -34,17 +34,20 @@ export class FeatureService implements FeatureServiceInterface {
       return false
     }
 
-    if (feature.no_expire) {
+    const featureWithExpiry = feature as AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }
+
+    if (featureWithExpiry.no_expire) {
       return true
     }
 
     const featureIsExpired =
-      feature.expires_at !== undefined && feature.expires_at < this.timer.getTimestampInMicroseconds()
+      featureWithExpiry.expires_at !== undefined &&
+      featureWithExpiry.expires_at < this.timer.getTimestampInMicroseconds()
 
     return !featureIsExpired
   }
 
-  async getFeaturesForOfflineUser(email: string): Promise<{ features: FeatureDescription[]; roles: string[] }> {
+  async getFeaturesForOfflineUser(email: string): Promise<{ features: AnyFeatureDescription[]; roles: string[] }> {
     if (this.shouldReturnIncludedFeatures()) {
       return {
         features: this.getIncludedFeatures(),
@@ -71,7 +74,7 @@ export class FeatureService implements FeatureServiceInterface {
     }
   }
 
-  async getFeaturesForUser(user: User): Promise<Array<FeatureDescription>> {
+  async getFeaturesForUser(user: User): Promise<Array<AnyFeatureDescription>> {
     if (this.shouldReturnIncludedFeatures()) {
       return this.getIncludedFeatures()
     }
@@ -85,13 +88,13 @@ export class FeatureService implements FeatureServiceInterface {
     return ['included', 'full'].includes(this.standardRedFeaturesMode)
   }
 
-  private getIncludedFeatures(): Array<FeatureDescription> {
+  private getIncludedFeatures(): Array<AnyFeatureDescription> {
     return GetFeatures().map((feature) => ({
       ...feature,
       expires_at: undefined,
       no_expire: true,
       role_name: RoleName.NAMES.ProUser,
-    })) as Array<FeatureDescription>
+    })) as Array<AnyFeatureDescription>
   }
 
   private getIncludedRoles(): string[] {
@@ -101,8 +104,8 @@ export class FeatureService implements FeatureServiceInterface {
   private async getFeaturesForSubscriptions(
     userSubscriptions: Array<UserSubscription | OfflineUserSubscription>,
     userRoles: Array<Role>,
-  ): Promise<Array<FeatureDescription>> {
-    const userFeatures: Map<string, FeatureDescription> = new Map()
+  ): Promise<Array<AnyFeatureDescription>> {
+    const userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }> = new Map()
 
     await this.appendFeaturesBasedOnSubscriptions(userSubscriptions, userRoles, userFeatures)
 
@@ -113,7 +116,7 @@ export class FeatureService implements FeatureServiceInterface {
 
   private async appendFeaturesBasedOnNonSubscriptionRoles(
     userRoles: Array<Role>,
-    userFeatures: Map<string, FeatureDescription>,
+    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
   ): Promise<void> {
     const nonSubscriptionRolesOfUser = this.roleToSubscriptionMap.filterNonSubscriptionRoles(userRoles)
 
@@ -125,7 +128,7 @@ export class FeatureService implements FeatureServiceInterface {
   private async appendFeaturesBasedOnSubscriptions(
     userSubscriptions: Array<UserSubscription | OfflineUserSubscription>,
     userRoles: Array<Role>,
-    userFeatures: Map<string, FeatureDescription>,
+    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
   ): Promise<void> {
     const userSubscriptionNames: Array<SubscriptionName> = []
 
@@ -154,14 +157,14 @@ export class FeatureService implements FeatureServiceInterface {
 
   private async appendFeaturesAssociatedWithRole(
     role: Role,
-    userFeatures: Map<string, FeatureDescription>,
+    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
     longestLastingSubscription?: UserSubscription | OfflineUserSubscription,
   ): Promise<void> {
     const rolePermissions = await role.permissions
     for (const rolePermission of rolePermissions) {
       const featureForPermission = GetFeatures().find(
         (feature) => feature.permission_name === rolePermission.name,
-      ) as FeatureDescription
+      ) as AnyFeatureDescription
       if (featureForPermission === undefined) {
         continue
       }

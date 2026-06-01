@@ -1,10 +1,10 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
+import { BaseHttpController, controller, httpGet, httpPost, results } from 'inversify-express-utils'
 import { TYPES } from '../../Bootstrap/Types'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
-import { JsonResult } from 'inversify-express-utils/lib/results'
+type JsonResult = results.JsonResult
 
 @controller('/v1')
 export class ActionsController extends BaseHttpController {

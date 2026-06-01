@@ -11,7 +11,7 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedSharedVaultUsersController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharedVaultsController'
 
 import helmet from 'helmet'
-import * as cors from 'cors'
+import cors from 'cors'
 import * as grpc from '@grpc/grpc-js'
 import { urlencoded, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'

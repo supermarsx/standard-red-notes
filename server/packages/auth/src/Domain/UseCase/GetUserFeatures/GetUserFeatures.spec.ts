@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { FeatureDescription } from '@standardnotes/features'
+import { AnyFeatureDescription } from '@standardnotes/features'
 import { RoleName } from '@standardnotes/domain-core'
 
 import { GetUserFeatures } from './GetUserFeatures'
@@ -10,7 +10,7 @@ import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
 describe('GetUserFeatures', () => {
   let user: User
   let userRepository: UserRepositoryInterface
-  let feature1: FeatureDescription
+  let feature1: AnyFeatureDescription
   let featureService: FeatureServiceInterface
 
   const createUseCase = () => new GetUserFeatures(userRepository, featureService)
@@ -20,7 +20,7 @@ describe('GetUserFeatures', () => {
     userRepository = {} as jest.Mocked<UserRepositoryInterface>
     userRepository.findOneByUuid = jest.fn().mockReturnValue(user)
 
-    feature1 = { name: 'foobar' } as jest.Mocked<FeatureDescription>
+    feature1 = { name: 'foobar' } as jest.Mocked<AnyFeatureDescription>
     featureService = {} as jest.Mocked<FeatureServiceInterface>
     featureService.getFeaturesForUser = jest.fn().mockReturnValue([feature1])
     featureService.getFeaturesForOfflineUser = jest

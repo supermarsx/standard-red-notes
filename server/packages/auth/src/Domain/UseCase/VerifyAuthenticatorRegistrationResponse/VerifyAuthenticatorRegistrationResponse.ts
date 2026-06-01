@@ -1,6 +1,6 @@
 import { Dates, Result, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { VerifiedRegistrationResponse, verifyRegistrationResponse } from '@simplewebauthn/server'
-import { FeatureIdentifier } from '@standardnotes/features'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 
 import { AuthenticatorChallengeRepositoryInterface } from '../../Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
@@ -34,7 +34,7 @@ export class VerifyAuthenticatorRegistrationResponse implements UseCaseInterface
 
     const userIsEntitledToU2F = await this.featureService.userIsEntitledToFeature(
       user,
-      FeatureIdentifier.UniversalSecondFactor,
+      NativeFeatureIdentifier.TYPES.UniversalSecondFactor,
     )
 
     if (!userIsEntitledToU2F) {

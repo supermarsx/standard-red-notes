@@ -1,5 +1,5 @@
 import { Result, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
-import { FeatureIdentifier } from '@standardnotes/features'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
 import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
@@ -27,7 +27,7 @@ export class DeleteAuthenticator implements UseCaseInterface<string> {
 
     const userIsEntitledToU2F = await this.featureService.userIsEntitledToFeature(
       user,
-      FeatureIdentifier.UniversalSecondFactor,
+      NativeFeatureIdentifier.TYPES.UniversalSecondFactor,
     )
 
     if (!userIsEntitledToU2F) {

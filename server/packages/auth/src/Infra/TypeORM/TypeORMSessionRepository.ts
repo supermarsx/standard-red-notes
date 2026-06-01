@@ -1,5 +1,5 @@
 import { TimerInterface } from '@standardnotes/time'
-import * as dayjs from 'dayjs'
+import dayjs from 'dayjs'
 
 import { inject, injectable } from 'inversify'
 import { Repository } from 'typeorm'

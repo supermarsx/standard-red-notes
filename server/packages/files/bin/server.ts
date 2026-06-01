@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 
-import * as busboy from 'connect-busboy'
+import busboy from 'connect-busboy'
 
 import '../src/Infra/InversifyExpress/AnnotatedFallbackController'
 import '../src/Infra/InversifyExpress/AnnotatedHealthCheckController'
@@ -8,7 +8,7 @@ import '../src/Infra/InversifyExpress/AnnotatedFilesController'
 import '../src/Infra/InversifyExpress/AnnotatedSharedVaultFilesController'
 
 import helmet from 'helmet'
-import * as cors from 'cors'
+import cors from 'cors'
 import { urlencoded, json, raw, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 

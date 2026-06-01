@@ -30,7 +30,7 @@ jest.mock('@standardnotes/features', () => {
 const { GetFeatures } = jest.requireMock('@standardnotes/features')
 
 import { FeatureService } from './FeatureService'
-import { FeatureIdentifier, Permission, PermissionName } from '@standardnotes/features'
+import { NativeFeatureIdentifier, Permission, PermissionName } from '@standardnotes/features'
 import { OfflineUserSubscriptionRepositoryInterface } from '../Subscription/OfflineUserSubscriptionRepositoryInterface'
 import { TimerInterface } from '@standardnotes/time'
 import { OfflineUserSubscription } from '../Subscription/OfflineUserSubscription'
@@ -257,13 +257,13 @@ describe('FeatureService', () => {
 
   describe('online subscribers', () => {
     it('should tell if a user is entitled to a feature', async () => {
-      expect(await createService().userIsEntitledToFeature(user, FeatureIdentifier.AutobiographyTheme)).toBe(true)
-      expect(await createService().userIsEntitledToFeature(user, FeatureIdentifier.DeprecatedBoldEditor)).toBe(false)
+      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme)).toBe(true)
+      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.DeprecatedBoldEditor)).toBe(false)
     })
 
     it('should tell if a user is not entitled to a feature because it is expired', async () => {
       timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(777)
-      expect(await createService().userIsEntitledToFeature(user, FeatureIdentifier.AutobiographyTheme)).toBe(false)
+      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme)).toBe(false)
     })
 
     it('should tell if a user is entitled to a feature that does not expire', async () => {

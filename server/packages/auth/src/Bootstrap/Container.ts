@@ -1,5 +1,5 @@
 import * as winston from 'winston'
-import * as AgentKeepAlive from 'agentkeepalive'
+import AgentKeepAlive from 'agentkeepalive'
 import Redis from 'ioredis'
 import { SNSClient, SNSClientConfig } from '@aws-sdk/client-sns'
 import axios, { AxiosInstance } from 'axios'
