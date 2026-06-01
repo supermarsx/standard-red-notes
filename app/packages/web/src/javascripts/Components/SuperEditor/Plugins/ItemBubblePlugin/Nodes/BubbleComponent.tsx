@@ -34,7 +34,7 @@ export function BubbleComponent({ itemUuid, node }: BubbleComponentProps) {
     editor.update(() => {
       node.remove()
     })
-  }, [linkingController, node, editor])
+  }, [node, editor])
 
   if (!item) {
     return <div>Unable to find item {itemUuid}</div>

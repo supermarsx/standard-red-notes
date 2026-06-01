@@ -8,7 +8,7 @@ import { StoreData } from './StoreKeys'
 
 export const app = process.type === 'browser' ? require('electron').app : require('@electron/remote').app
 
-export function logError(...message: any) {
+export function logError(...message: unknown[]) {
   console.error('store:', ...message)
 }
 

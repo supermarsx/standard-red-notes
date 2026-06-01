@@ -22,7 +22,7 @@
       "@/*": ["./src/javascripts/*"],
       "@Controllers/*": ["src/javascripts/Controllers/*"]
     },
-    "ignoreDeprecations": "5.0"
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/javascripts"]
 }

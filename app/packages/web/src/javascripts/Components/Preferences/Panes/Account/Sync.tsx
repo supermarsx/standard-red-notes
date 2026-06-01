@@ -27,7 +27,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
       checkIntegrity: true,
     })
     setIsSyncingInProgress(false)
-    if (response && (response as any).error) {
+    if (response && (response as { error?: unknown }).error) {
       application.alerts.alert(STRING_GENERIC_SYNC_ERROR()).catch(console.error)
     } else {
       setLastSyncDate(formatLastSyncDate(application.sync.getLastSyncDate() as Date))

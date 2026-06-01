@@ -21,6 +21,6 @@
     "@types/react-dom": "^19.2.3",
     "eslint": "^8.57.0",
     "prettier": "*",
-    "typescript": "5.6.3"
+    "typescript": "6.0.3"
   }
 }

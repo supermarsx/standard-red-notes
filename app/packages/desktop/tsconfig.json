@@ -15,7 +15,7 @@
     "paths": {
       "@web/*": ["../web/src/javascripts/*"]
     },
-    "ignoreDeprecations": "5.0"
+    "ignoreDeprecations": "6.0"
   },
   "include": ["app/**/*"],
   "exclude": ["node_modules", "app/dist"],

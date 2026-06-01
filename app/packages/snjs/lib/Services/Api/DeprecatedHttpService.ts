@@ -126,7 +126,7 @@ export class DeprecatedHttpService extends AbstractService {
       request.onreadystatechange = () => {
         this.stateChangeHandlerForRequest(request, resolve, reject)
       }
-      request.send(body)
+      request.send(body as XMLHttpRequestBodyInit | null | undefined)
     })
   }
 

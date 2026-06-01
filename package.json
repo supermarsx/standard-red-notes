@@ -9,12 +9,14 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "mcp"
+    "mcp",
+    "openclaw"
   ],
   "scripts": {
-    "build": "yarn build:mcp && yarn build:app && yarn build:server",
+    "build": "yarn build:mcp && yarn build:openclaw && yarn build:app && yarn build:server",
     "build:app": "cd app && yarn build:all",
     "build:mcp": "yarn workspace @standard-red-notes/mcp build",
+    "build:openclaw": "yarn workspace @standard-red-notes/openclaw build",
     "build:server": "cd server && yarn build",
     "check": "yarn typecheck && yarn lint && yarn format:check && yarn test",
     "deps:audit": "yarn deps:audit:app && yarn deps:audit:server",
@@ -23,24 +25,30 @@
     "docker:config": "docker compose config",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build",
-    "format": "yarn format:mcp && yarn format:app && yarn format:server",
+    "format": "yarn format:mcp && yarn format:openclaw && yarn format:app && yarn format:server",
     "format:app": "cd app && yarn format",
-    "format:check": "yarn format:check:mcp && yarn format:check:app && yarn format:check:server",
+    "format:check": "yarn format:check:mcp && yarn format:check:openclaw && yarn format:check:app && yarn format:check:server",
     "format:check:app": "cd app && yarn format:check",
     "format:check:mcp": "yarn workspace @standard-red-notes/mcp format:check",
+    "format:check:openclaw": "yarn workspace @standard-red-notes/openclaw format:check",
     "format:check:server": "cd server && yarn format:check",
     "format:mcp": "yarn workspace @standard-red-notes/mcp format",
+    "format:openclaw": "yarn workspace @standard-red-notes/openclaw format",
     "format:server": "cd server && yarn format",
-    "lint": "yarn lint:mcp && yarn lint:app && yarn lint:server",
+    "lint": "yarn lint:mcp && yarn lint:openclaw && yarn lint:app && yarn lint:server",
     "lint:app": "cd app && yarn lint",
     "lint:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
+    "lint:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck",
     "lint:server": "cd server && yarn lint",
     "start:mcp": "yarn workspace @standard-red-notes/mcp start",
-    "test": "yarn test:app && yarn test:server",
+    "start:openclaw": "yarn workspace @standard-red-notes/openclaw start",
+    "test": "yarn test:openclaw && yarn test:app && yarn test:server",
     "test:app": "cd app && yarn test",
+    "test:openclaw": "yarn workspace @standard-red-notes/openclaw test",
     "test:server": "cd server && yarn test",
-    "typecheck": "yarn typecheck:mcp",
-    "typecheck:mcp": "yarn workspace @standard-red-notes/mcp typecheck"
+    "typecheck": "yarn typecheck:mcp && yarn typecheck:openclaw",
+    "typecheck:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
+    "typecheck:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck"
   },
   "devDependencies": {
     "npm-check-updates": "^22.2.1",

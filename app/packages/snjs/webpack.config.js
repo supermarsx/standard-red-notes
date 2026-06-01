@@ -28,16 +28,21 @@ module.exports = {
   module: {
     rules: [
       {
-        test: /\.(js|ts)$/,
+        test: /\.ts$/,
         use: [
           'babel-loader',
           {
             loader: 'ts-loader',
             options: {
               transpileOnly: true,
+              configFile: path.resolve(__dirname, 'webpack.tsconfig.json'),
             },
           },
         ],
+      },
+      {
+        test: /\.js$/,
+        use: ['babel-loader'],
       },
     ],
   },

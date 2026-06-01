@@ -1,0 +1,10 @@
+{
+  "extends": "./lib/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "rootDir": "../..",
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["./lib/**/*.ts", "../**/src/**/*.ts", "../**/lib/**/*.ts"]
+}

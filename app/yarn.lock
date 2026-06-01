@@ -10328,7 +10328,7 @@ __metadata:
     jest: ^29.7.0
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10435,7 +10435,7 @@ __metadata:
     eslint: ^8.57.0
     eslint-config-prettier: ^9.1.0
     ts-loader: ^9.6.0
-    typescript: 5.6.3
+    typescript: 6.0.3
     web-ext: ^10.3.0
     webextension-polyfill: ^0.12.0
     webpack: ^5.107.2
@@ -10542,7 +10542,7 @@ __metadata:
     terser-webpack-plugin: ^5.6.1
     ts-loader: ^9.6.0
     ts-node: ^10.9.2
-    typescript: 5.6.3
+    typescript: 6.0.3
     webpack: ^5.107.2
     webpack-merge: ^6.0.1
   languageName: unknown
@@ -10663,7 +10663,7 @@ __metadata:
     prettier: "*"
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10680,7 +10680,7 @@ __metadata:
     jest: ^29.7.0
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10712,7 +10712,7 @@ __metadata:
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
     ts-node: ^10.9.2
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10766,7 +10766,7 @@ __metadata:
     jest: ^29.7.0
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10837,7 +10837,7 @@ __metadata:
     react-dom: ^19.2.6
     ts-jest: ^29.4.11
     ts-loader: ^9.6.0
-    typescript: 5.6.3
+    typescript: 6.0.3
     webpack: ^5.107.2
     webpack-cli: ^7.0.3
     webpack-dev-server: ^5.2.4
@@ -10948,7 +10948,7 @@ __metadata:
     react-native-store-review: ^0.5.0
     react-native-version-info: ^1.1.1
     react-native-webview: 13.16.1
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -10978,7 +10978,7 @@ __metadata:
     lodash: ^4.18.1
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11011,7 +11011,7 @@ __metadata:
     "@standardnotes/mobile": "workspace:*"
     "@standardnotes/web": "workspace:*"
     "@types/node": "*"
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11028,7 +11028,7 @@ __metadata:
     jest: ^29.7.0
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11124,7 +11124,7 @@ __metadata:
     jest: ^29.7.0
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11166,7 +11166,7 @@ __metadata:
     eslint: ^8.57.0
     eslint-plugin-prettier: "*"
     reflect-metadata: ^0.2.2
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11213,7 +11213,7 @@ __metadata:
     serve-static: ^2.2.1
     ts-loader: ^9.6.0
     typedarray-to-buffer: ^4.0.0
-    typescript: 5.6.3
+    typescript: 6.0.3
     uuid: ^14.0.0
     webpack: ^5.107.2
     webpack-cli: ^7.0.3
@@ -11270,7 +11270,7 @@ __metadata:
     ts-loader: ^9.6.0
     ts-node: ^10.9.2
     tscpaths: 0.0.9
-    typescript: 5.6.3
+    typescript: 6.0.3
     uuid: ^14.0.0
     webpack: ^5.107.2
     webpack-cli: ^7.0.3
@@ -11321,7 +11321,7 @@ __metadata:
     sass: ^1.100.0
     sass-loader: "*"
     style-loader: ~4.0.0
-    typescript: 5.6.3
+    typescript: 6.0.3
     webpack: ^5.107.2
   languageName: unknown
   linkType: soft
@@ -11399,7 +11399,7 @@ __metadata:
     prettier: "*"
     react: ^19.2.6
     react-dom: ^19.2.6
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11425,7 +11425,7 @@ __metadata:
     mobx: ^6.15.4
     mobx-react-lite: ^4.1.1
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11448,7 +11448,7 @@ __metadata:
     lodash: ^4.18.1
     reflect-metadata: ^0.2.2
     ts-jest: ^29.4.11
-    typescript: 5.6.3
+    typescript: 6.0.3
   languageName: unknown
   linkType: soft
 
@@ -11543,7 +11543,7 @@ __metadata:
     ts-jest: ^29.4.11
     ts-loader: ^9.6.0
     ttag: ^1.8.12
-    typescript: 5.6.3
+    typescript: 6.0.3
     unicode-script: ^1.2.0
     webextension-polyfill: ^0.12.0
     webpack: ^5.107.2
@@ -33078,16 +33078,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typescript@npm:5.6.3":
-  version: 5.6.3
-  resolution: "typescript@npm:5.6.3"
-  bin:
-    tsc: bin/tsc
-    tsserver: bin/tsserver
-  checksum: ba302f8822777ebefb28b554105f3e074466b671e7444ec6b75dadc008a62f46f373d9e57ceced1c433756d06c8b7dc569a7eefdf3a9573122a49205ff99021a
-  languageName: node
-  linkType: hard
-
 "typescript@npm:6.0.3":
   version: 6.0.3
   resolution: "typescript@npm:6.0.3"
@@ -33095,16 +33085,6 @@ __metadata:
     tsc: bin/tsc
     tsserver: bin/tsserver
   checksum: c1182dfadf8a8cb22a4e32442715afef1af1b950ae635b1c52c27e0d7fb7a5e2607ed7c7c4079bba4163579250e02445fd8d46b09cbceda71ff72a5b7d69db61
-  languageName: node
-  linkType: hard
-
-"typescript@patch:typescript@5.6.3#~builtin<compat/typescript>":
-  version: 5.6.3
-  resolution: "typescript@patch:typescript@npm%3A5.6.3#~builtin<compat/typescript>::version=5.6.3&hash=7ad353"
-  bin:
-    tsc: bin/tsc
-    tsserver: bin/tsserver
-  checksum: ade87bce2363ee963eed0e4ca8a312ea02c81873ebd53609bc3f6dc0a57f6e61ad7e3fb8cbb7f7ab8b5081cbee801b023f7c4823ee70b1c447eae050e6c7622b
   languageName: node
   linkType: hard
 

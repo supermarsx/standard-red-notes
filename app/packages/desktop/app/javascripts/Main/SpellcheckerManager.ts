@@ -57,11 +57,12 @@ export enum Language {
   KO = 'ko',
 }
 
-function isLanguage(language: any): language is Language {
-  return Object.values(Language).includes(language)
+function isLanguage(language: unknown): language is Language {
+  return Object.values(Language).includes(language as Language)
 }
 
-function log(...message: any) {
+function log(...message: unknown[]) {
+  // eslint-disable-next-line no-console
   console.log('spellcheckerMaager:', ...message)
 }
 

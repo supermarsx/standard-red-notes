@@ -40,7 +40,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
         checkIntegrity: true,
       })
       .then((res) => {
-        if (res && (res as any).error) {
+        if (res && (res as { error?: unknown }).error) {
           throw new Error()
         } else {
           setLastSyncDate(formatLastSyncDate(application.sync.getLastSyncDate() as Date))

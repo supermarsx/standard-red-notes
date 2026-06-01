@@ -191,7 +191,7 @@ export class SNWebCrypto implements PureCryptoInterface {
    * @returns A WebCrypto CryptoKey object
    */
   private async webCryptoImportKey(
-    keyData: Uint8Array,
+    keyData: Uint8Array<ArrayBuffer>,
     alg: WebCryptoAlgs,
     actions: Array<WebCryptoActions>,
     hash?: WebCryptoParams,

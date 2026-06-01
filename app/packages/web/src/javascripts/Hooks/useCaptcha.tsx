@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 export const useCaptcha = (captchaURL: string, callback: (token: string) => void) => {
   useEffect(() => {
-    function handleCaptchaEvent(event: any) {
+    function handleCaptchaEvent(event: MessageEvent) {
       if (!captchaURL) {
         return
       }
@@ -11,8 +11,9 @@ export const useCaptcha = (captchaURL: string, callback: (token: string) => void
         return
       }
 
-      if (event?.data?.type?.includes('captcha')) {
-        callback(event.data.token)
+      const data = event.data as { type?: string; token?: string } | undefined
+      if (data?.type?.includes('captcha') && data.token) {
+        callback(data.token)
       }
     }
 
@@ -21,7 +22,7 @@ export const useCaptcha = (captchaURL: string, callback: (token: string) => void
     return () => {
       window.removeEventListener('message', handleCaptchaEvent)
     }
-  }, [callback])
+  }, [callback, captchaURL])
 
   if (!captchaURL) {
     return null

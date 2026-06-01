@@ -29,7 +29,7 @@ export async function downloadFile(url: string, filePath: string): Promise<void>
      * but still all the ones that pipeline needs
      * @see https://www.electronjs.org/docs/api/incoming-message
      */
-    response as any,
+    response as unknown as NodeJS.ReadableStream,
     fs.createWriteStream(filePath),
   )
 }

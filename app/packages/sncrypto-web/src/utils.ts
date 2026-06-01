@@ -66,8 +66,8 @@ export function generateUUID(): string {
  * Converts a plain string into an ArrayBuffer
  * @param {string} string - A plain string
  */
-export function stringToArrayBuffer(string: string): Uint8Array {
-  return from_string(string)
+export function stringToArrayBuffer(string: string): Uint8Array<ArrayBuffer> {
+  return from_string(string) as Uint8Array<ArrayBuffer>
 }
 
 /**
@@ -91,16 +91,16 @@ export function arrayBufferToHexString(arrayBuffer: ArrayBufferLike | ArrayBuffe
  * @access public
  * @param hex - A hex string
  */
-export function hexStringToArrayBuffer(hex: string): Uint8Array {
-  return from_hex(hex)
+export function hexStringToArrayBuffer(hex: string): Uint8Array<ArrayBuffer> {
+  return from_hex(hex) as Uint8Array<ArrayBuffer>
 }
 
 /**
  * Converts a base64 string into an ArrayBuffer
  * @param base64 - A base64 string
  */
-export function base64ToArrayBuffer(base64: string): Uint8Array {
-  return from_base64(base64, SN_BASE64_VARIANT)
+export function base64ToArrayBuffer(base64: string): Uint8Array<ArrayBuffer> {
+  return from_base64(base64, SN_BASE64_VARIANT) as Uint8Array<ArrayBuffer>
 }
 
 /**
@@ -156,9 +156,9 @@ export function base64Decode(base64String: string): string {
 
 const RFC4648 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
-export function base32Encode(input: ArrayBuffer): string {
-  const length = input.byteLength
-  const buffer = new Uint8Array(input)
+export function base32Encode(input: ArrayBufferLike | ArrayBufferView): string {
+  const buffer = ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength) : new Uint8Array(input)
+  const length = buffer.byteLength
 
   let bitIdx = 0
   let currentVal = 0

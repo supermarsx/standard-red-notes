@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "allowJs": true,
+    "allowJs": false,
     "alwaysStrict": true,
     "baseUrl": ".",
     "declaration": true,
@@ -28,7 +28,9 @@
       "@Lib/*": ["*"],
       "@Services/*": ["Services/*"]
     },
-    "ignoreDeprecations": "5.0"
+    "types": ["node", "jest"],
+    "ignoreDeprecations": "6.0"
   },
-  "exclude": ["../package.json"]
+  "include": ["./**/*.ts"],
+  "exclude": ["../package.json", "**/*.spec.ts"]
 }

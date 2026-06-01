@@ -70,7 +70,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
   private async runRequest<T>(request: Request, body?: string | Uint8Array | undefined): Promise<HttpResponse<T>> {
     try {
       const fetchResponse = await fetch(request, {
-        body,
+        body: body as BodyInit | undefined,
       })
 
       const response = await this.handleFetchResponse<T>(fetchResponse)
