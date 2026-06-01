@@ -19,8 +19,8 @@
   "scripts": {
     "lint": "yarn workspaces foreach -t --verbose run lint",
     "test": "yarn workspaces foreach -pt --jobs 10 --verbose run test",
-    "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,js,json,md}\"",
-    "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx,js,json,md}\"",
+    "format": "prettier --write \"packages/*/{src,lib,app}/**/*.{ts,tsx,js,jsx,json,md,html,css,scss}\" \"packages/*/*.{js,ts,json,md}\"",
+    "format:check": "prettier --check \"packages/*/{src,lib,app}/**/*.{ts,tsx,js,jsx,json,md,html,css,scss}\" \"packages/*/*.{js,ts,json,md}\"",
     "clean": "lerna run clean",
     "build:all": "yarn workspaces foreach -pt --topological-dev --verbose --exclude '{@standardnotes/docs}' run build",
     "build:web": "yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web run build",

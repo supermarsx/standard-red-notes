@@ -8,7 +8,11 @@ describe('GetAuthenticatorAuthenticationResponse', () => {
     authenticationOptions: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>
 
-  const createUseCase = () => new GetAuthenticatorAuthenticationResponse(getAuthenticatorAuthenticationOptions, authenticatorVerificationPromptFunction)
+  const createUseCase = () =>
+    new GetAuthenticatorAuthenticationResponse(
+      getAuthenticatorAuthenticationOptions,
+      authenticatorVerificationPromptFunction,
+    )
 
   beforeEach(() => {
     getAuthenticatorAuthenticationOptions = {} as jest.Mocked<GetAuthenticatorAuthenticationOptions>

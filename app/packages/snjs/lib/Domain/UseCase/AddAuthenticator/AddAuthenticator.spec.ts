@@ -7,7 +7,6 @@ describe('AddAuthenticator', () => {
     registrationOptions: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>
 
-
   const createUseCase = () => new AddAuthenticator(authenticatorClient, authenticatorRegistrationPromptFunction)
 
   beforeEach(() => {
@@ -27,7 +26,9 @@ describe('AddAuthenticator', () => {
     })
 
     expect(result.isFailed()).toBe(true)
-    expect(result.getError()).toBe('Could not generate authenticator registration options: Given value is not a valid uuid: invalid')
+    expect(result.getError()).toBe(
+      'Could not generate authenticator registration options: Given value is not a valid uuid: invalid',
+    )
   })
 
   it('should return error if authenticatorName is invalid', async () => {
@@ -121,6 +122,8 @@ describe('AddAuthenticator', () => {
     })
 
     expect(result.isFailed()).toBe(true)
-    expect(result.getError()).toBe('Could not generate authenticator registration options: No authenticator registration prompt function provided')
+    expect(result.getError()).toBe(
+      'Could not generate authenticator registration options: No authenticator registration prompt function provided',
+    )
   })
 })
