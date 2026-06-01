@@ -5,7 +5,7 @@ module.exports = {
     project: './tsconfig.json',
     tsconfigRootDir: __dirname,
   },
-  ignorePatterns: ['**/*.spec.ts', "__mocks__"],
+  ignorePatterns: ['**/*.spec.ts', '__mocks__'],
   plugins: ['@typescript-eslint', 'react', 'react-hooks', 'prettier'],
   env: {
     browser: true,

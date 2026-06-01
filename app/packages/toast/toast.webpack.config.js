@@ -10,7 +10,7 @@ module.exports = () => {
       extensions: ['.ts', '.tsx', '.js'],
     },
     externals: {
-      "@standardnotes/icons": path.resolve(__dirname, "./node_modules/@standardnotes/icons")
+      '@standardnotes/icons': path.resolve(__dirname, './node_modules/@standardnotes/icons'),
     },
     module: {
       rules: [

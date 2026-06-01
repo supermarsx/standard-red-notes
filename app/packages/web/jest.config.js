@@ -23,8 +23,6 @@ module.exports = {
     '^.+\\.(ts|tsx|js|jsx)?$': 'ts-jest',
     '\\.svg$': 'svg-jest',
   },
-  transformIgnorePatterns: [
-    'node_modules/(?!(react-error-boundary)/)',
-  ],
+  transformIgnorePatterns: ['node_modules/(?!(react-error-boundary)/)'],
   testEnvironment: 'jsdom',
 }

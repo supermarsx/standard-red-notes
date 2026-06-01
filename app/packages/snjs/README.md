@@ -21,14 +21,14 @@ SNJS also interacts with a Standard Notes [syncing server](https://github.com/st
 ## Integrating in module environment
 
 ```javascript
-import { SNApplication } from 'snjs';
+import { SNApplication } from 'snjs'
 ```
 
 ## Integrating in non-module web environment
 
 ```javascript
-<script src="snjs.js"></script>
-Object.assign(window, SNLibrary);
+;<script src="snjs.js"></script>
+Object.assign(window, SNLibrary)
 ```
 
 ## Building

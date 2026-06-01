@@ -61,12 +61,14 @@ By default, upgrading an account's protocol version will create a new `itemsKey`
 ## Encryption Flow
 
 _For each_ item (such as a note) the client wants to encrypt:
+
 1. Client generates random `item_key` (note: singular. Not related to `itemsKey`).
 2. Client encrypts note content with `item_key` to form `content`.
 3. Client encrypts `item_key` with default `itemsKey` as `enc_item_key`.
 4. Client notes `itemsKey` UUID and associates it with encrypted item payload as `items_key_id`, and uploads payload to server.
 
 To decrypt an item payload:
+
 1. Client retrieves `itemsKey` matching `items_key_id` of payload.
 2. Client decrypts item's `enc_item_key` with `itemsKey` to form `item_key`.
 3. Client decrypts item's `content` using `item_key`.
@@ -169,27 +171,35 @@ When a client encounters an invalid session network response (typically status c
 How data is stored depends on different key scenarios.
 
 ### Scenario A
+
 _No root key and no root key wrapper (no account and no passcode)_
+
 - **Value storage**: Plain, unencrypted
 - **Payload storage**: Plain, unencrypted
 - **Root key storage**: Not applicable
 
 ### Scenario B
+
 _Root key but no root key wrapper (account but no passcode):_
+
 - **Value storage**: Encrypted with root key
 - **Payload storage:** Encrypted with root key
 - **Root key storage**:
-    - With device keychain: Plainly in secure keychain
-    - With no device keychain: Plainly in device storage
+  - With device keychain: Plainly in secure keychain
+  - With no device keychain: Plainly in device storage
 
 ### Scenario C
+
 _Root key and root key wrapper (account and passcode):_
+
 - **Value storage**: Encrypted with root key
 - **Payload storage**: Encrypted with root key
 - **Root key storage**: Encrypted in device storage
 
 ### Scenario D
+
 _No root key but root key wrapper (no account but passcode):_
+
 - **Value storage**: Encrypted with root key wrapper
 - **Payload storage**: Encrypted with root key wrapper
 - **Root key storage**: Not applicable
@@ -211,7 +221,7 @@ This `itemsKey` is encrypted as usual using `rootKey.masterKey`, and synced to t
 **Key Derivation:**
 
 | Name               | Value    |
-|--------------------|----------|
+| ------------------ | -------- |
 | Algorithm          | Argon2id |
 | Memory (Bytes)     | 67108864 |
 | Iterations         | 5        |
@@ -221,15 +231,16 @@ This `itemsKey` is encrypted as usual using `rootKey.masterKey`, and synced to t
 
 **Encryption:**
 
-| Name               | Value              |
-|--------------------|--------------------|
-| Algorithm          | XChaCha20+Poly1305 |
-| Key Length (Bits)  | 256                |
-| Nonce Length (Bits)| 192                |
+| Name                | Value              |
+| ------------------- | ------------------ |
+| Algorithm           | XChaCha20+Poly1305 |
+| Key Length (Bits)   | 256                |
+| Nonce Length (Bits) | 192                |
 
 ### Root Key Derivation Flow - Specifics
 
 Given a user `identifier` (email) and `password` (user password):
+
 1. Generate a random salt `seed`, 256 bits (`hex`).
 2. Generate `salt`:
    1. `hash = SHA256Hex('identifier:seed')`
@@ -242,24 +253,26 @@ Given a user `identifier` (email) and `password` (user password):
       serverPassword: derivedKey.secondHalf,
       version: '004'
     }
-    ```
+   ```
 5. For account registration, `identifier`, `seed`, `serverPassword`, and `version` must be uploaded to the server.
 
 **Understanding the salt `seed`:**
 
-Our threat model is intended to distrust the server as much as possible. For this reason, we do not want to blindly trust whatever salt value a server returns to us. For example, a malicious server may attempt to mass-weaken user security by sending the same salt for every user account, and observe what interesting results the clients send back. Instead,  clients play a more significant role in salt generation, and use the value the user inputs into the email field for salt generation.
+Our threat model is intended to distrust the server as much as possible. For this reason, we do not want to blindly trust whatever salt value a server returns to us. For example, a malicious server may attempt to mass-weaken user security by sending the same salt for every user account, and observe what interesting results the clients send back. Instead, clients play a more significant role in salt generation, and use the value the user inputs into the email field for salt generation.
 
 At this point we have `salt = generateSalt(email)`. However, we'd ideally like to make this value more unique. Emails are globally unique, but well-known in advance. We could introduce more variability by also including the protocol version in salt computation, such as `salt = generateSalt(email, version)`, but this could also be well-accounted for in advance.
 
 The salt `seed` serves as a way to make it truly impossible to know a salt for an account ahead of time, without first interacting with the server the account is hosted on. While retrieving a `seed` for a given account is a public, non-authorized operation, users who configure two-factor authentication can proceed to lock this operation so that a proper 2FA code is required to retrieve the salt `seed`. Salts are thus computed via `salt = generateSalt(email, seed)`.
 
 ### Items Key Generation Flow
+
 1. Generate random `hex` string `key`, 256 bits.
 2. Create `itemsKey = {itemsKey: key, version: '004'}`
 
 ### Encryption - Specifics
 
 An encrypted payload consists of:
+
 - `items_key_id`: The UUID of the `itemsKey` used to encrypt `enc_item_key`.
 - `enc_item_key`: An encrypted protocol string joined by colons `:` of the following components:
   - protocol version
@@ -277,14 +290,14 @@ An encrypted payload consists of:
 1. Generate a random 256-bit key `item_key` (in `hex` format).
 2. Encrypt `item.content` using `item_key` to form `content`, and `{ u: item.uuid, v: '004', kp: rootKey.key_params IF item.type == ItemsKey }` as `authenticated_data`, following the instructions _"Encrypting a string using the 004 scheme"_ below.
 3. Encrypt `item_key` using the the default `itemsKey.itemsKey` to form `enc_item_key`, and `{ u: item.uuid, v: '004', kp: rootKey.key_params IF item.type == ItemsKey }` as `authenticated_data`, following the instructions _"Encrypting a string using the 004 scheme"_ below.
-5. Generate an encrypted payload as:
-    ```
-    {
-        items_key_id: itemsKey.uuid,
-        enc_item_key: enc_item_key,
-        content: content,
-    }
-    ```
+4. Generate an encrypted payload as:
+   ```
+   {
+       items_key_id: itemsKey.uuid,
+       enc_item_key: enc_item_key,
+       content: content,
+   }
+   ```
 
 ### Encrypting a string using the 004 scheme:
 
@@ -295,10 +308,13 @@ Given a `string_to_encrypt`, an `encryption_key`, `authenticated_data`, and an i
 2. Encode `authenticated_data` as a base64 encoded json string (`base64(json(authenticated_data))`) where the embedded data is recursively sorted by key for stringification (i.e `{v: '2', 'u': '1'}` should be stringified as `{u: '1', 'v': '2'}`), to get `encoded_authenticated_data`.
 
 3. Encrypt `string_to_encrypt` using `XChaCha20+Poly1305:Base64`, `encryption_key`, `nonce`, and `encoded_authenticated_data`:
-  ```
-  ciphertext = XChaCha20Poly1305(string_to_encrypt, encryption_key, nonce, encoded_authenticated_data)
-  ```
+
+```
+ciphertext = XChaCha20Poly1305(string_to_encrypt, encryption_key, nonce, encoded_authenticated_data)
+```
+
 4. Generate the final result by combining components into a `:` separated string:
-  ```
-  result = ['004', nonce, ciphertext, encoded_authenticated_data].join(':')
-  ```
+
+```
+result = ['004', nonce, ciphertext, encoded_authenticated_data].join(':')
+```
