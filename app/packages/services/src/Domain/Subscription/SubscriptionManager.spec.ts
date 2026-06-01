@@ -17,7 +17,14 @@ describe('SubscriptionManager', () => {
   let storage: StorageServiceInterface
   let isApplicationUsingThirdPartyHostUseCase: IsApplicationUsingThirdPartyHost
 
-  const createManager = () => new SubscriptionManager(subscriptionApiService, sessions, storage, isApplicationUsingThirdPartyHostUseCase, internalEventBus)
+  const createManager = () =>
+    new SubscriptionManager(
+      subscriptionApiService,
+      sessions,
+      storage,
+      isApplicationUsingThirdPartyHostUseCase,
+      internalEventBus,
+    )
 
   beforeEach(() => {
     subscriptionApiService = {} as jest.Mocked<SubscriptionApiServiceInterface>

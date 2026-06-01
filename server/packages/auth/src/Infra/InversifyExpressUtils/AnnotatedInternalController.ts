@@ -1,12 +1,6 @@
 import { Request } from 'express'
 import { inject } from 'inversify'
-import {
-  BaseHttpController,
-  controller,
-  httpGet,
-   
-  results,
-} from 'inversify-express-utils'
+import { BaseHttpController, controller, httpGet, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { GetSetting } from '../../Domain/UseCase/GetSetting/GetSetting'
 import { GetUserFeatures } from '../../Domain/UseCase/GetUserFeatures/GetUserFeatures'

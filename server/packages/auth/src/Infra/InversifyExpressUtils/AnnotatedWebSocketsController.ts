@@ -1,11 +1,6 @@
 import { TokenDecoderInterface, WebSocketConnectionTokenData } from '@standardnotes/security'
 import { Request } from 'express'
-import {
-  controller,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpPost, results } from 'inversify-express-utils'
 import { CreateCrossServiceToken } from '../../Domain/UseCase/CreateCrossServiceToken/CreateCrossServiceToken'
 import { inject } from 'inversify'
 import TYPES from '../../Bootstrap/Types'

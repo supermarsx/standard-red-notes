@@ -147,7 +147,10 @@ export class BaseAuthController extends BaseHttpController {
     })
 
     if (!signInResult.success) {
-      const resultOrError = await this.increaseLoginAttempts.execute({ email: request.body.email, skipUsernameValidation: true })
+      const resultOrError = await this.increaseLoginAttempts.execute({
+        email: request.body.email,
+        skipUsernameValidation: true,
+      })
       if (resultOrError.isFailed()) {
         this.logger.error(`Failed to increase login attempts: ${resultOrError.getError()}`, {
           application: request.headers['x-application-version'] as string,

@@ -10,7 +10,7 @@ import { ContentType } from '@standardnotes/domain-core'
 // Mock the utils functions
 jest.mock('@standardnotes/utils', () => ({
   deepFreeze: jest.fn(),
-  useBoolean: jest.fn((value, defaultValue) => value !== undefined ? !!value : defaultValue),
+  useBoolean: jest.fn((value, defaultValue) => (value !== undefined ? !!value : defaultValue)),
 }))
 
 // Mock the content type encryption check
@@ -36,7 +36,10 @@ class TestPurePayload extends PurePayload<TransferPayload<ItemContent>, ItemCont
     return new TestPurePayload(newPayload, source || this.source) as this
   }
 
-  copyAsSyncResolved(override?: Partial<TransferPayload<ItemContent>> & SyncResolvedParams, source?: PayloadSource): SyncResolvedPayload {
+  copyAsSyncResolved(
+    override?: Partial<TransferPayload<ItemContent>> & SyncResolvedParams,
+    source?: PayloadSource,
+  ): SyncResolvedPayload {
     const newPayload = {
       ...this.ejected(),
       ...override,
@@ -52,10 +55,12 @@ describe('PurePayload', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockDeepFreeze.mockImplementation((obj) => obj)
-    mockUseBoolean.mockImplementation((value, defaultValue) => value !== undefined ? !!value : defaultValue)
+    mockUseBoolean.mockImplementation((value, defaultValue) => (value !== undefined ? !!value : defaultValue))
   })
 
-  const createValidRawPayload = (overrides: Partial<TransferPayload<ItemContent>> = {}): TransferPayload<ItemContent> => ({
+  const createValidRawPayload = (
+    overrides: Partial<TransferPayload<ItemContent>> = {},
+  ): TransferPayload<ItemContent> => ({
     uuid: '123e4567-e89b-12d3-a456-426614174000',
     content_type: ContentType.TYPES.Note,
     content: FillItemContent({}),
@@ -70,37 +75,33 @@ describe('PurePayload', () => {
   describe('constructor', () => {
     it('should throw error when uuid is null', () => {
       const rawPayload = createValidRawPayload({ uuid: null as any })
-      
-      expect(() => new TestPurePayload(rawPayload)).toThrow(
-        'Attempting to construct payload with null uuid'
-      )
+
+      expect(() => new TestPurePayload(rawPayload)).toThrow('Attempting to construct payload with null uuid')
     })
 
     it('should throw error when uuid is undefined', () => {
       const rawPayload = createValidRawPayload({ uuid: undefined as any })
-      
-      expect(() => new TestPurePayload(rawPayload)).toThrow(
-        'Attempting to construct payload with null uuid'
-      )
+
+      expect(() => new TestPurePayload(rawPayload)).toThrow('Attempting to construct payload with null uuid')
     })
 
     it('should throw error when content type uses root key encryption but has key_system_identifier', () => {
       const rawPayload = createValidRawPayload({
         content_type: ContentType.TYPES.RootKey,
-        key_system_identifier: 'some-key-system-id'
+        key_system_identifier: 'some-key-system-id',
       })
-      
+
       expect(() => new TestPurePayload(rawPayload)).toThrow(
-        'Rootkey-encrypted payload should not have a key system identifier'
+        'Rootkey-encrypted payload should not have a key system identifier',
       )
     })
 
     it('should allow key_system_identifier for non-root-key content types', () => {
       const rawPayload = createValidRawPayload({
         content_type: ContentType.TYPES.Note,
-        key_system_identifier: 'some-key-system-id'
+        key_system_identifier: 'some-key-system-id',
       })
-      
+
       expect(() => new TestPurePayload(rawPayload)).not.toThrow()
     })
 
@@ -388,9 +389,7 @@ describe('PurePayload', () => {
         content_type: ContentType.TYPES.Note,
       })
 
-      expect(() => new TestPurePayload(rawPayload)).toThrow(
-        /Content type: Note/
-      )
+      expect(() => new TestPurePayload(rawPayload)).toThrow(/Content type: Note/)
     })
   })
 
@@ -435,4 +434,4 @@ describe('PurePayload', () => {
       expect(payload.last_edited_by_uuid).toBeUndefined()
     })
   })
-}) 
+})

@@ -217,8 +217,16 @@ describe('CryptoNode', function () {
     // base32 of "12345678901234567890"
     const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
     const expectedTokens = [
-      '755224', '287082', '359152', '969429', '338314',
-      '254676', '287922', '162583', '399871', '520489',
+      '755224',
+      '287082',
+      '359152',
+      '969429',
+      '338314',
+      '254676',
+      '287922',
+      '162583',
+      '399871',
+      '520489',
     ]
 
     for (let counter = 0; counter < expectedTokens.length; counter++) {

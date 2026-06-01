@@ -1,13 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  controller,
-  httpDelete,
-  httpGet,
-  httpPut,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpDelete, httpGet, httpPut, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { DeleteSetting } from '../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from '../../Domain/UseCase/GetSetting/GetSetting'

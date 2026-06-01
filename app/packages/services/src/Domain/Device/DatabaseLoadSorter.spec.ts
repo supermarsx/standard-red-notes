@@ -4,7 +4,12 @@ import { GetSortedPayloadsByPriority } from './DatabaseLoadSorter'
 
 describe('GetSortedPayloadsByPriority', () => {
   let payloads: FullyFormedPayloadInterface[] = []
-  const contentTypePriority = [ContentType.TYPES.ItemsKey, ContentType.TYPES.UserPrefs, ContentType.TYPES.Component, ContentType.TYPES.Theme]
+  const contentTypePriority = [
+    ContentType.TYPES.ItemsKey,
+    ContentType.TYPES.UserPrefs,
+    ContentType.TYPES.Component,
+    ContentType.TYPES.Theme,
+  ]
   let launchPriorityUuids: string[] = []
 
   it('should sort payloads based on content type priority', () => {

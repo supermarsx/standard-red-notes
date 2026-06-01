@@ -62,14 +62,16 @@ export class SKAlert {
     const genButton = function (buttonDesc: AlertButton, index: number) {
       return `
         <button id='button-${index}' class='font-bold px-4 py-1.5 rounded text-base lg:text-sm ${
-        buttonDesc.primary ? 'no-border ' : 'border-solid border-border border '
-      } ${
-        buttonDesc.primary
-          ? 'hover:brightness-125 focus:outline-none focus:brightness-125 '
-          : 'focus:bg-contrast focus:outline-none hover:bg-contrast '
-      } ${
-        buttonDesc.primary ? getColorsForPrimaryVariant(buttonDesc.style) : getColorsForNormalVariant(buttonDesc.style)
-      }'>
+          buttonDesc.primary ? 'no-border ' : 'border-solid border-border border '
+        } ${
+          buttonDesc.primary
+            ? 'hover:brightness-125 focus:outline-none focus:brightness-125 '
+            : 'focus:bg-contrast focus:outline-none hover:bg-contrast '
+        } ${
+          buttonDesc.primary
+            ? getColorsForPrimaryVariant(buttonDesc.style)
+            : getColorsForNormalVariant(buttonDesc.style)
+        }'>
           <div class='sk-label'>${buttonDesc.text}</div>
         </button>
       `

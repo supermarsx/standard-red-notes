@@ -5,7 +5,9 @@ describe('note type', () => {
   it('should return the correct note type for editor identifier', () => {
     expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.PlainEditor)).toEqual(NoteType.Plain)
     expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.SuperEditor)).toEqual(NoteType.Super)
-    expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.DeprecatedMarkdownProEditor)).toEqual(NoteType.Markdown)
+    expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.DeprecatedMarkdownProEditor)).toEqual(
+      NoteType.Markdown,
+    )
     expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.DeprecatedPlusEditor)).toEqual(NoteType.RichText)
     expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.DeprecatedCodeEditor)).toEqual(NoteType.Code)
     expect(noteTypeForEditorIdentifier(NativeFeatureIdentifier.TYPES.SheetsEditor)).toEqual(NoteType.Spreadsheet)

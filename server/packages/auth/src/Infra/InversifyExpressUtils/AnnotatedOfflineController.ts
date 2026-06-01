@@ -1,12 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  controller,
-  httpGet,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpGet, httpPost, results } from 'inversify-express-utils'
 import { Logger } from 'winston'
 import { OfflineUserTokenData, TokenEncoderInterface } from '@standardnotes/security'
 import TYPES from '../../Bootstrap/Types'

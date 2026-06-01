@@ -1,12 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  BaseHttpController,
-  controller,
-  httpDelete,
-  httpPost,
-  results,
-} from 'inversify-express-utils'
+import { BaseHttpController, controller, httpDelete, httpPost, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { AddWebSocketsConnection } from '../../Domain/UseCase/AddWebSocketsConnection/AddWebSocketsConnection'
 import { RemoveWebSocketsConnection } from '../../Domain/UseCase/RemoveWebSocketsConnection/RemoveWebSocketsConnection'

@@ -14,7 +14,11 @@ import { getBufferWithEncoding } from './Utils'
 import { CryptoTotpInterface } from './CryptoTotpInterface'
 
 export class CryptoNode
-  implements CryptoAes256GcmInterface<BufferEncoding>, CryptoSha256Interface, CryptoBase64Interface, CryptoTotpInterface
+  implements
+    CryptoAes256GcmInterface<BufferEncoding>,
+    CryptoSha256Interface,
+    CryptoBase64Interface,
+    CryptoTotpInterface
 {
   async aes256GcmEncrypt({
     unencrypted,
@@ -175,7 +179,7 @@ export class CryptoNode
 
     let bits = 0
     let value = 0
-    const output = new Uint8Array(Math.ceil(cleanInput.length * 5 / 8))
+    const output = new Uint8Array(Math.ceil((cleanInput.length * 5) / 8))
     let outputIndex = 0
 
     for (let i = 0; i < cleanInput.length; i++) {

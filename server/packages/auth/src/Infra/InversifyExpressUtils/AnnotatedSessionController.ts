@@ -1,12 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  controller,
-  httpDelete,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpDelete, httpPost, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { DeleteOtherSessionsForUser } from '../../Domain/UseCase/DeleteOtherSessionsForUser'
 import { DeleteSessionForUser } from '../../Domain/UseCase/DeleteSessionForUser'

@@ -1,12 +1,7 @@
 import { CrossServiceTokenData, TokenEncoderInterface } from '@standardnotes/security'
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  controller,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpPost, results } from 'inversify-express-utils'
 
 import TYPES from '../../Bootstrap/Types'
 import { Role } from '../../Domain/Role/Role'

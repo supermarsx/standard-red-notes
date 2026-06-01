@@ -1,10 +1,5 @@
 import { Request, Response } from 'express'
-import {
-  controller,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpPost, results } from 'inversify-express-utils'
 
 import TYPES from '../../Bootstrap/Types'
 import { SignIn } from '../../Domain/UseCase/SignIn'

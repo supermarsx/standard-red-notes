@@ -376,9 +376,7 @@ describe('CreateValetToken', () => {
   })
 
   it('should return no-subscription when regular lookup succeeds with undefined value', async () => {
-    getRegularSubscription.execute = jest
-      .fn()
-      .mockReturnValue(Result.ok(undefined as unknown as UserSubscription))
+    getRegularSubscription.execute = jest.fn().mockReturnValue(Result.ok(undefined as unknown as UserSubscription))
 
     const response = await createUseCase().execute({
       operation: ValetTokenOperation.Read,
@@ -405,13 +403,15 @@ describe('CreateValetToken', () => {
     } as jest.Mocked<UserSubscription>
 
     getSharedSubscription.execute = jest.fn().mockReturnValue(Result.ok(sharedSubscription))
-    getRegularSubscription.execute = jest.fn().mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
-      if (dto.subscriptionId !== undefined) {
-        return Result.ok(sharedRegularSubscription)
-      }
+    getRegularSubscription.execute = jest
+      .fn()
+      .mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
+        if (dto.subscriptionId !== undefined) {
+          return Result.ok(sharedRegularSubscription)
+        }
 
-      return Result.ok(regularSubscription)
-    })
+        return Result.ok(regularSubscription)
+      })
 
     const response = await createUseCase().execute({
       operation: ValetTokenOperation.Read,
@@ -439,13 +439,15 @@ describe('CreateValetToken', () => {
 
   it('should fallback to user regular when shared regular subscription lookup fails', async () => {
     getSharedSubscription.execute = jest.fn().mockReturnValue(Result.ok(sharedSubscription))
-    getRegularSubscription.execute = jest.fn().mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
-      if (dto.subscriptionId !== undefined) {
-        return Result.fail('not found')
-      }
+    getRegularSubscription.execute = jest
+      .fn()
+      .mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
+        if (dto.subscriptionId !== undefined) {
+          return Result.fail('not found')
+        }
 
-      return Result.ok(regularSubscription)
-    })
+        return Result.ok(regularSubscription)
+      })
 
     const response = await createUseCase().execute({
       operation: ValetTokenOperation.Read,
@@ -479,13 +481,15 @@ describe('CreateValetToken', () => {
     } as jest.Mocked<UserSubscription>
 
     getSharedSubscription.execute = jest.fn().mockReturnValue(Result.ok(sharedSubscription))
-    getRegularSubscription.execute = jest.fn().mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
-      if (dto.subscriptionId !== undefined) {
-        return Result.ok(sharedOwnerRegularSubscription)
-      }
+    getRegularSubscription.execute = jest
+      .fn()
+      .mockImplementation((dto: { userUuid?: string; subscriptionId?: number }) => {
+        if (dto.subscriptionId !== undefined) {
+          return Result.ok(sharedOwnerRegularSubscription)
+        }
 
-      return Result.fail('not found')
-    })
+        return Result.fail('not found')
+      })
 
     const response = await createUseCase().execute({
       operation: ValetTokenOperation.Read,

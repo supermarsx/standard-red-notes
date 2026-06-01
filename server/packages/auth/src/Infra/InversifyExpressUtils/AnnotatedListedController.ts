@@ -1,5 +1,5 @@
 import { inject } from 'inversify'
- 
+
 import { controller, httpPost, results } from 'inversify-express-utils'
 import { Request, Response } from 'express'
 import TYPES from '../../Bootstrap/Types'

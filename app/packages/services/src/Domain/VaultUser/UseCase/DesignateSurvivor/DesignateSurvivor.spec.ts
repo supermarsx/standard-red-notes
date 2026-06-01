@@ -5,9 +5,7 @@ import { DesignateSurvivor } from './DesignateSurvivor'
 describe('DesignateSurvivor', () => {
   let sharedVaultUserServer: SharedVaultUsersServerInterface
 
-  const createUseCase = () => new DesignateSurvivor(
-    sharedVaultUserServer,
-  )
+  const createUseCase = () => new DesignateSurvivor(sharedVaultUserServer)
 
   beforeEach(() => {
     sharedVaultUserServer = {} as jest.Mocked<SharedVaultUsersServerInterface>

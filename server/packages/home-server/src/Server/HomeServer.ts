@@ -98,26 +98,28 @@ export class HomeServer implements HomeServerInterface {
 
       server.setConfig((app) => {
         /* eslint-disable */
-        app.use(helmet({
-          contentSecurityPolicy: {
-            directives: {
-              defaultSrc: ["https: 'self'"],
-              baseUri: ["'self'"],
-              childSrc: ["*", "blob:"],
-              connectSrc: ["*"],
-              fontSrc: ["*", "'self'"],
-              formAction: ["'self'"],
-              frameAncestors: ["*", "*.standardnotes.org", "*.standardnotes.com"],
-              frameSrc: ["*", "blob:"],
-              imgSrc: ["'self'", "*", "data:"],
-              manifestSrc: ["'self'"],
-              mediaSrc: ["'self'"],
-              objectSrc: ["'self'"],
-              scriptSrc: ["'self'"],
-              styleSrc: ["'self'"]
-            }
-          }
-        }))
+        app.use(
+          helmet({
+            contentSecurityPolicy: {
+              directives: {
+                defaultSrc: ["https: 'self'"],
+                baseUri: ["'self'"],
+                childSrc: ['*', 'blob:'],
+                connectSrc: ['*'],
+                fontSrc: ['*', "'self'"],
+                formAction: ["'self'"],
+                frameAncestors: ['*', '*.standardnotes.org', '*.standardnotes.com'],
+                frameSrc: ['*', 'blob:'],
+                imgSrc: ["'self'", '*', 'data:'],
+                manifestSrc: ["'self'"],
+                mediaSrc: ["'self'"],
+                objectSrc: ["'self'"],
+                scriptSrc: ["'self'"],
+                styleSrc: ["'self'"],
+              },
+            },
+          }),
+        )
         /* eslint-enable */
         app.use(json({ limit: requestPayloadLimit }))
         app.use(raw({ limit: requestPayloadLimit, type: 'application/octet-stream' }))

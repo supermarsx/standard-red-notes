@@ -1,8 +1,4 @@
-import {
-   
-  SessionTokenData,
-  TokenEncoderInterface,
-} from '@standardnotes/security'
+import { SessionTokenData, TokenEncoderInterface } from '@standardnotes/security'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'

@@ -1,12 +1,5 @@
 import { Request, Response } from 'express'
-import {
-  controller,
-  httpDelete,
-  httpGet,
-  httpPost,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpDelete, httpGet, httpPost, results } from 'inversify-express-utils'
 import { inject } from 'inversify'
 
 import TYPES from '../../Bootstrap/Types'

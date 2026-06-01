@@ -1,12 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import {
-  controller,
-  httpGet,
-  httpPut,
-   
-  results,
-} from 'inversify-express-utils'
+import { controller, httpGet, httpPut, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { BaseSubscriptionSettingsController } from './Base/BaseSubscriptionSettingsController'
 import { GetSharedOrRegularSubscriptionForUser } from '../../Domain/UseCase/GetSharedOrRegularSubscriptionForUser/GetSharedOrRegularSubscriptionForUser'

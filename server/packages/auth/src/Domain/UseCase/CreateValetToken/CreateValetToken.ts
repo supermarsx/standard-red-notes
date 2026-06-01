@@ -31,10 +31,7 @@ export class CreateValetToken implements UseCaseInterface {
 
     const sharedSubscription = await this.getEligibleSharedSubscription(userUuid)
     const ownersRegularSubscription = await this.getSharedOwnersRegularSubscription(sharedSubscription)
-    const mostRecentSubscription = await this.getMostRecentSubscription(
-      dto.userUuid,
-      ownersRegularSubscription,
-    )
+    const mostRecentSubscription = await this.getMostRecentSubscription(dto.userUuid, ownersRegularSubscription)
     if (mostRecentSubscription === undefined) {
       return {
         success: false,
