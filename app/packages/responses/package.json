@@ -2,7 +2,7 @@
   "name": "@standardnotes/responses",
   "version": "1.13.57",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Common http responses used between Standard Notes clients and servers",
   "main": "dist/index.js",

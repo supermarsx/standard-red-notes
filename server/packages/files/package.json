@@ -2,7 +2,7 @@
   "name": "@standardnotes/files-server",
   "version": "1.38.4",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Standard Notes Files Server",
   "main": "dist/src/index.js",

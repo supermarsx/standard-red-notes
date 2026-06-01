@@ -2,7 +2,7 @@
   "name": "@standardnotes/api",
   "version": "1.26.97",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Interfaces for dealing with SN server-side API",
   "main": "dist/index.js",

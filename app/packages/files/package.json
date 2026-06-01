@@ -2,7 +2,7 @@
   "name": "@standardnotes/files",
   "version": "1.20.17",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Client-side files library",
   "main": "./src/index.ts",

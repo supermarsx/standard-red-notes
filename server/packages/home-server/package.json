@@ -2,7 +2,7 @@
   "name": "@standardnotes/home-server",
   "version": "1.23.3",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Standard Notes Home Server",
   "main": "dist/src/index.js",

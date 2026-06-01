@@ -2,7 +2,7 @@
   "name": "@standardnotes/services",
   "version": "1.72.3",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Services for Standard Notes SNJS library",
   "main": "./src/index.ts",

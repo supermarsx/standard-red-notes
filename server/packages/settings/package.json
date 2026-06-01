@@ -2,7 +2,7 @@
   "name": "@standardnotes/settings",
   "version": "1.23.5",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Settings SDK for Standard Notes projects",
   "main": "dist/src/index.js",

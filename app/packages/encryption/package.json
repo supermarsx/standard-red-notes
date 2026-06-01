@@ -2,7 +2,7 @@
   "name": "@standardnotes/encryption",
   "version": "1.21.113",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Payload encryption used in SNJS library",
   "main": "./src/index.ts",

@@ -2,7 +2,7 @@
   "name": "@standardnotes/websockets-server",
   "version": "1.22.15",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "private": true,
   "repository": {

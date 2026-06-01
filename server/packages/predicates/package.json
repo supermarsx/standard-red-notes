@@ -2,7 +2,7 @@
   "name": "@standardnotes/predicates",
   "version": "1.8.3",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Utils and models required for scheduling jobs",
   "main": "dist/src/index.js",

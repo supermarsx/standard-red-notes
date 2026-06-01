@@ -2,7 +2,7 @@
   "name": "@standardnotes/features",
   "version": "1.61.3",
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "description": "Features SDK for Standard Notes projects",
   "main": "dist/index.js",

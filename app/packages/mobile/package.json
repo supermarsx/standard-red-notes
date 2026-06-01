@@ -72,7 +72,7 @@
     "typescript": "*"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@notifee/react-native": "^9.1.8",

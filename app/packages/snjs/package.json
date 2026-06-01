@@ -7,7 +7,7 @@
     "directory": "packages/snjs"
   },
   "engines": {
-    "node": ">=16.0.0 <17.0.0"
+    "node": ">=22.0.0"
   },
   "main": "dist/snjs.js",
   "author": "Standard Notes",

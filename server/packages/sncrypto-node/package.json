@@ -2,7 +2,7 @@
   "name": "@standardnotes/sncrypto-node",
   "version": "1.16.4",
   "engines": {
-    "node": ">=18.0.0 <21.0.0"
+    "node": ">=22.0.0"
   },
   "description": "SNCrypto for Node.js",
   "main": "dist/src/index.js",
