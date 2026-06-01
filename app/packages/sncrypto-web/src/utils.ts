@@ -74,7 +74,7 @@ export function stringToArrayBuffer(string: string): Uint8Array {
  * Converts an ArrayBuffer into a plain string
  * @param {ArrayBuffer} arrayBuffer
  */
-export function arrayBufferToString(arrayBuffer: ArrayBuffer): string {
+export function arrayBufferToString(arrayBuffer: ArrayBufferLike | ArrayBufferView): string {
   return to_string(arrayBuffer as Uint8Array)
 }
 
@@ -82,8 +82,8 @@ export function arrayBufferToString(arrayBuffer: ArrayBuffer): string {
  * Converts an ArrayBuffer into a hex string
  * @param arrayBuffer
  */
-export function arrayBufferToHexString(arrayBuffer: ArrayBuffer): string {
-  return to_hex(Buffer.from(arrayBuffer))
+export function arrayBufferToHexString(arrayBuffer: ArrayBufferLike | ArrayBufferView): string {
+  return to_hex(Buffer.from(arrayBuffer as ArrayBuffer))
 }
 
 /**
@@ -107,8 +107,8 @@ export function base64ToArrayBuffer(base64: string): Uint8Array {
  * Converts an ArrayBuffer into a base64 string
  * @param buffer
  */
-export function arrayBufferToBase64(arrayBuffer: ArrayBuffer): string {
-  return to_base64(Buffer.from(arrayBuffer), SN_BASE64_VARIANT)
+export function arrayBufferToBase64(arrayBuffer: ArrayBufferLike | ArrayBufferView): string {
+  return to_base64(Buffer.from(arrayBuffer as ArrayBuffer), SN_BASE64_VARIANT)
 }
 
 /**

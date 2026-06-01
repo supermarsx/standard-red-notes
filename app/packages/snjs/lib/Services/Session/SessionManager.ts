@@ -51,7 +51,7 @@ import {
   HttpSuccessResponse,
   getErrorFromErrorResponse,
 } from '@standardnotes/responses'
-import { CopyPayloadWithContentOverride, RootKeyWithKeyPairsInterface } from '@standardnotes/models'
+import { CopyPayloadWithContentOverride, RootKeyWithKeyPairsInterface, isProtocolVersionExpired } from '@standardnotes/models'
 import { LegacySession, MapperInterface, Result, Session, SessionToken } from '@standardnotes/domain-core'
 import { KeyParamsFromApiResponse, SNRootKeyParams, SNRootKey } from '@standardnotes/encryption'
 import * as Common from '@standardnotes/common'
@@ -557,7 +557,7 @@ export class SessionManager
       }
     }
 
-    if (Common.isProtocolVersionExpired(keyParams.version)) {
+    if (isProtocolVersionExpired(keyParams.version)) {
       /* Cost minimums only apply to now outdated versions (001 and 002) */
       const minimum = this.encryptionService.costMinimumForVersion(keyParams.version)
       if (keyParams.content002.pw_cost < minimum) {

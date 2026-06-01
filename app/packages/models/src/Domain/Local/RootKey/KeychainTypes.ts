@@ -1,4 +1,5 @@
-import { ApplicationIdentifier, ProtocolVersion } from '@standardnotes/common'
+import { ProtocolVersion } from '@standardnotes/common'
+import { ApplicationIdentifier } from '../ApplicationIdentifier'
 import { RootKeyContentSpecialized } from './RootKeyContent'
 import { PkcKeyPair } from '@standardnotes/sncrypto-common'
 

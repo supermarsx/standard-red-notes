@@ -21,7 +21,7 @@
       "../../node_modules/@types",
       "node_modules/@types"
     ],
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "5.0"
   },
   "include": [
     "src/**/*"

@@ -2,7 +2,10 @@
   "compilerOptions": {
     "skipLibCheck": true,
     "lib": [
-      "ES2022"
+      "ES2022",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
     ],
     "target": "ES2019",
     "module": "ES2020",
@@ -23,6 +26,7 @@
       "../../node_modules/@types",
       "node_modules/@types"
     ],
+    "types": ["node", "jest", "react", "react-dom"],
     "paths": {
       "@/*": [
         "./src/javascripts/*"
@@ -31,7 +35,7 @@
         "src/javascripts/Controllers/*"
       ]
     },
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "5.0"
   },
   "include": [
     "src/javascripts"

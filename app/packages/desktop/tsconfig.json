@@ -22,7 +22,7 @@
         "../web/src/javascripts/*"
       ]
     },
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "5.0"
   },
   "include": [
     "app/**/*"

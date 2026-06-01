@@ -1,4 +1,5 @@
-import { KeyParamsOrigination, ProtocolVersion, ProtocolVersionLength } from '@standardnotes/common'
+import { KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
+import { ProtocolVersionLength } from '@standardnotes/models'
 import {
   CreateDecryptedItemFromPayload,
   DecryptedPayload,

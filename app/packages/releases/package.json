@@ -26,6 +26,6 @@
     "@standardnotes/mobile": "workspace:*",
     "@standardnotes/web": "workspace:*",
     "@types/node": "*",
-    "typescript": "^6.0.3"
+    "typescript": "5.6.3"
   }
 }

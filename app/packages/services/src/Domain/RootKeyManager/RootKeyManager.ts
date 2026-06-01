@@ -1,10 +1,5 @@
-import {
-  AnyKeyParamsContent,
-  ApplicationIdentifier,
-  KeyParamsOrigination,
-  ProtocolVersion,
-  ProtocolVersionLatest,
-} from '@standardnotes/common'
+import { AnyKeyParamsContent, KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
+import { ApplicationIdentifier, ProtocolVersionLatest } from '@standardnotes/models'
 import {
   CreateNewRootKey,
   CreateAnyKeyParams,

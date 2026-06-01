@@ -45,15 +45,8 @@ import {
   isWebCryptoAvailable,
   UuidGenerator,
 } from '@standardnotes/utils'
-import {
-  AnyKeyParamsContent,
-  compareVersions,
-  isVersionLessThanOrEqualTo,
-  KeyParamsOrigination,
-  ProtocolVersion,
-  ProtocolVersionLastNonrootItemsKey,
-  ProtocolVersionLatest,
-} from '@standardnotes/common'
+import { AnyKeyParamsContent, KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
+import { compareVersions, isVersionLessThanOrEqualTo, ProtocolVersionLastNonrootItemsKey, ProtocolVersionLatest } from '@standardnotes/models'
 
 import { AbstractService } from '../Service/AbstractService'
 import { ItemsEncryptionService } from '../ItemsEncryption/ItemsEncryption'

@@ -7,7 +7,8 @@ import { PreferencesService } from './../Services/Preferences/PreferencesService
 import { ProtectionService } from './../Services/Protection/ProtectionService'
 import { SessionManager } from './../Services/Session/SessionManager'
 import { HttpService, HttpServiceInterface, UserRegistrationResponseBody } from '@standardnotes/api'
-import { ApplicationIdentifier, compareVersions, ProtocolVersion, KeyParamsOrigination } from '@standardnotes/common'
+import { ProtocolVersion, KeyParamsOrigination } from '@standardnotes/common'
+import { ApplicationIdentifier, compareVersions } from '@standardnotes/models'
 import {
   DeinitCallback,
   SessionEvent,

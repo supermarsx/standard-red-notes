@@ -1,4 +1,5 @@
-import { ProtocolVersion, ProtocolVersionLatest } from '@standardnotes/common'
+import { ProtocolVersion } from '@standardnotes/common'
+import { ProtocolVersionLatest } from '@standardnotes/models'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { createOperatorForVersion } from './Functions'
 import { AnyOperatorInterface } from './OperatorInterface/TypeCheck'

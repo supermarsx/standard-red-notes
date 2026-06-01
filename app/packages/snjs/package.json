@@ -83,11 +83,11 @@
     "ts-loader": "^9.6.0",
     "ts-node": "^10.9.2",
     "tscpaths": "0.0.9",
-    "typescript": "^6.0.3",
+    "typescript": "5.6.3",
     "uuid": "^14.0.0",
-    "webpack": "*",
-    "webpack-cli": "*",
-    "webpack-merge": "*"
+    "webpack": "^5.107.2",
+    "webpack-cli": "^7.0.3",
+    "webpack-merge": "^6.0.1"
   },
   "dependencies": {
     "connect": "^3.7.0",

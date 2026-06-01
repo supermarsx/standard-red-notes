@@ -8,7 +8,7 @@ import {
   isEncryptedPayload,
 } from '@standardnotes/models'
 import { PayloadManagerInterface } from '../Payloads/PayloadManagerInterface'
-import { ProtocolVersionLatest } from '@standardnotes/common'
+import { ProtocolVersionLatest } from '@standardnotes/models'
 import { isNotUndefined } from '@standardnotes/utils'
 
 export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {

@@ -1,4 +1,4 @@
-import { ProtocolExpirationDates, ProtocolVersion } from '@standardnotes/common'
+import { ProtocolExpirationDates, ProtocolVersion } from '@standardnotes/models'
 
 export const ConfirmStrings = {
   ProtocolVersionExpired(version: ProtocolVersion) {

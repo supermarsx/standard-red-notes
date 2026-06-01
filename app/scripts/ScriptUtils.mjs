@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import minimatch from 'minimatch'
+import { minimatch } from 'minimatch'
 
 export const doesDirExist = (dir) => {
   return fs.existsSync(dir)

@@ -4,7 +4,8 @@ import { PayloadManagerInterface } from '../Payloads/PayloadManagerInterface'
 import { ProtectionsClientInterface } from '../Protection/ProtectionClientInterface'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { ItemManagerInterface } from '../Item/ItemManagerInterface'
-import { ProtocolVersion, compareVersions } from '@standardnotes/common'
+import { ProtocolVersion } from '@standardnotes/common'
+import { compareVersions } from '@standardnotes/models'
 import {
   BackupFile,
   BackupFileDecryptedContextualPayload,

@@ -2,7 +2,7 @@ import { ItemManagerInterface } from './../Item/ItemManagerInterface'
 import { ProtectionsClientInterface } from './../Protection/ProtectionClientInterface'
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { BackupFile, CreateEncryptedBackupFileContextPayload } from '@standardnotes/models'
-import { ProtocolVersionLatest } from '@standardnotes/common'
+import { ProtocolVersionLatest } from '@standardnotes/models'
 import { CreateEncryptionSplitWithKeyLookup, SplitPayloadsByEncryptionType } from '@standardnotes/encryption'
 import { EncryptionProviderInterface } from '../Encryption/EncryptionProviderInterface'
 
