@@ -158,17 +158,17 @@ const ImagePreview: FunctionComponent<Props> = ({
             ...(isEmbeddedInSuper
               ? {}
               : imageZoomPercent <= DefaultZoomPercent
-              ? {
-                  minWidth: '100%',
-                  objectFit: 'contain',
-                }
-              : {
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  margin: 'auto',
-                  maxWidth: 'none',
-                }),
+                ? {
+                    minWidth: '100%',
+                    objectFit: 'contain',
+                  }
+                : {
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    margin: 'auto',
+                    maxWidth: 'none',
+                  }),
           }}
         />
       </div>

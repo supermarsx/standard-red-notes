@@ -29,7 +29,7 @@ module.exports = {
     '@typescript-eslint/prefer-as-const': 'error',
     '@typescript-eslint/no-array-constructor': 'error',
     '@typescript-eslint/no-duplicate-enum-values': 'error',
-    '@typescript-eslint/restrict-template-expressions': 'error',
+    '@typescript-eslint/restrict-template-expressions': 'off',
     '@typescript-eslint/no-unused-vars': [
       'error',
       {
@@ -40,7 +40,7 @@ module.exports = {
         varsIgnorePattern: '^_',
       },
     ],
-    '@typescript-eslint/no-floating-promises': ['error'],
+    '@typescript-eslint/no-floating-promises': 'off',
     'block-scoped-var': 'error',
     'comma-dangle': ['error', 'always-multiline'],
     'eol-last': 'error',

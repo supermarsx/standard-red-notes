@@ -51,7 +51,11 @@ import {
   HttpSuccessResponse,
   getErrorFromErrorResponse,
 } from '@standardnotes/responses'
-import { CopyPayloadWithContentOverride, RootKeyWithKeyPairsInterface, isProtocolVersionExpired } from '@standardnotes/models'
+import {
+  CopyPayloadWithContentOverride,
+  RootKeyWithKeyPairsInterface,
+  isProtocolVersionExpired,
+} from '@standardnotes/models'
 import { LegacySession, MapperInterface, Result, Session, SessionToken } from '@standardnotes/domain-core'
 import { KeyParamsFromApiResponse, SNRootKeyParams, SNRootKey } from '@standardnotes/encryption'
 import * as Common from '@standardnotes/common'

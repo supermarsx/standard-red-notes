@@ -13,7 +13,7 @@
   },
   "devDependencies": {
     "css-loader": "*",
-    "eslint": "*",
+    "eslint": "^8.57.0",
     "mini-css-extract-plugin": "^2.10.2",
     "prettier": "*",
     "sass": "^1.100.0",

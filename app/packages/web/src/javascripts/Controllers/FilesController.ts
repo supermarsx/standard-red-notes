@@ -492,8 +492,8 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         fileOrHandle instanceof File
           ? fileOrHandle
           : fileOrHandle instanceof FileSystemFileHandle && this.shouldUseStreamingAPI
-          ? await fileOrHandle.getFile()
-          : undefined
+            ? await fileOrHandle.getFile()
+            : undefined
 
       if (!fileToUpload) {
         return

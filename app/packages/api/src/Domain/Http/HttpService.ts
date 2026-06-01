@@ -24,7 +24,7 @@ export class HttpService implements HttpServiceInterface {
   private session?: Session | LegacySession
   private __latencySimulatorMs?: number
   private __simulateNextSessionRefreshResponseDrop = false
-  private declare host: string
+  declare private host: string
   loggingEnabled = false
 
   private inProgressRefreshSessionPromise?: Promise<Result<HttpResponse<SessionRefreshResponseBody>>>

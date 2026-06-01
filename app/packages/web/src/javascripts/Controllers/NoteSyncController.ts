@@ -148,8 +148,8 @@ export class NoteSyncController {
     const syncDebounceMs = noDebounce
       ? EditorSaveTimeoutDebounce.ImmediateChange
       : this._isNativeMobileWeb.execute().getValue()
-      ? EditorSaveTimeoutDebounce.NativeMobileWeb
-      : EditorSaveTimeoutDebounce.Desktop
+        ? EditorSaveTimeoutDebounce.NativeMobileWeb
+        : EditorSaveTimeoutDebounce.Desktop
 
     return new Promise((resolve) => {
       const isLargeNote = this.isLargeNote(params.text ? params.text : this.item.text)

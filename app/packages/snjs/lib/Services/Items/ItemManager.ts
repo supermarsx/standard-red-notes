@@ -906,8 +906,8 @@ export class ItemManager extends Services.AbstractService implements Services.It
     return itemAReferencesItemB
       ? ItemRelationshipDirection.AReferencesB
       : itemBReferencesItemA
-      ? ItemRelationshipDirection.BReferencesA
-      : ItemRelationshipDirection.NoRelationship
+        ? ItemRelationshipDirection.BReferencesA
+        : ItemRelationshipDirection.NoRelationship
   }
 
   public conflictsOf(uuid: string) {

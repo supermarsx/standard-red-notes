@@ -36,6 +36,10 @@ import {
   KeySystemRootKeyParamsInterface,
   PortablePublicKeySet,
   RootKeyParamsInterface,
+  compareVersions,
+  isVersionLessThanOrEqualTo,
+  ProtocolVersionLastNonrootItemsKey,
+  ProtocolVersionLatest,
 } from '@standardnotes/models'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import {
@@ -46,7 +50,6 @@ import {
   UuidGenerator,
 } from '@standardnotes/utils'
 import { AnyKeyParamsContent, KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
-import { compareVersions, isVersionLessThanOrEqualTo, ProtocolVersionLastNonrootItemsKey, ProtocolVersionLatest } from '@standardnotes/models'
 
 import { AbstractService } from '../Service/AbstractService'
 import { ItemsEncryptionService } from '../ItemsEncryption/ItemsEncryption'

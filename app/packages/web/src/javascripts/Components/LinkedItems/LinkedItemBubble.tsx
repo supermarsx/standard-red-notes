@@ -111,7 +111,7 @@ const LinkedItemBubble = ({
         ref={(el) => (ref.current = el as HTMLElement)}
         tabIndex={0}
         className={classNames(
-          'group cursor-pointer rounded ',
+          'group cursor-pointer rounded',
           'bg-passive-4-opacity-variant outline-1 outline-info hover:bg-contrast focus:bg-contrast focus:outline',
           'whitespace-pre-wrap text-left text-sm text-text hover:no-underline focus:no-underline lg:text-xs',
           'py-1 pl-1 pr-2',

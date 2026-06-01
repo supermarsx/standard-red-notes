@@ -3,8 +3,9 @@ import { ComponentPackageInfo, ThemePackageInfo } from './PackageInfo'
 import { DecryptedItemInterface } from '../../Abstract/Item'
 import { ComponentContent } from './ComponentContent'
 
-export interface ComponentInterface<P extends ComponentPackageInfo | ThemePackageInfo = ComponentPackageInfo>
-  extends DecryptedItemInterface<ComponentContent> {
+export interface ComponentInterface<
+  P extends ComponentPackageInfo | ThemePackageInfo = ComponentPackageInfo,
+> extends DecryptedItemInterface<ComponentContent> {
   /** Items that have requested a component to be disabled in its context */
   disassociatedItemIds: string[]
 

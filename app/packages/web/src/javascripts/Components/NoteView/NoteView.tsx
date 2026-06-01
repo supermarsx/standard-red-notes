@@ -96,8 +96,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   #observers: (() => void)[] = []
 
   private protectionTimeoutId: ReturnType<typeof setTimeout> | null = null
-  private noteViewElementRef: RefObject<HTMLDivElement>
-  private editorContentRef: RefObject<HTMLDivElement>
+  private noteViewElementRef: RefObject<HTMLDivElement | null>
+  private editorContentRef: RefObject<HTMLDivElement | null>
   private plainEditorRef?: PlainEditorInterface
 
   constructor(props: NoteViewProps) {
@@ -827,10 +827,10 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       this.note.noteType === NoteType.Super
         ? 'super'
         : this.state.editorStateDidLoad && !this.state.editorComponentViewer
-        ? 'plain'
-        : this.state.editorComponentViewer
-        ? 'component'
-        : 'plain'
+          ? 'plain'
+          : this.state.editorComponentViewer
+            ? 'component'
+            : 'plain'
 
     const shouldShowConflictsButton = this.state.conflictedNotes.length > 0 && !this.state.readonly
 
@@ -868,7 +868,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               className={classNames(
                 'mb-2 flex justify-between md:mb-0 md:flex-nowrap md:gap-4 xl:items-center',
                 shouldShowConflictsButton ? 'items-center' : 'items-start',
-                !renderHeaderOptions ? 'flex-nowrap gap-4' : 'flex-wrap gap-2 ',
+                !renderHeaderOptions ? 'flex-nowrap gap-4' : 'flex-wrap gap-2',
               )}
             >
               <div className={classNames(this.state.noteLocked && 'locked', 'flex flex-grow items-center')}>

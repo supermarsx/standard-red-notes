@@ -10,9 +10,7 @@ import { DecryptedTransferPayload } from '../../TransferPayload/Interfaces/Decry
 import { SearchableItem } from '../../../Runtime/Display'
 
 export interface DecryptedItemInterface<C extends ItemContent = ItemContent>
-  extends ItemInterface<DecryptedPayloadInterface<C>>,
-    SortableItem,
-    SearchableItem {
+  extends ItemInterface<DecryptedPayloadInterface<C>>, SortableItem, SearchableItem {
   readonly content: C
   readonly conflictOf?: string
   readonly duplicateOf?: string

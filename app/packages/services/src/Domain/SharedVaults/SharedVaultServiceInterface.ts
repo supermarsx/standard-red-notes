@@ -11,8 +11,10 @@ import {
 import { AbstractService } from '../Service/AbstractService'
 import { SharedVaultServiceEvent, SharedVaultServiceEventPayload } from './SharedVaultServiceEvent'
 
-export interface SharedVaultServiceInterface
-  extends AbstractService<SharedVaultServiceEvent, SharedVaultServiceEventPayload> {
+export interface SharedVaultServiceInterface extends AbstractService<
+  SharedVaultServiceEvent,
+  SharedVaultServiceEventPayload
+> {
   createSharedVault(dto: {
     name: string
     description?: string

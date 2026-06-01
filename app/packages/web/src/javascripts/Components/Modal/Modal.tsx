@@ -159,7 +159,7 @@ const Modal = ({
                   </Popover>
                 </>
               )}
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap ">{title}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{title}</span>
             </div>
             <div className="hidden items-center gap-2 md:flex">
               <button tabIndex={0} className="ml-2 rounded p-1 font-bold hover:bg-contrast" onClick={close}>

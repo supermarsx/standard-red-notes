@@ -4,7 +4,7 @@ export const SuccessPrompt = ({
   ctaRef,
   onClose,
 }: {
-  ctaRef: React.RefObject<HTMLButtonElement>
+  ctaRef: React.RefObject<HTMLButtonElement | null>
   onClose: () => void
 }) => {
   return (

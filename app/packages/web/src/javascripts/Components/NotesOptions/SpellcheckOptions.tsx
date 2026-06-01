@@ -15,8 +15,8 @@ export const SpellcheckOptions: FunctionComponent<{
   const noteSpellcheck = !spellcheckControllable
     ? true
     : note
-    ? notesController.getSpellcheckStateForNote(note)
-    : undefined
+      ? notesController.getSpellcheckStateForNote(note)
+      : undefined
 
   return (
     <div className="flex flex-col">

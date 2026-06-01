@@ -35,10 +35,10 @@ const ChangeEditorButton: FunctionComponent<Props> = ({ noteViewController, onCl
         ),
       )
     : note && note.noteType != NoteType.Unknown
-    ? note.noteType
-    : selectedEditor
-    ? selectedEditor.noteType
-    : NoteType.Unknown
+      ? note.noteType
+      : selectedEditor
+        ? selectedEditor.noteType
+        : NoteType.Unknown
 
   const [selectedEditorIcon, selectedEditorIconTint] = getIconAndTintForNoteType(noteType, true)
   const [isClickOutsideDisabled, setIsClickOutsideDisabled] = useState(false)

@@ -5,6 +5,7 @@ import { RuntimeMessage, RuntimeMessageTypes } from '../types/message'
 let isSelectingNodeForClipping = false
 let isScreenshotMode = false
 
+// @ts-expect-error -- webextension-polyfill OnMessageListener type tightened in newer types
 runtime.onMessage.addListener(async (message: RuntimeMessage) => {
   switch (message.type) {
     case RuntimeMessageTypes.StartNodeSelection: {

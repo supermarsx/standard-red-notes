@@ -6,13 +6,7 @@
     "outDir": "./dist",
     "ignoreDeprecations": "5.0"
   },
-  "include": [
-    "src/**/*"
-  ],
+  "include": ["src/**/*"],
   "references": [],
-  "exclude": [
-    "**/*.spec.ts",
-    "dist",
-    "example"
-  ]
+  "exclude": ["**/*.spec.ts", "dist", "example"]
 }

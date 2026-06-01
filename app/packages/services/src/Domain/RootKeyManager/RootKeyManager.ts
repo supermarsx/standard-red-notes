@@ -1,13 +1,7 @@
 import { AnyKeyParamsContent, KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
-import { ApplicationIdentifier, ProtocolVersionLatest } from '@standardnotes/models'
 import {
-  CreateNewRootKey,
-  CreateAnyKeyParams,
-  SNRootKey,
-  isErrorDecryptingParameters,
-  EncryptionOperatorsInterface,
-} from '@standardnotes/encryption'
-import {
+  ApplicationIdentifier,
+  ProtocolVersionLatest,
   DecryptedPayload,
   DecryptedTransferPayload,
   EncryptedPayload,
@@ -18,6 +12,13 @@ import {
   RootKeyInterface,
   RootKeyParamsInterface,
 } from '@standardnotes/models'
+import {
+  CreateNewRootKey,
+  CreateAnyKeyParams,
+  SNRootKey,
+  isErrorDecryptingParameters,
+  EncryptionOperatorsInterface,
+} from '@standardnotes/encryption'
 import { DeviceInterface } from '../Device/DeviceInterface'
 import { InternalEventBusInterface } from '../Internal/InternalEventBusInterface'
 import { StorageKey } from '../Storage/StorageKeys'

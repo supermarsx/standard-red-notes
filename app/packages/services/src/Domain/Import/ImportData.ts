@@ -5,8 +5,8 @@ import { ProtectionsClientInterface } from '../Protection/ProtectionClientInterf
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { ItemManagerInterface } from '../Item/ItemManagerInterface'
 import { ProtocolVersion } from '@standardnotes/common'
-import { compareVersions } from '@standardnotes/models'
 import {
+  compareVersions,
   BackupFile,
   BackupFileDecryptedContextualPayload,
   CreateDecryptedBackupFileContextPayload,

@@ -375,7 +375,7 @@ class Footer extends AbstractComponent<Props, State> {
               <QuickSettingsButton application={this.application} />
             </div>
 
-            <div className="relative z-footer-bar-item  ml-1.5 select-none">
+            <div className="relative z-footer-bar-item ml-1.5 select-none">
               <VaultSelectionButton />
             </div>
             <UpgradeNow

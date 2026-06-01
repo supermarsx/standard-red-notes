@@ -6,15 +6,9 @@
     "outDir": "./dist",
     "ignoreDeprecations": "5.0",
     "lib": ["es2020", "dom"],
-    "types": ["node"]
+    "types": ["node", "jest"]
   },
-  "include": [
-    "src/**/*"
-  ],
+  "include": ["src/**/*"],
   "references": [],
-  "exclude": [
-    "**/*.spec.ts",
-    "dist",
-    "node_modules"
-  ]
+  "exclude": ["**/*.spec.ts", "dist", "node_modules"]
 }

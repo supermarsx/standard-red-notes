@@ -1,15 +1,10 @@
 {
   "compilerOptions": {
     "skipLibCheck": true,
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable",
-      "WebWorker"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "target": "ES2019",
     "module": "ES2020",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "allowJs": true,
     "noEmit": true,
     "strict": true,
@@ -21,23 +16,13 @@
     "declarationDir": "dist/@types",
     "baseUrl": ".",
     "jsx": "react-jsx",
-    "typeRoots": [
-      "./src/javascripts/Types/External",
-      "../../node_modules/@types",
-      "node_modules/@types"
-    ],
+    "typeRoots": ["./src/javascripts/Types/External", "../../node_modules/@types", "node_modules/@types"],
     "types": ["node", "jest", "react", "react-dom"],
     "paths": {
-      "@/*": [
-        "./src/javascripts/*"
-      ],
-      "@Controllers/*": [
-        "src/javascripts/Controllers/*"
-      ]
+      "@/*": ["./src/javascripts/*"],
+      "@Controllers/*": ["src/javascripts/Controllers/*"]
     },
     "ignoreDeprecations": "5.0"
   },
-  "include": [
-    "src/javascripts"
-  ]
+  "include": ["src/javascripts"]
 }

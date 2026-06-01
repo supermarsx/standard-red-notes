@@ -74,8 +74,8 @@ export class GetFeatureStatusUseCase {
     const roles = !dto.firstPartyRoles
       ? undefined
       : 'online' in dto.firstPartyRoles
-      ? dto.firstPartyRoles.online
-      : dto.firstPartyRoles.offline
+        ? dto.firstPartyRoles.online
+        : dto.firstPartyRoles.offline
 
     if (dto.nativeFeature.availableInRoles && roles) {
       const hasRole = roles.some((role) => {

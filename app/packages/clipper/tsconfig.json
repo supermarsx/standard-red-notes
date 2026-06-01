@@ -1,9 +1,7 @@
 {
   "compilerOptions": {
     "skipLibCheck": true,
-    "lib": [
-      "ES2022"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "target": "ES2019",
     "module": "ES2020",
     "moduleResolution": "node",
@@ -17,13 +15,9 @@
     "newLine": "lf",
     "declarationDir": "dist/@types",
     "baseUrl": ".",
-    "typeRoots": [
-      "../../node_modules/@types",
-      "node_modules/@types"
-    ],
+    "typeRoots": ["../../node_modules/@types", "node_modules/@types"],
+    "types": ["node", "jest"],
     "ignoreDeprecations": "5.0"
   },
-  "include": [
-    "src/**/*"
-  ]
+  "include": ["src/**/*"]
 }

@@ -47,8 +47,8 @@ const DataBackups = ({ application }: Props) => {
     const encryptionStatusString = hasUser
       ? STRING_E2E_ENABLED
       : hasPasscode
-      ? STRING_LOCAL_ENC_ENABLED
-      : STRING_ENC_NOT_ENABLED
+        ? STRING_LOCAL_ENC_ENABLED
+        : STRING_ENC_NOT_ENABLED
 
     setEncryptionStatusString(encryptionStatusString)
     setIsEncryptionEnabled(encryptionEnabled)

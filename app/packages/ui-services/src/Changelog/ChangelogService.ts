@@ -80,8 +80,8 @@ export class ChangelogService implements ChangelogServiceInterface {
     return this.environment === Environment.Desktop
       ? LegacyWebToDesktopVersionMapping
       : this.environment === Environment.Mobile
-      ? LegacyWebToMobileVersionMapping
-      : {}
+        ? LegacyWebToMobileVersionMapping
+        : {}
   }
 
   public getDesktopDownloadsUrl(version: string): string {

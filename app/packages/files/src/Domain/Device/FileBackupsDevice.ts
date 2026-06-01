@@ -13,10 +13,7 @@ export type PlaintextBackupsMapping = {
 }
 
 export interface FileBackupsDevice
-  extends FileBackupsMethods,
-    LegacyBackupsMethods,
-    PlaintextBackupsMethods,
-    TextBackupsMethods {
+  extends FileBackupsMethods, LegacyBackupsMethods, PlaintextBackupsMethods, TextBackupsMethods {
   joinPaths(...paths: string[]): Promise<string>
 
   monitorPlaintextBackupsLocationForChanges(backupsDirectory: string): Promise<void>

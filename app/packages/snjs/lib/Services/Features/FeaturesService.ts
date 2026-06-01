@@ -428,8 +428,8 @@ export class FeaturesService
       firstPartyRoles: this.hasFirstPartyOnlineSubscription()
         ? { online: this.onlineRoles }
         : this.hasFirstPartyOfflineSubscription()
-        ? { offline: this.offlineRoles }
-        : undefined,
+          ? { offline: this.offlineRoles }
+          : undefined,
       hasPaidAnyPartyOnlineOrOfflineSubscription: this.hasPaidAnyPartyOnlineOrOfflineSubscription(),
       firstPartyOnlineSubscription: this.hasFirstPartyOnlineSubscription()
         ? this.subscriptions.getOnlineSubscription()

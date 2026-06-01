@@ -170,7 +170,7 @@ const SignIn: FunctionComponent<Props> = ({ application }) => {
         <div className="text-sm font-medium text-passive-1">
           {c('Info').t`Don’t have an account yet?`}{' '}
           <a
-            className={`text-info ${isSigningIn ? 'cursor-not-allowed' : 'cursor-pointer '}`}
+            className={`text-info ${isSigningIn ? 'cursor-not-allowed' : 'cursor-pointer'}`}
             onClick={handleCreateAccountInstead}
           >
             {c('Action').t`Create account`}

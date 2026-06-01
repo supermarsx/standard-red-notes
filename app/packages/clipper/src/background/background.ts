@@ -27,6 +27,7 @@ const openPopupAndClipSelection = async (payload: ClipPayload) => {
 const logger = new Logger('clipper')
 const requestHandler = new FetchRequestHandler(SnjsVersion, packageInfo.version, Environment.Clipper, logger)
 
+// @ts-expect-error -- webextension-polyfill OnMessageListener type tightened in newer types
 runtime.onMessage.addListener(async (message: RuntimeMessage) => {
   if (message.type === RuntimeMessageTypes.OpenPopupWithSelection) {
     if (!message.payload) {

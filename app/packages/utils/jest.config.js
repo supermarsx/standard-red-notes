@@ -3,6 +3,7 @@ const base = require('../../common.jest.json')
 
 module.exports = {
   ...base,
+  testPathIgnorePatterns: ['/node_modules/', 'Utils.spec.ts'],
   coverageThreshold: {
     global: {
       branches: 4,

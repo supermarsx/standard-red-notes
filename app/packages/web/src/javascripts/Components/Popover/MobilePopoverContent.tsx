@@ -100,8 +100,8 @@ const MobilePopoverContent = ({
       const shouldNotDrag = isClosestScrollContainerScrolled
         ? true
         : containerScrollChangedAfterTouchStart
-        ? true
-        : isClosestScrollContainerScrolledAtStart
+          ? true
+          : isClosestScrollContainerScrolledAtStart
 
       if (deltaY < 0 || shouldNotDrag) {
         return

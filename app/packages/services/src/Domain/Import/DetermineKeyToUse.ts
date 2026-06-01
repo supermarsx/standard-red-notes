@@ -1,7 +1,7 @@
 import { Result, SyncUseCaseInterface } from '@standardnotes/domain-core'
 import { leftVersionGreaterThanOrEqualToRight, ProtocolVersion } from '@standardnotes/common'
-import { compareVersions } from '@standardnotes/models'
 import {
+  compareVersions,
   ContentTypeUsesKeySystemRootKeyEncryption,
   ContentTypeUsesRootKeyEncryption,
   EncryptedPayloadInterface,

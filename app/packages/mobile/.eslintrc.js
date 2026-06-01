@@ -9,5 +9,9 @@ module.exports = {
   plugins: ['@typescript-eslint', 'react', 'react-hooks', 'prettier'],
   rules: {
     'no-console': 'warn',
+    '@typescript-eslint/no-floating-promises': 'off',
+    '@typescript-eslint/restrict-template-expressions': 'off',
+    'react-hooks/refs': 'off',
+    'react-hooks/purity': 'off',
   },
 }

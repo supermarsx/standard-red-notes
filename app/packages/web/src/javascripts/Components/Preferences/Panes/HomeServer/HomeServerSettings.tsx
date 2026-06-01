@@ -56,7 +56,7 @@ const HomeServerSettings = () => {
             </a>
           </>
         ) : (
-          result.errorMessage ?? 'Your home server is offline.'
+          (result.errorMessage ?? 'Your home server is offline.')
         ),
     })
   }, [homeServerService, setStatus])

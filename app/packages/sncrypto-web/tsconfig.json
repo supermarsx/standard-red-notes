@@ -12,20 +12,10 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "inlineSourceMap": true,
-    "types": [
-      "node"
-    ],
-    "typeRoots": [
-      "node_modules/@types",
-      "typings"
-    ],
+    "types": ["node"],
+    "typeRoots": ["node_modules/@types", "typings"],
     "ignoreDeprecations": "5.0"
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "dist",
-    "test/**/*"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["dist", "test/**/*"]
 }

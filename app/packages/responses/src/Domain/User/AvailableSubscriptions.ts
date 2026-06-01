@@ -2,7 +2,7 @@ import { AnyFeatureDescription } from '@standardnotes/features'
 import { SubscriptionName } from '@standardnotes/common'
 
 export type AvailableSubscriptions = {
-  [key in SubscriptionName]: {
+  [_key in SubscriptionName]: {
     name: string
     pricing: {
       price: number

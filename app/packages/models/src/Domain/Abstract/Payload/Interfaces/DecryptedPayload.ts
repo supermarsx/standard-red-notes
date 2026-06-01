@@ -3,8 +3,9 @@ import { ItemContent } from '../../Content/ItemContent'
 import { ContentReference } from '../../Reference/ContentReference'
 import { PayloadInterface } from './PayloadInterface'
 
-export interface DecryptedPayloadInterface<C extends ItemContent = ItemContent>
-  extends PayloadInterface<DecryptedTransferPayload> {
+export interface DecryptedPayloadInterface<
+  C extends ItemContent = ItemContent,
+> extends PayloadInterface<DecryptedTransferPayload> {
   readonly content: C
   deleted: false
 

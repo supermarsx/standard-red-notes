@@ -26,12 +26,12 @@ const TwoFactorAuthView: FunctionComponent<Props> = ({ auth, application, canDis
     ? auth.status.activationStep === 'scan-qr-code'
       ? 'Step 1 of 3 - Scan QR code'
       : auth.status.activationStep === 'save-secret-key'
-      ? 'Step 2 of 3 - Save secret key'
-      : auth.status.activationStep === 'verification'
-      ? 'Step 3 of 3 - Verification'
-      : auth.status.activationStep === 'success'
-      ? 'Successfully Enabled'
-      : ''
+        ? 'Step 2 of 3 - Save secret key'
+        : auth.status.activationStep === 'verification'
+          ? 'Step 3 of 3 - Verification'
+          : auth.status.activationStep === 'success'
+            ? 'Successfully Enabled'
+            : ''
     : ''
 
   const closeActivationModal = () => {
@@ -72,8 +72,8 @@ const TwoFactorAuthView: FunctionComponent<Props> = ({ auth, application, canDis
             auth.status.activationStep === 'scan-qr-code'
               ? auth.status.openSaveSecretKey
               : auth.status.activationStep === 'save-secret-key'
-              ? auth.status.openVerification
-              : auth.status.enable2FA,
+                ? auth.status.openVerification
+                : auth.status.enable2FA,
           type: 'primary',
           mobileSlot: 'right',
           hidden: auth.status.activationStep === 'success',

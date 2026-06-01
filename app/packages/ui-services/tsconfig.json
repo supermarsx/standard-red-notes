@@ -8,11 +8,6 @@
     "jsx": "react-jsx",
     "ignoreDeprecations": "5.0"
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "**/*.spec.ts",
-    "node_modules"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["**/*.spec.ts", "node_modules"]
 }

@@ -404,7 +404,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
         >
           Clip as screenshot
         </MenuSwitchButtonItem>
-        <div className="border-t border-border px-3 py-3  text-foreground">
+        <div className="border-t border-border px-3 py-3 text-foreground">
           {defaultTag && (
             <div className="flex items-center justify-between text-base">
               <LinkedItemBubble

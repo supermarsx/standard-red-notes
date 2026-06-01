@@ -12,7 +12,7 @@ const RevisionHistoryModal: FunctionComponent<RevisionHistoryModalProps> = ({ ap
 
   const isOpen = Boolean(
     application.historyModalController.note &&
-      application.isAuthorizedToRenderItem(application.historyModalController.note),
+    application.isAuthorizedToRenderItem(application.historyModalController.note),
   )
 
   useEffect(() => {

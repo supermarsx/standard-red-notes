@@ -8,9 +8,9 @@ import { PayloadSource } from '../Types/PayloadSource'
 import { PurePayload } from './PurePayload'
 
 export class DecryptedPayload<
-    C extends ItemContent = ItemContent,
-    T extends DecryptedTransferPayload<C> = DecryptedTransferPayload<C>,
-  >
+  C extends ItemContent = ItemContent,
+  T extends DecryptedTransferPayload<C> = DecryptedTransferPayload<C>,
+>
   extends PurePayload<T>
   implements DecryptedPayloadInterface<C>
 {

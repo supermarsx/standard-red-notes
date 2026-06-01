@@ -80,47 +80,43 @@ export const SearchHighlightRenderer = forwardRef(
       [isBoundingClientRectVisible, rootElementRect],
     )
 
-    useImperativeHandle(
-      ref,
-      () => {
-        return {
-          setActiveHighlight: (range: Range) => {
-            if (canUseCSSHiglights) {
-              CSS.highlights.set('active-search-result', new Highlight(range))
-              return
-            }
-            setActiveHighlightRange(range)
-            setActiveHighlightRect(getBoundingClientRectForRangeIfVisible(range))
-          },
-          highlightMultipleRanges: (ranges: Range[]) => {
-            if (canUseCSSHiglights) {
-              const searchResultsHighlight = new Highlight()
-              for (let i = 0; i < ranges.length; i++) {
-                const range = ranges[i]
-                if (!range) {
-                  continue
-                }
-                searchResultsHighlight.add(range)
+    useImperativeHandle(ref, () => {
+      return {
+        setActiveHighlight: (range: Range) => {
+          if (canUseCSSHiglights) {
+            CSS.highlights.set('active-search-result', new Highlight(range))
+            return
+          }
+          setActiveHighlightRange(range)
+          setActiveHighlightRect(getBoundingClientRectForRangeIfVisible(range))
+        },
+        highlightMultipleRanges: (ranges: Range[]) => {
+          if (canUseCSSHiglights) {
+            const searchResultsHighlight = new Highlight()
+            for (let i = 0; i < ranges.length; i++) {
+              const range = ranges[i]
+              if (!range) {
+                continue
               }
-              CSS.highlights.set('search-results', searchResultsHighlight)
-              return
+              searchResultsHighlight.add(range)
             }
-            setRangesToHighlight(ranges)
-          },
-          clearHighlights: () => {
-            if (canUseCSSHiglights) {
-              CSS.highlights.clear()
-              return
-            }
-            setRangesToHighlight([])
-            setRangeRects([])
-            setActiveHighlightRange(undefined)
-            setActiveHighlightRect(undefined)
-          },
-        }
-      },
-      [getBoundingClientRectForRangeIfVisible],
-    )
+            CSS.highlights.set('search-results', searchResultsHighlight)
+            return
+          }
+          setRangesToHighlight(ranges)
+        },
+        clearHighlights: () => {
+          if (canUseCSSHiglights) {
+            CSS.highlights.clear()
+            return
+          }
+          setRangesToHighlight([])
+          setRangeRects([])
+          setActiveHighlightRange(undefined)
+          setActiveHighlightRect(undefined)
+        },
+      }
+    }, [getBoundingClientRectForRangeIfVisible])
 
     useEffect(() => {
       if (shouldHighlightAll && !canUseCSSHiglights) {

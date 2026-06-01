@@ -15,6 +15,7 @@ module.exports = {
     '@standardnotes/toast': 'identity-obj-proxy',
     '@standardnotes/styles': 'identity-obj-proxy',
     '@simplewebauthn/browser': 'identity-obj-proxy',
+    '^@lexical/headless$': '<rootDir>/../../node_modules/@lexical/headless/dist/LexicalHeadless.js',
   },
   globals: {
     __WEB_VERSION__: '1.0.0',

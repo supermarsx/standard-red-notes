@@ -661,8 +661,8 @@ export class SyncService
         !canExecuteSync
           ? 'Another function call has begun preparing for sync.'
           : syncInProgress
-          ? 'Attempting to sync while existing sync in progress.'
-          : 'Attempting to sync before local database has loaded.',
+            ? 'Attempting to sync while existing sync in progress.'
+            : 'Attempting to sync before local database has loaded.',
         options,
       )
     }

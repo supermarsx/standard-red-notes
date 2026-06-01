@@ -61,7 +61,7 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
 
     try {
       const userSettings = await application.settings.listSettings()
-      setSignInEmailsMutedValue(
+      ;(setSignInEmailsMutedValue(
         userSettings.getSettingValue<MuteSignInEmailsOption>(
           SettingName.create(SettingName.NAMES.MuteSignInEmails).getValue(),
           MuteSignInEmailsOption.NotMuted,
@@ -72,7 +72,7 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
             SettingName.create(SettingName.NAMES.MuteMarketingEmails).getValue(),
             MuteMarketingEmailsOption.NotMuted,
           ),
-        )
+        ))
     } catch (error) {
       console.error(error)
     } finally {

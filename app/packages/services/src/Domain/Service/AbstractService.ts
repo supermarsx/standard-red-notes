@@ -7,9 +7,10 @@ import { InternalEventBusInterface } from '../Internal/InternalEventBusInterface
 import { InternalEventPublishStrategy } from '../Internal/InternalEventPublishStrategy'
 import { DiagnosticInfo } from '../Diagnostics/ServiceDiagnostics'
 
-export abstract class AbstractService<EventName = string, EventData = unknown>
-  implements ApplicationServiceInterface<EventName, EventData>
-{
+export abstract class AbstractService<EventName = string, EventData = unknown> implements ApplicationServiceInterface<
+  EventName,
+  EventData
+> {
   private eventObservers: EventObserver<EventName, EventData>[] = []
   public loggingEnabled = false
   private criticalPromises: Promise<unknown>[] = []

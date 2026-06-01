@@ -12,8 +12,10 @@ import { VaultServiceEvent, VaultServiceEventPayload } from './VaultServiceEvent
 import { ChangeVaultKeyOptionsDTO } from './UseCase/ChangeVaultKeyOptionsDTO'
 import { Result } from '@standardnotes/domain-core'
 
-export interface VaultServiceInterface
-  extends AbstractService<VaultServiceEvent, VaultServiceEventPayload[VaultServiceEvent]> {
+export interface VaultServiceInterface extends AbstractService<
+  VaultServiceEvent,
+  VaultServiceEventPayload[VaultServiceEvent]
+> {
   createRandomizedVault(dto: {
     name: string
     description?: string

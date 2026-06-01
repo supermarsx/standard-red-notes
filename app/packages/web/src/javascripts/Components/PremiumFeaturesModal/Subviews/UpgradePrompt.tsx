@@ -7,7 +7,7 @@ import { requestCloseAllOpenModalsAndPopovers } from '@/Utils/CloseOpenModalsAnd
 
 type Props = {
   featureName?: string
-  ctaRef: React.RefObject<HTMLButtonElement>
+  ctaRef: React.RefObject<HTMLButtonElement | null>
   application: WebApplication
   hasSubscription: boolean
   onClick?: () => void

@@ -31,7 +31,7 @@ const LinkedItemMeta = ({ item, searchQuery }: Props) => {
                 className={`${
                   substring.toLowerCase() === searchQuery.toLowerCase()
                     ? 'whitespace-pre-wrap font-bold'
-                    : 'whitespace-pre-wrap '
+                    : 'whitespace-pre-wrap'
                 }`}
               >
                 {substring}

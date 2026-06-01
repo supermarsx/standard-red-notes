@@ -13,9 +13,10 @@ type RequiredKeepUndefined<T> = { [K in keyof T]-?: [T[K]] } extends infer U
     : never
   : never
 
-export abstract class PurePayload<T extends TransferPayload<C>, C extends ItemContent = ItemContent>
-  implements PayloadInterface<T>
-{
+export abstract class PurePayload<
+  T extends TransferPayload<C>,
+  C extends ItemContent = ItemContent,
+> implements PayloadInterface<T> {
   readonly source: PayloadSource
   readonly uuid: string
   readonly content_type: string

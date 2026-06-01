@@ -1,6 +1,8 @@
 import { EncryptionOperatorsInterface } from '@standardnotes/encryption'
-import { ProtocolVersionLastNonrootItemsKey, ProtocolVersionLatest, compareVersions } from '@standardnotes/models'
 import {
+  ProtocolVersionLastNonrootItemsKey,
+  ProtocolVersionLatest,
+  compareVersions,
   CreateDecryptedItemFromPayload,
   DecryptedPayload,
   FillItemContentSpecialized,

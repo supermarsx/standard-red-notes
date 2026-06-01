@@ -30,8 +30,8 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/lodash": "^4.17.24",
-    "@typescript-eslint/eslint-plugin": "*",
-    "eslint": "*",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "eslint": "^8.57.0",
     "eslint-plugin-prettier": "*",
     "jest": "^29.7.0",
     "reflect-metadata": "^0.2.2",

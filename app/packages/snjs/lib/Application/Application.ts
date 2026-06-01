@@ -8,7 +8,6 @@ import { ProtectionService } from './../Services/Protection/ProtectionService'
 import { SessionManager } from './../Services/Session/SessionManager'
 import { HttpService, HttpServiceInterface, UserRegistrationResponseBody } from '@standardnotes/api'
 import { ProtocolVersion, KeyParamsOrigination } from '@standardnotes/common'
-import { ApplicationIdentifier, compareVersions } from '@standardnotes/models'
 import {
   DeinitCallback,
   SessionEvent,
@@ -92,6 +91,8 @@ import {
   EncryptedItemInterface,
   Environment,
   Platform,
+  ApplicationIdentifier,
+  compareVersions,
 } from '@standardnotes/models'
 import {
   HttpResponse,

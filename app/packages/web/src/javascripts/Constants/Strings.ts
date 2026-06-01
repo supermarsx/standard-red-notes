@@ -138,8 +138,8 @@ export const StringUtils = {
       platform === Platform.WindowsDesktop
         ? 'credential manager'
         : platform === Platform.MacDesktop
-        ? 'keychain'
-        : 'password manager'
+          ? 'keychain'
+          : 'password manager'
     return `Your keys are currently stored in your operating system's ${keychainName}. Adding a passcode prevents even your operating system from reading them.`
   },
   deleteNotes(permanently: boolean, notesCount = 1, title?: string): string {

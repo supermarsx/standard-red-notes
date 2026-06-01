@@ -1,5 +1,4 @@
 import { KeyParamsOrigination, ProtocolVersion } from '@standardnotes/common'
-import { ProtocolVersionLength } from '@standardnotes/models'
 import {
   CreateDecryptedItemFromPayload,
   DecryptedPayload,
@@ -15,6 +14,7 @@ import {
   RootKeyInterface,
   KeySystemRootKeyParamsInterface,
   PortablePublicKeySet,
+  ProtocolVersionLength,
 } from '@standardnotes/models'
 import { PkcKeyPair, PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { firstHalfOfString, secondHalfOfString, splitString, UuidGenerator } from '@standardnotes/utils'

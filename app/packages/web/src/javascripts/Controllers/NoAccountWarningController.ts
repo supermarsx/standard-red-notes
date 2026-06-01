@@ -18,7 +18,7 @@ export class NoAccountWarningController extends AbstractViewController implement
   ) {
     super(eventBus)
 
-    this.show = sessions.isSignedIn() ? false : storage.get(StorageKey.ShowNoAccountWarning) ?? true
+    this.show = sessions.isSignedIn() ? false : (storage.get(StorageKey.ShowNoAccountWarning) ?? true)
 
     eventBus.addEventHandler(this, ApplicationEvent.SignedIn)
     eventBus.addEventHandler(this, ApplicationEvent.Started)

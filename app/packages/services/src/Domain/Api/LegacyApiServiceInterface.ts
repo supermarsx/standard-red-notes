@@ -7,8 +7,7 @@ import { ClientDisplayableError, HttpRequest, HttpResponse } from '@standardnote
 import { AnyFeatureDescription } from '@standardnotes/features'
 
 export interface LegacyApiServiceInterface
-  extends AbstractService<ApiServiceEvent, ApiServiceEventData>,
-    FilesApiInterface {
+  extends AbstractService<ApiServiceEvent, ApiServiceEventData>, FilesApiInterface {
   setHost(host: string): Promise<void>
   getHost(): string
 

@@ -13,8 +13,6 @@ export function isDesktopDevice(x: DeviceInterface): x is DesktopDeviceInterface
 }
 
 export interface DesktopDeviceInterface
-  extends WebOrDesktopDeviceInterface,
-    WebClientRequiresDesktopMethods,
-    HomeServerManagerInterface {
+  extends WebOrDesktopDeviceInterface, WebClientRequiresDesktopMethods, HomeServerManagerInterface {
   environment: Environment.Desktop
 }
