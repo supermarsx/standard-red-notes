@@ -1,0 +1,14 @@
+node_modules/
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.yarn/
+**/*.bundle.js
+**/*.min.js
+# Generated gRPC stubs.
+**/grpc/**/*.{ts,js}
+**/*.pb.ts
+**/*_pb.ts
+**/*_pb.js
+**/*_pb.d.ts

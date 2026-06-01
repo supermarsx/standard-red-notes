@@ -1,0 +1,46 @@
+# Normalize line endings on checkout. Files end up LF in the repo and in the
+# working tree, regardless of the contributor's platform. Run
+# `git add --renormalize .` once after introducing this file so existing CRLF
+# blobs are rewritten.
+* text=auto eol=lf
+
+# Force LF on text formats where tools or upstream tools assume Unix endings.
+*.cjs   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.jsx   text eol=lf
+*.md    text eol=lf
+*.mjs   text eol=lf
+*.proto text eol=lf
+*.sh    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# Windows-specific files keep CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary blobs / generated bundles: never normalize, never diff as text.
+*.bundle.js  binary
+*.min.js     binary
+*.min.css    binary
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.webp       binary
+*.woff       binary
+*.woff2      binary
+*.ttf        binary
+*.eot        binary
+*.otf        binary
+*.pdf        binary
+*.zip        binary
+*.gz         binary
+*.node       binary

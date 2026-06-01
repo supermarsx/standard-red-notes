@@ -1,3 +1,17 @@
 .github
 codeqldb
 CHANGELOG.md
+node_modules/
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.yarn/
+# Bundled third-party editor components shipped in the web package.
+packages/web/src/components/assets/
+packages/web/src/vendor/
+**/*.bundle.js
+**/*.min.js
+**/*.min.css
+# Generated type roll-up.
+packages/icons/src/Svg.d.ts
