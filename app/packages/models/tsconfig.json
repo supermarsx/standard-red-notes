@@ -3,8 +3,13 @@
   "compilerOptions": {
     "skipLibCheck": true,
     "rootDir": "./src",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*"],
-  "exclude": ["**/*.spec.ts"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "**/*.spec.ts"
+  ]
 }

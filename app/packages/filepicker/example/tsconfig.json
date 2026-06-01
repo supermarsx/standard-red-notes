@@ -6,6 +6,10 @@
     "module": "es2015",
     "moduleResolution": "node",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0"
   },
-  "exclude": ["dist", "node_modules"]
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
 }

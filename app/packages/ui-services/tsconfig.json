@@ -5,8 +5,14 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "allowSyntheticDefaultImports": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*"],
-  "exclude": ["**/*.spec.ts", "node_modules"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "**/*.spec.ts",
+    "node_modules"
+  ]
 }

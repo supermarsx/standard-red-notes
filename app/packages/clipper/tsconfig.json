@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "skipLibCheck": true,
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "target": "ES2019",
     "module": "ES2020",
     "moduleResolution": "node",
@@ -15,7 +17,13 @@
     "newLine": "lf",
     "declarationDir": "dist/@types",
     "baseUrl": ".",
-    "typeRoots": ["../../node_modules/@types", "node_modules/@types"]
+    "typeRoots": [
+      "../../node_modules/@types",
+      "node_modules/@types"
+    ],
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

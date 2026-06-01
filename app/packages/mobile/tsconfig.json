@@ -6,7 +6,9 @@
     "esModuleInterop": true,
     "isolatedModules": true,
     "jsx": "react-native",
-    "lib": ["ESNext"],
+    "lib": [
+      "ESNext"
+    ],
     "module": "ESNext",
     "moduleResolution": "node",
     "noEmit": true,
@@ -15,7 +17,13 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "esnext",
-    "typeRoots": ["node_modules/@types", "./src/Types/*"]
+    "typeRoots": [
+      "node_modules/@types",
+      "./src/Types/*"
+    ],
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

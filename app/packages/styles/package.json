@@ -14,12 +14,12 @@
   "devDependencies": {
     "css-loader": "*",
     "eslint": "*",
-    "mini-css-extract-plugin": "^2.6.1",
+    "mini-css-extract-plugin": "^2.10.2",
     "prettier": "*",
-    "sass": "^1.77.6",
+    "sass": "^1.100.0",
     "sass-loader": "*",
-    "style-loader": "~3.3.1",
-    "typescript": "*",
+    "style-loader": "~4.0.0",
+    "typescript": "^6.0.3",
     "webpack": "*"
   }
 }

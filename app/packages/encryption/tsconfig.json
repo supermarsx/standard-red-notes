@@ -4,8 +4,13 @@
     "skipLibCheck": true,
     "rootDir": "./src",
     "outDir": "./dist",
-    "noEmit": true
+    "noEmit": true,
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }

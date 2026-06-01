@@ -20,19 +20,19 @@
   },
   "devDependencies": {
     "@standardnotes/web": "workspace:*",
-    "@types/webextension-polyfill": "^0.10.0",
-    "babel-loader": "^9.1.0",
-    "copy-webpack-plugin": "11.0.0",
+    "@types/webextension-polyfill": "^0.12.5",
+    "babel-loader": "^10.1.1",
+    "copy-webpack-plugin": "14.0.0",
     "eslint": "*",
-    "eslint-config-prettier": "^8.9.0",
-    "ts-loader": "^9.4.2",
-    "typescript": "*",
-    "web-ext": "^7.5.0",
-    "webextension-polyfill": "^0.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "ts-loader": "^9.6.0",
+    "typescript": "^6.0.3",
+    "web-ext": "^10.3.0",
+    "webextension-polyfill": "^0.12.0",
     "webpack": "*"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.4.2",
+    "@mozilla/readability": "^0.6.0",
     "@standardnotes/snjs": "workspace:^"
   }
 }

@@ -3,9 +3,18 @@
   "compilerOptions": {
     "skipLibCheck": true,
     "rootDir": "./src",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "ignoreDeprecations": "6.0",
+    "lib": ["es2020", "dom"],
+    "types": ["node"]
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*"
+  ],
   "references": [],
-  "exclude": ["**/*.spec.ts", "dist", "node_modules"]
+  "exclude": [
+    "**/*.spec.ts",
+    "dist",
+    "node_modules"
+  ]
 }

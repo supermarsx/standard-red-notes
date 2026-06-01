@@ -28,9 +28,9 @@
     "@typescript-eslint/parser": "*",
     "eslint": "*",
     "eslint-plugin-prettier": "*",
-    "typescript": "*"
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "reflect-metadata": "^0.1.13"
+    "reflect-metadata": "^0.2.2"
   }
 }

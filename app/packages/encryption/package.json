@@ -17,23 +17,23 @@
   },
   "devDependencies": {
     "@standardnotes/config": "2.4.3",
-    "@types/jest": "^29.2.3",
-    "@types/node": "^18.11.9",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^25.9.1",
     "@typescript-eslint/eslint-plugin": "*",
     "eslint": "*",
     "eslint-plugin-prettier": "*",
-    "jest": "^29.3.1",
+    "jest": "^29.7.0",
     "prettier": "*",
-    "ts-jest": "^29.0.3",
-    "typescript": "*"
+    "ts-jest": "^29.4.11",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@standardnotes/common": "^1.50.0",
-    "@standardnotes/domain-core": "^1.40.0",
+    "@standardnotes/common": "^1.52.4",
+    "@standardnotes/domain-core": "^1.41.3",
     "@standardnotes/models": "workspace:*",
     "@standardnotes/responses": "workspace:*",
     "@standardnotes/sncrypto-common": "workspace:*",
     "@standardnotes/utils": "workspace:*",
-    "reflect-metadata": "^0.1.13"
+    "reflect-metadata": "^0.2.2"
   }
 }
