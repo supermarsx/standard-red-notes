@@ -11,7 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "prettier": "^3.0.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
