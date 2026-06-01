@@ -139,7 +139,7 @@ export class Register implements UseCaseInterface {
   }
 
   private shouldActivateStandardRedFullFeatures(): boolean {
-    return this.standardRedEntitlementMode === 'full' && this.activatePremiumFeatures !== undefined
+    return this.standardRedEntitlementMode === 'provisioned-full' && this.activatePremiumFeatures !== undefined
   }
 
   private standardRedSubscriptionIdForUser(userUuid: string): number {

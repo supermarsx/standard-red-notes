@@ -18,6 +18,7 @@ describe('VerifyPredicate', () => {
   let setting: Setting
 
   const createUseCase = () => new VerifyPredicate(settingRepository, userSubscriptionRepository)
+  const createIncludedUseCase = () => new VerifyPredicate(settingRepository, userSubscriptionRepository, 'included')
 
   beforeEach(() => {
     setting = {} as jest.Mocked<Setting>
@@ -107,6 +108,21 @@ describe('VerifyPredicate', () => {
     ).toEqual({
       predicateVerificationResult: PredicateVerificationResult.Denied,
     })
+  })
+
+  it('should affirm subscription purchased predicates in included mode without stored subscriptions', async () => {
+    userSubscriptionRepository.findOneByUserUuid = jest.fn().mockReturnValue(null)
+
+    expect(
+      await createIncludedUseCase().execute({
+        predicate: { jobUuid: '2-3-4', authority: PredicateAuthority.Auth, name: PredicateName.SubscriptionPurchased },
+        userUuid: '1-2-3',
+      }),
+    ).toEqual({
+      predicateVerificationResult: PredicateVerificationResult.Affirmed,
+    })
+
+    expect(userSubscriptionRepository.findOneByUserUuid).not.toHaveBeenCalled()
   })
 
   it('should throw error upon not recognized predicate', async () => {

@@ -1,4 +1,5 @@
 import { SubscriptionName } from '@standardnotes/common'
+import { RoleName } from '@standardnotes/domain-core'
 import { FeatureDescription, GetFeatures } from '@standardnotes/features'
 import { TimerInterface } from '@standardnotes/time'
 
@@ -17,9 +18,14 @@ export class FeatureService implements FeatureServiceInterface {
     private offlineUserSubscriptionRepository: OfflineUserSubscriptionRepositoryInterface,
     private timer: TimerInterface,
     private userSubscriptionRepository: UserSubscriptionRepositoryInterface,
+    private standardRedFeaturesMode = 'legacy',
   ) {}
 
   async userIsEntitledToFeature(user: User, featureIdentifier: string): Promise<boolean> {
+    if (this.shouldReturnIncludedFeatures()) {
+      return true
+    }
+
     const userFeatures = await this.getFeaturesForUser(user)
 
     const feature = userFeatures.find((userFeature) => userFeature.identifier === featureIdentifier)
@@ -39,6 +45,13 @@ export class FeatureService implements FeatureServiceInterface {
   }
 
   async getFeaturesForOfflineUser(email: string): Promise<{ features: FeatureDescription[]; roles: string[] }> {
+    if (this.shouldReturnIncludedFeatures()) {
+      return {
+        features: this.getIncludedFeatures(),
+        roles: this.getIncludedRoles(),
+      }
+    }
+
     const userSubscriptions = await this.offlineUserSubscriptionRepository.findByEmail(
       email,
       this.timer.getTimestampInMicroseconds(),
@@ -59,9 +72,30 @@ export class FeatureService implements FeatureServiceInterface {
   }
 
   async getFeaturesForUser(user: User): Promise<Array<FeatureDescription>> {
+    if (this.shouldReturnIncludedFeatures()) {
+      return this.getIncludedFeatures()
+    }
+
     const userSubscriptions = await this.userSubscriptionRepository.findByUserUuid(user.uuid)
 
     return this.getFeaturesForSubscriptions(userSubscriptions, await user.roles)
+  }
+
+  private shouldReturnIncludedFeatures(): boolean {
+    return ['included', 'full'].includes(this.standardRedFeaturesMode)
+  }
+
+  private getIncludedFeatures(): Array<FeatureDescription> {
+    return GetFeatures().map((feature) => ({
+      ...feature,
+      expires_at: undefined,
+      no_expire: true,
+      role_name: RoleName.NAMES.ProUser,
+    })) as Array<FeatureDescription>
+  }
+
+  private getIncludedRoles(): string[] {
+    return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser, RoleName.NAMES.InternalTeamUser]
   }
 
   private async getFeaturesForSubscriptions(

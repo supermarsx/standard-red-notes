@@ -17,6 +17,7 @@ export class VerifyPredicate implements UseCaseInterface {
     @inject(TYPES.Auth_SettingRepository) private settingRepository: SettingRepositoryInterface,
     @inject(TYPES.Auth_UserSubscriptionRepository)
     private userSubscriptionRepository: UserSubscriptionRepositoryInterface,
+    private standardRedFeaturesMode = 'legacy',
   ) {}
 
   async execute(dto: VerifyPredicateDTO): Promise<VerifyPredicateResponse> {
@@ -35,9 +36,17 @@ export class VerifyPredicate implements UseCaseInterface {
   }
 
   private async hasUserBoughtASubscription(userUuid: string): Promise<boolean> {
+    if (this.shouldReturnIncludedSubscription()) {
+      return true
+    }
+
     const subscription = await this.userSubscriptionRepository.findOneByUserUuid(userUuid)
 
     return subscription !== null
+  }
+
+  private shouldReturnIncludedSubscription(): boolean {
+    return ['included', 'full'].includes(this.standardRedFeaturesMode)
   }
 
   private async hasUserEnabledEmailBackups(userUuid: string): Promise<boolean> {

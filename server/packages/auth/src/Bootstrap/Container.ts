@@ -924,6 +924,8 @@ export class ContainerConfigLoader {
     container.bind<ClientServiceInterface>(TYPES.Auth_WebSocketsClientService).to(WebSocketsClientService)
     container.bind<RoleServiceInterface>(TYPES.Auth_RoleService).to(RoleService)
     container.bind<RoleToSubscriptionMapInterface>(TYPES.Auth_RoleToSubscriptionMap).to(RoleToSubscriptionMap)
+    const standardRedFeaturesMode = env.get('STANDARD_RED_FEATURES_MODE', true) ?? 'included'
+    const standardRedEntitlementMode = env.get('STANDARD_RED_ENTITLEMENT_MODE', true) ?? 'included'
     container
       .bind<SubscriptionSettingsAssociationServiceInterface>(TYPES.Auth_SubscriptionSettingsAssociationService)
       .to(SubscriptionSettingsAssociationService)
@@ -935,6 +937,7 @@ export class ContainerConfigLoader {
           container.get<OfflineUserSubscriptionRepositoryInterface>(TYPES.Auth_OfflineUserSubscriptionRepository),
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository),
+          standardRedFeaturesMode,
         ),
       )
     container
@@ -1251,7 +1254,7 @@ export class ContainerConfigLoader {
           container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<ApplyDefaultSettings>(TYPES.Auth_ApplyDefaultSettings),
-          env.get('STANDARD_RED_ENTITLEMENT_MODE', true) ?? 'full',
+          standardRedEntitlementMode,
           container.get<ActivatePremiumFeatures>(TYPES.Auth_ActivatePremiumFeatures),
           env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
             ? +env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
@@ -1360,8 +1363,31 @@ export class ContainerConfigLoader {
           container.get<VerifyUserServerPassword>(TYPES.Auth_VerifyUserServerPassword),
         ),
       )
-    container.bind<GetUserSubscription>(TYPES.Auth_GetUserSubscription).to(GetUserSubscription)
-    container.bind<GetUserOfflineSubscription>(TYPES.Auth_GetUserOfflineSubscription).to(GetUserOfflineSubscription)
+    container
+      .bind<GetUserSubscription>(TYPES.Auth_GetUserSubscription)
+      .toConstantValue(
+        new GetUserSubscription(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository),
+          standardRedFeaturesMode,
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+            ? +env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+            : 36500,
+        ),
+      )
+    container
+      .bind<GetUserOfflineSubscription>(TYPES.Auth_GetUserOfflineSubscription)
+      .toConstantValue(
+        new GetUserOfflineSubscription(
+          container.get<OfflineUserSubscriptionRepositoryInterface>(TYPES.Auth_OfflineUserSubscriptionRepository),
+          standardRedFeaturesMode,
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+            ? +env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+            : 36500,
+        ),
+      )
     container.bind<CreateSubscriptionToken>(TYPES.Auth_CreateSubscriptionToken).to(CreateSubscriptionToken)
     container
       .bind<AuthenticateSubscriptionToken>(TYPES.Auth_AuthenticateSubscriptionToken)
@@ -1413,7 +1439,15 @@ export class ContainerConfigLoader {
     container
       .bind<ListSharedSubscriptionInvitations>(TYPES.Auth_ListSharedSubscriptionInvitations)
       .to(ListSharedSubscriptionInvitations)
-    container.bind<VerifyPredicate>(TYPES.Auth_VerifyPredicate).to(VerifyPredicate)
+    container
+      .bind<VerifyPredicate>(TYPES.Auth_VerifyPredicate)
+      .toConstantValue(
+        new VerifyPredicate(
+          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+          container.get<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository),
+          standardRedFeaturesMode,
+        ),
+      )
     container
       .bind<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken)
       .toConstantValue(

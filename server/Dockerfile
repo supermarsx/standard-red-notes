@@ -1,33 +1,35 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:20.10.0-alpine
 
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 RUN apk add --update --no-cache \
+  bash \
+  curl \
   g++ \
   make \
+  netcat-openbsd \
   openssl \
-  curl \
-  bash \
-  py3-pip
-
-RUN pip install --no-cache-dir --upgrade --break-system-packages supervisor
-
-RUN mkdir -p /var/lib/server/logs
-
-COPY docker/supervisord.conf /etc/supervisord.conf
-
-COPY docker/docker-entrypoint.sh /usr/local/bin/
-
-COPY . /opt/server
+  py3-pip \
+  python3 \
+  && pip install --no-cache-dir --upgrade --break-system-packages supervisor
 
 WORKDIR /opt/server
 
-RUN corepack enable
+COPY docker/supervisord.conf /etc/supervisord.conf
+COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY . .
 
-RUN yarn install --immutable
+RUN corepack enable \
+  && yarn install --immutable \
+  && CI=true yarn build \
+  && mkdir -p /var/lib/server/logs /opt/shared/uploads \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh
 
-RUN CI=true yarn build
+EXPOSE 3000 3104
 
-RUN mkdir -p /opt/shared/uploads
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=10 \
+  CMD curl -fsS http://localhost:3000/healthcheck >/dev/null || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]

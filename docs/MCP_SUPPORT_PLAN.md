@@ -44,7 +44,7 @@ Server tools:
 
 - `server.status` - health, version, database mode, file storage mode.
 - `users.lookup` - admin lookup by username/email with redacted fields.
-- `entitlements.status` - report full-feature mode and user roles.
+- `capabilities.status` - report included-feature mode, operational quotas, and user/admin capability scopes.
 - `sync.item_metadata` - encrypted item counts, content types, last sync timestamps.
 - `files.storage_status` - storage path, configured limits, byte usage.
 - `revisions.summary` - revision counts and retention status.

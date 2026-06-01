@@ -57,6 +57,14 @@ describe('FeatureService', () => {
 
   const createService = () =>
     new FeatureService(roleToSubscriptionMap, offlineUserSubscriptionRepository, timer, userSubscriptionRepository)
+  const createIncludedService = () =>
+    new FeatureService(
+      roleToSubscriptionMap,
+      offlineUserSubscriptionRepository,
+      timer,
+      userSubscriptionRepository,
+      'included',
+    )
 
   beforeEach(() => {
     roleToSubscriptionMap = {} as jest.Mocked<RoleToSubscriptionMapInterface>
@@ -178,6 +186,52 @@ describe('FeatureService', () => {
 
     timer = {} as jest.Mocked<TimerInterface>
     timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(123)
+  })
+
+  describe('included features mode', () => {
+    it('should return every feature as non-expiring for online users', async () => {
+      const features = await createIncludedService().getFeaturesForUser(user)
+
+      expect(userSubscriptionRepository.findByUserUuid).not.toHaveBeenCalled()
+      expect(features).toEqual([
+        expect.objectContaining({
+          identifier: 'org.standardnotes.theme-autobiography',
+          expires_at: undefined,
+          no_expire: true,
+          role_name: RoleName.NAMES.ProUser,
+        }),
+        expect.objectContaining({
+          identifier: 'org.standardnotes.bold-editor',
+          expires_at: undefined,
+          no_expire: true,
+          role_name: RoleName.NAMES.ProUser,
+        }),
+      ])
+    })
+
+    it('should return every feature and full roles for offline users', async () => {
+      const response = await createIncludedService().getFeaturesForOfflineUser('test@test.com')
+
+      expect(offlineUserSubscriptionRepository.findByEmail).not.toHaveBeenCalled()
+      expect(response.roles).toEqual([
+        RoleName.NAMES.CoreUser,
+        RoleName.NAMES.PlusUser,
+        RoleName.NAMES.ProUser,
+        RoleName.NAMES.InternalTeamUser,
+      ])
+      expect(response.features).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            identifier: 'org.standardnotes.theme-autobiography',
+            no_expire: true,
+          }),
+        ]),
+      )
+    })
+
+    it('should grant direct included feature checks', async () => {
+      expect(await createIncludedService().userIsEntitledToFeature(user, 'unknown-future-feature')).toBe(true)
+    })
   })
 
   describe('offline subscribers', () => {

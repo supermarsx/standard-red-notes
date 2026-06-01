@@ -1,13 +1,23 @@
 dist
 coverage
+node_modules
+**/node_modules
+.git
+.github
+.vscode
+.idea
+.env
+.env.*
+!.env.sample
+yarn.build-error.log
 
 .yarn/*
-!.yarn/cache
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
-!.yarn/unplugged
 !.yarn/sdks
 !.yarn/versions
 
 data/*
+logs/*
+packages/files/uploads/*

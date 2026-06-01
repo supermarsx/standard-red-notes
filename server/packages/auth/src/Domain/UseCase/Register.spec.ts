@@ -133,7 +133,7 @@ describe('Register', () => {
     })
   })
 
-  it('should activate Standard Red full features for new users in full entitlement mode', async () => {
+  it('should activate Standard Red full features only in explicit provisioned-full mode', async () => {
     expect(
       await new Register(
         userRepository,
@@ -143,7 +143,7 @@ describe('Register', () => {
         false,
         timer,
         applyDefaultSettings,
-        'full',
+        'provisioned-full',
         activatePremiumFeatures,
       ).execute({
         email: 'test@test.te',
@@ -166,6 +166,32 @@ describe('Register', () => {
       endsAt: new Date(2),
       cancelPreviousSubscription: true,
     })
+  })
+
+  it('should not activate Standard Red full features in included mode', async () => {
+    await new Register(
+      userRepository,
+      roleRepository,
+      authResponseFactory,
+      crypter,
+      false,
+      timer,
+      applyDefaultSettings,
+      'included',
+      activatePremiumFeatures,
+    ).execute({
+      email: 'test@test.te',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      pwCost: 11,
+      pwSalt: 'qweqwe',
+      pwNonce: undefined,
+    })
+
+    expect(activatePremiumFeatures.execute).not.toHaveBeenCalled()
   })
 
   it('should not activate Standard Red full features in subscription entitlement mode', async () => {
