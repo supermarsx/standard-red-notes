@@ -119,17 +119,31 @@ module.exports = (env) => {
           ],
         },
         {
-          test: /\.s?css$/,
+          // Pure CSS files (e.g. the Tailwind 4 entry) — postcss processes
+          // them with @tailwindcss/postcss.
+          test: /\.css$/,
           use: [
             {
               loader: MiniCssExtractPlugin.loader,
-              options: {
-                publicPath: '../', // The base assets directory in relation to the stylesheets
-              },
+              options: { publicPath: '../' },
+            },
+            'css-loader',
+            'postcss-loader',
+          ],
+        },
+        {
+          // SCSS files go through sass-loader. We skip postcss here so the
+          // @tailwindcss/postcss plugin doesn't try to interpret scss `@layer`
+          // blocks. Tailwind theme references inside scss are pulled in via
+          // `@reference 'tailwindcss';` (handled by the sass build).
+          test: /\.scss$/,
+          use: [
+            {
+              loader: MiniCssExtractPlugin.loader,
+              options: { publicPath: '../' },
             },
             'css-loader',
             'sass-loader',
-            'postcss-loader',
           ],
         },
       ],

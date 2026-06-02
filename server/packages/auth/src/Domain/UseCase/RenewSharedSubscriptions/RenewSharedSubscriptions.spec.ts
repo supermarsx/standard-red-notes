@@ -74,8 +74,8 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(sharedSubscriptionInvitationRepository.save).toBeCalledTimes(1)
-    expect(userSubscriptionRepository.save).toBeCalledTimes(1)
+    expect(sharedSubscriptionInvitationRepository.save).toHaveBeenCalledTimes(1)
+    expect(userSubscriptionRepository.save).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if user not found by email', async () => {
@@ -92,7 +92,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if user not found by uuid', async () => {
@@ -111,7 +111,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if user not found by unknown identifier type', async () => {
@@ -128,7 +128,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if error occurs', async () => {
@@ -147,7 +147,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if username is invalid', async () => {
@@ -165,7 +165,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should log error if uuid is invalid', async () => {
@@ -183,7 +183,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toBeCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
   it('should renew shared subscription for invitations by user uuid', async () => {
@@ -201,7 +201,7 @@ describe('RenewSharedSubscriptions', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(sharedSubscriptionInvitationRepository.save).toBeCalledTimes(1)
-    expect(userSubscriptionRepository.save).toBeCalledTimes(1)
+    expect(sharedSubscriptionInvitationRepository.save).toHaveBeenCalledTimes(1)
+    expect(userSubscriptionRepository.save).toHaveBeenCalledTimes(1)
   })
 })

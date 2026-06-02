@@ -92,11 +92,11 @@ describe('HandleKeyPairChange', () => {
 
     const result = await useCase.execute(dto)
 
-    expect(mockReuploadAllInvites.execute).toBeCalledWith({ keys: dto.newKeys, previousKeys: dto.previousKeys })
-    expect(mockResendAllMessages.execute).toBeCalledWith({ keys: dto.newKeys, previousKeys: dto.previousKeys })
-    expect(mockSendOwnContactChangedMessage.execute).not.toBeCalled()
-    expect(mockMessageServer.deleteAllInboundMessages).toBeCalled()
-    expect(mockInvitesServer.deleteAllInboundInvites).toBeCalled()
+    expect(mockReuploadAllInvites.execute).toHaveBeenCalledWith({ keys: dto.newKeys, previousKeys: dto.previousKeys })
+    expect(mockResendAllMessages.execute).toHaveBeenCalledWith({ keys: dto.newKeys, previousKeys: dto.previousKeys })
+    expect(mockSendOwnContactChangedMessage.execute).not.toHaveBeenCalled()
+    expect(mockMessageServer.deleteAllInboundMessages).toHaveBeenCalled()
+    expect(mockInvitesServer.deleteAllInboundInvites).toHaveBeenCalled()
 
     expect(result.isFailed()).toBe(false)
   })
@@ -107,7 +107,7 @@ describe('HandleKeyPairChange', () => {
 
     await useCase.execute(dto)
 
-    expect(mockSendOwnContactChangedMessage.execute).toBeCalledWith({
+    expect(mockSendOwnContactChangedMessage.execute).toHaveBeenCalledWith({
       senderOldKeyPair: dto.previousKeys.encryption,
       senderOldSigningKeyPair: dto.previousKeys.signing,
       senderNewKeyPair: dto.newKeys.encryption,
@@ -122,7 +122,7 @@ describe('HandleKeyPairChange', () => {
 
     await useCase.execute({ newKeys: dto.newKeys })
 
-    expect(mockSendOwnContactChangedMessage.execute).not.toBeCalled()
+    expect(mockSendOwnContactChangedMessage.execute).not.toHaveBeenCalled()
   })
 
   it('should not send contact change event if getAllContacts fails', async () => {
@@ -130,7 +130,7 @@ describe('HandleKeyPairChange', () => {
 
     await useCase.execute(dto)
 
-    expect(mockSendOwnContactChangedMessage.execute).not.toBeCalled()
+    expect(mockSendOwnContactChangedMessage.execute).not.toHaveBeenCalled()
   })
 
   it('should not send contact change event for self contact', async () => {
@@ -139,7 +139,7 @@ describe('HandleKeyPairChange', () => {
 
     await useCase.execute(dto)
 
-    expect(mockSendOwnContactChangedMessage.execute).not.toBeCalled()
+    expect(mockSendOwnContactChangedMessage.execute).not.toHaveBeenCalled()
   })
 
   it('should reupload invites and resend messages before sending contact change message', async () => {

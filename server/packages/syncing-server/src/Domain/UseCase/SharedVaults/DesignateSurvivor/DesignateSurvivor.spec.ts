@@ -174,7 +174,7 @@ describe('DesignateSurvivor', () => {
 
     expect(result.isFailed()).toBe(false)
     expect(sharedVaultUser.props.isDesignatedSurvivor).toBe(true)
-    expect(sharedVaultUserRepository.save).toBeCalledTimes(1)
+    expect(sharedVaultUserRepository.save).toHaveBeenCalledTimes(1)
   })
 
   it('should designate a survivor if the user is a member and there is already a survivor', async () => {
@@ -200,7 +200,7 @@ describe('DesignateSurvivor', () => {
 
     expect(result.isFailed()).toBe(false)
     expect(sharedVaultUser.props.isDesignatedSurvivor).toBe(true)
-    expect(sharedVaultUserRepository.save).toBeCalledTimes(2)
+    expect(sharedVaultUserRepository.save).toHaveBeenCalledTimes(2)
   })
 
   it('should fail if it fails to add notification for user', async () => {

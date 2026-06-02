@@ -2,7 +2,7 @@ import { Color } from './Color'
 
 describe('Color', () => {
   it('should throw an error if the color is invalid', () => {
-    expect(() => new Color('#ff')).toThrowError('Invalid color')
+    expect(() => new Color('#ff')).toThrow('Invalid color')
   })
 
   it('should parse a rgb string', () => {
@@ -14,8 +14,8 @@ describe('Color', () => {
   })
 
   it('should throw error if rgb string is invalid', () => {
-    expect(() => new Color('rgb(255, 0)')).toThrowError('Invalid color')
-    expect(() => new Color('rgb(266, -1, 0)')).toThrowError('Invalid color')
+    expect(() => new Color('rgb(255, 0)')).toThrow('Invalid color')
+    expect(() => new Color('rgb(266, -1, 0)')).toThrow('Invalid color')
   })
 
   it('should parse a hex string', () => {
@@ -27,9 +27,9 @@ describe('Color', () => {
   })
 
   it('should throw error if hex string is invalid', () => {
-    expect(() => new Color('#ff')).toThrowError('Invalid color')
-    expect(() => new Color('#ff000')).toThrowError('Invalid color')
-    expect(() => new Color('#ff00000')).toThrowError('Invalid color')
+    expect(() => new Color('#ff')).toThrow('Invalid color')
+    expect(() => new Color('#ff000')).toThrow('Invalid color')
+    expect(() => new Color('#ff00000')).toThrow('Invalid color')
   })
 
   it('should set the alpha value', () => {
@@ -40,8 +40,8 @@ describe('Color', () => {
 
   it('should throw error if alpha value is invalid', () => {
     const color = new Color('rgb(255, 0, 0)')
-    expect(() => color.setAlpha(-1)).toThrowError('Invalid alpha value')
-    expect(() => color.setAlpha(1.1)).toThrowError('Invalid alpha value')
+    expect(() => color.setAlpha(-1)).toThrow('Invalid alpha value')
+    expect(() => color.setAlpha(1.1)).toThrow('Invalid alpha value')
   })
 
   it('should convert to string', () => {

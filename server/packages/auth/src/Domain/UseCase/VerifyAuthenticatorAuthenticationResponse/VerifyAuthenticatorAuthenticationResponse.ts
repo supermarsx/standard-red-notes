@@ -1,6 +1,9 @@
 import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
-import { VerifiedAuthenticationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server'
-import { AuthenticatorDevice } from '@simplewebauthn/typescript-types'
+import {
+  VerifiedAuthenticationResponse,
+  verifyAuthenticationResponse,
+  WebAuthnCredential,
+} from '@simplewebauthn/server'
 
 import { AuthenticatorChallengeRepositoryInterface } from '../../Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
@@ -45,12 +48,12 @@ export class VerifyAuthenticatorAuthenticationResponse implements UseCaseInterfa
         expectedOrigin: this.expectedOrigin,
         expectedRPID: this.relyingPartyId,
         requireUserVerification: this.requireUserVerification,
-        authenticator: {
+        credential: {
           counter: authenticator.props.counter,
-          credentialID: authenticator.props.credentialId,
-          credentialPublicKey: authenticator.props.credentialPublicKey,
+          id: authenticator.props.credentialId as unknown as string,
+          publicKey: authenticator.props.credentialPublicKey as unknown as Uint8Array,
           transports: authenticator.props.transports,
-        } as AuthenticatorDevice,
+        } as WebAuthnCredential,
       })
 
       if (!verification.verified) {

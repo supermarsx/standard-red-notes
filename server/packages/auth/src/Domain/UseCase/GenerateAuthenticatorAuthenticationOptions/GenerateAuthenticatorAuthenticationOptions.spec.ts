@@ -19,6 +19,7 @@ describe('GenerateAuthenticatorAuthenticationOptions', () => {
       authenticatorRepository,
       authenticatorChallengeRepository,
       'pseudo-key-params-key',
+      'standardnotes.com',
     )
 
   beforeEach(() => {

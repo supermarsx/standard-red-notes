@@ -1050,6 +1050,7 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_AuthenticatorRepository),
           container.get(TYPES.Auth_AuthenticatorChallengeRepository),
           container.get(TYPES.Auth_PSEUDO_KEY_PARAMS_KEY),
+          container.get(TYPES.Auth_U2F_RELYING_PARTY_ID),
         ),
       )
     container

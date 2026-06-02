@@ -29,7 +29,7 @@ describe('UpdateStorageQuotaUsedInSharedVault', () => {
       bytesUsed: 10,
     })
 
-    expect(sharedVaultRepository.save).toBeCalledWith(sharedVault)
+    expect(sharedVaultRepository.save).toHaveBeenCalledWith(sharedVault)
     expect(sharedVault.props.fileUploadBytesUsed).toEqual(12)
   })
 
@@ -67,7 +67,7 @@ describe('UpdateStorageQuotaUsedInSharedVault', () => {
       bytesUsed: -1,
     })
 
-    expect(sharedVaultRepository.save).toBeCalledWith(sharedVault)
+    expect(sharedVaultRepository.save).toHaveBeenCalledWith(sharedVault)
     expect(sharedVault.props.fileUploadBytesUsed).toEqual(1)
   })
 })

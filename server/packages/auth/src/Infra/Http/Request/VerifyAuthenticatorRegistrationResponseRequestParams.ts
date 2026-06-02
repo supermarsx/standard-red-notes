@@ -1,4 +1,4 @@
-import { RegistrationResponseJSON } from '@simplewebauthn/typescript-types'
+import { RegistrationResponseJSON } from '@simplewebauthn/server'
 
 export interface VerifyAuthenticatorRegistrationResponseRequestParams {
   userUuid: string

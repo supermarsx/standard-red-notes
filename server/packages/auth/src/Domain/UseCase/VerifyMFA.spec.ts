@@ -1,5 +1,11 @@
 import 'reflect-metadata'
-import { authenticator } from 'otplib'
+
+jest.mock('otplib', () => ({
+  generateSync: jest.fn(() => '123456'),
+  verifySync: jest.fn(({ token }: { token: string }) => ({ valid: token === '123456' })),
+}))
+
+import { generateSync as totpGenerateSync } from 'otplib'
 import { SelectorInterface } from '@standardnotes/security'
 import { Result, SettingName, Timestamps, Uuid } from '@standardnotes/domain-core'
 
@@ -140,7 +146,7 @@ describe('VerifyMFA', () => {
       expect(
         await createVerifyMFA().execute({
           email: 'test@test.te',
-          requestParams: { 'mfa_1-2-3': authenticator.generate('shhhh') },
+          requestParams: { 'mfa_1-2-3': totpGenerateSync({ secret: 'shhhh' }) },
           preventOTPFromFurtherUsage: true,
         }),
       ).toEqual({
@@ -154,7 +160,7 @@ describe('VerifyMFA', () => {
       expect(
         await createVerifyMFA().execute({
           email: 'test@test.te',
-          requestParams: { 'mfa_1-2-3': authenticator.generate('shhhh') },
+          requestParams: { 'mfa_1-2-3': totpGenerateSync({ secret: 'shhhh' }) },
           preventOTPFromFurtherUsage: false,
         }),
       ).toEqual({
@@ -168,7 +174,7 @@ describe('VerifyMFA', () => {
       expect(
         await createVerifyMFA().execute({
           email: '',
-          requestParams: { 'mfa_1-2-3': authenticator.generate('shhhh') },
+          requestParams: { 'mfa_1-2-3': totpGenerateSync({ secret: 'shhhh' }) },
           preventOTPFromFurtherUsage: true,
         }),
       ).toEqual({
@@ -186,7 +192,7 @@ describe('VerifyMFA', () => {
       expect(
         await createVerifyMFA().execute({
           email: 'test@test.te',
-          requestParams: { 'mfa_1-2-3': authenticator.generate('shhhh') },
+          requestParams: { 'mfa_1-2-3': totpGenerateSync({ secret: 'shhhh' }) },
           preventOTPFromFurtherUsage: true,
         }),
       ).toEqual({

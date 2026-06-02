@@ -1,8 +1,8 @@
 import * as crypto from 'crypto'
-import { AuthenticationResponseJSON } from '@simplewebauthn/typescript-types'
+import { AuthenticationResponseJSON } from '@simplewebauthn/server'
 import { ErrorTag } from '@standardnotes/responses'
 import { v4 as uuidv4 } from 'uuid'
-import { authenticator } from 'otplib'
+import { verifySync as totpVerifySync } from 'otplib'
 import { SelectorInterface } from '@standardnotes/security'
 import { SettingName, Username, Uuid } from '@standardnotes/domain-core'
 
@@ -208,7 +208,7 @@ export class VerifyMFA implements UseCaseInterface {
       )
     }
 
-    if (!authenticator.verify({ token: tokenAndParamKey.token, secret })) {
+    if (!totpVerifySync({ token: tokenAndParamKey.token, secret }).valid) {
       throw new MFAValidationError(
         'The two-factor authentication code you entered is incorrect. Please try again.',
         ErrorTag.MfaInvalid,

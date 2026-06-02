@@ -19,9 +19,10 @@
 @import 'animation';
 @import '../javascripts/Components/SuperEditor/Lexical/Theme/lexical.scss';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind 4 moved to ./tailwind.css (imported separately from javascripts/index.ts
+   because @import 'tailwindcss' is not valid scss). @reference pulls tailwind's
+   theme metadata in so @layer/@apply below resolve without re-emitting the
+   framework. */
 
 @layer base {
   ul,

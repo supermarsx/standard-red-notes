@@ -3,11 +3,11 @@ import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessS
 import { NoteType, PrefKey, SNNote, PrefDefaults, FileItem, PrefValue } from '@standardnotes/snjs'
 import { WebApplicationInterface } from '@standardnotes/ui-services'
 import { type ZipDirectoryEntry } from '@zip.js/zip.js'
-// @ts-expect-error Using inline loaders to load CSS as string
+// @ts-ignore inline webpack loader imports
 import superEditorCSS from '!css-loader?{"sourceMap":false}!sass-loader!../Components/SuperEditor/Lexical/Theme/editor.scss'
-// @ts-expect-error Using inline loaders to load CSS as string
+// @ts-ignore inline webpack loader imports
 import snColorsCSS from '!css-loader?{"sourceMap":false}!sass-loader!@standardnotes/styles/src/Styles/_colors.scss'
-// @ts-expect-error Using inline loaders to load CSS as string
+// @ts-ignore inline webpack loader imports
 import exportOverridesCSS from '!css-loader?{"sourceMap":false}!sass-loader!../Components/SuperEditor/Lexical/Theme/export-overrides.scss'
 import { getBase64FromBlob } from './Utils'
 import { parseFileName, parseAndCreateZippableFileName, sanitizeFileName } from '@standardnotes/utils'

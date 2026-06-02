@@ -1,4 +1,4 @@
-import { AuthenticationResponseJSON } from '@simplewebauthn/typescript-types'
+import { AuthenticationResponseJSON } from '@simplewebauthn/server'
 
 export interface VerifyAuthenticatorAuthenticationResponseDTO {
   userUuid: string

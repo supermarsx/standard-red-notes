@@ -8,7 +8,7 @@ import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallen
 import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
-import { AuthenticatorTransportFuture, PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/typescript-types'
+import { AuthenticatorTransportFuture, PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/server'
 
 export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterface<PublicKeyCredentialCreationOptionsJSON> {
   constructor(
@@ -53,15 +53,14 @@ export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterfac
     const options = await generateRegistrationOptions({
       rpID: this.relyingPartyId,
       rpName: this.relyingPartyName,
-      userID: userUuid.value,
+      userID: new TextEncoder().encode(userUuid.value),
       userName: username.value,
       attestationType: 'none',
       authenticatorSelection: {
         authenticatorAttachment: 'cross-platform',
       },
       excludeCredentials: authenticators.map((authenticator) => ({
-        id: authenticator.props.credentialId,
-        type: 'public-key',
+        id: Buffer.from(authenticator.props.credentialId).toString('base64url'),
         transports: authenticator.props.transports as AuthenticatorTransportFuture[],
       })),
     })

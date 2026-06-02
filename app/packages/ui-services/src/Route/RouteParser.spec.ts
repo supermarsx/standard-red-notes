@@ -48,7 +48,7 @@ describe('route parser', () => {
     const url = 'https://app.standardnotes.com/item?uuid=123'
     const parser = new RouteParser(url)
 
-    expect(() => parser.onboardingParams).toThrowError('Accessing invalid params')
+    expect(() => parser.onboardingParams).toThrow('Accessing invalid params')
   })
 
   it('routes to subscription sharing', () => {

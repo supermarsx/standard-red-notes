@@ -67,13 +67,14 @@ export class VerifyAuthenticatorRegistrationResponse implements UseCaseInterface
       return Result.fail('Could not verify authenticator registration response: registration info not found')
     }
 
+    const credential = verification.registrationInfo.credential
     const authenticatorOrError = Authenticator.create({
       userUuid,
-      counter: verification.registrationInfo.counter,
+      counter: credential.counter,
       credentialBackedUp: verification.registrationInfo.credentialBackedUp,
       credentialDeviceType: verification.registrationInfo.credentialDeviceType,
-      credentialId: verification.registrationInfo.credentialID,
-      credentialPublicKey: verification.registrationInfo.credentialPublicKey,
+      credentialId: credential.id as unknown as Uint8Array,
+      credentialPublicKey: credential.publicKey,
       dates: Dates.create(new Date(), new Date()).getValue(),
       transports: dto.attestationResponse.response.transports,
     })

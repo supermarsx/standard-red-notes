@@ -1,5 +1,9 @@
 import { Uuid, Dates } from '@standardnotes/domain-core'
 import * as simeplWebAuthnServer from '@simplewebauthn/server'
+
+jest.mock('@simplewebauthn/server', () => ({
+  verifyAuthenticationResponse: jest.fn(),
+}))
 import { VerifiedAuthenticationResponse } from '@simplewebauthn/server'
 
 import { Authenticator } from '../../Authenticator/Authenticator'
@@ -128,7 +132,7 @@ describe('VerifyAuthenticatorAuthenticationResponse', () => {
   it('should return error if verification throws error', async () => {
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyAuthenticationResponse')
+    const mock = simeplWebAuthnServer.verifyAuthenticationResponse as jest.Mock
     mock.mockImplementation(() => {
       throw new Error('error')
     })
@@ -159,7 +163,7 @@ describe('VerifyAuthenticatorAuthenticationResponse', () => {
   it('should return error if verification is not successful', async () => {
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyAuthenticationResponse')
+    const mock = simeplWebAuthnServer.verifyAuthenticationResponse as jest.Mock
     mock.mockReturnValue(
       Promise.resolve({
         verified: false,
@@ -192,7 +196,7 @@ describe('VerifyAuthenticatorAuthenticationResponse', () => {
   it('should persist new authenticator counter', async () => {
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyAuthenticationResponse')
+    const mock = simeplWebAuthnServer.verifyAuthenticationResponse as jest.Mock
     mock.mockReturnValue(
       Promise.resolve({
         verified: true,

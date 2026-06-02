@@ -16,11 +16,11 @@
     "test": "jest"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
+    "@types/jest": "^30.0.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "eslint": "^8.57.0",
     "eslint-plugin-prettier": "*",
-    "jest": "^29.7.0",
+    "jest": "^30.4.2",
     "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
     "typescript": "6.0.3"

@@ -45,7 +45,7 @@ describe('GetUserKeyParams', () => {
   })
 
   it('should throw an error when searching by email and the email is invalid', async () => {
-    await expect(createUseCase().execute({ email: '', authenticated: false })).rejects.toThrowError(
+    await expect(createUseCase().execute({ email: '', authenticated: false })).rejects.toThrow(
       'Username cannot be empty',
     )
   })

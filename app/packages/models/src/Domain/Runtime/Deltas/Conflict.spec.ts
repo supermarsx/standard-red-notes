@@ -61,7 +61,7 @@ describe('conflict delta', () => {
 
     delta.result()
 
-    expect(mocked).toBeCalledTimes(0)
+    expect(mocked).toHaveBeenCalledTimes(0)
   })
 
   it('if apply payload is errored but base payload is not, should duplicate base and keep apply', () => {

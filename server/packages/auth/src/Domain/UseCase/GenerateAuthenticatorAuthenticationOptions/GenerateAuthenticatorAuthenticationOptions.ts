@@ -7,7 +7,7 @@ import { AuthenticatorRepositoryInterface } from '../../Authenticator/Authentica
 import { AuthenticatorChallengeRepositoryInterface } from '../../Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallenge'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
-import { AuthenticatorTransportFuture, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/typescript-types'
+import { AuthenticatorTransportFuture, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/server'
 
 export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterface<PublicKeyCredentialRequestOptionsJSON> {
   constructor(
@@ -15,6 +15,7 @@ export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterf
     private authenticatorRepository: AuthenticatorRepositoryInterface,
     private authenticatorChallengeRepository: AuthenticatorChallengeRepositoryInterface,
     private pseudoKeyParamsKey: string,
+    private relyingPartyId: string,
   ) {}
 
   async execute(
@@ -34,10 +35,10 @@ export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterf
         .digest('base64url')
 
       const options = await generateAuthenticationOptions({
+        rpID: this.relyingPartyId,
         allowCredentials: [
           {
-            id: Buffer.from(credentialIdHash),
-            type: 'public-key',
+            id: credentialIdHash,
             transports: [],
           },
         ],
@@ -55,9 +56,9 @@ export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterf
 
     const authenticators = await this.authenticatorRepository.findByUserUuid(userUuid)
     const options = await generateAuthenticationOptions({
+      rpID: this.relyingPartyId,
       allowCredentials: authenticators.map((authenticator) => ({
-        id: authenticator.props.credentialId,
-        type: 'public-key',
+        id: Buffer.from(authenticator.props.credentialId).toString('base64url'),
         transports: authenticator.props.transports as AuthenticatorTransportFuture[],
       })),
       userVerification: 'preferred',

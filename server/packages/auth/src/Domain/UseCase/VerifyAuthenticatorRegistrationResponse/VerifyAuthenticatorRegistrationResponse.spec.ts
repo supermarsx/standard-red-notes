@@ -1,6 +1,10 @@
 import * as simeplWebAuthnServer from '@simplewebauthn/server'
+
+jest.mock('@simplewebauthn/server', () => ({
+  verifyRegistrationResponse: jest.fn(),
+}))
 import { VerifiedRegistrationResponse } from '@simplewebauthn/server'
-import { RegistrationResponseJSON } from '@simplewebauthn/typescript-types'
+import { RegistrationResponseJSON } from '@simplewebauthn/server'
 import { Result } from '@standardnotes/domain-core'
 import { Authenticator } from '../../Authenticator/Authenticator'
 
@@ -150,18 +154,20 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyRegistrationResponse')
+    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: false,
         registrationInfo: {
-          counter: 1,
           credentialBackedUp: true,
           credentialDeviceType: 'singleDevice',
-          credentialID: Uint8Array.from([1, 2, 3]),
-          credentialPublicKey: Uint8Array.from([1, 2, 3]),
+          credential: {
+            counter: 1,
+            id: 'id',
+            publicKey: Uint8Array.from([1, 2, 3]),
+          },
         },
-      } as jest.Mocked<VerifiedRegistrationResponse>)
+      } as unknown as jest.Mocked<VerifiedRegistrationResponse>)
     })
 
     const result = await useCase.execute({
@@ -193,7 +199,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyRegistrationResponse')
+    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       throw new Error('Oops')
     })
@@ -227,11 +233,11 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyRegistrationResponse')
+    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,
-      } as jest.Mocked<VerifiedRegistrationResponse>)
+      } as unknown as jest.Mocked<VerifiedRegistrationResponse>)
     })
 
     const result = await useCase.execute({
@@ -265,18 +271,20 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyRegistrationResponse')
+    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,
         registrationInfo: {
-          counter: 1,
           credentialBackedUp: true,
           credentialDeviceType: 'singleDevice',
-          credentialID: Uint8Array.from([1, 2, 3]),
-          credentialPublicKey: Uint8Array.from([1, 2, 3]),
+          credential: {
+            counter: 1,
+            id: 'id',
+            publicKey: Uint8Array.from([1, 2, 3]),
+          },
         },
-      } as jest.Mocked<VerifiedRegistrationResponse>)
+      } as unknown as jest.Mocked<VerifiedRegistrationResponse>)
     })
 
     const mockAuthenticator = jest.spyOn(Authenticator, 'create')
@@ -314,18 +322,20 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = jest.spyOn(simeplWebAuthnServer, 'verifyRegistrationResponse')
+    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,
         registrationInfo: {
-          counter: 1,
           credentialBackedUp: true,
           credentialDeviceType: 'singleDevice',
-          credentialID: Uint8Array.from([1, 2, 3]),
-          credentialPublicKey: Uint8Array.from([1, 2, 3]),
+          credential: {
+            counter: 1,
+            id: 'id',
+            publicKey: Uint8Array.from([1, 2, 3]),
+          },
         },
-      } as jest.Mocked<VerifiedRegistrationResponse>)
+      } as unknown as jest.Mocked<VerifiedRegistrationResponse>)
     })
 
     const result = await useCase.execute({
