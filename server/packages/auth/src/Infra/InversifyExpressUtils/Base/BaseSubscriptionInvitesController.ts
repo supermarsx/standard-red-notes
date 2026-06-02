@@ -29,7 +29,7 @@ export class BaseSubscriptionInvitesController extends BaseHttpController {
 
     const result = await this.subscriptionInvitesController.acceptInvite({
       api: request.query.api as ApiVersion,
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
     })
 
     response.setHeader('x-invalidate-cache', locals.user.uuid)
@@ -40,7 +40,7 @@ export class BaseSubscriptionInvitesController extends BaseHttpController {
   async declineInvite(request: Request): Promise<results.JsonResult> {
     const response = await this.subscriptionInvitesController.declineInvite({
       api: request.query.api as ApiVersion,
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
     })
 
     return this.json(response.data, response.status)
@@ -76,7 +76,7 @@ export class BaseSubscriptionInvitesController extends BaseHttpController {
 
     const result = await this.subscriptionInvitesController.cancelInvite({
       ...request.body,
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
       inviterEmail: locals.user.email,
     })
 

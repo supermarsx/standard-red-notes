@@ -30,7 +30,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async getUser(request: Request): Promise<results.JsonResult> {
-    const usernameOrError = Username.create(request.params.email ?? '', { skipValidation: true })
+    const usernameOrError = Username.create((request.params.email as string) ?? '', { skipValidation: true })
     if (usernameOrError.isFailed()) {
       return this.json(
         {
@@ -62,7 +62,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async deleteMFASetting(request: Request): Promise<results.JsonResult> {
-    const { userUuid } = request.params
+    const { userUuid } = request.params as Record<string, string>
     const { uuid, updatedAt } = request.body
 
     const result = await this.doDeleteSetting.execute({
@@ -81,7 +81,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async getListedCode(request: Request): Promise<results.JsonResult> {
-    const { userUuid } = request.params
+    const { userUuid } = request.params as Record<string, string>
 
     const result = await this.doGetSetting.execute({
       userUuid,
@@ -106,7 +106,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async createToken(request: Request): Promise<results.JsonResult> {
-    const { userUuid } = request.params
+    const { userUuid } = request.params as Record<string, string>
     const result = await this.createSubscriptionToken.execute({
       userUuid,
     })
@@ -117,7 +117,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async createOfflineToken(request: Request): Promise<results.JsonResult | results.BadRequestResult> {
-    const { email } = request.params
+    const { email } = request.params as Record<string, string>
     const result = await this.createOfflineSubscriptionToken.execute({
       userEmail: email,
     })
@@ -132,7 +132,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   async disableEmailBackups(request: Request): Promise<results.BadRequestErrorMessageResult | results.OkResult> {
-    const { userUuid } = request.params
+    const { userUuid } = request.params as Record<string, string>
 
     const result = await this.doDeleteSetting.execute({
       userUuid,

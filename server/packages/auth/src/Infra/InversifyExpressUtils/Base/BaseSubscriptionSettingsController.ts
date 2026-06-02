@@ -54,7 +54,7 @@ export class BaseSubscriptionSettingsController extends BaseHttpController {
     const resultOrError = await this.doGetSetting.execute({
       userSubscriptionUuid: subscription.uuid,
       allowSensitiveRetrieval: false,
-      settingName: request.params.subscriptionSettingName.toUpperCase(),
+      settingName: (request.params.subscriptionSettingName as string).toUpperCase(),
     })
 
     if (resultOrError.isFailed()) {

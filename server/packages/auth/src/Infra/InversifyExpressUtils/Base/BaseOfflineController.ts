@@ -85,7 +85,7 @@ export class BaseOfflineController extends BaseHttpController {
     }
 
     const authenticateTokenResponse = await this.authenticateToken.execute({
-      token: request.params.token,
+      token: request.params.token as string,
       userEmail: request.body.email,
     })
 

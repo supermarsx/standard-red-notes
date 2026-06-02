@@ -59,7 +59,7 @@ export class BaseSettingsController extends BaseHttpController {
       )
     }
 
-    const { userUuid } = request.params
+    const { userUuid } = request.params as Record<string, string>
     const result = await this.doGetSettings.execute({ userUuid })
     if (result.isFailed()) {
       return this.json(
@@ -107,7 +107,7 @@ export class BaseSettingsController extends BaseHttpController {
       )
     }
 
-    const { userUuid, settingName } = request.params
+    const { userUuid, settingName } = request.params as Record<string, string>
     const serverPassword = request.headers['x-server-password'] as string | undefined
     const resultOrError = await this.doGetSetting.execute({
       allowSensitiveRetrieval: true,
@@ -256,7 +256,7 @@ export class BaseSettingsController extends BaseHttpController {
       )
     }
 
-    const { userUuid, settingName } = request.params
+    const { userUuid, settingName } = request.params as Record<string, string>
     const serverPassword = request.headers['x-server-password'] as string | undefined
 
     const result = await this.doDeleteSetting.execute({

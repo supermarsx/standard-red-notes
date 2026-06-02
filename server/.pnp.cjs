@@ -5304,7 +5304,7 @@ const RAW_RUNTIME_STATE =
           ["typeorm", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:0.3.30"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["ua-parser-js", "npm:2.0.10"],\
-          ["uuid", "npm:14.0.0"],\
+          ["uuid", "npm:11.1.1"],\
           ["winston", "npm:3.19.0"]\
         ],\
         "linkType": "SOFT"\
@@ -5338,7 +5338,7 @@ const RAW_RUNTIME_STATE =
           ["jest-util", "npm:29.7.0"],\
           ["ts-jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:29.4.11"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
-          ["uuid", "npm:14.0.0"]\
+          ["uuid", "npm:11.1.1"]\
         ],\
         "linkType": "SOFT"\
       }]\
@@ -5449,7 +5449,7 @@ const RAW_RUNTIME_STATE =
           ["reflect-metadata", "npm:0.2.2"],\
           ["ts-jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:29.4.11"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
-          ["uuid", "npm:14.0.0"],\
+          ["uuid", "npm:11.1.1"],\
           ["winston", "npm:3.19.0"]\
         ],\
         "linkType": "SOFT"\
@@ -5726,7 +5726,7 @@ const RAW_RUNTIME_STATE =
           ["typeorm", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:0.3.30"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["ua-parser-js", "npm:2.0.10"],\
-          ["uuid", "npm:14.0.0"],\
+          ["uuid", "npm:11.1.1"],\
           ["winston", "npm:3.19.0"]\
         ],\
         "linkType": "SOFT"\

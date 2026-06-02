@@ -55,8 +55,8 @@ void container.load().then(async (container) => {
     })
     app.use(json())
     app.use(urlencoded({ extended: true }))
-    app.use(cookieParser())
-    app.use(cors())
+    app.use(cookieParser() as never)
+    app.use(cors() as never)
   })
 
   const logger: winston.Logger = container.get(TYPES.Auth_Logger)

@@ -45,7 +45,7 @@ export class BaseAuthenticatorsController extends BaseHttpController {
 
     const result = await this.authenticatorsController.delete({
       userUuid: locals.user.uuid,
-      authenticatorId: request.params.authenticatorId,
+      authenticatorId: request.params.authenticatorId as string,
     })
 
     return this.json(result.data, result.status)

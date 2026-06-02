@@ -22,7 +22,7 @@ export class AnnotatedInternalController extends BaseHttpController {
   @httpGet('/users/:userUuid/features')
   async getFeatures(request: Request): Promise<results.JsonResult> {
     const result = await this.doGetUserFeatures.execute({
-      userUuid: request.params.userUuid,
+      userUuid: request.params.userUuid as string,
       offline: false,
     })
 
@@ -36,8 +36,8 @@ export class AnnotatedInternalController extends BaseHttpController {
   @httpGet('/users/:userUuid/settings/:settingName')
   async getSetting(request: Request): Promise<results.JsonResult> {
     const resultOrError = await this.doGetSetting.execute({
-      userUuid: request.params.userUuid,
-      settingName: request.params.settingName,
+      userUuid: request.params.userUuid as string,
+      settingName: request.params.settingName as string,
       allowSensitiveRetrieval: true,
       decrypted: true,
     })

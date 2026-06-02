@@ -3659,7 +3659,7 @@ __metadata:
     typeorm: "npm:^0.3.27"
     typescript: "npm:^6.0.3"
     ua-parser-js: "npm:^2.0.10"
-    uuid: "npm:^14.0.0"
+    uuid: "npm:^11.1.0"
     winston: "npm:^3.19.0"
   languageName: unknown
   linkType: soft
@@ -3689,7 +3689,7 @@ __metadata:
     jest-util: "npm:^29.7.0"
     ts-jest: "npm:^29.4.11"
     typescript: "npm:^6.0.3"
-    uuid: "npm:^14.0.0"
+    uuid: "npm:^11.1.0"
   languageName: unknown
   linkType: soft
 
@@ -3793,7 +3793,7 @@ __metadata:
     reflect-metadata: "npm:^0.2.2"
     ts-jest: "npm:^29.4.11"
     typescript: "npm:^6.0.3"
-    uuid: "npm:^14.0.0"
+    uuid: "npm:^11.1.0"
     winston: "npm:^3.19.0"
   languageName: unknown
   linkType: soft
@@ -4049,7 +4049,7 @@ __metadata:
     typeorm: "npm:^0.3.27"
     typescript: "npm:^6.0.3"
     ua-parser-js: "npm:^2.0.10"
-    uuid: "npm:^14.0.0"
+    uuid: "npm:^11.1.0"
     winston: "npm:^3.19.0"
   languageName: unknown
   linkType: soft
@@ -12299,7 +12299,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:*, uuid@npm:^14.0.0":
+"uuid@npm:*":
   version: 14.0.0
   resolution: "uuid@npm:14.0.0"
   bin:
@@ -12308,7 +12308,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:^11.1.1":
+"uuid@npm:^11.1.0, uuid@npm:^11.1.1":
   version: 11.1.1
   resolution: "uuid@npm:11.1.1"
   bin:
