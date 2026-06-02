@@ -1,6 +1,6 @@
 import * as winston from 'winston'
 import Redis from 'ioredis'
-import { Container, interfaces } from 'inversify'
+import { Container, ResolutionContext } from 'inversify'
 
 import { Env } from './Env'
 import TYPES from './Types'
@@ -184,6 +184,7 @@ export class ContainerConfigLoader {
     directCallDomainEventPublisher?: DirectCallDomainEventPublisher
     logger?: Transform
     environmentOverrides?: { [name: string]: string }
+    container?: Container
   }): Promise<Container> {
     const directCallDomainEventPublisher =
       configuration?.directCallDomainEventPublisher ?? new DirectCallDomainEventPublisher()
@@ -191,9 +192,11 @@ export class ContainerConfigLoader {
     const env: Env = new Env(configuration?.environmentOverrides)
     env.load()
 
-    const container = new Container({
-      defaultScope: 'Singleton',
-    })
+    const container =
+      configuration?.container ??
+      new Container({
+        defaultScope: 'Singleton',
+      })
 
     let logger: winston.Logger
     if (configuration?.logger) {
@@ -253,8 +256,8 @@ export class ContainerConfigLoader {
       container.bind(TYPES.Sync_S3_BACKUP_BUCKET_NAME).toConstantValue(env.get('S3_BACKUP_BUCKET_NAME', true))
       container.bind(TYPES.Sync_EXTENSIONS_SERVER_URL).toConstantValue(env.get('EXTENSIONS_SERVER_URL', true))
 
-      container.bind<SNSClient>(TYPES.Sync_SNS).toDynamicValue((context: interfaces.Context) => {
-        const env: Env = context.container.get(TYPES.Sync_Env)
+      container.bind<SNSClient>(TYPES.Sync_SNS).toDynamicValue((context: ResolutionContext) => {
+        const env: Env = context.get(TYPES.Sync_Env)
 
         const snsConfig: SNSClientConfig = {
           apiVersion: 'latest',
@@ -275,10 +278,10 @@ export class ContainerConfigLoader {
 
       container
         .bind<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher)
-        .toDynamicValue((context: interfaces.Context) => {
+        .toDynamicValue((context: ResolutionContext) => {
           return new SNSDomainEventPublisher(
-            context.container.get(TYPES.Sync_SNS),
-            context.container.get(TYPES.Sync_SNS_TOPIC_ARN),
+            context.get(TYPES.Sync_SNS),
+            context.get(TYPES.Sync_SNS_TOPIC_ARN),
           )
         })
 
@@ -297,8 +300,8 @@ export class ContainerConfigLoader {
       const sqsClient = new SQSClient(sqsConfig)
       container.bind<SQSClient>(TYPES.Sync_SQS).toConstantValue(sqsClient)
 
-      container.bind<S3Client | undefined>(TYPES.Sync_S3).toDynamicValue((context: interfaces.Context) => {
-        const env: Env = context.container.get(TYPES.Sync_Env)
+      container.bind<S3Client | undefined>(TYPES.Sync_S3).toDynamicValue((context: ResolutionContext) => {
+        const env: Env = context.get(TYPES.Sync_Env)
 
         let s3Client = undefined
         if (env.get('S3_AWS_REGION', true)) {
@@ -456,23 +459,23 @@ export class ContainerConfigLoader {
 
     container
       .bind<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory)
-      .toDynamicValue((context: interfaces.Context) => {
-        return new DomainEventFactory(context.container.get(TYPES.Sync_Timer))
+      .toDynamicValue((context: ResolutionContext) => {
+        return new DomainEventFactory(context.get(TYPES.Sync_Timer))
       })
 
     container
       .bind<ItemTransferCalculatorInterface>(TYPES.Sync_ItemTransferCalculator)
-      .toDynamicValue((context: interfaces.Context) => {
-        return new ItemTransferCalculator(context.container.get<Logger>(TYPES.Sync_Logger))
+      .toDynamicValue((context: ResolutionContext) => {
+        return new ItemTransferCalculator(context.get<Logger>(TYPES.Sync_Logger))
       })
 
     // Middleware
     container
       .bind<InversifyExpressAuthMiddleware>(TYPES.Sync_AuthMiddleware)
-      .toDynamicValue((context: interfaces.Context) => {
+      .toDynamicValue((context: ResolutionContext) => {
         return new InversifyExpressAuthMiddleware(
-          context.container.get(TYPES.Sync_AUTH_JWT_SECRET),
-          context.container.get(TYPES.Sync_Logger),
+          context.get(TYPES.Sync_AUTH_JWT_SECRET),
+          context.get(TYPES.Sync_Logger),
         )
       })
 
@@ -756,11 +759,11 @@ export class ContainerConfigLoader {
           container.get<Logger>(TYPES.Sync_Logger),
         ),
       )
-    container.bind<CheckIntegrity>(TYPES.Sync_CheckIntegrity).toDynamicValue((context: interfaces.Context) => {
-      return new CheckIntegrity(context.container.get(TYPES.Sync_SQLItemRepository))
+    container.bind<CheckIntegrity>(TYPES.Sync_CheckIntegrity).toDynamicValue((context: ResolutionContext) => {
+      return new CheckIntegrity(context.get(TYPES.Sync_SQLItemRepository))
     })
-    container.bind<GetItem>(TYPES.Sync_GetItem).toDynamicValue((context: interfaces.Context) => {
-      return new GetItem(context.container.get(TYPES.Sync_SQLItemRepository))
+    container.bind<GetItem>(TYPES.Sync_GetItem).toDynamicValue((context: ResolutionContext) => {
+      return new GetItem(context.get(TYPES.Sync_SQLItemRepository))
     })
     container
       .bind<InviteUserToSharedVault>(TYPES.Sync_InviteUserToSharedVault)
@@ -1003,10 +1006,10 @@ export class ContainerConfigLoader {
       )
     container
       .bind<SyncResponseFactoryResolverInterface>(TYPES.Sync_SyncResponseFactoryResolver)
-      .toDynamicValue((context: interfaces.Context) => {
+      .toDynamicValue((context: ResolutionContext) => {
         return new SyncResponseFactoryResolver(
-          context.container.get(TYPES.Sync_SyncResponseFactory20161215),
-          context.container.get(TYPES.Sync_SyncResponseFactory20200115),
+          context.get(TYPES.Sync_SyncResponseFactory20161215),
+          context.get(TYPES.Sync_SyncResponseFactory20200115),
         )
       })
     container

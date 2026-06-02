@@ -36,6 +36,7 @@ export class Service implements ServiceInterface {
       directCallDomainEventPublisher: this.directCallDomainEventPublisher,
       logger: configuration?.logger,
       environmentOverrides: configuration?.environmentOverrides,
+      container: configuration?.container as import('inversify').Container | undefined,
     })
   }
 

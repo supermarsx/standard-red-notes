@@ -6,7 +6,9 @@ module.exports = {
   ...base,
   transform: {
     ...tsjPreset.transform,
+    '^.+\.m?jsx?$': 'babel-jest',
   },
+  transformIgnorePatterns: ['/node_modules/(?!(inversify|@inversifyjs)/)'],
   coveragePathIgnorePatterns: ['/Bootstrap/', '/Infra/', '/Controller/', '/Projection/', '/Domain/Email/', '/Mapping/'],
   setupFilesAfterEnv: ['./test-setup.ts'],
 }

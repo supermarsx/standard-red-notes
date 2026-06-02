@@ -3,6 +3,7 @@
   "compilerOptions": {
     "composite": true,
     "outDir": "./dist",
+    "moduleResolution": "bundler",
   },
   "include": [
     "src/**/*",

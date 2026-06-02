@@ -68,28 +68,32 @@ export class HomeServer implements HomeServerInterface {
       )
       const filesService = new FilesService(serviceContainer, directCallDomainEventPublisher)
 
-      const container = Container.merge(
-        (await apiGatewayService.getContainer({
-          logger: winston.loggers.get('api-gateway'),
-          environmentOverrides,
-        })) as Container,
-        (await authService.getContainer({
-          logger: winston.loggers.get('auth-server'),
-          environmentOverrides,
-        })) as Container,
-        (await syncingService.getContainer({
-          logger: winston.loggers.get('syncing-server'),
-          environmentOverrides,
-        })) as Container,
-        (await revisionsService.getContainer({
-          logger: winston.loggers.get('revisions-server'),
-          environmentOverrides,
-        })) as Container,
-        (await filesService.getContainer({
-          logger: winston.loggers.get('files-server'),
-          environmentOverrides,
-        })) as Container,
-      )
+      const container = new Container()
+      await apiGatewayService.getContainer({
+        logger: winston.loggers.get('api-gateway'),
+        environmentOverrides,
+        container,
+      })
+      await authService.getContainer({
+        logger: winston.loggers.get('auth-server'),
+        environmentOverrides,
+        container,
+      })
+      await syncingService.getContainer({
+        logger: winston.loggers.get('syncing-server'),
+        environmentOverrides,
+        container,
+      })
+      await revisionsService.getContainer({
+        logger: winston.loggers.get('revisions-server'),
+        environmentOverrides,
+        container,
+      })
+      await filesService.getContainer({
+        logger: winston.loggers.get('files-server'),
+        environmentOverrides,
+        container,
+      })
 
       const server = new InversifyExpressServer(container)
 

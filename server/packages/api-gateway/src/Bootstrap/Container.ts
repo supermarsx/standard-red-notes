@@ -40,11 +40,12 @@ export class ContainerConfigLoader {
     serviceContainer?: ServiceContainerInterface
     logger?: Transform
     environmentOverrides?: { [name: string]: string }
+    container?: Container
   }): Promise<Container> {
     const env: Env = new Env(configuration?.environmentOverrides)
     env.load()
 
-    const container = new Container()
+    const container = configuration?.container ?? new Container()
 
     const isConfiguredForHomeServer = env.get('MODE', true) === 'home-server'
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'

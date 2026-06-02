@@ -59,6 +59,7 @@ export class Service implements AuthServiceInterface {
       directCallDomainEventPublisher: this.directCallDomainEventPublisher,
       logger: configuration?.logger,
       environmentOverrides: configuration?.environmentOverrides,
+      container: configuration?.container as Container | undefined,
     })
 
     this.container = container

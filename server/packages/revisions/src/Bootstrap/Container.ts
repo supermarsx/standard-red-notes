@@ -1,5 +1,5 @@
 import { ControllerContainer, ControllerContainerInterface, MapperInterface } from '@standardnotes/domain-core'
-import { Container, interfaces } from 'inversify'
+import { Container, ResolutionContext } from 'inversify'
 import { Repository } from 'typeorm'
 import * as winston from 'winston'
 
@@ -63,6 +63,7 @@ export class ContainerConfigLoader {
     directCallDomainEventPublisher?: DirectCallDomainEventPublisher
     logger?: Transform
     environmentOverrides?: { [name: string]: string }
+    container?: Container
   }): Promise<Container> {
     const directCallDomainEventPublisher =
       configuration?.directCallDomainEventPublisher ?? new DirectCallDomainEventPublisher()
@@ -74,9 +75,11 @@ export class ContainerConfigLoader {
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'
     const isConfiguredForHomeServerOrSelfHosting = isConfiguredForHomeServer || isConfiguredForSelfHosting
 
-    const container = new Container({
-      defaultScope: 'Singleton',
-    })
+    const container =
+      configuration?.container ??
+      new Container({
+        defaultScope: 'Singleton',
+      })
 
     container
       .bind<boolean>(TYPES.Revisions_IS_CONFIGURED_FOR_HOME_SERVER_OR_SELF_HOSTING)
@@ -114,8 +117,8 @@ export class ContainerConfigLoader {
       container.bind(TYPES.Revisions_S3_AWS_REGION).toConstantValue(env.get('S3_AWS_REGION', true))
       container.bind(TYPES.Revisions_S3_BACKUP_BUCKET_NAME).toConstantValue(env.get('S3_BACKUP_BUCKET_NAME', true))
 
-      container.bind<SQSClient>(TYPES.Revisions_SQS).toDynamicValue((context: interfaces.Context) => {
-        const env: Env = context.container.get(TYPES.Revisions_Env)
+      container.bind<SQSClient>(TYPES.Revisions_SQS).toDynamicValue((context: ResolutionContext) => {
+        const env: Env = context.get(TYPES.Revisions_Env)
 
         const sqsConfig: SQSClientConfig = {
           region: env.get('SQS_AWS_REGION'),
@@ -133,8 +136,8 @@ export class ContainerConfigLoader {
         return new SQSClient(sqsConfig)
       })
 
-      container.bind<S3Client | undefined>(TYPES.Revisions_S3).toDynamicValue((context: interfaces.Context) => {
-        const env: Env = context.container.get(TYPES.Revisions_Env)
+      container.bind<S3Client | undefined>(TYPES.Revisions_S3).toDynamicValue((context: ResolutionContext) => {
+        const env: Env = context.get(TYPES.Revisions_Env)
 
         let s3Client = undefined
         if (env.get('S3_AWS_REGION', true)) {
@@ -181,8 +184,8 @@ export class ContainerConfigLoader {
 
     container
       .bind<GetRequiredRoleToViewRevision>(TYPES.Revisions_GetRequiredRoleToViewRevision)
-      .toDynamicValue((context: interfaces.Context) => {
-        return new GetRequiredRoleToViewRevision(context.container.get(TYPES.Revisions_Timer))
+      .toDynamicValue((context: ResolutionContext) => {
+        return new GetRequiredRoleToViewRevision(context.get(TYPES.Revisions_Timer))
       })
 
     // Map
@@ -193,8 +196,8 @@ export class ContainerConfigLoader {
       .bind<
         MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>
       >(TYPES.Revisions_RevisionMetadataHttpMapper)
-      .toDynamicValue((context: interfaces.Context) => {
-        return new RevisionMetadataHttpMapper(context.container.get(TYPES.Revisions_GetRequiredRoleToViewRevision))
+      .toDynamicValue((context: ResolutionContext) => {
+        return new RevisionMetadataHttpMapper(context.get(TYPES.Revisions_GetRequiredRoleToViewRevision))
       })
     container
       .bind<MapperInterface<Revision, string>>(TYPES.Revisions_RevisionItemStringMapper)
@@ -264,16 +267,16 @@ export class ContainerConfigLoader {
 
     container
       .bind<TokenDecoderInterface<CrossServiceTokenData>>(TYPES.Revisions_CrossServiceTokenDecoder)
-      .toDynamicValue((context: interfaces.Context) => {
-        return new TokenDecoder<CrossServiceTokenData>(context.container.get(TYPES.Revisions_AUTH_JWT_SECRET))
+      .toDynamicValue((context: ResolutionContext) => {
+        return new TokenDecoder<CrossServiceTokenData>(context.get(TYPES.Revisions_AUTH_JWT_SECRET))
       })
 
     container
       .bind<ApiGatewayAuthMiddleware>(TYPES.Revisions_ApiGatewayAuthMiddleware)
-      .toDynamicValue((context: interfaces.Context) => {
+      .toDynamicValue((context: ResolutionContext) => {
         return new ApiGatewayAuthMiddleware(
-          context.container.get(TYPES.Revisions_CrossServiceTokenDecoder),
-          context.container.get(TYPES.Revisions_Logger),
+          context.get(TYPES.Revisions_CrossServiceTokenDecoder),
+          context.get(TYPES.Revisions_Logger),
         )
       })
 

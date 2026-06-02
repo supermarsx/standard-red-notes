@@ -38,7 +38,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "helmet": "^8.2.0",
-    "inversify": "^6.2.2",
+    "inversify": "^8.1.0",
     "inversify-express-utils": "^6.5.0",
     "reflect-metadata": "^0.2.2",
     "winston": "^3.19.0"

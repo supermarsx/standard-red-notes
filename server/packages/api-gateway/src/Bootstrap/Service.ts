@@ -23,6 +23,7 @@ export class Service implements ServiceInterface {
       serviceContainer: this.serviceContainer,
       logger: configuration?.logger,
       environmentOverrides: configuration?.environmentOverrides,
+      container: configuration?.container as import('inversify').Container | undefined,
     })
   }
 

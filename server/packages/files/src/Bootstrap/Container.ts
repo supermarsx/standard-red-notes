@@ -64,6 +64,7 @@ export class ContainerConfigLoader {
     directCallDomainEventPublisher?: DirectCallDomainEventPublisher
     logger?: Transform
     environmentOverrides?: { [name: string]: string }
+    container?: Container
   }): Promise<Container> {
     const directCallDomainEventPublisher =
       configuration?.directCallDomainEventPublisher ?? new DirectCallDomainEventPublisher()
@@ -71,7 +72,7 @@ export class ContainerConfigLoader {
     const env: Env = new Env(configuration?.environmentOverrides)
     env.load()
 
-    const container = new Container()
+    const container = configuration?.container ?? new Container()
 
     // env vars
     container
