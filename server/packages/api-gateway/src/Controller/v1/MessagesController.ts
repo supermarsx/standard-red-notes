@@ -62,7 +62,7 @@ export class MessagesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'messages/:messageUuid',
-        request.params.messageUuid,
+        request.params.messageUuid as string,
       ),
       request.body,
     )

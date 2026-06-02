@@ -34,6 +34,7 @@
     "@lerna-lite/publish": "^5.2.2",
     "@lerna-lite/run": "^5.2.2",
     "@lerna-lite/version": "^5.2.2",
+    "@typeorm/codemod": "^1.0.3",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.9.1",
     "eslint": "^10.4.1",

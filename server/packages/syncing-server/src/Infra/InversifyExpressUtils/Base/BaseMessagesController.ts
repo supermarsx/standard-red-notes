@@ -129,7 +129,7 @@ export class BaseMessagesController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.deleteMessageUseCase.execute({
-      messageUuid: request.params.messageUuid,
+      messageUuid: request.params.messageUuid as string,
       originatorUuid: locals.user.uuid,
     })
 

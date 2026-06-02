@@ -39,7 +39,7 @@ export class ItemsController extends BaseHttpController {
     await this.serviceProxy.callSyncingServer(
       request,
       response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'items/:uuid', request.params.uuid),
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'items/:uuid', request.params.uuid as string),
       request.body,
     )
   }

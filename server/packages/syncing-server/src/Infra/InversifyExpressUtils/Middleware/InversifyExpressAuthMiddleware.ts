@@ -22,9 +22,9 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
         return this.sendInvalidAuthResponse(response)
       }
 
-      const authToken = <string>request.header('X-Auth-Token')
+      const authToken = request.header('X-Auth-Token') as string
 
-      const decodedToken = <CrossServiceTokenData>verify(authToken, this.authJWTSecret, { algorithms: ['HS256'] })
+      const decodedToken = verify(authToken, this.authJWTSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
 
       Object.assign(response.locals, {
         user: decodedToken.user,

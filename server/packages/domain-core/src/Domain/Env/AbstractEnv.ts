@@ -21,7 +21,7 @@ export abstract class AbstractEnv {
       throw new Error(`Environment variable ${key} not set`)
     }
 
-    return <string>process.env[key]
+    return process.env[key] as string
   }
 
   getAll(): { [key: string]: string } {

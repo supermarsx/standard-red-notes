@@ -91,7 +91,7 @@ void container.load().then((container) => {
       }),
     )
 
-    app.use(cookieParser())
+    app.use(cookieParser() as never)
 
     app.use(json({ limit: requestPayloadLimit }))
     app.use(

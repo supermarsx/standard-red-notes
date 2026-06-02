@@ -97,7 +97,7 @@ export class BaseSharedVaultsController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.deleteSharedVaultUseCase.execute({
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
       originatorUuid: locals.user.uuid,
       allowSurviving: false,
     })
@@ -123,7 +123,7 @@ export class BaseSharedVaultsController extends BaseHttpController {
 
     const result = await this.createSharedVaultFileValetTokenUseCase.execute({
       userUuid: locals.user.uuid,
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
       sharedVaultOwnerUploadBytesLimit: locals.sharedVaultOwnerContext?.upload_bytes_limit,
       fileUuid: request.body.file_uuid,
       remoteIdentifier: request.body.remote_identifier,

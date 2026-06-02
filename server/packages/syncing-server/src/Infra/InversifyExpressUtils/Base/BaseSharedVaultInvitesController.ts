@@ -67,7 +67,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.inviteUserToSharedVaultUseCase.execute({
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
       senderUuid: locals.user.uuid,
       recipientUuid: request.body.recipient_uuid,
       encryptedMessage: request.body.encrypted_message,
@@ -95,7 +95,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
 
     const result = await this.updateSharedVaultInviteUseCase.execute({
       encryptedMessage: request.body.encrypted_message,
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
       senderUuid: locals.user.uuid,
       permission: request.body.permission,
     })
@@ -120,7 +120,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.acceptSharedVaultInviteUseCase.execute({
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
       originatorUuid: locals.user.uuid,
     })
 
@@ -146,7 +146,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.declineSharedVaultInviteUseCase.execute({
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
       userUuid: locals.user.uuid,
     })
 
@@ -240,7 +240,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
 
     const result = await this.getSharedVaultInvitesSentByUserUseCase.execute({
       senderUuid: locals.user.uuid,
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
     })
 
     if (result.isFailed()) {
@@ -286,7 +286,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.declineSharedVaultInviteUseCase.execute({
-      inviteUuid: request.params.inviteUuid,
+      inviteUuid: request.params.inviteUuid as string,
       userUuid: locals.user.uuid,
     })
 
@@ -311,7 +311,7 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
 
     const result = await this.deleteSharedVaultInvitesSentByUserUseCase.execute({
       userUuid: locals.user.uuid,
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
     })
 
     if (result.isFailed()) {

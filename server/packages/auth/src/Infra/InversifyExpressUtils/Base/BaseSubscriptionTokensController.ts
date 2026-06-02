@@ -97,13 +97,13 @@ export class BaseSubscriptionTokensController extends BaseHttpController {
   }
 
   private async projectUser(user: User): Promise<{ uuid: string; email: string }> {
-    return <{ uuid: string; email: string }>await this.userProjector.projectSimple(user)
+    return (await this.userProjector.projectSimple(user)) as { uuid: string; email: string }
   }
 
   private async projectRoles(roles: Array<Role>): Promise<Array<{ uuid: string; name: string }>> {
     const roleProjections = []
     for (const role of roles) {
-      roleProjections.push(<{ uuid: string; name: string }>await this.roleProjector.projectSimple(role))
+      roleProjections.push((await this.roleProjector.projectSimple(role)) as { uuid: string; name: string })
     }
 
     return roleProjections

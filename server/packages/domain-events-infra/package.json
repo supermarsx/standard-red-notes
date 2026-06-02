@@ -41,6 +41,7 @@
     "@opentelemetry/instrumentation-grpc": "^0.218.0",
     "@opentelemetry/instrumentation-http": "^0.218.0",
     "@opentelemetry/instrumentation-ioredis": "^0.66.0",
+    "@opentelemetry/instrumentation-typeorm": "^0.18.0",
     "@opentelemetry/instrumentation-winston": "^0.62.0",
     "@opentelemetry/propagator-aws-xray": "^2.2.0",
     "@opentelemetry/resource-detector-aws": "^2.18.0",
@@ -48,7 +49,6 @@
     "@opentelemetry/semantic-conventions": "^1.41.1",
     "@standardnotes/domain-events": "workspace:*",
     "ioredis": "^5.11.0",
-    "opentelemetry-instrumentation-typeorm": "^0.41.0",
     "reflect-metadata": "^0.2.2",
     "sqs-consumer": "^15.0.2",
     "winston": "^3.19.0"

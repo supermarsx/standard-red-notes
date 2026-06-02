@@ -34,7 +34,7 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
 
     const result = await this.getSharedVaultUsersUseCase.execute({
       originatorUuid: locals.user.uuid,
-      sharedVaultUuid: request.params.sharedVaultUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
     })
 
     if (result.isFailed()) {
@@ -57,8 +57,8 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.removeUserFromSharedVaultUseCase.execute({
-      sharedVaultUuid: request.params.sharedVaultUuid,
-      userUuid: request.params.userUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
+      userUuid: request.params.userUuid as string,
       originatorUuid: locals.user.uuid,
     })
 
@@ -73,7 +73,7 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
       )
     }
 
-    response.setHeader('x-invalidate-cache', request.params.userUuid)
+    response.setHeader('x-invalidate-cache', request.params.userUuid as string)
 
     return this.json({
       success: true,
@@ -84,8 +84,8 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
     const locals = response.locals as ResponseLocals
 
     const result = await this.designateSurvivorUseCase.execute({
-      sharedVaultUuid: request.params.sharedVaultUuid,
-      userUuid: request.params.userUuid,
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
+      userUuid: request.params.userUuid as string,
       originatorUuid: locals.user.uuid,
     })
 

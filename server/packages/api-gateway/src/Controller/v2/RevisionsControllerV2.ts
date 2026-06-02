@@ -23,7 +23,7 @@ export class RevisionsControllerV2 extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'items/:itemUuid/revisions',
-        request.params.itemUuid,
+        request.params.itemUuid as string,
       ),
     )
   }
@@ -36,8 +36,8 @@ export class RevisionsControllerV2 extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'items/:itemUuid/revisions/:id',
-        request.params.itemUuid,
-        request.params.uuid,
+        request.params.itemUuid as string,
+        request.params.uuid as string,
       ),
     )
   }
@@ -50,8 +50,8 @@ export class RevisionsControllerV2 extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'items/:itemUuid/revisions/:id',
-        request.params.itemUuid,
-        request.params.uuid,
+        request.params.itemUuid as string,
+        request.params.uuid as string,
       ),
     )
   }

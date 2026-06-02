@@ -1,7 +1,7 @@
 import { DataSource, EntityTarget, LoggerOptions, ObjectLiteral, Repository } from 'typeorm'
-import { MysqlConnectionOptions } from 'typeorm/driver/mysql/MysqlConnectionOptions'
 import { Env } from './Env'
 import { SQLConnection } from '../Infra/TypeORM/SQLConnection'
+import type { DataSourceOptions } from "typeorm";
 
 export class AppDataSource {
   private _dataSource: DataSource | undefined
@@ -37,7 +37,7 @@ export class AppDataSource {
       entities: [SQLConnection],
       migrations: [`${__dirname}/../../migrations/mysql/*.js`],
       migrationsRun: this.configuration.runMigrations,
-      logging: <LoggerOptions>this.configuration.env.get('DB_DEBUG_LEVEL', true) ?? 'info',
+      logging: (this.configuration.env.get('DB_DEBUG_LEVEL', true) as LoggerOptions) ?? 'info',
     }
 
     const inReplicaMode = this.configuration.env.get('DB_REPLICA_HOST', true) ? true : false
@@ -63,7 +63,7 @@ export class AppDataSource {
       restoreNodeTimeout: 5,
     }
 
-    const mySQLDataSourceOptions: MysqlConnectionOptions = {
+    const mySQLDataSourceOptions: Extract<DataSourceOptions, { type: "mysql" | "mariadb" }> = {
       ...commonDataSourceOptions,
       type: 'mysql',
       charset: 'utf8mb4',

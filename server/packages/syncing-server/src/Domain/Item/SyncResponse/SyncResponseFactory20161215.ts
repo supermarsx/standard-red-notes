@@ -28,7 +28,7 @@ export class SyncResponseFactory20161215 implements SyncResponseFactoryInterface
     const unsaved = []
     for (const conflict of pickOutConflictsResult.unsavedItems) {
       unsaved.push({
-        item: conflict.serverItem ? this.mapper.toProjection(conflict.serverItem) : <ItemHash>conflict.unsavedItem,
+        item: conflict.serverItem ? this.mapper.toProjection(conflict.serverItem) : (conflict.unsavedItem as ItemHash),
         error: {
           tag: conflict.type,
         },
@@ -68,8 +68,8 @@ export class SyncResponseFactory20161215 implements SyncResponseFactoryInterface
     const conflictingIds = savedIds.filter((savedId) => retrievedIds.includes(savedId))
 
     for (const conflictingId of conflictingIds) {
-      const savedItem = <Item>savedItems.find((item) => item.id.toString() === conflictingId)
-      const conflictedItem = <Item>retrievedItems.find((item) => item.id.toString() === conflictingId)
+      const savedItem = savedItems.find((item) => item.id.toString() === conflictingId) as Item
+      const conflictedItem = retrievedItems.find((item) => item.id.toString() === conflictingId) as Item
 
       const difference = savedItem.props.timestamps.updatedAt - conflictedItem.props.timestamps.updatedAt
 

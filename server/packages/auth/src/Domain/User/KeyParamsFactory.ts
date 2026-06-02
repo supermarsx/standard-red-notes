@@ -76,6 +76,6 @@ export class KeyParamsFactory implements KeyParamsFactoryInterface {
         sortedKeyParams[key] = (keyParams as any)[key]
       })
 
-    return <KeyParamsData>sortedKeyParams
+    return sortedKeyParams as KeyParamsData
   }
 }

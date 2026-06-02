@@ -36,7 +36,7 @@ void container.load().then((container) => {
     app.use(
       busboy({
         highWaterMark: 2 * 1024 * 1024,
-      }),
+      }) as never,
     )
     /* eslint-disable */
     app.use(helmet({

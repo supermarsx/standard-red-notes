@@ -41,17 +41,15 @@ export class UserSubscription {
 
   @Column({
     type: 'tinyint',
-    width: 1,
     nullable: false,
-    default: 0,
+    default: 0
   })
   declare cancelled: boolean
 
   @Column({
     name: 'subscription_id',
     type: 'int',
-    width: 11,
-    nullable: true,
+    nullable: true
   })
   declare subscriptionId: number | null
 

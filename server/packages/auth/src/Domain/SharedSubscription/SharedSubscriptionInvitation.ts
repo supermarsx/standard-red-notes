@@ -47,8 +47,7 @@ export class SharedSubscriptionInvitation {
 
   @Column({
     name: 'subscription_id',
-    type: 'int',
-    width: 11,
+    type: 'int'
   })
   declare subscriptionId: number
 

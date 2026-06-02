@@ -50,7 +50,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PUT',
         'users/:userUuid/attributes/credentials',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
       request.body,
     )
@@ -64,7 +64,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PUT',
         'users/:userUuid/attributes/credentials',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
       request.body,
     )
@@ -112,7 +112,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/settings',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
     )
   }
@@ -125,7 +125,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PUT',
         'users/:userUuid/settings',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
       request.body,
     )
@@ -139,7 +139,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PUT',
         'users/:userUuid/subscription-settings',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
       request.body,
     )
@@ -153,8 +153,8 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/settings/:settingName',
-        request.params.userUuid,
-        request.params.settingName,
+        request.params.userUuid as string,
+        request.params.settingName as string,
       ),
     )
   }
@@ -167,8 +167,8 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'users/:userUuid/settings/:settingName',
-        request.params.userUuid,
-        request.params.settingName,
+        request.params.userUuid as string,
+        request.params.settingName as string,
       ),
       request.body,
     )
@@ -185,8 +185,8 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/subscription-settings/:subscriptionSettingName',
-        request.params.userUuid,
-        request.params.subscriptionSettingName,
+        request.params.userUuid as string,
+        request.params.subscriptionSettingName as string,
       ),
     )
   }
@@ -199,7 +199,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/features',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
     )
   }
@@ -212,7 +212,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/subscription',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
     )
   }
@@ -243,7 +243,7 @@ export class UsersController extends BaseHttpController {
     await this.httpService.callAuthServer(
       request,
       response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('DELETE', 'users/:userUuid', request.params.userUuid),
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('DELETE', 'users/:userUuid', request.params.userUuid as string),
     )
   }
 
@@ -255,7 +255,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'users/:userUuid/requests',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
       request.body,
     )
@@ -269,7 +269,7 @@ export class UsersController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'users/:userUuid/mfa-secret',
-        request.params.userUuid,
+        request.params.userUuid as string,
       ),
     )
   }

@@ -23,7 +23,7 @@ export class AuthenticatorsController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'authenticators/:authenticatorId',
-        request.params.authenticatorId,
+        request.params.authenticatorId as string,
       ),
       request.body,
     )

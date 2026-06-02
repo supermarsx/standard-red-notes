@@ -31,7 +31,7 @@ export class BaseRevisionsController extends BaseHttpController {
 
   async getRevisions(request: Request, response: Response): Promise<results.JsonResult> {
     const revisionMetadataOrError = await this.getRevisionsMetadata.execute({
-      itemUuid: request.params.itemUuid,
+      itemUuid: request.params.itemUuid as string,
       userUuid: response.locals.user.uuid,
       sharedVaultUuids: response.locals.belongsToSharedVaults.map(
         (association: { shared_vault_uuid: string; permission: string }) => association.shared_vault_uuid,
@@ -57,7 +57,7 @@ export class BaseRevisionsController extends BaseHttpController {
 
   async getRevision(request: Request, response: Response): Promise<results.JsonResult> {
     const revisionOrError = await this.doGetRevision.execute({
-      revisionUuid: request.params.uuid,
+      revisionUuid: request.params.uuid as string,
       userUuid: response.locals.user.uuid,
       sharedVaultUuids: response.locals.belongsToSharedVaults.map(
         (association: { shared_vault_uuid: string; permission: string }) => association.shared_vault_uuid,
@@ -82,7 +82,7 @@ export class BaseRevisionsController extends BaseHttpController {
 
   async deleteRevision(request: Request, response: Response): Promise<results.JsonResult> {
     const revisionOrError = await this.doDeleteRevision.execute({
-      revisionUuid: request.params.uuid,
+      revisionUuid: request.params.uuid as string,
       userUuid: response.locals.user.uuid,
     })
 

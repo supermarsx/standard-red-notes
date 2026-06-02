@@ -42,7 +42,7 @@ export class SharedVaultsController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'shared-vaults/:sharedVaultUuid',
-        request.params.sharedVaultUuid,
+        request.params.sharedVaultUuid as string,
       ),
       request.body,
     )
@@ -56,7 +56,7 @@ export class SharedVaultsController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'shared-vaults/:sharedVaultUuid/valet-tokens',
-        request.params.sharedVaultUuid,
+        request.params.sharedVaultUuid as string,
       ),
       request.body,
     )

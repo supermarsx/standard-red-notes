@@ -4,6 +4,6 @@ import { config, DotenvParseOutput } from 'dotenv'
 export class Env extends AbstractEnv {
   load(): void {
     const output = config()
-    this.env = <DotenvParseOutput>output.parsed
+    this.env = output.parsed as DotenvParseOutput
   }
 }

@@ -92,7 +92,7 @@ export class BaseAuthController extends BaseHttpController {
     }
 
     const verifyMFAResponse = await this.verifyMFA.execute({
-      email: <string>request.body.email,
+      email: request.body.email as string,
       requestParams: request.body,
       preventOTPFromFurtherUsage: true,
     })
@@ -111,7 +111,7 @@ export class BaseAuthController extends BaseHttpController {
     }
 
     const result = await this.getUserKeyParams.execute({
-      email: <string>request.body.email,
+      email: request.body.email as string,
       authenticated: false,
       codeChallenge: request.body.code_challenge as string,
     })
@@ -136,7 +136,7 @@ export class BaseAuthController extends BaseHttpController {
 
     const signInResult = await this.signInUseCase.execute({
       apiVersion: request.body.api,
-      userAgent: <string>request.headers['user-agent'],
+      userAgent: request.headers['user-agent'] as string,
       email: request.body.email,
       password: request.body.password,
       ephemeralSession: request.body.ephemeral ?? false,
@@ -213,7 +213,7 @@ export class BaseAuthController extends BaseHttpController {
   async recoveryLogin(request: Request, response: Response): Promise<results.JsonResult> {
     const result = await this.signInWithRecoveryCodes.execute({
       apiVersion: request.body.api_version,
-      userAgent: <string>request.headers['user-agent'],
+      userAgent: request.headers['user-agent'] as string,
       codeVerifier: request.body.code_verifier,
       username: request.body.username,
       recoveryCodes: request.body.recovery_codes,

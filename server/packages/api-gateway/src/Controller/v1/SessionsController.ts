@@ -30,7 +30,7 @@ export class SessionsController extends BaseHttpController {
       response,
       this.endpointResolver.resolveEndpointOrMethodIdentifier('DELETE', 'session'),
       {
-        uuid: request.params.uuid,
+        uuid: request.params.uuid as string,
       },
     )
   }

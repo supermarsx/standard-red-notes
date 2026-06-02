@@ -57,7 +57,7 @@ export class BaseUsersController extends BaseHttpController {
     }
 
     const result = await this.doDeleteAccount.execute({
-      userUuid: request.params.userUuid,
+      userUuid: request.params.userUuid as string,
       serverPassword: request.headers['x-server-password'] as string | undefined,
       authTokenVersion: locals.authTokenVersion,
       shouldVerifyUserServerPassword: true,
@@ -92,7 +92,7 @@ export class BaseUsersController extends BaseHttpController {
     }
 
     const result = await this.doGetUserSubscription.execute({
-      userUuid: request.params.userUuid,
+      userUuid: request.params.userUuid as string,
     })
 
     if (result.success) {
@@ -172,7 +172,7 @@ export class BaseUsersController extends BaseHttpController {
       pwNonce: request.body.pw_nonce,
       kpCreated: request.body.created,
       kpOrigination: request.body.origination,
-      updatedWithUserAgent: <string>request.headers['user-agent'],
+      updatedWithUserAgent: request.headers['user-agent'] as string,
       protocolVersion: request.body.version,
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,

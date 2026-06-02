@@ -64,7 +64,7 @@ export class AuthenticateUser implements UseCaseInterface {
 
     switch (authenticationMethod.type) {
       case 'jwt': {
-        const pwHash = <string>(<Record<string, unknown>>authenticationMethod.claims).pw_hash
+        const pwHash = (authenticationMethod.claims as Record<string, unknown>).pw_hash as string
         const encryptedPasswordDigest = crypto.createHash('sha256').update(user.encryptedPassword).digest('hex')
 
         if (!pwHash || !crypto.timingSafeEqual(Buffer.from(pwHash), Buffer.from(encryptedPasswordDigest))) {

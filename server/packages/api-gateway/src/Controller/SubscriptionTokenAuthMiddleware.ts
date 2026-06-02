@@ -107,9 +107,9 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
   }
 
   private handleOfflineAuthTokenValidationResponse(response: Response, authResponse: AxiosResponse) {
-    const decodedToken = <OfflineUserTokenData>(
-      verify(authResponse.data.authToken, this.jwtSecret, { algorithms: ['HS256'] })
-    )
+    const decodedToken = verify(authResponse.data.authToken, this.jwtSecret, {
+      algorithms: ['HS256'],
+    }) as OfflineUserTokenData
 
     Object.assign(response.locals, {
       offlineAuthToken: authResponse.data.authToken,
@@ -119,9 +119,9 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
   }
 
   private handleAuthTokenValidationResponse(response: Response, authResponse: AxiosResponse) {
-    const decodedToken = <CrossServiceTokenData>(
-      verify(authResponse.data.authToken, this.jwtSecret, { algorithms: ['HS256'] })
-    )
+    const decodedToken = verify(authResponse.data.authToken, this.jwtSecret, {
+      algorithms: ['HS256'],
+    }) as CrossServiceTokenData
 
     Object.assign(response.locals, {
       authToken: authResponse.data.authToken,

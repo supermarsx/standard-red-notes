@@ -63,17 +63,15 @@ export class User {
 
   @Column({
     name: 'pw_cost',
-    width: 11,
     type: 'int',
-    nullable: true,
+    nullable: true
   })
   declare pwCost: number
 
   @Column({
     name: 'pw_key_size',
-    width: 11,
     type: 'int',
-    nullable: true,
+    nullable: true
   })
   declare pwKeySize: number
 
@@ -126,8 +124,7 @@ export class User {
   @Column({
     name: 'num_failed_attempts',
     type: 'int',
-    width: 11,
-    nullable: true,
+    nullable: true
   })
   declare numberOfFailedAttempts: number | null
 

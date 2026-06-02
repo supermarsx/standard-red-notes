@@ -3,7 +3,7 @@ import { SemanticAttributes, SemanticResourceAttributes } from '@opentelemetry/s
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
 import { AWSXRayIdGenerator } from '@opentelemetry/id-generator-aws-xray'
 import * as AwsResourceDetectors from '@opentelemetry/resource-detector-aws'
-import { TypeormInstrumentation } from 'opentelemetry-instrumentation-typeorm'
+import { TypeormInstrumentation } from '@opentelemetry/instrumentation-typeorm'
 import { AWSXRayPropagator } from '@opentelemetry/propagator-aws-xray'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
 import { AwsInstrumentation } from '@opentelemetry/instrumentation-aws-sdk'
@@ -78,7 +78,7 @@ export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
           sqsExtractContextPropagationFromPayload: true,
         }),
         new TypeormInstrumentation({
-          collectParameters: false,
+          enhancedDatabaseReporting: false,
           suppressInternalInstrumentation: true,
         }),
         winstonInstrumentation,

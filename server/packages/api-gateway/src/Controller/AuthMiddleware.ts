@@ -81,7 +81,7 @@ export abstract class AuthMiddleware extends BaseMiddleware {
         crossServiceTokenFetchedFromCache = false
       }
 
-      const decodedToken = <CrossServiceTokenData>verify(crossServiceToken, this.jwtSecret, { algorithms: ['HS256'] })
+      const decodedToken = verify(crossServiceToken, this.jwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
 
       if (this.crossServiceTokenCacheTTL && !crossServiceTokenFetchedFromCache) {
         await this.crossServiceTokenCache.set({

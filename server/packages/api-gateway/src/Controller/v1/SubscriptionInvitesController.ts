@@ -43,7 +43,7 @@ export class SubscriptionInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'subscription-invites/:inviteUuid',
-        request.params.inviteUuid,
+        request.params.inviteUuid as string,
       ),
     )
   }
@@ -56,7 +56,7 @@ export class SubscriptionInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'subscription-invites/:inviteUuid/accept',
-        request.params.inviteUuid,
+        request.params.inviteUuid as string,
       ),
     )
   }

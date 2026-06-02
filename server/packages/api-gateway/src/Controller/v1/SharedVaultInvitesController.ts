@@ -22,7 +22,7 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'shared-vaults/:sharedVaultUuid/invites',
-        request.params.sharedVaultUuid,
+        request.params.sharedVaultUuid as string,
       ),
       request.body,
     )
@@ -36,8 +36,8 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PATCH',
         'shared-vaults/:sharedVaultUuid/invites/:inviteUuid',
-        request.params.sharedVaultUuid,
-        request.params.inviteUuid,
+        request.params.sharedVaultUuid as string,
+        request.params.inviteUuid as string,
       ),
       request.body,
     )
@@ -51,8 +51,8 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'shared-vaults/:sharedVaultUuid/invites/:inviteUuid/accept',
-        request.params.sharedVaultUuid,
-        request.params.inviteUuid,
+        request.params.sharedVaultUuid as string,
+        request.params.inviteUuid as string,
       ),
       request.body,
     )
@@ -66,8 +66,8 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'shared-vaults/:sharedVaultUuid/invites/:inviteUuid/decline',
-        request.params.sharedVaultUuid,
-        request.params.inviteUuid,
+        request.params.sharedVaultUuid as string,
+        request.params.inviteUuid as string,
       ),
       request.body,
     )
@@ -121,7 +121,7 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'GET',
         'shared-vaults/:sharedVaultUuid/invites',
-        request.params.sharedVaultUuid,
+        request.params.sharedVaultUuid as string,
       ),
       request.body,
     )
@@ -135,8 +135,8 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'shared-vaults/:sharedVaultUuid/invites/:inviteUuid',
-        request.params.sharedVaultUuid,
-        request.params.inviteUuid,
+        request.params.sharedVaultUuid as string,
+        request.params.inviteUuid as string,
       ),
       request.body,
     )
@@ -150,7 +150,7 @@ export class SharedVaultInvitesController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'shared-vaults/:sharedVaultUuid/invites',
-        request.params.sharedVaultUuid,
+        request.params.sharedVaultUuid as string,
       ),
       request.body,
     )

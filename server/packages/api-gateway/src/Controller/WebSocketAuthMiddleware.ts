@@ -56,7 +56,7 @@ export class WebSocketAuthMiddleware extends BaseMiddleware {
 
       const crossServiceToken = authResponse.data.authToken
 
-      const decodedToken = <CrossServiceTokenData>verify(crossServiceToken, this.jwtSecret, { algorithms: ['HS256'] })
+      const decodedToken = verify(crossServiceToken, this.jwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
 
       Object.assign(response.locals, {
         authToken: crossServiceToken,

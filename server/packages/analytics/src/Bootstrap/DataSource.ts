@@ -50,5 +50,5 @@ export const AppDataSource = new DataSource({
   entities: [AnalyticsEntity, TypeORMRevenueModification],
   migrations: [env.get('DB_MIGRATIONS_PATH', true) ?? 'dist/migrations/*.js'],
   migrationsRun: true,
-  logging: <LoggerOptions>env.get('DB_DEBUG_LEVEL'),
+  logging: env.get('DB_DEBUG_LEVEL') as LoggerOptions,
 })

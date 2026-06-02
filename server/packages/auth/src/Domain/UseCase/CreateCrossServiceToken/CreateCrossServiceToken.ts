@@ -117,7 +117,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
   }
 
   private projectUser(user: User): { uuid: string; email: string } {
-    return <{ uuid: string; email: string }>this.userProjector.projectSimple(user)
+    return this.userProjector.projectSimple(user) as { uuid: string; email: string }
   }
 
   private projectSession(session: Session): {
@@ -130,22 +130,20 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     access_expiration: string
     refresh_expiration: string
   } {
-    return <
-      {
-        uuid: string
-        api_version: string
-        created_at: string
-        updated_at: string
-        device_info: string
-        readonly_access: boolean
-        access_expiration: string
-        refresh_expiration: string
-      }
-    >this.sessionProjector.projectSimple(session)
+    return this.sessionProjector.projectSimple(session) as {
+      uuid: string
+      api_version: string
+      created_at: string
+      updated_at: string
+      device_info: string
+      readonly_access: boolean
+      access_expiration: string
+      refresh_expiration: string
+    }
   }
 
   private projectRoles(roles: Array<Role>): Array<{ uuid: string; name: string }> {
-    return roles.map((role) => <{ uuid: string; name: string }>this.roleProjector.projectSimple(role))
+    return roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
   }
 
   // TODO: Eventually roll out all clients to use version 3

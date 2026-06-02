@@ -127,7 +127,7 @@ export class BaseItemsController extends BaseHttpController {
       limit: request.body.limit,
       contentType: request.body.content_type,
       apiVersion: request.body.api ?? ApiVersion.v20161215,
-      snjsVersion: <string>request.headers['x-snjs-version'],
+      snjsVersion: request.headers['x-snjs-version'] as string,
       readOnlyAccess: locals.readOnlyAccess,
       sessionUuid: locals.session ? locals.session.uuid : null,
       sharedVaultUuids,
@@ -172,7 +172,7 @@ export class BaseItemsController extends BaseHttpController {
 
     const result = await this.getItem.execute({
       userUuid: locals.user.uuid,
-      itemUuid: request.params.uuid,
+      itemUuid: request.params.uuid as string,
     })
 
     if (result.isFailed()) {

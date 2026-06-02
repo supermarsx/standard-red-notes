@@ -46,7 +46,7 @@ describe('AuthenticateOfflineSubscriptionToken', () => {
 
     expect(response.success).toBeTruthy()
 
-    expect((<{ success: true; email: string }>response).email).toEqual('test@test.com')
+    expect((response as { success: true; email: string }).email).toEqual('test@test.com')
   })
 
   it('should not authenticate an dashboard token if user has no features token', async () => {

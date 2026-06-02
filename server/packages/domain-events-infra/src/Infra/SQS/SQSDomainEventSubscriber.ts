@@ -38,7 +38,7 @@ export class SQSDomainEventSubscriber implements DomainEventSubscriberInterface 
   }
 
   async handleMessage(message: Message): Promise<Message | undefined> {
-    await this.domainEventMessageHandler.handleMessage(<string>message.Body)
+    await this.domainEventMessageHandler.handleMessage(message.Body as string)
     return undefined
   }
 

@@ -130,7 +130,7 @@ export class HomeServer implements HomeServerInterface {
           }),
         )
 
-        app.use(cookieParser())
+        app.use(cookieParser() as never)
 
         const corsAllowedOrigins = env.get('CORS_ALLOWED_ORIGINS', true)
           ? env.get('CORS_ALLOWED_ORIGINS', true).split(',')

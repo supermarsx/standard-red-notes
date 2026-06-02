@@ -43,7 +43,7 @@
     "ioredis": "^5.11.0",
     "mysql2": "^3.22.4",
     "reflect-metadata": "^0.2.2",
-    "typeorm": "^0.3.27",
+    "typeorm": "^1.0.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {
