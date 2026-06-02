@@ -453,9 +453,9 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Authenticator, AuthenticatorHttpProjection>>(TYPES.Auth_AuthenticatorHttpMapper)
       .toConstantValue(new AuthenticatorHttpMapper())
     container
-      .bind<MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>>(
-        TYPES.Auth_AuthenticatorChallengePersistenceMapper,
-      )
+      .bind<
+        MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
+      >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
       .toConstantValue(new AuthenticatorChallengePersistenceMapper())
     container
       .bind<MapperInterface<CacheEntry, TypeORMCacheEntry>>(TYPES.Auth_CacheEntryPersistenceMapper)
@@ -467,17 +467,17 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Setting, SettingHttpRepresentation>>(TYPES.Auth_SettingHttpMapper)
       .toConstantValue(new SettingHttpMapper())
     container
-      .bind<MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>>(
-        TYPES.Auth_SubscriptionSettingHttpMapper,
-      )
+      .bind<
+        MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>
+      >(TYPES.Auth_SubscriptionSettingHttpMapper)
       .toConstantValue(new SubscriptionSettingHttpMapper())
     container
       .bind<MapperInterface<Setting, TypeORMSetting>>(TYPES.Auth_SettingPersistenceMapper)
       .toConstantValue(new SettingPersistenceMapper())
     container
-      .bind<MapperInterface<SubscriptionSetting, TypeORMSubscriptionSetting>>(
-        TYPES.Auth_SubscriptionSettingPersistenceMapper,
-      )
+      .bind<
+        MapperInterface<SubscriptionSetting, TypeORMSubscriptionSetting>
+      >(TYPES.Auth_SubscriptionSettingPersistenceMapper)
       .toConstantValue(new SubscriptionSettingPersistenceMapper())
 
     // ORM

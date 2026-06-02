@@ -3,9 +3,10 @@ import { MapperInterface } from '@standardnotes/domain-core'
 import { SharedVaultInvite } from '../../Domain/SharedVault/User/Invite/SharedVaultInvite'
 import { SharedVaultInviteHttpRepresentation } from './SharedVaultInviteHttpRepresentation'
 
-export class SharedVaultInviteHttpMapper
-  implements MapperInterface<SharedVaultInvite, SharedVaultInviteHttpRepresentation>
-{
+export class SharedVaultInviteHttpMapper implements MapperInterface<
+  SharedVaultInvite,
+  SharedVaultInviteHttpRepresentation
+> {
   toDomain(_projection: SharedVaultInviteHttpRepresentation): SharedVaultInvite {
     throw new Error('Mapping from http representation to domain is not implemented.')
   }

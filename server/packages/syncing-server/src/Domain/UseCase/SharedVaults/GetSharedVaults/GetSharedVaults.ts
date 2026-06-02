@@ -5,13 +5,10 @@ import { GetSharedVaultsDTO } from './GetSharedVaultsDTO'
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
 
-export class GetSharedVaults
-  implements
-    UseCaseInterface<{
-      sharedVaults: SharedVault[]
-      designatedSurvivors: SharedVaultUser[]
-    }>
-{
+export class GetSharedVaults implements UseCaseInterface<{
+  sharedVaults: SharedVault[]
+  designatedSurvivors: SharedVaultUser[]
+}> {
   constructor(
     private sharedVaultUserRepository: SharedVaultUserRepositoryInterface,
     private sharedVaultRepository: SharedVaultRepositoryInterface,

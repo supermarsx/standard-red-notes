@@ -11,7 +11,7 @@ export const useDocumentRect = (): DOMRect => {
   const [documentRect, setDocumentRect] = useState<DOMRect>(getBoundingClientRect())
 
   useEffect(() => {
-    let debounceTimeout: number
+    let debounceTimeout: number | undefined
 
     const handleWindowResize = () => {
       window.clearTimeout(debounceTimeout)

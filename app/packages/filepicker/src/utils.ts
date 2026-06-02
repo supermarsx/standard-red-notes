@@ -12,7 +12,7 @@ export async function readFile(file: File): Promise<Uint8Array> {
 
 export function saveFile(name: string, bytes: Uint8Array): void {
   const link = document.createElement('a')
-  const blob = new Blob([bytes], {
+  const blob = new Blob([bytes as BlobPart], {
     type: 'text/plain;charset=utf-8',
   })
   link.href = window.URL.createObjectURL(blob)

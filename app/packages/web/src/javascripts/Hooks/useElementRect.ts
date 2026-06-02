@@ -17,7 +17,7 @@ export const useAutoElementRect = (
   const [rect, setRect] = useState<DOMRect>()
 
   useEffect(() => {
-    let windowResizeDebounceTimeout: number
+    let windowResizeDebounceTimeout: number | undefined
     let windowResizeHandler: () => void
 
     if (element) {
@@ -54,7 +54,7 @@ export const useAutoElementRect = (
 
 export const useElementResize = (element: HTMLElement | null | undefined, callback: () => void) => {
   useEffect(() => {
-    let windowResizeDebounceTimeout: number
+    let windowResizeDebounceTimeout: number | undefined
     let windowResizeHandler: () => void
 
     if (element) {

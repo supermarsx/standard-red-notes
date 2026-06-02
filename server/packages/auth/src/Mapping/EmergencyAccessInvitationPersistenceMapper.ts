@@ -4,9 +4,10 @@ import { EmergencyAccessInvitation } from '../Domain/EmergencyAccess/EmergencyAc
 import { EmergencyAccessInvitationStatus } from '../Domain/EmergencyAccess/EmergencyAccessInvitationStatus'
 import { TypeORMEmergencyAccessInvitation } from '../Infra/TypeORM/TypeORMEmergencyAccessInvitation'
 
-export class EmergencyAccessInvitationPersistenceMapper
-  implements MapperInterface<EmergencyAccessInvitation, TypeORMEmergencyAccessInvitation>
-{
+export class EmergencyAccessInvitationPersistenceMapper implements MapperInterface<
+  EmergencyAccessInvitation,
+  TypeORMEmergencyAccessInvitation
+> {
   toDomain(projection: TypeORMEmergencyAccessInvitation): EmergencyAccessInvitation {
     const grantorUuidOrError = Uuid.create(projection.grantorUuid)
     if (grantorUuidOrError.isFailed()) {

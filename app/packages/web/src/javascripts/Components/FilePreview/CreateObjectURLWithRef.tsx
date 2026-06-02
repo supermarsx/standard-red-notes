@@ -7,7 +7,7 @@ export const createObjectURLWithRef = (
   ref: MutableRefObject<string | undefined>,
 ) => {
   const objectURL = URL.createObjectURL(
-    new Blob([bytes], {
+    new Blob([bytes as BlobPart], {
       type,
     }),
   )

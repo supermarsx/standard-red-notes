@@ -4,9 +4,9 @@ import { SubscriptionSettingRepositoryInterface } from '../../Setting/Subscripti
 import { GetSubscriptionSettingsDTO } from './GetSubscriptionSettingsDTO'
 import { SettingCrypterInterface } from '../../Setting/SettingCrypterInterface'
 
-export class GetSubscriptionSettings
-  implements UseCaseInterface<Array<{ setting: SubscriptionSetting; decryptedValue?: string | null }>>
-{
+export class GetSubscriptionSettings implements UseCaseInterface<
+  Array<{ setting: SubscriptionSetting; decryptedValue?: string | null }>
+> {
   constructor(
     private subscriptionSettingRepository: SubscriptionSettingRepositoryInterface,
     private settingCrypter: SettingCrypterInterface,

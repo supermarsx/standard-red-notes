@@ -3,6 +3,7 @@
     "allowJs": false,
     "alwaysStrict": true,
     "baseUrl": ".",
+    "rootDir": ".",
     "declaration": true,
     "declarationDir": "../dist/@types",
     "emitDeclarationOnly": true,

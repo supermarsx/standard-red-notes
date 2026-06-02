@@ -3,9 +3,10 @@ import { MapperInterface, SyncUseCaseInterface } from '@standardnotes/domain-cor
 import { RevisionMetadata } from '../../Domain/Revision/RevisionMetadata'
 import { RevisionMetadataHttpRepresentation } from './RevisionMetadataHttpRepresentation'
 
-export class RevisionMetadataHttpMapper
-  implements MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>
-{
+export class RevisionMetadataHttpMapper implements MapperInterface<
+  RevisionMetadata,
+  RevisionMetadataHttpRepresentation
+> {
   constructor(private getRequiredRoleToViewRevision: SyncUseCaseInterface<string>) {}
 
   toDomain(_projection: RevisionMetadataHttpRepresentation): RevisionMetadata {

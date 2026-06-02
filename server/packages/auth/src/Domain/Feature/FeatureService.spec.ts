@@ -257,13 +257,19 @@ describe('FeatureService', () => {
 
   describe('online subscribers', () => {
     it('should tell if a user is entitled to a feature', async () => {
-      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme)).toBe(true)
-      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.DeprecatedBoldEditor)).toBe(false)
+      expect(
+        await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme),
+      ).toBe(true)
+      expect(
+        await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.DeprecatedBoldEditor),
+      ).toBe(false)
     })
 
     it('should tell if a user is not entitled to a feature because it is expired', async () => {
       timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(777)
-      expect(await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme)).toBe(false)
+      expect(
+        await createService().userIsEntitledToFeature(user, NativeFeatureIdentifier.TYPES.AutobiographyTheme),
+      ).toBe(false)
     })
 
     it('should tell if a user is entitled to a feature that does not expire', async () => {

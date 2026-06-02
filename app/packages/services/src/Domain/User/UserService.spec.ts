@@ -27,8 +27,8 @@ describe('UserService', () => {
   let challengeService: ChallengeServiceInterface
   let protectionService: ProtectionsClientInterface
   let userApiService: UserApiServiceInterface
-  let reencryptTypeAItems: ReencryptTypeAItems
-  let decryptErroredPayloads: DecryptErroredPayloads
+  let reencryptTypeAItems!: ReencryptTypeAItems
+  let decryptErroredPayloads!: DecryptErroredPayloads
   let internalEventBus: InternalEventBusInterface
 
   const createService = () =>

@@ -10,9 +10,7 @@ import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { AuthenticatorTransportFuture, PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/typescript-types'
 
-export class GenerateAuthenticatorRegistrationOptions
-  implements UseCaseInterface<PublicKeyCredentialCreationOptionsJSON>
-{
+export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterface<PublicKeyCredentialCreationOptionsJSON> {
   constructor(
     private authenticatorRepository: AuthenticatorRepositoryInterface,
     private authenticatorChallengeRepository: AuthenticatorChallengeRepositoryInterface,

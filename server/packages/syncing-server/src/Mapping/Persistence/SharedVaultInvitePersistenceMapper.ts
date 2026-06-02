@@ -10,9 +10,10 @@ import {
 import { SharedVaultInvite } from '../../Domain/SharedVault/User/Invite/SharedVaultInvite'
 import { TypeORMSharedVaultInvite } from '../../Infra/TypeORM/TypeORMSharedVaultInvite'
 
-export class SharedVaultInvitePersistenceMapper
-  implements MapperInterface<SharedVaultInvite, TypeORMSharedVaultInvite>
-{
+export class SharedVaultInvitePersistenceMapper implements MapperInterface<
+  SharedVaultInvite,
+  TypeORMSharedVaultInvite
+> {
   toDomain(projection: TypeORMSharedVaultInvite): SharedVaultInvite {
     const userUuidOrError = Uuid.create(projection.userUuid)
     if (userUuidOrError.isFailed()) {

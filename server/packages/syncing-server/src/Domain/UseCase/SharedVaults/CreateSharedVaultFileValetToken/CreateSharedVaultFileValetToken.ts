@@ -107,15 +107,15 @@ export class CreateSharedVaultFileValetToken implements UseCaseInterface<string>
     const toSharedVaultUuid = targetSharedVault
       ? targetSharedVault.id.toString()
       : dto.moveOperationType === 'shared-vault-to-user'
-      ? undefined
-      : sharedVaultUuid.value
+        ? undefined
+        : sharedVaultUuid.value
 
     const toOwnerUuid =
       dto.moveOperationType === 'user-to-shared-vault'
         ? sharedVault.props.userUuid.value
         : targetSharedVault
-        ? targetSharedVault.props.userUuid.value
-        : userUuid.value
+          ? targetSharedVault.props.userUuid.value
+          : userUuid.value
 
     const tokenData: SharedVaultValetTokenData = {
       sharedVaultUuid: dto.sharedVaultUuid,

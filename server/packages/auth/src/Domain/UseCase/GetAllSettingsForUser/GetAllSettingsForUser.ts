@@ -7,13 +7,10 @@ import { GetSubscriptionSettings } from '../GetSubscriptionSettings/GetSubscript
 import { GetSettings } from '../GetSettings/GetSettings'
 import { GetSharedOrRegularSubscriptionForUser } from '../GetSharedOrRegularSubscriptionForUser/GetSharedOrRegularSubscriptionForUser'
 
-export class GetAllSettingsForUser
-  implements
-    UseCaseInterface<{
-      settings: { setting: Setting; decryptedValue?: string | null }[]
-      subscriptionSettings: { setting: SubscriptionSetting; decryptedValue?: string | null }[]
-    }>
-{
+export class GetAllSettingsForUser implements UseCaseInterface<{
+  settings: { setting: Setting; decryptedValue?: string | null }[]
+  subscriptionSettings: { setting: SubscriptionSetting; decryptedValue?: string | null }[]
+}> {
   constructor(
     private getSettings: GetSettings,
     private getSharedOrRegularSubscription: GetSharedOrRegularSubscriptionForUser,

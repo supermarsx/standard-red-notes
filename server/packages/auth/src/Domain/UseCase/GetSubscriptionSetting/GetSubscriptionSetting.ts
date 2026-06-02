@@ -5,9 +5,10 @@ import { SubscriptionSettingRepositoryInterface } from '../../Setting/Subscripti
 import { GetSubscriptionSettingDTO } from './GetSubscriptionSettingDTO'
 import { SettingCrypterInterface } from '../../Setting/SettingCrypterInterface'
 
-export class GetSubscriptionSetting
-  implements UseCaseInterface<{ setting: SubscriptionSetting; decryptedValue?: string | null }>
-{
+export class GetSubscriptionSetting implements UseCaseInterface<{
+  setting: SubscriptionSetting
+  decryptedValue?: string | null
+}> {
   constructor(
     private subscriptionSettingRepository: SubscriptionSettingRepositoryInterface,
     private settingCrypter: SettingCrypterInterface,

@@ -2,9 +2,10 @@ import { MapperInterface } from '@standardnotes/domain-core'
 import { SubscriptionSetting } from '../../Domain/Setting/SubscriptionSetting'
 import { SubscriptionSettingHttpRepresentation } from './SubscriptionSettingHttpRepresentation'
 
-export class SubscriptionSettingHttpMapper
-  implements MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>
-{
+export class SubscriptionSettingHttpMapper implements MapperInterface<
+  SubscriptionSetting,
+  SubscriptionSettingHttpRepresentation
+> {
   toDomain(_projection: SubscriptionSettingHttpRepresentation): SubscriptionSetting {
     throw new Error('Mapping from http representation to domain is not implemented.')
   }

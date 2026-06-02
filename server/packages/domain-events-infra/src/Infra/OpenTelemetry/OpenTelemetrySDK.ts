@@ -18,7 +18,7 @@ import { Attributes } from '@opentelemetry/api'
 import { OpenTelemetrySDKInterface } from './OpenTelemetrySDKInterface'
 
 export class OpenTelemetrySDK implements OpenTelemetrySDKInterface {
-  private declare sdk: OpenTelemetrySDKNode.NodeSDK
+  declare private sdk: OpenTelemetrySDKNode.NodeSDK
 
   constructor(
     private options: {

@@ -4,6 +4,7 @@
     "skipLibCheck": true,
     "rootDir": "./src",
     "outDir": "./dist",
+    "types": ["node", "jest"],
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],

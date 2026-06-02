@@ -9,9 +9,7 @@ import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallen
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { AuthenticatorTransportFuture, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/typescript-types'
 
-export class GenerateAuthenticatorAuthenticationOptions
-  implements UseCaseInterface<PublicKeyCredentialRequestOptionsJSON>
-{
+export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterface<PublicKeyCredentialRequestOptionsJSON> {
   constructor(
     private userRepository: UserRepositoryInterface,
     private authenticatorRepository: AuthenticatorRepositoryInterface,

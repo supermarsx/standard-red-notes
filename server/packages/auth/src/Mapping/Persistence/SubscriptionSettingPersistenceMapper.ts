@@ -2,9 +2,10 @@ import { MapperInterface, Timestamps, UniqueEntityId, Uuid } from '@standardnote
 import { SubscriptionSetting } from '../../Domain/Setting/SubscriptionSetting'
 import { TypeORMSubscriptionSetting } from '../../Infra/TypeORM/TypeORMSubscriptionSetting'
 
-export class SubscriptionSettingPersistenceMapper
-  implements MapperInterface<SubscriptionSetting, TypeORMSubscriptionSetting>
-{
+export class SubscriptionSettingPersistenceMapper implements MapperInterface<
+  SubscriptionSetting,
+  TypeORMSubscriptionSetting
+> {
   toDomain(projection: TypeORMSubscriptionSetting): SubscriptionSetting {
     const timestampsOrError = Timestamps.create(projection.createdAt, projection.updatedAt)
     if (timestampsOrError.isFailed()) {

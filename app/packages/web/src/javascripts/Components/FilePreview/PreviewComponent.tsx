@@ -54,7 +54,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
     }
 
     const fileBase64 = await getBase64FromBlob(
-      new Blob([bytes], {
+      new Blob([bytes as BlobPart], {
         type: file.mimeType,
       }),
     )

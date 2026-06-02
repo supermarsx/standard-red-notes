@@ -366,9 +366,9 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<SharedVault, SharedVaultHttpRepresentation>>(TYPES.Sync_SharedVaultHttpMapper)
       .toConstantValue(new SharedVaultHttpMapper())
     container
-      .bind<MapperInterface<SharedVaultInvite, SharedVaultInviteHttpRepresentation>>(
-        TYPES.Sync_SharedVaultInviteHttpMapper,
-      )
+      .bind<
+        MapperInterface<SharedVaultInvite, SharedVaultInviteHttpRepresentation>
+      >(TYPES.Sync_SharedVaultInviteHttpMapper)
       .toConstantValue(new SharedVaultInviteHttpMapper())
     container
       .bind<MapperInterface<Message, TypeORMMessage>>(TYPES.Sync_MessagePersistenceMapper)

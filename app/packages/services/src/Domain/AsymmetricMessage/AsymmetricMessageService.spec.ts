@@ -32,7 +32,7 @@ describe('AsymmetricMessageService', () => {
   let sync: jest.Mocked<SyncServiceInterface>
   let mutator: jest.Mocked<MutatorClientInterface>
   let encryption: jest.Mocked<EncryptionProviderInterface>
-  let sessions: jest.Mocked<SessionsClientInterface>
+  let sessions!: jest.Mocked<SessionsClientInterface>
   let service: AsymmetricMessageService
 
   beforeEach(() => {

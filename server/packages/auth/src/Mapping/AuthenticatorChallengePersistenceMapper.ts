@@ -3,9 +3,10 @@ import { MapperInterface, UniqueEntityId, Uuid } from '@standardnotes/domain-cor
 import { AuthenticatorChallenge } from '../Domain/Authenticator/AuthenticatorChallenge'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
 
-export class AuthenticatorChallengePersistenceMapper
-  implements MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
-{
+export class AuthenticatorChallengePersistenceMapper implements MapperInterface<
+  AuthenticatorChallenge,
+  TypeORMAuthenticatorChallenge
+> {
   toDomain(projection: TypeORMAuthenticatorChallenge): AuthenticatorChallenge {
     const userUuidOrError = Uuid.create(projection.userUuid)
     if (userUuidOrError.isFailed()) {

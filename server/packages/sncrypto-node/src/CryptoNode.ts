@@ -14,11 +14,7 @@ import { getBufferWithEncoding } from './Utils'
 import { CryptoTotpInterface } from './CryptoTotpInterface'
 
 export class CryptoNode
-  implements
-    CryptoAes256GcmInterface<BufferEncoding>,
-    CryptoSha256Interface,
-    CryptoBase64Interface,
-    CryptoTotpInterface
+  implements CryptoAes256GcmInterface<BufferEncoding>, CryptoSha256Interface, CryptoBase64Interface, CryptoTotpInterface
 {
   async aes256GcmEncrypt({
     unencrypted,
