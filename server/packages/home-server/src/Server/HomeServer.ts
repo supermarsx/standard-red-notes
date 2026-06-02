@@ -16,9 +16,6 @@ import * as http from 'http'
 import { text, json, Request, Response, NextFunction, raw } from 'express'
 import * as winston from 'winston'
 import { PassThrough } from 'stream'
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const robots = require('express-robots-txt')
-
 import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
@@ -181,12 +178,13 @@ export class HomeServer implements HomeServerInterface {
             },
           }),
         )
-        app.use(
-          robots({
-            UserAgent: '*',
-            Disallow: '/',
-          }),
-        )
+        app.use((req: Request, res: Response, next: NextFunction) => {
+          if (req.path === '/robots.txt') {
+            res.type('text/plain').send('User-agent: *\nDisallow: /\n')
+            return
+          }
+          next()
+        })
 
         if (env.get('E2E_TESTING', true) === 'true') {
           app.post('/e2e/activate-premium', (request: Request, response: Response) => {

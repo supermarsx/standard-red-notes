@@ -13,7 +13,8 @@ import {
   DomainEventSubscriberInterface,
 } from '@standardnotes/domain-events'
 import { TimerInterface, Timer } from '@standardnotes/time'
-import { UAParser, UAParserInstance } from 'ua-parser-js'
+import { UAParser } from 'ua-parser-js'
+type UAParserInstance = InstanceType<typeof UAParser>
 
 import { Env } from './Env'
 import TYPES from './Types'

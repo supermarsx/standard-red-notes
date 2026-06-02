@@ -75,7 +75,8 @@
   },
   "dependencies": {
     "@notifee/react-native": "^9.1.8",
-    "react-native-mmkv": "^3.3.3",
+    "react-native-mmkv": "^4.3.1",
+    "react-native-nitro-modules": "^0.35.9",
     "react-native-safe-area-context": "^5.8.0",
     "react-native-store-review": "^0.5.0"
   }

@@ -1,7 +1,8 @@
 import * as crypto from 'crypto'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
-import { UAParserInstance } from 'ua-parser-js'
+import { UAParser } from 'ua-parser-js'
+type UAParserInstance = InstanceType<typeof UAParser>
 import { TimerInterface } from '@standardnotes/time'
 import { Logger } from 'winston'
 import { SettingName } from '@standardnotes/domain-core'

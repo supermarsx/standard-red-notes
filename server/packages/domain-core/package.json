@@ -30,12 +30,12 @@
     "test": "jest --coverage --no-cache --passWithNoTests --maxWorkers=2"
   },
   "dependencies": {
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^25.9.1",
-    "@types/uuid": "^9.0.8",
+    "@types/uuid": "^11.0.0",
     "jest": "^29.7.0",
     "jest-util": "^29.7.0",
     "ts-jest": "^29.4.11",

@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { UAParser } from 'ua-parser-js'
 import * as winston from 'winston'
 import { TimerInterface } from '@standardnotes/time'
 
@@ -28,7 +29,7 @@ describe('SessionService', () => {
   let existingEphemeralSession: EphemeralSession
   let revokedSession: RevokedSession
   let getSetting: GetSetting
-  let deviceDetector: UAParser
+  let deviceDetector: InstanceType<typeof UAParser>
   let timer: TimerInterface
   let logger: winston.Logger
   let cryptoNode: CryptoNode
@@ -101,7 +102,7 @@ describe('SessionService', () => {
     timer.convertStringDateToMilliseconds = jest.fn().mockReturnValue(123)
     timer.getUTCDate = jest.fn().mockReturnValue(new Date(1))
 
-    deviceDetector = {} as jest.Mocked<UAParser>
+    deviceDetector = {} as jest.Mocked<InstanceType<typeof UAParser>>
     deviceDetector.setUA = jest.fn().mockReturnThis()
     deviceDetector.getResult = jest.fn().mockReturnValue({
       ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.182 Safari/537.36',

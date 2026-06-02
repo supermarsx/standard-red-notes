@@ -31,9 +31,6 @@ import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const robots = require('express-robots-txt')
-
 import { InversifyExpressServer } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import { TYPES } from '../src/Bootstrap/Types'
@@ -145,12 +142,13 @@ void container.load().then((container) => {
         },
       }),
     )
-    app.use(
-      robots({
-        UserAgent: '*',
-        Disallow: '/',
-      }),
-    )
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.path === '/robots.txt') {
+        res.type('text/plain').send('User-agent: *\nDisallow: /\n')
+        return
+      }
+      next()
+    })
   })
 
   server.setErrorConfig((app) => {
