@@ -5,13 +5,11 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import { useApplication } from '@/Components/ApplicationProvider'
 import EncryptionStatusItem from '../Security/EncryptionStatusItem'
 import Icon from '@/Components/Icon/Icon'
-import OfflineSubscription from '../General/Offline/OfflineSubscription'
 import EnvironmentConfiguration from './Settings/EnvironmentConfiguration'
 import DatabaseConfiguration from './Settings/DatabaseConfiguration'
-import { HomeServerEnvironmentConfiguration, HomeServerServiceInterface, classNames, sleep } from '@standardnotes/snjs'
+import { HomeServerEnvironmentConfiguration, HomeServerServiceInterface, sleep } from '@standardnotes/snjs'
 import StatusIndicator from './Status/StatusIndicator'
 import { Status } from './Status/Status'
-import { PremiumFeatureIconClass, PremiumFeatureIconName } from '@/Components/Icon/PremiumFeatureIcon'
 import Switch from '@/Components/Switch/Switch'
 import AccordionItem from '@/Components/Shared/AccordionItem'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
@@ -23,8 +21,6 @@ const HomeServerSettings = () => {
 
   const application = useApplication()
   const homeServerService = application.homeServer as HomeServerServiceInterface
-  const featuresService = application.features
-  const sessionsService = application.sessions
 
   const logsTextarea = useRef<HTMLTextAreaElement>(null)
 
@@ -33,9 +29,6 @@ const HomeServerSettings = () => {
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>()
   const [homeServerDataLocation, setHomeServerDataLocation] = useState('')
-  const [isAPremiumUser, setIsAPremiumUser] = useState(false)
-  const [isSignedIn, setIsSignedIn] = useState(false)
-  const [showOfflineSubscriptionActivation, setShowOfflineSubscriptionActivation] = useState(false)
   const [logsIntervalRef, setLogsIntervalRef] = useState<NodeJS.Timeout | null>(null)
   const [homeServerConfiguration, setHomeServerConfiguration] = useState<HomeServerEnvironmentConfiguration | null>(
     null,
@@ -146,14 +139,10 @@ const HomeServerSettings = () => {
 
     void updateHomeServerEnabled()
 
-    setIsAPremiumUser(featuresService.hasOfflineRepo())
-
-    setIsSignedIn(sessionsService.isSignedIn())
-
     void initialyLoadHomeServerConfiguration()
 
     void refreshStatus()
-  }, [featuresService, sessionsService, homeServerService, refreshStatus, initialyLoadHomeServerConfiguration])
+  }, [homeServerService, refreshStatus, initialyLoadHomeServerConfiguration])
 
   const handleHomeServerConfigurationChange = useCallback(
     async (changedServerConfiguration: HomeServerEnvironmentConfiguration) => {
@@ -359,45 +348,6 @@ const HomeServerSettings = () => {
                     homeServerConfiguration={homeServerConfiguration}
                     setHomeServerConfigurationChangedCallback={handleHomeServerConfigurationChange}
                   />
-                </>
-              )}
-
-              {isSignedIn && !isAPremiumUser && (
-                <>
-                  <HorizontalSeparator classes="my-4" />
-                  <div className={'mt-2 grid grid-cols-1 rounded-md border border-border p-4'}>
-                    <div className="flex items-center">
-                      <Icon
-                        className={classNames('-ml-1 mr-1 h-5 w-5', PremiumFeatureIconClass)}
-                        type={PremiumFeatureIconName}
-                      />
-                      <h1 className="sk-h3 m-0 text-sm font-semibold">Activate Premium Features</h1>
-                    </div>
-                    <p className="col-start-1 col-end-3 m-0 mt-1 text-sm">
-                      Enter your purchased offline subscription code to activate all the features offered by your home
-                      server, likes files support and Super notes.
-                    </p>
-                    <Button
-                      primary
-                      small
-                      className="col-start-1 col-end-3 mt-3 justify-self-start uppercase"
-                      onClick={() => {
-                        setShowOfflineSubscriptionActivation(!showOfflineSubscriptionActivation)
-                      }}
-                    >
-                      {showOfflineSubscriptionActivation ? 'Close' : 'Activate Premium Features'}
-                    </Button>
-
-                    {showOfflineSubscriptionActivation && (
-                      <OfflineSubscription
-                        application={application}
-                        onSuccess={() => {
-                          setIsAPremiumUser(true)
-                          setShowOfflineSubscriptionActivation(false)
-                        }}
-                      />
-                    )}
-                  </div>
                 </>
               )}
             </>

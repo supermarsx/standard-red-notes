@@ -41,8 +41,6 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <PluginsPane pluginsLatestVersions={menu.extensionsLatestVersions} />
     case 'accessibility':
       return null
-    case 'get-free-month':
-      return null
     case 'help-feedback':
       return <HelpAndFeedback application={application} />
     case 'whats-new':

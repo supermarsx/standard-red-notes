@@ -11,7 +11,6 @@ export const PREFERENCES_MENU_ITEMS: PreferencesMenuItem[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard', order: 8 },
   { id: 'plugins', label: 'Plugins', icon: 'dashboard', order: 8 },
   { id: 'accessibility', label: 'Accessibility', icon: 'accessibility', order: 9 },
-  { id: 'get-free-month', label: 'Get a free month', icon: 'star', order: 10 },
   { id: 'help-feedback', label: 'Help & feedback', icon: 'help', order: 11 },
 ]
 

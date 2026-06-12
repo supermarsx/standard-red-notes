@@ -25,7 +25,6 @@ import InviteItem from './Invites/InviteItem'
 import EditVaultModal from './Vaults/VaultModal/EditVaultModal'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import { ToastType, addToast } from '@standardnotes/toast'
-import NoProSubscription from '../Account/NoProSubscription'
 
 const Vaults = observer(() => {
   const application = useApplication()
@@ -233,19 +232,12 @@ const Vaults = observer(() => {
               })}
             </div>
           )}
-          {canCreateMoreVaults ? (
+          {canCreateMoreVaults && (
             <div className="mt-2.5 flex gap-3">
               <Button label="Create Vault" onClick={createNewVault} />
               {hasAccount && isSharedVaultsEnabled && (
                 <Button label="Create Shared Vault" onClick={createNewSharedVault} />
               )}
-            </div>
-          ) : (
-            <div className="mt-3.5">
-              <NoProSubscription
-                application={application}
-                text={<span>Please upgrade in order to increase your vault limit.</span>}
-              />
             </div>
           )}
         </PreferencesSegment>

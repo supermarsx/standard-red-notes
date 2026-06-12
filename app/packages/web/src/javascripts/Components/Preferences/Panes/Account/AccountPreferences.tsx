@@ -4,11 +4,9 @@ import { WebApplication } from '@/Application/WebApplication'
 import Authentication from './Authentication'
 import Credentials from './Credentials'
 import Sync from './Sync'
-import Subscription from './Subscription/Subscription'
 import SignOutWrapper from './SignOutView'
 import FilesSection from './Files'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
-import SubscriptionSharing from './SubscriptionSharing/SubscriptionSharing'
 import Email from './Email/Email'
 import DeleteAccount from '@/Components/Preferences/Panes/Account/DeleteAccount'
 
@@ -18,7 +16,6 @@ type Props = {
 
 const AccountPreferences = ({ application }: Props) => {
   const isUsingThirdPartyServer = !application.sessions.isSignedIntoFirstPartyServer()
-  const isSharedSubscription = application.subscriptionController.isSharedSubscription
 
   return (
     <PreferencesPane>
@@ -30,8 +27,6 @@ const AccountPreferences = ({ application }: Props) => {
           <Sync application={application} />
         </>
       )}
-      <Subscription />
-      {!isSharedSubscription && <SubscriptionSharing application={application} />}
       {application.hasAccount() && application.featuresController.entitledToFiles && (
         <FilesSection application={application} />
       )}

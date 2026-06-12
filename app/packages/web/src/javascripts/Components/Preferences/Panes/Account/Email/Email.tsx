@@ -16,8 +16,7 @@ import { STRING_FAILED_TO_UPDATE_USER_SETTING } from '@/Constants/Strings'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import Spinner from '@/Components/Spinner/Spinner'
-import NoProSubscription from '../NoProSubscription'
-import { c, jt } from 'ttag'
+import { c } from 'ttag'
 
 type Props = {
   application: WebApplication
@@ -118,8 +117,6 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
     }
   }
 
-  const subscriptionBold = <span className="font-bold">{c('Label').t`subscription`}</span>
-
   return (
     <PreferencesGroup>
       <PreferencesSegment>
@@ -128,20 +125,11 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
           <div className="flex items-start justify-between gap-2 md:items-center">
             <div className="flex flex-col">
               <Subtitle>{c('Subtitle').t`Mute sign-in notification emails`}</Subtitle>
-              {isMuteSignInEmailsFeatureAvailable ? (
+              {isMuteSignInEmailsFeatureAvailable && (
                 <Text>
                   {c('Info')
                     .t`Disables email notifications when a new sign-in occurs on your account. (Email notifications are available only to paid subscribers).`}
                 </Text>
-              ) : (
-                <NoProSubscription
-                  application={application}
-                  text={
-                    <span>
-                      {jt`Sign-in notification emails are available only on a ${subscriptionBold} plan. Please upgrade in order to enable sign-in notifications.`}
-                    </span>
-                  }
-                />
               )}
             </div>
             {isLoading ? (
