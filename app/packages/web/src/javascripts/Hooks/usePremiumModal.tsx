@@ -36,10 +36,11 @@ const PremiumModalProvider: FunctionComponent<Props> = observer(({ application, 
   const hasSubscription = application.hasValidFirstPartySubscription()
 
   const activate = useCallback(
-    (feature: string) => {
-      application.featuresController.showPremiumAlert(feature).catch(console.error)
+    (_feature: string) => {
+      // Standard Red Notes: all features are entitled, so the premium upgrade
+      // prompt is a no-op and never appears.
     },
-    [application.featuresController],
+    [],
   )
 
   const close = useCallback(() => {

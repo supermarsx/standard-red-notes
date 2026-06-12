@@ -45,6 +45,9 @@ export enum PrefKey {
   AssistantProvider = 'assistantProvider',
   AssistantModel = 'assistantModel',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
+  AssistantConnectionMode = 'assistantConnectionMode',
+  AssistantBaseUrl = 'assistantBaseUrl',
+  AssistantApiKey = 'assistantApiKey',
   AddImportsToTag = 'addImportsToTag',
   AlwaysCreateNewTagForImports = 'alwaysCreateNewTagForImports',
   ExistingTagForImports = 'existingTagForImports',
@@ -105,6 +108,9 @@ export type PrefValue = {
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
   [PrefKey.AssistantConfirmBeforeWrite]: boolean
+  [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'
+  [PrefKey.AssistantBaseUrl]: string
+  [PrefKey.AssistantApiKey]: string
   [PrefKey.AddImportsToTag]: boolean
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined

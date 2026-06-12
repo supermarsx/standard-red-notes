@@ -10,7 +10,7 @@ import {
   InternalEventInterface,
   RoleName,
 } from '@standardnotes/snjs'
-import { action, makeObservable, observable, runInAction, when } from 'mobx'
+import { action, makeObservable, observable, runInAction } from 'mobx'
 import { AbstractViewController } from './Abstract/AbstractViewController'
 import { CrossControllerEvent } from './CrossControllerEvent'
 import { featureTrunkVaultsEnabled } from '@/FeatureTrunk'
@@ -92,11 +92,12 @@ export class FeaturesController extends AbstractViewController implements Intern
     }
   }
 
-  public async showPremiumAlert(featureName?: FeatureName | string): Promise<void> {
-    this.premiumAlertFeatureName = featureName
-    this.premiumAlertType = PremiumFeatureModalType.UpgradePrompt
-
-    return when(() => this.premiumAlertType === undefined)
+  public async showPremiumAlert(_featureName?: FeatureName | string): Promise<void> {
+    // Standard Red Notes: every feature is entitled, so the premium upgrade
+    // prompt ("Enable Advanced Features") is permanently suppressed.
+    this.premiumAlertFeatureName = undefined
+    this.premiumAlertType = undefined
+    return Promise.resolve()
   }
 
   showPurchaseSuccessAlert = () => {

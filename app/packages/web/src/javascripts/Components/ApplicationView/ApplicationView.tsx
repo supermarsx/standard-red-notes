@@ -41,6 +41,7 @@ type Props = {
 }
 
 const LazyLoadedClipperView = lazy(() => import('../ClipperView/ClipperView'))
+const LazyLoadedAssistantView = lazy(() => import('../Assistant/AssistantView'))
 
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
   const platformString = getPlatformString()
@@ -210,6 +211,36 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   }
 
   const route = application.routeService.getRoute()
+
+  if (route.type === RouteType.AppViewRoute && route.appViewRouteParam === 'assistant') {
+    return (
+      <ApplicationProvider application={application}>
+        <KeyboardServiceProvider service={application.keyboardService}>
+          <AndroidBackHandlerProvider application={application}>
+            <ResponsivePaneProvider paneController={application.paneController}>
+              <PremiumModalProvider application={application}>
+                <LinkingControllerProvider controller={application.linkingController}>
+                  <FileDragNDropProvider application={application}>
+                    <div className={platformString + ' main-ui-view sn-component h-full'}>
+                      <LazyLoadedAssistantView
+                        id="assistant-standalone"
+                        application={application}
+                        className="h-full"
+                        standalone
+                      />
+                    </div>
+                    <ToastContainer />
+                    <FilePreviewModalWrapper application={application} />
+                    {renderChallenges()}
+                  </FileDragNDropProvider>
+                </LinkingControllerProvider>
+              </PremiumModalProvider>
+            </ResponsivePaneProvider>
+          </AndroidBackHandlerProvider>
+        </KeyboardServiceProvider>
+      </ApplicationProvider>
+    )
+  }
 
   if (route.type === RouteType.AppViewRoute && route.appViewRouteParam === 'extension') {
     return (

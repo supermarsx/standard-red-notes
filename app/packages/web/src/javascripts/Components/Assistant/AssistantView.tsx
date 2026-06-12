@@ -11,6 +11,8 @@ import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { ChatMessage as AgentChatMessage } from '@/Assistant/types'
 import { run } from '@/Assistant/agent'
 import { ProxyProvider } from '@/Assistant/ProxyProvider'
+import { DirectProvider } from '@/Assistant/DirectProvider'
+import { Provider } from '@/Assistant/types'
 import { AssistantTools } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT } from '@/Assistant/prompts'
 
@@ -31,9 +33,11 @@ type Props = {
   application: WebApplication
   className?: string
   id: string
+  /** When true the view is rendered as a standalone popped-out window. */
+  standalone?: boolean
 }
 
-const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, className, id }, ref) => {
+const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, className, id, standalone }, ref) => {
   const { dismissLastPane, presentPane } = useResponsiveAppPane()
 
   const [messages, setMessages] = useState<UIMessage[]>([])
@@ -54,7 +58,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       return
     }
 
+    const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
     const provider = application.getPreference(PrefKey.AssistantProvider, '')
+    const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
+    const apiKey = application.getPreference(PrefKey.AssistantApiKey, '')
     const model = application.getPreference(PrefKey.AssistantModel, '')
     const confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
 
@@ -95,12 +102,20 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     const controller = new AbortController()
     abortRef.current = controller
 
-    const proxyProvider = new ProxyProvider({
-      provider,
-      model,
-      signal: controller.signal,
-      postStream: (body, signal) => application.assistantStreamRequest('/v1/assistant/stream', body, signal),
-    })
+    const agentProvider: Provider =
+      connectionMode === 'proxy'
+        ? new ProxyProvider({
+            provider,
+            model,
+            signal: controller.signal,
+            postStream: (body, signal) => application.assistantStreamRequest('/v1/assistant/stream', body, signal),
+          })
+        : new DirectProvider({
+            baseURL,
+            model,
+            apiKey,
+            signal: controller.signal,
+          })
 
     const tools = new AssistantTools(application, {
       confirmBeforeWrite,
@@ -116,7 +131,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
     try {
       const result = await run([...priorHistory, { role: 'user', content: trimmed }], {
-        provider: proxyProvider,
+        provider: agentProvider,
         session: tools,
         systemPrompt: ASSISTANT_SYSTEM_PROMPT,
         signal: controller.signal,
@@ -162,10 +177,18 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     abortRef.current?.abort()
   }, [])
 
-  const isConfigured = useMemo(
-    () => Boolean(application.getPreference(PrefKey.AssistantProvider, '')),
-    [application],
-  )
+  const isConfigured = useMemo(() => {
+    const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+    if (connectionMode === 'proxy') {
+      return Boolean(application.getPreference(PrefKey.AssistantProvider, ''))
+    }
+    return Boolean(application.getPreference(PrefKey.AssistantBaseUrl, '')) &&
+      Boolean(application.getPreference(PrefKey.AssistantModel, ''))
+  }, [application])
+
+  const handlePopOut = useCallback(() => {
+    window.open('/?route=assistant', '_blank', 'noopener,noreferrer')
+  }, [])
 
   return (
     <div
@@ -178,20 +201,35 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           <Icon type="dashboard" className="text-info" />
           <span className="text-base font-bold">Assistant</span>
         </div>
-        <button
-          className="rounded p-1 hover:bg-contrast"
-          onClick={() => dismissLastPane()}
-          aria-label="Close assistant"
-          title="Close assistant"
-        >
-          <Icon type="close" />
-        </button>
+        <div className="flex items-center gap-1">
+          {!standalone && (
+            <button
+              className="rounded p-1 hover:bg-contrast"
+              onClick={handlePopOut}
+              aria-label="Pop out assistant"
+              title="Pop out to a new window"
+            >
+              <Icon type="open-in" />
+            </button>
+          )}
+          {!standalone && (
+            <button
+              className="rounded p-1 hover:bg-contrast"
+              onClick={() => dismissLastPane()}
+              aria-label="Close assistant"
+              title="Close assistant"
+            >
+              <Icon type="close" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-grow overflow-y-auto px-4 py-4">
         {!isConfigured && (
           <div className="mb-4 rounded border border-border bg-contrast p-3 text-sm text-neutral">
-            No assistant provider is configured. Open Preferences → Assistant to choose a provider and model.
+            The assistant is not configured yet. Open Preferences → Assistant to set the connection mode, endpoint
+            (e.g. LM Studio at http://localhost:1234/v1), and model.
           </div>
         )}
         {messages.length === 0 && isConfigured && (
