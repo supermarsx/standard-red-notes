@@ -5,7 +5,6 @@ import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '../ApplicationProvider'
 import ServerPicker from './ServerPicker/ServerPicker'
-import { DefaultHost } from '@standardnotes/snjs'
 import { c } from 'ttag'
 
 type Props = {
@@ -25,9 +24,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
 }) => {
   const application = useApplication()
 
-  const { server } = application.accountMenuController
-
-  const [showAdvanced, setShowAdvanced] = useState(server !== DefaultHost.Api)
+  const [showAdvanced, setShowAdvanced] = useState(true)
 
   const [isPrivateUsername, setIsPrivateUsername] = useState(false)
   const [privateUsername, setPrivateUsername] = useState('')
