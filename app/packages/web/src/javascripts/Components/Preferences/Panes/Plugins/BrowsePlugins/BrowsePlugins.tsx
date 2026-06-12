@@ -7,7 +7,6 @@ import PluginRowView from './PluginRowView'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import { ContentType } from '@standardnotes/snjs'
 import { Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
-import { PreferencesPremiumOverlay } from '@/Components/Preferences/PremiumOverlay'
 
 const BrowsePlugins: FunctionComponent = () => {
   const application = useApplication()
@@ -25,8 +24,6 @@ const BrowsePlugins: FunctionComponent = () => {
   useEffect(() => {
     application.items.streamItems([ContentType.TYPES.Component, ContentType.TYPES.Theme], reloadPlugins)
   }, [application, reloadPlugins])
-
-  const hasSubscription = application.hasValidFirstPartySubscription()
 
   return (
     <div className="relative">
@@ -60,8 +57,6 @@ const BrowsePlugins: FunctionComponent = () => {
         Plugins may not be actively maintained. Standard Notes cannot attest to the quality or user experience of these
         plugins, and is not responsible for any data loss that may arise from their use.
       </Text>
-
-      {!hasSubscription && <PreferencesPremiumOverlay />}
     </div>
   )
 }

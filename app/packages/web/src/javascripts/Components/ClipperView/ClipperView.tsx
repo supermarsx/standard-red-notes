@@ -26,7 +26,6 @@ import {
 import { addToast, ToastType } from '@standardnotes/toast'
 import { getSuperJSONFromClipPayload } from './getSuperJSONFromClipHTML'
 import ClippedNoteView from './ClippedNoteView'
-import { PremiumFeatureIconClass, PremiumFeatureIconName } from '../Icon/PremiumFeatureIcon'
 import Button from '../Button/Button'
 
 import { useStateRef } from '@/Hooks/useStateRef'
@@ -67,7 +66,6 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
       ) === FeatureStatus.Entitled,
   )
   const isEntitledRef = useStateRef(isEntitledToExtension)
-  const hasSubscription = application.hasValidFirstPartySubscription()
   useEffect(() => {
     return application.addEventObserver(async (event) => {
       switch (event) {
@@ -271,39 +269,6 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
     defaultTagRef,
     isEntitledRef,
   ])
-
-  const upgradePlan = useCallback(async () => {
-    if (hasSubscription) {
-      await application.openSubscriptionDashboard.execute()
-    } else {
-      await application.openPurchaseFlow()
-    }
-    window.close()
-  }, [application, hasSubscription])
-
-  if (user && !isEntitledToExtension) {
-    return (
-      <div className="px-3 py-3">
-        <div
-          className="mx-auto mb-5 flex h-24 w-24 items-center justify-center rounded-[50%] bg-contrast"
-          aria-hidden={true}
-        >
-          <Icon className={`h-12 w-12 ${PremiumFeatureIconClass}`} size={'custom'} type={PremiumFeatureIconName} />
-        </div>
-        <div className="mb-1 text-center text-lg font-bold">Enable Advanced Features</div>
-        <div className="mb-3 text-center">
-          To take advantage of <span className="font-semibold">Web Clipper</span> and other advanced features, upgrade
-          your current plan.
-        </div>
-        <Button className="mb-2" fullWidth primary onClick={upgradePlan}>
-          Upgrade
-        </Button>
-        <Button fullWidth onClick={showSignOutConfirmation}>
-          Sign out
-        </Button>
-      </div>
-    )
-  }
 
   if (clippedNote) {
     return (

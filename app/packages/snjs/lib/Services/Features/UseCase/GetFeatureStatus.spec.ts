@@ -70,7 +70,7 @@ describe('GetFeatureStatusUseCase', () => {
       ).toEqual(FeatureStatus.Entitled)
     })
 
-    it('should return NoUserSubscription for non-existing third-party features', () => {
+    it('should return Entitled for non-existing third-party features', () => {
       ;(items.getDisplayableComponents as jest.Mock).mockReturnValue([])
 
       expect(
@@ -80,10 +80,10 @@ describe('GetFeatureStatusUseCase', () => {
           firstPartyOnlineSubscription: undefined,
           firstPartyRoles: undefined,
         }),
-      ).toEqual(FeatureStatus.NoUserSubscription)
+      ).toEqual(FeatureStatus.Entitled)
     })
 
-    it('should return InCurrentPlanButExpired for expired third-party features', () => {
+    it('should return Entitled for expired third-party features', () => {
       const mockComponent = {
         uuid: '00000000-0000-0000-0000-000000000000',
         isExpired: true,
@@ -98,7 +98,7 @@ describe('GetFeatureStatusUseCase', () => {
           firstPartyOnlineSubscription: undefined,
           firstPartyRoles: undefined,
         }),
-      ).toEqual(FeatureStatus.InCurrentPlanButExpired)
+      ).toEqual(FeatureStatus.Entitled)
     })
   })
 })

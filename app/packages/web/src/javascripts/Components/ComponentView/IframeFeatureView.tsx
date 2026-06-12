@@ -12,7 +12,6 @@ import { observer } from 'mobx-react-lite'
 import OfflineRestricted from '@/Components/ComponentView/OfflineRestricted'
 import UrlMissing from '@/Components/ComponentView/UrlMissing'
 import IsDeprecated from '@/Components/ComponentView/IsDeprecated'
-import NotEntitledBanner from '@/Components/ComponentView/NotEntitledBanner'
 import IssueOnLoading from '@/Components/ComponentView/IssueOnLoading'
 import { useApplication } from '../ApplicationProvider'
 
@@ -228,9 +227,6 @@ const IframeFeatureView: FunctionComponent<Props> = ({
         />
       )}
 
-      {featureStatus !== FeatureStatus.Entitled && (
-        <NotEntitledBanner featureStatus={featureStatus} feature={uiFeature.featureDescription} />
-      )}
       {deprecationMessage && !isDeprecationMessageDismissed && (
         <IsDeprecated deprecationMessage={deprecationMessage} dismissDeprecationMessage={dismissDeprecationMessage} />
       )}

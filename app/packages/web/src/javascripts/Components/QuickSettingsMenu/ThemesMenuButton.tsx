@@ -1,8 +1,6 @@
 import { UIFeature, NativeFeatureIdentifier, FeatureStatus, ThemeFeatureDescription } from '@standardnotes/snjs'
 import { FunctionComponent, MouseEventHandler, useCallback, useMemo } from 'react'
-import Icon from '@/Components/Icon/Icon'
 import { usePremiumModal } from '@/Hooks/usePremiumModal'
-import { PremiumFeatureIconClass, PremiumFeatureIconName } from '../Icon/PremiumFeatureIcon'
 import { isMobileScreen } from '@/Utils'
 import { classNames } from '@standardnotes/utils'
 import MenuSwitchButtonItem from '../Menu/MenuSwitchButtonItem'
@@ -73,24 +71,19 @@ const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature }) => {
 
   return uiFeature.layerable ? (
     <MenuSwitchButtonItem checked={themeActive} onChange={() => toggleTheme()}>
-      {!canActivateTheme && (
-        <Icon type={PremiumFeatureIconName} className={classNames(PremiumFeatureIconClass, 'mr-2')} />
-      )}
       {uiFeature.displayName}
     </MenuSwitchButtonItem>
   ) : (
     <MenuRadioButtonItem checked={themeActive} onClick={onClick}>
       <span className={classNames('mr-auto', themeActive ? 'font-semibold' : undefined)}>{uiFeature.displayName}</span>
       {darkThemeShortcut && <KeyboardShortcutIndicator className="mr-2" shortcut={darkThemeShortcut} />}
-      {uiFeature && canActivateTheme ? (
+      {uiFeature && (
         <div
           className="h-5 w-5 rounded-full"
           style={{
             backgroundColor: dockIcon?.background_color,
           }}
         ></div>
-      ) : (
-        <Icon type={PremiumFeatureIconName} className={classNames(PremiumFeatureIconClass, 'ml-auto')} />
       )}
     </MenuRadioButtonItem>
   )

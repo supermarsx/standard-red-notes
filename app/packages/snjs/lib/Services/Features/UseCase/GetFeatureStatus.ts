@@ -5,41 +5,24 @@ import { Subscription } from '@standardnotes/responses'
 import { FeatureStatus, ItemManagerInterface } from '@standardnotes/services'
 
 export class GetFeatureStatusUseCase {
-  constructor(private items: ItemManagerInterface) {}
+  // Standard Red Notes: the ItemManager is no longer needed to determine
+  // entitlement (everything is Entitled), but the constructor signature is
+  // preserved so existing callers/tests keep compiling.
+  constructor(_items: ItemManagerInterface) {}
 
-  execute(dto: {
+  execute(_dto: {
     featureId: NativeFeatureIdentifier | Uuid
     firstPartyOnlineSubscription: Subscription | undefined
     firstPartyRoles: { online: string[] } | { offline: string[] } | undefined
     hasPaidAnyPartyOnlineOrOfflineSubscription: boolean
     inContextOfItem?: DecryptedItemInterface
   }): FeatureStatus {
-    const nativeFeature = this.findNativeFeature(dto.featureId)
-
-    // Standard Red Notes: all native features are unconditionally entitled.
-    // Only third-party components retain not-installed / expired handling.
-    if (!nativeFeature) {
-      return this.getThirdPartyFeatureStatus(dto.featureId)
-    }
-
+    // Standard Red Notes: this is a single-tier free fork. Every feature -
+    // native AND third-party - is unconditionally entitled.
     return FeatureStatus.Entitled
   }
 
   findNativeFeature(featureId: NativeFeatureIdentifier | Uuid): AnyFeatureDescription | undefined {
     return FindNativeFeature(featureId.value)
-  }
-
-  private getThirdPartyFeatureStatus(uuid: Uuid): FeatureStatus {
-    const component = this.items.getDisplayableComponents().find((candidate) => candidate.uuid === uuid.value)
-
-    if (!component) {
-      return FeatureStatus.NoUserSubscription
-    }
-
-    if (component.isExpired) {
-      return FeatureStatus.InCurrentPlanButExpired
-    }
-
-    return FeatureStatus.Entitled
   }
 }

@@ -13,7 +13,6 @@ import {
 } from '@standardnotes/snjs'
 import { useCallback, useMemo, useState } from 'react'
 import Icon from '../Icon/Icon'
-import { PremiumFeatureIconName, PremiumFeatureIconClass } from '../Icon/PremiumFeatureIcon'
 import Menu from '../Menu/Menu'
 import MenuItem from '../Menu/MenuItem'
 import { EditorMenuGroup } from '../NotesOptions/EditorMenuGroup'
@@ -161,7 +160,6 @@ const ChangeEditorMultipleMenu = ({ application, notes, setDisableClickOutside }
                         </Pill>
                       )}
                     </div>
-                    {!item.isEntitled && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
                   </div>
                 </MenuItem>
               )

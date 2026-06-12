@@ -19,7 +19,6 @@ import { EditorMenuGroup } from '@/Components/NotesOptions/EditorMenuGroup'
 import { EditorMenuItem } from '@/Components/NotesOptions/EditorMenuItem'
 import { createEditorMenuGroups } from '../../Utils/createEditorMenuGroups'
 import { reloadFont } from '../NoteView/FontFunctions'
-import { PremiumFeatureIconClass, PremiumFeatureIconName } from '../Icon/PremiumFeatureIcon'
 import { SuperNoteImporter } from '../SuperEditor/SuperNoteImporter'
 import MenuRadioButtonItem from '../Menu/MenuRadioButtonItem'
 import { Pill } from '../Preferences/PreferencesComponents/Content'
@@ -306,9 +305,6 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
                               </Pill>
                             )}
                         </div>
-                        {!menuItem.isEntitled && (
-                          <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />
-                        )}
                       </div>
                     </MenuRadioButtonItem>
                   )

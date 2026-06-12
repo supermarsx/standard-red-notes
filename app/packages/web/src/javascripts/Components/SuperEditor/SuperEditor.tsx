@@ -4,7 +4,6 @@ import {
   isPayloadSourceRetrieved,
   NativeFeatureIdentifier,
   FeatureStatus,
-  GetSuperNoteFeature,
   EditorLineHeightValues,
   WebAppEvent,
   LocalPrefKey,
@@ -34,7 +33,6 @@ import GetMarkdownPlugin, { GetMarkdownPluginInterface } from './Plugins/GetMark
 import { useResponsiveEditorFontSize } from '@/Utils/getPlaintextFontSize'
 import ReadonlyPlugin from './Plugins/ReadonlyPlugin/ReadonlyPlugin'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
-import NotEntitledBanner from '../ComponentView/NotEntitledBanner'
 import AutoFocusPlugin from './Plugins/AutoFocusPlugin'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import BlockPickerMenuPlugin from './Plugins/BlockPickerPlugin/BlockPickerPlugin'
@@ -267,9 +265,6 @@ export const SuperEditor: FunctionComponent<Props> = ({
       }
       ref={ref}
     >
-      {featureStatus !== FeatureStatus.Entitled && (
-        <NotEntitledBanner featureStatus={featureStatus} feature={GetSuperNoteFeature()} />
-      )}
       <ErrorBoundary>
         <LinkingControllerProvider controller={linkingController}>
           <FilesControllerProvider controller={filesController}>

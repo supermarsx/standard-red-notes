@@ -11,7 +11,6 @@ import { Subtitle, Title, Text } from '@/Components/Preferences/PreferencesCompo
 import PreferencesPane from '../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../PreferencesComponents/PreferencesSegment'
-import { PremiumFeatureIconName } from '@/Components/Icon/PremiumFeatureIcon'
 import EditorAppearance from './Appearance/EditorAppearance'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
@@ -50,10 +49,6 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
         return {
           label: theme.displayName as string,
           value: theme.featureIdentifier,
-          icon:
-            application.features.getFeatureStatus(theme.uniqueIdentifier) !== FeatureStatus.Entitled
-              ? PremiumFeatureIconName
-              : undefined,
         }
       }),
     )

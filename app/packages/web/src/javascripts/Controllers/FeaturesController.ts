@@ -1,6 +1,5 @@
 import { FeaturesClientInterface, InternalEventHandlerInterface } from '@standardnotes/services'
 import { FeatureName } from './FeatureName'
-import { PremiumFeatureModalType } from '@/Components/PremiumFeaturesModal/PremiumFeatureModalType'
 import { destroyAllObjectProperties } from '@/Utils'
 import {
   ApplicationEvent,
@@ -10,27 +9,23 @@ import {
   InternalEventInterface,
   RoleName,
 } from '@standardnotes/snjs'
-import { action, makeObservable, observable, runInAction } from 'mobx'
+import { makeObservable, observable } from 'mobx'
 import { AbstractViewController } from './Abstract/AbstractViewController'
 import { CrossControllerEvent } from './CrossControllerEvent'
 import { featureTrunkVaultsEnabled } from '@/FeatureTrunk'
 
 export class FeaturesController extends AbstractViewController implements InternalEventHandlerInterface {
-  hasFolders: boolean
-  hasSmartViews: boolean
-  entitledToFiles: boolean
-  premiumAlertFeatureName: string | undefined
-  premiumAlertType: PremiumFeatureModalType | undefined = undefined
+  // Standard Red Notes: single-tier free fork. Every feature is entitled.
+  hasFolders = true
+  hasSmartViews = true
+  entitledToFiles = true
 
   override deinit() {
     super.deinit()
     ;(this.showPremiumAlert as unknown) = undefined
-    ;(this.closePremiumAlert as unknown) = undefined
     ;(this.hasFolders as unknown) = undefined
     ;(this.hasSmartViews as unknown) = undefined
     ;(this.entitledToFiles as unknown) = undefined
-    ;(this.premiumAlertFeatureName as unknown) = undefined
-    ;(this.premiumAlertType as unknown) = undefined
 
     destroyAllObjectProperties(this)
   }
@@ -41,99 +36,30 @@ export class FeaturesController extends AbstractViewController implements Intern
   ) {
     super(eventBus)
 
-    this.hasFolders = this.isEntitledToFolders()
-    this.hasSmartViews = this.isEntitledToSmartViews()
-    this.entitledToFiles = this.isEntitledToFiles()
-    this.premiumAlertFeatureName = undefined
-
     makeObservable(this, {
       hasFolders: observable,
       hasSmartViews: observable,
       entitledToFiles: observable,
-      premiumAlertType: observable,
-      premiumAlertFeatureName: observable,
-      showPremiumAlert: action,
-      closePremiumAlert: action,
-      showPurchaseSuccessAlert: action,
     })
 
     eventBus.addEventHandler(this, CrossControllerEvent.DisplayPremiumModal)
-    eventBus.addEventHandler(this, ApplicationEvent.DidPurchaseSubscription)
-    eventBus.addEventHandler(this, ApplicationEvent.FeaturesAvailabilityChanged)
-    eventBus.addEventHandler(this, ApplicationEvent.Launched)
-    eventBus.addEventHandler(this, ApplicationEvent.LocalDataLoaded)
-    eventBus.addEventHandler(this, ApplicationEvent.UserRolesChanged)
 
     this.showPremiumAlert = this.showPremiumAlert.bind(this)
-    this.closePremiumAlert = this.closePremiumAlert.bind(this)
   }
 
-  async handleEvent(event: InternalEventInterface): Promise<void> {
-    switch (event.type) {
-      case ApplicationEvent.DidPurchaseSubscription:
-        this.showPurchaseSuccessAlert()
-        break
-      case ApplicationEvent.FeaturesAvailabilityChanged:
-      case ApplicationEvent.Launched:
-      case ApplicationEvent.LocalDataLoaded:
-      case ApplicationEvent.UserRolesChanged:
-        runInAction(() => {
-          this.hasFolders = this.isEntitledToFolders()
-          this.hasSmartViews = this.isEntitledToSmartViews()
-          this.entitledToFiles = this.isEntitledToFiles()
-        })
-        break
-      case CrossControllerEvent.DisplayPremiumModal:
-        {
-          const payload = event.payload as { featureName: string }
-          void this.showPremiumAlert(payload.featureName)
-        }
-        break
-    }
+  async handleEvent(_event: InternalEventInterface): Promise<void> {
+    // Standard Red Notes: every feature is entitled and there is no premium
+    // modal, so there is nothing to handle here.
   }
 
   public async showPremiumAlert(_featureName?: FeatureName | string): Promise<void> {
     // Standard Red Notes: every feature is entitled, so the premium upgrade
     // prompt ("Enable Advanced Features") is permanently suppressed.
-    this.premiumAlertFeatureName = undefined
-    this.premiumAlertType = undefined
     return Promise.resolve()
   }
 
-  showPurchaseSuccessAlert = () => {
-    this.premiumAlertType = PremiumFeatureModalType.UpgradeSuccess
-  }
-
   showSuperDemoModal = () => {
-    this.premiumAlertType = PremiumFeatureModalType.SuperDemo
-  }
-
-  public closePremiumAlert() {
-    this.premiumAlertType = undefined
-  }
-
-  private isEntitledToFiles(): boolean {
-    const status = this.features.getFeatureStatus(
-      NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.Files).getValue(),
-    )
-
-    return status === FeatureStatus.Entitled
-  }
-
-  private isEntitledToFolders(): boolean {
-    const status = this.features.getFeatureStatus(
-      NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.TagNesting).getValue(),
-    )
-
-    return status === FeatureStatus.Entitled
-  }
-
-  private isEntitledToSmartViews(): boolean {
-    const status = this.features.getFeatureStatus(
-      NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SmartFilters).getValue(),
-    )
-
-    return status === FeatureStatus.Entitled
+    // Standard Red Notes: no Super demo modal; the editor is always available.
   }
 
   isVaultsEnabled(): boolean {

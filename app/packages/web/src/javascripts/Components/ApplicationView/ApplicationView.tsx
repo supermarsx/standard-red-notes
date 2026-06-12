@@ -11,7 +11,6 @@ import NotesContextMenu from '@/Components/NotesContextMenu/NotesContextMenu'
 import PurchaseFlowWrapper from '@/Components/PurchaseFlow/PurchaseFlowWrapper'
 import { FunctionComponent, useCallback, useEffect, useMemo, useState, lazy, useRef } from 'react'
 import RevisionHistoryModal from '@/Components/RevisionHistoryModal/RevisionHistoryModal'
-import PremiumModalProvider from '@/Hooks/usePremiumModal'
 import ConfirmSignoutContainer from '@/Components/ConfirmSignoutModal/ConfirmSignoutModal'
 import { addToast, ToastContainer, ToastType } from '@standardnotes/toast'
 import FilePreviewModalWrapper from '@/Components/FilePreview/FilePreviewModal'
@@ -218,23 +217,21 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         <KeyboardServiceProvider service={application.keyboardService}>
           <AndroidBackHandlerProvider application={application}>
             <ResponsivePaneProvider paneController={application.paneController}>
-              <PremiumModalProvider application={application}>
-                <LinkingControllerProvider controller={application.linkingController}>
-                  <FileDragNDropProvider application={application}>
-                    <div className={platformString + ' main-ui-view sn-component h-full'}>
-                      <LazyLoadedAssistantView
-                        id="assistant-standalone"
-                        application={application}
-                        className="h-full"
-                        standalone
-                      />
-                    </div>
-                    <ToastContainer />
-                    <FilePreviewModalWrapper application={application} />
-                    {renderChallenges()}
-                  </FileDragNDropProvider>
-                </LinkingControllerProvider>
-              </PremiumModalProvider>
+              <LinkingControllerProvider controller={application.linkingController}>
+                <FileDragNDropProvider application={application}>
+                  <div className={platformString + ' main-ui-view sn-component h-full'}>
+                    <LazyLoadedAssistantView
+                      id="assistant-standalone"
+                      application={application}
+                      className="h-full"
+                      standalone
+                    />
+                  </div>
+                  <ToastContainer />
+                  <FilePreviewModalWrapper application={application} />
+                  {renderChallenges()}
+                </FileDragNDropProvider>
+              </LinkingControllerProvider>
             </ResponsivePaneProvider>
           </AndroidBackHandlerProvider>
         </KeyboardServiceProvider>
@@ -248,16 +245,14 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         <KeyboardServiceProvider service={application.keyboardService}>
           <AndroidBackHandlerProvider application={application}>
             <ResponsivePaneProvider paneController={application.paneController}>
-              <PremiumModalProvider application={application}>
-                <LinkingControllerProvider controller={application.linkingController}>
-                  <FileDragNDropProvider application={application}>
-                    <LazyLoadedClipperView applicationGroup={mainApplicationGroup} />
-                    <ToastContainer />
-                    <FilePreviewModalWrapper application={application} />
-                    {renderChallenges()}
-                  </FileDragNDropProvider>
-                </LinkingControllerProvider>
-              </PremiumModalProvider>
+              <LinkingControllerProvider controller={application.linkingController}>
+                <FileDragNDropProvider application={application}>
+                  <LazyLoadedClipperView applicationGroup={mainApplicationGroup} />
+                  <ToastContainer />
+                  <FilePreviewModalWrapper application={application} />
+                  {renderChallenges()}
+                </FileDragNDropProvider>
+              </LinkingControllerProvider>
             </ResponsivePaneProvider>
           </AndroidBackHandlerProvider>
         </KeyboardServiceProvider>
@@ -270,12 +265,11 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
       <KeyboardServiceProvider service={application.keyboardService}>
         <AndroidBackHandlerProvider application={application}>
           <ResponsivePaneProvider paneController={application.paneController}>
-            <PremiumModalProvider application={application}>
-              <LinkingControllerProvider controller={application.linkingController}>
-                <div className={platformString + ' main-ui-view sn-component h-full'}>
-                  <FileDragNDropProvider application={application}>
-                    <PanesSystemComponent />
-                  </FileDragNDropProvider>
+            <LinkingControllerProvider controller={application.linkingController}>
+              <div className={platformString + ' main-ui-view sn-component h-full'}>
+                <FileDragNDropProvider application={application}>
+                  <PanesSystemComponent />
+                </FileDragNDropProvider>
                   <>
                     <Footer application={application} applicationGroup={mainApplicationGroup} />
                     <SessionsModal application={application} />
@@ -309,7 +303,6 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                   {isIOS() && <IosKeyboardClose />}
                 </div>
               </LinkingControllerProvider>
-            </PremiumModalProvider>
           </ResponsivePaneProvider>
         </AndroidBackHandlerProvider>
       </KeyboardServiceProvider>
