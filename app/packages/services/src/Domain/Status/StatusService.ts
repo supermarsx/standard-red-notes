@@ -13,6 +13,7 @@ export class StatusService extends AbstractService<StatusServiceEvent, string> i
     'home-server': 0,
     vaults: 0,
     appearance: 0,
+    assistant: 0,
     backups: 0,
     shortcuts: 0,
     plugins: 0,

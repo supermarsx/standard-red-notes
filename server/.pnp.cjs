@@ -147,6 +147,30 @@ const RAW_RUNTIME_STATE =
         "linkType": "SOFT"\
       }]\
     ]],\
+    ["@anthropic-ai/sdk", [\
+      ["npm:0.100.1", {\
+        "packageLocation": "./.yarn/cache/@anthropic-ai-sdk-npm-0.100.1-d707826e3f-fcf5967147.zip/node_modules/@anthropic-ai/sdk/",\
+        "packageDependencies": [\
+          ["@anthropic-ai/sdk", "npm:0.100.1"]\
+        ],\
+        "linkType": "SOFT"\
+      }],\
+      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:0.100.1", {\
+        "packageLocation": "./.yarn/__virtual__/@anthropic-ai-sdk-virtual-d6300a9ba2/0/cache/@anthropic-ai-sdk-npm-0.100.1-d707826e3f-fcf5967147.zip/node_modules/@anthropic-ai/sdk/",\
+        "packageDependencies": [\
+          ["@anthropic-ai/sdk", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:0.100.1"],\
+          ["@types/zod", null],\
+          ["json-schema-to-ts", "npm:3.1.1"],\
+          ["standardwebhooks", "npm:1.0.0"],\
+          ["zod", null]\
+        ],\
+        "packagePeers": [\
+          "@types/zod",\
+          "zod"\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@aws-crypto/crc32", [\
       ["npm:5.2.0", {\
         "packageLocation": "./.yarn/cache/@aws-crypto-crc32-npm-5.2.0-a834040f6d-1b0a56ad4c.zip/node_modules/@aws-crypto/crc32/",\
@@ -3587,6 +3611,15 @@ const RAW_RUNTIME_STATE =
         "packagePeers": [\
           "@babel/core",\
           "@types/babel__core"\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@babel/runtime", [\
+      ["npm:7.29.7", {\
+        "packageLocation": "./.yarn/cache/@babel-runtime-npm-7.29.7-423e8cd4b6-9883b49517.zip/node_modules/@babel/runtime/",\
+        "packageDependencies": [\
+          ["@babel/runtime", "npm:7.29.7"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -7406,6 +7439,15 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@stablelib/base64", [\
+      ["npm:1.0.1", {\
+        "packageLocation": "./.yarn/cache/@stablelib-base64-npm-1.0.1-2829ff7228-93f3edb05d.zip/node_modules/@stablelib/base64/",\
+        "packageDependencies": [\
+          ["@stablelib/base64", "npm:1.0.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@standard-red-notes/server-monorepo", [\
       ["workspace:.", {\
         "packageLocation": "./",\
@@ -7492,6 +7534,7 @@ const RAW_RUNTIME_STATE =
       ["workspace:packages/api-gateway", {\
         "packageLocation": "./packages/api-gateway/",\
         "packageDependencies": [\
+          ["@anthropic-ai/sdk", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:0.100.1"],\
           ["@aws-sdk/client-sns", "npm:3.1057.0"],\
           ["@babel/core", "npm:7.29.7"],\
           ["@babel/preset-env", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:7.29.7"],\
@@ -7528,6 +7571,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
+          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.42.0"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["ts-jest", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:29.4.11"],\
@@ -11933,6 +11977,15 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["fast-sha256", [\
+      ["npm:1.3.0", {\
+        "packageLocation": "./.yarn/cache/fast-sha256-npm-1.3.0-b84ef133b7-3bef0491f1.zip/node_modules/fast-sha256/",\
+        "packageDependencies": [\
+          ["fast-sha256", "npm:1.3.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["fast-string-truncated-width", [\
       ["npm:3.0.3", {\
         "packageLocation": "./.yarn/cache/fast-string-truncated-width-npm-3.0.3-1f742a6cd9-3a1631e489.zip/node_modules/fast-string-truncated-width/",\
@@ -14013,6 +14066,17 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["json-schema-to-ts", [\
+      ["npm:3.1.1", {\
+        "packageLocation": "./.yarn/cache/json-schema-to-ts-npm-3.1.1-683cdef854-9fd0490279.zip/node_modules/json-schema-to-ts/",\
+        "packageDependencies": [\
+          ["@babel/runtime", "npm:7.29.7"],\
+          ["json-schema-to-ts", "npm:3.1.1"],\
+          ["ts-algebra", "npm:2.0.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["json-schema-traverse", [\
       ["npm:0.4.1", {\
         "packageLocation": "./.yarn/cache/json-schema-traverse-npm-0.4.1-4759091693-7486074d3b.zip/node_modules/json-schema-traverse/",\
@@ -15355,6 +15419,32 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["mimic-fn", "npm:2.1.0"],\
           ["onetime", "npm:5.1.2"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["openai", [\
+      ["npm:6.42.0", {\
+        "packageLocation": "./.yarn/cache/openai-npm-6.42.0-2cd336fb0f-873067782b.zip/node_modules/openai/",\
+        "packageDependencies": [\
+          ["openai", "npm:6.42.0"]\
+        ],\
+        "linkType": "SOFT"\
+      }],\
+      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.42.0", {\
+        "packageLocation": "./.yarn/__virtual__/openai-virtual-3008ada3b9/0/cache/openai-npm-6.42.0-2cd336fb0f-873067782b.zip/node_modules/openai/",\
+        "packageDependencies": [\
+          ["@types/ws", null],\
+          ["@types/zod", null],\
+          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.42.0"],\
+          ["ws", null],\
+          ["zod", null]\
+        ],\
+        "packagePeers": [\
+          "@types/ws",\
+          "@types/zod",\
+          "ws",\
+          "zod"\
         ],\
         "linkType": "HARD"\
       }]\
@@ -16815,6 +16905,17 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["standardwebhooks", [\
+      ["npm:1.0.0", {\
+        "packageLocation": "./.yarn/cache/standardwebhooks-npm-1.0.0-841d0cb294-02b74a3e4c.zip/node_modules/standardwebhooks/",\
+        "packageDependencies": [\
+          ["@stablelib/base64", "npm:1.0.1"],\
+          ["fast-sha256", "npm:1.3.0"],\
+          ["standardwebhooks", "npm:1.0.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["statuses", [\
       ["npm:2.0.2", {\
         "packageLocation": "./.yarn/cache/statuses-npm-2.0.2-2d84c63b8c-6927feb50c.zip/node_modules/statuses/",\
@@ -17276,6 +17377,15 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/triple-beam-npm-1.3.0-eda4e2a46c-7d7b77d862.zip/node_modules/triple-beam/",\
         "packageDependencies": [\
           ["triple-beam", "npm:1.3.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["ts-algebra", [\
+      ["npm:2.0.0", {\
+        "packageLocation": "./.yarn/cache/ts-algebra-npm-2.0.0-f53b1d36ff-b970eef64c.zip/node_modules/ts-algebra/",\
+        "packageDependencies": [\
+          ["ts-algebra", "npm:2.0.0"]\
         ],\
         "linkType": "HARD"\
       }]\

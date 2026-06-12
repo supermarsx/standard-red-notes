@@ -5,6 +5,7 @@ const PREFERENCE_PANE_IDS = [
   'home-server',
   'vaults',
   'appearance',
+  'assistant',
   'backups',
   'plugins',
   'shortcuts',

@@ -26,6 +26,7 @@ import { EditorEventSource } from '@/Types/EditorEventSource'
 import QuickSettingsButton from './QuickSettingsButton'
 import AccountMenuButton from './AccountMenuButton'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
+import { AppPaneId } from '../Panes/AppPaneMetadata'
 import UpgradeNow from './UpgradeNow'
 import PreferencesButton from './PreferencesButton'
 import VaultSelectionButton from './VaultSelectionButton'
@@ -373,6 +374,18 @@ class Footer extends AbstractComponent<Props, State> {
 
             <div className="relative z-footer-bar-item select-none">
               <QuickSettingsButton application={this.application} />
+            </div>
+
+            <div className="relative z-footer-bar-item select-none">
+              <StyledTooltip label="Open AI assistant">
+                <button
+                  onClick={() => this.application.paneController.presentPane(AppPaneId.Assistant)}
+                  className="flex h-full w-8 cursor-pointer items-center justify-center"
+                  aria-label="Open AI assistant"
+                >
+                  <Icon type="dashboard" className="text-neutral" />
+                </button>
+              </StyledTooltip>
             </div>
 
             <div className="relative z-footer-bar-item ml-1.5 select-none">

@@ -1,6 +1,7 @@
 export const ElementIds = {
   ContentList: 'notes-scrollable',
   EditorColumn: 'editor-column',
+  AssistantColumn: 'assistant-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

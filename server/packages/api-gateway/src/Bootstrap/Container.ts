@@ -34,6 +34,7 @@ import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { SNSDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
 import { DomainEventFactory } from '../Event/DomainEventFactory'
+import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 
 export class ContainerConfigLoader {
   async load(configuration?: {
@@ -147,6 +148,23 @@ export class ContainerConfigLoader {
       .bind<string[]>(TYPES.ApiGateway_CORS_ALLOWED_ORIGINS)
       .toConstantValue(env.get('CORS_ALLOWED_ORIGINS', true) ? env.get('CORS_ALLOWED_ORIGINS', true).split(',') : [])
     container.bind<string>(TYPES.ApiGateway_CAPTCHA_UI_URL).toConstantValue(env.get('CAPTCHA_UI_URL', true))
+
+    // Assistant LLM proxy configuration (server-held provider credentials).
+    // The "openai" provider is the general OpenAI-compatible case driven by a
+    // configurable base URL (OpenAI, LM Studio, Ollama, OpenRouter, custom).
+    container.bind<AssistantProviderConfig>(TYPES.ApiGateway_ASSISTANT_PROVIDER_CONFIG).toConstantValue({
+      anthropicApiKey: env.get('ASSISTANT_ANTHROPIC_API_KEY', true) || undefined,
+      openaiApiKey: env.get('ASSISTANT_OPENAI_API_KEY', true) || undefined,
+      openaiBaseURL: env.get('ASSISTANT_OPENAI_BASE_URL', true) || undefined,
+      openaiModel: env.get('ASSISTANT_OPENAI_MODEL', true) || undefined,
+      ollamaUrl: env.get('ASSISTANT_OLLAMA_URL', true) || undefined,
+    })
+    container
+      .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_PROVIDER)
+      .toConstantValue(env.get('ASSISTANT_DEFAULT_PROVIDER', true) || 'anthropic')
+    container
+      .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_MODEL)
+      .toConstantValue(env.get('ASSISTANT_DEFAULT_MODEL', true) || 'claude-3-5-sonnet-latest')
 
     // Middleware
     container

@@ -42,6 +42,9 @@ export enum PrefKey {
   ComponentPreferences = 'componentPreferences',
   ActiveComponents = 'activeComponents',
   AlwaysShowSuperToolbar = 'alwaysShowSuperToolbar',
+  AssistantProvider = 'assistantProvider',
+  AssistantModel = 'assistantModel',
+  AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
   AddImportsToTag = 'addImportsToTag',
   AlwaysCreateNewTagForImports = 'alwaysCreateNewTagForImports',
   ExistingTagForImports = 'existingTagForImports',
@@ -99,6 +102,9 @@ export type PrefValue = {
   [PrefKey.ComponentPreferences]: AllComponentPreferences
   [PrefKey.ActiveComponents]: string[]
   [PrefKey.AlwaysShowSuperToolbar]: boolean
+  [PrefKey.AssistantProvider]: string
+  [PrefKey.AssistantModel]: string
+  [PrefKey.AssistantConfirmBeforeWrite]: boolean
   [PrefKey.AddImportsToTag]: boolean
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined

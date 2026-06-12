@@ -687,4 +687,61 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   get isNativeMobileWebUseCase(): IsNativeMobileWeb {
     return this.deps.get<IsNativeMobileWeb>(Web_TYPES.IsNativeMobileWeb)
   }
+
+  /**
+   * Performs an authenticated streaming POST to the server-side Assistant LLM
+   * proxy and returns the raw Response so the caller can read the SSE body.
+   * The provider API key never reaches the browser; only the chosen provider id,
+   * model, system prompt, message history and tool descriptors are sent.
+   */
+  public async assistantStreamRequest(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+
+    const url = `${host.replace(/\/$/, '')}${path}`
+
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
+  }
+
+  /** Authenticated GET helper for the Assistant config endpoint. */
+  public async assistantConfigRequest<T>(path: string): Promise<T> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    const url = `${host.replace(/\/$/, '')}${path}`
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+    })
+
+    return (await response.json()) as T
+  }
+}
+
+function extractAccessToken(session: unknown): string | undefined {
+  if (!session || typeof session !== 'object') {
+    return undefined
+  }
+  const accessToken = (session as { accessToken?: unknown }).accessToken
+  if (typeof accessToken === 'string') {
+    return accessToken
+  }
+  if (accessToken && typeof accessToken === 'object' && typeof (accessToken as { value?: unknown }).value === 'string') {
+    return (accessToken as { value: string }).value
+  }
+  return undefined
 }

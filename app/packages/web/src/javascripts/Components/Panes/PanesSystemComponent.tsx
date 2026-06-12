@@ -20,6 +20,7 @@ import { isPanesChangeLeafDismiss, isPanesChangePush } from '@/Controllers/PaneC
 import { log, LoggingDomain } from '@/Logging'
 import { useMediaQuery } from '@/Hooks/useMediaQuery'
 import EditorPane from '../NoteGroupView/EditorPane'
+import AssistantView from '../Assistant/AssistantView'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
 const ITEMS_PANEL_MIN_WIDTH = 200
@@ -176,13 +177,35 @@ const PanesSystemComponent = () => {
     }
   }, [isTablet, paneController, previousIsTabletOrMobileWrapped])
 
+  const ASSISTANT_PANEL_WIDTH = 400
+
   const computeStylesForContainer = (): React.CSSProperties => {
     const panes = paneController.panes
-    const numPanes = panes.length
+    const hasAssistant = panes.includes(AppPaneId.Assistant)
 
     if (isMobile) {
       return {}
     }
+
+    if (hasAssistant) {
+      // Render every non-assistant pane with its natural width and give the
+      // assistant a fixed trailing column.
+      const columns = panes.map((pane) => {
+        if (pane === AppPaneId.Assistant) {
+          return `${ASSISTANT_PANEL_WIDTH}px`
+        }
+        if (pane === AppPaneId.Navigation) {
+          return `${navigationPanelWidth}px`
+        }
+        if (pane === AppPaneId.Items) {
+          return `${itemsPanelWidth}px`
+        }
+        return 'minmax(0, 1fr)'
+      })
+      return { gridTemplateColumns: columns.join(' ') }
+    }
+
+    const numPanes = panes.length
 
     switch (numPanes) {
       case 1: {
@@ -322,6 +345,12 @@ const PanesSystemComponent = () => {
                 className={className}
                 application={application}
               />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Assistant) {
+          return (
+            <ErrorBoundary key="assistant-pane">
+              <AssistantView id={ElementIds.AssistantColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         }

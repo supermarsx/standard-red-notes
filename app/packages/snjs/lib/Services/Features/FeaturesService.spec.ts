@@ -323,21 +323,22 @@ describe('FeaturesService', () => {
       await featureService.updateOnlineRolesWithNewValues([RoleName.NAMES.CoreUser])
       subscriptions.hasOnlineSubscription = jest.fn().mockReturnValue(false)
 
+      // Standard Red Notes: all native features are unconditionally entitled.
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.MidnightTheme).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.DeprecatedPlusEditor).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SheetsEditor).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
     })
 
     it('role-based features while not signed into first party server', async () => {
@@ -345,11 +346,12 @@ describe('FeaturesService', () => {
 
       await featureService.updateOnlineRolesWithNewValues([RoleName.NAMES.ProUser])
 
+      // Standard Red Notes: native features are entitled regardless of server sign-in.
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
     })
 
     it('third party feature status', async () => {
@@ -373,21 +375,22 @@ describe('FeaturesService', () => {
       )
     })
 
-    it('feature status should be not entitled if no account or offline repo', async () => {
+    it('native features remain entitled even with no account or offline repo', async () => {
       await featureService.updateOnlineRolesWithNewValues([RoleName.NAMES.CoreUser])
 
       sessionManager.isSignedIntoFirstPartyServer = jest.fn().mockReturnValue(false)
 
+      // Standard Red Notes: native features are unconditionally entitled.
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.MidnightTheme).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.TokenVaultEditor).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
     })
 
     it('feature status for offline subscription', async () => {
@@ -406,15 +409,16 @@ describe('FeaturesService', () => {
       ).toBe(FeatureStatus.Entitled)
     })
 
-    it('feature status for deprecated feature and no subscription', async () => {
+    it('deprecated native feature is entitled even with no subscription', async () => {
       subscriptions.hasOnlineSubscription = jest.fn().mockReturnValue(false)
       sessionManager.isSignedIntoFirstPartyServer = jest.fn().mockReturnValue(true)
 
+      // Standard Red Notes: native (incl. deprecated) features are unconditionally entitled.
       expect(
         featureService.getFeatureStatus(
           NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.DeprecatedFileSafe).getValue(),
         ),
-      ).toBe(FeatureStatus.NoUserSubscription)
+      ).toBe(FeatureStatus.Entitled)
     })
 
     it('feature status for deprecated feature with subscription', async () => {

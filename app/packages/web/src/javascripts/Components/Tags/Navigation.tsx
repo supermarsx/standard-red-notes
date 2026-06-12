@@ -6,6 +6,7 @@ import { observer } from 'mobx-react-lite'
 import { forwardRef, useEffect, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
+import { AppPaneId } from '../Panes/AppPaneMetadata'
 import UpgradeNow from '../Footer/UpgradeNow'
 import RoundIconButton from '../Button/RoundIconButton'
 import { PanelResizedData } from '@/Types/PanelResizedData'
@@ -27,7 +28,7 @@ type Props = {
 }
 
 const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, children, id }, ref) => {
-  const { setPaneLayout } = useResponsiveAppPane()
+  const { setPaneLayout, presentPane } = useResponsiveAppPane()
 
   const [hasPasscode, setHasPasscode] = useState(() => application.hasPasscode())
   useEffect(() => {
@@ -118,6 +119,12 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
             icon="lock-filled"
           />
         )}
+        <RoundIconButton
+          className="ml-2.5 bg-default"
+          onClick={() => presentPane(AppPaneId.Assistant)}
+          label="Open AI assistant"
+          icon="dashboard"
+        />
         <PreferencesButton openPreferences={() => application.preferencesController.openPreferences()} />
         <QuickSettingsButton application={application} isMobileNavigation />
         {application.featuresController.isVaultsEnabled() && <VaultSelectionButton isMobileNavigation />}

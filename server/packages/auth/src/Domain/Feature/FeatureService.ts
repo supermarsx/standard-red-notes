@@ -1,91 +1,27 @@
-import { SubscriptionName } from '@standardnotes/common'
 import { RoleName } from '@standardnotes/domain-core'
 import { AnyFeatureDescription, GetFeatures } from '@standardnotes/features'
-import { TimerInterface } from '@standardnotes/time'
 
-import { RoleToSubscriptionMapInterface } from '../Role/RoleToSubscriptionMapInterface'
-import { User } from '../User/User'
-import { UserSubscription } from '../Subscription/UserSubscription'
 import { FeatureServiceInterface } from './FeatureServiceInterface'
-import { OfflineUserSubscriptionRepositoryInterface } from '../Subscription/OfflineUserSubscriptionRepositoryInterface'
-import { Role } from '../Role/Role'
-import { OfflineUserSubscription } from '../Subscription/OfflineUserSubscription'
-import { UserSubscriptionRepositoryInterface } from '../Subscription/UserSubscriptionRepositoryInterface'
+import { User } from '../User/User'
 
+/**
+ * Standard Red Notes: every user is unconditionally entitled to the full Pro
+ * feature set. The legacy subscription/role-driven branch has been removed.
+ */
 export class FeatureService implements FeatureServiceInterface {
-  constructor(
-    private roleToSubscriptionMap: RoleToSubscriptionMapInterface,
-    private offlineUserSubscriptionRepository: OfflineUserSubscriptionRepositoryInterface,
-    private timer: TimerInterface,
-    private userSubscriptionRepository: UserSubscriptionRepositoryInterface,
-    private standardRedFeaturesMode = 'legacy',
-  ) {}
-
-  async userIsEntitledToFeature(user: User, featureIdentifier: string): Promise<boolean> {
-    if (this.shouldReturnIncludedFeatures()) {
-      return true
-    }
-
-    const userFeatures = await this.getFeaturesForUser(user)
-
-    const feature = userFeatures.find((userFeature) => userFeature.identifier === featureIdentifier)
-
-    if (feature === undefined) {
-      return false
-    }
-
-    const featureWithExpiry = feature as AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }
-
-    if (featureWithExpiry.no_expire) {
-      return true
-    }
-
-    const featureIsExpired =
-      featureWithExpiry.expires_at !== undefined &&
-      featureWithExpiry.expires_at < this.timer.getTimestampInMicroseconds()
-
-    return !featureIsExpired
+  async userIsEntitledToFeature(_user: User, _featureIdentifier: string): Promise<boolean> {
+    return true
   }
 
-  async getFeaturesForOfflineUser(email: string): Promise<{ features: AnyFeatureDescription[]; roles: string[] }> {
-    if (this.shouldReturnIncludedFeatures()) {
-      return {
-        features: this.getIncludedFeatures(),
-        roles: this.getIncludedRoles(),
-      }
-    }
-
-    const userSubscriptions = await this.offlineUserSubscriptionRepository.findByEmail(
-      email,
-      this.timer.getTimestampInMicroseconds(),
-    )
-    const userRolesMap: Map<string, Role> = new Map()
-    for (const userSubscription of userSubscriptions) {
-      const subscriptionRoles = await userSubscription.roles
-      for (const subscriptionRole of subscriptionRoles) {
-        userRolesMap.set(subscriptionRole.name, subscriptionRole)
-      }
-    }
-
-    const roles = [...userRolesMap.values()]
+  async getFeaturesForOfflineUser(_email: string): Promise<{ features: AnyFeatureDescription[]; roles: string[] }> {
     return {
-      features: await this.getFeaturesForSubscriptions(userSubscriptions, roles),
-      roles: roles.map((role) => role.name),
+      features: this.getIncludedFeatures(),
+      roles: this.getIncludedRoles(),
     }
   }
 
-  async getFeaturesForUser(user: User): Promise<Array<AnyFeatureDescription>> {
-    if (this.shouldReturnIncludedFeatures()) {
-      return this.getIncludedFeatures()
-    }
-
-    const userSubscriptions = await this.userSubscriptionRepository.findByUserUuid(user.uuid)
-
-    return this.getFeaturesForSubscriptions(userSubscriptions, await user.roles)
-  }
-
-  private shouldReturnIncludedFeatures(): boolean {
-    return ['included', 'full'].includes(this.standardRedFeaturesMode)
+  async getFeaturesForUser(_user: User): Promise<Array<AnyFeatureDescription>> {
+    return this.getIncludedFeatures()
   }
 
   private getIncludedFeatures(): Array<AnyFeatureDescription> {
@@ -99,111 +35,5 @@ export class FeatureService implements FeatureServiceInterface {
 
   private getIncludedRoles(): string[] {
     return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser, RoleName.NAMES.InternalTeamUser]
-  }
-
-  private async getFeaturesForSubscriptions(
-    userSubscriptions: Array<UserSubscription | OfflineUserSubscription>,
-    userRoles: Array<Role>,
-  ): Promise<Array<AnyFeatureDescription>> {
-    const userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }> = new Map()
-
-    await this.appendFeaturesBasedOnSubscriptions(userSubscriptions, userRoles, userFeatures)
-
-    await this.appendFeaturesBasedOnNonSubscriptionRoles(userRoles, userFeatures)
-
-    return [...userFeatures.values()]
-  }
-
-  private async appendFeaturesBasedOnNonSubscriptionRoles(
-    userRoles: Array<Role>,
-    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
-  ): Promise<void> {
-    const nonSubscriptionRolesOfUser = this.roleToSubscriptionMap.filterNonSubscriptionRoles(userRoles)
-
-    for (const nonSubscriptionRole of nonSubscriptionRolesOfUser) {
-      await this.appendFeaturesAssociatedWithRole(nonSubscriptionRole, userFeatures)
-    }
-  }
-
-  private async appendFeaturesBasedOnSubscriptions(
-    userSubscriptions: Array<UserSubscription | OfflineUserSubscription>,
-    userRoles: Array<Role>,
-    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
-  ): Promise<void> {
-    const userSubscriptionNames: Array<SubscriptionName> = []
-
-    userSubscriptions.map((userSubscription: UserSubscription | OfflineUserSubscription) => {
-      const subscriptionName = userSubscription.planName as SubscriptionName
-      if (!userSubscriptionNames.includes(subscriptionName)) {
-        userSubscriptionNames.push(subscriptionName)
-      }
-    })
-
-    for (const userSubscriptionName of userSubscriptionNames) {
-      const roleName = this.roleToSubscriptionMap.getRoleNameForSubscriptionName(userSubscriptionName)
-      if (roleName === undefined) {
-        continue
-      }
-      const role = userRoles.find((role: Role) => role.name === roleName)
-      if (role === undefined) {
-        continue
-      }
-
-      const longestLastingSubscription = this.getLongestLastingSubscription(userSubscriptions, userSubscriptionName)
-
-      await this.appendFeaturesAssociatedWithRole(role, userFeatures, longestLastingSubscription)
-    }
-  }
-
-  private async appendFeaturesAssociatedWithRole(
-    role: Role,
-    userFeatures: Map<string, AnyFeatureDescription & { no_expire?: boolean; expires_at?: number }>,
-    longestLastingSubscription?: UserSubscription | OfflineUserSubscription,
-  ): Promise<void> {
-    const rolePermissions = await role.permissions
-    for (const rolePermission of rolePermissions) {
-      const featureForPermission = GetFeatures().find(
-        (feature) => feature.permission_name === rolePermission.name,
-      ) as AnyFeatureDescription
-      if (featureForPermission === undefined) {
-        continue
-      }
-
-      const alreadyAddedFeature = userFeatures.get(rolePermission.name)
-      if (alreadyAddedFeature === undefined) {
-        userFeatures.set(rolePermission.name, {
-          ...featureForPermission,
-          expires_at: longestLastingSubscription ? longestLastingSubscription.endsAt : undefined,
-          no_expire: longestLastingSubscription ? false : true,
-          role_name: role.name,
-        })
-
-        continue
-      }
-
-      if (
-        longestLastingSubscription !== undefined &&
-        longestLastingSubscription.endsAt > (alreadyAddedFeature.expires_at as number)
-      ) {
-        alreadyAddedFeature.expires_at = longestLastingSubscription.endsAt
-      }
-    }
-  }
-
-  private getLongestLastingSubscription(
-    userSubscriptions: Array<UserSubscription | OfflineUserSubscription>,
-    subscriptionName?: SubscriptionName,
-  ): UserSubscription | OfflineUserSubscription {
-    return userSubscriptions
-      .filter((subscription) => subscription.planName === subscriptionName)
-      .sort((a, b) => {
-        if (a.endsAt < b.endsAt) {
-          return 1
-        }
-        if (a.endsAt > b.endsAt) {
-          return -1
-        }
-        return 0
-      })[0]
   }
 }

@@ -20,6 +20,7 @@ import '../src/Controller/v1/MessagesController'
 import '../src/Controller/v1/SharedVaultsController'
 import '../src/Controller/v1/SharedVaultInvitesController'
 import '../src/Controller/v1/SharedVaultUsersController'
+import '../src/Controller/v1/AssistantController'
 
 import '../src/Controller/v2/PaymentsControllerV2'
 import '../src/Controller/v2/ActionsControllerV2'

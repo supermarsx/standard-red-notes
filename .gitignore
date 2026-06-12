@@ -32,3 +32,4 @@ server/packages/files/uploads/*
 server/docker-compose.yml
 
 .git-backups/
+.claude/

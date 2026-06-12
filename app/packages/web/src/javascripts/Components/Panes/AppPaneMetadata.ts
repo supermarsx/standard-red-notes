@@ -4,10 +4,12 @@ export enum AppPaneId {
   Navigation = 'NavigationColumn',
   Items = 'ItemsColumn',
   Editor = 'EditorColumn',
+  Assistant = 'AssistantColumn',
 }
 
 export const AppPaneIdToDivId = {
   [AppPaneId.Navigation]: ElementIds.NavigationColumn,
   [AppPaneId.Items]: ElementIds.ItemsColumn,
   [AppPaneId.Editor]: ElementIds.EditorColumn,
+  [AppPaneId.Assistant]: ElementIds.AssistantColumn,
 }

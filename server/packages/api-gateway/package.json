@@ -31,6 +31,7 @@
     "start": "yarn node dist/bin/server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
     "@aws-sdk/client-sns": "^3.1057.0",
     "@grpc/grpc-js": "1.14.4",
     "@standardnotes/domain-core": "workspace:^",
@@ -50,6 +51,7 @@
     "inversify-express-utils": "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch",
     "ioredis": "^5.11.0",
     "jsonwebtoken": "^9.0.3",
+    "openai": "^6.41.0",
     "prettyjson": "^1.2.5",
     "reflect-metadata": "^0.2.2",
     "winston": "^3.19.0"
