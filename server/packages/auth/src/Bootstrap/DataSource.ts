@@ -10,6 +10,7 @@ import { UserSubscription } from '../Domain/Subscription/UserSubscription'
 import { User } from '../Domain/User/User'
 import { TypeORMAuthenticator } from '../Infra/TypeORM/TypeORMAuthenticator'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
+import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
 import { TypeORMEmergencyAccessInvitation } from '../Infra/TypeORM/TypeORMEmergencyAccessInvitation'
 import { TypeORMSessionTrace } from '../Infra/TypeORM/TypeORMSessionTrace'
@@ -68,6 +69,7 @@ export class AppDataSource {
         TypeORMSessionTrace,
         TypeORMAuthenticator,
         TypeORMAuthenticatorChallenge,
+        TypeORMMagicLinkToken,
         TypeORMEmergencyAccessInvitation,
         TypeORMCacheEntry,
         TypeORMSharedVaultUser,

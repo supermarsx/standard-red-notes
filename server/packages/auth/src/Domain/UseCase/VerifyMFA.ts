@@ -17,6 +17,7 @@ import { VerifyMFAResponse } from './VerifyMFAResponse'
 import { Logger } from 'winston'
 import { GetSetting } from './GetSetting/GetSetting'
 import { VerifyAuthenticatorAuthenticationResponse } from './VerifyAuthenticatorAuthenticationResponse/VerifyAuthenticatorAuthenticationResponse'
+import { VerifyMagicLinkCode } from './VerifyMagicLinkCode/VerifyMagicLinkCode'
 
 export class VerifyMFA implements UseCaseInterface {
   constructor(
@@ -27,6 +28,7 @@ export class VerifyMFA implements UseCaseInterface {
     private authenticatorRepository: AuthenticatorRepositoryInterface,
     private verifyAuthenticatorAuthenticationResponse: VerifyAuthenticatorAuthenticationResponse,
     private getSetting: GetSetting,
+    private verifyMagicLinkCode: VerifyMagicLinkCode,
     private logger: Logger,
   ) {}
 
@@ -102,10 +104,23 @@ export class VerifyMFA implements UseCaseInterface {
       })
       const twoFactorEnabled = !mfaSecretOrError.isFailed() && mfaSecretOrError.getValue().decryptedValue !== null
 
-      if (u2fEnabled === false && twoFactorEnabled === false) {
+      const magicLinkSettingOrError = await this.getSetting.execute({
+        userUuid: userUuid.value,
+        settingName: SettingName.NAMES.MagicLinkEnabled,
+        allowSensitiveRetrieval: true,
+        decrypted: true,
+      })
+      const magicLinkEnabled =
+        !magicLinkSettingOrError.isFailed() && magicLinkSettingOrError.getValue().decryptedValue === 'true'
+
+      if (u2fEnabled === false && twoFactorEnabled === false && magicLinkEnabled === false) {
         return {
           success: true,
         }
+      }
+
+      if (magicLinkEnabled) {
+        return await this.verifyMagicLink(dto.email, dto.requestParams)
       }
 
       if (u2fEnabled) {
@@ -218,6 +233,41 @@ export class VerifyMFA implements UseCaseInterface {
 
     if (preventOTPFromFurtherUsage) {
       await this.lockRepository.lockSuccessfullOTP(email, tokenAndParamKey.token)
+    }
+
+    return {
+      success: true,
+    }
+  }
+
+  private async verifyMagicLink(
+    email: string,
+    requestParams: Record<string, unknown>,
+  ): Promise<VerifyMFAResponse> {
+    const code = (requestParams.magic_link_code ?? requestParams.mfa_code) as string | undefined
+
+    if (!code) {
+      return {
+        success: false,
+        errorTag: ErrorTag.MfaRequired,
+        errorMessage: 'Please enter the verification code sent to your email.',
+        errorPayload: { mfa_key: `mfa_${uuidv4()}` },
+      }
+    }
+
+    const verificationResultOrError = await this.verifyMagicLinkCode.execute({
+      userIdentifier: email,
+      code,
+    })
+
+    if (verificationResultOrError.isFailed()) {
+      this.logger.debug(`Could not verify magic link code: ${verificationResultOrError.getError()}`)
+
+      return {
+        success: false,
+        errorTag: ErrorTag.MfaInvalid,
+        errorMessage: verificationResultOrError.getError(),
+      }
     }
 
     return {

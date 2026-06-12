@@ -3,4 +3,6 @@ export interface MfaServiceInterface {
   generateMfaSecret(): Promise<string>
   enableMfa(secret: string, otpToken: string): Promise<void>
   disableMfa(): Promise<void>
+  isMagicLinkEnabled(): Promise<boolean>
+  setMagicLinkEnabled(enabled: boolean): Promise<void>
 }

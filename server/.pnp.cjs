@@ -7619,6 +7619,7 @@ const RAW_RUNTIME_STATE =
           ["@types/ioredis", "npm:5.0.0"],\
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:25.9.1"],\
+          ["@types/nodemailer", "npm:6.4.24"],\
           ["@types/prettyjson", "npm:0.0.33"],\
           ["@types/semver", "npm:7.7.1"],\
           ["@types/uuid", "npm:11.0.0"],\
@@ -7638,6 +7639,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.22.4"],\
+          ["nodemailer", "npm:6.10.1"],\
           ["otplib", "npm:13.4.1"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -8618,6 +8620,16 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@types/node", "npm:25.9.1"],\
           ["undici-types", "npm:7.24.6"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@types/nodemailer", [\
+      ["npm:6.4.24", {\
+        "packageLocation": "./.yarn/cache/@types-nodemailer-npm-6.4.24-cee5dfb7ae-659be5cc6b.zip/node_modules/@types/nodemailer/",\
+        "packageDependencies": [\
+          ["@types/node", "npm:20.2.5"],\
+          ["@types/nodemailer", "npm:6.4.24"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -15208,6 +15220,15 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/node-releases-npm-2.0.46-b0f9c0af01-47a1fd18bc.zip/node_modules/node-releases/",\
         "packageDependencies": [\
           ["node-releases", "npm:2.0.46"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["nodemailer", [\
+      ["npm:6.10.1", {\
+        "packageLocation": "./.yarn/cache/nodemailer-npm-6.10.1-a82e2575bf-d991170164.zip/node_modules/nodemailer/",\
+        "packageDependencies": [\
+          ["nodemailer", "npm:6.10.1"]\
         ],\
         "linkType": "HARD"\
       }]\

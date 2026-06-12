@@ -21,6 +21,7 @@ import { Authenticator } from '../Authenticator/Authenticator'
 import { GetSetting } from './GetSetting/GetSetting'
 import { EncryptionVersion } from '../Encryption/EncryptionVersion'
 import { VerifyAuthenticatorAuthenticationResponse } from './VerifyAuthenticatorAuthenticationResponse/VerifyAuthenticatorAuthenticationResponse'
+import { VerifyMagicLinkCode } from './VerifyMagicLinkCode/VerifyMagicLinkCode'
 
 describe('VerifyMFA', () => {
   let user: User
@@ -31,6 +32,7 @@ describe('VerifyMFA', () => {
   let lockRepository: LockRepositoryInterface
   let authenticatorRepository: AuthenticatorRepositoryInterface
   let verifyAuthenticatorAuthenticationResponse: VerifyAuthenticatorAuthenticationResponse
+  let verifyMagicLinkCode: VerifyMagicLinkCode
   let logger: Logger
   const pseudoKeyParamsKey = 'foobar'
 
@@ -43,6 +45,7 @@ describe('VerifyMFA', () => {
       authenticatorRepository,
       verifyAuthenticatorAuthenticationResponse,
       getSetting,
+      verifyMagicLinkCode,
       logger,
     )
 
@@ -78,6 +81,9 @@ describe('VerifyMFA', () => {
 
     verifyAuthenticatorAuthenticationResponse = {} as jest.Mocked<VerifyAuthenticatorAuthenticationResponse>
     verifyAuthenticatorAuthenticationResponse.execute = jest.fn().mockReturnValue(Result.ok())
+
+    verifyMagicLinkCode = {} as jest.Mocked<VerifyMagicLinkCode>
+    verifyMagicLinkCode.execute = jest.fn().mockReturnValue(Result.ok(true))
 
     logger = {} as jest.Mocked<Logger>
     logger.debug = jest.fn()
@@ -371,6 +377,69 @@ describe('VerifyMFA', () => {
         }),
       ).toEqual({
         success: true,
+      })
+    })
+  })
+
+  describe('Magic Link', () => {
+    beforeEach(() => {
+      authenticatorRepository.findByUserUuid = jest.fn().mockReturnValue([])
+
+      getSetting.execute = jest.fn().mockImplementation((dto: { settingName: string }) => {
+        if (dto.settingName === SettingName.NAMES.MagicLinkEnabled) {
+          return Result.ok({ setting, decryptedValue: 'true' })
+        }
+
+        return Result.fail('not found')
+      })
+    })
+
+    it('should require a code when magic link is enabled and no code is provided', async () => {
+      expect(
+        await createVerifyMFA().execute({
+          email: 'test@test.te',
+          requestParams: {},
+          preventOTPFromFurtherUsage: true,
+        }),
+      ).toEqual({
+        success: false,
+        errorTag: 'mfa-required',
+        errorMessage: 'Please enter the verification code sent to your email.',
+        errorPayload: { mfa_key: expect.stringMatching(/^mfa_/) },
+      })
+    })
+
+    it('should pass when the magic link code is valid', async () => {
+      verifyMagicLinkCode.execute = jest.fn().mockReturnValue(Result.ok(true))
+
+      expect(
+        await createVerifyMFA().execute({
+          email: 'test@test.te',
+          requestParams: { magic_link_code: '123456' },
+          preventOTPFromFurtherUsage: true,
+        }),
+      ).toEqual({
+        success: true,
+      })
+
+      expect(verifyMagicLinkCode.execute).toHaveBeenCalledWith({ userIdentifier: 'test@test.te', code: '123456' })
+    })
+
+    it('should not pass when the magic link code is invalid', async () => {
+      verifyMagicLinkCode.execute = jest
+        .fn()
+        .mockReturnValue(Result.fail('The magic link code you entered is incorrect.'))
+
+      expect(
+        await createVerifyMFA().execute({
+          email: 'test@test.te',
+          requestParams: { magic_link_code: '000000' },
+          preventOTPFromFurtherUsage: true,
+        }),
+      ).toEqual({
+        success: false,
+        errorTag: 'mfa-invalid',
+        errorMessage: 'The magic link code you entered is incorrect.',
       })
     })
   })

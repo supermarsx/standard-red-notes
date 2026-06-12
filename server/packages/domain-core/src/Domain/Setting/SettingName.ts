@@ -6,6 +6,7 @@ import { SettingNameProps } from './SettingNameProps'
 export class SettingName extends ValueObject<SettingNameProps> {
   static readonly NAMES = {
     MfaSecret: 'MFA_SECRET',
+    MagicLinkEnabled: 'MAGIC_LINK_ENABLED',
     ExtensionKey: 'EXTENSION_KEY',
     EmailBackupFrequency: 'EMAIL_BACKUP_FREQUENCY',
     DropboxBackupFrequency: 'DROPBOX_BACKUP_FREQUENCY',

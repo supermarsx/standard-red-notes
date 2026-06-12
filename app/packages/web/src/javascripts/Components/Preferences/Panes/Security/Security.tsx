@@ -13,6 +13,7 @@ import MultitaskingPrivacy from '@/Components/Preferences/Panes/Security/Multita
 import { TwoFactorAuth, is2FAEnabled as checkIf2FAIsEnabled } from './TwoFactorAuth/TwoFactorAuth'
 import U2FView from './U2F/U2FView/U2FView'
 import TwoFactorAuthView from './TwoFactorAuth/TwoFactorAuthView/TwoFactorAuthView'
+import MagicLinkView from './TwoFactorAuth/MagicLink/MagicLinkView'
 
 interface SecurityProps {
   application: WebApplication
@@ -56,6 +57,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
           loadAuthenticatorsCallback={onU2FDevicesLoaded}
         />
       )}
+      {props.application.sessions.getUser() && <MagicLinkView application={props.application} />}
       {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
       <PasscodeLock application={props.application} />
       {isNativeMobileWeb && <BiometricsLock application={props.application} />}

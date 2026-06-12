@@ -9,25 +9,5 @@
     "bin/**/*",
     "migrations/**/*",
   ],
-  // Orphaned, unwired MagicLink feature files were staged onto main alongside
-  // the Assistant work but were never wired up (missing nodemailer dependency,
-  // SettingName.MagicLinkEnabled, Auth_MagicLinkController DI symbol, etc.).
-  // They are out of scope for the Assistant/entitlement task and break the
-  // build, so they are excluded from compilation until that feature is completed.
-  "exclude": [
-    "src/Controller/MagicLinkController.ts",
-    "src/Domain/Email/EmailSenderInterface.ts",
-    "src/Domain/Email/SmtpEmailSender.ts",
-    "src/Domain/MagicLink/**/*",
-    "src/Domain/UseCase/GenerateMagicLinkCode/**/*",
-    "src/Domain/UseCase/VerifyMagicLinkCode/**/*",
-    "src/Infra/InversifyExpressUtils/AnnotatedMagicLinkController.ts",
-    "src/Infra/InversifyExpressUtils/Base/BaseMagicLinkController.ts",
-    "src/Infra/TypeORM/TypeORMMagicLinkToken.ts",
-    "src/Infra/TypeORM/TypeORMMagicLinkTokenRepository.ts",
-    "src/Mapping/MagicLinkTokenPersistenceMapper.ts",
-    "migrations/mysql/1718000000000-magic-link-tokens.ts",
-    "migrations/sqlite/1718000000000-magic-link-tokens.ts",
-  ],
   "references": []
 }

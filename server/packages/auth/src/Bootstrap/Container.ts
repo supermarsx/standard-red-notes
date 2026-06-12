@@ -188,6 +188,17 @@ import { AuthenticatorRepositoryInterface } from '../Domain/Authenticator/Authen
 import { TypeORMAuthenticatorRepository } from '../Infra/TypeORM/TypeORMAuthenticatorRepository'
 import { AuthenticatorChallengeRepositoryInterface } from '../Domain/Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { TypeORMAuthenticatorChallengeRepository } from '../Infra/TypeORM/TypeORMAuthenticatorChallengeRepository'
+import { MagicLinkToken } from '../Domain/MagicLink/MagicLinkToken'
+import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
+import { MagicLinkTokenPersistenceMapper } from '../Mapping/MagicLinkTokenPersistenceMapper'
+import { MagicLinkTokenRepositoryInterface } from '../Domain/MagicLink/MagicLinkTokenRepositoryInterface'
+import { TypeORMMagicLinkTokenRepository } from '../Infra/TypeORM/TypeORMMagicLinkTokenRepository'
+import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
+import { SmtpEmailSender } from '../Domain/Email/SmtpEmailSender'
+import { GenerateMagicLinkCode } from '../Domain/UseCase/GenerateMagicLinkCode/GenerateMagicLinkCode'
+import { VerifyMagicLinkCode } from '../Domain/UseCase/VerifyMagicLinkCode/VerifyMagicLinkCode'
+import { MagicLinkController } from '../Controller/MagicLinkController'
+import { BaseMagicLinkController } from '../Infra/InversifyExpressUtils/Base/BaseMagicLinkController'
 import { GenerateAuthenticatorRegistrationOptions } from '../Domain/UseCase/GenerateAuthenticatorRegistrationOptions/GenerateAuthenticatorRegistrationOptions'
 import { VerifyAuthenticatorRegistrationResponse } from '../Domain/UseCase/VerifyAuthenticatorRegistrationResponse/VerifyAuthenticatorRegistrationResponse'
 import { GenerateAuthenticatorAuthenticationOptions } from '../Domain/UseCase/GenerateAuthenticatorAuthenticationOptions/GenerateAuthenticatorAuthenticationOptions'
@@ -456,6 +467,9 @@ export class ContainerConfigLoader {
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
       .toConstantValue(new AuthenticatorChallengePersistenceMapper())
     container
+      .bind<MapperInterface<MagicLinkToken, TypeORMMagicLinkToken>>(TYPES.Auth_MagicLinkTokenPersistenceMapper)
+      .toConstantValue(new MagicLinkTokenPersistenceMapper())
+    container
       .bind<MapperInterface<CacheEntry, TypeORMCacheEntry>>(TYPES.Auth_CacheEntryPersistenceMapper)
       .toConstantValue(new CacheEntryPersistenceMapper())
     container
@@ -514,6 +528,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
+    container
+      .bind<Repository<TypeORMMagicLinkToken>>(TYPES.Auth_ORMMagicLinkTokenRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMMagicLinkToken))
     container
       .bind<Repository<TypeORMCacheEntry>>(TYPES.Auth_ORMCacheEntryRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMCacheEntry))
@@ -581,6 +598,14 @@ export class ContainerConfigLoader {
         new TypeORMAuthenticatorChallengeRepository(
           container.get(TYPES.Auth_ORMAuthenticatorChallengeRepository),
           container.get(TYPES.Auth_AuthenticatorChallengePersistenceMapper),
+        ),
+      )
+    container
+      .bind<MagicLinkTokenRepositoryInterface>(TYPES.Auth_MagicLinkTokenRepository)
+      .toConstantValue(
+        new TypeORMMagicLinkTokenRepository(
+          container.get(TYPES.Auth_ORMMagicLinkTokenRepository),
+          container.get(TYPES.Auth_MagicLinkTokenPersistenceMapper),
         ),
       )
     container
@@ -673,6 +698,25 @@ export class ContainerConfigLoader {
     container
       .bind(TYPES.Auth_U2F_REQUIRE_USER_VERIFICATION)
       .toConstantValue(env.get('U2F_REQUIRE_USER_VERIFICATION', true) === 'true')
+    container.bind(TYPES.Auth_SMTP_HOST).toConstantValue(env.get('SMTP_HOST', true))
+    container
+      .bind(TYPES.Auth_SMTP_PORT)
+      .toConstantValue(env.get('SMTP_PORT', true) ? +env.get('SMTP_PORT', true) : 587)
+    container.bind(TYPES.Auth_SMTP_USER).toConstantValue(env.get('SMTP_USER', true))
+    container.bind(TYPES.Auth_SMTP_PASS).toConstantValue(env.get('SMTP_PASS', true))
+    container.bind(TYPES.Auth_SMTP_FROM).toConstantValue(env.get('SMTP_FROM', true))
+    container.bind<EmailSenderInterface>(TYPES.Auth_EmailSender).toConstantValue(
+      new SmtpEmailSender(
+        {
+          host: container.get(TYPES.Auth_SMTP_HOST),
+          port: container.get(TYPES.Auth_SMTP_PORT),
+          user: container.get(TYPES.Auth_SMTP_USER),
+          pass: container.get(TYPES.Auth_SMTP_PASS),
+          from: container.get(TYPES.Auth_SMTP_FROM),
+        },
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+      ),
+    )
     container
       .bind(TYPES.Auth_READONLY_USERS)
       .toConstantValue(env.get('READONLY_USERS', true) ? env.get('READONLY_USERS', true).split(',') : [])
@@ -1181,6 +1225,23 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<GenerateMagicLinkCode>(TYPES.Auth_GenerateMagicLinkCode)
+      .toConstantValue(
+        new GenerateMagicLinkCode(
+          container.get<MagicLinkTokenRepositoryInterface>(TYPES.Auth_MagicLinkTokenRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<VerifyMagicLinkCode>(TYPES.Auth_VerifyMagicLinkCode)
+      .toConstantValue(
+        new VerifyMagicLinkCode(
+          container.get<MagicLinkTokenRepositoryInterface>(TYPES.Auth_MagicLinkTokenRepository),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
       .bind<VerifyMFA>(TYPES.Auth_VerifyMFA)
       .toConstantValue(
         new VerifyMFA(
@@ -1193,6 +1254,7 @@ export class ContainerConfigLoader {
             TYPES.Auth_VerifyAuthenticatorAuthenticationResponse,
           ),
           container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<VerifyMagicLinkCode>(TYPES.Auth_VerifyMagicLinkCode),
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
@@ -1594,6 +1656,15 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<MagicLinkController>(TYPES.Auth_MagicLinkController)
+      .toConstantValue(
+        new MagicLinkController(
+          container.get(TYPES.Auth_GenerateMagicLinkCode),
+          container.get(TYPES.Auth_SetSettingValue),
+          container.get(TYPES.Auth_GetSetting),
+        ),
+      )
+    container
       .bind<SubscriptionInvitesController>(TYPES.Auth_SubscriptionInvitesController)
       .to(SubscriptionInvitesController)
     container.bind<UserRequestsController>(TYPES.Auth_UserRequestsController).to(UserRequestsController)
@@ -1902,6 +1973,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseAuthenticatorsController(
             container.get(TYPES.Auth_AuthenticatorsController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseMagicLinkController>(TYPES.Auth_BaseMagicLinkController)
+        .toConstantValue(
+          new BaseMagicLinkController(
+            container.get(TYPES.Auth_MagicLinkController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

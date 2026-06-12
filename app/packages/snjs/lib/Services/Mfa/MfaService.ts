@@ -10,6 +10,12 @@ import {
 } from '@standardnotes/services'
 import { SettingName } from '@standardnotes/domain-core'
 import { SNRootKeyParams } from '@standardnotes/encryption'
+import { HttpServiceInterface } from '@standardnotes/api'
+import { isErrorResponse } from '@standardnotes/responses'
+
+const MagicLinkPaths = {
+  status: '/v1/mfa/magic-link/status',
+}
 
 export class MfaService extends AbstractService implements MfaServiceInterface {
   constructor(
@@ -17,9 +23,28 @@ export class MfaService extends AbstractService implements MfaServiceInterface {
     private featuresService: FeaturesService,
     private protections: ProtectionsClientInterface,
     private encryption: EncryptionService,
+    private http: HttpServiceInterface,
     protected override internalEventBus: InternalEventBusInterface,
   ) {
     super(internalEventBus)
+  }
+
+  async isMagicLinkEnabled(): Promise<boolean> {
+    try {
+      const response = await this.http.get<{ enabled?: boolean }>(MagicLinkPaths.status)
+
+      if (isErrorResponse(response)) {
+        return false
+      }
+
+      return response.data?.enabled === true
+    } catch (error) {
+      return false
+    }
+  }
+
+  async setMagicLinkEnabled(enabled: boolean): Promise<void> {
+    await this.http.post(MagicLinkPaths.status, { enabled })
   }
 
   async isMfaActivated(): Promise<boolean> {
@@ -60,6 +85,7 @@ export class MfaService extends AbstractService implements MfaServiceInterface {
   override deinit(): void {
     ;(this.settingsService as unknown) = undefined
     ;(this.featuresService as unknown) = undefined
+    ;(this.http as unknown) = undefined
     super.deinit()
   }
 }

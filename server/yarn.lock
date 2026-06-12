@@ -4841,6 +4841,7 @@ __metadata:
     "@types/ioredis": "npm:^5.0.0"
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^25.9.1"
+    "@types/nodemailer": "npm:^6.4.14"
     "@types/prettyjson": "npm:^0.0.33"
     "@types/semver": "npm:^7.7.1"
     "@types/uuid": "npm:^11.0.0"
@@ -4860,6 +4861,7 @@ __metadata:
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
     mysql2: "npm:^3.22.4"
+    nodemailer: "npm:^6.9.13"
     otplib: "npm:^13.4.1"
     prettyjson: "npm:^1.2.5"
     reflect-metadata: "npm:^0.2.2"
@@ -5750,6 +5752,15 @@ __metadata:
   dependencies:
     undici-types: "npm:>=7.24.0 <7.24.7"
   checksum: 10/8a1ccf60f0c0ca856d3324a690ee35776f26dfc1d51c3763aecdf246a3246a7971a0156bf6eb3239aa22dfa940eb361d048212f5c3204264d31ef4c41d17416a
+  languageName: node
+  linkType: hard
+
+"@types/nodemailer@npm:^6.4.14":
+  version: 6.4.24
+  resolution: "@types/nodemailer@npm:6.4.24"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10/659be5cc6b379ba8d772d8117c67e5d401df97b729e22c41feb5f560637f704e1d6e56556055322dd9d24d91999be74197b11a83b90f14147ac5421d4f9ac1af
   languageName: node
   linkType: hard
 
@@ -11267,6 +11278,13 @@ __metadata:
   version: 2.0.46
   resolution: "node-releases@npm:2.0.46"
   checksum: 10/47a1fd18bc8330282c3e628ea38629dd137e9f1f16d7b7d3bb033ea24f5c3f917d78e25fbc90bb004d1971c624b1cc3d48023a20d7c214ea23326a75aebb908f
+  languageName: node
+  linkType: hard
+
+"nodemailer@npm:^6.9.13":
+  version: 6.10.1
+  resolution: "nodemailer@npm:6.10.1"
+  checksum: 10/d9911701641e06143a2deb0bd5deb518310972316c6e6eabc594af24353b0d67867f26cb8d72b0cfa385abef945149ac51ae40a40d2199e1088aef5829e58a3d
   languageName: node
   linkType: hard
 

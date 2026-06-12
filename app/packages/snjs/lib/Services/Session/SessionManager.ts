@@ -379,7 +379,33 @@ export class SessionManager
     return response.values[0].value as Record<string, unknown>
   }
 
-  private async promptForMfaValue(): Promise<string | undefined> {
+  /**
+   * Requests a magic-link one-time code from the server. When SMTP is configured
+   * server-side the code is emailed and nothing is returned here; when it is not
+   * configured the server returns the code so it can be shown on screen as a fallback.
+   */
+  private async requestMagicLinkCode(email: string): Promise<string | undefined> {
+    try {
+      const response = await this.httpService.post<{ emailed?: boolean; code?: string }>(
+        '/v1/mfa/magic-link/request',
+        { email },
+      )
+
+      if (isErrorResponse(response)) {
+        return undefined
+      }
+
+      return response.data?.code
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  private async promptForMfaValue(onScreenCode?: string): Promise<string | undefined> {
+    const heading = onScreenCode
+      ? `${SessionStrings.EnterMfa} Your verification code is: ${onScreenCode}`
+      : SessionStrings.EnterMfa
+
     const challenge = new Challenge(
       [
         new ChallengePrompt(
@@ -392,7 +418,7 @@ export class SessionManager
       ],
       ChallengeReason.Custom,
       true,
-      SessionStrings.EnterMfa,
+      heading,
     )
 
     const response = await this.challengeService.promptForChallengeResponse(challenge)
@@ -474,7 +500,17 @@ export class SessionManager
 
       if (response.data && [ErrorTag.U2FRequired, ErrorTag.MfaRequired].includes(error?.tag as ErrorTag)) {
         const isU2FRequired = error?.tag === ErrorTag.U2FRequired
-        const result = isU2FRequired ? await this.promptForU2FVerification(dto.email) : await this.promptForMfaValue()
+
+        let onScreenMagicLinkCode: string | undefined
+        const isMagicLinkRequired =
+          error?.tag === ErrorTag.MfaRequired && /email/i.test(error?.message ?? '') && !dto.mfaCode
+        if (isMagicLinkRequired) {
+          onScreenMagicLinkCode = await this.requestMagicLinkCode(dto.email)
+        }
+
+        const result = isU2FRequired
+          ? await this.promptForU2FVerification(dto.email)
+          : await this.promptForMfaValue(onScreenMagicLinkCode)
         if (!result) {
           return {
             response: this.apiService.createErrorResponse(

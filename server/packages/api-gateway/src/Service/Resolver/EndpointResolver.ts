@@ -20,6 +20,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:authenticators/generate-registration-options', 'auth.authenticators.generateRegistrationOptions'],
     ['[POST]:authenticators/generate-authentication-options', 'auth.authenticators.generateAuthenticationOptions'],
     ['[POST]:authenticators/verify-registration', 'auth.authenticators.verifyRegistrationResponse'],
+    // Magic Link Controller
+    ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
+    ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],
+    ['[GET]:mfa/magic-link/status', 'auth.magicLink.getStatus'],
     // Files Controller
     ['[POST]:valet-tokens', 'auth.valet-tokens.create'],
     // Offline Controller

@@ -160,6 +160,7 @@ import {
   AuthenticatorApiService,
   AuthenticatorServer,
   HttpService,
+  HttpServiceInterface,
   RevisionApiService,
   RevisionServer,
   SharedVaultInvitesServer,
@@ -1218,6 +1219,7 @@ export class Dependencies {
         this.get<FeaturesService>(TYPES.FeaturesService),
         this.get<ProtectionsClientInterface>(TYPES.ProtectionService),
         this.get<EncryptionService>(TYPES.EncryptionService),
+        this.get<HttpServiceInterface>(TYPES.HttpService),
         this.get<InternalEventBus>(TYPES.InternalEventBus),
       )
     })
