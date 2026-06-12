@@ -1,5 +1,5 @@
 import { tabs } from 'webextension-polyfill'
-import { RuntimeMessage, RuntimeMessageReturnTypes } from '../types/message'
+import { RuntimeMessage, RuntimeMessageReturnTypes } from './message'
 
 export default async function sendMessageToActiveTab<T extends RuntimeMessage>(
   message: T,

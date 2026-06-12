@@ -34,7 +34,6 @@ export const API_MESSAGE_INVALID_SESSION = 'Please sign in to an account in orde
 
 export const API_MESSAGE_FAILED_GET_SETTINGS = 'Failed to get settings.'
 export const API_MESSAGE_FAILED_UPDATE_SETTINGS = 'Failed to update settings.'
-export const API_MESSAGE_FAILED_LISTED_REGISTRATION = 'Unable to register for Listed. Please try again later.'
 
 export const API_MESSAGE_FAILED_CREATE_FILE_TOKEN = 'Failed to create file token.'
 
@@ -166,7 +165,6 @@ export const ChallengeStrings = {
   SelectProtectedNote: 'Authentication is required to select a protected note',
   DisableMfa: 'Authentication is required to disable two-factor authentication',
   DeleteAccount: 'Authentication is required to delete your account',
-  ListedAuthorization: 'Authentication is required to approve this note for Listed',
   UnlockVault: (vaultName: string) => `Unlock ${vaultName}`,
   DeleteVault: (vaultName: string) => `Delete ${vaultName}`,
   EnterVaultPassword: 'Enter the password for this vault',

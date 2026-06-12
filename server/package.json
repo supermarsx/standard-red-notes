@@ -47,6 +47,9 @@
     "typescript-eslint": "^8.60.0"
   },
   "packageManager": "yarn@4.15.0",
+  "resolutions": {
+    "inversify-express-utils@npm:6.5.0": "patch:inversify-express-utils@npm%3A6.5.0#./.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
+  },
   "dependenciesMeta": {
     "grpc-tools@1.12.4": {
       "unplugged": true

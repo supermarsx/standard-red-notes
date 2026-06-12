@@ -240,7 +240,7 @@ export class SNWebCrypto implements PureCryptoInterface {
       Utils.hexStringToArrayBuffer(salt),
       iterations,
       bytes,
-      sodium.crypto_pwhash_ALG_DEFAULT,
+      sodium.getCryptoPwhashAlgDefault(),
       'hex',
     )
     return result
@@ -430,7 +430,7 @@ export class SNWebCrypto implements PureCryptoInterface {
 
   sodiumCryptoGenericHash(message: string, key?: HexString): HexString {
     const result = sodium.crypto_generichash(
-      sodium.crypto_generichash_BYTES,
+      sodium.getCryptoGenerichashBytes(),
       message,
       key ? Utils.hexStringToArrayBuffer(key) : null,
     )

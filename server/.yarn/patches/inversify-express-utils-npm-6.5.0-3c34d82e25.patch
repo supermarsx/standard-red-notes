@@ -1,0 +1,65 @@
+diff --git a/lib/cjs/server.js b/lib/cjs/server.js
+index 8bca4474c12ed1ac2df7ede1cc317bc00837d916..cfa7141dfdeebe544c1aa88b9c9035df49736368 100644
+--- a/lib/cjs/server.js
++++ b/lib/cjs/server.js
+@@ -95,7 +95,7 @@ class InversifyExpressServer {
+         // The very first middleware to be invoked
+         // it creates a new httpContext and attaches it to the
+         // current request as metadata using Reflect
+-        this._app.all('*', (req, res, next) => {
++        this._app.all('/{*splat}', (req, res, next) => {
+             void (async () => {
+                 const httpContext = await this._createHttpContext(req, res, next);
+                 Reflect.defineMetadata(constants_1.METADATA_KEY.httpContext, httpContext, req);
+@@ -123,13 +123,13 @@ class InversifyExpressServer {
+         const constructors = (0, utils_1.getControllersFromMetadata)();
+         constructors.forEach((constructor) => {
+             const { name } = constructor;
+-            if (this._container.isBoundNamed(constants_1.TYPE.Controller, name)) {
++            if (this._container.isBound(constants_1.TYPE.Controller, { name })) {
+                 throw new Error((0, constants_1.DUPLICATED_CONTROLLER_NAME)(name));
+             }
+             this._container
+                 .bind(constants_1.TYPE.Controller)
+                 .to(constructor)
+-                .whenTargetNamed(name);
++                .whenNamed(name);
+         });
+         const controllers = (0, utils_1.getControllersFromContainer)(this._container, this._forceControllers);
+         controllers.forEach((controller) => {
+@@ -220,7 +220,7 @@ class InversifyExpressServer {
+                     .bind(constants_1.TYPE.HttpContext)
+                     .toConstantValue(httpContext);
+                 // invoke controller's action
+-                const value = await httpContext.container.getNamed(constants_1.TYPE.Controller, controllerName)[key](...args);
++                const value = await httpContext.container.get(constants_1.TYPE.Controller, { name: controllerName })[key](...args);
+                 if (value instanceof httpResponseMessage_1.HttpResponseMessage) {
+                     await this.handleHttpResponseMessage(value, res);
+                 }
+@@ -251,7 +251,7 @@ class InversifyExpressServer {
+         return {
+             // We use a childContainer for each request so we can be
+             // sure that the binding is unique for each HTTP request
+-            container: this._container.createChild(),
++            container: new this._container.constructor({ parent: this._container }),
+             request: req,
+             response: res,
+             user: principal,
+diff --git a/lib/cjs/utils.js b/lib/cjs/utils.js
+index f9336d9b48a73f3337dea164faff5685ebfba845..f8aee66133c0cb5af532ed9b60d3f388c9dac270 100644
+--- a/lib/cjs/utils.js
++++ b/lib/cjs/utils.js
+@@ -11,8 +11,11 @@ exports.instanceOfIhttpActionResult = instanceOfIhttpActionResult;
+ exports.getOrCreateMetadata = getOrCreateMetadata;
+ const constants_1 = require("./constants");
+ function getControllersFromContainer(container, forceControllers) {
+-    if (container.isBound(constants_1.TYPE.Controller)) {
+-        return container.getAll(constants_1.TYPE.Controller);
++    const namedControllers = getControllersFromMetadata()
++        .filter((c) => container.isBound(constants_1.TYPE.Controller, { name: c.name }))
++        .map((c) => container.get(constants_1.TYPE.Controller, { name: c.name }));
++    if (namedControllers.length > 0) {
++        return namedControllers;
+     }
+     if (forceControllers) {
+         throw new Error(constants_1.NO_CONTROLLERS_FOUND);

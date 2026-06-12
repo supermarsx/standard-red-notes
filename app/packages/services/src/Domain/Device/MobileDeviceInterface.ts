@@ -5,7 +5,7 @@ import { DeviceInterface } from './DeviceInterface'
 import { AppleIAPReceipt } from '../Subscription/AppleIAPReceipt'
 import { ApplicationEvent } from '../Event/ApplicationEvent'
 
-import type { Notification } from '../../../../mobile/node_modules/@notifee/react-native/dist/index'
+import type { Notification } from '@notifee/react-native'
 
 export interface MobileDeviceInterface extends DeviceInterface {
   environment: Environment.Mobile

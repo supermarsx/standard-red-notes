@@ -3,14 +3,12 @@ import { SettingData } from '@standardnotes/responses'
 import {
   MuteSignInEmailsOption,
   EmailBackupFrequency,
-  ListedAuthorSecretsData,
   LogSessionUserAgentOption,
   MuteMarketingEmailsOption,
 } from '@standardnotes/settings'
 
 type SettingType =
   | EmailBackupFrequency
-  | ListedAuthorSecretsData
   | LogSessionUserAgentOption
   | MuteSignInEmailsOption
   | MuteMarketingEmailsOption

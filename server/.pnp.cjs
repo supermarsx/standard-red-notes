@@ -7523,7 +7523,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -7589,7 +7589,7 @@ const RAW_RUNTIME_STATE =
           ["dotenv", "npm:17.4.2"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -7744,7 +7744,7 @@ const RAW_RUNTIME_STATE =
           ["express-winston", "virtual:b442cf0427cc365d1c137f7340f9b81f9b204561afe791a8564ae9590c3a7fc4b5f793aaf8817b946f75a3cb64d03ef8790eb847f8b576b41e700da7b00c240c#npm:4.2.0"],\
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -7797,7 +7797,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["winston", "npm:3.19.0"]\
@@ -7880,7 +7880,7 @@ const RAW_RUNTIME_STATE =
           ["dotenv", "npm:17.4.2"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -8035,7 +8035,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -8113,7 +8113,7 @@ const RAW_RUNTIME_STATE =
           ["dotenv", "npm:17.4.2"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["ioredis", "npm:5.11.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -13020,15 +13020,15 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["inversify-express-utils", [\
-      ["npm:6.5.0", {\
-        "packageLocation": "./.yarn/cache/inversify-express-utils-npm-6.5.0-3c34d82e25-564b54d787.zip/node_modules/inversify-express-utils/",\
+      ["patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828", {\
+        "packageLocation": "./.yarn/cache/inversify-express-utils-patch-eec7d83cd3-e403c6f863.zip/node_modules/inversify-express-utils/",\
         "packageDependencies": [\
-          ["inversify-express-utils", "npm:6.5.0"]\
+          ["inversify-express-utils", "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"]\
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0", {\
-        "packageLocation": "./.yarn/__virtual__/inversify-express-utils-virtual-a6eba6ac6e/0/cache/inversify-express-utils-npm-6.5.0-3c34d82e25-564b54d787.zip/node_modules/inversify-express-utils/",\
+      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828", {\
+        "packageLocation": "./.yarn/__virtual__/inversify-express-utils-virtual-60417acdca/0/cache/inversify-express-utils-patch-eec7d83cd3-e403c6f863.zip/node_modules/inversify-express-utils/",\
         "packageDependencies": [\
           ["@types/express", "npm:5.0.6"],\
           ["@types/inversify", null],\
@@ -13036,7 +13036,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["http-status-codes", "npm:2.3.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
-          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.5.0"],\
+          ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
           ["reflect-metadata", "npm:0.2.2"]\
         ],\
         "packagePeers": [\

@@ -6,7 +6,6 @@ import {
   UserRolesChangedEvent,
   UserEmailChangedEvent,
   EmailBackupRequestedEvent,
-  ListedAccountRequestedEvent,
   UserDisabledSessionUserAgentLoggingEvent,
   SharedSubscriptionInvitationCreatedEvent,
   SharedSubscriptionInvitationCanceledEvent,
@@ -37,7 +36,6 @@ export interface DomainEventFactoryInterface {
     subject: string
     userUuid?: string
   }): EmailRequestedEvent
-  createListedAccountRequestedEvent(userUuid: string, userEmail: string): ListedAccountRequestedEvent
   createUserRegisteredEvent(dto: {
     userUuid: string
     email: string

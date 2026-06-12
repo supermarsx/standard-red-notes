@@ -40,7 +40,6 @@ export class EndpointResolver implements EndpointResolverInterface {
     // Users Controller
     ['[PUT]:users/:userUuid/attributes/credentials', 'auth.users.updateCredentials'],
     ['[DELETE]:users/:userUuid', 'auth.users.delete'],
-    ['[POST]:listed', 'auth.users.createListedAccount'],
     ['[POST]:auth', 'auth.users.register'],
     ['[GET]:users/:userUuid/settings', 'auth.users.getSettings'],
     ['[PUT]:users/:userUuid/settings', 'auth.users.updateSetting'],

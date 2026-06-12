@@ -271,13 +271,6 @@ export class ProtectionService
     })
   }
 
-  async authorizeListedPublishing(): Promise<boolean> {
-    return this.authorizeAction(ChallengeReason.AuthorizeNoteForListed, {
-      fallBackToAccountPassword: true,
-      requireAccountPassword: false,
-      forcePrompt: true,
-    })
-  }
 
   async authorizeAccountDeletion(): Promise<{ success: boolean; challengeResponse?: ChallengeResponse }> {
     return this.authorizeActionWithChallengeResponse(ChallengeReason.DeleteAccount, {

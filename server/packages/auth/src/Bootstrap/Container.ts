@@ -129,9 +129,6 @@ import {
 } from '@standardnotes/security'
 import { FileUploadedEventHandler } from '../Domain/Handler/FileUploadedEventHandler'
 import { CreateValetToken } from '../Domain/UseCase/CreateValetToken/CreateValetToken'
-import { CreateListedAccount } from '../Domain/UseCase/CreateListedAccount/CreateListedAccount'
-import { ListedAccountCreatedEventHandler } from '../Domain/Handler/ListedAccountCreatedEventHandler'
-import { ListedAccountDeletedEventHandler } from '../Domain/Handler/ListedAccountDeletedEventHandler'
 import { FileRemovedEventHandler } from '../Domain/Handler/FileRemovedEventHandler'
 import { UserDisabledSessionUserAgentLoggingEventHandler } from '../Domain/Handler/UserDisabledSessionUserAgentLoggingEventHandler'
 import { SettingCrypterInterface } from '../Domain/Setting/SettingCrypterInterface'
@@ -224,7 +221,6 @@ import { BaseAdminController } from '../Infra/InversifyExpressUtils/Base/BaseAdm
 import { BaseAuthController } from '../Infra/InversifyExpressUtils/Base/BaseAuthController'
 import { BaseAuthenticatorsController } from '../Infra/InversifyExpressUtils/Base/BaseAuthenticatorsController'
 import { BaseFeaturesController } from '../Infra/InversifyExpressUtils/Base/BaseFeaturesController'
-import { BaseListedController } from '../Infra/InversifyExpressUtils/Base/BaseListedController'
 import { BaseOfflineController } from '../Infra/InversifyExpressUtils/Base/BaseOfflineController'
 import { BaseSessionController } from '../Infra/InversifyExpressUtils/Base/BaseSessionController'
 import { BaseSubscriptionInvitesController } from '../Infra/InversifyExpressUtils/Base/BaseSubscriptionInvitesController'
@@ -1416,7 +1412,6 @@ export class ContainerConfigLoader {
           container.get<number>(TYPES.Auth_VALET_TOKEN_TTL),
         ),
       )
-    container.bind<CreateListedAccount>(TYPES.Auth_CreateListedAccount).to(CreateListedAccount)
     container.bind<InviteToSharedSubscription>(TYPES.Auth_InviteToSharedSubscription).to(InviteToSharedSubscription)
     container
       .bind<AcceptSharedSubscriptionInvitation>(TYPES.Auth_AcceptSharedSubscriptionInvitation)
@@ -1738,26 +1733,6 @@ export class ContainerConfigLoader {
         ),
       )
     container
-      .bind<ListedAccountCreatedEventHandler>(TYPES.Auth_ListedAccountCreatedEventHandler)
-      .toConstantValue(
-        new ListedAccountCreatedEventHandler(
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-        ),
-      )
-    container
-      .bind<ListedAccountDeletedEventHandler>(TYPES.Auth_ListedAccountDeletedEventHandler)
-      .toConstantValue(
-        new ListedAccountDeletedEventHandler(
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-        ),
-      )
-    container
       .bind<UserDisabledSessionUserAgentLoggingEventHandler>(TYPES.Auth_UserDisabledSessionUserAgentLoggingEventHandler)
       .to(UserDisabledSessionUserAgentLoggingEventHandler)
     container
@@ -1855,8 +1830,6 @@ export class ContainerConfigLoader {
       ['SHARED_VAULT_FILE_MOVED', container.get(TYPES.Auth_SharedVaultFileMovedEventHandler)],
       ['FILE_REMOVED', container.get(TYPES.Auth_FileRemovedEventHandler)],
       ['SHARED_VAULT_FILE_REMOVED', container.get(TYPES.Auth_SharedVaultFileRemovedEventHandler)],
-      ['LISTED_ACCOUNT_CREATED', container.get(TYPES.Auth_ListedAccountCreatedEventHandler)],
-      ['LISTED_ACCOUNT_DELETED', container.get(TYPES.Auth_ListedAccountDeletedEventHandler)],
       [
         'USER_DISABLED_SESSION_USER_AGENT_LOGGING',
         container.get(TYPES.Auth_UserDisabledSessionUserAgentLoggingEventHandler),
@@ -2081,14 +2054,6 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_OfflineUserTokenEncoder),
             container.get(TYPES.Auth_AUTH_JWT_TTL),
             container.get(TYPES.Auth_Logger),
-            container.get(TYPES.Auth_ControllerContainer),
-          ),
-        )
-      container
-        .bind<BaseListedController>(TYPES.Auth_BaseListedController)
-        .toConstantValue(
-          new BaseListedController(
-            container.get(TYPES.Auth_CreateListedAccount),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

@@ -14,7 +14,6 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedSubscriptionSettingsControll
 import '../src/Infra/InversifyExpressUtils/AnnotatedSettingsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSessionController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedOfflineController'
-import '../src/Infra/InversifyExpressUtils/AnnotatedListedController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedInternalController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedFeaturesController'

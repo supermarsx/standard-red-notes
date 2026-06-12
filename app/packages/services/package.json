@@ -16,6 +16,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@notifee/react-native": "^9.1.8",
     "@standardnotes/api": "workspace:^",
     "@standardnotes/common": "^1.52.4",
     "@standardnotes/domain-core": "^1.41.3",

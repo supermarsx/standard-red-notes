@@ -1,39 +1,35 @@
 import { nanoid } from 'nanoid'
-import { action, atom, WritableAtom } from 'nanostores'
+import { atom } from 'nanostores'
 import { Toast, ToastOptions, ToastUpdateOptions } from './types'
 
 export const toastStore = atom<Toast[]>([])
 
-export const updateToast = action(
-  toastStore,
-  'updateToast',
-  (store: WritableAtom<Toast[]>, toastId: Toast['id'], options: ToastUpdateOptions) => {
-    const existingToasts = store.get()
-    store.set(
-      existingToasts.map((toast) => {
-        if (toast.id === toastId) {
-          return {
-            ...toast,
-            ...options,
-          }
-        } else {
-          return toast
+export const updateToast = (toastId: Toast['id'], options: ToastUpdateOptions): void => {
+  const existingToasts = toastStore.get()
+  toastStore.set(
+    existingToasts.map((toast) => {
+      if (toast.id === toastId) {
+        return {
+          ...toast,
+          ...options,
         }
-      }),
-    )
-  },
-)
+      } else {
+        return toast
+      }
+    }),
+  )
+}
 
-const removeToast = action(toastStore, 'removeToast', (store: WritableAtom<Toast[]>, toastId: Toast['id']) => {
-  const existingToasts = store.get()
-  store.set(existingToasts.filter((toast) => toast.id !== toastId))
-})
+const removeToast = (toastId: Toast['id']): void => {
+  const existingToasts = toastStore.get()
+  toastStore.set(existingToasts.filter((toast) => toast.id !== toastId))
+}
 
 const DelayBeforeRemovingToast = 175
 
-export const dismissToast = action(toastStore, 'dismissToast', (store: WritableAtom<Toast[]>, toastId: Toast['id']) => {
-  const existingToasts = store.get()
-  store.set(
+export const dismissToast = (toastId: Toast['id']): void => {
+  const existingToasts = toastStore.get()
+  toastStore.set(
     existingToasts.map((toast) => {
       if (toast.id === toastId) {
         return {
@@ -48,10 +44,10 @@ export const dismissToast = action(toastStore, 'dismissToast', (store: WritableA
   setTimeout(() => {
     removeToast(toastId)
   }, DelayBeforeRemovingToast)
-})
+}
 
-export const addToast = action(toastStore, 'addToast', (store: WritableAtom<Toast[]>, options: ToastOptions) => {
-  const existingToasts = store.get()
+export const addToast = (options: ToastOptions): Toast['id'] => {
+  const existingToasts = toastStore.get()
   const isToastIdDuplicate = existingToasts.findIndex((toast) => toast.id === options.id) > -1
 
   const id = options.id && !isToastIdDuplicate ? options.id : nanoid()
@@ -68,7 +64,7 @@ If you want to update an existing toast, use the \`updateToast()\` function inst
     pauseOnWindowBlur: options.pauseOnWindowBlur ?? true,
   }
 
-  store.set([...existingToasts, toast])
+  toastStore.set([...existingToasts, toast])
 
   return id
-})
+}

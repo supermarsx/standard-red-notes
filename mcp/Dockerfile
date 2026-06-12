@@ -4,11 +4,12 @@ FROM node:22-alpine AS build
 
 WORKDIR /opt/standard-red-notes
 
-RUN corepack enable
+RUN npm install -g corepack@latest && corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY mcp/package.json mcp/tsconfig.json ./mcp/
 COPY mcp/src ./mcp/src
+COPY openclaw/package.json ./openclaw/
 
 RUN yarn install --immutable \
   && yarn workspace @standard-red-notes/mcp build

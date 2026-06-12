@@ -53,7 +53,7 @@
     "express": "^5.2.1",
     "helmet": "^8.2.0",
     "inversify": "^8.1.0",
-    "inversify-express-utils": "^6.5.0",
+    "inversify-express-utils": "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch",
     "ioredis": "^5.11.0",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.22.4",

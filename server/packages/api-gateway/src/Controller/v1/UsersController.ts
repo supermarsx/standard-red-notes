@@ -84,16 +84,6 @@ export class UsersController extends BaseHttpController {
     return this.statusCode(401)
   }
 
-  @httpPost('/:userUuid/integrations/listed', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async createListedAccount(request: Request, response: Response): Promise<void> {
-    await this.httpService.callAuthServer(
-      request,
-      response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'listed'),
-      request.body,
-    )
-  }
-
   @httpPost('/')
   async register(request: Request, response: Response): Promise<void> {
     await this.httpService.callAuthServer(

@@ -7,7 +7,7 @@
 // async boundary, every function below is exported as a thin lazy lookup —
 // the actual runtime binding is fetched off the default export on each
 // invocation, after callers have already awaited `ready` upstream.
-import sodium from 'libsodium-wrappers'
+import sodium from 'libsodium-wrappers-sumo'
 
 type SodiumApi = typeof sodium
 
@@ -23,7 +23,9 @@ function lazy<K extends keyof SodiumApi>(name: K): SodiumApi[K] {
   }) as unknown as SodiumApi[K]
 }
 
-// Constants need to be read late (after init), so expose them via getters.
+// Constants are only attached to the default export after `await ready`, so they
+// MUST be read lazily at call time — reading them at module-load time captures
+// `undefined` and silently breaks every crypto operation that depends on them.
 function lazyConst<K extends keyof SodiumApi>(name: K): () => SodiumApi[K] {
   return () => sodium[name]
 }
@@ -34,10 +36,8 @@ export const base64_variants = new Proxy({} as SodiumApi['base64_variants'], {
   },
 })
 
-const _getPwhashAlgDefault = lazyConst('crypto_pwhash_ALG_DEFAULT')
-const _getGenerichashBytes = lazyConst('crypto_generichash_BYTES')
-export const crypto_pwhash_ALG_DEFAULT: SodiumApi['crypto_pwhash_ALG_DEFAULT'] = _getPwhashAlgDefault()
-export const crypto_generichash_BYTES: SodiumApi['crypto_generichash_BYTES'] = _getGenerichashBytes()
+export const getCryptoPwhashAlgDefault = lazyConst('crypto_pwhash_ALG_DEFAULT')
+export const getCryptoGenerichashBytes = lazyConst('crypto_generichash_BYTES')
 
 export const crypto_aead_xchacha20poly1305_ietf_decrypt = lazy('crypto_aead_xchacha20poly1305_ietf_decrypt')
 export const crypto_aead_xchacha20poly1305_ietf_encrypt = lazy('crypto_aead_xchacha20poly1305_ietf_encrypt')
@@ -63,4 +63,4 @@ export const to_base64 = lazy('to_base64')
 export const to_hex = lazy('to_hex')
 export const to_string = lazy('to_string')
 
-export type { StateAddress } from 'libsodium-wrappers'
+export type { StateAddress } from 'libsodium-wrappers-sumo'

@@ -111,7 +111,6 @@ export const IconNameToSvgMapping = {
   italic: icons.ItalicIcon,
   keyboard: icons.KeyboardIcon,
   link: icons.LinkIcon,
-  listed: icons.ListedIcon,
   lock: icons.LockIcon,
   markdown: icons.MarkdownIcon,
   merge: icons.MergeIcon,

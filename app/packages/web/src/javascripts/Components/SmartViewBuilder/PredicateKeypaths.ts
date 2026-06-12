@@ -4,7 +4,6 @@ export type PredicateKeypath =
   | 'text'
   | 'text.length'
   | 'noteType'
-  | 'authorizedForListed'
   | 'editorIdentifier'
   | 'userModifiedDate'
   | 'serverUpdatedAt'
@@ -25,7 +24,6 @@ export const PredicateKeypathLabels: { [k in PredicateKeypath]: string } = {
   text: 'Text',
   'text.length': 'Text Length',
   noteType: 'Note Type',
-  authorizedForListed: 'Authorized For Listed',
   editorIdentifier: 'Editor Identifier',
   userModifiedDate: 'User Modified Date',
   serverUpdatedAt: 'Server Updated At',
@@ -49,7 +47,6 @@ export const PredicateKeypathTypes: {
   text: 'string',
   'text.length': 'number',
   noteType: 'noteType',
-  authorizedForListed: 'boolean',
   editorIdentifier: 'editorIdentifier',
   userModifiedDate: 'date',
   serverUpdatedAt: 'date',

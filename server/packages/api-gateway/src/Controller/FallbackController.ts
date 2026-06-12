@@ -3,7 +3,7 @@ import { BaseHttpController, all, controller, results } from 'inversify-express-
 
 @controller('')
 export class FallbackController extends BaseHttpController {
-  @all('*')
+  @all('/{*splat}')
   public async fallback(request: Request, response: Response): Promise<void | results.NotFoundResult> {
     if (request.path === '/' && request.method === 'GET') {
       response.send(

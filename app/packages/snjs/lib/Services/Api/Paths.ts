@@ -58,16 +58,11 @@ const UserPathsV2 = {
   signIn: '/v2/login',
 }
 
-const ListedPaths = {
-  listedRegistration: (userUuid: string) => `/v1/users/${userUuid}/integrations/listed`,
-}
-
 export const Paths = {
   v1: {
     ...FilesPaths,
     ...SharedVaultFilesPaths,
     ...ItemsPaths,
-    ...ListedPaths,
     ...SettingsPaths,
     ...SubscriptionPaths,
     ...UserPaths,

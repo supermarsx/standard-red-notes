@@ -50,7 +50,7 @@ export class PaymentsController extends BaseHttpController {
     await this.httpService.callPaymentsServer(request, response, 'api/subscriptions/apple_iap_confirm', request.body)
   }
 
-  @all('/subscriptions(/*)?')
+  @all('/subscriptions{/*splat}')
   async subscriptions(request: Request, response: Response): Promise<void> {
     await this.httpService.callPaymentsServer(request, response, request.path.replace('v1', 'api'), request.body)
   }
@@ -145,7 +145,7 @@ export class PaymentsController extends BaseHttpController {
     await this.httpService.callPaymentsServer(request, response, 'api/pro_users/stripe-setup-intent', request.body)
   }
 
-  @all('/pro_users(/*)?')
+  @all('/pro_users{/*splat}')
   async proUsers(request: Request, response: Response): Promise<void> {
     await this.httpService.callPaymentsServer(request, response, request.path.replace('v1', 'api'), request.body)
   }

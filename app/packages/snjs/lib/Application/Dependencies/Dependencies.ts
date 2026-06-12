@@ -9,7 +9,6 @@ import { ListAuthenticators } from '../../Domain/UseCase/ListAuthenticators/List
 import { AddAuthenticator } from '../../Domain/UseCase/AddAuthenticator/AddAuthenticator'
 import { GetRecoveryCodes } from '../../Domain/UseCase/GetRecoveryCodes/GetRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
-import { ListedService } from '../../Services/Listed/ListedService'
 import { MigrationService } from '../../Services/Migration/MigrationService'
 import { MfaService } from '../../Services/Mfa/MfaService'
 import { ComponentManager } from '../../Services/ComponentManager/ComponentManager'
@@ -1125,19 +1124,6 @@ export class Dependencies {
         this.get<DeprecatedHttpService>(TYPES.DeprecatedHttpService),
         this.get<EncryptionService>(TYPES.EncryptionService),
         this.get<ChallengeService>(TYPES.ChallengeService),
-        this.get<InternalEventBus>(TYPES.InternalEventBus),
-      )
-    })
-
-    this.factory.set(TYPES.ListedService, () => {
-      return new ListedService(
-        this.get<LegacyApiService>(TYPES.LegacyApiService),
-        this.get<ItemManager>(TYPES.ItemManager),
-        this.get<SettingsService>(TYPES.SettingsService),
-        this.get<DeprecatedHttpService>(TYPES.DeprecatedHttpService),
-        this.get<ProtectionService>(TYPES.ProtectionService),
-        this.get<MutatorService>(TYPES.MutatorService),
-        this.get<SyncService>(TYPES.SyncService),
         this.get<InternalEventBus>(TYPES.InternalEventBus),
       )
     })

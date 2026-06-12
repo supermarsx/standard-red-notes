@@ -3,7 +3,7 @@ import { $generateNodesFromDOM } from '@lexical/html'
 import { createHeadlessEditor } from '@lexical/headless'
 import { BlockEditorNodes } from '../SuperEditor/Lexical/Nodes/AllNodes'
 import BlocksEditorTheme from '../SuperEditor/Lexical/Theme/Theme'
-import { ClipPayload } from '@standardnotes/clipper/src/types/message'
+import { ClipPayload } from '@/Clipper/message'
 import { $isLinkNode } from '@lexical/link'
 import { $dfs } from '@lexical/utils'
 

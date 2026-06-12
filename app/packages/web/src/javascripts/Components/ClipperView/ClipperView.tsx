@@ -7,8 +7,8 @@ import Icon from '../Icon/Icon'
 import Menu from '../Menu/Menu'
 import MenuItem from '../Menu/MenuItem'
 import { storage as extensionStorage, runtime, windows } from 'webextension-polyfill'
-import sendMessageToActiveTab from '@standardnotes/clipper/src/utils/sendMessageToActiveTab'
-import { ClipPayload, RuntimeMessageTypes } from '@standardnotes/clipper/src/types/message'
+import sendMessageToActiveTab from '@/Clipper/sendMessageToActiveTab'
+import { ClipPayload, RuntimeMessageTypes } from '@/Clipper/message'
 import { confirmDialog } from '@standardnotes/ui-services'
 import {
   ApplicationEvent,

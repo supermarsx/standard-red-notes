@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:20.10.0-alpine
+FROM node:24-alpine
 
 ENV NODE_ENV=production
 
@@ -21,7 +21,14 @@ COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY . .
 
-RUN corepack enable \
+# Normalize line endings: a CRLF checkout (Windows) leaves `#!/bin/bash\r`, which the
+# Linux kernel reads as interpreter "/bin/bash\r" → "no such file or directory" at exec.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /etc/supervisord.conf \
+  && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
+  && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} +
+
+RUN npm install -g corepack@latest \
+  && corepack enable \
   && yarn install --immutable \
   && CI=true yarn build \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads \

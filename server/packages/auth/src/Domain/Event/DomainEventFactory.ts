@@ -7,7 +7,6 @@ import {
   UserRegisteredEvent,
   UserRolesChangedEvent,
   EmailBackupRequestedEvent,
-  ListedAccountRequestedEvent,
   UserDisabledSessionUserAgentLoggingEvent,
   SharedSubscriptionInvitationCreatedEvent,
   SharedSubscriptionInvitationCanceledEvent,
@@ -287,23 +286,6 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
     }
   }
 
-  createListedAccountRequestedEvent(userUuid: string, userEmail: string): ListedAccountRequestedEvent {
-    return {
-      type: 'LISTED_ACCOUNT_REQUESTED',
-      createdAt: this.timer.getUTCDate(),
-      meta: {
-        correlation: {
-          userIdentifier: userUuid,
-          userIdentifierType: 'uuid',
-        },
-        origin: DomainEventService.Auth,
-      },
-      payload: {
-        userUuid,
-        userEmail,
-      },
-    }
-  }
 
   createEmailBackupRequestedEvent(userUuid: string, keyParams: KeyParamsData): EmailBackupRequestedEvent {
     return {

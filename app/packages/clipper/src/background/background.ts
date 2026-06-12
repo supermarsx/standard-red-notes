@@ -1,5 +1,5 @@
 import { runtime, action, browserAction, windows, storage, tabs } from 'webextension-polyfill'
-import { ClipPayload, RuntimeMessage, RuntimeMessageTypes } from '../types/message'
+import { ClipPayload, RuntimeMessage, RuntimeMessageTypes } from '@standardnotes/web/src/javascripts/Clipper/message'
 import { Environment, FetchRequestHandler, Logger, SnjsVersion } from '@standardnotes/snjs'
 import packageInfo from '../../package.json'
 

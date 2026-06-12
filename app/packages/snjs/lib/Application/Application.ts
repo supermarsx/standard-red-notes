@@ -107,7 +107,6 @@ import {
   SettingsService,
   ActionsService,
   ChallengeResponse,
-  ListedClientInterface,
   DiskStorageService,
 } from '../Services'
 import {
@@ -1037,9 +1036,6 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     return this.dependencies.get<ComponentManagerInterface>(TYPES.ComponentManager)
   }
 
-  public get listed(): ListedClientInterface {
-    return this.dependencies.get<ListedClientInterface>(TYPES.ListedService)
-  }
 
   public get alerts(): AlertService {
     return this.dependencies.get<AlertService>(TYPES.AlertService)

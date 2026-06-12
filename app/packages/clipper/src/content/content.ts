@@ -1,6 +1,6 @@
 import { runtime } from 'webextension-polyfill'
 import { Readability } from '@mozilla/readability'
-import { RuntimeMessage, RuntimeMessageTypes } from '../types/message'
+import { RuntimeMessage, RuntimeMessageTypes } from '@standardnotes/web/src/javascripts/Clipper/message'
 
 let isSelectingNodeForClipping = false
 let isScreenshotMode = false

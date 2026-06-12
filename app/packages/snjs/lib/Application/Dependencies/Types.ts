@@ -45,7 +45,6 @@ export const TYPES = {
   MigrationService: Symbol.for('MigrationService'),
   FileService: Symbol.for('FileService'),
   IntegrityService: Symbol.for('IntegrityService'),
-  ListedService: Symbol.for('ListedService'),
   ActionsService: Symbol.for('ActionsService'),
   AuthenticatorApiService: Symbol.for('AuthenticatorApiService'),
   AuthenticatorManager: Symbol.for('AuthenticatorManager'),

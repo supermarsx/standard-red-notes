@@ -10,7 +10,6 @@ import {
   STAR_NOTE_COMMAND,
 } from '@standardnotes/ui-services'
 import ChangeEditorOption from './ChangeEditorOption'
-import ListedActionsOption from './Listed/ListedActionsOption'
 import AddTagOption from './AddTagOption'
 import { NotesOptionsProps } from './NotesOptionsProps'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
@@ -368,12 +367,6 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
       {notes.length === 1 && (
         <>
           {notes[0].noteType === NoteType.Super && <SuperNoteOptions closeMenu={closeMenu} />}
-
-          {!areSomeNotesInSharedVault && (
-            <MenuSection>
-              <ListedActionsOption iconClassName={iconClass} application={application} note={notes[0]} />
-            </MenuSection>
-          )}
 
           {editorForNote && (
             <MenuSection>

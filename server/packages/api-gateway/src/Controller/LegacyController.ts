@@ -52,7 +52,7 @@ export class LegacyController extends BaseHttpController {
     return this.statusCode(401)
   }
 
-  @all('*')
+  @all('/{*splat}')
   async legacyProxyToSyncingServer(request: Request, response: Response): Promise<void> {
     if (request.path === '/') {
       response.send(

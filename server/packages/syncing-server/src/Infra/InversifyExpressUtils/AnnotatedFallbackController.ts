@@ -2,7 +2,7 @@ import { BaseHttpController, all, controller, results } from 'inversify-express-
 
 @controller('')
 export class AnnotatedFallbackController extends BaseHttpController {
-  @all('*')
+  @all('/{*splat}')
   public async fallback(): Promise<results.NotFoundResult> {
     return this.notFound()
   }

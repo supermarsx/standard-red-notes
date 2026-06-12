@@ -11,7 +11,8 @@ x-server-env: &server-env
   REDIS_HOST: cache
   REDIS_PORT: 6379
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me}
-  AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-dev-auth-encryption-key-change-me}
+  # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
+  AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
   VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-dev-valet-token-secret-change-me}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
@@ -35,7 +36,7 @@ services:
     ports:
       - "${APP_PORT:-3001}:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

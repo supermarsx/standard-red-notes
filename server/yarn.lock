@@ -4744,7 +4744,7 @@ __metadata:
     express: "npm:^5.2.1"
     helmet: "npm:^8.2.0"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -4822,7 +4822,7 @@ __metadata:
     dotenv: "npm:^17.4.2"
     express: "npm:^5.2.1"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -4966,7 +4966,7 @@ __metadata:
     express-winston: "npm:^4.2.0"
     helmet: "npm:^8.2.0"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -5015,7 +5015,7 @@ __metadata:
     express: "npm:^5.2.1"
     helmet: "npm:^8.2.0"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     reflect-metadata: "npm:^0.2.2"
     typescript: "npm:^6.0.3"
     winston: "npm:^3.19.0"
@@ -5092,7 +5092,7 @@ __metadata:
     dotenv: "npm:^17.4.2"
     express: "npm:^5.2.1"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -5236,7 +5236,7 @@ __metadata:
     express: "npm:^5.2.1"
     helmet: "npm:^8.2.0"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -5309,7 +5309,7 @@ __metadata:
     dotenv: "npm:^17.4.2"
     express: "npm:^5.2.1"
     inversify: "npm:^8.1.0"
-    inversify-express-utils: "npm:^6.5.0"
+    inversify-express-utils: "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch"
     ioredis: "npm:^5.11.0"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
@@ -9370,7 +9370,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"inversify-express-utils@npm:^6.5.0":
+"inversify-express-utils@npm:6.5.0":
   version: 6.5.0
   resolution: "inversify-express-utils@npm:6.5.0"
   dependencies:
@@ -9380,6 +9380,19 @@ __metadata:
     inversify: ^6.0.3
     reflect-metadata: ~0.2.2
   checksum: 10/564b54d787ef101b87347c8c853a2f96558323219af6c123eeffd63ebafa8ae85557b442a7e30dc193fc26b0d22df3d9681ac1094f469b0adc13f03915cd867a
+  languageName: node
+  linkType: hard
+
+"inversify-express-utils@patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch":
+  version: 6.5.0
+  resolution: "inversify-express-utils@patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"
+  dependencies:
+    http-status-codes: "npm:2.3.0"
+  peerDependencies:
+    express: ^4.21.1
+    inversify: ^6.0.3
+    reflect-metadata: ~0.2.2
+  checksum: 10/e403c6f863519cede26fdb8c33979f7fba17f6186adf3c89e3047a0df2241ee4d9b272570e61efd61a544855050c154e3bc7e9bfb9f57423b419f2504c2f762e
   languageName: node
   linkType: hard
 
