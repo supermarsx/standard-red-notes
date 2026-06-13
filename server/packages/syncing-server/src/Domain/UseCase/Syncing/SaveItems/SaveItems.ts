@@ -170,18 +170,22 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     savedItems: Item[],
     lastUpdatedTimestamp: number,
   ): Promise<void> {
-    if (savedItems.length === 0 || !dto.sessionUuid) {
+    // Emit on any saved item so realtime push works even when the session is
+    // not propagated into the sync context (self-hosted/cross-service). Without
+    // a session the message simply isn't excluded from the originating client,
+    // which is harmless (a no-op re-sync).
+    if (savedItems.length === 0) {
       return
     }
 
     const itemsChangedEvent = this.domainEventFactory.createItemsChangedOnServerEvent({
       userUuid: dto.userUuid,
-      sessionUuid: dto.sessionUuid,
+      sessionUuid: dto.sessionUuid ?? '',
       timestamp: lastUpdatedTimestamp,
     })
     const result = await this.sendEventToClient.execute({
       userUuid: dto.userUuid,
-      originatingSessionUuid: dto.sessionUuid,
+      originatingSessionUuid: dto.sessionUuid ?? undefined,
       event: itemsChangedEvent,
     })
     /* istanbul ignore next */
