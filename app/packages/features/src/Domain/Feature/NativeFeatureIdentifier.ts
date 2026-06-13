@@ -29,12 +29,17 @@ export class NativeFeatureIdentifier extends ValueObject<NativeFeatureIdentifier
     SolarizedDarkTheme: 'org.standardnotes.theme-solarized-dark',
     TitaniumTheme: 'org.standardnotes.theme-titanium',
     ProtonTheme: 'com.standardnotes.theme-proton',
+    DraculaTheme: 'com.sncommunity.dracula-theme',
+    StandardBlueDarkTheme: 'com.sncommunity.standard-blue-dark-theme',
+    DarkMintTheme: 'com.sncommunity.dark-mint-theme',
+    LightsOutTheme: 'com.sncommunity.lights-out-theme',
 
     PlainEditor: 'com.standardnotes.plain-text',
     SuperEditor: 'com.standardnotes.super-editor',
 
     SheetsEditor: 'org.standardnotes.standard-sheets',
     TokenVaultEditor: 'org.standardnotes.token-vault',
+    AdvancedChecklistEditor: 'com.sncommunity.advanced-checklist',
 
     Clipper: 'org.standardnotes.clipper',
 

@@ -41,4 +41,9 @@ export enum PermissionName {
   Vaults = 'app:vaults',
   SharedVaults = 'server:shared-vaults',
   ProtonTheme = 'theme:proton',
+  DraculaTheme = 'theme:dracula',
+  StandardBlueDarkTheme = 'theme:standard-blue-dark',
+  DarkMintTheme = 'theme:dark-mint',
+  LightsOutTheme = 'theme:lights-out',
+  AdvancedChecklistEditor = 'editor:advanced-checklist',
 }

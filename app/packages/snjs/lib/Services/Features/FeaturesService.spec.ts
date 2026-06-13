@@ -364,14 +364,15 @@ describe('FeaturesService', () => {
 
       await featureService.updateOnlineRolesWithNewValues([RoleName.NAMES.CoreUser])
 
+      // Standard Red Notes: all features (including third-party and expired) are unconditionally entitled.
       expect(featureService.getFeatureStatus(Uuid.create('00000000-0000-0000-0000-000000000001').getValue())).toBe(
         FeatureStatus.Entitled,
       )
       expect(featureService.getFeatureStatus(Uuid.create('00000000-0000-0000-0000-000000000002').getValue())).toBe(
-        FeatureStatus.InCurrentPlanButExpired,
+        FeatureStatus.Entitled,
       )
       expect(featureService.getFeatureStatus(Uuid.create('00000000-0000-0000-0000-000000000003').getValue())).toBe(
-        FeatureStatus.NoUserSubscription,
+        FeatureStatus.Entitled,
       )
     })
 

@@ -110,5 +110,80 @@ export function themes(): ThemeFeatureDescription[] {
     },
   })
 
-  return [midnight, futura, solarizedDark, autobiography, dark, proton, titanium, dynamic]
+  const allRoles = [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser]
+
+  const dracula: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Dracula',
+    identifier: NativeFeatureIdentifier.TYPES.DraculaTheme,
+    permission_name: PermissionName.DraculaTheme,
+    index_path: 'dist/dist.css',
+    isDark: true,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#bd93f9',
+      foreground_color: '#282a36',
+      border_color: '#bd93f9',
+    },
+  })
+
+  const standardBlueDark: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Standard Blue Dark',
+    identifier: NativeFeatureIdentifier.TYPES.StandardBlueDarkTheme,
+    permission_name: PermissionName.StandardBlueDarkTheme,
+    index_path: 'dist/dist.css',
+    isDark: true,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#086DD6',
+      foreground_color: '#ffffff',
+      border_color: '#086DD6',
+    },
+  })
+
+  const darkMint: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Dark Mint',
+    identifier: NativeFeatureIdentifier.TYPES.DarkMintTheme,
+    permission_name: PermissionName.DarkMintTheme,
+    index_path: 'dist/theme.css',
+    isDark: true,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#3eb489',
+      foreground_color: '#0d1f1a',
+      border_color: '#3eb489',
+    },
+  })
+
+  const lightsOut: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Lights Out',
+    identifier: NativeFeatureIdentifier.TYPES.LightsOutTheme,
+    permission_name: PermissionName.LightsOutTheme,
+    index_path: 'dist/theme.css',
+    isDark: true,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#0a0a0a',
+      foreground_color: '#e0e0e0',
+      border_color: '#3a3a3a',
+    },
+  })
+
+  return [
+    midnight,
+    futura,
+    solarizedDark,
+    autobiography,
+    dark,
+    proton,
+    titanium,
+    dynamic,
+    dracula,
+    standardBlueDark,
+    darkMint,
+    lightsOut,
+  ]
 }
