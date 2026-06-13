@@ -17,6 +17,13 @@ export const providerSchema = z.discriminatedUnion("type", [
     base_url: z.string().url().default("http://127.0.0.1:11434"),
   }),
   z.object({
+    type: z.literal("hermes"),
+    model: z.string().default("hermes3"),
+    base_url: z.string().url().default("http://127.0.0.1:11434"),
+    transport: z.enum(["openai", "ollama"]).default("ollama"),
+    api_key_env: z.string().optional(),
+  }),
+  z.object({
     type: z.literal("mock"),
     script: z.array(z.string()).default([]),
   }),

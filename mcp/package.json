@@ -5,22 +5,27 @@
   "type": "module",
   "description": "MCP bridge for Standard Red Notes.",
   "bin": {
-    "standard-red-notes-mcp": "dist/index.js"
+    "standard-red-notes-mcp": "dist/index.cjs"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "build": "node esbuild.config.mjs src/index.ts dist/index.cjs",
+    "dev": "node esbuild.config.mjs src/index.ts dist/index.cjs && node dist/index.cjs",
+    "start": "node dist/index.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@standardnotes/domain-core": "^1.41.3",
+    "@standardnotes/sncrypto-web": "1.14.11",
+    "@standardnotes/snjs": "2.211.6",
+    "libsodium-wrappers-sumo": "0.8.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "esbuild": "^0.28.1",
     "prettier": "^3.8.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"

@@ -1,64 +1,107 @@
 #!/usr/bin/env node
+import "./polyfill.js";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { ServerClient } from "./serverClient.js";
+import { bootstrapHeadlessApp, type HeadlessApp } from "./snjs/bootstrap.js";
+import { SnjsBackedClient } from "./snjs/SnjsBackedClient.js";
+
+const serverUrl =
+  process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3000";
+const allowWrites = process.env.STANDARD_RED_NOTES_ALLOW_WRITES === "1";
+const email = process.env.STANDARD_RED_NOTES_EMAIL;
+const password = process.env.STANDARD_RED_NOTES_PASSWORD;
+const mfaCode = process.env.STANDARD_RED_NOTES_MFA_CODE;
+const dataDir =
+  process.env.STANDARD_RED_NOTES_DATA_DIR ?? "/var/lib/standard-red-notes-mcp";
+const allowRegister = process.env.STANDARD_RED_NOTES_ALLOW_REGISTER === "1";
+
+let headless: HeadlessApp | undefined;
+let client: SnjsBackedClient | undefined;
+let initPromise: Promise<SnjsBackedClient> | undefined;
+
+// Lazily bootstrap snjs and sign into the account on first use. Memoized so the
+// expensive launch+sync happens once. `status` works without credentials.
+function getClient(): Promise<SnjsBackedClient> {
+  if (client) {
+    return Promise.resolve(client);
+  }
+  if (!initPromise) {
+    initPromise = (async () => {
+      if (!email || !password) {
+        throw new Error(
+          "Account not configured. Set STANDARD_RED_NOTES_EMAIL and STANDARD_RED_NOTES_PASSWORD.",
+        );
+      }
+      headless = await bootstrapHeadlessApp({
+        serverUrl,
+        dataDir,
+        mfaCode,
+        password,
+      });
+      if (!headless.isSignedIn()) {
+        if (allowRegister) {
+          await headless.register(email, password);
+        } else {
+          await headless.signIn(email, password, mfaCode);
+        }
+      } else {
+        await headless.sync();
+      }
+      client = new SnjsBackedClient(headless, { allowWrites, baseUrl: serverUrl });
+      return client;
+    })();
+  }
+  return initPromise;
+}
 
 const server = new McpServer(
   {
     name: "standard-red-notes",
-    version: "0.2.0",
+    version: "0.3.0",
   },
   {
     instructions:
-      "Standard Red Notes MCP bridge. Exposes status plus a read-only notes API surface against the configured Standard Red Notes server. Write tools require STANDARD_RED_NOTES_ALLOW_WRITES=1 in the environment.",
+      "Standard Red Notes MCP bridge. Operates on a real, end-to-end-encrypted account via an embedded headless snjs client: notes and tags are decrypted locally and changes sync back encrypted. Configure STANDARD_RED_NOTES_EMAIL/_PASSWORD/_SERVER_URL. Write tools require STANDARD_RED_NOTES_ALLOW_WRITES=1.",
   },
 );
-
-const client = new ServerClient({
-  baseUrl: process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3000",
-  authToken: process.env.STANDARD_RED_NOTES_AUTH_TOKEN,
-  allowWrites: process.env.STANDARD_RED_NOTES_ALLOW_WRITES === "1",
-});
 
 server.registerTool(
   "standard_red_notes_status",
   {
     title: "Standard Red Notes Status",
-    description: "Report MCP bridge status and the configured server URL.",
-    inputSchema: {
-      includeRoadmap: z
-        .boolean()
-        .optional()
-        .describe("Include the next implementation slices."),
-    },
+    description: "Report MCP bridge status, server URL, and account sign-in state.",
+    inputSchema: {},
     outputSchema: {
       status: z.string(),
       transport: z.string(),
       serverUrl: z.string(),
       writes: z.boolean(),
-      next: z.array(z.string()).optional(),
+      accountConfigured: z.boolean(),
+      signedIn: z.boolean(),
     },
   },
-  async ({ includeRoadmap }) => {
+  async () => {
+    let signedIn = false;
+    try {
+      if (email && password) {
+        await getClient();
+        signedIn = headless?.isSignedIn() ?? false;
+      }
+    } catch {
+      signedIn = false;
+    }
     const structuredContent = {
       status: "ready",
       transport: "stdio",
-      serverUrl: client.baseUrl,
-      writes: client.allowWrites,
-      next: includeRoadmap
-        ? [
-            "Wire local-client adapter so note search runs against the unlocked app",
-            "Add Streamable HTTP transport once auth + DNS rebinding protection ship",
-            "Add server-side status/admin tools behind scoped service tokens",
-          ]
-        : undefined,
+      serverUrl,
+      writes: allowWrites,
+      accountConfigured: Boolean(email && password),
+      signedIn,
     };
     return {
-      content: [
-        { type: "text", text: JSON.stringify(structuredContent, null, 2) },
-      ],
+      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
       structuredContent,
     };
   },
@@ -69,33 +112,20 @@ server.registerTool(
   {
     title: "List Notes",
     description:
-      "List recent notes from the configured Standard Red Notes server. Returns note UUIDs, titles, and updated_at. Bodies are not included.",
+      "List recent notes (UUID, title, updatedAt), newest first. Bodies are not included.",
     inputSchema: {
-      limit: z
-        .number()
-        .int()
-        .positive()
-        .max(200)
-        .default(50)
-        .describe("Maximum number of notes to return."),
-      cursor: z
-        .string()
-        .optional()
-        .describe("Opaque cursor returned by a previous call."),
+      limit: z.number().int().positive().max(200).default(50),
+      cursor: z.string().optional(),
     },
     outputSchema: {
       notes: z.array(
-        z.object({
-          uuid: z.string(),
-          title: z.string(),
-          updatedAt: z.string(),
-        }),
+        z.object({ uuid: z.string(), title: z.string(), updatedAt: z.string() }),
       ),
       cursor: z.string().optional(),
     },
   },
   async ({ limit, cursor }) => {
-    const result = await client.listNotes(limit, cursor);
+    const result = await (await getClient()).listNotes(limit, cursor);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -107,24 +137,19 @@ server.registerTool(
   "notes.search",
   {
     title: "Search Notes",
-    description:
-      "Search notes by title or body keywords. Returns matching note UUIDs, titles, and a snippet.",
+    description: "Search notes by title or body keywords. Returns UUID, title, snippet.",
     inputSchema: {
-      query: z.string().min(1).describe("Search query."),
+      query: z.string().min(1),
       limit: z.number().int().positive().max(50).default(10),
     },
     outputSchema: {
       hits: z.array(
-        z.object({
-          uuid: z.string(),
-          title: z.string(),
-          snippet: z.string(),
-        }),
+        z.object({ uuid: z.string(), title: z.string(), snippet: z.string() }),
       ),
     },
   },
   async ({ query, limit }) => {
-    const result = await client.searchNotes(query, limit);
+    const result = await (await getClient()).searchNotes(query, limit);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -136,11 +161,8 @@ server.registerTool(
   "notes.read",
   {
     title: "Read Note",
-    description:
-      "Fetch a single note by UUID. Returns title, body, tags, and timestamps.",
-    inputSchema: {
-      uuid: z.string().uuid().describe("Note UUID."),
-    },
+    description: "Fetch a single note by UUID: title, body, tags, timestamps.",
+    inputSchema: { uuid: z.string().uuid() },
     outputSchema: {
       uuid: z.string(),
       title: z.string(),
@@ -151,7 +173,7 @@ server.registerTool(
     },
   },
   async ({ uuid }) => {
-    const note = await client.readNote(uuid);
+    const note = await (await getClient()).readNote(uuid);
     return {
       content: [{ type: "text", text: JSON.stringify(note, null, 2) }],
       structuredContent: note as unknown as Record<string, unknown>,
@@ -164,24 +186,16 @@ server.registerTool(
   {
     title: "Create Note",
     description:
-      "Create a new note. Disabled unless STANDARD_RED_NOTES_ALLOW_WRITES=1 to keep the bootstrap bridge read-only by default.",
+      "Create a new note. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
     inputSchema: {
       title: z.string().min(1),
       body: z.string().default(""),
       tags: z.array(z.string()).default([]),
     },
-    outputSchema: {
-      uuid: z.string(),
-      title: z.string(),
-    },
+    outputSchema: { uuid: z.string(), title: z.string() },
   },
   async ({ title, body, tags }) => {
-    if (!client.allowWrites) {
-      throw new Error(
-        "Writes are disabled. Set STANDARD_RED_NOTES_ALLOW_WRITES=1 to enable notes.create.",
-      );
-    }
-    const created = await client.createNote({ title, body, tags });
+    const created = await (await getClient()).createNote({ title, body, tags });
     return {
       content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
       structuredContent: created as unknown as Record<string, unknown>,
@@ -193,26 +207,17 @@ server.registerTool(
   "notes.update",
   {
     title: "Update Note",
-    description:
-      "Update an existing note by UUID. Disabled unless STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+    description: "Update an existing note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
     inputSchema: {
       uuid: z.string().uuid(),
       title: z.string().optional(),
       body: z.string().optional(),
       tags: z.array(z.string()).optional(),
     },
-    outputSchema: {
-      uuid: z.string(),
-      updatedAt: z.string(),
-    },
+    outputSchema: { uuid: z.string(), updatedAt: z.string() },
   },
   async ({ uuid, title, body, tags }) => {
-    if (!client.allowWrites) {
-      throw new Error(
-        "Writes are disabled. Set STANDARD_RED_NOTES_ALLOW_WRITES=1 to enable notes.update.",
-      );
-    }
-    const updated = await client.updateNote(uuid, { title, body, tags });
+    const updated = await (await getClient()).updateNote(uuid, { title, body, tags });
     return {
       content: [{ type: "text", text: JSON.stringify(updated, null, 2) }],
       structuredContent: updated as unknown as Record<string, unknown>,
@@ -224,22 +229,14 @@ server.registerTool(
   "notes.delete",
   {
     title: "Delete Note",
-    description:
-      "Delete a note by UUID. Disabled unless STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+    description: "Delete a note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
     inputSchema: { uuid: z.string().uuid() },
     outputSchema: { uuid: z.string(), deleted: z.boolean() },
   },
   async ({ uuid }) => {
-    if (!client.allowWrites) {
-      throw new Error(
-        "Writes are disabled. Set STANDARD_RED_NOTES_ALLOW_WRITES=1 to enable notes.delete.",
-      );
-    }
-    await client.deleteNote(uuid);
+    await (await getClient()).deleteNote(uuid);
     return {
-      content: [
-        { type: "text", text: JSON.stringify({ uuid, deleted: true }) },
-      ],
+      content: [{ type: "text", text: JSON.stringify({ uuid, deleted: true }) }],
       structuredContent: { uuid, deleted: true },
     };
   },
@@ -249,14 +246,14 @@ server.registerTool(
   "tags.list",
   {
     title: "List Tags",
-    description: "List tags available on the server.",
+    description: "List tags in the account.",
     inputSchema: {},
     outputSchema: {
       tags: z.array(z.object({ uuid: z.string(), title: z.string() })),
     },
   },
   async () => {
-    const tags = await client.listTags();
+    const tags = await (await getClient()).listTags();
     return {
       content: [{ type: "text", text: JSON.stringify({ tags }, null, 2) }],
       structuredContent: { tags },
@@ -264,5 +261,9 @@ server.registerTool(
   },
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+async function start(): Promise<void> {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+void start();

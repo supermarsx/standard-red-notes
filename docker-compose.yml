@@ -95,7 +95,16 @@ services:
     stdin_open: true
     tty: true
     environment:
-      STANDARD_RED_NOTES_API_URL: http://server:3000
+      STANDARD_RED_NOTES_SERVER_URL: http://server:3000
+      STANDARD_RED_NOTES_DATA_DIR: /var/lib/standard-red-notes-mcp
+      # Provide account credentials to enable note tools (read-only by default).
+      STANDARD_RED_NOTES_EMAIL: ${STANDARD_RED_NOTES_EMAIL:-}
+      STANDARD_RED_NOTES_PASSWORD: ${STANDARD_RED_NOTES_PASSWORD:-}
+      STANDARD_RED_NOTES_MFA_CODE: ${STANDARD_RED_NOTES_MFA_CODE:-}
+      STANDARD_RED_NOTES_ALLOW_WRITES: ${STANDARD_RED_NOTES_ALLOW_WRITES:-0}
+      STANDARD_RED_NOTES_ALLOW_REGISTER: ${STANDARD_RED_NOTES_ALLOW_REGISTER:-0}
+    volumes:
+      - mcp-data:/var/lib/standard-red-notes-mcp
     depends_on:
       server:
         condition: service_healthy
@@ -166,3 +175,4 @@ volumes:
   localstack-data:
   server-logs:
   uploads:
+  mcp-data:
