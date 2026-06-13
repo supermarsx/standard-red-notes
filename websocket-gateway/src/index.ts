@@ -4,6 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { mintConnectionToken, verifyConnectionToken } from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
+import { startSqsConsumer } from './sqsConsumer.js'
 
 // ---------------------------------------------------------------------------
 // Environment / config
@@ -216,6 +217,20 @@ const redis = startRedisBridge(registry, {
   logger,
 })
 
+// SQS consumer (multi-process / SNS+SQS deployment). Enabled when SQS_QUEUE_URL
+// is set; consumes WEB_SOCKET_MESSAGE_REQUESTED from the syncing-server topic.
+let stopSqs: (() => void) | undefined
+if (process.env.SQS_QUEUE_URL) {
+  stopSqs = startSqsConsumer(registry, {
+    queueUrl: process.env.SQS_QUEUE_URL,
+    endpoint: process.env.SQS_ENDPOINT,
+    region: process.env.SQS_AWS_REGION,
+    accessKeyId: process.env.SQS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.SQS_SECRET_ACCESS_KEY,
+    logger,
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Boot + graceful shutdown
 // ---------------------------------------------------------------------------
@@ -229,6 +244,7 @@ function shutdown(signal: string): void {
   clearInterval(heartbeat)
   for (const socket of wss.clients) socket.close(1001, 'server shutting down')
   wss.close()
+  stopSqs?.()
   redis.quit().catch(() => redis.disconnect())
   httpServer.close(() => process.exit(0))
   // Force-exit if something hangs.

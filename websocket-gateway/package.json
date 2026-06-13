@@ -14,6 +14,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1068.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.0"

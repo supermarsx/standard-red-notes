@@ -195,6 +195,26 @@ QUEUE_URL=$(create_queue ${QUEUE_NAME})
 echo "created queue: $QUEUE_URL"
 SCHEDULER_QUEUE_ARN=$(get_queue_arn_from_name $QUEUE_NAME)
 
+# Queue consumed by the self-hosted websocket-gateway. Subscribed to the
+# syncing-server topic so it receives WEB_SOCKET_MESSAGE_REQUESTED (item
+# changes) and to the auth topic for shared-vault invite/messages.
+QUEUE_NAME="websocket-local-queue"
+
+echo "creating queue $QUEUE_NAME"
+QUEUE_URL=$(create_queue ${QUEUE_NAME})
+echo "created queue: $QUEUE_URL"
+WEBSOCKET_QUEUE_ARN=$(get_queue_arn_from_name $QUEUE_NAME)
+
+echo "linking topic $SYNCING_SERVER_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN"
+LINKING_RESULT=$(link_queue_and_topic $SYNCING_SERVER_TOPIC_ARN $WEBSOCKET_QUEUE_ARN)
+echo "linking done:"
+echo "$LINKING_RESULT"
+
+echo "linking topic $AUTH_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN"
+LINKING_RESULT=$(link_queue_and_topic $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_ARN)
+echo "linking done:"
+echo "$LINKING_RESULT"
+
 echo "all topics are:"
 echo "$(get_all_topics)"
 
