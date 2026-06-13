@@ -11,6 +11,7 @@
     "build": "node esbuild.config.mjs src/index.ts dist/index.cjs",
     "dev": "node esbuild.config.mjs src/index.ts dist/index.cjs && node dist/index.cjs",
     "start": "node dist/index.cjs",
+    "e2e": "node run-e2e.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
