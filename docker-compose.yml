@@ -102,6 +102,9 @@ services:
       WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
       WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
       WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
+      # Must match the auth service's secret so the gateway can decode the
+      # api-gateway's forwarded cross-service token (x-auth-token) for the web flow.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me}
       # SNS/SQS event source (multi-process deployment): consume the syncing
       # server's WEB_SOCKET_MESSAGE_REQUESTED events for realtime push.
       SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://localstack:4566/000000000000/websocket-local-queue}

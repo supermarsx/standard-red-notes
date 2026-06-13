@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { mintConnectionToken, verifyConnectionToken } from './auth.js'
+import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken } from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startSqsConsumer } from './sqsConsumer.js'
@@ -18,6 +18,10 @@ const CONNECTION_TOKEN_TTL = process.env.WEB_SOCKET_CONNECTION_TOKEN_TTL ?? '60s
 // When set, POST /sockets/tokens requires header `x-internal-secret` to match.
 // When unset (dev), the endpoint is open.
 const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? ''
+// Shared secret the auth service signs cross-service tokens with. Lets the
+// gateway authenticate browser token requests proxied by the api-gateway (which
+// forwards the user's identity in the `x-auth-token` header).
+const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET ?? ''
 
 // Heartbeat interval for dropping dead sockets.
 const HEARTBEAT_MS = 30_000
@@ -76,7 +80,26 @@ const httpServer = createServer((req, res) => {
  * (e.g. forwarding the authenticated identity) is handled separately.
  */
 function handleMintToken(req: IncomingMessage, res: ServerResponse): void {
-  // Guard: if an internal secret is configured, require a matching header.
+  // Web-client path: the api-gateway authenticated the request and forwarded the
+  // user's identity in the `x-auth-token` cross-service token. Decode it and mint
+  // a connection token directly (no internal secret / body needed).
+  const xAuthToken = req.headers['x-auth-token']
+  if (typeof xAuthToken === 'string' && xAuthToken.length > 0) {
+    const identity = AUTH_JWT_SECRET ? decodeCrossServiceToken(xAuthToken, AUTH_JWT_SECRET) : undefined
+    if (!identity) {
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'invalid auth token' }))
+      return
+    }
+    const token = mintConnectionToken(identity, CONNECTION_TOKEN_SECRET, CONNECTION_TOKEN_TTL)
+    logger.info(`[token] minted (x-auth) user=${identity.userUuid} session=${identity.sessionUuid}`)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ token }))
+    return
+  }
+
+  // Internal path: trusted callers (e.g. the headless bridge) pass an internal
+  // secret + {userUuid, sessionUuid} body.
   if (INTERNAL_SECRET) {
     const provided = req.headers['x-internal-secret']
     if (provided !== INTERNAL_SECRET) {

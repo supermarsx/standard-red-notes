@@ -50,6 +50,27 @@ export function verifyConnectionToken(token: string, secret: string): Connection
  *
  * @param ttl jsonwebtoken `expiresIn` string/number, e.g. '60s'.
  */
+export function decodeCrossServiceToken(
+  token: string,
+  secret: string,
+): { userUuid: string; sessionUuid: string } | undefined {
+  try {
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] })
+    if (typeof decoded !== 'object' || decoded === null) {
+      return undefined
+    }
+    const payload = decoded as { user?: { uuid?: unknown }; session?: { uuid?: unknown } }
+    const userUuid = payload.user?.uuid
+    const sessionUuid = payload.session?.uuid
+    if (typeof userUuid !== 'string' || !userUuid || typeof sessionUuid !== 'string' || !sessionUuid) {
+      return undefined
+    }
+    return { userUuid, sessionUuid }
+  } catch {
+    return undefined
+  }
+}
+
 export function mintConnectionToken(
   identity: { userUuid: string; sessionUuid: string },
   secret: string,
