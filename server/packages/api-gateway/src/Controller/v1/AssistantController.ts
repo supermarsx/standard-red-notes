@@ -24,7 +24,11 @@ interface StreamRequestBody {
  * the provider API key and forwards ONE model turn at a time as Server-Sent
  * Events. Tool execution never happens here.
  */
-@controller('/v1/assistant', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+// `/config` is intentionally public: it returns only which LLM providers the
+// server proxy has configured (non-sensitive), and the client may query it
+// before/without a session. `/stream` stays authenticated because it spends the
+// server-held provider API key.
+@controller('/v1/assistant')
 export class AssistantController extends BaseHttpController {
   constructor(
     @inject(TYPES.ApiGateway_ASSISTANT_PROVIDER_CONFIG) private providerConfig: AssistantProviderConfig,
@@ -45,7 +49,7 @@ export class AssistantController extends BaseHttpController {
     })
   }
 
-  @httpPost('/stream')
+  @httpPost('/stream', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async streamCompletion(request: Request, response: Response): Promise<void> {
     const body = (request.body ?? {}) as StreamRequestBody
 
