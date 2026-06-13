@@ -185,10 +185,13 @@ export class SnjsBackedClient {
     vault?: string
   }): Promise<{ uuid: string; title: string }> {
     this.requireWrites('notes.create')
+    // needsSync MUST be true so the note is marked dirty and actually uploaded
+    // on sync; otherwise it stays local-only (never persisted server-side, and
+    // never triggers the items-changed realtime event).
     const note = await this.app.mutator.createItem(
       ContentType.TYPES.Note,
       { title: input.title, text: input.body, references: [] },
-      false,
+      true,
     )
 
     // A vault item may only link to items in the same vault, so move the note

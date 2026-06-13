@@ -18,6 +18,7 @@ import { RemoteImageNode } from '../../Plugins/RemoteImagePlugin/RemoteImageNode
 import { InlineFileNode } from '../../Plugins/InlineFilePlugin/InlineFileNode'
 import { CreateEditorArgs } from 'lexical'
 import { FileExportNode } from './FileExportNode'
+import { MermaidNode } from './MermaidNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -44,6 +45,7 @@ const CommonNodes = [
   RemoteImageNode,
   InlineFileNode,
   ListNode,
+  MermaidNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

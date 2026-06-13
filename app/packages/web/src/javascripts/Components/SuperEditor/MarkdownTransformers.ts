@@ -5,6 +5,7 @@ import {
   TEXT_FORMAT_TRANSFORMERS,
   TEXT_MATCH_TRANSFORMERS,
   TextMatchTransformer,
+  MultilineElementTransformer,
   $convertToMarkdownString,
   $convertFromMarkdownString,
   MULTILINE_ELEMENT_TRANSFORMERS,
@@ -33,6 +34,29 @@ import {
   RemoteImageNode,
 } from './Plugins/RemoteImagePlugin/RemoteImageNode'
 import { $createInlineFileNode, $isInlineFileNode, InlineFileNode } from './Plugins/InlineFilePlugin/InlineFileNode'
+import { $createMermaidNode, $isMermaidNode, MermaidNode } from './Lexical/Nodes/MermaidNode'
+
+// Serializes a Mermaid diagram node to a ```mermaid fenced code block and
+// imports such fences back into a live diagram. Placed before the generic code
+// transformer so ```mermaid is captured here rather than as a plain code block.
+const MERMAID: MultilineElementTransformer = {
+  dependencies: [MermaidNode],
+  export: (node: LexicalNode) => {
+    if (!$isMermaidNode(node)) {
+      return null
+    }
+    return '```mermaid\n' + node.getCode() + '\n```'
+  },
+  regExpStart: /^[ \t]*```mermaid\s*$/,
+  regExpEnd: { optional: true, regExp: /^[ \t]*```\s*$/ },
+  replace: (rootNode, children, _startMatch, _endMatch, linesInBetween) => {
+    if (children == null && linesInBetween != null) {
+      const code = linesInBetween.join('\n').replace(/^\n+|\n+$/g, '')
+      rootNode.append($createMermaidNode(code))
+    }
+  },
+  type: 'multiline-element',
+}
 
 const HorizontalRule: ElementTransformer = {
   dependencies: [HorizontalRuleNode],
@@ -247,6 +271,7 @@ export const MarkdownTransformers = [
   CHECK_LIST,
   IMAGE,
   INLINE_FILE,
+  MERMAID,
   ...ELEMENT_TRANSFORMERS,
   ...MULTILINE_ELEMENT_TRANSFORMERS,
   ...TEXT_FORMAT_TRANSFORMERS,

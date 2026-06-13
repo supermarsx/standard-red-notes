@@ -29,6 +29,7 @@ import { GetQuoteBlockOption } from '../Blocks/Quote'
 import { GetDividerBlockOption } from '../Blocks/Divider'
 import { GetCollapsibleBlockOption } from '../Blocks/Collapsible'
 import { GetUploadFileOption } from '../Blocks/File'
+import { GetMermaidBlockOption } from '../Blocks/Mermaid'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -63,6 +64,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetChecklistBlockOption(editor),
       GetQuoteBlockOption(editor),
       GetCodeBlockOption(editor),
+      GetMermaidBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),
