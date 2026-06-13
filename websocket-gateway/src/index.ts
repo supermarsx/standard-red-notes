@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken } from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
+import { RoomRegistry, parseRelayFrame, handleRelayFrame } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startSqsConsumer } from './sqsConsumer.js'
 
@@ -43,6 +44,9 @@ if (!CONNECTION_TOKEN_SECRET) {
 // ---------------------------------------------------------------------------
 
 const registry = new ConnectionRegistry<WebSocket>()
+
+/** Room registry for collaborative (yjs) co-editing relay. */
+const rooms = new RoomRegistry<WebSocket>()
 
 /** Tracks liveness per socket for the heartbeat sweep. */
 const alive = new WeakMap<WebSocket, boolean>()
@@ -187,6 +191,7 @@ wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
 
   const cleanup = (): void => {
     registry.remove(identity.userUuid, conn)
+    rooms.leaveAll(conn)
     logger.info(
       `[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`,
     )
@@ -204,10 +209,18 @@ wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
   })
 
   // Some clients send a `ping` text frame; reply with `pong` and stay alive.
+  // Collaborative-editing frames (yjs sync/awareness, room join/leave) are
+  // relayed to room peers. Anything else is ignored.
   socket.on('message', (data) => {
     alive.set(socket, true)
-    if (data.toString() === 'ping') {
+    const raw = data.toString()
+    if (raw === 'ping') {
       socket.send('pong')
+      return
+    }
+    const frame = parseRelayFrame(raw)
+    if (frame) {
+      handleRelayFrame(rooms, conn, frame)
     }
   })
 })
