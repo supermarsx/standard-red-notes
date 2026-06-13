@@ -16,6 +16,13 @@ module.exports = (env) => {
     { from: 'src/favicon', to: 'favicon' },
     { from: 'src/vendor', to: 'dist' },
     { from: 'src/fonts', to: 'assets/fonts' },
+    // Excalidraw loads its fonts from window.EXCALIDRAW_ASSET_PATH ('/excalidraw/')
+    // -> serve them locally so the drawing block works fully offline (no CDN).
+    {
+      // require.resolve('@excalidraw/excalidraw') -> .../dist/prod/index.js
+      from: path.join(path.dirname(require.resolve('@excalidraw/excalidraw')), 'fonts'),
+      to: 'excalidraw/fonts',
+    },
     { from: 'src/404.html' },
     { from: 'src/422.html' },
     { from: 'src/500.html' },
@@ -90,6 +97,9 @@ module.exports = (env) => {
         '@': path.resolve(__dirname, 'src/javascripts'),
         '@Controllers': path.resolve(__dirname, 'src/javascripts/controllers'),
         '@Services': path.resolve(__dirname, 'src/javascripts/services'),
+        // Excalidraw's prod bundle does `require('roughjs/bin/...')`; point all
+        // roughjs subpath imports at the copy that actually ships the bin/ dir.
+        roughjs: path.dirname(require.resolve('roughjs/package.json')),
       },
     },
     module: {

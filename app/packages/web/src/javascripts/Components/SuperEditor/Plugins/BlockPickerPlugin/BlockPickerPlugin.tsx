@@ -30,6 +30,7 @@ import { GetDividerBlockOption } from '../Blocks/Divider'
 import { GetCollapsibleBlockOption } from '../Blocks/Collapsible'
 import { GetUploadFileOption } from '../Blocks/File'
 import { GetMermaidBlockOption } from '../Blocks/Mermaid'
+import { GetExcalidrawBlockOption } from '../Blocks/Excalidraw'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -65,6 +66,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetQuoteBlockOption(editor),
       GetCodeBlockOption(editor),
       GetMermaidBlockOption(editor),
+      GetExcalidrawBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

@@ -45,6 +45,8 @@
       window.defaultFilesHost = 'http://localhost:3000'
       window.enabledUnfinishedFeatures = false
       window.websocketUrl = 'ws://localhost:3106'
+      // Serve Excalidraw fonts from our own origin (no CDN) — see webpack copy.
+      window.EXCALIDRAW_ASSET_PATH = '/excalidraw/'
       window.purchaseUrl = 'about:blank'
       window.plansUrl = 'about:blank'
       window.dashboardUrl = 'about:blank'

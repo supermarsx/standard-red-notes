@@ -19,6 +19,7 @@ import { InlineFileNode } from '../../Plugins/InlineFilePlugin/InlineFileNode'
 import { CreateEditorArgs } from 'lexical'
 import { FileExportNode } from './FileExportNode'
 import { MermaidNode } from './MermaidNode'
+import { ExcalidrawNode } from './ExcalidrawNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -46,6 +47,7 @@ const CommonNodes = [
   InlineFileNode,
   ListNode,
   MermaidNode,
+  ExcalidrawNode,
 ]
 
 export const BlockEditorNodes = CommonNodes
