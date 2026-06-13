@@ -9,6 +9,12 @@ type BlocksEditorComposerProps = {
   children: React.ReactNode
   nodes?: Array<Klass<LexicalNode>>
   readonly?: boolean
+  /**
+   * When co-editing, the shared yjs doc — not initialValue — is the source of
+   * truth, so the composer must start with a null editorState and let
+   * CollaborationPlugin seed/sync content (otherwise content double-applies).
+   */
+  collaborating?: boolean
 }
 
 export const BlocksEditorComposer: FunctionComponent<BlocksEditorComposerProps> = ({
@@ -16,6 +22,7 @@ export const BlocksEditorComposer: FunctionComponent<BlocksEditorComposerProps> 
   children,
   readonly,
   nodes = [],
+  collaborating = false,
 }) => {
   return (
     <LexicalComposer
@@ -24,7 +31,11 @@ export const BlocksEditorComposer: FunctionComponent<BlocksEditorComposerProps> 
         theme: BlocksEditorTheme,
         editable: !readonly,
         onError: (error: Error) => console.error(error),
-        editorState: typeof initialValue === 'string' && initialValue.length === 0 ? undefined : initialValue,
+        editorState: collaborating
+          ? null
+          : typeof initialValue === 'string' && initialValue.length === 0
+            ? undefined
+            : initialValue,
         nodes: [...nodes, ...BlockEditorNodes],
       }}
     >

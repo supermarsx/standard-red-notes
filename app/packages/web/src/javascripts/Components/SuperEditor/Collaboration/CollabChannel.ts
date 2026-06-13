@@ -1,0 +1,18 @@
+// Transport abstraction for collaborative-editing frames. The web app backs this
+// with the existing authenticated gateway WebSocket (see WebSocketsService); the
+// provider unit tests back it with an in-memory loopback. Keeping the provider
+// decoupled from the socket makes the CRDT logic testable headlessly.
+
+export type CollabFrame =
+  | { t: 'room-join'; room: string }
+  | { t: 'room-leave'; room: string }
+  | { t: 'room-sync'; room: string }
+  | { t: 'yjs'; room: string; payload: string }
+  | { t: 'awareness'; room: string; payload: string }
+
+export interface CollabChannel {
+  isConnected(): boolean
+  send(frame: CollabFrame): void
+  /** Subscribe to ALL inbound frames; the provider filters by room. Returns an unsubscribe. */
+  subscribe(handler: (frame: CollabFrame) => void): () => void
+}

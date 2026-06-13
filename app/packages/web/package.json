@@ -118,6 +118,7 @@
     "@lexical/react": "0.45.0",
     "@lexical/rich-text": "0.45.0",
     "@lexical/utils": "0.45.0",
+    "@lexical/yjs": "0.45.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@react-pdf/renderer": "^4.5.1",
     "comlink": "^4.4.2",
@@ -125,6 +126,8 @@
     "lexical": "0.45.0",
     "mermaid": "^11.15.0",
     "ttag": "^1.8.12",
-    "unicode-script": "^1.2.0"
+    "unicode-script": "^1.2.0",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.18"
   }
 }

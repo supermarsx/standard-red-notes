@@ -32,6 +32,8 @@ import DatetimePlugin from './Plugins/DateTimePlugin/DateTimePlugin'
 import PasswordPlugin from './Plugins/PasswordPlugin/PasswordPlugin'
 import { CheckListPlugin } from './Plugins/CheckListPlugin'
 import GoogleDocsPastePlugin from './Plugins/GoogleDocsPastePlugin/GoogleDocsPastePlugin'
+import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
+import { WebApplication } from '@/Application/WebApplication'
 
 type BlocksEditorProps = {
   onChange?: (value: string, preview: string) => void
@@ -43,6 +45,9 @@ type BlocksEditorProps = {
   readonly?: boolean
   onFocus?: (event: FocusEvent) => void
   onBlur?: (event: FocusEvent) => void
+  /** When set, enables live co-editing (opt-in; shared-vault notes only). */
+  collaboration?: CollaborationConfig
+  application?: WebApplication
 }
 
 export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
@@ -55,6 +60,8 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   readonly,
   onFocus,
   onBlur,
+  collaboration,
+  application,
 }) => {
   const [didIgnoreFirstChange, setDidIgnoreFirstChange] = useState(false)
   const handleChange = useCallback(
@@ -116,7 +123,11 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
       <TablePlugin hasCellMerge />
       <OnChangePlugin onChange={handleChange} ignoreSelectionChange={true} />
-      <HistoryPlugin />
+      {collaboration && application ? (
+        <SuperCollaborationPlugin application={application} config={collaboration} />
+      ) : (
+        <HistoryPlugin />
+      )}
       <HorizontalRulePlugin />
       <ClearEditorPlugin />
       <CheckListPlugin />

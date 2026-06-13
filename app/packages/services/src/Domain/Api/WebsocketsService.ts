@@ -8,12 +8,27 @@ import { AbstractService } from '../Service/AbstractService'
 import { StorageKey } from '../Storage/StorageKeys'
 import { Result } from '@standardnotes/domain-core'
 
+/**
+ * Collaborative-editing relay frames carried over the same authenticated gateway
+ * socket (see websocket-gateway/src/rooms.ts). A room id is a note uuid; payloads
+ * are end-to-end-encrypted yjs sync/awareness blobs the gateway cannot read.
+ */
+export type CollaborationFrame =
+  | { t: 'room-join'; room: string }
+  | { t: 'room-leave'; room: string }
+  | { t: 'room-sync'; room: string }
+  | { t: 'yjs'; room: string; payload: string }
+  | { t: 'awareness'; room: string; payload: string }
+
+const COLLABORATION_FRAME_TYPES = new Set(['room-join', 'room-leave', 'room-sync', 'yjs', 'awareness'])
+
 export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, DomainEventInterface> {
   private CLOSE_CONNECTION_CODE = 3123
   private HEARTBEAT_DELAY = 360_000
 
   private webSocket?: WebSocket
   private webSocketHeartbeatInterval?: NodeJS.Timeout
+  private collaborationFrameHandlers = new Set<(frame: CollaborationFrame) => void>()
 
   constructor(
     private storageService: StorageServiceInterface,
@@ -81,8 +96,31 @@ export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, D
     }
   }
 
+  /**
+   * Send a collaborative-editing relay frame over the live socket. No-ops (drops
+   * the frame) if the socket is not open — the yjs room-sync handshake recovers
+   * any state missed while disconnected.
+   */
+  sendCollaborationFrame(frame: CollaborationFrame): void {
+    if (this.webSocket?.readyState === WebSocket.OPEN) {
+      this.webSocket.send(JSON.stringify(frame))
+    }
+  }
+
+  /** Subscribe to inbound collaboration frames. Returns an unsubscribe fn. */
+  onCollaborationFrame(handler: (frame: CollaborationFrame) => void): () => void {
+    this.collaborationFrameHandlers.add(handler)
+    return () => {
+      this.collaborationFrameHandlers.delete(handler)
+    }
+  }
+
   private onWebSocketMessage(messageEvent: MessageEvent) {
     const eventData = JSON.parse(messageEvent.data)
+    if (typeof eventData.t === 'string' && COLLABORATION_FRAME_TYPES.has(eventData.t)) {
+      this.collaborationFrameHandlers.forEach((handler) => handler(eventData as CollaborationFrame))
+      return
+    }
     switch (eventData.type) {
       case 'ITEMS_CHANGED_ON_SERVER':
         void this.notifyEvent(WebSocketsServiceEvent.ItemsChangedOnServer, eventData)

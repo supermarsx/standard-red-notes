@@ -1141,7 +1141,7 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     return this.dependencies.get<HttpServiceInterface>(TYPES.HttpService)
   }
 
-  private get sockets(): WebSocketsService {
+  public get sockets(): WebSocketsService {
     return this.dependencies.get<WebSocketsService>(TYPES.WebSocketsService)
   }
 }
