@@ -1,5 +1,4 @@
 import { log, LoggingDomain } from '@/Logging'
-import { isDev } from '@/Utils'
 import { useEffect, useRef } from 'react'
 
 type Props = {
@@ -8,7 +7,9 @@ type Props = {
   apiHost: string
 }
 
-const U2F_IFRAME_ORIGIN = isDev ? 'http://localhost:3001/?route=u2f' : 'https://app.standardnotes.com/?route=u2f'
+// Self-hosted: the `?route=u2f` view is served by this same app (see App.tsx),
+// so the WebAuthn iframe loads from our own origin rather than a hosted domain.
+const U2F_IFRAME_ORIGIN = `${window.location.origin}/?route=u2f`
 
 const U2FPromptIframeContainer = ({ contextData, onResponse, apiHost }: Props) => {
   const iframeRef = useRef<HTMLIFrameElement>(null)

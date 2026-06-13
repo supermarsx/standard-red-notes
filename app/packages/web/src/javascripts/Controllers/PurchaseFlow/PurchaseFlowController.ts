@@ -77,7 +77,7 @@ export class PurchaseFlowController extends AbstractViewController {
 
     const showGenericError = () => {
       void this.alerts.alert(
-        'There was an error confirming your purchase. Please contact support at help@standardnotes.com.',
+        'There was an error confirming your purchase. Please contact your administrator.',
       )
     }
 

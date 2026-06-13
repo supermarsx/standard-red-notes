@@ -12,7 +12,7 @@ export const FinishStep = () => {
           <div className="text-base font-bold">{c('Info').t`Your password has been successfully changed.`}</div>
           <p>
             {c('Info')
-              .t`Ensure you are running the latest version of Standard Notes on all platforms for maximum compatibility.`}
+              .t`Ensure you are running the latest version of Standard Red Notes on all platforms for maximum compatibility.`}
           </p>
         </div>
       </div>

@@ -203,8 +203,8 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
           <h1 className="mb-2 mt-0 text-2xl font-bold">{c('Title').t`Create your free account`}</h1>
         }
         {
-          // translator: Full sentence: "Create your free account to continue to Standard Notes."
-          <div className="mb-4 text-sm font-medium">{c('Info').t`to continue to Standard Notes.`}</div>
+          // translator: Full sentence: "Create your free account to continue to Standard Red Notes."
+          <div className="mb-4 text-sm font-medium">{c('Info').t`to continue to Standard Red Notes.`}</div>
         }
         {captchaURL ? captchaIframe : CreateAccountForm}
         <div className="flex flex-col-reverse items-start justify-between md:flex-row md:items-center">

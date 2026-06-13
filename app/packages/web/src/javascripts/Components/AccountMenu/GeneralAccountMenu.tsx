@@ -68,16 +68,6 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
     application.preferencesController.openPreferences()
   }, [application])
 
-  const openEmail = useCallback(() => {
-    const subject = c('MailtoSubject').t`Standard Notes Feedback`
-
-    const body = c('MailtoBody').t`App Version: ${application.version}`
-
-    application.device.openUrl(
-      `mailto:help@standardnotes.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
-    )
-  }, [application.device, application.version])
-
   const signOut = useCallback(() => {
     application.accountMenuController.setSigningOut(true)
   }, [application])
@@ -184,16 +174,10 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
             <Icon type="archive" className={iconClassName} />
             {c('Action').t`Import`}
           </MenuItem>
-          {application.isNativeMobileWeb() && (
-            <MenuItem onClick={openEmail}>
-              <Icon type="email-filled" className={iconClassName} />
-              {c('Action').t`Email us`}
-            </MenuItem>
-          )}
           <MenuItem className="justify-between" onClick={openHelp}>
             <div className="flex items-center">
               <Icon type="help" className={iconClassName} />
-              {c('Action').t`Help & feedback`}
+              {c('Action').t`Documentation`}
             </div>
             <span className="text-neutral">v{application.version}</span>
           </MenuItem>

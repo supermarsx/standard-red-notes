@@ -1,5 +1,5 @@
 // Browser-side mirror of the openclaw provider/agent contracts. The agent loop
-// and all tool execution run in the browser because Standard Notes notes are
+// and all tool execution run in the browser because Standard Red Notes notes are
 // end-to-end encrypted and decryption keys only exist on the client. The server
 // is only a stateless LLM streaming proxy.
 

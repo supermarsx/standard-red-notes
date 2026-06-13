@@ -94,10 +94,7 @@ const FONT_VARIANT_TO_FONT_OPTIONS: Record<FontVariant, { fontWeight: FontWeight
 
 export const FALLBACK_FONT_SOURCE = '/noto-sans/NotoSans-Regular.ttf'
 
-export const FONT_ASSETS_BASE_PATH =
-  process.env.NODE_ENV === 'development'
-    ? 'http://localhost:3001/assets/fonts'
-    : 'https://assets.standardnotes.com/fonts'
+export const FONT_ASSETS_BASE_PATH = '/assets/fonts'
 export const FALLBACK_FONT_FAMILY = FontFamily.Helvetica
 export const MONOSPACE_FONT_FAMILY = FontFamily.Courier
 

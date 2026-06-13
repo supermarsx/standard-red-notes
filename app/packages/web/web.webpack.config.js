@@ -15,6 +15,7 @@ module.exports = (env) => {
   const copyPluginPatterns = [
     { from: 'src/favicon', to: 'favicon' },
     { from: 'src/vendor', to: 'dist' },
+    { from: 'src/fonts', to: 'assets/fonts' },
     { from: 'src/404.html' },
     { from: 'src/422.html' },
     { from: 'src/500.html' },

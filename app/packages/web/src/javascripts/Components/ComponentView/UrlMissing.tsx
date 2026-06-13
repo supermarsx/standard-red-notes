@@ -13,7 +13,7 @@ const UrlMissing: FunctionComponent<Props> = ({ componentName }) => {
             <div className={'sk-panel-section-title'}>This extension is missing its URL property.</div>
             <p>In order to access your note immediately, please switch from {componentName} to the Plain Editor.</p>
             <br />
-            <p>Please contact help@standardnotes.com to remedy this issue.</p>
+            <p>Please contact your administrator to remedy this issue.</p>
           </div>
         </div>
       </div>

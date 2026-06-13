@@ -167,19 +167,19 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
     <>
       <div className="mb-3 px-3 text-sm">
         {
-          // translator: Full sentence: "Because your notes are encrypted using your password, Standard Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
+          // translator: Full sentence: "Because your notes are encrypted using your password, Standard Red Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
           c('Info').t`Because your notes are encrypted using your password,`
         }{' '}
         {
           <span className="text-danger">
             {
-              // translator: Full sentence: "Because your notes are encrypted using your password, Standard Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
-              c('Info').t`Standard Notes does not have a password reset option`
+              // translator: Full sentence: "Because your notes are encrypted using your password, Standard Red Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
+              c('Info').t`Standard Red Notes does not have a password reset option`
             }
           </span>
         }
         {
-          // translator: Full sentence: "Because your notes are encrypted using your password, Standard Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
+          // translator: Full sentence: "Because your notes are encrypted using your password, Standard Red Notes does not have a password reset option. If you forget your password, you will permanently lose access to your data."
           c('Info').t`. If you forget your password, you will permanently lose access to your data.`
         }
       </div>

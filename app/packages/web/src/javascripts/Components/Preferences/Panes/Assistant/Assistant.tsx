@@ -164,7 +164,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           <Text className="mt-2">
             {connectionMode === 'direct'
               ? 'In Direct mode the browser talks straight to the OpenAI-compatible endpoint you configure below (e.g. LM Studio, Ollama, OpenRouter, OpenAI, or any custom server). Your API key, if any, is stored in your encrypted synced preferences and sent only to that endpoint.'
-              : 'In Server proxy mode your Standard Notes server relays one model turn at a time to the AI provider using a server-held API key.'}
+              : 'In Server proxy mode your Standard Red Notes server relays one model turn at a time to the AI provider using a server-held API key.'}
           </Text>
 
           <HorizontalSeparator classes="my-4" />

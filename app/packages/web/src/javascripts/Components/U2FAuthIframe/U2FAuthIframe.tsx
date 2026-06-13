@@ -4,8 +4,9 @@ import { startAuthentication } from '@simplewebauthn/browser'
 import { log, LoggingDomain } from '@/Logging'
 
 /**
- * An iframe for use in the desktop and mobile application that allows them to load app.standardnotes.com to perform
- * U2F authentication. Web applications do not need this iframe, as they can perform U2F authentication directly.
+ * An iframe for use in the desktop and mobile application that allows them to load this app's own origin to
+ * perform U2F authentication. Web applications do not need this iframe, as they can perform U2F authentication
+ * directly.
  */
 const U2FAuthIframe = () => {
   const [username, setUsername] = useState('')

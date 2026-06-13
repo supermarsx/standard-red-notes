@@ -11,7 +11,7 @@ export const PREFERENCES_MENU_ITEMS: PreferencesMenuItem[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard', order: 8 },
   { id: 'plugins', label: 'Plugins', icon: 'dashboard', order: 8 },
   { id: 'accessibility', label: 'Accessibility', icon: 'accessibility', order: 9 },
-  { id: 'help-feedback', label: 'Help & feedback', icon: 'help', order: 11 },
+  { id: 'help-feedback', label: 'Documentation', icon: 'help', order: 11 },
 ]
 
 export const READY_PREFERENCES_MENU_ITEMS: PreferencesMenuItem[] = [
@@ -23,5 +23,5 @@ export const READY_PREFERENCES_MENU_ITEMS: PreferencesMenuItem[] = [
   { id: 'appearance', label: 'Appearance', icon: 'themes', order: 6 },
   { id: 'assistant', label: 'Assistant', icon: 'dashboard', order: 7 },
   { id: 'plugins', label: 'Plugins', icon: 'dashboard', order: 8 },
-  { id: 'help-feedback', label: 'Help & feedback', icon: 'help', order: 11 },
+  { id: 'help-feedback', label: 'Documentation', icon: 'help', order: 11 },
 ]

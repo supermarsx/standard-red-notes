@@ -42,7 +42,7 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
     case 'accessibility':
       return null
     case 'help-feedback':
-      return <HelpAndFeedback application={application} />
+      return <HelpAndFeedback />
     case 'whats-new':
       return <WhatsNew application={application} />
     default:

@@ -262,6 +262,6 @@ export const createNoteExport = async (
 
   return {
     blob: zippedBlob,
-    fileName: `Standard Notes Export - ${application.archiveService.formattedDateForExports()}.zip`,
+    fileName: `Standard Red Notes Export - ${application.archiveService.formattedDateForExports()}.zip`,
   }
 }

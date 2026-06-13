@@ -18,14 +18,6 @@ const User = () => {
             {c('Error')
               .t`Hmm...we can't seem to sync your account. The reason: ${application.syncStatusController.errorMessage}`}
           </div>
-          <a
-            className="sk-a info-contrast sk-bold sk-panel-row"
-            href="https://standardnotes.com/help"
-            rel="noopener"
-            target="_blank"
-          >
-            {c('Action').t`Need help?`}
-          </a>
         </div>
       )}
       <div className="sk-panel-row">

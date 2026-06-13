@@ -24,7 +24,6 @@ import ConfirmDeleteAccountContainer from '@/Components/ConfirmDeleteAccountModa
 import ApplicationProvider from '../ApplicationProvider'
 import KeyboardServiceProvider from '../KeyboardServiceProvider'
 import PanesSystemComponent from '../Panes/PanesSystemComponent'
-import DotOrgNotice from './DotOrgNotice'
 import LinkingControllerProvider from '@/Controllers/LinkingControllerProvider'
 import ImportModal from '../ImportModal/ImportModal'
 import IosKeyboardClose from '../IosKeyboardClose/IosKeyboardClose'
@@ -299,7 +298,6 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                     <SuperExportModal />
                     <CommandPalette />
                   </>
-                  {application.routeService.isDotOrg && <DotOrgNotice />}
                   {isIOS() && <IosKeyboardClose />}
                 </div>
               </LinkingControllerProvider>

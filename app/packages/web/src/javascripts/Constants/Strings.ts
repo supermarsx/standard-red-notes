@@ -7,7 +7,7 @@ export const STRING_SESSION_EXPIRED = () =>
   c('Error').t`Your session has expired. New changes will not be pulled in. Please sign in to refresh your session.`
 export const STRING_DEFAULT_FILE_ERROR = () =>
   c('Error')
-    .t`Please use FileSafe or the Bold Editor to attach images and files. Learn more at standardnotes.com/filesafe.`
+    .t`Please use the Bold Editor to attach images and files.`
 export const STRING_GENERIC_SYNC_ERROR = () =>
   c('Error').t`There was an error syncing. Please try again. If all else fails, try signing out and signing back in.`
 export function StringSyncException(data: unknown) {
@@ -102,7 +102,7 @@ export const STRING_CONFIRM_APP_QUIT_DURING_PASSCODE_REMOVAL =
 export const STRING_UPGRADE_ACCOUNT_CONFIRM_TITLE = () => c('Title').t`Encryption upgrade available`
 export const STRING_UPGRADE_ACCOUNT_CONFIRM_TEXT = () =>
   c('Info')
-    .t`Encryption version 004 is available. This version strengthens the encryption algorithms your account and local storage use. To learn more about this upgrade, visit our <a href="https://standardnotes.com/help/security" target="_blank">Security Upgrade page.</a>`
+    .t`Encryption version 004 is available. This version strengthens the encryption algorithms your account and local storage use.`
 export const STRING_UPGRADE_ACCOUNT_CONFIRM_BUTTON = () => c('Action').t`Upgrade`
 
 export const STRING_REMOVE_OFFLINE_KEY_CONFIRMATION = 'This will delete the previously saved offline key.'

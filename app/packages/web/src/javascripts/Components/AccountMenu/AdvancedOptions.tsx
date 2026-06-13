@@ -127,14 +127,6 @@ const AdvancedOptions: FunctionComponent<Props> = ({
                 disabled={disabled || isRecoveryCodes}
                 onChange={handleIsPrivateUsernameChange}
               />
-              <a
-                href="https://standardnotes.com/help/80"
-                target="_blank"
-                rel="noopener noreferrer"
-                title={c('Action').t`Learn more`}
-              >
-                <Icon type="info" className="text-neutral" />
-              </a>
             </div>
 
             {isPrivateUsername && (
@@ -162,14 +154,6 @@ const AdvancedOptions: FunctionComponent<Props> = ({
                   disabled={disabled || isRecoveryCodes}
                   onChange={handleStrictSigninChange}
                 />
-                <a
-                  href="https://standardnotes.com/help/security"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={c('Action').t`Learn more`}
-                >
-                  <Icon type="info" className="text-neutral" />
-                </a>
               </div>
             )}
 

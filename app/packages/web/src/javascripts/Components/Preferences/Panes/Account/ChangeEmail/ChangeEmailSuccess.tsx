@@ -7,7 +7,7 @@ const ChangeEmailSuccess: FunctionComponent = () => {
       <div className={'mb-2 font-bold text-info'}>{c('Info').t`Your email has been successfully changed.`}</div>
       <p>
         {c('Info')
-          .t`Please ensure you are running the latest version of Standard Notes on all platforms to ensure maximum compatibility.`}
+          .t`Please ensure you are running the latest version of Standard Red Notes on all platforms to ensure maximum compatibility.`}
       </p>
     </div>
   )
