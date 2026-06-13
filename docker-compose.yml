@@ -14,11 +14,15 @@ x-server-env: &server-env
   # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
   AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
   VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-dev-valet-token-secret-change-me}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
   STANDARD_RED_FULL_FEATURE_DURATION_DAYS: ${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
   STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT: ${STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT:--1}
   PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:3125}
+  # Self-hosted realtime WebSocket gateway (replaces AWS API Gateway push).
+  WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://websocket-gateway:3106}
+  WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
   AUTH_SERVER_U2F_RELYING_PARTY_ID: ${AUTH_SERVER_U2F_RELYING_PARTY_ID:-localhost}
   AUTH_SERVER_U2F_RELYING_PARTY_NAME: ${AUTH_SERVER_U2F_RELYING_PARTY_NAME:-Standard Red Notes}
   AUTH_SERVER_U2F_EXPECTED_ORIGIN: ${AUTH_SERVER_U2F_EXPECTED_ORIGIN:-http://localhost:3001,http://localhost}
@@ -82,6 +86,27 @@ services:
       timeout: 5s
       retries: 10
       start_period: 90s
+    networks:
+      - standard-red-notes
+
+  websocket-gateway:
+    build:
+      context: .
+      dockerfile: websocket-gateway/Dockerfile
+    image: standard-red-notes/websocket-gateway:local
+    restart: unless-stopped
+    environment:
+      PORT: 3106
+      REDIS_HOST: cache
+      REDIS_PORT: 6379
+      WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
+      WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
+      WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
+    depends_on:
+      cache:
+        condition: service_healthy
+    ports:
+      - "${WEBSOCKET_PORT:-3106}:3106"
     networks:
       - standard-red-notes
 

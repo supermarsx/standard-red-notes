@@ -7828,6 +7828,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/api-gateway", "workspace:packages/api-gateway"],\
           ["@standardnotes/auth-server", "workspace:packages/auth"],\
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\
+          ["@standardnotes/domain-events", "workspace:packages/domain-events"],\
           ["@standardnotes/domain-events-infra", "workspace:packages/domain-events-infra"],\
           ["@standardnotes/files-server", "workspace:packages/files"],\
           ["@standardnotes/home-server", "workspace:packages/home-server"],\
@@ -7844,6 +7845,7 @@ const RAW_RUNTIME_STATE =
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.0"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch::version=6.5.0&hash=0e0828"],\
+          ["ioredis", "npm:5.11.0"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["winston", "npm:3.19.0"]\

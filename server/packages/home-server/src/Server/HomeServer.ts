@@ -19,6 +19,7 @@ import { PassThrough } from 'stream'
 import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
+import { WebSocketRedisBridge } from './WebSocketRedisBridge'
 
 export class HomeServer implements HomeServerInterface {
   private serverInstance: http.Server | undefined
@@ -56,6 +57,16 @@ export class HomeServer implements HomeServerInterface {
         : '50mb'
 
       this.configureLoggers(env, configuration)
+
+      // Bridge in-process WEB_SOCKET_MESSAGE_REQUESTED events onto Redis pub/sub
+      // so the self-hosted WebSocket gateway can push them to live clients.
+      directCallDomainEventPublisher.register(
+        new WebSocketRedisBridge(
+          winston.loggers.get('home-server'),
+          env.get('REDIS_HOST', true) || undefined,
+          env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+        ),
+      )
 
       const apiGatewayService = new ApiGatewayService(serviceContainer)
       const authService = new AuthService(serviceContainer, controllerContainer, directCallDomainEventPublisher)

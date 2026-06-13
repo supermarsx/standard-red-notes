@@ -146,12 +146,42 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     })
   }
 
-  async callWebSocketServer(_request: Request, response: Response, _methodIdentifier: string): Promise<void> {
-    response.status(400).send({
-      error: {
-        message: 'Websockets server is not available.',
-      },
-    })
+  async callWebSocketServer(_request: Request, response: Response, methodIdentifier: string): Promise<void> {
+    const webSocketServerUrl = process.env.WEB_SOCKET_SERVER_URL
+    const locals = response.locals as ResponseLocals
+
+    // Only the connection-token endpoint is relevant to the self-hosted gateway;
+    // the AWS $connect/$disconnect registration endpoints are unused because the
+    // gateway's ws server manages connection lifecycle directly.
+    const isTokenRequest = methodIdentifier.toLowerCase().includes('token')
+
+    if (!webSocketServerUrl || !isTokenRequest || !locals.user?.uuid || !locals.session?.uuid) {
+      response.status(400).send({
+        error: {
+          message: 'Websockets server is not available.',
+        },
+      })
+      return
+    }
+
+    try {
+      const upstream = await fetch(`${webSocketServerUrl.replace(/\/$/, '')}/sockets/tokens`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-internal-secret': process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? '',
+        },
+        body: JSON.stringify({ userUuid: locals.user.uuid, sessionUuid: locals.session.uuid }),
+      })
+      const data = (await upstream.json()) as Record<string, unknown>
+      response.status(upstream.status).send(data)
+    } catch (_error) {
+      response.status(502).send({
+        error: {
+          message: 'Could not reach the websockets gateway.',
+        },
+      })
+    }
   }
 
   private sendDecoratedResponse(

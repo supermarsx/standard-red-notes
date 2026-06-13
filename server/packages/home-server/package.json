@@ -29,6 +29,7 @@
     "@standardnotes/api-gateway": "workspace:^",
     "@standardnotes/auth-server": "workspace:^",
     "@standardnotes/domain-core": "workspace:^",
+    "@standardnotes/domain-events": "workspace:^",
     "@standardnotes/domain-events-infra": "workspace:^",
     "@standardnotes/files-server": "workspace:^",
     "@standardnotes/revisions-server": "workspace:^",
@@ -40,6 +41,7 @@
     "helmet": "^8.2.0",
     "inversify": "^8.1.0",
     "inversify-express-utils": "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch",
+    "ioredis": "^5.11.0",
     "reflect-metadata": "^0.2.2",
     "winston": "^3.19.0"
   },
