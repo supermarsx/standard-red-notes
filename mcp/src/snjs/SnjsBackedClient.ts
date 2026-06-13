@@ -18,12 +18,18 @@ export interface FullNote {
   title: string
   body: string
   tags: string[]
+  vault?: string
   createdAt: string
   updatedAt: string
 }
 export interface TagSummary {
   uuid: string
   title: string
+}
+export interface VaultSummary {
+  uuid: string
+  name: string
+  shared: boolean
 }
 
 function iso(d: unknown): string {
@@ -126,14 +132,42 @@ export class SnjsBackedClient {
 
   async readNote(uuid: string): Promise<FullNote> {
     const note = this.noteByUuid(uuid)
+    const vault = this.app.vaults.getItemVault(note)
     return {
       uuid: note.uuid,
       title: note.title ?? '',
       body: note.text ?? '',
       tags: this.tagsForNote(note),
+      vault: vault?.name,
       createdAt: iso(note.created_at),
       updatedAt: updatedAtIso(note),
     }
+  }
+
+  // --- vaults ------------------------------------------------------------
+
+  async listVaults(): Promise<VaultSummary[]> {
+    await this.headless.sync()
+    return this.app.vaults.getVaults().map((v: any) => ({
+      uuid: v.uuid,
+      name: v.name ?? '',
+      shared: v.isSharedVaultListing?.() ?? false,
+    }))
+  }
+
+  async createVault(name: string, description?: string): Promise<VaultSummary> {
+    this.requireWrites('vaults.create')
+    const vault = await this.app.vaults.createRandomizedVault({ name, description, iconString: '🔒' })
+    await this.headless.sync()
+    return { uuid: vault.uuid, name: vault.name ?? name, shared: vault.isSharedVaultListing?.() ?? false }
+  }
+
+  private vaultByUuid(uuid: string): any {
+    const vault = this.app.vaults.getVaults().find((v: any) => v.uuid === uuid)
+    if (!vault) {
+      throw new Error(`vault not found: ${uuid}`)
+    }
+    return vault
   }
 
   private async resolveTag(title: string): Promise<any> {
@@ -144,17 +178,39 @@ export class SnjsBackedClient {
     return this.app.mutator.createTagOrSmartView(title)
   }
 
-  async createNote(input: { title: string; body: string; tags: string[] }): Promise<{ uuid: string; title: string }> {
+  async createNote(input: {
+    title: string
+    body: string
+    tags: string[]
+    vault?: string
+  }): Promise<{ uuid: string; title: string }> {
     this.requireWrites('notes.create')
     const note = await this.app.mutator.createItem(
       ContentType.TYPES.Note,
       { title: input.title, text: input.body, references: [] },
       false,
     )
-    for (const tagTitle of input.tags ?? []) {
-      const tag = await this.resolveTag(tagTitle)
-      await this.app.mutator.addTagToNote(note, tag, false)
+
+    // A vault item may only link to items in the same vault, so move the note
+    // into the vault BEFORE linking tags, and co-locate each tag in that vault.
+    let vault: any
+    if (input.vault) {
+      vault = this.vaultByUuid(input.vault)
+      const moved = await this.app.vaults.moveItemToVault(vault, this.noteByUuid(note.uuid))
+      if (moved?.isFailed?.()) {
+        throw new Error(`failed to move note into vault: ${moved.getError?.() ?? 'unknown'}`)
+      }
     }
+
+    for (const tagTitle of input.tags ?? []) {
+      let tag = await this.resolveTag(tagTitle)
+      if (vault && !this.app.vaults.isItemInVault(tag)) {
+        const movedTag = await this.app.vaults.moveItemToVault(vault, tag)
+        tag = movedTag?.getValue?.() ?? tag
+      }
+      await this.app.mutator.addTagToNote(this.noteByUuid(note.uuid), tag, false)
+    }
+
     await this.headless.sync()
     return { uuid: note.uuid, title: input.title }
   }

@@ -103,6 +103,8 @@ services:
       STANDARD_RED_NOTES_MFA_CODE: ${STANDARD_RED_NOTES_MFA_CODE:-}
       STANDARD_RED_NOTES_ALLOW_WRITES: ${STANDARD_RED_NOTES_ALLOW_WRITES:-0}
       STANDARD_RED_NOTES_ALLOW_REGISTER: ${STANDARD_RED_NOTES_ALLOW_REGISTER:-0}
+      # Continuous background sync so the agent picks up collaborators' changes.
+      STANDARD_RED_NOTES_SYNC_INTERVAL_MS: ${STANDARD_RED_NOTES_SYNC_INTERVAL_MS:-10000}
     volumes:
       - mcp-data:/var/lib/standard-red-notes-mcp
     depends_on:

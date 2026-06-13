@@ -16,6 +16,9 @@ const mfaCode = process.env.STANDARD_RED_NOTES_MFA_CODE;
 const dataDir =
   process.env.STANDARD_RED_NOTES_DATA_DIR ?? "/var/lib/standard-red-notes-mcp";
 const allowRegister = process.env.STANDARD_RED_NOTES_ALLOW_REGISTER === "1";
+const syncIntervalMs = process.env.STANDARD_RED_NOTES_SYNC_INTERVAL_MS
+  ? Number(process.env.STANDARD_RED_NOTES_SYNC_INTERVAL_MS)
+  : 10_000;
 
 let headless: HeadlessApp | undefined;
 let client: SnjsBackedClient | undefined;
@@ -39,6 +42,7 @@ function getClient(): Promise<SnjsBackedClient> {
         dataDir,
         mfaCode,
         password,
+        syncIntervalMs,
       });
       if (!headless.isSignedIn()) {
         if (allowRegister) {
@@ -49,6 +53,9 @@ function getClient(): Promise<SnjsBackedClient> {
       } else {
         await headless.sync();
       }
+      // Continuously pick up collaborators' changes (shared vaults, other
+      // sessions) without waiting for the next tool call.
+      headless.startSyncLoop();
       client = new SnjsBackedClient(headless, { allowWrites, baseUrl: serverUrl });
       return client;
     })();
@@ -191,11 +198,15 @@ server.registerTool(
       title: z.string().min(1),
       body: z.string().default(""),
       tags: z.array(z.string()).default([]),
+      vault: z
+        .string()
+        .optional()
+        .describe("Optional vault UUID to place the note in (use vaults.list)."),
     },
     outputSchema: { uuid: z.string(), title: z.string() },
   },
-  async ({ title, body, tags }) => {
-    const created = await (await getClient()).createNote({ title, body, tags });
+  async ({ title, body, tags, vault }) => {
+    const created = await (await getClient()).createNote({ title, body, tags, vault });
     return {
       content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
       structuredContent: created as unknown as Record<string, unknown>,
@@ -257,6 +268,49 @@ server.registerTool(
     return {
       content: [{ type: "text", text: JSON.stringify({ tags }, null, 2) }],
       structuredContent: { tags },
+    };
+  },
+);
+
+server.registerTool(
+  "vaults.list",
+  {
+    title: "List Vaults",
+    description:
+      "List vaults in the account (UUID, name, and whether it is a shared/collaborative vault).",
+    inputSchema: {},
+    outputSchema: {
+      vaults: z.array(
+        z.object({ uuid: z.string(), name: z.string(), shared: z.boolean() }),
+      ),
+    },
+  },
+  async () => {
+    const vaults = await (await getClient()).listVaults();
+    return {
+      content: [{ type: "text", text: JSON.stringify({ vaults }, null, 2) }],
+      structuredContent: { vaults },
+    };
+  },
+);
+
+server.registerTool(
+  "vaults.create",
+  {
+    title: "Create Vault",
+    description:
+      "Create a new vault (for grouping/collaborating on notes). Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+    inputSchema: {
+      name: z.string().min(1),
+      description: z.string().optional(),
+    },
+    outputSchema: { uuid: z.string(), name: z.string(), shared: z.boolean() },
+  },
+  async ({ name, description }) => {
+    const vault = await (await getClient()).createVault(name, description);
+    return {
+      content: [{ type: "text", text: JSON.stringify(vault, null, 2) }],
+      structuredContent: vault as unknown as Record<string, unknown>,
     };
   },
 );

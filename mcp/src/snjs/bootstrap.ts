@@ -43,6 +43,12 @@ export interface BootstrapOptions {
   mfaCode?: string
   /** Account password, supplied to protection/re-auth challenges. */
   password?: string
+  /**
+   * Continuous background sync interval (ms). When > 0 the bridge keeps syncing
+   * on a timer so it picks up collaborators' changes (e.g. in a shared vault)
+   * without waiting for a tool call. 0 disables the loop. Default 10000.
+   */
+  syncIntervalMs?: number
 }
 
 export interface HeadlessApp {
@@ -51,6 +57,8 @@ export interface HeadlessApp {
   signIn(email: string, password: string, mfaCode?: string): Promise<void>
   isSignedIn(): boolean
   sync(): Promise<void>
+  /** Begin continuous background sync (idempotent). Call after sign-in. */
+  startSyncLoop(): void
   deinit(): Promise<void>
 }
 
@@ -96,8 +104,33 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
 
   await app.launch(true)
 
-  return {
+  const syncIntervalMs = options.syncIntervalMs ?? 10_000
+  let syncTimer: NodeJS.Timeout | undefined
+  let syncing = false
+
+  const result: HeadlessApp = {
     app,
+
+    startSyncLoop(): void {
+      if (syncTimer || syncIntervalMs <= 0) {
+        return
+      }
+      syncTimer = setInterval(() => {
+        // Skip if a sync is already in flight or we aren't signed in yet.
+        if (syncing || !result.isSignedIn()) {
+          return
+        }
+        syncing = true
+        void app.sync
+          .sync({ sourceDescription: 'mcp-bridge-loop' })
+          .catch(() => {})
+          .finally(() => {
+            syncing = false
+          })
+      }, syncIntervalMs)
+      // Don't keep the process alive solely for the heartbeat.
+      syncTimer.unref?.()
+    },
 
     async register(email: string, pw: string): Promise<void> {
       password = pw
@@ -129,8 +162,14 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
     },
 
     async deinit(): Promise<void> {
+      if (syncTimer) {
+        clearInterval(syncTimer)
+        syncTimer = undefined
+      }
       await app.prepareForDeinit?.()
       app.deinit?.(1)
     },
   }
+
+  return result
 }
