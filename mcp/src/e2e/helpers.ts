@@ -19,9 +19,12 @@ export function check(name: string, cond: boolean): void {
     failures++
   }
 }
-export function finish(): never {
+export function finish(): void {
   console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
-  process.exit(failures === 0 ? 0 : 1)
+  // Delay the exit so any closing async handles (sockets, child-process stdio)
+  // finish closing first — calling process.exit() mid-close trips a libuv
+  // UV_HANDLE_CLOSING assertion (abort -> bogus non-zero code) on Node/Windows.
+  setTimeout(() => process.exit(failures === 0 ? 0 : 1), 400)
 }
 
 export async function serverUp(): Promise<boolean> {
