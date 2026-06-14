@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "e2e": "node e2e/realtime.e2e.mjs && node e2e/collab.e2e.mjs && node e2e/collab-yjs.e2e.mjs",
+    "e2e:browser": "node e2e/browser.e2e.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\""
   },
@@ -24,6 +25,7 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^25.9.1",
     "@types/ws": "^8.5.13",
+    "playwright": "^1.60.0",
     "prettier": "^3.8.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
