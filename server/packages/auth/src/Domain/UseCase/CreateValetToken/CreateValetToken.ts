@@ -32,22 +32,6 @@ export class CreateValetToken implements UseCaseInterface {
     const sharedSubscription = await this.getEligibleSharedSubscription(userUuid)
     const ownersRegularSubscription = await this.getSharedOwnersRegularSubscription(sharedSubscription)
     const mostRecentSubscription = await this.getMostRecentSubscription(dto.userUuid, ownersRegularSubscription)
-    if (mostRecentSubscription === undefined) {
-      return {
-        success: false,
-        reason: 'no-subscription',
-      }
-    }
-    const regularSubscription = mostRecentSubscription
-
-    if (regularSubscription.endsAt < currentTimestamp) {
-      return {
-        success: false,
-        reason: 'expired-subscription',
-      }
-    }
-    const selectedSharedSubscription =
-      ownersRegularSubscription?.uuid === regularSubscription.uuid ? sharedSubscription : undefined
 
     if (!this.isValidWritePayload(payload)) {
       return {
@@ -55,6 +39,30 @@ export class CreateValetToken implements UseCaseInterface {
         reason: 'invalid-parameters',
       }
     }
+
+    // Single-tier, fully-free instance: an account without an active subscription
+    // is granted UNLIMITED file storage (uploadBytesLimit = -1) instead of being
+    // blocked. The valet token is HMAC-signed and self-contained, so the
+    // files-server trusts the limit without a backing subscription record.
+    if (mostRecentSubscription === undefined || mostRecentSubscription.endsAt < currentTimestamp) {
+      const freeTokenData: ValetTokenData = {
+        userUuid: dto.userUuid,
+        permittedOperation: dto.operation,
+        permittedResources: dto.resources,
+        uploadBytesUsed: 0,
+        uploadBytesLimit: -1,
+        sharedSubscriptionUuid: undefined,
+        regularSubscriptionUuid: `free-${dto.userUuid}`,
+      }
+      return {
+        success: true,
+        valetToken: this.tokenEncoder.encodeExpirableToken(freeTokenData, this.valetTokenTTL),
+      }
+    }
+
+    const regularSubscription = mostRecentSubscription
+    const selectedSharedSubscription =
+      ownersRegularSubscription?.uuid === regularSubscription.uuid ? sharedSubscription : undefined
 
     let uploadBytesUsed = 0
     const uploadBytesUsedSettingOrError = await this.getSubscriptionSetting.execute({
