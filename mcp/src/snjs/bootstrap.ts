@@ -59,6 +59,8 @@ export interface HeadlessApp {
   sync(): Promise<void>
   /** Begin continuous background sync (idempotent). Call after sign-in. */
   startSyncLoop(): void
+  /** How many MFA/2FA challenges snjs has raised (e.g. during sign-in). */
+  getMfaChallengeCount(): number
   deinit(): Promise<void>
 }
 
@@ -81,20 +83,51 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
 
   let password = options.password
   const mfaCode = options.mfaCode
+  let mfaChallengeCount = 0
+  // For self-hosted magic-link 2FA the one-time code is fetched on demand (the
+  // server returns it on-screen when SMTP isn't configured) and supplied to the
+  // sign-in MFA challenge.
+  let dynamicMfaCode: string | undefined
+
+  async function fetchMagicLinkCode(email: string): Promise<string | undefined> {
+    try {
+      const res = await fetch(`${options.serverUrl.replace(/\/$/, '')}/v1/mfa/magic-link/request`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { code?: string; data?: { code?: string } }
+      return body.code ?? body.data?.code
+    } catch {
+      return undefined
+    }
+  }
 
   // Respond to any challenge snjs raises during launch / protected operations.
-  // For a headless bridge the only credentials we can supply are the account
-  // password and an optional TOTP code from the environment.
+  // For a headless bridge the credentials we can supply are the account password,
+  // an optional static TOTP code, and — for self-hosted magic-link 2FA — the
+  // one-time code the server surfaces in the challenge heading ("...verification
+  // code is: 123456"), which a headless agent reads on-screen.
   await app.prepareForLaunch({
     receiveChallenge: (challenge: any) => {
       if (process.env.MCP_DEBUG_CHALLENGES) {
         // eslint-disable-next-line no-console
-        console.error('[snjs challenge]', challenge.reason, JSON.stringify((challenge.prompts ?? []).map((p: any) => p.title)))
+        console.error('[snjs challenge]', challenge.reason, challenge.heading, JSON.stringify((challenge.prompts ?? []).map((p: any) => p.title)))
       }
+      const onScreenCode = String(challenge.heading ?? '').match(/\b(\d{4,8})\b/)?.[1]
+      const code = mfaCode ?? dynamicMfaCode ?? onScreenCode ?? ''
       const values = (challenge.prompts ?? []).map((prompt: any) => {
         const title = String(prompt.title ?? '').toLowerCase()
-        if (title.includes('authentication') || title.includes('code') || title.includes('2fa')) {
-          return CreateChallengeValue(prompt, mfaCode ?? '')
+        if (
+          title.includes('authentication') ||
+          title.includes('code') ||
+          title.includes('2fa') ||
+          title.includes('mfa') ||
+          title.includes('two-factor') ||
+          title.includes('verification')
+        ) {
+          mfaChallengeCount += 1
+          return CreateChallengeValue(prompt, code)
         }
         return CreateChallengeValue(prompt, password ?? '')
       })
@@ -142,6 +175,10 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
 
     async signIn(email: string, pw: string, code?: string): Promise<void> {
       password = pw
+      // If no static TOTP code was given, pre-fetch a magic-link one-time code so
+      // the bridge can satisfy a magic-link 2FA challenge headlessly. Harmless if
+      // the account has no MFA (the code simply goes unused).
+      dynamicMfaCode = (code ?? mfaCode) ? undefined : await fetchMagicLinkCode(email)
       const response = await app.signIn(email, pw, false, false, true, true, code)
       const error = response?.data?.error ?? response?.error
       if (error) {
@@ -155,6 +192,10 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
 
     isSignedIn(): boolean {
       return Boolean(app.hasAccount?.() ?? app.getUser?.())
+    },
+
+    getMfaChallengeCount(): number {
+      return mfaChallengeCount
     },
 
     async sync(): Promise<void> {
