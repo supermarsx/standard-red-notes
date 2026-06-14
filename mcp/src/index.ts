@@ -175,6 +175,7 @@ server.registerTool(
       title: z.string(),
       body: z.string(),
       tags: z.array(z.string()),
+      vault: z.string().optional(),
       createdAt: z.string(),
       updatedAt: z.string(),
     },
