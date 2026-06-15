@@ -15,6 +15,7 @@ const NoteImportTypeColors: Record<string, string> = {
   plaintext: 'bg-default border border-border',
   html: 'bg-accessory-tint-2',
   super: 'bg-accessory-tint-1 text-accessory-tint-1',
+  'standard-notes-backup': 'bg-info text-info-contrast',
 }
 
 const NoteImportTypeIcons: Record<string, string> = {
@@ -25,6 +26,7 @@ const NoteImportTypeIcons: Record<string, string> = {
   plaintext: 'plain-text',
   html: 'rich-text',
   super: 'file-doc',
+  'standard-notes-backup': 'archive',
 }
 
 const countSuccessfulItemsByGroup = (successful: ConversionResult['successful']) => {
@@ -203,6 +205,7 @@ const ImportModalFileItem = ({
                   <option value="plaintext">Plaintext</option>
                   <option value="html">HTML</option>
                   <option value="super">Super</option>
+                  <option value="standard-notes-backup">Standard Red Notes Backup</option>
                 </select>
                 <button
                   aria-label={c('AriaLabel').t`Choose service`}

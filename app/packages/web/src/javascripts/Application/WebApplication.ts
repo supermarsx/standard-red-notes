@@ -69,6 +69,7 @@ import { AccountMenuController } from '@/Controllers/AccountMenu/AccountMenuCont
 import { PreferencesController } from '@/Controllers/PreferencesController'
 import { NotesController } from '@/Controllers/NotesController/NotesController'
 import { ImportModalController } from '@/Components/ImportModal/ImportModalController'
+import { ExportModalController } from '@/Controllers/ExportModal/ExportModalController'
 import { SyncStatusController } from '@/Controllers/SyncStatusController'
 import { HistoryModalController } from '@/Controllers/NoteHistory/HistoryModalController'
 import { NavigationController } from '@/Controllers/Navigation/NavigationController'
@@ -622,6 +623,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   get importModalController(): ImportModalController {
     return this.deps.get<ImportModalController>(Web_TYPES.ImportModalController)
+  }
+
+  get exportModalController(): ExportModalController {
+    return this.deps.get<ExportModalController>(Web_TYPES.ExportModalController)
   }
 
   get navigationController(): NavigationController {

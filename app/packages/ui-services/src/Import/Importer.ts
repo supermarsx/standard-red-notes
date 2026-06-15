@@ -34,6 +34,25 @@ import { ContentType } from '@standardnotes/domain-core'
 const BytesInOneMegabyte = 1_000_000
 const NoteSizeThreshold = 3 * BytesInOneMegabyte
 
+/** Import-type id for a native Standard Notes backup file (decrypted or encrypted). */
+export const StandardNotesBackupImportType = 'standard-notes-backup'
+
+/** True if the text content is a native Standard Notes backup file (has an items array). */
+export function isStandardNotesBackupContent(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { items?: unknown }
+    return (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Array.isArray(parsed.items) &&
+      (parsed.items.length === 0 ||
+        (typeof parsed.items[0] === 'object' && parsed.items[0] !== null && 'content_type' in (parsed.items[0] as object)))
+    )
+  } catch {
+    return false
+  }
+}
+
 export class Importer {
   converters: Set<Converter> = new Set()
 
@@ -60,6 +79,12 @@ export class Importer {
     },
     private _generateUuid: GenerateUuid,
     private files: FilesClientInterface,
+    /**
+     * Imports a native Standard Notes backup file via the app's ImportData use
+     * case (handles decrypted + encrypted backups, prompting for the password
+     * when needed). Injected by the host app since it needs the full application.
+     */
+    private importStandardNotesBackup?: (file: File) => Promise<ConversionResult>,
   ) {
     this.registerNativeConverters()
   }
@@ -79,6 +104,12 @@ export class Importer {
       return null
     }
     const content = await readFileAsText(file)
+
+    // A native Standard Notes backup takes priority over the generic converters
+    // (a .txt/.json backup could otherwise be mistaken for plaintext).
+    if (this.importStandardNotesBackup && isStandardNotesBackupContent(content)) {
+      return StandardNotesBackupImportType
+    }
 
     const { ext } = parseFileName(file.name)
 
@@ -231,6 +262,14 @@ export class Importer {
 
   async importFromFile(file: File, type: string): Promise<ConversionResult> {
     const canUseSuper = this.canUseSuper()
+
+    if (type === StandardNotesBackupImportType) {
+      if (!this.importStandardNotesBackup) {
+        throw new Error('Standard Notes backup import is not available')
+      }
+      assertImportFileWithinSizeLimit(file)
+      return this.importStandardNotesBackup(file)
+    }
 
     if (type === 'super' && !canUseSuper) {
       throw new Error('Importing Super notes requires a subscription')

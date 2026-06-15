@@ -33,6 +33,10 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
       </button>
       <div className="my-4 w-full text-center">{c('Info').t`or import from:`}</div>
       <div className="flex flex-wrap items-center justify-center gap-4">
+        <Button className="flex items-center !py-2" onClick={() => selectFiles('standard-notes-backup')}>
+          <Icon type="archive" className="mr-2 text-info" />
+          {c('ImportSource').t`Standard Red Notes Backup`}
+        </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('evernote')}>
           <Icon type="evernote" className="mr-2 text-[#14cc45]" />
           Evernote

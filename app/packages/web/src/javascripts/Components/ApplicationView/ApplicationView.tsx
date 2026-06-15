@@ -26,6 +26,7 @@ import KeyboardServiceProvider from '../KeyboardServiceProvider'
 import PanesSystemComponent from '../Panes/PanesSystemComponent'
 import LinkingControllerProvider from '@/Controllers/LinkingControllerProvider'
 import ImportModal from '../ImportModal/ImportModal'
+import ExportModal from '../ExportModal/ExportModal'
 import IosKeyboardClose from '../IosKeyboardClose/IosKeyboardClose'
 import EditorWidthSelectionModalWrapper from '../EditorWidthSelectionModal/EditorWidthSelectionModal'
 import { ProtectionEvent } from '@standardnotes/services'
@@ -294,6 +295,7 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                     <EditorWidthSelectionModalWrapper />
                     <ConfirmDeleteAccountContainer application={application} />
                     <ImportModal importModalController={application.importModalController} />
+                    <ExportModal exportModalController={application.exportModalController} />
                     <KeyboardShortcutsModal keyboardService={application.keyboardService} />
                     <SuperExportModal />
                     <CommandPalette />

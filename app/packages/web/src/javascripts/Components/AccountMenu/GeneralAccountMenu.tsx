@@ -167,6 +167,15 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
           )}
           <MenuItem
             onClick={() => {
+              application.exportModalController.setIsVisible(true)
+              application.accountMenuController.closeAccountMenu()
+            }}
+          >
+            <Icon type="download" className={iconClassName} />
+            {c('Action').t`Export`}
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
               application.importModalController.setIsVisible(true)
               application.accountMenuController.closeAccountMenu()
             }}

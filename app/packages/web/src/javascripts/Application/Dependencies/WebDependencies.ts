@@ -35,6 +35,7 @@ import { PurchaseFlowController } from '@/Controllers/PurchaseFlow/PurchaseFlowC
 import { FilesController } from '@/Controllers/FilesController'
 import { HistoryModalController } from '@/Controllers/NoteHistory/HistoryModalController'
 import { ImportModalController } from '@/Components/ImportModal/ImportModalController'
+import { ExportModalController } from '@/Controllers/ExportModal/ExportModalController'
 import { ApplicationEventObserver } from '@/Event/ApplicationEventObserver'
 import { SearchOptionsController } from '@/Controllers/SearchOptionsController'
 import { LinkingController } from '@/Controllers/LinkingController'
@@ -70,6 +71,27 @@ export class WebDependencies extends DependencyContainer {
         this.get<LinkingController>(Web_TYPES.LinkingController),
         application.generateUuid,
         application.files,
+        async (file: File) => {
+          // Import a native Standard Notes backup (decrypted or encrypted) via
+          // the ImportData use case, which prompts for the password if needed.
+          const data = JSON.parse(await file.text())
+          const version = data.version || data.keyParams?.version || data.auth_params?.version
+          if (version && !application.encryption.supportedVersions().includes(version)) {
+            throw new Error('Unsupported backup file version')
+          }
+          const result = await application.importData(data)
+          if (result.isFailed()) {
+            throw new Error(result.getError())
+          }
+          const value = result.getValue()
+          return {
+            successful: value.affectedItems,
+            errored: Array.from({ length: value.errorCount }, () => ({
+              name: 'item',
+              error: new Error('Failed to decrypt or import item'),
+            })),
+          }
+        },
       )
     })
 
@@ -382,6 +404,10 @@ export class WebDependencies extends DependencyContainer {
         this.get<CommandService>(Web_TYPES.CommandService),
         application.events,
       )
+    })
+
+    this.bind(Web_TYPES.ExportModalController, () => {
+      return new ExportModalController(application.events)
     })
 
     this.bind(Web_TYPES.ImportModalController, () => {
