@@ -47,13 +47,11 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     }
 
     const roles = await user.roles
-    const coreUserRole = roles.find((role) => role.name === RoleName.NAMES.CoreUser)
-    let hasContentLimit = false
-
-    if (coreUserRole) {
-      const permissions = await coreUserRole.permissions
-      hasContentLimit = permissions.find((permission) => permission.name === 'server:content-limit') !== undefined
-    }
+    // Single-tier, fully-free instance: every user is treated as Pro. No content
+    // size limit here, and projectRoles() below guarantees the Pro role so all
+    // role-gated server features (full revision history, unlimited shared vaults,
+    // etc.) are unlocked for everyone.
+    const hasContentLimit = false
 
     const sharedVaultAssociations = await this.sharedVaultUserRepository.findByUserUuid(
       Uuid.create(user.uuid).getValue(),
@@ -143,7 +141,14 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
   }
 
   private projectRoles(roles: Array<Role>): Array<{ uuid: string; name: string }> {
-    return roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
+    const projected = roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
+    // Single-tier, fully-free instance: guarantee every user carries the Pro role
+    // so role-gated server features (revision history beyond 30/365 days,
+    // shared-vault count limits, etc.) are unlocked for everyone.
+    if (!projected.some((role) => role.name === RoleName.NAMES.ProUser)) {
+      projected.push({ uuid: `singletier-${RoleName.NAMES.ProUser}`, name: RoleName.NAMES.ProUser })
+    }
+    return projected
   }
 
   // TODO: Eventually roll out all clients to use version 3
