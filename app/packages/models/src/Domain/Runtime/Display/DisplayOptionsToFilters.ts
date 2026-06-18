@@ -7,6 +7,22 @@ import { ItemFilter, ReferenceLookupCollection, SearchableDecryptedItem } from '
 import { NotesAndFilesDisplayOptions } from './DisplayOptions'
 import { SystemViewId } from '../../Syncable/SmartView'
 import { ContentType } from '@standardnotes/domain-core'
+import { SearchableItem } from './Search/SearchableItem'
+
+// Lives here (rather than in SearchUtilities) so SearchUtilities has no import
+// of computeFiltersForDisplayOptions — that edge formed a runtime circular
+// dependency between SearchUtilities <-> DisplayOptionsToFilters.
+export function notesAndFilesMatchingOptions(
+  options: NotesAndFilesDisplayOptions,
+  fromItems: SearchableDecryptedItem[],
+  collection: ReferenceLookupCollection,
+): SearchableItem[] {
+  const filters = computeFiltersForDisplayOptions(options, collection)
+
+  return fromItems.filter((item) => {
+    return itemPassesFilters(item, filters)
+  })
+}
 
 export function computeUnifiedFilterForDisplayOptions(
   options: NotesAndFilesDisplayOptions,

@@ -1,7 +1,7 @@
 import { createNoteWithContent } from '../../Utilities/Test/SpecUtils'
 import { ItemCollection } from '../Collection/Item/ItemCollection'
 import { SNNote } from '../../Syncable/Note/Note'
-import { notesAndFilesMatchingOptions } from './Search/SearchUtilities'
+import { notesAndFilesMatchingOptions } from './DisplayOptionsToFilters'
 import { NotesAndFilesDisplayOptions } from './DisplayOptions'
 
 describe('item display options', () => {

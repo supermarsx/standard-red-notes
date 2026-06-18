@@ -1,7 +1,5 @@
 import { ContentType } from '@standardnotes/domain-core'
 import { SNTag } from '../../../Syncable/Tag'
-import { NotesAndFilesDisplayOptions } from '../DisplayOptions'
-import { computeFiltersForDisplayOptions } from '../DisplayOptionsToFilters'
 import { SearchableItem } from './SearchableItem'
 import { ReferenceLookupCollection, ItemFilter, SearchQuery, SearchableDecryptedItem } from './Types'
 
@@ -13,17 +11,6 @@ enum MatchResult {
   Uuid = 5,
 }
 
-export function notesAndFilesMatchingOptions(
-  options: NotesAndFilesDisplayOptions,
-  fromItems: SearchableDecryptedItem[],
-  collection: ReferenceLookupCollection,
-): SearchableItem[] {
-  const filters = computeFiltersForDisplayOptions(options, collection)
-
-  return fromItems.filter((item) => {
-    return itemPassesFilters(item, filters)
-  })
-}
 export function itemPassesFilters(item: SearchableDecryptedItem, filters: ItemFilter[]) {
   for (const filter of filters) {
     if (!filter(item)) {
