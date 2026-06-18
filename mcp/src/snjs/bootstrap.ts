@@ -118,18 +118,23 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
       const code = mfaCode ?? dynamicMfaCode ?? onScreenCode ?? ''
       const values = (challenge.prompts ?? []).map((prompt: any) => {
         const title = String(prompt.title ?? '').toLowerCase()
-        if (
-          title.includes('authentication') ||
-          title.includes('code') ||
-          title.includes('2fa') ||
-          title.includes('mfa') ||
-          title.includes('two-factor') ||
-          title.includes('verification')
-        ) {
+        const text = `${title} ${String(prompt.placeholder ?? '').toLowerCase()}`
+        if (/authentication|code|2fa|mfa|two-factor|verification/.test(title)) {
           mfaChallengeCount += 1
           return CreateChallengeValue(prompt, code)
         }
-        return CreateChallengeValue(prompt, password ?? '')
+        if (/password|account/.test(text)) {
+          return CreateChallengeValue(prompt, password ?? '')
+        }
+        // Unrecognized prompt (local passcode, PIN, biometric, a future type):
+        // NEVER auto-submit the account password into a field we don't
+        // recognize. Submit empty so the challenge fails safely instead of
+        // leaking the password into an unexpected validator.
+        if (process.env.MCP_DEBUG_CHALLENGES) {
+          // eslint-disable-next-line no-console
+          console.error('[snjs challenge] unrecognized prompt; submitting empty:', prompt.title)
+        }
+        return CreateChallengeValue(prompt, '')
       })
       void app.submitValuesForChallenge(challenge, values)
     },

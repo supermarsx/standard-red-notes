@@ -33,10 +33,12 @@ const logger: Logger = {
   error: (...args) => console.error(new Date().toISOString(), '[error]', ...args),
 }
 
+// Fail CLOSED: an empty connection-token secret means tokens are signed/verified
+// with an empty HS256 key — trivially forgeable, so any client could connect as
+// any user. Refuse to start rather than run an open relay.
 if (!CONNECTION_TOKEN_SECRET) {
-  logger.warn(
-    'WEB_SOCKET_CONNECTION_TOKEN_SECRET is unset — all connection tokens will fail to verify.',
-  )
+  logger.error('WEB_SOCKET_CONNECTION_TOKEN_SECRET is required (refusing to start with an empty signing secret).')
+  process.exit(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -103,14 +105,19 @@ function handleMintToken(req: IncomingMessage, res: ServerResponse): void {
   }
 
   // Internal path: trusted callers (e.g. the headless bridge) pass an internal
-  // secret + {userUuid, sessionUuid} body.
-  if (INTERNAL_SECRET) {
-    const provided = req.headers['x-internal-secret']
-    if (provided !== INTERNAL_SECRET) {
-      res.writeHead(403, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'forbidden' }))
-      return
-    }
+  // secret + {userUuid, sessionUuid} body. Fail CLOSED: if the internal secret
+  // is not configured, this endpoint would otherwise mint a token for ANY user
+  // supplied in the body, so refuse it entirely when unset.
+  if (!INTERNAL_SECRET) {
+    res.writeHead(503, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: 'internal token minting is disabled (no internal secret configured)' }))
+    return
+  }
+  const provided = req.headers['x-internal-secret']
+  if (provided !== INTERNAL_SECRET) {
+    res.writeHead(403, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: 'forbidden' }))
+    return
   }
 
   let body = ''

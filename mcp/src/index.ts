@@ -58,7 +58,15 @@ function getClient(): Promise<SnjsBackedClient> {
       headless.startSyncLoop();
       client = new SnjsBackedClient(headless, { allowWrites, baseUrl: serverUrl });
       return client;
-    })();
+    })().catch((error) => {
+      // Don't cache a rejected init — a transient sign-in/network failure would
+      // otherwise brick every subsequent tool call until the process restarts.
+      // Tear down any half-initialized app so the next call starts clean.
+      initPromise = undefined;
+      void headless?.deinit().catch(() => {});
+      headless = undefined;
+      throw error;
+    });
   }
   return initPromise;
 }

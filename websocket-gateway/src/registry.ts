@@ -81,8 +81,14 @@ export class ConnectionRegistry<S extends SendableSocket = SendableSocket> {
       if (excludeSessionUuid !== undefined && conn.sessionUuid === excludeSessionUuid) {
         continue
       }
-      conn.socket.send(message)
-      sent += 1
+      // A dead/closing socket's send() can throw; never let one bad socket abort
+      // the dispatch or bubble up and crash the gateway.
+      try {
+        conn.socket.send(message)
+        sent += 1
+      } catch {
+        /* socket unwritable; skip it */
+      }
     }
     return sent
   }

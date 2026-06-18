@@ -30,12 +30,27 @@ if (g.navigator === undefined) {
 // headless bridge authenticates exactly like a browser.
 if (!g.__srnCookieJarInstalled) {
   g.__srnCookieJarInstalled = true
-  const jar = new Map<string, string>()
+  // Cookies are scoped PER ORIGIN (scheme://host:port). A flat jar would replay a
+  // host's session cookies to every other host the process talks to (a redirect,
+  // a proxy, the magic-link endpoint, or — in tests — a second account), leaking
+  // the session. Keying by origin keeps each host's cookies to that host.
+  const jarByOrigin = new Map<string, Map<string, string>>()
   const originalFetch = globalThis.fetch.bind(globalThis)
 
+  const originOf = (input: RequestInfo | URL): string | undefined => {
+    try {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      return new URL(url).origin
+    } catch {
+      return undefined
+    }
+  }
+
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const origin = originOf(input)
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
-    if (jar.size > 0 && !headers.has('cookie')) {
+    const jar = origin ? jarByOrigin.get(origin) : undefined
+    if (jar && jar.size > 0 && !headers.has('cookie')) {
       headers.set(
         'cookie',
         Array.from(jar.entries())
@@ -46,11 +61,18 @@ if (!g.__srnCookieJarInstalled) {
     const response = await originalFetch(input, { ...init, headers })
     const setCookies =
       (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? []
-    for (const cookie of setCookies) {
-      const pair = cookie.split(';', 1)[0]
-      const eq = pair.indexOf('=')
-      if (eq > 0) {
-        jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim())
+    if (origin && setCookies.length > 0) {
+      let store = jarByOrigin.get(origin)
+      if (!store) {
+        store = new Map<string, string>()
+        jarByOrigin.set(origin, store)
+      }
+      for (const cookie of setCookies) {
+        const pair = cookie.split(';', 1)[0]
+        const eq = pair.indexOf('=')
+        if (eq > 0) {
+          store.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim())
+        }
       }
     }
     return response
