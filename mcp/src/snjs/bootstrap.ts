@@ -61,6 +61,8 @@ export interface HeadlessApp {
   startSyncLoop(): void
   /** How many MFA/2FA challenges snjs has raised (e.g. during sign-in). */
   getMfaChallengeCount(): number
+  /** Background-sync health, to detect a silently-failing ("zombie") bridge. */
+  getSyncHealth(): { consecutiveFailures: number; lastError?: string }
   deinit(): Promise<void>
 }
 
@@ -114,7 +116,14 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
         // eslint-disable-next-line no-console
         console.error('[snjs challenge]', challenge.reason, challenge.heading, JSON.stringify((challenge.prompts ?? []).map((p: any) => p.title)))
       }
-      const onScreenCode = String(challenge.heading ?? '').match(/\b(\d{4,8})\b/)?.[1]
+      // Extract the on-screen magic-link code from the challenge heading. Prefer
+      // the digits right after a "code" label; otherwise take the LAST 4-8 digit
+      // run — never the first, since a localized heading may begin with a year or
+      // count that would otherwise be mistaken for the code.
+      const heading = String(challenge.heading ?? '')
+      const codeRuns = heading.match(/\b\d{4,8}\b/g)
+      const onScreenCode =
+        heading.match(/code[^0-9]*?(\d{4,8})/i)?.[1] ?? (codeRuns ? codeRuns[codeRuns.length - 1] : undefined)
       const code = mfaCode ?? dynamicMfaCode ?? onScreenCode ?? ''
       const values = (challenge.prompts ?? []).map((prompt: any) => {
         const title = String(prompt.title ?? '').toLowerCase()
@@ -145,6 +154,10 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
   const syncIntervalMs = options.syncIntervalMs ?? 10_000
   let syncTimer: NodeJS.Timeout | undefined
   let syncing = false
+  // Track sync health so the status tool can surface a "zombie" bridge (session
+  // expired -> the loop keeps failing silently while isSignedIn() stays true).
+  let consecutiveSyncFailures = 0
+  let lastSyncError: string | undefined
 
   const result: HeadlessApp = {
     app,
@@ -161,13 +174,24 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
         syncing = true
         void app.sync
           .sync({ sourceDescription: 'mcp-bridge-loop' })
-          .catch(() => {})
+          .then(() => {
+            consecutiveSyncFailures = 0
+            lastSyncError = undefined
+          })
+          .catch((e: unknown) => {
+            consecutiveSyncFailures += 1
+            lastSyncError = e instanceof Error ? e.message : String(e)
+          })
           .finally(() => {
             syncing = false
           })
       }, syncIntervalMs)
       // Don't keep the process alive solely for the heartbeat.
       syncTimer.unref?.()
+    },
+
+    getSyncHealth(): { consecutiveFailures: number; lastError?: string } {
+      return { consecutiveFailures: consecutiveSyncFailures, lastError: lastSyncError }
     },
 
     async register(email: string, pw: string): Promise<void> {
@@ -204,7 +228,15 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
     },
 
     async sync(): Promise<void> {
-      await app.sync.sync({ sourceDescription: 'mcp-bridge' })
+      try {
+        await app.sync.sync({ sourceDescription: 'mcp-bridge' })
+        consecutiveSyncFailures = 0
+        lastSyncError = undefined
+      } catch (e) {
+        consecutiveSyncFailures += 1
+        lastSyncError = e instanceof Error ? e.message : String(e)
+        throw e
+      }
     },
 
     async deinit(): Promise<void> {
@@ -214,6 +246,9 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
       }
       await app.prepareForDeinit?.()
       app.deinit?.(1)
+      // Ensure any storage/keychain writes queued during teardown actually land
+      // before the process exits.
+      await device.flushWrites().catch(() => {})
     },
   }
 

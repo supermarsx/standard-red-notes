@@ -79,16 +79,44 @@ export class NodeDevice {
   private writeChain: Promise<void> = Promise.resolve()
   private writeSeq = 0
 
+  /** Returns a promise that resolves once all currently-queued writes finish. */
+  public async flushWrites(): Promise<void> {
+    await this.writeChain.catch(() => {})
+  }
+
   // Serialize all file writes through one chain. snjs issues many concurrent
   // storage/db writes during sync; a shared fixed temp name would otherwise
   // race on rename. Unique temp names + a serialized chain keep it atomic.
   private writeJson(name: string, value: unknown): Promise<void> {
-    this.writeChain = this.writeChain.then(async () => {
-      const tmp = this.file(`${name}.${this.writeSeq++}.tmp`)
-      await fs.writeFile(tmp, JSON.stringify(value), 'utf8')
+    // Serialize NOW (synchronously, at enqueue) so the bytes written reflect the
+    // state at call time — not whatever the live object has mutated to by the
+    // time the deferred write actually runs (which corrupted the keychain).
+    const data = JSON.stringify(value)
+    // Run after the previous write whether it succeeded OR failed: a single
+    // transient FS error must never poison the chain and silently stop ALL
+    // subsequent persistence.
+    const run = this.writeChain.then(
+      () => this.doWrite(name, data),
+      () => this.doWrite(name, data),
+    )
+    // The chain tail must always settle as resolved so the next write proceeds.
+    this.writeChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  private async doWrite(name: string, data: string): Promise<void> {
+    const tmp = this.file(`${name}.${this.writeSeq++}.tmp`)
+    try {
+      await fs.writeFile(tmp, data, 'utf8')
       await fs.rename(tmp, this.file(name))
-    })
-    return this.writeChain
+    } catch (error) {
+      // Best-effort cleanup so failed renames don't leak temp files forever.
+      await fs.rm(tmp, { force: true }).catch(() => {})
+      throw error
+    }
   }
 
   private async persistStorage(): Promise<void> {

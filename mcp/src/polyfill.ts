@@ -68,10 +68,30 @@ if (!g.__srnCookieJarInstalled) {
         jarByOrigin.set(origin, store)
       }
       for (const cookie of setCookies) {
-        const pair = cookie.split(';', 1)[0]
+        const parts = cookie.split(';')
+        const pair = parts[0]
         const eq = pair.indexOf('=')
-        if (eq > 0) {
-          store.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim())
+        if (eq <= 0) continue
+        const name = pair.slice(0, eq).trim()
+        const value = pair.slice(eq + 1).trim()
+        // Honor cookie DELETION (logout / rotation) — a flat jar that only ever
+        // stored name=value would keep replaying a cleared/empty session cookie
+        // forever, breaking re-auth after the server rotates the session.
+        let isDeletion = value === ''
+        for (const attr of parts.slice(1)) {
+          const a = attr.trim().toLowerCase()
+          if (a.startsWith('max-age=')) {
+            const n = Number(a.slice('max-age='.length))
+            if (!Number.isNaN(n) && n <= 0) isDeletion = true
+          } else if (a.startsWith('expires=')) {
+            const exp = Date.parse(a.slice('expires='.length))
+            if (!Number.isNaN(exp) && exp <= Date.now()) isDeletion = true
+          }
+        }
+        if (isDeletion) {
+          store.delete(name)
+        } else {
+          store.set(name, value)
         }
       }
     }

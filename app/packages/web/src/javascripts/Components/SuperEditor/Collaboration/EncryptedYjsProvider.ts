@@ -30,7 +30,10 @@ export class EncryptedYjsProvider implements Provider {
   private readonly listeners: Record<string, Set<Listener>> = {}
   private unsubscribe: (() => void) | null = null
   private connected = false
-  private readonly pending: Promise<void>[] = []
+  // In-flight encrypt/send/decrypt work. Entries REMOVE THEMSELVES on settle so
+  // this never grows unbounded over a long editing session (awareness fires on
+  // every cursor move); flush() still works for tests by awaiting the live set.
+  private readonly pending = new Set<Promise<void>>()
 
   constructor(
     public readonly doc: Y.Doc,
@@ -90,9 +93,8 @@ export class EncryptedYjsProvider implements Provider {
 
   /** Resolves once all in-flight encrypt/send work settles (used by tests). */
   async flush(): Promise<void> {
-    while (this.pending.length) {
-      const batch = this.pending.splice(0, this.pending.length)
-      await Promise.all(batch)
+    while (this.pending.size) {
+      await Promise.all([...this.pending])
     }
   }
 
@@ -152,6 +154,9 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private track(p: Promise<void>): void {
-    this.pending.push(p.catch((err) => console.error('[collab] frame error', err)))
+    const settled = p
+      .catch((err) => console.error('[collab] frame error', err))
+      .finally(() => this.pending.delete(settled))
+    this.pending.add(settled)
   }
 }

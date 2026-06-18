@@ -95,6 +95,9 @@ server.registerTool(
       writes: z.boolean(),
       accountConfigured: z.boolean(),
       signedIn: z.boolean(),
+      syncHealthy: z.boolean(),
+      consecutiveSyncFailures: z.number(),
+      lastSyncError: z.string().optional(),
     },
   },
   async () => {
@@ -107,6 +110,7 @@ server.registerTool(
     } catch {
       signedIn = false;
     }
+    const health = headless?.getSyncHealth() ?? { consecutiveFailures: 0 };
     const structuredContent = {
       status: "ready",
       transport: "stdio",
@@ -114,6 +118,11 @@ server.registerTool(
       writes: allowWrites,
       accountConfigured: Boolean(email && password),
       signedIn,
+      // A signed-in bridge whose background sync keeps failing is a "zombie":
+      // it looks fine but no data moves. Surface that explicitly.
+      syncHealthy: signedIn && health.consecutiveFailures < 3,
+      consecutiveSyncFailures: health.consecutiveFailures,
+      ...(health.lastError ? { lastSyncError: health.lastError } : {}),
     };
     return {
       content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
@@ -328,5 +337,21 @@ async function start(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
+
+// Flush pending storage/keychain writes before the process exits (container stop,
+// Ctrl-C) so an in-flight write isn't dropped, leaving local state stale/corrupt.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await headless?.deinit();
+  } catch {
+    /* best-effort */
+  }
+  process.exit(signal === "uncaught" ? 1 : 0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 void start();

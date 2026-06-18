@@ -49,7 +49,9 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
     const markdown = await noteToMarkdown(application, note)
     const title = sanitizeFileName(note.title || 'Untitled')
     data.push({
-      name: `${title}-${note.uuid.split('-')[0]}.md`,
+      // Full uuid (not a prefix) guarantees a unique entry per note so two
+      // same-titled notes can't collide and silently drop one from the export.
+      name: `${title}-${note.uuid}.md`,
       content: new Blob([markdown], { type: 'text/markdown' }),
     })
   }

@@ -20,7 +20,7 @@ export interface ConnectionTokenPayload {
  * malformed payload). Callers should catch and close the socket with 1008.
  */
 export function verifyConnectionToken(token: string, secret: string): ConnectionTokenPayload {
-  const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] })
+  const decoded = jwt.verify(token, secret, { algorithms: ['HS256'], clockTolerance: 10 })
 
   if (typeof decoded !== 'object' || decoded === null) {
     throw new Error('connection token payload is not an object')
@@ -55,7 +55,7 @@ export function decodeCrossServiceToken(
   secret: string,
 ): { userUuid: string; sessionUuid: string } | undefined {
   try {
-    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] })
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'], clockTolerance: 10 })
     if (typeof decoded !== 'object' || decoded === null) {
       return undefined
     }

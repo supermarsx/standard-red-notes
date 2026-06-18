@@ -92,8 +92,11 @@ export class ArchiveManager {
       }
 
       const blob = new Blob([contents], { type: 'text/plain' })
+      // Use the FULL uuid (not just the first 8 hex chars) so two items with the
+      // same title can never collide on the same zip entry and silently overwrite
+      // each other (data loss in the readable backup).
       const fileName =
-        `Items/${sanitizeFileName(item.content_type)}/` + createZippableFileName(name, `-${item.uuid.split('-')[0]}`)
+        `Items/${sanitizeFileName(item.content_type)}/` + createZippableFileName(name, `-${item.uuid}`)
       await zipWriter.add(fileName, new zip.BlobReader(blob))
     }
 
@@ -109,21 +112,25 @@ export class ArchiveManager {
     const zip = await import('@zip.js/zip.js')
     const writer = new zip.ZipWriter<Blob>(new zip.BlobWriter('application/zip'))
 
-    const filenameCounts: Record<string, number> = {}
+    // Dedup on the ACTUAL (sanitized + truncated) zip entry name, not the raw
+    // input name — otherwise two notes whose names only differ past the 100-char
+    // truncation, or after sanitization, collide and one is SILENTLY OVERWRITTEN
+    // in the export (data loss in a backup).
+    const usedNames = new Set<string>()
 
     for (let i = 0; i < data.length; i++) {
       const file = data[i]
 
       const { name, ext } = parseFileName(file.name)
 
-      filenameCounts[file.name] = filenameCounts[file.name] == undefined ? 0 : filenameCounts[file.name] + 1
+      let entryName = createZippableFileName(name, '', ext)
+      let counter = 1
+      while (usedNames.has(entryName)) {
+        entryName = createZippableFileName(name, ` - ${counter++}`, ext)
+      }
+      usedNames.add(entryName)
 
-      const currentFileNameIndex = filenameCounts[file.name]
-
-      await writer.add(
-        createZippableFileName(name, currentFileNameIndex > 0 ? ` - ${currentFileNameIndex}` : '', ext),
-        new zip.BlobReader(file.content),
-      )
+      await writer.add(entryName, new zip.BlobReader(file.content))
     }
 
     const zipFileAsBlob = await writer.close()
