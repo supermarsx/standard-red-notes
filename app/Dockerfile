@@ -5,6 +5,10 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /opt/standard-red-notes/app
 
 ENV CI=true
+# Suppress node-runtime DeprecationWarnings (util._extend / fs.Stats) emitted by
+# transitive build-time dependencies — they're not actionable from this repo and
+# only add noise to the build log. Affects the build stage only (final image is nginx).
+ENV NODE_OPTIONS=--no-deprecation
 
 # Insurance for any git-sourced dep that still packs via the bundled Yarn 1 (classic):
 # its engine pins predate Node 24. A classic ~/.yarnrc disables that check for the nested

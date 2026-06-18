@@ -3,6 +3,8 @@ module.exports = {
   entry: {
     'sncrypto-web.js': './src/index',
   },
+  // Library bundle — the 244 KiB web-entrypoint size recommendation is noise.
+  performance: { hints: false },
   resolve: {
     extensions: ['.ts', '.js'],
     fallback: {

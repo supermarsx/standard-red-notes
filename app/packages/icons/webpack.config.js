@@ -3,6 +3,8 @@ module.exports = () => {
     entry: './src/index.ts',
     mode: 'production',
     devtool: 'source-map',
+    // Library bundle — the 244 KiB web-entrypoint size recommendation is noise.
+    performance: { hints: false },
     optimization: {
       minimize: false,
     },

@@ -31,8 +31,14 @@ module.exports = (_, { mode }) => ({
           {
             loader: 'sass-loader',
             options: {
+              api: 'modern',
               sassOptions: {
                 outputStyle: 'expanded',
+                quietDeps: true,
+                // @import + the legacy JS API are deprecated in Dart Sass but
+                // still supported by the pinned ^1.100; migrating off them is out
+                // of scope for a build-warning cleanup.
+                silenceDeprecations: ['import', 'legacy-js-api'],
               },
             },
           },

@@ -42,7 +42,9 @@ module.exports = {
       },
       {
         test: /\.js$/,
-        use: ['babel-loader'],
+        // compact output avoids babel's "deoptimised the styling of <large file>"
+        // note when it processes big vendored files (e.g. lodash).
+        use: [{ loader: 'babel-loader', options: { compact: true } }],
       },
     ],
   },
