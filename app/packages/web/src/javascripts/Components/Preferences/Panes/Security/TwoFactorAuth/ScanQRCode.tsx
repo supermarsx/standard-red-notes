@@ -1,6 +1,6 @@
 import { FunctionComponent } from 'react'
 import { observer } from 'mobx-react-lite'
-import QRCode from 'qrcode.react'
+import { QRCodeSVG as QRCode } from 'qrcode.react'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import { TwoFactorActivation } from './TwoFactorActivation'
 import AuthAppInfoTooltip from './AuthAppInfoPopup'

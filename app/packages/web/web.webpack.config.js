@@ -38,6 +38,10 @@ module.exports = (env) => {
 
   return {
     entry: './src/javascripts/index.ts',
+    // The SN web app is intentionally large and already code-splits its heavy
+    // editors (Excalidraw/Mermaid/etc.), so the 244 KiB asset-size recommendation
+    // is noise here.
+    performance: { hints: false },
     output: {
       filename: process.env.BUILD_TARGET === 'clipper' ? './[name].bundle.js' : './app.js',
     },
@@ -154,7 +158,21 @@ module.exports = (env) => {
               options: { publicPath: '../' },
             },
             'css-loader',
-            'sass-loader',
+            {
+              loader: 'sass-loader',
+              // Use the modern Dart Sass API and silence deprecation notices for
+              // syntax the pinned Sass (^1.100) still supports — @import and the
+              // legacy globals are slated for removal in Dart Sass 2.0/3.0, but
+              // migrating the app's 21-deep @import graph to @use is out of scope
+              // for a build-warning cleanup.
+              options: {
+                api: 'modern',
+                sassOptions: {
+                  quietDeps: true,
+                  silenceDeprecations: ['import', 'legacy-js-api'],
+                },
+              },
+            },
           ],
         },
       ],
