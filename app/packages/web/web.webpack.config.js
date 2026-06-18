@@ -124,7 +124,9 @@ module.exports = (env) => {
           exclude:
             /node_modules\/(?!(@standardnotes\/common|@standardnotes\/domain-core|webextension-polyfill|yoga-layout))/,
           use: [
-            'babel-loader',
+            // compact output avoids babel's "deoptimised the styling of
+            // <large file>" note when it processes big bundles (e.g. snjs.js).
+            { loader: 'babel-loader', options: { compact: true } },
             {
               loader: 'ts-loader',
               options: {

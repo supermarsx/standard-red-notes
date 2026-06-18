@@ -23,12 +23,19 @@
 }
 
 @mixin define-color($name, $source: null) {
+  // Resolve $source || $name without the global Sass if() function (deprecated
+  // in favor of the CSS if()).
+  $resolved: $name;
+  @if $source {
+    $resolved: $source;
+  }
+
   .bg-#{$name} {
-    background-color: var(--sn-stylekit-#{if($source, $source, $name)});
+    background-color: var(--sn-stylekit-#{$resolved});
   }
 
   .color-#{$name} {
-    color: var(--sn-stylekit-#{if($source, $source, $name)});
+    color: var(--sn-stylekit-#{$resolved});
   }
 }
 
