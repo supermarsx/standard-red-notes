@@ -85,7 +85,7 @@ function CommandPaletteListItem({
       focusOnHover={true}
       blurOnHoverEnd={false}
       className={classNames(
-        'flex scroll-m-2 items-center gap-2 whitespace-nowrap rounded-md px-2 py-2.5 text-[0.95rem] data-[active-item]:bg-info data-[active-item]:text-info-contrast [&>svg]:flex-shrink-0',
+        'flex scroll-m-2 items-center gap-2 whitespace-nowrap rounded-md px-2 py-2 text-[0.8rem] data-[active-item]:bg-info data-[active-item]:text-info-contrast [&>svg]:flex-shrink-0',
         index === 0 && 'scroll-m-8',
       )}
       onClick={() => handleClick(item)}
