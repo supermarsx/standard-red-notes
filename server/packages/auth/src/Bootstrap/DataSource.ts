@@ -9,6 +9,7 @@ import { OfflineUserSubscription } from '../Domain/Subscription/OfflineUserSubsc
 import { UserSubscription } from '../Domain/Subscription/UserSubscription'
 import { User } from '../Domain/User/User'
 import { TypeORMAuthenticator } from '../Infra/TypeORM/TypeORMAuthenticator'
+import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
 import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
@@ -68,6 +69,7 @@ export class AppDataSource {
         TypeORMSubscriptionSetting,
         TypeORMSessionTrace,
         TypeORMAuthenticator,
+        TypeORMAppPassword,
         TypeORMAuthenticatorChallenge,
         TypeORMMagicLinkToken,
         TypeORMEmergencyAccessInvitation,

@@ -208,6 +208,19 @@ import { ListAuthenticators } from '../Domain/UseCase/ListAuthenticators/ListAut
 import { AuthenticatorHttpProjection } from '../Infra/Http/Projection/AuthenticatorHttpProjection'
 import { AuthenticatorHttpMapper } from '../Mapping/AuthenticatorHttpMapper'
 import { DeleteAuthenticator } from '../Domain/UseCase/DeleteAuthenticator/DeleteAuthenticator'
+import { AppPassword } from '../Domain/AppPassword/AppPassword'
+import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
+import { AppPasswordPersistenceMapper } from '../Mapping/AppPasswordPersistenceMapper'
+import { AppPasswordRepositoryInterface } from '../Domain/AppPassword/AppPasswordRepositoryInterface'
+import { TypeORMAppPasswordRepository } from '../Infra/TypeORM/TypeORMAppPasswordRepository'
+import { AppPasswordHttpProjection } from '../Infra/Http/Projection/AppPasswordHttpProjection'
+import { AppPasswordHttpMapper } from '../Mapping/AppPasswordHttpMapper'
+import { CreateAppPassword } from '../Domain/UseCase/CreateAppPassword/CreateAppPassword'
+import { ListAppPasswords } from '../Domain/UseCase/ListAppPasswords/ListAppPasswords'
+import { DeleteAppPassword } from '../Domain/UseCase/DeleteAppPassword/DeleteAppPassword'
+import { VerifyAppPassword } from '../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
+import { AppPasswordsController } from '../Controller/AppPasswordsController'
+import { BaseAppPasswordsController } from '../Infra/InversifyExpressUtils/Base/BaseAppPasswordsController'
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -462,6 +475,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Authenticator, AuthenticatorHttpProjection>>(TYPES.Auth_AuthenticatorHttpMapper)
       .toConstantValue(new AuthenticatorHttpMapper())
     container
+      .bind<MapperInterface<AppPassword, TypeORMAppPassword>>(TYPES.Auth_AppPasswordPersistenceMapper)
+      .toConstantValue(new AppPasswordPersistenceMapper())
+    container
+      .bind<MapperInterface<AppPassword, AppPasswordHttpProjection>>(TYPES.Auth_AppPasswordHttpMapper)
+      .toConstantValue(new AppPasswordHttpMapper())
+    container
       .bind<
         MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
@@ -525,6 +544,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMAuthenticator>>(TYPES.Auth_ORMAuthenticatorRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticator))
+    container
+      .bind<Repository<TypeORMAppPassword>>(TYPES.Auth_ORMAppPasswordRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMAppPassword))
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
@@ -590,6 +612,14 @@ export class ContainerConfigLoader {
         new TypeORMAuthenticatorRepository(
           container.get(TYPES.Auth_ORMAuthenticatorRepository),
           container.get(TYPES.Auth_AuthenticatorPersistenceMapper),
+        ),
+      )
+    container
+      .bind<AppPasswordRepositoryInterface>(TYPES.Auth_AppPasswordRepository)
+      .toConstantValue(
+        new TypeORMAppPasswordRepository(
+          container.get(TYPES.Auth_ORMAppPasswordRepository),
+          container.get(TYPES.Auth_AppPasswordPersistenceMapper),
         ),
       )
     container
@@ -1111,6 +1141,28 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_AuthenticatorRepository),
           container.get(TYPES.Auth_UserRepository),
           container.get(TYPES.Auth_FeatureService),
+        ),
+      )
+    container
+      .bind<CreateAppPassword>(TYPES.Auth_CreateAppPassword)
+      .toConstantValue(
+        new CreateAppPassword(
+          container.get(TYPES.Auth_AppPasswordRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<ListAppPasswords>(TYPES.Auth_ListAppPasswords)
+      .toConstantValue(new ListAppPasswords(container.get(TYPES.Auth_AppPasswordRepository)))
+    container
+      .bind<DeleteAppPassword>(TYPES.Auth_DeleteAppPassword)
+      .toConstantValue(new DeleteAppPassword(container.get(TYPES.Auth_AppPasswordRepository)))
+    container
+      .bind<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword)
+      .toConstantValue(
+        new VerifyAppPassword(
+          container.get(TYPES.Auth_AppPasswordRepository),
+          container.get(TYPES.Auth_UserRepository),
         ),
       )
     container
@@ -1656,6 +1708,16 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<AppPasswordsController>(TYPES.Auth_AppPasswordsController)
+      .toConstantValue(
+        new AppPasswordsController(
+          container.get(TYPES.Auth_CreateAppPassword),
+          container.get(TYPES.Auth_ListAppPasswords),
+          container.get(TYPES.Auth_DeleteAppPassword),
+          container.get(TYPES.Auth_AppPasswordHttpMapper),
+        ),
+      )
+    container
       .bind<MagicLinkController>(TYPES.Auth_MagicLinkController)
       .toConstantValue(
         new MagicLinkController(
@@ -1962,6 +2024,7 @@ export class ContainerConfigLoader {
           container.get<SignInWithRecoveryCodes>(TYPES.Auth_SignInWithRecoveryCodes),
           container.get<DeleteSessionByToken>(TYPES.Auth_DeleteSessionByToken),
           container.get<string>(TYPES.Auth_CAPTCHA_UI_URL),
+          container.get<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword),
           container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
         ),
       )
@@ -1973,6 +2036,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseAuthenticatorsController(
             container.get(TYPES.Auth_AuthenticatorsController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseAppPasswordsController>(TYPES.Auth_BaseAppPasswordsController)
+        .toConstantValue(
+          new BaseAppPasswordsController(
+            container.get(TYPES.Auth_AppPasswordsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

@@ -19,6 +19,7 @@ import { VerifyHumanInteraction } from '../../Domain/UseCase/VerifyHumanInteract
 import { CookieFactoryInterface } from '../../Domain/Auth/Cookies/CookieFactoryInterface'
 import { SignInWithRecoveryCodes } from '../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { DeleteSessionByToken } from '../../Domain/UseCase/DeleteSessionByToken/DeleteSessionByToken'
+import { VerifyAppPassword } from '../../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
 
 @controller('/auth')
 export class AnnotatedAuthController extends BaseAuthController {
@@ -39,6 +40,7 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_SignInWithRecoveryCodes) override signInWithRecoveryCodes: SignInWithRecoveryCodes,
     @inject(TYPES.Auth_DeleteSessionByToken) override deleteSessionByToken: DeleteSessionByToken,
     @inject(TYPES.Auth_CAPTCHA_UI_URL) override captchaUIUrl: string,
+    @inject(TYPES.Auth_VerifyAppPassword) override verifyAppPassword: VerifyAppPassword,
   ) {
     super(
       verifyMFA,
@@ -57,6 +59,7 @@ export class AnnotatedAuthController extends BaseAuthController {
       signInWithRecoveryCodes,
       deleteSessionByToken,
       captchaUIUrl,
+      verifyAppPassword,
     )
   }
 

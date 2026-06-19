@@ -54,6 +54,15 @@ const AdminPaths = {
   registration: '/v1/admin/registration',
 }
 
+// Standard Red Notes: app-specific passwords. These hit the gateway
+// /v1/app-passwords routes (cross-service-token protected), which proxy to the
+// auth server. They let headless clients (e.g. the MCP bridge) satisfy the 2FA
+// challenge without an interactive TOTP code.
+const AppPasswordPaths = {
+  appPasswords: '/v1/app-passwords',
+  appPassword: (appPasswordId: string) => `/v1/app-passwords/${appPasswordId}`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -75,6 +84,7 @@ export const Paths = {
     ...SubscriptionPaths,
     ...UserPaths,
     ...AdminPaths,
+    ...AppPasswordPaths,
     meta: '/v1/meta',
   },
   v2: {

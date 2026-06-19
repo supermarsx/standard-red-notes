@@ -2,6 +2,7 @@ import 'reflect-metadata'
 
 import '../src/Infra/InversifyExpressUtils/AnnotatedAuthController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedAuthenticatorsController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedAppPasswordsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMagicLinkController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSessionsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSubscriptionInvitesController'

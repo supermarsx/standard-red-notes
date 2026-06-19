@@ -256,6 +256,13 @@ export class LegacyApiService
     email: string
     mfaCode?: string
     authenticatorResponse?: Record<string, unknown>
+    /**
+     * Standard Red Notes: an app-specific password. When present and valid, the
+     * server treats the interactive 2FA challenge as satisfied for this sign-in
+     * only (see auth server VerifyAppPassword). Used by headless clients such as
+     * the MCP bridge so they do not need a live TOTP code.
+     */
+    appPassword?: string
   }): Promise<HttpResponse<KeyParamsResponse>> {
     const codeVerifier = this.crypto.generateRandomKey(256)
     this.inMemoryStore.setValue(StorageKey.CodeVerifier, codeVerifier)
@@ -273,6 +280,10 @@ export class LegacyApiService
 
     if (dto.authenticatorResponse) {
       params.authenticator_response = dto.authenticatorResponse
+    }
+
+    if (dto.appPassword !== undefined && dto.appPassword.length > 0) {
+      params['app_password'] = dto.appPassword
     }
 
     return this.request({
@@ -700,6 +711,41 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to set registration flag.',
       params: { registrationDisabled },
+    })
+  }
+
+  /**
+   * Standard Red Notes: app-specific passwords. These hit the gateway
+   * /v1/app-passwords routes, protected by the cross-service token middleware
+   * (the auth server scopes every call to the authenticated user). The plaintext
+   * secret is only ever returned by `createAppPassword` and never stored or
+   * retrievable again.
+   */
+  async listAppPasswords(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.appPasswords),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list app passwords.',
+    })
+  }
+
+  async createAppPassword(label: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.appPasswords),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create app password.',
+      params: { label },
+    })
+  }
+
+  async deleteAppPassword(appPasswordId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.appPassword(appPasswordId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete app password.',
     })
   }
 

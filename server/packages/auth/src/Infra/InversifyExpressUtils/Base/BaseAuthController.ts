@@ -22,6 +22,8 @@ import { VerifyHumanInteraction } from '../../../Domain/UseCase/VerifyHumanInter
 import { CookieFactoryInterface } from '../../../Domain/Auth/Cookies/CookieFactoryInterface'
 import { SignInWithRecoveryCodes } from '../../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { DeleteSessionByToken } from '../../../Domain/UseCase/DeleteSessionByToken/DeleteSessionByToken'
+import { VerifyAppPassword } from '../../../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
+import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
 
 export class BaseAuthController extends BaseHttpController {
   constructor(
@@ -41,6 +43,7 @@ export class BaseAuthController extends BaseHttpController {
     protected signInWithRecoveryCodes: SignInWithRecoveryCodes,
     protected deleteSessionByToken: DeleteSessionByToken,
     protected captchaUIUrl: string,
+    protected verifyAppPassword: VerifyAppPassword,
     protected controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -91,11 +94,34 @@ export class BaseAuthController extends BaseHttpController {
       )
     }
 
-    const verifyMFAResponse = await this.verifyMFA.execute({
-      email: request.body.email as string,
-      requestParams: request.body,
-      preventOTPFromFurtherUsage: true,
-    })
+    // Standard Red Notes: app-password 2FA bypass for headless/automation clients
+    // (e.g. the MCP bridge). If the request carries a valid app password we treat
+    // the interactive MFA challenge as satisfied for THIS sign-in only. This does
+    // NOT change account-password sign-in: a missing or wrong app password makes
+    // `appPasswordSatisfiesMfa` false and we fall through to the normal MFA
+    // enforcement below. VerifyAppPassword fails closed (constant-time bcrypt
+    // compare), so a wrong app password behaves exactly like a failed MFA.
+    //
+    // Caveat: an app password only affects server-side auth / the 2FA gate. The
+    // account's end-to-end encryption key is still derived client-side from the
+    // real account password; an app password never grants decryption.
+    let appPasswordSatisfiesMfa = false
+    const presentedAppPassword = request.body.app_password
+    if (typeof presentedAppPassword === 'string' && presentedAppPassword.length > 0) {
+      const appPasswordResult = await this.verifyAppPassword.execute({
+        email: request.body.email as string,
+        appPassword: presentedAppPassword,
+      })
+      appPasswordSatisfiesMfa = !appPasswordResult.isFailed() && appPasswordResult.getValue() === true
+    }
+
+    const verifyMFAResponse: VerifyMFAResponse = appPasswordSatisfiesMfa
+      ? { success: true }
+      : await this.verifyMFA.execute({
+          email: request.body.email as string,
+          requestParams: request.body,
+          preventOTPFromFurtherUsage: true,
+        })
 
     if (!verifyMFAResponse.success) {
       return this.json(

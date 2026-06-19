@@ -20,6 +20,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:authenticators/generate-registration-options', 'auth.authenticators.generateRegistrationOptions'],
     ['[POST]:authenticators/generate-authentication-options', 'auth.authenticators.generateAuthenticationOptions'],
     ['[POST]:authenticators/verify-registration', 'auth.authenticators.verifyRegistrationResponse'],
+    // App Passwords Controller (Standard Red Notes)
+    ['[GET]:app-passwords/', 'auth.appPasswords.list'],
+    ['[POST]:app-passwords/', 'auth.appPasswords.create'],
+    ['[DELETE]:app-passwords/:appPasswordId', 'auth.appPasswords.delete'],
     // Magic Link Controller
     ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
     ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],
