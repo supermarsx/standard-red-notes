@@ -64,7 +64,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
 
     const authTokenData: CrossServiceTokenData = {
       user: this.projectUser(user),
-      roles: this.projectRoles(roles),
+      roles: this.projectRoles(roles, user.email),
       shared_vault_owner_context: undefined,
       belongs_to_shared_vaults: sharedVaultAssociations.map((association) => ({
         shared_vault_uuid: association.props.sharedVaultUuid.value,
@@ -140,13 +140,25 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     }
   }
 
-  private projectRoles(roles: Array<Role>): Array<{ uuid: string; name: string }> {
+  private projectRoles(roles: Array<Role>, email?: string): Array<{ uuid: string; name: string }> {
     const projected = roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
     // Single-tier, fully-free instance: guarantee every user carries the Pro role
     // so role-gated server features (revision history beyond 30/365 days,
     // shared-vault count limits, etc.) are unlocked for everyone.
     if (!projected.some((role) => role.name === RoleName.NAMES.ProUser)) {
       projected.push({ uuid: `singletier-${RoleName.NAMES.ProUser}`, name: RoleName.NAMES.ProUser })
+    }
+    // Designate admins via the ADMIN_EMAILS env (comma-separated). These users
+    // carry the InternalTeamUser role, which unlocks the in-app Admin panel and
+    // the /admin endpoints that manage other users' feature flags.
+    const adminEmails = (process.env.ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+    if (email && adminEmails.includes(email.toLowerCase())) {
+      if (!projected.some((role) => role.name === RoleName.NAMES.InternalTeamUser)) {
+        projected.push({ uuid: `admin-${RoleName.NAMES.InternalTeamUser}`, name: RoleName.NAMES.InternalTeamUser })
+      }
     }
     return projected
   }

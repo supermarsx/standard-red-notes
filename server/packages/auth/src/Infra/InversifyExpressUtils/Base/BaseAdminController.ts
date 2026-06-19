@@ -1,13 +1,22 @@
-import { ControllerContainerInterface, SettingName, Username } from '@standardnotes/domain-core'
+import { ControllerContainerInterface, RoleName, SettingName, Username } from '@standardnotes/domain-core'
 import { BaseHttpController, results } from 'inversify-express-utils'
-import { Request } from 'express'
+import { Request, Response } from 'express'
+import { Role } from '@standardnotes/security'
 
 import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscriptionToken/CreateSubscriptionToken'
 import { GetSetting } from './../../../Domain/UseCase/GetSetting/GetSetting'
+import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { ListedAuthorSecretsData } from '@standardnotes/settings'
+
+/**
+ * Standard Red Notes: settings an admin (INTERNAL_TEAM_USER) is allowed to set
+ * on behalf of another user via the admin panel. Keep this allow-list tight so
+ * the admin endpoints can never be used to mutate arbitrary/sensitive settings.
+ */
+const ADMIN_MANAGEABLE_SETTINGS: string[] = [SettingName.NAMES.AiEnabled, SettingName.NAMES.AiRequestLimit]
 
 export class BaseAdminController extends BaseHttpController {
   constructor(
@@ -16,6 +25,7 @@ export class BaseAdminController extends BaseHttpController {
     protected userRepository: UserRepositoryInterface,
     protected createSubscriptionToken: CreateSubscriptionToken,
     protected createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
+    protected setSettingValue: SetSettingValue,
     private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -26,7 +36,24 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.createToken', this.createToken.bind(this))
       this.controllerContainer.register('admin.createOfflineToken', this.createOfflineToken.bind(this))
       this.controllerContainer.register('admin.disableEmailBackups', this.disableEmailBackups.bind(this))
+      this.controllerContainer.register('admin.lookupUser', this.lookupUser.bind(this))
+      this.controllerContainer.register('admin.getUserFeatureFlags', this.getUserFeatureFlags.bind(this))
+      this.controllerContainer.register('admin.setUserFeatureFlag', this.setUserFeatureFlag.bind(this))
+      this.controllerContainer.register('admin.getRegistrationFlag', this.getRegistrationFlag.bind(this))
+      this.controllerContainer.register('admin.setRegistrationFlag', this.setRegistrationFlag.bind(this))
     }
+  }
+
+  /**
+   * Standard Red Notes: enforce the INTERNAL_TEAM_USER role for admin-only
+   * endpoints. The api-gateway AuthMiddleware decodes the cross-service token and
+   * places the roles (by name) on `response.locals.roles`, which is forwarded to
+   * this controller both over HTTP and in the home-server DirectCall path.
+   */
+  protected requestorIsAdmin(response?: Response): boolean {
+    const roles = ((response?.locals as { roles?: Role[] } | undefined)?.roles ?? []) as Role[]
+
+    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
   }
 
   async getUser(request: Request): Promise<results.JsonResult> {
@@ -144,5 +171,144 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     return this.badRequest('No email backups found')
+  }
+
+  /**
+   * Standard Red Notes: admin-gated user lookup by email used by the in-app
+   * admin panel. Unlike the internal `getUser`, this enforces the
+   * INTERNAL_TEAM_USER role before resolving the user's uuid.
+   */
+  async lookupUser(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    return this.getUser(request)
+  }
+
+  /**
+   * Standard Red Notes: read the admin-managed per-user feature flags
+   * (AI_ENABLED, AI_REQUEST_LIMIT) for a given user. Defaults are returned when a
+   * setting has never been written for the user.
+   */
+  async getUserFeatureFlags(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+
+    const flags: Record<string, string | null> = {}
+    for (const settingName of ADMIN_MANAGEABLE_SETTINGS) {
+      const result = await this.doGetSetting.execute({
+        userUuid,
+        settingName,
+        allowSensitiveRetrieval: false,
+        decrypted: true,
+      })
+
+      flags[settingName] = result.isFailed() ? null : (result.getValue().decryptedValue ?? null)
+    }
+
+    return this.json({
+      userUuid,
+      flags,
+    })
+  }
+
+  /**
+   * Standard Red Notes: set an admin-managed per-user feature flag. Only the
+   * flags in ADMIN_MANAGEABLE_SETTINGS may be written through this endpoint.
+   * `checkUserPermissions` is intentionally false here because the admin (not the
+   * target user) is performing the action; access is gated by the role check.
+   */
+  async setUserFeatureFlag(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { name, value } = request.body as { name?: string; value?: string | null }
+
+    if (!name || !ADMIN_MANAGEABLE_SETTINGS.includes(name)) {
+      return this.json({ error: { message: `Setting ${name} is not admin-manageable.` } }, 400)
+    }
+
+    const result = await this.setSettingValue.execute({
+      settingName: name,
+      value: value ?? null,
+      userUuid,
+      checkUserPermissions: false,
+    })
+
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ success: true, userUuid, name, value: value ?? null })
+  }
+
+  /**
+   * Standard Red Notes: read the instance-wide "registration disabled" flag.
+   *
+   * NOTE: this flag is persisted as a setting on the admin's own user record so
+   * the admin panel can display/toggle it and the value survives restarts.
+   * Actual enforcement at signup time is still governed by the
+   * DISABLE_USER_REGISTRATION env var (read at boot in Register.ts).
+   *
+   * TODO(standard-red-notes): have the Register use case consult this persisted
+   * flag at runtime (e.g. via a GetSetting lookup against a well-known admin
+   * record) so toggling here takes effect without a redeploy.
+   */
+  async getRegistrationFlag(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const adminUuid = (response?.locals as { user?: { uuid: string } } | undefined)?.user?.uuid
+    if (!adminUuid) {
+      return this.json({ error: { message: 'Missing admin context.' } }, 400)
+    }
+
+    const result = await this.doGetSetting.execute({
+      userUuid: adminUuid,
+      settingName: SettingName.NAMES.RegistrationDisabled,
+      allowSensitiveRetrieval: false,
+      decrypted: true,
+    })
+
+    const registrationDisabled = result.isFailed() ? false : result.getValue().decryptedValue === 'true'
+
+    return this.json({ registrationDisabled })
+  }
+
+  /**
+   * Standard Red Notes: set the instance-wide "registration disabled" flag.
+   * See getRegistrationFlag for the persistence/enforcement caveats and TODO.
+   */
+  async setRegistrationFlag(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const adminUuid = (response?.locals as { user?: { uuid: string } } | undefined)?.user?.uuid
+    if (!adminUuid) {
+      return this.json({ error: { message: 'Missing admin context.' } }, 400)
+    }
+
+    const { registrationDisabled } = request.body as { registrationDisabled?: boolean }
+
+    const result = await this.setSettingValue.execute({
+      settingName: SettingName.NAMES.RegistrationDisabled,
+      value: registrationDisabled ? 'true' : 'false',
+      userUuid: adminUuid,
+      checkUserPermissions: false,
+    })
+
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ success: true, registrationDisabled: Boolean(registrationDisabled) })
   }
 }

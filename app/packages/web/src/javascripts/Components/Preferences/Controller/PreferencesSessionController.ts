@@ -29,6 +29,13 @@ export class PreferencesSessionController {
       menuItems.push({ id: 'vaults', label: 'Vaults', icon: 'safe-square', order: 5 })
     }
 
+    // Standard Red Notes: the Admin pane is only added to the menu for users who
+    // carry the INTERNAL_TEAM_USER role. Non-admins never see the entry, and the
+    // server independently re-checks the role on every admin endpoint.
+    if (application.featuresController.isAdminUser()) {
+      menuItems.push({ id: 'admin', label: 'Admin', icon: 'server', order: 10 })
+    }
+
     if (isDesktopApplication()) {
       menuItems.push({ id: 'home-server', label: 'Home Server', icon: 'server', order: 5 })
     }

@@ -22,6 +22,13 @@ export class SettingName extends ValueObject<SettingNameProps> {
     RecoveryCodes: 'RECOVERY_CODES',
     FileUploadBytesLimit: 'FILE_UPLOAD_BYTES_LIMIT',
     FileUploadBytesUsed: 'FILE_UPLOAD_BYTES_USED',
+    // Standard Red Notes: admin-managed per-user feature flags.
+    AiEnabled: 'AI_ENABLED',
+    AiRequestLimit: 'AI_REQUEST_LIMIT',
+    // Standard Red Notes: admin-managed instance flag for whether new signups
+    // are allowed. Persisted as a setting so the admin panel state survives; see
+    // the TODO in Register.ts about having registration consult this at runtime.
+    RegistrationDisabled: 'REGISTRATION_DISABLED',
   }
 
   get value(): string {

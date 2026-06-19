@@ -646,6 +646,63 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: admin panel API. These hit the gateway /v1/admin routes,
+   * which are protected by the cross-service token middleware; the auth server
+   * additionally re-checks the INTERNAL_TEAM_USER role on every call. A
+   * non-admin caller will receive a 401 from the server.
+   */
+  async adminLookupUser(email: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.lookupUser(email)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to look up user.',
+    })
+  }
+
+  async adminGetUserFeatureFlags(userUuid: UuidString): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.userFeatureFlags(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get user feature flags.',
+    })
+  }
+
+  async adminSetUserFeatureFlag(
+    userUuid: UuidString,
+    name: string,
+    value: string | null,
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.userFeatureFlags(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set user feature flag.',
+      params: { name, value },
+    })
+  }
+
+  async adminGetRegistrationFlag(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.registration),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get registration flag.',
+    })
+  }
+
+  async adminSetRegistrationFlag(registrationDisabled: boolean): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.registration),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set registration flag.',
+      params: { registrationDisabled },
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

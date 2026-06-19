@@ -13,6 +13,7 @@ import HomeServer from './Panes/HomeServer/HomeServer'
 import Vaults from './Panes/Vaults/Vaults'
 import PluginsPane from './Panes/Plugins/PluginsPane'
 import Assistant from './Panes/Assistant/Assistant'
+import Admin from './Panes/Admin/Admin'
 
 const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = ({
   menu,
@@ -27,6 +28,8 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <Appearance application={application} />
     case 'assistant':
       return <Assistant application={application} />
+    case 'admin':
+      return <Admin application={application} />
     case 'home-server':
       return <HomeServer />
     case 'security':

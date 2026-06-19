@@ -1,12 +1,13 @@
-import { Request } from 'express'
+import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import { controller, httpDelete, httpGet, httpPost, results } from 'inversify-express-utils'
+import { controller, httpDelete, httpGet, httpPost, httpPut, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { BaseAdminController } from './Base/BaseAdminController'
 import { CreateOfflineSubscriptionToken } from '../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { CreateSubscriptionToken } from '../../Domain/UseCase/CreateSubscriptionToken/CreateSubscriptionToken'
 import { DeleteSetting } from '../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from './../../Domain/UseCase/GetSetting/GetSetting'
+import { SetSettingValue } from '../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 
 @controller('/admin')
@@ -18,8 +19,16 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_CreateSubscriptionToken) override createSubscriptionToken: CreateSubscriptionToken,
     @inject(TYPES.Auth_CreateOfflineSubscriptionToken)
     override createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
+    @inject(TYPES.Auth_SetSettingValue) override setSettingValue: SetSettingValue,
   ) {
-    super(doDeleteSetting, doGetSetting, userRepository, createSubscriptionToken, createOfflineSubscriptionToken)
+    super(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+    )
   }
 
   @httpGet('/user/:email')
@@ -52,5 +61,30 @@ export class AnnotatedAdminController extends BaseAdminController {
     request: Request,
   ): Promise<results.BadRequestErrorMessageResult | results.OkResult> {
     return super.disableEmailBackups(request)
+  }
+
+  @httpGet('/lookup-user/:email')
+  override async lookupUser(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.lookupUser(request, response)
+  }
+
+  @httpGet('/users/:userUuid/feature-flags')
+  override async getUserFeatureFlags(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getUserFeatureFlags(request, response)
+  }
+
+  @httpPut('/users/:userUuid/feature-flags')
+  override async setUserFeatureFlag(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setUserFeatureFlag(request, response)
+  }
+
+  @httpGet('/registration')
+  override async getRegistrationFlag(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getRegistrationFlag(request, response)
+  }
+
+  @httpPut('/registration')
+  override async setRegistrationFlag(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setRegistrationFlag(request, response)
   }
 }

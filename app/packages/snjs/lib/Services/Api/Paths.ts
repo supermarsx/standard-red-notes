@@ -46,6 +46,14 @@ const SettingsPaths = {
   subscriptionSettings: (userUuid: string) => `/v1/users/${userUuid}/subscription-settings`,
 }
 
+// Standard Red Notes: in-app admin panel endpoints (proxied to the auth server
+// /admin controller and gated on the INTERNAL_TEAM_USER role server-side).
+const AdminPaths = {
+  lookupUser: (email: string) => `/v1/admin/lookup-user/${encodeURIComponent(email)}`,
+  userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
+  registration: '/v1/admin/registration',
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -66,6 +74,7 @@ export const Paths = {
     ...SettingsPaths,
     ...SubscriptionPaths,
     ...UserPaths,
+    ...AdminPaths,
     meta: '/v1/meta',
   },
   v2: {

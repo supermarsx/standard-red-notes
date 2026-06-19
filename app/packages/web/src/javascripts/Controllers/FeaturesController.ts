@@ -62,6 +62,14 @@ export class FeaturesController extends AbstractViewController implements Intern
     // Standard Red Notes: no Super demo modal; the editor is always available.
   }
 
+  // Standard Red Notes: true when the current user has the INTERNAL_TEAM_USER
+  // role. Used to gate the in-app Admin preferences pane on the client. The
+  // server re-enforces this role on every admin endpoint, so this is purely a
+  // UX gate.
+  isAdminUser(): boolean {
+    return this.features.hasRole(RoleName.create(RoleName.NAMES.InternalTeamUser).getValue())
+  }
+
   isVaultsEnabled(): boolean {
     const enabled = this.features.isExperimentalFeatureEnabled(NativeFeatureIdentifier.TYPES.Vaults)
     return (

@@ -31,6 +31,11 @@ export class Register implements UseCaseInterface {
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
+    // TODO(standard-red-notes): the in-app admin panel persists a
+    // REGISTRATION_DISABLED setting (see BaseAdminController.setRegistrationFlag).
+    // To make that toggle take effect at runtime without a redeploy, this check
+    // should also consult that persisted flag here (via a GetSetting lookup)
+    // instead of relying solely on the boot-time DISABLE_USER_REGISTRATION env.
     if (this.disableUserRegistration) {
       return {
         success: false,

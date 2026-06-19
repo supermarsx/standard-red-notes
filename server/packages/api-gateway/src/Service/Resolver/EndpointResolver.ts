@@ -56,6 +56,12 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:offline/users/subscription', 'auth.users.getOfflineSubscriptionByToken'],
     ['[POST]:users/:userUuid/requests', 'auth.users.createRequest'],
     ['[GET]:users/:userUuid/mfa-secret', 'auth.users.getMfaSecret'],
+    // Admin Controller (Standard Red Notes admin panel)
+    ['[GET]:admin/lookup-user/:email', 'admin.lookupUser'],
+    ['[GET]:admin/users/:userUuid/feature-flags', 'admin.getUserFeatureFlags'],
+    ['[PUT]:admin/users/:userUuid/feature-flags', 'admin.setUserFeatureFlag'],
+    ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
+    ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
     // Syncing Server
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],

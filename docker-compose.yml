@@ -25,6 +25,9 @@ x-server-env: &server-env
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   COOKIE_PARTITIONED: ${COOKIE_PARTITIONED:-false}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Comma-separated emails granted the InternalTeamUser (admin) role, which
+  # unlocks the in-app Admin panel and the /admin user-management endpoints.
+  ADMIN_EMAILS: ${ADMIN_EMAILS:-}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
   STANDARD_RED_FULL_FEATURE_DURATION_DAYS: ${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
