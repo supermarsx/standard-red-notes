@@ -4,4 +4,5 @@ export interface RevisionMetadata {
   created_at: string
   updated_at: string
   required_role: string
+  edited_by_uuid?: string | null
 }

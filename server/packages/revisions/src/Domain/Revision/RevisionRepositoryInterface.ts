@@ -15,5 +15,7 @@ export interface RevisionRepositoryInterface {
   findByUserUuid(dto: { userUuid: Uuid; offset?: number; limit?: number }): Promise<Array<Revision>>
   insert(revision: Revision): Promise<boolean>
   update(revision: Revision): Promise<boolean>
+  removeByItemUuidOlderThan(itemUuid: Uuid, cutoffDate: Date): Promise<void>
+  removeByItemUuidBeyondCount(itemUuid: Uuid, maxCount: number): Promise<void>
   clearSharedVaultAndKeySystemAssociations(dto: { itemUuid?: Uuid; sharedVaultUuid: Uuid }): Promise<void>
 }

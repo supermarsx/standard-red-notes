@@ -59,9 +59,17 @@ export class RevisionItemStringMapper implements MapperInterface<Revision, strin
       keySystemAssociation = keySystemAssociationOrError.getValue()
     }
 
+    const editedByUuid: string | null =
+      typeof item.last_edited_by === 'string' && item.last_edited_by.length > 0
+        ? item.last_edited_by
+        : typeof item.user_uuid === 'string' && item.user_uuid.length > 0
+          ? item.user_uuid
+          : null
+
     const revisionOrError = Revision.create({
       itemUuid,
       userUuid,
+      editedByUuid,
       authHash: item.auth_hash,
       content: item.content,
       contentType,

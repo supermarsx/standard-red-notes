@@ -91,6 +91,14 @@ export class SQLRevision {
 
   @Column({
     type: 'varchar',
+    name: 'edited_by_uuid',
+    length: 36,
+    nullable: true,
+  })
+  declare editedByUuid: string | null
+
+  @Column({
+    type: 'varchar',
     name: 'shared_vault_uuid',
     length: 36,
     nullable: true,

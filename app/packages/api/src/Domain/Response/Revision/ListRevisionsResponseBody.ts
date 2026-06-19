@@ -5,5 +5,6 @@ export interface ListRevisionsResponseBody {
     created_at: string
     updated_at: string
     required_role: string
+    edited_by_uuid?: string | null
   }>
 }

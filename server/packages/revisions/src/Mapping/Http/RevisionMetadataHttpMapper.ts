@@ -22,6 +22,7 @@ export class RevisionMetadataHttpMapper implements MapperInterface<
       updated_at: domain.props.dates.updatedAt.toISOString(),
       required_role: this.getRequiredRoleToViewRevision.execute({ createdAt: domain.props.dates.createdAt }).getValue(),
       shared_vault_uuid: domain.props.sharedVaultUuid ? domain.props.sharedVaultUuid.value : null,
+      edited_by_uuid: domain.props.editedByUuid ?? null,
     }
   }
 }

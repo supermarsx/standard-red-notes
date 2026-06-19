@@ -53,7 +53,14 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
                   }}
                 >
                   <div className="flex flex-grow items-center justify-between">
-                    <div>{previewHistoryEntryTitle(entry)}</div>
+                    <div>
+                      <div>{previewHistoryEntryTitle(entry)}</div>
+                      {entry.edited_by_uuid && (
+                        <div className="mt-0.5 text-xs text-passive-0">
+                          edited by {entry.edited_by_uuid.slice(0, 8)}
+                        </div>
+                      )}
+                    </div>
                     {!features.hasMinimumRole(entry.required_role) && (
                       <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />
                     )}

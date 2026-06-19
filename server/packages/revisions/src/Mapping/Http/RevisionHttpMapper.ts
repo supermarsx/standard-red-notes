@@ -29,6 +29,7 @@ export class RevisionHttpMapper implements MapperInterface<Revision, RevisionHtt
         ? domain.props.sharedVaultAssociation.props.editedBy.value
         : null,
       user_uuid: domain.props.userUuid ? domain.props.userUuid.value : null,
+      edited_by_uuid: domain.props.editedByUuid ?? null,
     }
   }
 }

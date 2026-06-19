@@ -105,6 +105,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
       .addSelect('created_at', 'createdAt')
       .addSelect('updated_at', 'updatedAt')
       .addSelect('shared_vault_uuid', 'sharedVaultUuid')
+      .addSelect('edited_by_uuid', 'editedByUuid')
       .addSelect('item_uuid', 'itemUuid')
       .orderBy('created_at', 'DESC')
 
@@ -211,5 +212,49 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
     await this.ormRepository.update({ uuid: uuid }, rest)
 
     return true
+  }
+
+  async removeByItemUuidOlderThan(itemUuid: Uuid, cutoffDate: Date): Promise<void> {
+    await this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .from('revisions_revisions')
+      .where('item_uuid = :itemUuid AND created_at < :cutoffDate', {
+        itemUuid: itemUuid.value,
+        cutoffDate,
+      })
+      .execute()
+  }
+
+  async removeByItemUuidBeyondCount(itemUuid: Uuid, maxCount: number): Promise<void> {
+    if (maxCount <= 0) {
+      return
+    }
+
+    const uuidsToKeep = (
+      await this.ormRepository
+        .createQueryBuilder()
+        .select('uuid', 'uuid')
+        .where('item_uuid = :itemUuid', { itemUuid: itemUuid.value })
+        .orderBy('created_at', 'DESC')
+        .limit(maxCount)
+        .getRawMany()
+    ).map((row) => row.uuid)
+
+    const deleteQueryBuilder = this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .from('revisions_revisions')
+
+    if (uuidsToKeep.length > 0) {
+      deleteQueryBuilder.where('item_uuid = :itemUuid AND uuid NOT IN (:...uuidsToKeep)', {
+        itemUuid: itemUuid.value,
+        uuidsToKeep,
+      })
+    } else {
+      deleteQueryBuilder.where('item_uuid = :itemUuid', { itemUuid: itemUuid.value })
+    }
+
+    await deleteQueryBuilder.execute()
   }
 }

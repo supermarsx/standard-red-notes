@@ -17,7 +17,16 @@ export class RevisionManager extends AbstractService implements RevisionClientIn
 
   async listRevisions(
     itemUuid: Uuid,
-  ): Promise<{ uuid: string; content_type: string; created_at: string; updated_at: string; required_role: string }[]> {
+  ): Promise<
+    {
+      uuid: string
+      content_type: string
+      created_at: string
+      updated_at: string
+      required_role: string
+      edited_by_uuid?: string | null
+    }[]
+  > {
     const result = await this.revisionApiService.listRevisions(itemUuid.value)
 
     if (isErrorResponse(result)) {

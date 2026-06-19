@@ -26,6 +26,8 @@ const TYPES = {
   Revisions_SNS_TOPIC_ARN: Symbol.for('Revisions_SNS_TOPIC_ARN'),
   Revisions_SNS_AWS_REGION: Symbol.for('Revisions_SNS_AWS_REGION'),
   Revisions_VERSION: Symbol.for('Revisions_VERSION'),
+  Revisions_REVISIONS_RETENTION_DAYS: Symbol.for('Revisions_REVISIONS_RETENTION_DAYS'),
+  Revisions_REVISIONS_MAX_COUNT_PER_ITEM: Symbol.for('Revisions_REVISIONS_MAX_COUNT_PER_ITEM'),
   Revisions_IS_CONFIGURED_FOR_HOME_SERVER_OR_SELF_HOSTING: Symbol.for(
     'Revisions_IS_CONFIGURED_FOR_HOME_SERVER_OR_SELF_HOSTING',
   ),

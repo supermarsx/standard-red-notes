@@ -6,6 +6,7 @@ import { KeySystemAssociation } from '../KeySystem/KeySystemAssociation'
 export interface RevisionProps {
   itemUuid: Uuid
   userUuid: Uuid | null
+  editedByUuid?: string | null
   content: string | null
   contentType: ContentType
   itemsKeyId: string | null

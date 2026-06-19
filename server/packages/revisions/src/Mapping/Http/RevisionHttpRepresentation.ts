@@ -12,4 +12,5 @@ export interface RevisionHttpRepresentation {
   shared_vault_uuid: string | null
   user_uuid: string | null
   last_edited_by_uuid: string | null
+  edited_by_uuid: string | null
 }

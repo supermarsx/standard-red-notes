@@ -80,6 +80,7 @@ export class SQLRevisionPersistenceMapper implements MapperInterface<Revision, S
         itemsKeyId: projection.itemsKeyId,
         itemUuid,
         userUuid,
+        editedByUuid: projection.editedByUuid ?? null,
         dates,
         sharedVaultAssociation,
         keySystemAssociation,
@@ -108,6 +109,7 @@ export class SQLRevisionPersistenceMapper implements MapperInterface<Revision, S
     sqlRevision.itemUuid = domain.props.itemUuid.value
     sqlRevision.itemsKeyId = domain.props.itemsKeyId
     sqlRevision.userUuid = domain.props.userUuid ? domain.props.userUuid.value : null
+    sqlRevision.editedByUuid = domain.props.editedByUuid ?? null
     sqlRevision.uuid = domain.id.toString()
     sqlRevision.sharedVaultUuid = domain.props.sharedVaultAssociation
       ? domain.props.sharedVaultAssociation.props.sharedVaultUuid.value

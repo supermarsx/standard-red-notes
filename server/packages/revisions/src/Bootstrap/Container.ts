@@ -111,6 +111,15 @@ export class ContainerConfigLoader {
 
     container.bind(TYPES.Revisions_VERSION).toConstantValue(env.get('VERSION', true) ?? 'development')
 
+    container
+      .bind<number>(TYPES.Revisions_REVISIONS_RETENTION_DAYS)
+      .toConstantValue(env.get('REVISIONS_RETENTION_DAYS', true) ? +env.get('REVISIONS_RETENTION_DAYS', true) : 0)
+    container
+      .bind<number>(TYPES.Revisions_REVISIONS_MAX_COUNT_PER_ITEM)
+      .toConstantValue(
+        env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) ? +env.get('REVISIONS_MAX_COUNT_PER_ITEM', true) : 0,
+      )
+
     if (!isConfiguredForHomeServer) {
       // env vars
       container.bind(TYPES.Revisions_SQS_QUEUE_URL).toConstantValue(env.get('SQS_QUEUE_URL'))
@@ -254,6 +263,9 @@ export class ContainerConfigLoader {
         new CreateRevisionFromDump(
           container.get<DumpRepositoryInterface>(TYPES.Revisions_DumpRepository),
           container.get<RevisionRepositoryInterface>(TYPES.Revisions_SQLRevisionRepository),
+          container.get<TimerInterface>(TYPES.Revisions_Timer),
+          container.get<number>(TYPES.Revisions_REVISIONS_RETENTION_DAYS),
+          container.get<number>(TYPES.Revisions_REVISIONS_MAX_COUNT_PER_ITEM),
         ),
       )
 

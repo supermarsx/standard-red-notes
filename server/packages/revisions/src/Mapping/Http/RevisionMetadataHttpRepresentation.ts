@@ -6,4 +6,5 @@ export interface RevisionMetadataHttpRepresentation {
   updated_at: string
   required_role: string
   shared_vault_uuid: string | null
+  edited_by_uuid: string | null
 }

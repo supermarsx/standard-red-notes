@@ -4,5 +4,6 @@ export interface RevisionMetadataProps {
   contentType: ContentType
   itemUuid: Uuid
   sharedVaultUuid: Uuid | null
+  editedByUuid?: string | null
   dates: Dates
 }
