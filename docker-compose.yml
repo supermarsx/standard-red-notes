@@ -14,6 +14,16 @@ x-server-env: &server-env
   # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
   AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
   VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-dev-valet-token-secret-change-me}
+  # Auth session cookies. The auth service authenticates browser requests off the
+  # access_token_<session> cookie, so these MUST suit the deployment or every
+  # authed request 401s. Defaults below are for an http://localhost self-host:
+  # empty domain -> host-only cookie (works on localhost / any bare host or IP);
+  # SameSite=Lax + Secure=false so the cookie is stored/sent over plain http.
+  # For an HTTPS deployment behind a domain, set COOKIE_DOMAIN, COOKIE_SECURE=true.
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+  COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  COOKIE_PARTITIONED: ${COOKIE_PARTITIONED:-false}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}

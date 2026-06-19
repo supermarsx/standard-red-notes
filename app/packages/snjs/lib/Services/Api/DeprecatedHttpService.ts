@@ -95,6 +95,13 @@ export class DeprecatedHttpService extends AbstractService {
     request.responseType = httpRequest.responseType ?? ''
 
     if (!httpRequest.external) {
+      // Send session cookies (access_token_*) on same-server requests. The auth
+      // service authenticates browser requests off these cookies, and on a
+      // split-origin self-host (app and API on different ports) the browser only
+      // attaches them when withCredentials is set. Never enable for external
+      // requests so cookies are not leaked to third-party hosts.
+      request.withCredentials = true
+
       request.setRequestHeader('X-SNJS-Version', SnjsVersion)
 
       const appVersionHeaderValue = `${Environment[this.environment]}-${this.appVersion}`
