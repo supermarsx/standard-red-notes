@@ -17,6 +17,7 @@ import {
   ItemManagerInterface,
   ListRevisions,
   MutatorClientInterface,
+  NoteContent,
   NoteHistoryEntry,
   PayloadEmitSource,
   RevisionMetadata,
@@ -42,6 +43,11 @@ export class NoteHistoryController {
 
   selectedRevision: SelectedRevision = undefined
   selectedEntry: SelectedEntry = undefined
+
+  /** When true, the content pane renders a diff instead of a single revision. */
+  isComparing = false
+  /** What the selected revision is diffed against in compare mode. */
+  compareTarget: 'current' | 'previous' = 'current'
 
   contentState = RevisionContentState.Idle
 
@@ -69,6 +75,13 @@ export class NoteHistoryController {
       selectedEntry: observable,
       setSelectedEntry: action,
 
+      isComparing: observable,
+      setIsComparing: action,
+      compareTarget: observable,
+      setCompareTarget: action,
+      comparisonContent: observable,
+      setComparisonContent: action,
+
       remoteHistory: observable,
       setRemoteHistory: action,
       isFetchingRemoteHistory: observable,
@@ -94,10 +107,89 @@ export class NoteHistoryController {
 
   setSelectedRevision = (revision: SelectedRevision) => {
     this.selectedRevision = revision
+    if (this.isComparing) {
+      void this.refreshComparisonContent()
+    }
   }
 
   setSelectedEntry = (entry: SelectedEntry) => {
     this.selectedEntry = entry
+  }
+
+  /**
+   * Holds the resolved content the selected revision is diffed against while in
+   * compare mode. `undefined` while loading or unavailable.
+   */
+  comparisonContent: NoteContent | undefined = undefined
+
+  setComparisonContent = (content: NoteContent | undefined) => {
+    this.comparisonContent = content
+  }
+
+  setIsComparing = (value: boolean) => {
+    this.isComparing = value
+    if (value) {
+      void this.refreshComparisonContent()
+    } else {
+      this.setComparisonContent(undefined)
+    }
+  }
+
+  setCompareTarget = (target: 'current' | 'previous') => {
+    this.compareTarget = target
+    if (this.isComparing) {
+      void this.refreshComparisonContent()
+    }
+  }
+
+  /** The note's current (live) content, used for "compare with current". */
+  get currentNoteContent(): NoteContent | undefined {
+    const liveNote = this.items.findItem<SNNote>(this.note.uuid) ?? this.note
+    return liveNote?.content as NoteContent | undefined
+  }
+
+  /**
+   * Resolves the content to diff against, based on the active compare target,
+   * and stores it on `comparisonContent`. For "previous" we fetch the
+   * next-older remote revision relative to the current selection.
+   */
+  refreshComparisonContent = async () => {
+    if (this.compareTarget === 'current') {
+      this.setComparisonContent(this.currentNoteContent)
+      return
+    }
+
+    this.setComparisonContent(undefined)
+
+    const selectedUuid = (this.selectedEntry as RevisionMetadata | undefined)?.uuid
+    if (!selectedUuid || !this.note) {
+      return
+    }
+
+    const currentIndex = this.flattenedRemoteHistory.findIndex((entry) => entry?.uuid === selectedUuid)
+    const previousEntry = this.flattenedRemoteHistory[currentIndex + 1]
+
+    if (!previousEntry) {
+      return
+    }
+
+    if (!this.features.hasMinimumRole(previousEntry.required_role)) {
+      return
+    }
+
+    try {
+      const previousRevisionOrError = await this._getRevision.execute({
+        itemUuid: this.note.uuid,
+        revisionUuid: previousEntry.uuid,
+      })
+      if (previousRevisionOrError.isFailed()) {
+        throw new Error(previousRevisionOrError.getError())
+      }
+      this.setComparisonContent(previousRevisionOrError.getValue().payload.content as NoteContent)
+    } catch (err) {
+      console.error(err)
+      this.setComparisonContent(undefined)
+    }
   }
 
   clearSelection = () => {
