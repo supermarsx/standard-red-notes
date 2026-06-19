@@ -6,7 +6,7 @@ import Appearance from './Panes/Appearance'
 import General from './Panes/General/General'
 import AccountPreferences from './Panes/Account/AccountPreferences'
 import Security from './Panes/Security/Security'
-import HelpAndFeedback from './Panes/HelpFeedback'
+import Documentation from './Panes/Documentation/Documentation'
 import { PreferencesProps } from './PreferencesProps'
 import WhatsNew from './Panes/WhatsNew/WhatsNew'
 import HomeServer from './Panes/HomeServer/HomeServer'
@@ -42,7 +42,7 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
     case 'accessibility':
       return null
     case 'help-feedback':
-      return <HelpAndFeedback />
+      return <Documentation />
     case 'whats-new':
       return <WhatsNew application={application} />
     default:
