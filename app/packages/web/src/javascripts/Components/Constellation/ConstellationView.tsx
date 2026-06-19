@@ -105,7 +105,7 @@ function readColors(element: HTMLElement): Colors {
 
 const ConstellationView = forwardRef<HTMLDivElement, Props>(
   ({ application, className, id, children, standalone }, ref) => {
-  const { presentPane } = useResponsiveAppPane()
+  const { presentPane, removePane } = useResponsiveAppPane()
   const [selected, setSelected] = useState<SelectedNote | null>(null)
   const [position, setPosition] = useState<ConstellationPosition>(
     application.getPreference(PrefKey.ConstellationPosition, 'right'),
@@ -560,6 +560,16 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
           <button className="rounded p-1 hover:bg-default" onClick={recenter} aria-label="Recenter graph" title="Recenter">
             <Icon type="fullscreen-exit" />
           </button>
+          {!standalone && (
+            <button
+              className="rounded p-1 hover:bg-default"
+              onClick={() => removePane(AppPaneId.Constellation)}
+              aria-label="Close constellation"
+              title="Close"
+            >
+              <Icon type="menu-close" />
+            </button>
+          )}
         </div>
       </div>
 

@@ -16,8 +16,8 @@ const ScanQRCode: FunctionComponent<Props> = ({ activation: act }) => {
   const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
   return (
-    <div className="h-33 flex flex-col items-center gap-5 px-4 py-4 md:flex-row">
-      <div className="flex items-center justify-center bg-info">
+    <div className="flex flex-col items-center gap-5 px-4 py-4 md:flex-row md:items-start">
+      <div className="flex flex-shrink-0 items-center justify-center bg-info p-2">
         <QRCode
           className="border-2 border-solid border-neutral-contrast"
           value={act.qrCode}
