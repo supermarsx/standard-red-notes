@@ -29,6 +29,7 @@ export const TYPES = {
   ApiGateway_ASSISTANT_PROVIDER_CONFIG: Symbol.for('ApiGateway_ASSISTANT_PROVIDER_CONFIG'),
   ApiGateway_ASSISTANT_DEFAULT_PROVIDER: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_PROVIDER'),
   ApiGateway_ASSISTANT_DEFAULT_MODEL: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_MODEL'),
+  ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT: Symbol.for('ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT'),
   // Middleware
   ApiGateway_RequiredCrossServiceTokenMiddleware: Symbol.for('ApiGateway_RequiredCrossServiceTokenMiddleware'),
   ApiGateway_OptionalCrossServiceTokenMiddleware: Symbol.for('ApiGateway_OptionalCrossServiceTokenMiddleware'),

@@ -32,6 +32,13 @@ x-server-env: &server-env
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
   STANDARD_RED_FULL_FEATURE_DURATION_DAYS: ${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
   STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT: ${STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT:--1}
+  # Revision history retention. Both default to 0 = unlimited (no pruning),
+  # preserving the upstream behavior. When set, the revisions service prunes a
+  # note/file's history on each new revision: REVISIONS_RETENTION_DAYS deletes
+  # revisions older than the window; REVISIONS_MAX_COUNT_PER_ITEM keeps only the
+  # N most-recent revisions per item.
+  REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-0}
+  REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-0}
   PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:3125}
   # Self-hosted realtime WebSocket gateway (replaces AWS API Gateway push).
   WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://websocket-gateway:3106}
@@ -50,6 +57,8 @@ x-server-env: &server-env
   ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
   ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
+  # Global per-user daily AI request ceiling enforced by the api-gateway. 0 = unlimited.
+  ASSISTANT_DAILY_REQUEST_LIMIT: ${ASSISTANT_DAILY_REQUEST_LIMIT:-0}
 
 services:
   app:

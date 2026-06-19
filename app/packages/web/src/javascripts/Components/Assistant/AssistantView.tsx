@@ -47,8 +47,32 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+
+  const refreshUsage = useCallback(async () => {
+    if (connectionMode !== 'proxy') {
+      setUsage(null)
+      return
+    }
+    try {
+      const result = await application.assistantConfigRequest<{ used: number; limit: number; resetsAt: string }>(
+        '/v1/assistant/usage',
+      )
+      if (typeof result?.used === 'number' && typeof result?.limit === 'number') {
+        setUsage({ used: result.used, limit: result.limit })
+      }
+    } catch {
+      // Usage display is best-effort; ignore failures.
+    }
+  }, [application, connectionMode])
+
+  useEffect(() => {
+    void refreshUsage()
+  }, [refreshUsage])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -62,7 +86,6 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
       return
     }
 
-    const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
     const provider = application.getPreference(PrefKey.AssistantProvider, '')
     const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
     const apiKey = application.getPreference(PrefKey.AssistantApiKey, '')
@@ -174,8 +197,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
     } finally {
       setIsRunning(false)
       abortRef.current = null
+      void refreshUsage()
     }
-  }, [application, input, isRunning, messages, presentPane])
+  }, [application, connectionMode, input, isRunning, messages, presentPane, refreshUsage])
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
@@ -204,6 +228,11 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
         <div className="flex items-center gap-2">
           <Icon type="dashboard" className="text-info" />
           <span className="text-base font-bold">Assistant</span>
+          {usage && (
+            <span className="text-xs text-passive-0" title="AI requests used today">
+              AI usage: {usage.used} / {usage.limit > 0 ? usage.limit : '∞'} today
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           {!standalone && (

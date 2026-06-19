@@ -165,6 +165,10 @@ export class ContainerConfigLoader {
     container
       .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_MODEL)
       .toConstantValue(env.get('ASSISTANT_DEFAULT_MODEL', true) || 'claude-3-5-sonnet-latest')
+    // Global daily AI request ceiling enforced per user. 0 = unlimited.
+    container
+      .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
+      .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
 
     // Middleware
     container

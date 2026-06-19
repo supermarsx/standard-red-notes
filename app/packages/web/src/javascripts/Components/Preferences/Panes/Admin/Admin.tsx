@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
-import { SettingName, isErrorResponse } from '@standardnotes/snjs'
+import { isErrorResponse } from '@standardnotes/snjs'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -23,8 +23,11 @@ type LookedUpUser = {
   email: string
 }
 
-const AI_ENABLED = SettingName.NAMES.AiEnabled
-const AI_REQUEST_LIMIT = SettingName.NAMES.AiRequestLimit
+// Server-only Standard Red Notes setting names. The client's published
+// domain-core does not carry these, so use the literal strings the server
+// expects (must match the server's SettingName.NAMES values exactly).
+const AI_ENABLED = 'AI_ENABLED'
+const AI_REQUEST_LIMIT = 'AI_REQUEST_LIMIT'
 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
@@ -49,7 +52,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
     try {
       const response = await application.legacyApi.adminGetRegistrationFlag()
       if (!isErrorResponse(response)) {
-        const data = response.data as { registrationDisabled?: boolean } | undefined
+        const data = (response as { data?: { registrationDisabled?: boolean } }).data
         setRegistrationDisabled(Boolean(data?.registrationDisabled))
       }
     } catch (error) {
@@ -72,7 +75,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
           return
         }
-        const data = response.data as { flags?: Record<string, string | null> } | undefined
+        const data = (response as { data?: { flags?: Record<string, string | null> } }).data
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] === 'true')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
@@ -97,7 +100,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         addToast({ type: ToastType.Error, message: 'No user found with that email.' })
         return
       }
-      const data = response.data as { uuid?: string } | undefined
+      const data = (response as { data?: { uuid?: string } }).data
       if (!data?.uuid) {
         addToast({ type: ToastType.Error, message: 'No user found with that email.' })
         return
