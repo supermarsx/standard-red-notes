@@ -41,6 +41,7 @@ type Props = {
 
 const LazyLoadedClipperView = lazy(() => import('../ClipperView/ClipperView'))
 const LazyLoadedAssistantView = lazy(() => import('../Assistant/AssistantView'))
+const LazyLoadedConstellationView = lazy(() => import('../Constellation/ConstellationView'))
 
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
   const platformString = getPlatformString()
@@ -222,6 +223,34 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                   <div className={platformString + ' main-ui-view sn-component h-full'}>
                     <LazyLoadedAssistantView
                       id="assistant-standalone"
+                      application={application}
+                      className="h-full"
+                      standalone
+                    />
+                  </div>
+                  <ToastContainer />
+                  <FilePreviewModalWrapper application={application} />
+                  {renderChallenges()}
+                </FileDragNDropProvider>
+              </LinkingControllerProvider>
+            </ResponsivePaneProvider>
+          </AndroidBackHandlerProvider>
+        </KeyboardServiceProvider>
+      </ApplicationProvider>
+    )
+  }
+
+  if (route.type === RouteType.AppViewRoute && route.appViewRouteParam === 'constellation') {
+    return (
+      <ApplicationProvider application={application}>
+        <KeyboardServiceProvider service={application.keyboardService}>
+          <AndroidBackHandlerProvider application={application}>
+            <ResponsivePaneProvider paneController={application.paneController}>
+              <LinkingControllerProvider controller={application.linkingController}>
+                <FileDragNDropProvider application={application}>
+                  <div className={platformString + ' main-ui-view sn-component h-full'}>
+                    <LazyLoadedConstellationView
+                      id="constellation-standalone"
                       application={application}
                       className="h-full"
                       standalone

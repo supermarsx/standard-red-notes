@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { PrefKey } from '@standardnotes/snjs'
 import { confirmDialog } from '@standardnotes/ui-services'
@@ -15,6 +15,7 @@ import { DirectProvider } from '@/Assistant/DirectProvider'
 import { Provider } from '@/Assistant/types'
 import { AssistantTools } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT } from '@/Assistant/prompts'
+import { openOrFocusAssistantWindow } from '@/Assistant/assistantWindow'
 
 type ToolEntry = {
   id: string
@@ -35,9 +36,12 @@ type Props = {
   id: string
   /** When true the view is rendered as a standalone popped-out window. */
   standalone?: boolean
+  /** Extra overlay content (e.g. the panel resize handle) rendered inside the root. */
+  children?: ReactNode
 }
 
-const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, className, id, standalone }, ref) => {
+const AssistantView = forwardRef<HTMLDivElement, Props>(
+  ({ application, className, id, standalone, children }, ref) => {
   const { dismissLastPane, presentPane } = useResponsiveAppPane()
 
   const [messages, setMessages] = useState<UIMessage[]>([])
@@ -187,16 +191,16 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   }, [application])
 
   const handlePopOut = useCallback(() => {
-    window.open('/?route=assistant', '_blank', 'noopener,noreferrer')
+    openOrFocusAssistantWindow()
   }, [])
 
   return (
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden bg-default')}
+      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
     >
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
         <div className="flex items-center gap-2">
           <Icon type="dashboard" className="text-info" />
           <span className="text-base font-bold">Assistant</span>
@@ -244,7 +248,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
       </div>
 
-      <div className="border-t border-border p-3">
+      <div className="border-t border-border bg-contrast p-3">
         <div className="flex items-end gap-2">
           <textarea
             className="min-h-[2.5rem] flex-grow resize-none rounded border border-border bg-default px-3 py-2 text-sm focus:border-info focus:outline-none"
@@ -267,6 +271,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           )}
         </div>
       </div>
+      {children}
     </div>
   )
 })

@@ -9,6 +9,8 @@ import { NewNoteTitleFormat } from './NewNoteTitleFormat'
 export const PrefDefaults = {
   [PrefKey.TagsPanelWidth]: 220,
   [PrefKey.NotesPanelWidth]: 350,
+  [PrefKey.AssistantPanelWidth]: 400,
+  [PrefKey.ConstellationPosition]: 'right',
   [PrefKey.EditorWidth]: null,
   [PrefKey.EditorLeft]: null,
   [PrefKey.DEPRECATED_EditorMonospaceEnabled]: false,

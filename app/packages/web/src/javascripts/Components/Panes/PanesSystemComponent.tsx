@@ -21,11 +21,15 @@ import { log, LoggingDomain } from '@/Logging'
 import { useMediaQuery } from '@/Hooks/useMediaQuery'
 import EditorPane from '../NoteGroupView/EditorPane'
 import AssistantView from '../Assistant/AssistantView'
+import ConstellationView from '../Constellation/ConstellationView'
+import usePreference from '@/Hooks/usePreference'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
 const ITEMS_PANEL_MIN_WIDTH = 200
 const NAVIGATION_PANEL_DEFAULT_WIDTH = 220
 const ITEMS_PANEL_DEFAULT_WIDTH = 400
+const ASSISTANT_PANEL_MIN_WIDTH = 300
+const ASSISTANT_PANEL_DEFAULT_WIDTH = 400
 
 const PanesSystemComponent = () => {
   const application = useApplication()
@@ -49,7 +53,53 @@ const PanesSystemComponent = () => {
   )
   const [listRef, setListRef] = useState<HTMLDivElement | null>(null)
 
+  const [assistantPanelWidth, setAssistantPanelWidth] = useState<number>(
+    application.getPreference(PrefKey.AssistantPanelWidth, ASSISTANT_PANEL_DEFAULT_WIDTH),
+  )
+
+  const startAssistantResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      const startX = event.clientX
+      const startWidth = assistantPanelWidth
+      let latest = startWidth
+
+      const onMove = (moveEvent: MouseEvent) => {
+        // The assistant is the rightmost pane, so dragging its left edge LEFT
+        // (clientX decreases) should widen it.
+        const delta = startX - moveEvent.clientX
+        const maxWidth = Math.min(900, window.innerWidth - 400)
+        latest = Math.max(ASSISTANT_PANEL_MIN_WIDTH, Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)))
+        setAssistantPanelWidth(latest)
+      }
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('select-none', 'cursor-col-resize')
+        void application.setPreference(PrefKey.AssistantPanelWidth, latest).catch(console.error)
+      }
+
+      document.body.classList.add('select-none', 'cursor-col-resize')
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [application, assistantPanelWidth],
+  )
+
   const showPanelResizers = !isTabletOrMobile
+
+  const constellationPosition = usePreference(PrefKey.ConstellationPosition)
+
+  const orderPanesForConstellation = (list: AppPaneId[]): AppPaneId[] => {
+    if (isMobile || !list.includes(AppPaneId.Constellation)) {
+      return list
+    }
+    const others = list.filter((pane) => pane !== AppPaneId.Constellation)
+    return constellationPosition === 'left'
+      ? [AppPaneId.Constellation, ...others]
+      : [...others, AppPaneId.Constellation]
+  }
 
   const [_editorRef, setEditorRef] = useState<HTMLDivElement | null>(null)
 
@@ -177,31 +227,39 @@ const PanesSystemComponent = () => {
     }
   }, [isTablet, paneController, previousIsTabletOrMobileWrapped])
 
-  const ASSISTANT_PANEL_WIDTH = 400
-
   const computeStylesForContainer = (): React.CSSProperties => {
     const panes = paneController.panes
     const hasAssistant = panes.includes(AppPaneId.Assistant)
+    const hasConstellation = panes.includes(AppPaneId.Constellation)
 
     if (isMobile) {
       return {}
     }
 
-    if (hasAssistant) {
-      // Render every non-assistant pane with its natural width and give the
-      // assistant a fixed trailing column.
-      const columns = panes.map((pane) => {
-        if (pane === AppPaneId.Assistant) {
-          return `${ASSISTANT_PANEL_WIDTH}px`
-        }
-        if (pane === AppPaneId.Navigation) {
-          return `${navigationPanelWidth}px`
-        }
-        if (pane === AppPaneId.Items) {
-          return `${itemsPanelWidth}px`
-        }
-        return 'minmax(0, 1fr)'
-      })
+    const columnFor = (pane: AppPaneId) => {
+      if (pane === AppPaneId.Assistant) {
+        return `${assistantPanelWidth}px`
+      }
+      if (pane === AppPaneId.Navigation) {
+        return `${navigationPanelWidth}px`
+      }
+      if (pane === AppPaneId.Items) {
+        return `${itemsPanelWidth}px`
+      }
+      return 'minmax(0, 1fr)'
+    }
+
+    // Constellation docked to the bottom: it spans all columns in a second row
+    // (placed explicitly per-pane), so the columns only describe the other panes.
+    if (hasConstellation && constellationPosition === 'bottom') {
+      const columns = panes.filter((pane) => pane !== AppPaneId.Constellation).map(columnFor)
+      return { gridTemplateColumns: columns.join(' '), gridTemplateRows: '1fr minmax(0, 40vh)' }
+    }
+
+    if (hasAssistant || hasConstellation) {
+      // Render fixed-width side panes (navigation/items/assistant) at their set
+      // widths, and let the editor and the constellation graph share the rest.
+      const columns = orderPanesForConstellation(panes).map(columnFor)
       return { gridTemplateColumns: columns.join(' ') }
     }
 
@@ -270,7 +328,7 @@ const PanesSystemComponent = () => {
     return 'grid'
   }
 
-  const renderPanesWithPendingExit = [...renderPanes, ...panesPendingExit]
+  const renderPanesWithPendingExit = orderPanesForConstellation([...renderPanes, ...panesPendingExit])
 
   log(LoggingDomain.Panes, 'Rendering panes', renderPanesWithPendingExit)
 
@@ -279,7 +337,14 @@ const PanesSystemComponent = () => {
       {renderPanesWithPendingExit.map((pane, index) => {
         const isPendingEntrance = panesPendingEntrance?.includes(pane)
 
-        const className = computeClassesForPane(pane, isPendingEntrance ?? false, index)
+        const constellationBottomPlacement =
+          pane === AppPaneId.Constellation && constellationPosition === 'bottom' && !isMobile
+            ? '[grid-column:1/-1] [grid-row:2]'
+            : ''
+        const className = classNames(
+          computeClassesForPane(pane, isPendingEntrance ?? false, index),
+          constellationBottomPlacement,
+        )
 
         if (pane === AppPaneId.Navigation) {
           return (
@@ -350,7 +415,27 @@ const PanesSystemComponent = () => {
         } else if (pane === AppPaneId.Assistant) {
           return (
             <ErrorBoundary key="assistant-pane">
-              <AssistantView id={ElementIds.AssistantColumn} className={className} application={application} />
+              <AssistantView id={ElementIds.AssistantColumn} className={className} application={application}>
+                {showPanelResizers && (
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize assistant panel"
+                    onMouseDown={startAssistantResize}
+                    className="absolute left-0 top-0 z-panel-resizer hidden h-full w-[5px] cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-0 transition-opacity hover:opacity-100 md:block"
+                  />
+                )}
+              </AssistantView>
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Constellation) {
+          return (
+            <ErrorBoundary key="constellation-pane">
+              <ConstellationView
+                id={ElementIds.ConstellationColumn}
+                className={className}
+                application={application}
+              />
             </ErrorBoundary>
           )
         }

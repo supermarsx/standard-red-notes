@@ -48,6 +48,8 @@ export enum PrefKey {
   AssistantConnectionMode = 'assistantConnectionMode',
   AssistantBaseUrl = 'assistantBaseUrl',
   AssistantApiKey = 'assistantApiKey',
+  AssistantPanelWidth = 'assistantPanelWidth',
+  ConstellationPosition = 'constellationPosition',
   AddImportsToTag = 'addImportsToTag',
   AlwaysCreateNewTagForImports = 'alwaysCreateNewTagForImports',
   ExistingTagForImports = 'existingTagForImports',
@@ -65,6 +67,8 @@ export enum PrefKey {
 export type PrefValue = {
   [PrefKey.TagsPanelWidth]: number
   [PrefKey.NotesPanelWidth]: number
+  [PrefKey.AssistantPanelWidth]: number
+  [PrefKey.ConstellationPosition]: 'right' | 'left' | 'bottom'
   [PrefKey.EditorWidth]: number | null
   [PrefKey.EditorLeft]: number | null
   [PrefKey.EditorSpellcheck]: boolean
