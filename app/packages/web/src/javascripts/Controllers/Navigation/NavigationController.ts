@@ -580,6 +580,14 @@ export class NavigationController
       .catch(console.error)
   }
 
+  public setColor(tag: SNTag, color: string | undefined) {
+    this._changeAndSaveItem
+      .execute<TagMutator>(tag, (mutator) => {
+        mutator.color = color
+      })
+      .catch(console.error)
+  }
+
   public get editingTag(): SNTag | SmartView | undefined {
     return this.editing_
   }

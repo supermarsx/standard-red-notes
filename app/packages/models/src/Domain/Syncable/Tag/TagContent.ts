@@ -7,6 +7,11 @@ export interface TagContentSpecialized {
   title: string
   expanded: boolean
   iconString: IconType | EmojiString
+  /**
+   * Optional hex color (e.g. "#086dd6") used to color-code the tag in the UI.
+   * An empty string or undefined means no color is set.
+   */
+  color?: string
   preferences?: TagPreferences
 }
 

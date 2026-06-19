@@ -32,6 +32,14 @@ export class TagMutator<Content extends TagContent = TagContent> extends Decrypt
     this.mutableContent.iconString = iconString
   }
 
+  set color(color: string | undefined) {
+    if (color) {
+      this.mutableContent.color = color
+    } else {
+      delete this.mutableContent.color
+    }
+  }
+
   get preferences(): TagPreferences {
     if (!this.mutablePreferences) {
       this.mutableContent.preferences = {}

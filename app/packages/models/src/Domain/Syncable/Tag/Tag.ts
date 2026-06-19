@@ -18,6 +18,7 @@ export class SNTag extends DecryptedItem<TagContent> implements TagContentSpecia
   public readonly title: string
   public readonly iconString: VectorIconNameOrEmoji
   public readonly expanded: boolean
+  public readonly color?: string
   public readonly preferences?: TagPreferences
 
   constructor(payload: DecryptedPayloadInterface<TagContent>) {
@@ -25,6 +26,7 @@ export class SNTag extends DecryptedItem<TagContent> implements TagContentSpecia
     this.title = this.payload.content.title || ''
     this.expanded = this.payload.content.expanded != undefined ? this.payload.content.expanded : true
     this.iconString = this.payload.content.iconString || DefaultTagIconName
+    this.color = this.payload.content.color || undefined
     this.preferences = this.payload.content.preferences
   }
 

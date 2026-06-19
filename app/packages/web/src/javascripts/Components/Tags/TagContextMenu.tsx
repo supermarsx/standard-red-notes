@@ -16,6 +16,7 @@ import { useApplication } from '../ApplicationProvider'
 import MenuSection from '../Menu/MenuSection'
 import DecoratedInput from '../Input/DecoratedInput'
 import { KeyboardKey } from '@standardnotes/ui-services'
+import TagColorPicker from './TagColorPicker'
 
 type ContextMenuProps = {
   navigationController: NavigationController
@@ -51,6 +52,10 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
 
   const handleIconChange = (value?: VectorIconNameOrEmoji) => {
     navigationController.setIcon(selectedTag, value || DefaultTagIconName)
+  }
+
+  const handleColorChange = (color: string | undefined) => {
+    navigationController.setColor(selectedTag, color)
   }
 
   const onClickStar = useCallback(() => {
@@ -134,6 +139,9 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
           iconGridClassName="max-h-30"
           autoFocus={false}
         />
+        <div className="px-4 py-1.5 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
+          <TagColorPicker selectedColor={selectedTag.color} onChange={handleColorChange} />
+        </div>
         <MenuSection>
           {application.featuresController.isVaultsEnabled() && (
             <AddToVaultMenuOption iconClassName="mr-2 text-neutral" items={[selectedTag]} />

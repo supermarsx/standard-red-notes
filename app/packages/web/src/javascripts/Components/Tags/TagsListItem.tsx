@@ -303,7 +303,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           role="button"
           tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
           className={classNames(
-            'tag group px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
+            'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
             (isSelected || isContextMenuOpenForTag) && 'selected',
             isBeingDraggedOver && 'is-drag-over',
           )}
@@ -345,13 +345,24 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           onDragLeave={removeDragIndicator}
           onDrop={onDrop}
         >
+          {tag.color && (
+            <div
+              className="absolute bottom-0 left-0 top-0 w-1 rounded-r"
+              style={{ backgroundColor: tag.color }}
+              aria-hidden="true"
+            />
+          )}
           <div className="tag-info" title={title}>
-            <div onClick={selectCurrentTag} className={'tag-icon draggable mr-2'}>
+            <div
+              onClick={selectCurrentTag}
+              className={'tag-icon draggable mr-2'}
+              style={tag.color ? { color: tag.color } : undefined}
+            >
               <Icon
                 type={tag.iconString as IconType}
                 className={classNames(
-                  'cursor-pointer group-hover:text-text',
-                  isSelected ? 'text-info' : 'text-neutral',
+                  'cursor-pointer',
+                  tag.color ? 'fill-current' : isSelected ? 'text-info' : 'text-neutral group-hover:text-text',
                 )}
               />
             </div>
