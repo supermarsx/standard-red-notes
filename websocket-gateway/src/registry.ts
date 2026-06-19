@@ -70,6 +70,14 @@ export class ConnectionRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /**
+   * Number of distinct user buckets currently held. Should return to 0 once all
+   * connections close — a lingering empty bucket would be a memory leak.
+   */
+  userCount(): number {
+    return this.byUser.size
+  }
+
+  /**
    * Push a raw message string to every live socket for `userUuid`, EXCEPT
    * sockets whose sessionUuid equals `excludeSessionUuid`.
    *

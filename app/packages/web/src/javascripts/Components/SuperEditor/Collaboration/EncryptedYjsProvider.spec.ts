@@ -121,6 +121,64 @@ describe('EncryptedYjsProvider convergence', () => {
   })
 })
 
+async function drain(provider: EncryptedYjsProvider): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await provider.flush()
+    await new Promise((r) => setTimeout(r, 0)) // let .finally() cleanups run
+  }
+}
+
+describe('EncryptedYjsProvider — no memory leak', () => {
+  it('the in-flight work set is BOUNDED — it does not grow with update volume', async () => {
+    const hub = new LoopbackHub()
+
+    const measure = async (updates: number): Promise<number> => {
+      const doc = new Y.Doc()
+      const provider = new EncryptedYjsProvider(doc, `leak-${updates}`, hub.channel(), createPlaintextCipher())
+      provider.connect()
+      await drain(provider)
+      for (let i = 0; i < updates; i++) {
+        doc.getText('content').insert(0, 'x') // awareness/doc churn
+      }
+      await drain(provider)
+      const count = provider.getPendingCount()
+      provider.disconnect()
+      return count
+    }
+
+    // The leak (a growing array) would leave ~updates entries retained. The fix
+    // (self-cleaning Set) leaves the SAME small residual regardless of volume.
+    const small = await measure(50)
+    const large = await measure(5000)
+    expect(large).toBe(small)
+    expect(large).toBeLessThan(5)
+  })
+
+  it('every awareness heartbeat interval created is cleared on disconnect (no timer leak)', () => {
+    const hub = new LoopbackHub()
+    const setSpy = jest.spyOn(globalThis, 'setInterval')
+    const clearSpy = jest.spyOn(globalThis, 'clearInterval')
+    try {
+      const setBefore = setSpy.mock.calls.length
+      const clearBefore = clearSpy.mock.calls.length
+
+      for (let i = 0; i < 200; i++) {
+        const p = new EncryptedYjsProvider(new Y.Doc(), `cycle-${i}`, hub.channel(), createPlaintextCipher())
+        p.connect()
+        p.disconnect()
+      }
+
+      const created = setSpy.mock.calls.length - setBefore
+      const cleared = clearSpy.mock.calls.length - clearBefore
+      expect(created).toBeGreaterThan(0) // the awareness heartbeat
+      expect(cleared).toBe(created) // every one torn down — none leaked
+    } finally {
+      setSpy.mockRestore()
+      clearSpy.mockRestore()
+    }
+  })
+})
+
 const hasSubtle = !!(globalThis as { crypto?: Crypto }).crypto?.subtle
 const maybe = hasSubtle ? describe : describe.skip
 

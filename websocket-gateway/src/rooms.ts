@@ -116,6 +116,19 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /**
+   * Number of rooms currently held. Should return to 0 once every member has
+   * left — a lingering empty room would be a memory leak.
+   */
+  roomCount(): number {
+    return this.byRoom.size
+  }
+
+  /** Number of rooms a connection is currently in (0 if none/unknown). */
+  roomCountForConn(conn: Conn<S>): number {
+    return this.byConn.get(conn)?.size ?? 0
+  }
+
+  /**
    * Send `message` to every member of `room` except `from`. Returns the number
    * of sockets that received it.
    */

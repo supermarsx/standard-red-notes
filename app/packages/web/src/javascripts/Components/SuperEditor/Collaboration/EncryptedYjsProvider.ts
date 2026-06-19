@@ -91,6 +91,11 @@ export class EncryptedYjsProvider implements Provider {
     this.unsubscribe = null
   }
 
+  /** Count of in-flight encrypt/send/decrypt operations (for tests/leak guards). */
+  getPendingCount(): number {
+    return this.pending.size
+  }
+
   /** Resolves once all in-flight encrypt/send work settles (used by tests). */
   async flush(): Promise<void> {
     while (this.pending.size) {
