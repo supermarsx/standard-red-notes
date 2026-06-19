@@ -61,6 +61,9 @@ import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { Toolbar, ToolbarItem, useToolbarStore } from '@ariakit/react'
 import { PasswordBlock } from '../Blocks/Password'
+import { KanbanBlock } from '../Blocks/Kanban'
+import { CalendarBlock } from '../Blocks/Calendar'
+import { DataviewBlock } from '../Blocks/Dataview'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -1097,6 +1100,21 @@ const ToolbarPlugin = () => {
             name={PasswordBlock.name}
             iconName={PasswordBlock.iconName}
             onClick={() => PasswordBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={KanbanBlock.name}
+            iconName={KanbanBlock.iconName}
+            onClick={() => KanbanBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={CalendarBlock.name}
+            iconName={CalendarBlock.iconName}
+            onClick={() => CalendarBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={DataviewBlock.name}
+            iconName={DataviewBlock.iconName}
+            onClick={() => DataviewBlock.onSelect(editor)}
           />
         </Menu>
       </Popover>

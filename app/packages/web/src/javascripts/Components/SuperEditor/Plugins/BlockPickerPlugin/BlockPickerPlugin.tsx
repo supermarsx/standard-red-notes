@@ -31,6 +31,9 @@ import { GetCollapsibleBlockOption } from '../Blocks/Collapsible'
 import { GetUploadFileOption } from '../Blocks/File'
 import { GetMermaidBlockOption } from '../Blocks/Mermaid'
 import { GetExcalidrawBlockOption } from '../Blocks/Excalidraw'
+import { GetKanbanBlockOption } from '../Blocks/Kanban'
+import { GetCalendarBlockOption } from '../Blocks/Calendar'
+import { GetDataviewBlockOption } from '../Blocks/Dataview'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -67,6 +70,9 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetCodeBlockOption(editor),
       GetMermaidBlockOption(editor),
       GetExcalidrawBlockOption(editor),
+      GetKanbanBlockOption(editor),
+      GetCalendarBlockOption(editor),
+      GetDataviewBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

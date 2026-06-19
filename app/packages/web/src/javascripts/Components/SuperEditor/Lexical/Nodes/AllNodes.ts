@@ -20,6 +20,9 @@ import { CreateEditorArgs } from 'lexical'
 import { FileExportNode } from './FileExportNode'
 import { MermaidNode } from './MermaidNode'
 import { ExcalidrawNode } from './ExcalidrawNode'
+import { KanbanNode } from './KanbanNode'
+import { CalendarNode } from './CalendarNode'
+import { DataTableNode } from './DataTableNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -48,6 +51,9 @@ const CommonNodes = [
   ListNode,
   MermaidNode,
   ExcalidrawNode,
+  KanbanNode,
+  CalendarNode,
+  DataTableNode,
 ]
 
 export const BlockEditorNodes = CommonNodes
