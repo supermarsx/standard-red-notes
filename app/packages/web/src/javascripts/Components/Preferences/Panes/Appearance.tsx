@@ -40,7 +40,7 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
     const dropdownItems: DropdownItem[] = []
 
     dropdownItems.push({
-      label: 'Default',
+      label: 'Standard Red',
       value: 'Default',
     })
 

@@ -134,7 +134,7 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
       )}
       <MenuSection title="Appearance">
         <MenuRadioButtonItem checked={defaultThemeOn} onClick={toggleDefaultTheme} ref={defaultThemeButtonRef}>
-          Default
+          Standard Red
         </MenuRadioButtonItem>
         {themes.map((theme) => (
           <ThemesMenuButton uiFeature={theme} key={theme.uniqueIdentifier.value} />

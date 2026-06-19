@@ -22,6 +22,7 @@ export class NativeFeatureIdentifier extends ValueObject<NativeFeatureIdentifier
     SubscriptionSharing: 'org.standardnotes.subscription-sharing',
 
     AutobiographyTheme: 'org.standardnotes.theme-autobiography',
+    StandardNotesBlueTheme: 'org.standardnotes.theme-standard-notes-blue',
     DynamicTheme: 'org.standardnotes.theme-dynamic',
     DarkTheme: 'org.standardnotes.theme-focus',
     FuturaTheme: 'org.standardnotes.theme-futura',

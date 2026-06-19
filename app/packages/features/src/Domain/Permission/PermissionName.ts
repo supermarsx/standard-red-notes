@@ -1,6 +1,7 @@
 export enum PermissionName {
   AccountSwitcher = 'app:account-switcher',
   AutobiographyTheme = 'theme:autobiography',
+  StandardNotesBlueTheme = 'theme:standard-notes-blue',
   BoldEditor = 'editor:bold',
   DeprecatedCodeEditor = 'editor:code-editor',
   ComponentFilesafe = 'component:filesafe',

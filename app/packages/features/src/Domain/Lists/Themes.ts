@@ -172,7 +172,24 @@ export function themes(): ThemeFeatureDescription[] {
     },
   })
 
+  // The classic light Standard Notes look (white background, blue accent),
+  // offered as a theme since the default base is now the dark "Standard Red".
+  const standardNotesBlue: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Standard Notes Blue',
+    identifier: NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme,
+    permission_name: PermissionName.StandardNotesBlueTheme,
+    isDark: false,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#086DD6',
+      foreground_color: '#ffffff',
+      border_color: '#086DD6',
+    },
+  })
+
   return [
+    standardNotesBlue,
     midnight,
     futura,
     solarizedDark,
