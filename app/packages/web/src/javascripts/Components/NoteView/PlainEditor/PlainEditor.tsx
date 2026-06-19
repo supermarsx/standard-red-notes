@@ -14,7 +14,9 @@ import {
   WebAppEvent,
   PrefDefaults,
   LocalPrefKey,
+  sanitizeHtmlString,
 } from '@standardnotes/snjs'
+import { markdownToHtml } from '@/Utils/markdownToHtml'
 import { isIOS, TAB_COMMAND } from '@standardnotes/ui-services'
 import {
   ChangeEventHandler,
@@ -44,6 +46,7 @@ export type PlainEditorInterface = {
 export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
   ({ application, spellcheck, controller, locked, onFocus, onBlur }, ref) => {
     const [editorText, setEditorText] = useState<string | undefined>()
+    const [showPreview, setShowPreview] = useState(false)
     const [textareaUnloading, setTextareaUnloading] = useState(false)
     const [lineHeight, setLineHeight] = useState<EditorLineHeight | undefined>()
     const [fontSize, setFontSize] = useState<EditorFontSize | undefined>()
@@ -290,26 +293,57 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
     }
 
     return (
-      <textarea
-        autoComplete="off"
-        dir="auto"
-        id={ElementIds.NoteTextEditor}
-        onChange={onTextAreaChange}
-        onFocus={onContentFocus}
-        onBlur={onContentBlur}
-        readOnly={locked}
-        ref={onRef}
-        spellCheck={spellcheck}
-        value={editorText}
-        className={classNames(
-          'editable font-editor flex-grow',
-          lineHeight && `leading-${lineHeight.toLowerCase()}`,
-          responsiveFontSize,
-          // Extra bottom padding is added on iOS so that text
-          // doesn't get hidden by the floating "Close keyboard" button
-          isIOS() && '!pb-12',
+      <div className="flex h-full flex-grow flex-col overflow-hidden">
+        <div className="flex flex-shrink-0 items-center gap-1 border-b border-border bg-contrast px-2 py-1 text-xs">
+          <button
+            type="button"
+            className={classNames(
+              'rounded px-2 py-0.5 font-semibold',
+              !showPreview ? 'bg-info text-info-contrast' : 'text-neutral hover:bg-default',
+            )}
+            onClick={() => setShowPreview(false)}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className={classNames(
+              'rounded px-2 py-0.5 font-semibold',
+              showPreview ? 'bg-info text-info-contrast' : 'text-neutral hover:bg-default',
+            )}
+            onClick={() => setShowPreview(true)}
+          >
+            Markdown preview
+          </button>
+        </div>
+        {showPreview ? (
+          <div
+            className={classNames('markdown-preview font-editor flex-grow overflow-auto p-4', responsiveFontSize)}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtmlString(markdownToHtml(editorText ?? '')) }}
+          />
+        ) : (
+          <textarea
+            autoComplete="off"
+            dir="auto"
+            id={ElementIds.NoteTextEditor}
+            onChange={onTextAreaChange}
+            onFocus={onContentFocus}
+            onBlur={onContentBlur}
+            readOnly={locked}
+            ref={onRef}
+            spellCheck={spellcheck}
+            value={editorText}
+            className={classNames(
+              'editable font-editor flex-grow',
+              lineHeight && `leading-${lineHeight.toLowerCase()}`,
+              responsiveFontSize,
+              // Extra bottom padding is added on iOS so that text
+              // doesn't get hidden by the floating "Close keyboard" button
+              isIOS() && '!pb-12',
+            )}
+          ></textarea>
         )}
-      ></textarea>
+      </div>
     )
   },
 )
