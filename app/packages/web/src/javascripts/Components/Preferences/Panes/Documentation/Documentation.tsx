@@ -212,8 +212,8 @@ const Documentation: FunctionComponent = () => {
   }
 
   return (
-    <div className="flex min-h-0 flex-grow flex-col overflow-hidden md:flex-row">
-      <nav className="flex max-h-48 flex-shrink-0 flex-col overflow-y-auto border-b border-border p-3 md:max-h-none md:w-60 md:border-b-0 md:border-r">
+    <div className="flex h-full min-h-0 flex-grow flex-col overflow-hidden md:flex-row">
+      <nav className="flex max-h-48 flex-shrink-0 flex-col overflow-y-auto border-b border-border p-3 md:h-full md:max-h-none md:min-h-0 md:w-60 md:border-b-0 md:border-r">
         <div className="relative mb-3">
           <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-neutral">
             <Icon type="select-all" size="small" />
@@ -263,7 +263,7 @@ const Documentation: FunctionComponent = () => {
         ))}
       </nav>
 
-      <div className="flex-grow overflow-y-auto px-4 py-5 text-foreground md:px-8">
+      <div className="min-h-0 flex-grow overflow-y-auto px-4 py-5 text-foreground md:h-full md:px-8">
         {trimmedQuery ? (
           <SearchResultsView query={trimmedQuery} onNavigate={navigate} />
         ) : activeId ? (

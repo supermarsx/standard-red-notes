@@ -49,6 +49,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'Standard Red Notes is a private notes app built on end-to-end encryption. Your notes are encrypted on your device before they ever reach a server, so only you can read them. It is a single-tier, fully-free, self-hostable app — there are no paid plans and no locked features.',
           },
           {
+            type: 'paragraph',
+            text: 'Standard Red Notes is an independent fork of the original Standard Notes, keeping its end-to-end encryption and self-hosting foundations while adding AI-aware features (an in-app assistant and selection actions like refine, summarize, and expand) and collaboration features (shared vaults, realtime co-editing, and a graph view of your linked notes).',
+          },
+          {
             type: 'heading',
             text: 'What you get',
           },
