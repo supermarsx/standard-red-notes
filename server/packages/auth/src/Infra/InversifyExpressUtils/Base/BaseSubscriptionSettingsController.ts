@@ -40,14 +40,11 @@ export class BaseSubscriptionSettingsController extends BaseHttpController {
       userUuid: locals.user.uuid,
     })
     if (subscriptionOrError.isFailed()) {
-      return this.json(
-        {
-          error: {
-            message: subscriptionOrError.getError(),
-          },
-        },
-        400,
-      )
+      // In the single-tier, fully-free model there is no real subscription row,
+      // so subscription-setting lookups (e.g. file-upload usage) have nothing to
+      // read. Respond successfully with no setting instead of 400 so clients
+      // treat it as "no usage data" rather than surfacing a request error.
+      return this.json({ success: true, setting: undefined })
     }
     const subscription = subscriptionOrError.getValue()
 
