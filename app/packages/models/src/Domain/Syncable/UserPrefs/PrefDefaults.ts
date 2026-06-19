@@ -58,6 +58,7 @@ export const PrefDefaults = {
   [PrefKey.AssistantConnectionMode]: 'direct',
   [PrefKey.AssistantBaseUrl]: 'http://localhost:1234/v1',
   [PrefKey.AssistantApiKey]: '',
+  [PrefKey.AssistantSelectionActions]: '',
   [PrefKey.AddImportsToTag]: true,
   [PrefKey.AlwaysCreateNewTagForImports]: true,
   [PrefKey.ExistingTagForImports]: undefined,

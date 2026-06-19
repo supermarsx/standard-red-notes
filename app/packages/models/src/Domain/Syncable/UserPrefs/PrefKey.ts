@@ -48,6 +48,7 @@ export enum PrefKey {
   AssistantConnectionMode = 'assistantConnectionMode',
   AssistantBaseUrl = 'assistantBaseUrl',
   AssistantApiKey = 'assistantApiKey',
+  AssistantSelectionActions = 'assistantSelectionActions',
   AssistantPanelWidth = 'assistantPanelWidth',
   ConstellationPosition = 'constellationPosition',
   AddImportsToTag = 'addImportsToTag',
@@ -115,6 +116,7 @@ export type PrefValue = {
   [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'
   [PrefKey.AssistantBaseUrl]: string
   [PrefKey.AssistantApiKey]: string
+  [PrefKey.AssistantSelectionActions]: string
   [PrefKey.AddImportsToTag]: boolean
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined

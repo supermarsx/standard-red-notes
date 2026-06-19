@@ -34,6 +34,8 @@ import { GetExcalidrawBlockOption } from '../Blocks/Excalidraw'
 import { GetKanbanBlockOption } from '../Blocks/Kanban'
 import { GetCalendarBlockOption } from '../Blocks/Calendar'
 import { GetDataviewBlockOption } from '../Blocks/Dataview'
+import { GetCalloutBlockOption } from '../Blocks/Callout'
+import { GetEmbedBlockOption } from '../Blocks/Embed'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -73,6 +75,8 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetKanbanBlockOption(editor),
       GetCalendarBlockOption(editor),
       GetDataviewBlockOption(editor),
+      GetCalloutBlockOption(editor),
+      GetEmbedBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

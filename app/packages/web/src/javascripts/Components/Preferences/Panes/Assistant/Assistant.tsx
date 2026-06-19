@@ -9,6 +9,7 @@ import { Title, Subtitle, Text } from '../../PreferencesComponents/Content'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import Button from '@/Components/Button/Button'
+import { getSelectionActions, SelectionActionId } from '@/Assistant/selectionActions'
 
 type AssistantConfig = {
   providers: string[]
@@ -151,6 +152,22 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   }, [baseURL, apiKey])
 
   const providers = config?.providers ?? []
+
+  const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
+  const updateSelectionAction = useCallback(
+    (id: SelectionActionId, patch: { enabled?: boolean; prompt?: string }) => {
+      setSelectionActions((prev) => {
+        const next = prev.map((action) => (action.id === id ? { ...action, ...patch } : action))
+        const overrides: Record<string, { enabled: boolean; prompt: string }> = {}
+        next.forEach((action) => {
+          overrides[action.id] = { enabled: action.enabled, prompt: action.prompt }
+        })
+        void application.setPreference(PrefKey.AssistantSelectionActions, JSON.stringify(overrides))
+        return next
+      })
+    },
+    [application],
+  )
 
   return (
     <PreferencesPane>
@@ -305,6 +322,35 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             </div>
             <Switch checked={confirmBeforeWrite} onChange={handleConfirmToggle} />
           </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Subtitle>Text selection AI actions</Subtitle>
+          <Text>
+            Actions shown in the editor’s selection toolbar when text is selected. Toggle them on or off and edit their
+            prompts. These override the defaults.
+          </Text>
+          {selectionActions.map((action) => (
+            <div key={action.id} className="mt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">{action.label}</span>
+                <Switch
+                  checked={action.enabled}
+                  onChange={(value) => updateSelectionAction(action.id, { enabled: value })}
+                />
+              </div>
+              {!action.freeform && action.enabled && (
+                <textarea
+                  className="mt-1 w-full resize-none rounded border border-border bg-default px-2 py-1 text-sm"
+                  rows={2}
+                  value={action.prompt}
+                  onChange={(event) => updateSelectionAction(action.id, { prompt: event.target.value })}
+                />
+              )}
+            </div>
+          ))}
         </PreferencesSegment>
       </PreferencesGroup>
     </PreferencesPane>

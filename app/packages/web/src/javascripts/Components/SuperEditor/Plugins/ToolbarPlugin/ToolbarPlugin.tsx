@@ -64,6 +64,8 @@ import { PasswordBlock } from '../Blocks/Password'
 import { KanbanBlock } from '../Blocks/Kanban'
 import { CalendarBlock } from '../Blocks/Calendar'
 import { DataviewBlock } from '../Blocks/Dataview'
+import { CalloutBlock } from '../Blocks/Callout'
+import { EmbedBlock } from '../Blocks/Embed'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -81,6 +83,7 @@ import { $isDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
 import LinkViewer from './LinkViewer'
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
 import { CREATE_NOTE_FROM_SELECTION_COMMAND } from '../NoteFromSelectionPlugin'
+import SelectionTools from './SelectionTools'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -819,6 +822,7 @@ const ToolbarPlugin = () => {
               }}
               disabled={!hasNonCollapsedSelection}
             />
+            <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />
           </Toolbar>
           {isMobile && (
             <button
@@ -1115,6 +1119,16 @@ const ToolbarPlugin = () => {
             name={DataviewBlock.name}
             iconName={DataviewBlock.iconName}
             onClick={() => DataviewBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={CalloutBlock.name}
+            iconName={CalloutBlock.iconName}
+            onClick={() => CalloutBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={EmbedBlock.name}
+            iconName={EmbedBlock.iconName}
+            onClick={() => EmbedBlock.onSelect(editor)}
           />
         </Menu>
       </Popover>

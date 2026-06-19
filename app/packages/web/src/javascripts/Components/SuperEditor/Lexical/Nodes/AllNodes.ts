@@ -23,6 +23,8 @@ import { ExcalidrawNode } from './ExcalidrawNode'
 import { KanbanNode } from './KanbanNode'
 import { CalendarNode } from './CalendarNode'
 import { DataTableNode } from './DataTableNode'
+import { CalloutNode } from './CalloutNode'
+import { EmbedNode } from './EmbedNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -54,6 +56,8 @@ const CommonNodes = [
   KanbanNode,
   CalendarNode,
   DataTableNode,
+  CalloutNode,
+  EmbedNode,
 ]
 
 export const BlockEditorNodes = CommonNodes
