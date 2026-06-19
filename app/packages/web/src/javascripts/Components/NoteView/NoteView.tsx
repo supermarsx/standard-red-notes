@@ -76,6 +76,7 @@ type State = {
   stackComponentViewers: ComponentViewerInterface[]
   syncTakingTooLong: boolean
   monospaceFont?: boolean
+  customEditorFont?: string
   editorFocused?: boolean
   paneGestureEnabled?: boolean
   noteLastEditedByUuid?: string
@@ -547,7 +548,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         editorStateDidLoad: true,
       })
     } else {
-      reloadFont(this.state.monospaceFont)
+      reloadFont(this.state.monospaceFont, this.state.customEditorFont)
       this.setState({
         editorStateDidLoad: true,
       })
@@ -654,7 +655,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   async reloadSpellcheck() {
     const spellcheck = this.application.notesController.getSpellcheckStateForNote(this.note)
     if (spellcheck !== this.state.spellcheck) {
-      reloadFont(this.state.monospaceFont)
+      reloadFont(this.state.monospaceFont, this.state.customEditorFont)
       this.setState({ spellcheck })
     }
   }
@@ -674,6 +675,11 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       PrefDefaults[LocalPrefKey.EditorMonospaceEnabled],
     )
 
+    const customEditorFont = this.application.getPreference(
+      PrefKey.EditorFontFamily,
+      PrefDefaults[PrefKey.EditorFontFamily],
+    )
+
     const updateSavingIndicator = this.application.getPreference(
       PrefKey.UpdateSavingStatusIndicator,
       PrefDefaults[PrefKey.UpdateSavingStatusIndicator],
@@ -690,11 +696,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     this.setState({
       monospaceFont,
+      customEditorFont,
       updateSavingIndicator,
       paneGestureEnabled,
     })
 
-    reloadFont(monospaceFont)
+    reloadFont(monospaceFont, customEditorFont)
   }
 
   async reloadStackComponents() {

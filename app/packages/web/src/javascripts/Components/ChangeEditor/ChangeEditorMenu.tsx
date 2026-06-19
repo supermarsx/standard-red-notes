@@ -13,6 +13,8 @@ import {
   SNNote,
   ContentType,
   LocalPrefKey,
+  PrefKey,
+  PrefDefaults,
 } from '@standardnotes/snjs'
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
 import { EditorMenuGroup } from '@/Components/NotesOptions/EditorMenuGroup'
@@ -130,7 +132,10 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
       setCurrentFeature(application.componentManager.editorForNote(note))
 
       if (uiFeature.featureIdentifier === NativeFeatureIdentifier.TYPES.PlainEditor) {
-        reloadFont(application.preferences.getLocalValue(LocalPrefKey.EditorMonospaceEnabled))
+        reloadFont(
+          application.preferences.getLocalValue(LocalPrefKey.EditorMonospaceEnabled),
+          application.getPreference(PrefKey.EditorFontFamily, PrefDefaults[PrefKey.EditorFontFamily]),
+        )
       }
     },
     [application],

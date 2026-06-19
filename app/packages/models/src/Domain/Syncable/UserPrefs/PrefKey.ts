@@ -37,6 +37,7 @@ export enum PrefKey {
   SuperNoteExportUseMDFrontmatter = 'superNoteExportUseMDFrontmatter',
   SuperNoteExportPDFPageSize = 'superNoteExportPDFPageSize',
   SuperNoteImageAlignment = 'superNoteImageAlignment',
+  EditorFontFamily = 'editorFontFamily',
   AuthenticatorNames = 'authenticatorNames',
   PaneGesturesEnabled = 'paneGesturesEnabled',
   ComponentPreferences = 'componentPreferences',
@@ -121,4 +122,11 @@ export type PrefValue = {
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
+  /**
+   * The editor font family. Empty string means the theme/system default.
+   * A value prefixed with `google:` denotes a Google Font that must be loaded
+   * dynamically (e.g. `google:Inter`). Any other value is treated as a literal
+   * CSS font-family stack / installed local font name.
+   */
+  [PrefKey.EditorFontFamily]: string
 }

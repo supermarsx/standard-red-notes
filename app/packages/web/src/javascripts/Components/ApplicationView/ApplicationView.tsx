@@ -1,6 +1,16 @@
 import { WebApplicationGroup } from '@/Application/WebApplicationGroup'
 import { getPlatformString } from '@/Utils'
-import { ApplicationEvent, Challenge, removeFromArray, WebAppEvent } from '@standardnotes/snjs'
+import {
+  ApplicationEvent,
+  Challenge,
+  removeFromArray,
+  WebAppEvent,
+  PrefKey,
+  PrefDefaults,
+  LocalPrefKey,
+  LocalPrefDefaults,
+} from '@standardnotes/snjs'
+import { applyEditorFont } from '@/Utils/editorFont'
 import { alertDialog, isIOS, RouteType } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
 import Footer from '@/Components/Footer/Footer'
@@ -157,6 +167,39 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
       removeAppObserver()
     }
   }, [application, onAppLaunch, onAppStart])
+
+  useEffect(() => {
+    const applyFont = () => {
+      const customFont = application.getPreference(PrefKey.EditorFontFamily, PrefDefaults[PrefKey.EditorFontFamily])
+      const monospace = application.preferences.getLocalValue(
+        LocalPrefKey.EditorMonospaceEnabled,
+        LocalPrefDefaults[LocalPrefKey.EditorMonospaceEnabled],
+      )
+      applyEditorFont(customFont, monospace)
+    }
+
+    if (application.isLaunched()) {
+      applyFont()
+    }
+
+    const removeSyncedObserver = application.addEventObserver(async () => {
+      applyFont()
+    }, ApplicationEvent.PreferencesChanged)
+
+    const removeLaunchObserver = application.addEventObserver(async () => {
+      applyFont()
+    }, ApplicationEvent.Launched)
+
+    const removeLocalObserver = application.addEventObserver(async () => {
+      applyFont()
+    }, ApplicationEvent.LocalPreferencesChanged)
+
+    return () => {
+      removeSyncedObserver()
+      removeLaunchObserver()
+      removeLocalObserver()
+    }
+  }, [application])
 
   useEffect(() => {
     const disposer = application.protections.addEventObserver(async (eventName) => {

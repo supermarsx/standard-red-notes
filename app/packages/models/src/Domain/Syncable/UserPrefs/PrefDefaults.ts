@@ -46,6 +46,7 @@ export const PrefDefaults = {
   [PrefKey.SuperNoteExportUseMDFrontmatter]: true,
   [PrefKey.SuperNoteExportPDFPageSize]: 'A4',
   [PrefKey.SuperNoteImageAlignment]: 'left',
+  [PrefKey.EditorFontFamily]: '',
   [PrefKey.SystemViewPreferences]: {},
   [PrefKey.AuthenticatorNames]: '',
   [PrefKey.ComponentPreferences]: {},

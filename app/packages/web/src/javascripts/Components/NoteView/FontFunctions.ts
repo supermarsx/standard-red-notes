@@ -1,10 +1,13 @@
-export const reloadFont = (monospaceFont?: boolean) => {
-  const root = document.querySelector(':root') as HTMLElement
-  const propertyName = '--sn-stylekit-editor-font-family'
-  if (monospaceFont) {
-    root.style.setProperty(propertyName, 'var(--sn-stylekit-monospace-font)')
-  } else {
-    root.style.setProperty(propertyName, 'var(--sn-stylekit-sans-serif-font)')
-  }
-  document.documentElement.classList.toggle('monospace-font', monospaceFont)
+import { applyEditorFont } from '@/Utils/editorFont'
+
+/**
+ * Applies the editor font CSS variable.
+ *
+ * @param monospaceFont Whether the monospace toggle is enabled (used as the
+ *   theme fallback when no custom editor font is configured).
+ * @param customFontFamily The value of the synced `PrefKey.EditorFontFamily`
+ *   preference. When set, it takes precedence over the monospace fallback.
+ */
+export const reloadFont = (monospaceFont?: boolean, customFontFamily?: string) => {
+  applyEditorFont(customFontFamily, monospaceFont)
 }
