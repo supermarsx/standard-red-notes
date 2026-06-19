@@ -14,6 +14,7 @@ export class StatusService extends AbstractService<StatusServiceEvent, string> i
     vaults: 0,
     appearance: 0,
     assistant: 0,
+    admin: 0,
     backups: 0,
     shortcuts: 0,
     plugins: 0,
