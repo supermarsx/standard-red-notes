@@ -1,11 +1,5 @@
 import { FunctionComponent, useCallback, useMemo, useRef, useState } from 'react'
-import {
-  $createRangeSelection,
-  $getSelection,
-  $isRangeSelection,
-  $setSelection,
-  LexicalEditor,
-} from 'lexical'
+import { $createRangeSelection, $getSelection, $isRangeSelection, $setSelection, LexicalEditor } from 'lexical'
 import Icon from '@/Components/Icon/Icon'
 import Popover from '@/Components/Popover/Popover'
 import { useApplication } from '@/Components/ApplicationProvider'
@@ -19,7 +13,8 @@ import {
 type PointSnapshot = { key: string; offset: number; type: 'text' | 'element' }
 type SelectionSnapshot = { text: string; anchor: PointSnapshot; focus: PointSnapshot }
 
-const BTN = 'flex items-center justify-center rounded p-2 text-text hover:bg-default disabled:opacity-40 md:p-1.5'
+const BTN =
+  'flex select-none items-center justify-center rounded-md p-2.5 text-text transition-colors duration-75 hover:bg-passive-4 active:bg-passive-3 disabled:opacity-40 md:p-2'
 
 function captureSelection(editor: LexicalEditor): SelectionSnapshot | null {
   let snapshot: SelectionSnapshot | null = null
@@ -60,53 +55,6 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
   const actions = useMemo(() => getSelectionActions(application).filter((a) => a.enabled), [application, isAIMenuOpen])
   const availability = useMemo(() => getSelectionAIAvailability(application), [application, isAIMenuOpen])
 
-  const handleCopy = useCallback(async () => {
-    const snap = captureSelection(editor)
-    if (snap?.text) {
-      try {
-        await navigator.clipboard.writeText(snap.text)
-      } catch {
-        /* clipboard unavailable */
-      }
-    }
-  }, [editor])
-
-  const handleCut = useCallback(async () => {
-    const snap = captureSelection(editor)
-    if (!snap?.text) {
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(snap.text)
-    } catch {
-      /* clipboard unavailable */
-    }
-    editor.update(() => {
-      const selection = $getSelection()
-      if ($isRangeSelection(selection)) {
-        selection.insertText('')
-      }
-    })
-  }, [editor])
-
-  const handlePaste = useCallback(async () => {
-    let text = ''
-    try {
-      text = await navigator.clipboard.readText()
-    } catch {
-      return
-    }
-    if (!text) {
-      return
-    }
-    editor.update(() => {
-      const selection = $getSelection()
-      if ($isRangeSelection(selection)) {
-        selection.insertText(text)
-      }
-    })
-  }, [editor])
-
   const runAction = useCallback(
     async (action: SelectionAction, customInstruction?: string) => {
       const snap = captureSelection(editor)
@@ -142,22 +90,6 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
 
   return (
     <>
-      <div className="mx-0.5 h-6 w-px flex-shrink-0 bg-border" />
-      <button className={BTN} onClick={handleCopy} disabled={!hasSelection} title="Copy" aria-label="Copy">
-        <Icon type="copy" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
-      </button>
-      <button
-        className={`${BTN} text-xs font-semibold`}
-        onClick={handleCut}
-        disabled={!hasSelection}
-        title="Cut"
-        aria-label="Cut"
-      >
-        Cut
-      </button>
-      <button className={`${BTN} text-xs font-semibold`} onClick={handlePaste} title="Paste" aria-label="Paste">
-        Paste
-      </button>
       <button
         ref={aiButtonRef}
         className={BTN}
@@ -166,7 +98,7 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         title="AI actions"
         aria-label="AI actions"
       >
-        <Icon type="dashboard" size="custom" className="h-4 w-4 text-info md:h-3.5 md:w-3.5" />
+        <Icon type="dashboard" size="custom" className="h-5 w-5 text-info md:h-4 md:w-4" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-3.5 w-3.5" />
       </button>
 

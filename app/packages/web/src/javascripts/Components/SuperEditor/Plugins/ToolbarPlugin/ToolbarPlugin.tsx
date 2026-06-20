@@ -209,7 +209,7 @@ const ToolbarButton = forwardRef(
       >
         <ToolbarItem
           className={classNames(
-            'flex select-none items-center justify-center rounded p-0.5 focus:shadow-none focus:outline-none enabled:hover:bg-default enabled:focus-visible:bg-default disabled:opacity-50 md:border md:border-transparent enabled:hover:md:translucent-ui:border-[--popover-border-color]',
+            'flex select-none items-center justify-center rounded-md p-0.5 transition-colors duration-75 focus:shadow-none focus:outline-none enabled:hover:bg-passive-4 enabled:focus-visible:bg-passive-4 enabled:active:bg-passive-3 disabled:opacity-50 md:border md:border-transparent enabled:hover:md:border-border',
             className,
           )}
           onClick={() => {
@@ -228,8 +228,8 @@ const ToolbarButton = forwardRef(
         >
           <div
             className={classNames(
-              'flex items-center justify-center rounded p-2 transition-colors duration-75',
-              active && 'bg-info text-info-contrast',
+              'flex items-center justify-center rounded-md p-2.5 transition-colors duration-75 md:p-2',
+              active && 'bg-info text-info-contrast shadow-sm',
             )}
           >
             {children ? (
@@ -238,7 +238,7 @@ const ToolbarButton = forwardRef(
               <Icon
                 type={iconName}
                 size="custom"
-                className="h-4 w-4 !text-current md:h-3.5 md:w-3.5 [&>path]:!text-current"
+                className="h-5 w-5 !text-current md:h-4 md:w-4 [&>path]:!text-current"
               />
             ) : null}
           </div>
@@ -246,6 +246,10 @@ const ToolbarButton = forwardRef(
       </StyledTooltip>
     )
   },
+)
+
+const ToolbarSeparator = () => (
+  <div aria-hidden className="mx-1 my-1 h-6 w-px flex-shrink-0 self-center bg-border" role="separator" />
 )
 
 interface ToolbarMenuItemProps extends Omit<MenuItemProps, 'children'> {
@@ -641,6 +645,60 @@ const ToolbarPlugin = () => {
     [activeEditor],
   )
 
+  const handleClipboardCopy = useCallback(() => {
+    activeEditor.getEditorState().read(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection) && !selection.isCollapsed()) {
+        const text = selection.getTextContent()
+        if (text) {
+          void navigator.clipboard?.writeText?.(text).catch(() => {
+            /* clipboard unavailable */
+          })
+        }
+      }
+    })
+  }, [activeEditor])
+
+  const handleClipboardCut = useCallback(() => {
+    let text = ''
+    activeEditor.getEditorState().read(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection) && !selection.isCollapsed()) {
+        text = selection.getTextContent()
+      }
+    })
+    if (!text) {
+      return
+    }
+    void navigator.clipboard?.writeText?.(text).catch(() => {
+      /* clipboard unavailable */
+    })
+    activeEditor.update(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection)) {
+        selection.insertText('')
+      }
+    })
+  }, [activeEditor])
+
+  const handleClipboardPaste = useCallback(async () => {
+    let text = ''
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      return
+    }
+    if (!text) {
+      return
+    }
+    activeEditor.update(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection)) {
+        selection.insertText(text)
+      }
+    })
+  }, [activeEditor])
+
   useEffect(() => {
     if (isMobile) {
       return
@@ -891,8 +949,24 @@ const ToolbarPlugin = () => {
             ref={toolbarRef}
             store={toolbarStore}
           >
+            {/* Clipboard group */}
+            <ToolbarButton
+              name="Cut"
+              iconName="backspace"
+              disabled={!hasNonCollapsedSelection}
+              onSelect={handleClipboardCut}
+            />
+            <ToolbarButton
+              name="Copy"
+              iconName="copy"
+              disabled={!hasNonCollapsedSelection}
+              onSelect={handleClipboardCopy}
+            />
+            <ToolbarButton name="Paste" iconName="download" onSelect={() => void handleClipboardPaste()} />
+            <ToolbarSeparator />
             {canShowAllItems && (
               <>
+                {/* History / navigation group */}
                 <ToolbarButton
                   name="Table of Contents"
                   iconName="toc"
@@ -917,8 +991,10 @@ const ToolbarPlugin = () => {
                   disabled={!canRedo}
                   onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
                 />
+                <ToolbarSeparator />
               </>
             )}
+            {/* Block style group */}
             <ToolbarButton
               name="Formatting options"
               onSelect={() => {
@@ -927,9 +1003,11 @@ const ToolbarPlugin = () => {
               ref={textStyleAnchorRef}
               className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
             >
-              <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
               <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
             </ToolbarButton>
+            <ToolbarSeparator />
+            {/* Text style group */}
             <ToolbarButton
               name="Bold"
               iconName="bold"
@@ -949,18 +1027,18 @@ const ToolbarPlugin = () => {
               onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
             />
             <ToolbarButton
+              name="Inline Code"
+              iconName="code-tags"
+              active={isCode}
+              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
+            />
+            <ToolbarButton
               name="Link"
               iconName="link"
               active={!!linkNode}
               onSelect={() => {
                 editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')
               }}
-            />
-            <ToolbarButton
-              name="Inline Code"
-              iconName="code-tags"
-              active={isCode}
-              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
             />
             <ToolbarButton
               name="Text style"
@@ -970,9 +1048,11 @@ const ToolbarPlugin = () => {
               ref={textFormatAnchorRef}
               className={isTextFormatMenuOpen ? 'md:bg-default' : ''}
             >
-              <Icon type="text" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
               <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
             </ToolbarButton>
+            <ToolbarSeparator />
+            {/* Color / font group */}
             <ToolbarButton
               name="Text color"
               onSelect={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
@@ -990,20 +1070,14 @@ const ToolbarPlugin = () => {
               ref={bgColorAnchorRef}
               className={isBgColorMenuOpen ? 'md:bg-default' : ''}
             >
-              <span className="flex h-4 w-4 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-3.5 md:w-3.5">
+              <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-4 md:w-4">
                 H
               </span>
             </ToolbarButton>
-            <ToolbarButton
-              name="Decrease font size"
-              onSelect={() => stepFontSize(-1)}
-            >
+            <ToolbarButton name="Decrease font size" onSelect={() => stepFontSize(-1)}>
               <span className="text-xs font-semibold leading-none">A&minus;</span>
             </ToolbarButton>
-            <ToolbarButton
-              name="Increase font size"
-              onSelect={() => stepFontSize(1)}
-            >
+            <ToolbarButton name="Increase font size" onSelect={() => stepFontSize(1)}>
               <span className="text-sm font-semibold leading-none">A+</span>
             </ToolbarButton>
             <ToolbarButton
@@ -1012,9 +1086,11 @@ const ToolbarPlugin = () => {
               ref={fontFamilyAnchorRef}
               className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
             >
-              <Icon type="text" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
               <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
             </ToolbarButton>
+            <ToolbarSeparator />
+            {/* Paragraph / list group */}
             <ToolbarButton
               name="Bulleted List"
               iconName="list-bulleted"
@@ -1050,7 +1126,7 @@ const ToolbarPlugin = () => {
               ref={alignmentAnchorRef}
               className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
             >
-              <Icon type="align-left" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type="align-left" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
               <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
             </ToolbarButton>
             <ToolbarButton
@@ -1063,6 +1139,8 @@ const ToolbarPlugin = () => {
               iconName={OutdentBlock.iconName}
               onSelect={() => OutdentBlock.onSelect(editor)}
             />
+            <ToolbarSeparator />
+            {/* Insert group */}
             {canShowAllItems && (
               <ToolbarButton
                 name="Insert"
@@ -1072,7 +1150,7 @@ const ToolbarPlugin = () => {
                 ref={insertAnchorRef}
                 className={isInsertMenuOpen ? 'md:bg-default' : ''}
               >
-                <Icon type="add" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+                <Icon type="add" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
                 <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
               </ToolbarButton>
             )}
@@ -1092,6 +1170,8 @@ const ToolbarPlugin = () => {
               }}
               disabled={!hasNonCollapsedSelection}
             />
+            <ToolbarSeparator />
+            {/* AI group */}
             <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />
           </Toolbar>
           {isMobile && (
