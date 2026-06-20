@@ -4,4 +4,7 @@ export interface ShareHttpProjection {
   nickname: string | null
   createdAt: string
   revoked: boolean
+  oneTimeView: boolean
+  viewExpiresMinutes: number | null
+  firstOpenedAt: string | null
 }

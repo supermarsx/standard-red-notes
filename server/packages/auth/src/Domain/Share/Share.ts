@@ -20,6 +20,13 @@ export class Share extends Entity<ShareProps> {
       return Result.fail<Share>('Share nickname cannot be longer than 255 characters')
     }
 
+    if (
+      props.viewExpiresMinutes !== null &&
+      (!Number.isInteger(props.viewExpiresMinutes) || props.viewExpiresMinutes <= 0)
+    ) {
+      return Result.fail<Share>('Share view expiry minutes must be a positive integer')
+    }
+
     return Result.ok<Share>(new Share(props, id))
   }
 }

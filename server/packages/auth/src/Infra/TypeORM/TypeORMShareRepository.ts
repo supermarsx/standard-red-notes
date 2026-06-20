@@ -55,4 +55,29 @@ export class TypeORMShareRepository implements ShareRepositoryInterface {
       .where('user_uuid = :userUuid', { userUuid: userUuid.value })
       .execute()
   }
+
+  async markFirstOpenedAtomically(id: UniqueEntityId, openedAt: Date): Promise<boolean> {
+    // Conditional UPDATE: only stamp first_opened_at when it is still NULL. The DB
+    // serializes concurrent writers, so exactly one near-simultaneous opener gets
+    // affected === 1 (the winner); the rest get 0. This is the atomic "first wins"
+    // guard for burn-after-reading consumption.
+    const result = await this.ormRepository
+      .createQueryBuilder()
+      .update()
+      .set({ firstOpenedAt: openedAt.getTime() })
+      .where('uuid = :id', { id: id.toString() })
+      .andWhere('first_opened_at IS NULL')
+      .execute()
+
+    return (result.affected ?? 0) > 0
+  }
+
+  async markRevoked(id: UniqueEntityId): Promise<void> {
+    await this.ormRepository
+      .createQueryBuilder()
+      .update()
+      .set({ revoked: true })
+      .where('uuid = :id', { id: id.toString() })
+      .execute()
+  }
 }

@@ -3,4 +3,6 @@ export interface CreateShareDTO {
   type: string
   encryptedPayload: string
   nickname?: string | null
+  oneTimeView?: boolean
+  viewExpiresMinutes?: number | null
 }

@@ -8,4 +8,6 @@ export interface CreateShareResult {
   type: 'note' | 'tag' | 'account'
   nickname: string | null
   createdAt: Date
+  oneTimeView: boolean
+  viewExpiresMinutes: number | null
 }

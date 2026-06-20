@@ -96,4 +96,49 @@ describe('CreateShare', () => {
 
     expect(first.shareId).not.toEqual(second.shareId)
   })
+
+  it('should default burn fields off for a normal share', async () => {
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(false)
+    const saved = (shareRepository.save as jest.Mock).mock.calls[0][0] as Share
+    expect(saved.props.oneTimeView).toBe(false)
+    expect(saved.props.viewExpiresMinutes).toBeNull()
+    expect(saved.props.firstOpenedAt).toBeNull()
+    const created = result.getValue()
+    expect(created.oneTimeView).toBe(false)
+    expect(created.viewExpiresMinutes).toBeNull()
+  })
+
+  it('should persist a one-time-view (burn after reading) share', async () => {
+    const result = await createUseCase().execute({ ...validDto, oneTimeView: true })
+
+    expect(result.isFailed()).toBe(false)
+    const saved = (shareRepository.save as jest.Mock).mock.calls[0][0] as Share
+    expect(saved.props.oneTimeView).toBe(true)
+    expect(result.getValue().oneTimeView).toBe(true)
+  })
+
+  it('should persist a view-expiry window', async () => {
+    const result = await createUseCase().execute({ ...validDto, oneTimeView: true, viewExpiresMinutes: 15 })
+
+    expect(result.isFailed()).toBe(false)
+    const saved = (shareRepository.save as jest.Mock).mock.calls[0][0] as Share
+    expect(saved.props.viewExpiresMinutes).toBe(15)
+    expect(result.getValue().viewExpiresMinutes).toBe(15)
+  })
+
+  it('should reject a non-positive view-expiry window', async () => {
+    const result = await createUseCase().execute({ ...validDto, viewExpiresMinutes: 0 })
+
+    expect(result.isFailed()).toBe(true)
+    expect(shareRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('should reject a non-integer view-expiry window', async () => {
+    const result = await createUseCase().execute({ ...validDto, viewExpiresMinutes: 1.5 })
+
+    expect(result.isFailed()).toBe(true)
+    expect(shareRepository.save).not.toHaveBeenCalled()
+  })
 })

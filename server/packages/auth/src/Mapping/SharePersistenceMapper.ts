@@ -15,6 +15,15 @@ export class SharePersistenceMapper implements MapperInterface<Share, TypeORMSha
         nickname: projection.nickname ?? null,
         createdAt: new Date(Number(projection.createdAt)),
         revoked: Boolean(projection.revoked),
+        oneTimeView: Boolean(projection.oneTimeView),
+        viewExpiresMinutes:
+          projection.viewExpiresMinutes === null || projection.viewExpiresMinutes === undefined
+            ? null
+            : Number(projection.viewExpiresMinutes),
+        firstOpenedAt:
+          projection.firstOpenedAt === null || projection.firstOpenedAt === undefined
+            ? null
+            : new Date(Number(projection.firstOpenedAt)),
       },
       new UniqueEntityId(projection.uuid),
     )
@@ -35,6 +44,9 @@ export class SharePersistenceMapper implements MapperInterface<Share, TypeORMSha
     typeorm.nickname = domain.props.nickname
     typeorm.createdAt = domain.props.createdAt.getTime()
     typeorm.revoked = domain.props.revoked
+    typeorm.oneTimeView = domain.props.oneTimeView
+    typeorm.viewExpiresMinutes = domain.props.viewExpiresMinutes
+    typeorm.firstOpenedAt = domain.props.firstOpenedAt === null ? null : domain.props.firstOpenedAt.getTime()
 
     return typeorm
   }

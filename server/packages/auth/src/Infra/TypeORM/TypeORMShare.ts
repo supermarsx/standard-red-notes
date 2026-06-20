@@ -45,4 +45,25 @@ export class TypeORMShare {
     default: false,
   })
   declare revoked: boolean
+
+  @Column({
+    name: 'one_time_view',
+    type: 'boolean',
+    default: false,
+  })
+  declare oneTimeView: boolean
+
+  @Column({
+    name: 'view_expires_minutes',
+    type: 'integer',
+    nullable: true,
+  })
+  declare viewExpiresMinutes: number | null
+
+  @Column({
+    name: 'first_opened_at',
+    type: 'bigint',
+    nullable: true,
+  })
+  declare firstOpenedAt: number | null
 }

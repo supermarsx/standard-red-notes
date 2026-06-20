@@ -38,6 +38,8 @@ export class BaseSharesController extends BaseHttpController {
       type: request.body.type as string,
       encryptedPayload: request.body.encryptedPayload as string,
       nickname: request.body.nickname as string | null | undefined,
+      oneTimeView: request.body.oneTimeView as boolean | undefined,
+      viewExpiresMinutes: request.body.viewExpiresMinutes as number | null | undefined,
     })
 
     return this.json(result.data, result.status)

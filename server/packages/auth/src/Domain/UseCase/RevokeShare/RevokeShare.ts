@@ -30,6 +30,9 @@ export class RevokeShare implements UseCaseInterface<string> {
         nickname: share.props.nickname,
         createdAt: share.props.createdAt,
         revoked: true,
+        oneTimeView: share.props.oneTimeView,
+        viewExpiresMinutes: share.props.viewExpiresMinutes,
+        firstOpenedAt: share.props.firstOpenedAt,
       },
       new UniqueEntityId(share.id.toString()),
     )

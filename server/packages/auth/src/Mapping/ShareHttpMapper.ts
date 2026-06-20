@@ -17,6 +17,9 @@ export class ShareHttpMapper implements MapperInterface<Share, ShareHttpProjecti
       nickname: domain.props.nickname,
       createdAt: domain.props.createdAt.toISOString(),
       revoked: domain.props.revoked,
+      oneTimeView: domain.props.oneTimeView,
+      viewExpiresMinutes: domain.props.viewExpiresMinutes,
+      firstOpenedAt: domain.props.firstOpenedAt === null ? null : domain.props.firstOpenedAt.toISOString(),
     }
   }
 }

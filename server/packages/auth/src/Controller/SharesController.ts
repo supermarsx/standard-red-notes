@@ -46,12 +46,16 @@ export class SharesController {
     type: string
     encryptedPayload: string
     nickname?: string | null
+    oneTimeView?: boolean
+    viewExpiresMinutes?: number | null
   }): Promise<HttpResponse> {
     const result = await this.createShare.execute({
       userUuid: params.userUuid,
       type: params.type,
       encryptedPayload: params.encryptedPayload,
       nickname: params.nickname,
+      oneTimeView: params.oneTimeView,
+      viewExpiresMinutes: params.viewExpiresMinutes,
     })
 
     if (result.isFailed()) {
@@ -79,6 +83,9 @@ export class SharesController {
           nickname: created.nickname,
           createdAt: created.createdAt.toISOString(),
           revoked: false,
+          oneTimeView: created.oneTimeView,
+          viewExpiresMinutes: created.viewExpiresMinutes,
+          firstOpenedAt: null,
         },
       },
     }
@@ -140,6 +147,8 @@ export class SharesController {
       data: {
         type: share.type,
         encryptedPayload: share.encryptedPayload,
+        oneTimeView: share.oneTimeView,
+        viewExpiresMinutes: share.viewExpiresMinutes,
       },
     }
   }

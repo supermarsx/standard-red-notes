@@ -20,6 +20,9 @@ describe('RevokeShare', () => {
         nickname: null,
         createdAt: new Date(1),
         revoked: false,
+        oneTimeView: false,
+        viewExpiresMinutes: null,
+        firstOpenedAt: null,
       },
       new UniqueEntityId(shareId),
     ).getValue()

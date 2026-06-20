@@ -39,6 +39,17 @@ export class CreateShare implements UseCaseInterface<CreateShareResult> {
         ? dto.nickname.trim()
         : null
 
+    const oneTimeView = dto.oneTimeView === true
+
+    let viewExpiresMinutes: number | null = null
+    if (dto.viewExpiresMinutes !== undefined && dto.viewExpiresMinutes !== null) {
+      const minutes = Number(dto.viewExpiresMinutes)
+      if (!Number.isInteger(minutes) || minutes <= 0) {
+        return Result.fail('Could not create share: view expiry minutes must be a positive integer.')
+      }
+      viewExpiresMinutes = minutes
+    }
+
     const createdAt = new Date()
 
     const shareOrError = Share.create({
@@ -48,6 +59,9 @@ export class CreateShare implements UseCaseInterface<CreateShareResult> {
       nickname,
       createdAt,
       revoked: false,
+      oneTimeView,
+      viewExpiresMinutes,
+      firstOpenedAt: null,
     })
     if (shareOrError.isFailed()) {
       return Result.fail(`Could not create share: ${shareOrError.getError()}`)
@@ -61,6 +75,8 @@ export class CreateShare implements UseCaseInterface<CreateShareResult> {
       type,
       nickname,
       createdAt,
+      oneTimeView,
+      viewExpiresMinutes,
     })
   }
 }

@@ -931,6 +931,10 @@ export class LegacyApiService
     type: 'note' | 'tag' | 'account'
     encryptedPayload: string
     nickname?: string | null
+    /** Burn after reading: consume the share after its first successful open. */
+    oneTimeView?: boolean
+    /** Optional minutes the share stays readable AFTER the first open, then expires. */
+    viewExpiresMinutes?: number | null
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Post,

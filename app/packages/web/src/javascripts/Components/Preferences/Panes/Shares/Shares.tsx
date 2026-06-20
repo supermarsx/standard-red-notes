@@ -22,6 +22,23 @@ type Share = {
   nickname: string | null
   createdAt: string
   revoked: boolean
+  oneTimeView?: boolean
+  viewExpiresMinutes?: number | null
+  firstOpenedAt?: string | null
+}
+
+const describeBurn = (share: Share): string | null => {
+  const parts: string[] = []
+  if (share.oneTimeView) {
+    parts.push('Burn after reading')
+  }
+  if (share.viewExpiresMinutes != null) {
+    parts.push(`Expires ${share.viewExpiresMinutes} min after first open`)
+  }
+  if (parts.length === 0) {
+    return null
+  }
+  return parts.join(' · ')
 }
 
 const formatDate = (value: string | null): string => {
@@ -126,10 +143,19 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
                   {share.nickname || `${share.type} share`}
                 </span>
                 <span className="break-words text-sm text-passive-0 lg:text-xs">
-                  {share.type} · {share.revoked ? 'Revoked' : 'Active'}
+                  {share.type} ·{' '}
+                  {share.revoked
+                    ? share.oneTimeView && share.firstOpenedAt
+                      ? 'Burned (opened)'
+                      : 'Revoked'
+                    : 'Active'}
                 </span>
+                {describeBurn(share) && (
+                  <span className="break-words text-sm text-warning lg:text-xs">{describeBurn(share)}</span>
+                )}
                 <span className="break-words text-sm text-passive-0 lg:text-xs">
                   Created {formatDate(share.createdAt)}
+                  {share.firstOpenedAt ? ` · First opened ${formatDate(share.firstOpenedAt)}` : ''}
                 </span>
               </div>
               {!share.revoked && (
