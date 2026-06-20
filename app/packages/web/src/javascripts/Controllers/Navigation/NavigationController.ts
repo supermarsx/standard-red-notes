@@ -808,6 +808,62 @@ export class NavigationController
     })
   }
 
+  /**
+   * Standard Red Notes: create a folder and return the live item, without
+   * selecting it. Used by bulk/folder uploads which create many folders quickly
+   * and should not hijack the user's current selection or close the inline editor.
+   */
+  public async createFolderReturning(title: string, parent?: SNFolder): Promise<SNFolder | undefined> {
+    const trimmed = title.trim()
+    if (trimmed.length === 0) {
+      return undefined
+    }
+
+    const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
+      title: trimmed,
+    } as unknown as FolderContent)
+
+    const created = await this.mutator.insertItem<SNFolder>(template)
+
+    if (parent) {
+      await this.mutator.changeItem<FolderMutator>(created, (m) => m.makeChildOf(parent))
+    }
+
+    await this.sync.sync()
+    this.reloadFolders()
+
+    return this.folders.find((folder) => folder.uuid === created.uuid) || (created as SNFolder)
+  }
+
+  /** Find an existing child folder (or root folder when `parent` is undefined) by exact title. */
+  public findFolderByTitle(title: string, parent?: SNFolder): SNFolder | undefined {
+    return this.folders.find(
+      (folder) => folder.title === title && (parent ? folder.parentId === parent.uuid : !folder.parentId),
+    )
+  }
+
+  /**
+   * Standard Red Notes: resolve a folder path (ordered list of folder-name
+   * segments) into the deepest folder, creating any missing folders along the way
+   * and reusing existing folders with matching titles. Returns undefined for an
+   * empty path. Used to recreate a dropped/selected directory tree.
+   */
+  public async ensureFolderPath(segments: string[]): Promise<SNFolder | undefined> {
+    let parent: SNFolder | undefined
+    for (const segment of segments) {
+      const title = segment.trim()
+      if (title.length === 0) {
+        continue
+      }
+      const existing = this.findFolderByTitle(title, parent)
+      parent = existing ?? (await this.createFolderReturning(title, parent))
+      if (!parent) {
+        return undefined
+      }
+    }
+    return parent
+  }
+
   /** Begin the inline-create flow for a new root folder (renders an editable template row). */
   public createNewFolderTemplate(): void {
     if (this.editingFolder_ && this.items.isTemplateItem(this.editingFolder_)) {

@@ -7,6 +7,8 @@ import { FileItem, SNNote } from '@standardnotes/snjs'
 import { useMemo, useState, createContext, ReactNode, useRef, useCallback, useEffect, useContext, memo } from 'react'
 import Portal from './Portal/Portal'
 import { ElementIds } from '@/Constants/ElementIDs'
+import { DirectoryEntryLike, flattenDirectoryEntries } from '@/Utils/DirectoryUpload'
+import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
 
 type FileDragTargetCommonData = {
   tooltipText: string
@@ -202,50 +204,87 @@ const FileDragNDropProvider = ({ application, children }: Props) => {
       }
 
       if (event.dataTransfer?.items.length) {
-        // The DataTransfer/DataTransferItemList becomes inert once this event
-        // handler returns, so synchronously kick off retrieval of each item's
-        // File / FileSystemFileHandle *before* awaiting anything. Awaiting first
-        // (the previous behaviour) could detach the transfer and silently drop
-        // items, which is one way a dropped image ends up neither embedded nor
-        // (reliably) uploaded.
-        const useStreaming = StreamingFileReader.available()
-        const pendingFilesOrHandles = Array.from(event.dataTransfer.items)
-          .filter((item) => item.kind === 'file')
-          .map((item) =>
-            useStreaming
-              ? (item.getAsFileSystemHandle!() as Promise<FileSystemFileHandle | null>)
-              : Promise.resolve(item.getAsFile()),
-          )
-
         const dragTarget = closestDragTarget ? dragTargets.current.get(closestDragTarget) : undefined
 
-        pendingFilesOrHandles.forEach(async (pending) => {
-          const fileOrHandle = await pending
+        // The DataTransfer/DataTransferItemList becomes inert once this event
+        // handler returns, so synchronously capture everything we need *before*
+        // awaiting anything: each item's File / FileSystemFileHandle and, for
+        // whole-folder drops, the directory entry from webkitGetAsEntry().
+        const fileItems = Array.from(event.dataTransfer.items).filter((item) => item.kind === 'file')
 
-          if (!fileOrHandle) {
-            return
+        // Detect dropped directories. A target that embeds (e.g. Super note)
+        // doesn't support folders, so we only do directory recreation for the
+        // generic Files upload (no handleFileUpload).
+        const directoryEntries: DirectoryEntryLike[] = []
+        if (!dragTarget?.handleFileUpload && typeof DataTransferItem.prototype.webkitGetAsEntry === 'function') {
+          for (const item of fileItems) {
+            const entry = item.webkitGetAsEntry?.() as DirectoryEntryLike | null
+            if (entry?.isDirectory) {
+              directoryEntries.push(entry)
+            }
           }
+        }
 
-          // A drag target that knows how to embed (e.g. a Super note) is given
-          // the file directly; it owns the single upload + node insertion so we
-          // must NOT also run the generic upload below (which would duplicate it).
-          if (dragTarget?.handleFileUpload) {
-            dragTarget.handleFileUpload(fileOrHandle)
-            return
+        const useStreaming = StreamingFileReader.available()
+        const pendingFilesOrHandles = fileItems.map((item) => {
+          const entry = item.webkitGetAsEntry?.() as DirectoryEntryLike | null
+          // Directories are handled via their entry below; skip them here.
+          if (entry?.isDirectory) {
+            return Promise.resolve(null)
           }
-
-          const uploadedFile = await application.filesController.uploadNewFile(fileOrHandle, {
-            note: dragTarget?.note,
-          })
-
-          if (!uploadedFile) {
-            return
-          }
-
-          if (dragTarget?.callback) {
-            dragTarget.callback(uploadedFile)
-          }
+          return useStreaming
+            ? (item.getAsFileSystemHandle!() as Promise<FileSystemFileHandle | null>)
+            : Promise.resolve(item.getAsFile())
         })
+
+        // Whole-folder drop(s): walk the directory tree(s).
+        if (directoryEntries.length > 0) {
+          void (async () => {
+            const filesWithPaths = await flattenDirectoryEntries(directoryEntries)
+            if (filesWithPaths.length === 0) {
+              return
+            }
+            if (dragTarget?.note) {
+              // Attaching to a note + filing into folders is ambiguous, so the
+              // folder's files are uploaded flat and attached to the note.
+              await application.filesController.uploadFiles(filesWithPaths, {
+                note: dragTarget.note,
+                onFileUploaded: dragTarget.callback ? (file) => dragTarget.callback(file) : undefined,
+              })
+            } else {
+              // Recreate the dropped folder structure in the Files view.
+              await uploadFilesWithFolderStructure(filesWithPaths, {
+                filesController: application.filesController,
+                navigationController: application.navigationController,
+              })
+            }
+          })()
+        }
+
+        // Loose files (and any files for a note/embed target) upload individually.
+        Promise.all(pendingFilesOrHandles)
+          .then((resolved) => {
+            const loose = resolved.filter((value): value is File | FileSystemFileHandle => value != null)
+            if (loose.length === 0) {
+              return
+            }
+
+            // A drag target that knows how to embed (e.g. a Super note) owns the
+            // single upload + node insertion, so route each file to it directly.
+            if (dragTarget?.handleFileUpload) {
+              loose.forEach((fileOrHandle) => dragTarget.handleFileUpload(fileOrHandle))
+              return
+            }
+
+            void application.filesController.uploadFiles(
+              loose.map((fileOrHandle) => ({ file: fileOrHandle })),
+              {
+                note: dragTarget?.note,
+                onFileUploaded: dragTarget?.callback ? (file) => dragTarget.callback(file) : undefined,
+              },
+            )
+          })
+          .catch(console.error)
 
         dragCounter.current = 0
       }

@@ -16,6 +16,7 @@ type Props = {
   isInFilesSmartView: boolean
   addButtonLabel: string
   addNewItem: () => void
+  uploadFolder?: () => void
   filesController: FilesController
 }
 
@@ -25,6 +26,7 @@ const AddItemMenuButton = ({
   addButtonLabel,
   isInFilesSmartView,
   addNewItem,
+  uploadFolder,
 }: Props) => {
   const addItemButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -40,7 +42,9 @@ const AddItemMenuButton = ({
     void setCameraSupport()
   }, [])
 
-  const canShowMenu = isInFilesSmartView && deviceHasCamera
+  // In the Files view we always offer a menu (folder upload, and camera capture
+  // when available); elsewhere the button just runs the primary add action.
+  const canShowMenu = isInFilesSmartView
 
   const closeCaptureModal = () => {
     setCaptureType(undefined)
@@ -89,24 +93,39 @@ const AddItemMenuButton = ({
               <Icon type="add" className="mr-2" />
               {addButtonLabel}
             </MenuItem>
-            <MenuItem
-              onClick={async () => {
-                setCaptureType('photo')
-                setIsMenuOpen(false)
-              }}
-            >
-              <Icon type="camera" className="mr-2" />
-              Take photo
-            </MenuItem>
-            <MenuItem
-              onClick={async () => {
-                setCaptureType('video')
-                setIsMenuOpen(false)
-              }}
-            >
-              <Icon type="camera" className="mr-2" />
-              Record video
-            </MenuItem>
+            {uploadFolder && (
+              <MenuItem
+                onClick={() => {
+                  uploadFolder()
+                  setIsMenuOpen(false)
+                }}
+              >
+                <Icon type="folder" className="mr-2" />
+                Upload folder
+              </MenuItem>
+            )}
+            {deviceHasCamera && (
+              <>
+                <MenuItem
+                  onClick={async () => {
+                    setCaptureType('photo')
+                    setIsMenuOpen(false)
+                  }}
+                >
+                  <Icon type="camera" className="mr-2" />
+                  Take photo
+                </MenuItem>
+                <MenuItem
+                  onClick={async () => {
+                    setCaptureType('video')
+                    setIsMenuOpen(false)
+                  }}
+                >
+                  <Icon type="camera" className="mr-2" />
+                  Record video
+                </MenuItem>
+              </>
+            )}
           </Menu>
         </Popover>
       )}

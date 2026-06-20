@@ -41,6 +41,8 @@ import FilesFolderBar, {
   filterItemsByFolder,
 } from './FilesFolderBar'
 import QuickActionsBar from '../QuickActions/QuickActionsBar'
+import { selectDirectoryFiles } from '@/Utils/DirectoryPicker'
+import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
 
 type Props = {
   application: WebApplication
@@ -184,6 +186,21 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
         setPaneLayout(PaneLayout.Editing)
       }
     }, [isFilesSmartView, application, filesController, createNewNote, setPaneLayout])
+
+    const uploadFolder = useCallback(async () => {
+      if (!application.entitledToFiles) {
+        application.showPremiumModal(FeatureName.Files)
+        return
+      }
+      const filesWithPaths = await selectDirectoryFiles()
+      if (filesWithPaths.length === 0) {
+        return
+      }
+      await uploadFilesWithFolderStructure(filesWithPaths, {
+        filesController,
+        navigationController,
+      })
+    }, [application, filesController, navigationController])
 
     const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
     const shouldUseTableView = (isFilesSmartView || isTableViewEnabled) && !isMobileScreen
@@ -339,6 +356,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
                 icon={icon}
                 addButtonLabel={addButtonLabel}
                 addNewItem={addNewItem}
+                uploadFolder={uploadFolder}
                 isFilesSmartView={isFilesSmartView}
                 isTableViewEnabled={isTableViewEnabled || isFilesSmartView}
                 optionsSubtitle={optionsSubtitle}

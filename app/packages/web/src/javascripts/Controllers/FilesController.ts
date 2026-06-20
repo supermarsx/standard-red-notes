@@ -602,17 +602,117 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
   public async selectAndUploadNewFiles(note?: SNNote, callback?: (file: FileItem) => void) {
     const selectedFiles = await this.reader.selectFiles()
 
-    selectedFiles.forEach(async (file) => {
-      if (this.alertIfFileExceedsSizeLimit(file)) {
-        return
-      }
-      const uploadedFile = await this.uploadNewFile(file, {
+    await this.uploadFiles(
+      selectedFiles.map((file) => ({ file, path: file.name })),
+      {
         note,
-      })
-      if (uploadedFile && callback) {
-        callback(uploadedFile)
+        onFileUploaded: callback ? (file) => callback(file) : undefined,
+      },
+    )
+  }
+
+  /**
+   * Upload a batch of files (optionally carrying a relative `path` for folder
+   * recreation) with overall "n of m" progress and per-file error isolation.
+   *
+   * Uploads run with bounded concurrency rather than one-at-a-time prompts. Each
+   * file is routed through {@link uploadNewFile} with `showToast: false`, so the
+   * existing per-file size, large-file/local-only confirmation and local-max
+   * logic is fully preserved — we never bypass it. A single failed file does not
+   * abort the batch; failures are counted and surfaced in the final toast.
+   */
+  public async uploadFiles(
+    files: { file: File | FileSystemFileHandle; path?: string }[],
+    options: {
+      note?: SNNote
+      concurrency?: number
+      /** Called after each successful upload with the resulting item and its source relative path. */
+      onFileUploaded?: (file: FileItem, path?: string) => void | Promise<void>
+    } = {},
+  ): Promise<{ uploaded: FileItem[]; failed: number }> {
+    const { note, onFileUploaded } = options
+    const concurrency = Math.max(1, options.concurrency ?? 3)
+
+    const total = files.length
+    if (total === 0) {
+      return { uploaded: [], failed: 0 }
+    }
+
+    if (total === 1) {
+      // Single file: defer to the rich single-file toast/flow.
+      const uploaded = await this.uploadNewFile(files[0].file, { note })
+      if (uploaded) {
+        await onFileUploaded?.(uploaded, files[0].path)
+        return { uploaded: [uploaded], failed: 0 }
       }
+      return { uploaded: [], failed: 1 }
+    }
+
+    let completed = 0
+    let failed = 0
+    const uploaded: FileItem[] = []
+
+    const batchToastId = addToast({
+      type: ToastType.Progress,
+      message: `Uploading ${total} files (0 of ${total})`,
+      progress: 0,
     })
+
+    const updateBatchToast = () => {
+      const done = completed + failed
+      updateToast(batchToastId, {
+        message: `Uploading ${total} files (${done} of ${total})`,
+        progress: Math.round((done / total) * 100),
+      })
+    }
+
+    const queue = [...files]
+
+    const worker = async () => {
+      for (;;) {
+        const next = queue.shift()
+        if (!next) {
+          return
+        }
+        try {
+          const result = await this.uploadNewFile(next.file, { note, showToast: false })
+          if (result) {
+            completed += 1
+            uploaded.push(result)
+            await onFileUploaded?.(result, next.path)
+          } else {
+            // uploadNewFile returns undefined when the user declines a large
+            // local-only file or the file is rejected by size limits — count it
+            // as a (non-fatal) skip/failure so the batch keeps going.
+            failed += 1
+          }
+        } catch (error) {
+          console.error(error)
+          failed += 1
+        }
+        updateBatchToast()
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, total) }, () => worker()))
+
+    dismissToast(batchToastId)
+
+    if (failed === 0) {
+      addToast({
+        type: ToastType.Success,
+        message: `Uploaded ${completed} files`,
+        autoClose: true,
+      })
+    } else {
+      addToast({
+        type: completed > 0 ? ToastType.Success : ToastType.Error,
+        message: `Uploaded ${completed} of ${total} files${failed > 0 ? ` (${failed} skipped or failed)` : ''}`,
+        autoClose: true,
+      })
+    }
+
+    return { uploaded, failed }
   }
 
   public async uploadNewFile(

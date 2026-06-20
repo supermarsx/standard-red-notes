@@ -24,6 +24,7 @@ type Props = {
   icon?: VectorIconNameOrEmoji
   addButtonLabel: string
   addNewItem: () => void
+  uploadFolder?: () => void
   isFilesSmartView: boolean
   isTableViewEnabled: boolean
   optionsSubtitle?: string
@@ -39,6 +40,7 @@ const ContentListHeader = ({
   icon,
   addButtonLabel,
   addNewItem,
+  uploadFolder,
   isFilesSmartView,
   isTableViewEnabled,
   optionsSubtitle,
@@ -156,10 +158,11 @@ const ContentListHeader = ({
         isDailyEntry={isDailyEntry}
         addButtonLabel={addButtonLabel}
         addNewItem={addNewItem}
+        uploadFolder={uploadFolder}
         filesController={filesController}
       />
     )
-  }, [addButtonLabel, addNewItem, filesController, isDailyEntry, isFilesSmartView])
+  }, [addButtonLabel, addNewItem, uploadFolder, filesController, isDailyEntry, isFilesSmartView])
 
   const SearchBarButton = useMemo(() => {
     if (!isTableViewEnabled || isMobileScreen) {
