@@ -13,12 +13,21 @@ import {
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 
 type KanbanCard = { id: string; text: string }
-type KanbanColumn = { id: string; title: string; cards: KanbanCard[] }
+/** `color` is an optional hex string (e.g. `#3b82f6`) used as a column accent. */
+type KanbanColumn = { id: string; title: string; color?: string; cards: KanbanCard[] }
 export type KanbanData = { title: string; columns: KanbanColumn[] }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
 export const DEFAULT_BOARD_TITLE = 'Kanban board'
+
+/** A small palette offered as quick-pick swatches in the column header. */
+export const COLUMN_COLOR_PRESETS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7'] as const
+
+/** True for `#rgb`/`#rrggbb` hex strings; anything else is treated as "no color". */
+function isValidHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value)
+}
 
 const DEFAULT_KANBAN: KanbanData = {
   title: DEFAULT_BOARD_TITLE,
@@ -32,10 +41,22 @@ const DEFAULT_KANBAN: KanbanData = {
 /**
  * Normalizes data coming from importJSON. Notes serialized before the board
  * title was editable have no `title` field, so we backfill the default to keep
- * older notes rendering and round-tripping correctly.
+ * older notes rendering and round-tripping correctly. Likewise, columns from
+ * boards saved before per-column colors existed have no `color` field; we leave
+ * it undefined (i.e. "no color") so those boards are unaffected. Any invalid
+ * color value is dropped rather than persisted.
  */
 function normalize(data: KanbanData): KanbanData {
-  return { title: data.title ?? DEFAULT_BOARD_TITLE, columns: data.columns ?? [] }
+  return {
+    title: data.title ?? DEFAULT_BOARD_TITLE,
+    columns: (data.columns ?? []).map((c) => {
+      if (isValidHexColor(c.color)) return c
+      // Drop any absent/invalid color so legacy boards round-trip unchanged
+      // (no stray `color: undefined` key is introduced).
+      const { color: _color, ...rest } = c
+      return rest
+    }),
+  }
 }
 
 function clone(data: KanbanData): KanbanData {
@@ -69,6 +90,14 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
     mutate((d) => {
       const col = d.columns.find((c) => c.id === colId)
       if (col) col.title = title
+    })
+  const setColumnColor = (colId: string, color: string | undefined) =>
+    mutate((d) => {
+      const col = d.columns.find((c) => c.id === colId)
+      if (!col) return
+      // Passing undefined (or an invalid value) clears the color back to "none".
+      if (isValidHexColor(color)) col.color = color
+      else delete col.color
     })
   const addCard = (colId: string) =>
     mutate((d) => {
@@ -117,23 +146,73 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
       </div>
       <div className="flex gap-2 overflow-x-auto p-2">
         {data.columns.map((col, colIndex) => (
-          <div key={col.id} className="flex w-56 flex-shrink-0 flex-col rounded bg-contrast p-2">
-            <div className="mb-1 flex items-center gap-1">
-              <input
-                key={`title-${col.id}`}
-                className="min-w-0 flex-grow bg-transparent text-sm font-semibold text-text outline-none"
-                defaultValue={col.title}
-                onBlur={(e) => renameColumn(col.id, e.target.value)}
-              />
-              <button
-                className="rounded px-1 text-passive-1 hover:bg-default hover:text-danger"
-                onClick={() => removeColumn(col.id)}
-                title="Delete column"
-                type="button"
-              >
-                ×
-              </button>
+          <div
+            key={col.id}
+            className="flex w-56 flex-shrink-0 flex-col overflow-hidden rounded bg-contrast"
+            style={col.color ? { borderTop: `3px solid ${col.color}` } : undefined}
+          >
+            <div
+              className="flex flex-col gap-1 p-2"
+              // Use the column color as a translucent tint behind the header so the
+              // accent is visible in both light and dark themes without harming the
+              // contrast of the title text (which keeps the theme `text` color).
+              style={col.color ? { backgroundColor: `${col.color}26` } : undefined}
+            >
+              <div className="flex items-center gap-1">
+                <input
+                  key={`title-${col.id}`}
+                  className="min-w-0 flex-grow bg-transparent text-sm font-semibold text-text outline-none"
+                  defaultValue={col.title}
+                  onBlur={(e) => renameColumn(col.id, e.target.value)}
+                />
+                <button
+                  className="rounded px-1 text-passive-1 hover:bg-default hover:text-danger"
+                  onClick={() => removeColumn(col.id)}
+                  title="Delete column"
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                <label
+                  className="relative h-4 w-4 flex-shrink-0 cursor-pointer rounded-full border border-border"
+                  style={{ backgroundColor: col.color ?? 'transparent' }}
+                  title="Pick a custom column color"
+                >
+                  <input
+                    key={`color-${col.id}`}
+                    type="color"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    value={col.color ?? '#000000'}
+                    onChange={(e) => setColumnColor(col.id, e.target.value)}
+                    aria-label="Column color"
+                  />
+                </label>
+                {COLUMN_COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className="h-4 w-4 flex-shrink-0 rounded-full border border-border"
+                    style={{ backgroundColor: preset }}
+                    title={`Set column color ${preset}`}
+                    aria-label={`Set column color ${preset}`}
+                    aria-pressed={col.color === preset}
+                    onClick={() => setColumnColor(col.id, preset)}
+                  />
+                ))}
+                <button
+                  type="button"
+                  className="rounded px-1 text-xs text-passive-1 hover:bg-default disabled:opacity-40"
+                  disabled={!col.color}
+                  onClick={() => setColumnColor(col.id, undefined)}
+                  title="Clear column color"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
+            <div className="flex flex-col p-2 pt-0">
             <div className="flex flex-col gap-1">
               {col.cards.map((card) => (
                 <div key={card.id} className="rounded border border-border bg-default p-1.5">
@@ -183,6 +262,7 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
             >
               + Add card
             </button>
+            </div>
           </div>
         ))}
       </div>

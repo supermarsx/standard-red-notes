@@ -127,6 +127,54 @@ describe('Editor block node serialization', () => {
       expect((imported.data as KanbanData).title).toBe(DEFAULT_BOARD_TITLE)
       expect((imported.data as KanbanData).columns).toEqual([{ id: 'c1', title: 'To do', cards: [] }])
     })
+
+    it('round-trips per-column colors without loss', () => {
+      const colored: KanbanData = {
+        title: 'Colored board',
+        columns: [
+          { id: 'col-1', title: 'Red', color: '#ef4444', cards: [{ id: 'card-1', text: 'Urgent' }] },
+          { id: 'col-2', title: 'No color', cards: [] },
+        ],
+      }
+      const { first, second } = roundTrip(() => $createKanbanNode(colored), KanbanNode.importJSON)
+      expect((first.data as KanbanData).columns[0].color).toBe('#ef4444')
+      expect((second.data as KanbanData).columns[0].color).toBe('#ef4444')
+      // A column with no color stays colorless across the round-trip.
+      expect((second.data as KanbanData).columns[1].color).toBeUndefined()
+      expect(second.data).toEqual(colored)
+    })
+
+    it('imports a legacy board without colors and leaves columns colorless', () => {
+      const legacy = {
+        type: 'kanban',
+        version: 1,
+        // boards serialized before per-column colors existed have no `color`
+        data: {
+          title: 'Legacy',
+          columns: [{ id: 'c1', title: 'To do', cards: [] }],
+        } as unknown as KanbanData,
+      } as const
+      const imported = inEditor(() => KanbanNode.importJSON(legacy as never).exportJSON())
+      const col = (imported.data as KanbanData).columns[0]
+      expect(col.color).toBeUndefined()
+      // No stray `color` key is introduced for legacy columns.
+      expect(col).toEqual({ id: 'c1', title: 'To do', cards: [] })
+    })
+
+    it('drops an invalid column color on import', () => {
+      const bad = {
+        type: 'kanban',
+        version: 1,
+        data: {
+          title: 'Bad color',
+          columns: [{ id: 'c1', title: 'To do', color: 'not-a-color', cards: [] }],
+        } as unknown as KanbanData,
+      } as const
+      const imported = inEditor(() => KanbanNode.importJSON(bad as never).exportJSON())
+      const col = (imported.data as KanbanData).columns[0]
+      expect(col.color).toBeUndefined()
+      expect(col).toEqual({ id: 'c1', title: 'To do', cards: [] })
+    })
   })
 
   describe('CalendarNode', () => {
