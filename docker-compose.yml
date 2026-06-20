@@ -182,7 +182,7 @@ services:
       - standard-red-notes
 
   db:
-    image: mariadb:11
+    image: mariadb:13
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
@@ -218,7 +218,7 @@ services:
       - standard-red-notes
 
   localstack:
-    image: localstack/localstack:4
+    image: localstack/localstack:latest
     restart: unless-stopped
     environment:
       SERVICES: sns,sqs
