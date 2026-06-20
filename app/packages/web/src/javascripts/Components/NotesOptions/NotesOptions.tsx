@@ -37,6 +37,8 @@ import { ToastType, addToast } from '@standardnotes/toast'
 import { encryptShare } from '../SharedView/shareCrypto'
 import NarrationModal from './NarrationModal'
 import SplitNoteModal from './SplitNoteModal'
+import SuggestTagsModal from './SuggestTagsModal'
+import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
 const iconSize = MenuItemIconSize
@@ -51,6 +53,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const [altKeyDown, setAltKeyDown] = useState(false)
   const [narrationOpen, setNarrationOpen] = useState(false)
   const [splitOpen, setSplitOpen] = useState(false)
+  const [suggestTagsOpen, setSuggestTagsOpen] = useState(false)
   const { toggleAppPane } = useResponsiveAppPane()
 
   const {
@@ -71,6 +74,8 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
     () => (notes[0] ? application.componentManager.editorForNote(notes[0]) : undefined),
     [application.componentManager, notes],
   )
+
+  const aiAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
 
   useEffect(() => {
     const removeAltKeyObserver = application.keyboardService.addCommandHandler({
@@ -249,6 +254,14 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         />
       )}
       {notes.length === 1 && (
+        <SuggestTagsModal
+          application={application}
+          note={notes[0]}
+          isOpen={suggestTagsOpen}
+          close={() => setSuggestTagsOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
         <>
           <MenuSection>
             <MenuItem onClick={openRevisionHistoryModal}>
@@ -420,6 +433,17 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           >
             <Icon type="menu-arrow-down" className={iconClass} />
             Split note…
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setSuggestTagsOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault || !aiAvailability.available}
+          >
+            <Icon type="hashtag" className={iconClass} />
+            Suggest tags (AI)
           </MenuItem>
         )}
         {application.platform === Platform.Android && (
