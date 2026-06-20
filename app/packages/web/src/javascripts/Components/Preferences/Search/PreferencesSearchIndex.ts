@@ -106,6 +106,8 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
     'font size',
     'editor appearance',
     'monospace',
+    'ligatures',
+    'font ligatures',
     'line height',
     'margin',
   ],

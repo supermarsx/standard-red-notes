@@ -127,6 +127,28 @@ export const applyEditorFont = (preferenceValue: string | undefined, monospaceFa
   document.documentElement.classList.toggle('monospace-font', Boolean(monospaceFallback))
 }
 
+/**
+ * The class toggled on `document.documentElement` when the "Font ligatures"
+ * setting is enabled. Editor stylesheets scope their ligature CSS under this
+ * class so the effect applies live across the plain, Super and code editors.
+ *
+ * NOTE: ligatures only render if the *active editor font actually contains
+ * them*. This toggle merely enables the OpenType CSS; it does not bundle a
+ * ligature font.
+ */
+export const LIGATURES_CLASS = 'srn-ligatures-on'
+
+/**
+ * Applies (or removes) the global ligatures class on the document root. Safe to
+ * call repeatedly; toggling updates editor rendering live without a reload.
+ */
+export const applyEditorLigatures = (enabled: boolean | undefined): void => {
+  if (typeof document === 'undefined') {
+    return
+  }
+  document.documentElement.classList.toggle(LIGATURES_CLASS, Boolean(enabled))
+}
+
 export type LocalFontEntry = {
   family: string
   fullName: string

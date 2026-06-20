@@ -27,6 +27,10 @@ export enum LocalPrefKey {
   EditorLineHeight = 'editorLineHeight',
   EditorLineWidth = 'editorLineWidth',
   EditorFontSize = 'editorFontSize',
+  // Standard Red Notes: enables OpenType ligatures (common + contextual, plus
+  // coding ligatures for monospace) across the editors. Web-only, stored
+  // locally to avoid touching the published @standardnotes/models package.
+  EditorLigaturesEnabled = 'editorLigaturesEnabled',
 }
 
 export type LocalPrefValue = {
@@ -43,6 +47,7 @@ export type LocalPrefValue = {
   [LocalPrefKey.EditorLineHeight]: EditorLineHeight
   [LocalPrefKey.EditorLineWidth]: EditorLineWidth
   [LocalPrefKey.EditorFontSize]: EditorFontSize
+  [LocalPrefKey.EditorLigaturesEnabled]: boolean
 }
 
 export const LocalPrefDefaults = {
@@ -61,6 +66,8 @@ export const LocalPrefDefaults = {
   [LocalPrefKey.EditorLineHeight]: EditorLineHeight.Normal,
   [LocalPrefKey.EditorLineWidth]: EditorLineWidth.FullWidth,
   [LocalPrefKey.EditorFontSize]: EditorFontSize.Normal,
+  // Default OFF: ligatures change text rendering, so they're opt-in.
+  [LocalPrefKey.EditorLigaturesEnabled]: false,
 } satisfies {
   [key in LocalPrefKey]: LocalPrefValue[key]
 }

@@ -29,6 +29,7 @@ import {
   SNNote,
   VaultUserServiceEvent,
   LocalPrefKey,
+  LocalPrefDefaults,
 } from '@standardnotes/snjs'
 import { confirmDialog, DELETE_NOTE_KEYBOARD_COMMAND, KeyboardKey } from '@standardnotes/ui-services'
 import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, RefObject } from 'react'
@@ -90,6 +91,7 @@ type State = {
   stackComponentViewers: ComponentViewerInterface[]
   syncTakingTooLong: boolean
   monospaceFont?: boolean
+  ligaturesEnabled?: boolean
   customEditorFont?: string
   editorFocused?: boolean
   paneGestureEnabled?: boolean
@@ -585,7 +587,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         editorStateDidLoad: true,
       })
     } else {
-      reloadFont(this.state.monospaceFont, this.state.customEditorFont)
+      reloadFont(this.state.monospaceFont, this.state.customEditorFont, this.state.ligaturesEnabled)
       this.setState({
         editorStateDidLoad: true,
       })
@@ -692,7 +694,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   async reloadSpellcheck() {
     const spellcheck = this.application.notesController.getSpellcheckStateForNote(this.note)
     if (spellcheck !== this.state.spellcheck) {
-      reloadFont(this.state.monospaceFont, this.state.customEditorFont)
+      reloadFont(this.state.monospaceFont, this.state.customEditorFont, this.state.ligaturesEnabled)
       this.setState({ spellcheck })
     }
   }
@@ -724,6 +726,11 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       PrefDefaults[LocalPrefKey.EditorMonospaceEnabled],
     )
 
+    const ligaturesEnabled = this.application.preferences.getLocalValue(
+      LocalPrefKey.EditorLigaturesEnabled,
+      LocalPrefDefaults[LocalPrefKey.EditorLigaturesEnabled],
+    )
+
     const customEditorFont = this.application.getPreference(
       PrefKey.EditorFontFamily,
       PrefDefaults[PrefKey.EditorFontFamily],
@@ -745,12 +752,13 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     this.setState({
       monospaceFont,
+      ligaturesEnabled,
       customEditorFont,
       updateSavingIndicator,
       paneGestureEnabled,
     })
 
-    reloadFont(monospaceFont, customEditorFont)
+    reloadFont(monospaceFont, customEditorFont, ligaturesEnabled)
   }
 
   async reloadStackComponents() {

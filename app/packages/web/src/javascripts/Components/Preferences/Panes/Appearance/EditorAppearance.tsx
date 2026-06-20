@@ -247,6 +247,11 @@ const EditorDefaults = ({ application }: Props) => {
     setMonospaceFont(!monospaceFont)
   }
 
+  const [ligaturesEnabled, setLigaturesEnabled] = useLocalPreference(LocalPrefKey.EditorLigaturesEnabled)
+  const toggleLigatures = () => {
+    setLigaturesEnabled(!ligaturesEnabled)
+  }
+
   const [fontSize, setFontSize] = useLocalPreference(LocalPrefKey.EditorFontSize)
   const handleFontSizeChange = (value: string) => {
     setFontSize(value as EditorFontSize)
@@ -279,6 +284,18 @@ const EditorDefaults = ({ application }: Props) => {
                 <Text>Toggles the font style in plaintext and Super notes</Text>
               </div>
               <Switch onChange={toggleMonospaceFont} checked={monospaceFont} />
+            </div>
+            <HorizontalSeparator classes="my-4" />
+            <div className="flex justify-between gap-2 md:items-center">
+              <div className="flex flex-col">
+                <Subtitle>Font ligatures</Subtitle>
+                <Text>
+                  Enables OpenType ligatures in the plaintext, Super and code editors (including coding ligatures such as
+                  =&gt;, != and === for monospace fonts). Ligatures only appear if the active editor font actually
+                  contains them; this setting does not bundle a ligature font.
+                </Text>
+              </div>
+              <Switch onChange={toggleLigatures} checked={ligaturesEnabled} />
             </div>
             <HorizontalSeparator classes="my-4" />
             <div>

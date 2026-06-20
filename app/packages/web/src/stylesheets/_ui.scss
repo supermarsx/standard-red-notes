@@ -2,6 +2,37 @@
   font-family: var(--sn-stylekit-editor-font-family);
 }
 
+/*
+ * Standard Red Notes: "Font ligatures" toggle.
+ *
+ * The `srn-ligatures-on` class is applied to <html> when the setting is enabled
+ * (see Utils/editorFont.ts -> applyEditorLigatures). When OFF (no class), the
+ * default below explicitly disables ligatures so the toggle is a clean switch.
+ *
+ * Ligatures only actually render when the *active editor font contains them*.
+ * This enables the OpenType CSS; it does not bundle a ligature font.
+ *
+ * `.font-editor` is the shared root of the plain editor, the Markdown preview
+ * and the Super editor wrapper. `.Lexical__code` / `.Lexical__textCode` are the
+ * Super code block / inline-code (monospace), where `calt`/`liga` produce coding
+ * ligatures (=>, !=, ===) when the mono font supports them.
+ */
+.font-editor,
+.Lexical__code,
+.Lexical__textCode {
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
+.srn-ligatures-on {
+  .font-editor,
+  .Lexical__code,
+  .Lexical__textCode {
+    font-variant-ligatures: contextual common-ligatures;
+    font-feature-settings: 'liga' 1, 'calt' 1;
+  }
+}
+
 .wrap {
   word-wrap: break-word;
   word-break: break-all;
