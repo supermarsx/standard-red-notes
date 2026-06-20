@@ -11,6 +11,7 @@ import { User } from '../Domain/User/User'
 import { TypeORMAuthenticator } from '../Infra/TypeORM/TypeORMAuthenticator'
 import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
 import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
+import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
 import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
@@ -72,6 +73,7 @@ export class AppDataSource {
         TypeORMAuthenticator,
         TypeORMAppPassword,
         TypeORMMcpToken,
+        TypeORMShare,
         TypeORMAuthenticatorChallenge,
         TypeORMMagicLinkToken,
         TypeORMEmergencyAccessInvitation,

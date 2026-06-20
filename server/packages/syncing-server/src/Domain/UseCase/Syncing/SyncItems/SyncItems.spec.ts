@@ -158,6 +158,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
     expect(result.getValue()).toEqual({
       conflicts: [],
@@ -187,6 +188,7 @@ describe('SyncItems', () => {
       readOnlyAccess: false,
       sessionUuid: null,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
   })
 
@@ -211,6 +213,7 @@ describe('SyncItems', () => {
         snjsVersion: '1.2.3',
         isFreeUser: false,
         hasContentLimit: false,
+        liveSyncEnabled: true,
       })
     } catch (error) {
       caughtError = error
@@ -232,6 +235,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
     expect(result.getValue()).toEqual({
       conflicts: [],
@@ -260,6 +264,7 @@ describe('SyncItems', () => {
       isFreeUser: false,
       sharedVaultUuids: ['00000000-0000-0000-0000-000000000000'],
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
     expect(result.getValue()).toEqual({
       conflicts: [],
@@ -313,6 +318,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.getValue()).toEqual({
@@ -354,6 +360,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -376,6 +383,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -398,6 +406,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -420,6 +429,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -442,6 +452,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -464,6 +475,7 @@ describe('SyncItems', () => {
       snjsVersion: '1.2.3',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()

@@ -148,6 +148,9 @@ export class SyncingServer implements ISyncingServer {
 
       const apiVersion = call.request.hasApiVersion() ? (call.request.getApiVersion() as string) : ApiVersion.v20161215
       const readOnlyAccess = call.metadata.get('x-read-only-access').pop() === 'true'
+      // Standard Red Notes: per-user live-sync gating over gRPC. Opt-in disable:
+      // enabled unless the metadata header explicitly carries 'false'.
+      const liveSyncEnabled = call.metadata.get('x-live-sync-enabled').pop() !== 'false'
       if (readOnlyAccess) {
         this.logger.debug('Syncing with read-only access', {
           codeTag: 'SyncingServer',
@@ -170,6 +173,7 @@ export class SyncingServer implements ISyncingServer {
         sharedVaultUuids,
         isFreeUser,
         hasContentLimit,
+        liveSyncEnabled,
       })
       if (syncResult.isFailed()) {
         const metadata = new grpc.Metadata()

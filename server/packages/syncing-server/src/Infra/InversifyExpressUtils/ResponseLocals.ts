@@ -22,6 +22,9 @@ export interface ResponseLocals {
     access: 'read' | 'write'
     tagUuids?: string[]
   }
+  // Standard Red Notes: per-user gating. Default true when the token omits them.
+  collaborationEnabled: boolean
+  liveSyncEnabled: boolean
   sharedVaultOwnerContext?: {
     upload_bytes_limit: number
   }

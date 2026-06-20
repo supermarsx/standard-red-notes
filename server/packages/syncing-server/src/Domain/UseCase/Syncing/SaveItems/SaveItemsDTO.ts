@@ -9,4 +9,7 @@ export interface SaveItemsDTO {
   snjsVersion: string
   isFreeUser: boolean
   hasContentLimit: boolean
+  // Standard Red Notes: when false, suppress the realtime websocket push to the
+  // user's own clients. The save itself still succeeds. Default true.
+  liveSyncEnabled: boolean
 }

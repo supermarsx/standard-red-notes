@@ -40,6 +40,9 @@ export class PreferencesSessionController {
       menuItems.push({ id: 'home-server', label: 'Home Server', icon: 'server', order: 5 })
     }
 
+    // Standard Red Notes: public read-only share links management pane.
+    menuItems.push({ id: 'shares', label: 'Share Links', icon: 'link', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()

@@ -29,6 +29,11 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // are allowed. Persisted as a setting so the admin panel state survives; see
     // the TODO in Register.ts about having registration consult this at runtime.
     RegistrationDisabled: 'REGISTRATION_DISABLED',
+    // Standard Red Notes: per-user gating for collaboration (shared vaults) and
+    // live-sync websocket push. Default ENABLED when unset; value 'false'
+    // disables the feature (opt-in disable).
+    CollaborationEnabled: 'COLLABORATION_ENABLED',
+    LiveSyncEnabled: 'LIVE_SYNC_ENABLED',
   }
 
   get value(): string {

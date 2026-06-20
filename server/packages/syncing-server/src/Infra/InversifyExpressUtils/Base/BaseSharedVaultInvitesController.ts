@@ -66,6 +66,20 @@ export class BaseSharedVaultInvitesController extends BaseHttpController {
   async createSharedVaultInvite(request: Request, response: Response): Promise<results.JsonResult> {
     const locals = response.locals as ResponseLocals
 
+    // Standard Red Notes: collaboration gating. Reject new invites when
+    // collaboration is disabled for this account. Default-on: a token that omits
+    // the flag leaves locals.collaborationEnabled !== false.
+    if (locals.collaborationEnabled === false) {
+      return this.json(
+        {
+          error: {
+            message: 'Collaboration is disabled for this account',
+          },
+        },
+        HttpStatusCode.Forbidden,
+      )
+    }
+
     const result = await this.inviteUserToSharedVaultUseCase.execute({
       sharedVaultUuid: request.params.sharedVaultUuid as string,
       senderUuid: locals.user.uuid,

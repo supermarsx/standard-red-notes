@@ -5,4 +5,5 @@ export enum RootQueryParam {
   AcceptSubscriptionInvite = 'accept-subscription-invite',
   UserRequest = 'user-request',
   AppViewRoute = 'route',
+  Shared = 'shared',
 }

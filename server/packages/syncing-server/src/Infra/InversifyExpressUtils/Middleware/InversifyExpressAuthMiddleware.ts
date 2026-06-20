@@ -32,6 +32,11 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
       const mcpScope = decodedToken.mcp_scope
       const readOnlyAccess = (decodedToken.session?.readonly_access ?? false) || mcpScope?.access === 'read'
 
+      // Standard Red Notes: per-user collaboration + live-sync gating. The flags
+      // are optional on the token; an absent flag means ENABLED (default-on).
+      const collaborationEnabled = decodedToken.collaboration_enabled !== false
+      const liveSyncEnabled = decodedToken.live_sync_enabled !== false
+
       Object.assign(response.locals, {
         user: decodedToken.user,
         roles: decodedToken.roles,
@@ -39,6 +44,8 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
         session: decodedToken.session,
         readOnlyAccess,
         mcpScope,
+        collaborationEnabled,
+        liveSyncEnabled,
         sharedVaultOwnerContext: decodedToken.shared_vault_owner_context,
         hasContentLimit: decodedToken.hasContentLimit,
       } as ResponseLocals)

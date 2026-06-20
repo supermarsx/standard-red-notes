@@ -30,6 +30,9 @@ import { MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import AddToVaultMenuOption from '../Vaults/AddToVaultMenuOption'
 import MenuSection from '../Menu/MenuSection'
 import { shareBlobOnMobile } from '@/NativeMobileWeb/ShareBlobOnMobile'
+import { isErrorResponse } from '@standardnotes/snjs'
+import { ToastType, addToast } from '@standardnotes/toast'
+import { encryptShare } from '../SharedView/shareCrypto'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -81,6 +84,55 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         )
       })
       .catch(console.error)
+  }, [application, notes])
+
+  // Standard Red Notes: create a public, read-only share link for a single note.
+  // The note's title + text are encrypted client-side under a fresh key that lives
+  // in the URL fragment (never sent to the server); the server stores only the
+  // ciphertext keyed by the returned shareId.
+  const createShareLink = useCallback(async () => {
+    const note = notes[0]
+    if (!note) {
+      return
+    }
+
+    try {
+      const { encryptedPayload, keyHex } = await encryptShare({
+        kind: 'note',
+        title: note.title,
+        text: note.text,
+      })
+
+      const response = await application.legacyApi.createShare({ type: 'note', encryptedPayload })
+      if (isErrorResponse(response)) {
+        const data = response.data as { error?: { message?: string } } | undefined
+        addToast({ type: ToastType.Error, message: data?.error?.message ?? 'Failed to create share link.' })
+        return
+      }
+
+      const shareId = (response as { data?: { shareId?: string } }).data?.shareId
+      if (!shareId) {
+        addToast({ type: ToastType.Error, message: 'The server did not return a share link.' })
+        return
+      }
+
+      const link = `${window.location.origin}/?shared=${shareId}#${keyHex}`
+
+      try {
+        await navigator?.clipboard?.writeText(link)
+        addToast({ type: ToastType.Success, message: 'Public read-only share link copied to clipboard.' })
+      } catch {
+        addToast({ type: ToastType.Regular, message: 'Share link created (copy it from the dialog).' })
+      }
+
+      await application.alerts.alert(
+        `Anyone with this link can read this note. The link is read-only and the content is decrypted in the browser; the server never sees the key.\n\n${link}`,
+        'Public share link',
+      )
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to create share link.' })
+    }
   }, [application, notes])
 
   const closeMenuAndToggleNotesList = useCallback(() => {
@@ -265,6 +317,12 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <Icon type="download" className={iconClass} />
           Export
         </MenuItem>
+        {notes.length === 1 && (
+          <MenuItem onClick={createShareLink}>
+            <Icon type="link" className={iconClass} />
+            Create share link
+          </MenuItem>
+        )}
         {application.platform === Platform.Android && (
           <MenuItem onClick={shareSelectedItems}>
             <Icon type="share" className={iconClass} />

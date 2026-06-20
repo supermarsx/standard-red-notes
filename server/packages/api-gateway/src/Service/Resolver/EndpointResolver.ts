@@ -30,6 +30,11 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[DELETE]:mcp-tokens/:mcpTokenId', 'auth.mcpTokens.delete'],
     ['[GET]:mcp-tokens/keys/:mcpTokenId', 'auth.mcpTokens.getKeys'],
     ['[POST]:mcp-tokens/authenticate', 'auth.mcpTokens.authenticate'],
+    // Shares Controller (Standard Red Notes)
+    ['[POST]:shares/', 'auth.shares.create'],
+    ['[GET]:shares/', 'auth.shares.list'],
+    ['[DELETE]:shares/:shareId', 'auth.shares.revoke'],
+    ['[GET]:shares/:shareId', 'auth.shares.get'],
     // Magic Link Controller
     ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
     ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],

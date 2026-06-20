@@ -25,6 +25,7 @@ import { SubscriptionSetting } from '../../Setting/SubscriptionSetting'
 import { EncryptionVersion } from '../../Encryption/EncryptionVersion'
 import { GetActiveSessionsForUser } from '../GetActiveSessionsForUser'
 import { Permission } from '../../Permission/Permission'
+import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 
 describe('CreateCrossServiceToken', () => {
   let userProjector: ProjectorInterface<User>
@@ -36,6 +37,7 @@ describe('CreateCrossServiceToken', () => {
   let getSubscriptionSetting: GetSubscriptionSetting
   let sharedVaultUserRepository: SharedVaultUserRepositoryInterface
   let getActiveSessionsForUser: GetActiveSessionsForUser
+  let settingRepository: SettingRepositoryInterface
   const jwtTTL = 60
 
   let session: Session
@@ -60,6 +62,7 @@ describe('CreateCrossServiceToken', () => {
       getActiveSessionsForUser,
       applicationVersionThresholdForTokenVersion2,
       applicationVersionThresholdForTokenVersion3,
+      settingRepository,
     )
 
   beforeEach(() => {
@@ -70,6 +73,9 @@ describe('CreateCrossServiceToken', () => {
     session = {} as jest.Mocked<Session>
 
     getActiveSessionsForUser = {} as jest.Mocked<GetActiveSessionsForUser>
+
+    settingRepository = {} as jest.Mocked<SettingRepositoryInterface>
+    settingRepository.findLastByNameAndUserUuid = jest.fn().mockResolvedValue(null)
     getActiveSessionsForUser.execute = jest.fn().mockReturnValue({ sessions: [session] })
 
     role = {
@@ -158,6 +164,8 @@ describe('CreateCrossServiceToken', () => {
           uuid: '00000000-0000-0000-0000-000000000000',
         },
         hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -229,6 +237,8 @@ describe('CreateCrossServiceToken', () => {
           uuid: '00000000-0000-0000-0000-000000000000',
         },
         hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -259,6 +269,8 @@ describe('CreateCrossServiceToken', () => {
           uuid: '00000000-0000-0000-0000-000000000000',
         },
         hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -293,6 +305,8 @@ describe('CreateCrossServiceToken', () => {
           uuid: '00000000-0000-0000-0000-000000000000',
         },
         hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -326,6 +340,8 @@ describe('CreateCrossServiceToken', () => {
           uuid: '00000000-0000-0000-0000-000000000000',
         },
         hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -386,6 +402,8 @@ describe('CreateCrossServiceToken', () => {
             uuid: '00000000-0000-0000-0000-000000000000',
           },
           hasContentLimit: false,
+          collaboration_enabled: true,
+          live_sync_enabled: true,
           version: 1,
         },
         60,

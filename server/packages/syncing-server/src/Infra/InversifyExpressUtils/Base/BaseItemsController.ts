@@ -133,6 +133,8 @@ export class BaseItemsController extends BaseHttpController {
       sharedVaultUuids,
       isFreeUser: locals.isFreeUser,
       hasContentLimit: !!locals.hasContentLimit,
+      // Standard Red Notes: per-user live-sync gating. Absent ⇒ enabled.
+      liveSyncEnabled: locals.liveSyncEnabled !== false,
     })
     if (syncResult.isFailed()) {
       return this.json({ error: { message: syncResult.getError() } }, HttpStatusCode.BadRequest)

@@ -792,6 +792,46 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: public share links. These authed routes let a signed-in
+   * user create, list, and revoke read-only share links. The server only ever
+   * stores the ciphertext (`encryptedPayload`); the decryption key lives in the
+   * URL fragment and is never sent to the server. The public read of a share
+   * (GET /v1/shares/:shareId) is unauthenticated and is done by the viewer with a
+   * bare fetch, so it is intentionally not implemented here.
+   */
+  async createShare(body: {
+    type: 'note' | 'tag' | 'account'
+    encryptedPayload: string
+    nickname?: string | null
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.shares),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create share link.',
+      params: body,
+    })
+  }
+
+  async listShares(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.shares),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list share links.',
+    })
+  }
+
+  async revokeShare(shareId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.share(shareId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke share link.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

@@ -235,6 +235,19 @@ import { AuthenticateWithMcpToken } from '../Domain/UseCase/AuthenticateWithMcpT
 import { GetMcpTokenKeys } from '../Domain/UseCase/GetMcpTokenKeys/GetMcpTokenKeys'
 import { McpTokensController } from '../Controller/McpTokensController'
 import { BaseMcpTokensController } from '../Infra/InversifyExpressUtils/Base/BaseMcpTokensController'
+import { Share } from '../Domain/Share/Share'
+import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
+import { SharePersistenceMapper } from '../Mapping/SharePersistenceMapper'
+import { ShareRepositoryInterface } from '../Domain/Share/ShareRepositoryInterface'
+import { TypeORMShareRepository } from '../Infra/TypeORM/TypeORMShareRepository'
+import { ShareHttpProjection } from '../Infra/Http/Projection/ShareHttpProjection'
+import { ShareHttpMapper } from '../Mapping/ShareHttpMapper'
+import { CreateShare } from '../Domain/UseCase/CreateShare/CreateShare'
+import { ListShares } from '../Domain/UseCase/ListShares/ListShares'
+import { RevokeShare } from '../Domain/UseCase/RevokeShare/RevokeShare'
+import { GetShare } from '../Domain/UseCase/GetShare/GetShare'
+import { SharesController } from '../Controller/SharesController'
+import { BaseSharesController } from '../Infra/InversifyExpressUtils/Base/BaseSharesController'
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -501,6 +514,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<McpToken, McpTokenHttpProjection>>(TYPES.Auth_McpTokenHttpMapper)
       .toConstantValue(new McpTokenHttpMapper())
     container
+      .bind<MapperInterface<Share, TypeORMShare>>(TYPES.Auth_SharePersistenceMapper)
+      .toConstantValue(new SharePersistenceMapper())
+    container
+      .bind<MapperInterface<Share, ShareHttpProjection>>(TYPES.Auth_ShareHttpMapper)
+      .toConstantValue(new ShareHttpMapper())
+    container
       .bind<
         MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
@@ -570,6 +589,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMMcpToken>>(TYPES.Auth_ORMMcpTokenRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMMcpToken))
+    container
+      .bind<Repository<TypeORMShare>>(TYPES.Auth_ORMShareRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMShare))
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
@@ -651,6 +673,14 @@ export class ContainerConfigLoader {
         new TypeORMMcpTokenRepository(
           container.get(TYPES.Auth_ORMMcpTokenRepository),
           container.get(TYPES.Auth_McpTokenPersistenceMapper),
+        ),
+      )
+    container
+      .bind<ShareRepositoryInterface>(TYPES.Auth_ShareRepository)
+      .toConstantValue(
+        new TypeORMShareRepository(
+          container.get(TYPES.Auth_ORMShareRepository),
+          container.get(TYPES.Auth_SharePersistenceMapper),
         ),
       )
     container
@@ -1214,6 +1244,20 @@ export class ContainerConfigLoader {
       .bind<GetMcpTokenKeys>(TYPES.Auth_GetMcpTokenKeys)
       .toConstantValue(new GetMcpTokenKeys(container.get(TYPES.Auth_McpTokenRepository)))
     container
+      .bind<CreateShare>(TYPES.Auth_CreateShare)
+      .toConstantValue(
+        new CreateShare(container.get(TYPES.Auth_ShareRepository), container.get(TYPES.Auth_UserRepository)),
+      )
+    container
+      .bind<ListShares>(TYPES.Auth_ListShares)
+      .toConstantValue(new ListShares(container.get(TYPES.Auth_ShareRepository)))
+    container
+      .bind<RevokeShare>(TYPES.Auth_RevokeShare)
+      .toConstantValue(new RevokeShare(container.get(TYPES.Auth_ShareRepository)))
+    container
+      .bind<GetShare>(TYPES.Auth_GetShare)
+      .toConstantValue(new GetShare(container.get(TYPES.Auth_ShareRepository)))
+    container
       .bind<SetSettingValue>(TYPES.Auth_SetSettingValue)
       .toConstantValue(
         new SetSettingValue(
@@ -1614,6 +1658,7 @@ export class ContainerConfigLoader {
           container.get<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser),
           env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
           env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
+          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
         ),
       )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
@@ -1778,6 +1823,17 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_AuthResponseFactoryResolver),
           container.get(TYPES.Auth_UserRepository),
           container.get(TYPES.Auth_SessionRepository),
+        ),
+      )
+    container
+      .bind<SharesController>(TYPES.Auth_SharesController)
+      .toConstantValue(
+        new SharesController(
+          container.get(TYPES.Auth_CreateShare),
+          container.get(TYPES.Auth_ListShares),
+          container.get(TYPES.Auth_RevokeShare),
+          container.get(TYPES.Auth_GetShare),
+          container.get(TYPES.Auth_ShareHttpMapper),
         ),
       )
     container
@@ -2115,6 +2171,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseMcpTokensController(
             container.get(TYPES.Auth_McpTokensController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseSharesController>(TYPES.Auth_BaseSharesController)
+        .toConstantValue(
+          new BaseSharesController(
+            container.get(TYPES.Auth_SharesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

@@ -3,6 +3,7 @@ import { PreferencePaneId } from '@standardnotes/services'
 import { AppViewRouteParam, ValidAppViewRoutes } from './Params/AppViewRouteParams'
 import { DemoParams } from './Params/DemoParams'
 import { OnboardingParams } from './Params/OnboardingParams'
+import { SharedParams } from './Params/SharedParams'
 import { PurchaseParams } from './Params/PurchaseParams'
 import { SettingsParams } from './Params/SettingsParams'
 import { SubscriptionInviteParams } from './Params/SubscriptionInviteParams'
@@ -51,6 +52,14 @@ export class RouteParser implements RouteParserInterface {
 
     return {
       token: this.searchParams.get(RootQueryParam.DemoToken) as string,
+    }
+  }
+
+  get sharedParams(): SharedParams {
+    this.checkForProperRouteType(RouteType.Shared)
+
+    return {
+      shareId: this.searchParams.get(RootQueryParam.Shared) as string,
     }
   }
 
@@ -115,6 +124,7 @@ export class RouteParser implements RouteParserInterface {
       [RootQueryParam.AcceptSubscriptionInvite, RouteType.AcceptSubscriptionInvite],
       [RootQueryParam.UserRequest, RouteType.UserRequest],
       [RootQueryParam.AppViewRoute, RouteType.AppViewRoute],
+      [RootQueryParam.Shared, RouteType.Shared],
     ])
 
     for (const rootQueryParam of rootQueryParametersMap.keys()) {

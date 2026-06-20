@@ -73,6 +73,15 @@ const McpTokenPaths = {
   mcpToken: (mcpTokenId: string) => `/v1/mcp-tokens/${mcpTokenId}`,
 }
 
+// Standard Red Notes: public share links. The authed routes let a signed-in user
+// create, list, and revoke shares (the server only ever stores ciphertext keyed
+// by a shareId). The public read (GET /v1/shares/:shareId) is intentionally NOT a
+// snjs method — the unauthenticated viewer fetches it with a bare fetch.
+const SharePaths = {
+  shares: '/v1/shares',
+  share: (shareId: string) => `/v1/shares/${shareId}`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -96,6 +105,7 @@ export const Paths = {
     ...AdminPaths,
     ...AppPasswordPaths,
     ...McpTokenPaths,
+    ...SharePaths,
     meta: '/v1/meta',
   },
   v2: {

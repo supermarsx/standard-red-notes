@@ -15,4 +15,6 @@ export type SyncItemsDTO = {
   sessionUuid: string | null
   isFreeUser: boolean
   hasContentLimit: boolean
+  // Standard Red Notes: per-user live-sync gating. Default true.
+  liveSyncEnabled: boolean
 }

@@ -183,16 +183,22 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       sessionUuid: dto.sessionUuid ?? '',
       timestamp: lastUpdatedTimestamp,
     })
-    const result = await this.sendEventToClient.execute({
-      userUuid: dto.userUuid,
-      originatingSessionUuid: dto.sessionUuid ?? undefined,
-      event: itemsChangedEvent,
-    })
-    /* istanbul ignore next */
-    if (result.isFailed()) {
-      this.logger.error(`Sending items changed event to client failed. Error: ${result.getError()}`, {
-        userId: dto.userUuid,
+    // Standard Red Notes: live-sync gating. When disabled for this user, skip the
+    // personal realtime push only. The save has already persisted; clients will
+    // still pick up the change on their next regular sync. The shared-vault
+    // fan-out below is intentionally left untouched.
+    if (dto.liveSyncEnabled) {
+      const result = await this.sendEventToClient.execute({
+        userUuid: dto.userUuid,
+        originatingSessionUuid: dto.sessionUuid ?? undefined,
+        event: itemsChangedEvent,
       })
+      /* istanbul ignore next */
+      if (result.isFailed()) {
+        this.logger.error(`Sending items changed event to client failed. Error: ${result.getError()}`, {
+          userId: dto.userUuid,
+        })
+      }
     }
 
     const sharedVaultUuidsMap = new Map<string, boolean>()

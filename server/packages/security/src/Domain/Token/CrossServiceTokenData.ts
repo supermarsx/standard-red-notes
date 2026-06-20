@@ -36,4 +36,11 @@ export type CrossServiceTokenData = {
     access: 'read' | 'write'
     tagUuids?: string[]
   }
+  /**
+   * Standard Red Notes: per-user gating for collaboration (shared vaults) and
+   * live-sync websocket push. OPTIONAL so older tokens still validate; an absent
+   * flag MUST be treated as enabled (default-on).
+   */
+  collaboration_enabled?: boolean
+  live_sync_enabled?: boolean
 }

@@ -42,6 +42,7 @@ import { ElementIds } from './Constants/ElementIDs'
 import { setDefaultMonospaceFont } from './setDefaultMonospaceFont'
 import { RouteParser, RouteType } from '@standardnotes/ui-services'
 import U2FAuthIframe from './Components/U2FAuthIframe/U2FAuthIframe'
+import SharedView from './Components/SharedView/SharedView'
 
 let keyCount = 0
 const getKey = () => {
@@ -81,6 +82,14 @@ const startApplication: StartApplication = async function startApplication(
 
     if (route.type === RouteType.AppViewRoute && route.appViewRouteParam === 'u2f') {
       root.render(<U2FAuthIframe />)
+      return
+    }
+
+    // Standard Red Notes: public, unauthenticated read-only share viewer. It must
+    // render with NO WebApplication/session, so we early-return before the authed
+    // ApplicationGroupView, mirroring the U2F standalone-screen branch above.
+    if (route.type === RouteType.Shared) {
+      root.render(<SharedView shareId={route.sharedParams.shareId} />)
       return
     }
 

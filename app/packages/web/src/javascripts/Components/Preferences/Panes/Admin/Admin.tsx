@@ -28,6 +28,8 @@ type LookedUpUser = {
 // expects (must match the server's SettingName.NAMES values exactly).
 const AI_ENABLED = 'AI_ENABLED'
 const AI_REQUEST_LIMIT = 'AI_REQUEST_LIMIT'
+const COLLABORATION_ENABLED = 'COLLABORATION_ENABLED'
+const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
@@ -38,6 +40,10 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
 
   const [aiEnabled, setAiEnabled] = useState(false)
   const [aiRequestLimit, setAiRequestLimit] = useState('')
+  // Collaboration and live sync default to ENABLED; they are gated off only when
+  // the per-user setting is explicitly 'false'.
+  const [collaborationEnabled, setCollaborationEnabled] = useState(true)
+  const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
   const [flagsLoading, setFlagsLoading] = useState(false)
   const [savingLimit, setSavingLimit] = useState(false)
 
@@ -79,6 +85,8 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] === 'true')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
+        setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
+        setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
       } catch (error) {
         console.error(error)
       } finally {
@@ -140,6 +148,39 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       }
     },
     [application, user, aiEnabled],
+  )
+
+  const toggleUserFlag = useCallback(
+    async (
+      settingName: string,
+      enabled: boolean,
+      setLocal: (value: boolean) => void,
+      previous: boolean,
+      failureMessage: string,
+    ) => {
+      if (!user) {
+        return
+      }
+      setLocal(enabled)
+      try {
+        // Enabled is the default, so we only persist an explicit 'false' to gate
+        // the feature off; turning it back on stores 'true'.
+        const response = await application.legacyApi.adminSetUserFeatureFlag(
+          user.uuid,
+          settingName,
+          enabled ? 'true' : 'false',
+        )
+        if (isErrorResponse(response)) {
+          setLocal(previous)
+          addToast({ type: ToastType.Error, message: failureMessage })
+        }
+      } catch (error) {
+        console.error(error)
+        setLocal(previous)
+        addToast({ type: ToastType.Error, message: failureMessage })
+      }
+    },
+    [application, user],
   )
 
   const saveRequestLimit = useCallback(async () => {
@@ -264,6 +305,48 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                       />
                       <Button label="Save limit" onClick={() => void saveRequestLimit()} disabled={savingLimit} />
                     </div>
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Collaboration</Subtitle>
+                      <Text>Allow this user to create shared vaults and invite collaborators.</Text>
+                    </div>
+                    <Switch
+                      checked={collaborationEnabled}
+                      onChange={(checked) =>
+                        void toggleUserFlag(
+                          COLLABORATION_ENABLED,
+                          checked,
+                          setCollaborationEnabled,
+                          collaborationEnabled,
+                          'Failed to update collaboration access.',
+                        )
+                      }
+                    />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Live sync</Subtitle>
+                      <Text>Push real-time updates to this user's other devices. Disabling keeps manual sync working.</Text>
+                    </div>
+                    <Switch
+                      checked={liveSyncEnabled}
+                      onChange={(checked) =>
+                        void toggleUserFlag(
+                          LIVE_SYNC_ENABLED,
+                          checked,
+                          setLiveSyncEnabled,
+                          liveSyncEnabled,
+                          'Failed to update live sync access.',
+                        )
+                      }
+                    />
                   </div>
                 </>
               )}

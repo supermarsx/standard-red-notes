@@ -122,6 +122,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -132,6 +133,27 @@ describe('SaveItems', () => {
       sessionUuid: 'session-uuid',
     })
     expect(sendEventToClient.execute).toHaveBeenCalled()
+  })
+
+  it('should skip the personal realtime push when live-sync is disabled but still save', async () => {
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: false,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    // The save itself must still succeed; only the realtime push is suppressed.
+    expect(saveNewItem.execute).toHaveBeenCalled()
+    expect(sendEventToClient.execute).not.toHaveBeenCalled()
   })
 
   it('should mark items as conflicts if saving new item fails', async () => {
@@ -148,6 +170,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -174,6 +197,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -197,6 +221,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -221,6 +246,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -241,6 +267,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -261,6 +288,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -308,6 +336,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -337,6 +366,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -363,6 +393,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -410,6 +441,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: false,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -429,6 +461,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: true,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()
@@ -447,6 +480,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: true,
       hasContentLimit: true,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeTruthy()
@@ -465,6 +499,7 @@ describe('SaveItems', () => {
       snjsVersion: '2.200.0',
       isFreeUser: true,
       hasContentLimit: false,
+      liveSyncEnabled: true,
     })
 
     expect(result.isFailed()).toBeFalsy()

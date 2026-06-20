@@ -13,6 +13,7 @@ import { SharedVaultUserRepositoryInterface } from '../../SharedVault/SharedVaul
 import { GetSubscriptionSetting } from '../GetSubscriptionSetting/GetSubscriptionSetting'
 import { GetRegularSubscriptionForUser } from '../GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetActiveSessionsForUser } from '../GetActiveSessionsForUser'
+import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 
 export class CreateCrossServiceToken implements UseCaseInterface<string> {
   constructor(
@@ -28,7 +29,22 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     private getActiveSessions: GetActiveSessionsForUser,
     private applicationVersionThresholdForTokenVersion2: string | undefined,
     private applicationVersionThresholdForTokenVersion3: string | undefined,
+    private settingRepository: SettingRepositoryInterface,
   ) {}
+
+  /**
+   * Standard Red Notes: collaboration + live-sync are per-user gated. Default is
+   * ENABLED when the setting is unset; only the literal value 'false' disables
+   * the feature (opt-in disable). Read directly from the auth settings store at
+   * token-mint time so the booleans ride along in the cross-service token.
+   */
+  private async readGatingFlag(userUuid: string, settingName: string): Promise<boolean> {
+    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
+    if (setting === null) {
+      return true
+    }
+    return (setting.props.value as string | null) !== 'false'
+  }
 
   async execute(dto: CreateCrossServiceTokenDTO): Promise<Result<string>> {
     let user: User | undefined | null = dto.user
@@ -72,6 +88,8 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       })),
       hasContentLimit: hasContentLimit,
       version: this.determineTokenVersion(applicationVersionThresholds, dto.applicationVersion),
+      collaboration_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.CollaborationEnabled),
+      live_sync_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.LiveSyncEnabled),
     }
 
     if (dto.sharedVaultOwnerContext !== undefined) {
