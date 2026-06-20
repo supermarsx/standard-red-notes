@@ -3,6 +3,7 @@ import ChangeEditorButton from '@/Components/ChangeEditor/ChangeEditorButton'
 import IframeFeatureView from '@/Components/ComponentView/IframeFeatureView'
 import NotesOptionsPanel from '@/Components/NotesOptions/NotesOptionsPanel'
 import PinNoteButton from '@/Components/PinNoteButton/PinNoteButton'
+import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import ProtectedItemOverlay from '@/Components/ProtectedItemOverlay/ProtectedItemOverlay'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { StringDeleteNote, STRING_DELETE_LOCKED_ATTEMPT, STRING_DELETE_PLACEHOLDER_ATTEMPT } from '@/Constants/Strings'
@@ -1000,6 +1001,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                       notesController={this.application.notesController}
                       onClickPreprocessing={this.ensureNoteIsInsertedBeforeUIAction}
                     />
+                    <DictationButton />
                   </>
                 )}
                 <NotesOptionsPanel

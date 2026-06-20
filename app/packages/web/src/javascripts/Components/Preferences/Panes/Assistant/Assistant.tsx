@@ -18,6 +18,8 @@ import {
   saveNarrationSettings,
 } from '@/Assistant/narrationSettings'
 import { getTtsAvailability, listWebSpeechVoices } from '@/Assistant/tts'
+import { loadDictationSettings, saveDictationSettings, DictationSettings } from '@/Assistant/dictationSettings'
+import { getSttAvailability, getSpeechRecognitionCtor } from '@/Assistant/transcription'
 
 type AssistantConfig = {
   providers: string[]
@@ -320,6 +322,19 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     setNarration((prev) => {
       const next = { ...prev, ...patch }
       saveNarrationSettings(next)
+      return next
+    })
+  }, [])
+
+  // Dictation / speech-to-text settings (device-local; persisted in localStorage).
+  // dictationEnabled is DEFAULT OFF — it gates the editor mic toggle.
+  const [dictation, setDictation] = useState<DictationSettings>(() => loadDictationSettings())
+  const sttAvailability = useMemo(() => getSttAvailability(application), [application])
+  const speechRecognitionSupported = useMemo(() => getSpeechRecognitionCtor() !== undefined, [])
+  const updateDictation = useCallback((patch: Partial<DictationSettings>) => {
+    setDictation((prev) => {
+      const next = { ...prev, ...patch }
+      saveDictationSettings(next)
       return next
     })
   }, [])
@@ -741,6 +756,86 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             value={narration.rate}
             onChange={(event) => updateNarration({ rate: clampRate(Number(event.target.value)) })}
           />
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Recording, transcription &amp; dictation</Title>
+          <Text>
+            Record audio and attach it to a note from the note&rsquo;s options menu (“Record audio / Transcribe”). You
+            can transcribe a recording to text, or dictate directly into a note by speaking.
+          </Text>
+
+          <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+            <Subtitle className="text-warning">Transcription and dictation send audio off your device</Subtitle>
+            <Text className="mt-1">
+              Transcribing a recording uploads the audio to your configured Direct-mode AI endpoint&rsquo;s{' '}
+              <code>/audio/transcriptions</code> route for speech-to-text. Browser dictation uses the Web Speech API,
+              which on Chromium-based browsers streams your microphone audio to a cloud service. Only use these with
+              content you are comfortable sending this way. Saving a recording as a file attachment stays in your own
+              encrypted Standard Red Notes storage.
+            </Text>
+          </div>
+
+          <Text className="mt-3 text-passive-1">
+            {sttAvailability.modelAvailable
+              ? 'Transcription is available via your Direct endpoint’s /audio/transcriptions route.'
+              : 'Recorded-audio transcription needs Direct mode with a base URL (server-proxy mode has no transcription route). Live dictation uses the browser’s on-device speech recognition.'}
+          </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Speech-to-text model</Subtitle>
+          <Text>
+            Model id sent to the transcription endpoint (e.g. whisper-1, gpt-4o-transcribe). Leave empty to use the
+            default (whisper-1). Direct mode only.
+          </Text>
+          <input
+            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="text"
+            value={dictation.sttModel}
+            placeholder="whisper-1"
+            onChange={(event) => updateDictation({ sttModel: event.target.value })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Spoken language</Subtitle>
+          <Text>
+            Optional BCP-47 language hint for transcription and dictation (e.g. en-US, es-ES). Leave empty to
+            auto-detect.
+          </Text>
+          <input
+            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="text"
+            value={dictation.language}
+            placeholder="auto-detect"
+            onChange={(event) => updateDictation({ language: event.target.value })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>Enable dictation (type by speaking)</Subtitle>
+              <Text>
+                Adds a microphone toggle to the note toolbar that inserts spoken words at the cursor as you talk. Off by
+                default. Uses the browser&rsquo;s speech recognition (Chromium-based browsers only) and listens to your
+                microphone only after you press the toggle.
+              </Text>
+              {!speechRecognitionSupported && (
+                <Text className="mt-1 text-warning">
+                  This browser does not support the Web Speech recognition API, so dictation will not appear even when
+                  enabled. Try a Chromium-based browser.
+                </Text>
+              )}
+            </div>
+            <Switch
+              checked={dictation.dictationEnabled}
+              onChange={(value) => updateDictation({ dictationEnabled: value })}
+            />
+          </div>
         </PreferencesSegment>
       </PreferencesGroup>
 
