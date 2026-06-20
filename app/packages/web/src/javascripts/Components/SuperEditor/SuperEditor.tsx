@@ -11,6 +11,7 @@ import {
 import { CSSProperties, FocusEvent, FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BlocksEditor } from './BlocksEditor'
 import { CollaborationConfig } from './Collaboration/CollaborationPlugin'
+import { collaboratorColor } from './Collaboration/collaboratorColor'
 import { BlocksEditorComposer } from './BlocksEditorComposer'
 import { ItemSelectionPlugin } from './Plugins/ItemSelectionPlugin/ItemSelectionPlugin'
 import { FileNode } from './Plugins/EncryptedFilePlugin/Nodes/FileNode'
@@ -164,14 +165,16 @@ export const SuperEditor: FunctionComponent<Props> = ({
     if (!vault || !vault.isSharedVaultListing()) {
       return undefined
     }
-    const email = application.sessions.getUser()?.email ?? 'Collaborator'
-    const palette = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2']
-    const colorSeed = note.current.uuid.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+    const user = application.sessions.getUser()
+    const email = user?.email ?? 'Collaborator'
+    // Color the local user's cursor by their OWN account id so it stays stable
+    // across notes and matches their presence dot in the sidebar.
     return {
       room: note.current.uuid,
       sharedSecret: String(vault.systemIdentifier),
       username: email,
-      cursorColor: palette[colorSeed % palette.length],
+      cursorColor: collaboratorColor(user?.uuid ?? email),
+      userUuid: user?.uuid,
       shouldBootstrap: true,
       initialEditorState: note.current.text && note.current.text.length > 0 ? note.current.text : undefined,
     }

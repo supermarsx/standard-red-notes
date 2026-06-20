@@ -49,6 +49,7 @@ import { NoteViewController } from './Controller/NoteViewController'
 import { PlainEditor, PlainEditorInterface } from './PlainEditor/PlainEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
+import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
 import Button from '../Button/Button'
 import ModalOverlay from '../Modal/ModalOverlay'
 import NoteConflictResolutionModal from './NoteConflictResolutionModal/NoteConflictResolutionModal'
@@ -956,6 +957,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 linkingController={this.application.linkingController}
                 readonly={this.state.readonly}
               />
+              <div className="mt-2.5">
+                <CollaboratorsPresencePanel item={this.note} />
+              </div>
             </div>
           </div>
         )}
