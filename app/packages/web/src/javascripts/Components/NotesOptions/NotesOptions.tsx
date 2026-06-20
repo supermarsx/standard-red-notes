@@ -178,6 +178,19 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
     })
   }, [application, notes])
 
+  // Standard Red Notes: print the active note. The actual layout (hide app
+  // chrome, show only the note title + editor content, force legible light
+  // colors) is handled by the `@media print` rules in the global stylesheet.
+  // Here we only need to dismiss the floating options menu first so it doesn't
+  // capture focus / appear in the print, then defer window.print() to the next
+  // frame so the menu has fully unmounted.
+  const printNote = useCallback(() => {
+    closeMenu()
+    requestAnimationFrame(() => {
+      window.print()
+    })
+  }, [closeMenu])
+
   const closeMenuAndToggleNotesList = useCallback(() => {
     const isMobileScreen = matchMedia(MutuallyExclusiveMediaQueryBreakpoints.sm).matches
     if (isMobileScreen) {
@@ -431,6 +444,12 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <Icon type="download" className={iconClass} />
           Export
         </MenuItem>
+        {notes.length === 1 && (
+          <MenuItem onClick={printNote}>
+            <Icon type="file-doc" className={iconClass} />
+            Print note
+          </MenuItem>
+        )}
         {notes.length === 1 && (
           <MenuItem onClick={downloadImages}>
             <Icon type="image" className={iconClass} />

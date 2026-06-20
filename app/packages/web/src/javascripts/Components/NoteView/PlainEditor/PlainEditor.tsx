@@ -350,7 +350,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     return (
       <div className="flex h-full flex-grow flex-col overflow-hidden" style={surfaceStyle}>
-        <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-contrast px-2 py-1 text-xs">
+        <div className="plain-editor-mode-toggle flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-contrast px-2 py-1 text-xs">
           <button
             type="button"
             className={classNames(

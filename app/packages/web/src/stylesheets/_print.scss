@@ -1,0 +1,214 @@
+// Standard Red Notes: print support (GitHub standardnotes/forum issue 3876).
+//
+// Printing from the app or the browser previously dumped the whole app chrome
+// onto the page and the note never laid out cleanly. These rules only apply
+// when printing (`@media print`), so on-screen rendering is completely
+// untouched. The strategy mirrors the reporter's userstyle: hide every piece
+// of app chrome (navigation/items columns, footer, toolbars, menus, floating
+// UI) and lay out just the current note's title + editor content full-width
+// with legible black-on-white typography, overriding any dark theme.
+
+@media print {
+  // ---------------------------------------------------------------------------
+  // Force a clean, legible light surface regardless of the active (possibly
+  // dark) theme, and reset the page geometry so the note can flow full-width.
+  // ---------------------------------------------------------------------------
+  html,
+  body,
+  .main-ui-view,
+  .app,
+  #app-group-root,
+  #editor-column,
+  .section.editor {
+    background: #fff !important;
+    color: #000 !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    position: static !important;
+    width: auto !important;
+    display: block !important;
+  }
+
+  @page {
+    margin: 1.5cm;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hide all app chrome: the navigation + items columns, the footer bar, any
+  // floating menus/popovers/modals/toasts, and the per-note option buttons and
+  // editor toolbars. These are the surrounding UI the reporter wanted gone.
+  // ---------------------------------------------------------------------------
+  #navigation,
+  #items-column,
+  #footer-bar,
+  #component-stack-menu-bar,
+  #editor-pane-component-stack,
+  .note-view-options-buttons,
+  [data-reach-dialog-overlay],
+  .sn-component .editing-disabled-banner,
+  // Floating UI (dropdown menus, popovers, tooltips, toasts) lives at the
+  // document root via portals; hide it so it never prints.
+  [data-radix-popper-content-wrapper],
+  [role='tooltip'],
+  [role='menu'],
+  .toast-notifications,
+  // The plain editor's "Edit / Markdown preview" toggle bar.
+  .plain-editor-mode-toggle,
+  // The Super editor's formatting toolbar (both the fixed-top bar and the
+  // floating selection toolbar share this id).
+  #super-mobile-toolbar,
+  // Resizers / panel drag handles.
+  [role='separator'],
+  #resizer-overlay {
+    display: none !important;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Note title bar: keep only the title text, drop its own toolbars/HUD and any
+  // background color bleed from a custom note appearance / dark theme.
+  // ---------------------------------------------------------------------------
+  #editor-title-bar {
+    background: transparent !important;
+    color: #000 !important;
+    padding: 0 0 0.5rem 0 !important;
+    border-bottom: 1px solid #ccc !important;
+    margin-bottom: 1rem !important;
+  }
+
+  #note-title-editor {
+    background: transparent !important;
+    color: #000 !important;
+    border: none !important;
+    font-size: 1.6rem !important;
+    font-weight: 600 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Editor content area: show it full-width, remove scroll clipping, strip the
+  // per-note line-width margins so the note uses the printable page width.
+  // ---------------------------------------------------------------------------
+  #editor-content {
+    background: #fff !important;
+    color: #000 !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    display: block !important;
+    padding: 0 !important;
+  }
+
+  #editor-content > * {
+    // Cancel the on-screen `--editor-margin` / `--editor-max-width` so the note
+    // fills the page rather than sitting in a narrow centered column.
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  // Plain editor: render the <textarea> contents legibly. A textarea won't
+  // paginate its overflow, so let it grow to its full height for print.
+  #note-text-editor {
+    background: #fff !important;
+    color: #000 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    border: none !important;
+    resize: none !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+  }
+
+  // Plain editor's markdown preview + Super editor content: legible colors and
+  // full-width flow.
+  .markdown-preview,
+  #super-editor-content,
+  .blocks-editor {
+    background: #fff !important;
+    color: #000 !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+  }
+
+  // Reset rich-text foreground colors that the theme may have set so text is
+  // readable on white paper.
+  #editor-content p,
+  #editor-content li,
+  #editor-content span,
+  #editor-content h1,
+  #editor-content h2,
+  #editor-content h3,
+  #editor-content h4,
+  #editor-content h5,
+  #editor-content h6 {
+    color: #000 !important;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pagination: avoid splitting atomic blocks across pages, and keep headings
+  // with the content that follows them.
+  // ---------------------------------------------------------------------------
+  #editor-content img,
+  #editor-content table,
+  #editor-content pre,
+  #editor-content blockquote,
+  #editor-content figure,
+  #editor-content .ContentEditable__image,
+  #editor-content [data-lexical-decorator] {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  #editor-content img {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  #editor-content h1,
+  #editor-content h2,
+  #editor-content h3,
+  #editor-content h4 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  // Code blocks / preformatted text should wrap rather than overflow the page.
+  #editor-content pre,
+  #editor-content code {
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    background: #f4f4f4 !important;
+    color: #000 !important;
+  }
+
+  // Tables: simple legible borders for paper.
+  #editor-content table,
+  #editor-content th,
+  #editor-content td {
+    border: 1px solid #999 !important;
+    border-collapse: collapse !important;
+  }
+
+  // Optionally surface link URLs so printed links remain useful.
+  #editor-content a[href]:not([href^='#'])::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.85em;
+    color: #555 !important;
+    word-break: break-all;
+  }
+
+  // Don't print the link decoration underline noise on internal anchors.
+  #editor-content a {
+    color: #000 !important;
+    text-decoration: underline !important;
+  }
+}
