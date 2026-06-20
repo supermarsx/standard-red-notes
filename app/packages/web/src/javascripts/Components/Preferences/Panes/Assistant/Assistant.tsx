@@ -24,6 +24,7 @@ import {
   loadContextualSearchSettings,
   saveContextualSearchSettings,
 } from '@/Assistant/contextualSearchSettings'
+import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/deepResearchSettings'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 
 type AssistantConfig = {
@@ -75,6 +76,11 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   // (localStorage), DEFAULT OFF. Distinct from the local-only "AI-powered search"
   // toggle above, which never sends anything off-device.
   const [contextualSearch, setContextualSearch] = useState(() => loadContextualSearchSettings().enabled)
+
+  // AI DEEP RESEARCH over the user's own notes (bounded multi-step loop). Web-local
+  // (localStorage), DEFAULT OFF. Substantially more data exposure than a single
+  // query, so it is gated and clearly warned.
+  const [deepResearch, setDeepResearch] = useState(() => loadDeepResearchSettings().enabled)
 
   const [searchIndexEnabled, setSearchIndexEnabled] = useState(() =>
     application.getPreference(PrefKey.SearchIndexEnabled, true),
@@ -209,6 +215,11 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const handleContextualSearchToggle = useCallback((value: boolean) => {
     setContextualSearch(value)
     saveContextualSearchSettings({ enabled: value })
+  }, [])
+
+  const handleDeepResearchToggle = useCallback((value: boolean) => {
+    setDeepResearch(value)
+    saveDeepResearchSettings({ enabled: value })
   }, [])
 
   // Whether a provider is configured at all (reuses the assistant's own check).
@@ -668,6 +679,47 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               <Text className="mt-1 text-passive-1">
                 This is provider-dependent re-ranking of a small candidate set, not a semantic index over all your
                 notes.
+              </Text>
+              {!providerAvailability.available && (
+                <Text className="mt-1 text-warning">
+                  {providerAvailability.reason || 'Configure an AI provider above to use this.'} Until then the action
+                  appears disabled.
+                </Text>
+              )}
+            </div>
+          )}
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>AI deep research (multi-step, over your notes)</Subtitle>
+              <Text>
+                Adds a “Deep research” action to the assistant. Given a question, it runs a bounded multi-step loop over
+                your OWN notes: it searches for relevant notes, reads a bounded set, optionally pulls in a few more over
+                a small capped number of rounds, then writes a structured report with citations to the source notes you
+                can open. Off by default. Runs only when you start a research run.
+              </Text>
+            </div>
+            <Switch checked={deepResearch} onChange={handleDeepResearchToggle} />
+          </div>
+
+          {deepResearch && (
+            <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+              <Subtitle className="text-warning">Deep research sends several notes to your AI provider over multiple steps</Subtitle>
+              <Text className="mt-1">
+                Unlike a single query, deep research reads the content of multiple notes and sends those excerpts to the
+                AI provider across several model calls (capped at a few rounds and a small number of notes, with
+                truncated snippets). That is substantially more data exposure than a one-shot question. With cloud
+                providers this exposes that content to a third party — strongly prefer a local model (e.g. LM Studio /
+                Ollama in Direct mode) to keep it on your device.
+              </Text>
+              <Text className="mt-1 text-passive-1">
+                Honest scope: this researches your OWN notes only — there is no web-search tool here, so it cannot pull
+                in outside sources. It is a bounded agentic loop (capped rounds, notes, and snippet length), not
+                unlimited research.
               </Text>
               {!providerAvailability.available && (
                 <Text className="mt-1 text-warning">

@@ -13,6 +13,8 @@ import {
   readPersistedTabs,
 } from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
+import DeepResearchPanel from './DeepResearchPanel'
+import { isDeepResearchEnabled } from '@/Assistant/deepResearchSettings'
 
 type Props = {
   application: WebApplication
@@ -42,6 +44,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
     const [editingTabId, setEditingTabId] = useState<string | null>(null)
     // Open context menu (right-click or caret), if any.
     const [menu, setMenu] = useState<MenuState | null>(null)
+    // Whether the Deep research panel is overlaying the chat. The entry point is
+    // only shown when the (default-off) deep-research feature is enabled.
+    const [showDeepResearch, setShowDeepResearch] = useState(false)
+    const deepResearchEnabled = isDeepResearchEnabled()
     const editInputRef = useRef<HTMLInputElement | null>(null)
 
     // Persist the tab strip (id + title + userRenamed) so it survives a reload.
@@ -155,6 +161,20 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
             )}
           </div>
           <div className="flex items-center gap-1">
+            {deepResearchEnabled && (
+              <button
+                className={classNames(
+                  'rounded p-1 hover:bg-contrast',
+                  showDeepResearch && 'bg-info-faded text-info',
+                )}
+                onClick={() => setShowDeepResearch((value) => !value)}
+                aria-label="Deep research"
+                aria-pressed={showDeepResearch}
+                title="Deep research over your notes"
+              >
+                <Icon type="search" />
+              </button>
+            )}
             {!standalone && (
               <button
                 className="rounded p-1 hover:bg-contrast"
@@ -322,18 +342,22 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
           </div>
         )}
 
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId
-          return (
-            <div key={tab.id} className={isActive ? 'contents' : 'hidden'}>
-              <ConversationPanel
-                application={application}
-                onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
-                onUsageChange={isActive ? setUsage : undefined}
-              />
-            </div>
-          )
-        })}
+        {deepResearchEnabled && showDeepResearch ? (
+          <DeepResearchPanel application={application} onClose={() => setShowDeepResearch(false)} />
+        ) : (
+          tabs.map((tab) => {
+            const isActive = tab.id === activeTabId
+            return (
+              <div key={tab.id} className={isActive ? 'contents' : 'hidden'}>
+                <ConversationPanel
+                  application={application}
+                  onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
+                  onUsageChange={isActive ? setUsage : undefined}
+                />
+              </div>
+            )
+          })
+        )}
         {children}
       </div>
     )
