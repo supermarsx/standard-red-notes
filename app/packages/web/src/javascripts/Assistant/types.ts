@@ -40,6 +40,10 @@ export type ProviderEvent =
   | { kind: 'tool-call'; id: string; name: string; args: unknown }
   | { kind: 'finish'; stopReason: ProviderStopReason }
   | { kind: 'error'; message: string }
+  // Token usage reported by the endpoint when a completion finishes. Best-effort:
+  // emitted only when the provider's response carries a `usage` object (OpenAI
+  // non-streaming responses, or streaming with stream_options.include_usage).
+  | { kind: 'usage'; promptTokens?: number; completionTokens?: number; totalTokens?: number }
 
 export interface Provider {
   readonly id: string

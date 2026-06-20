@@ -1,3 +1,4 @@
+import { assistantUsageService } from './AssistantUsageService'
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest, ProviderStopReason, ToolDescriptor } from './types'
 
 export interface DirectProviderOptions {
@@ -51,6 +52,10 @@ export class DirectProvider implements Provider {
     const body: Record<string, unknown> = {
       model: this.options.model,
       stream: true,
+      // Ask OpenAI-compatible endpoints to emit a final usage-only chunk so we can
+      // surface token consumption in the footer. Endpoints that don't support this
+      // simply ignore the option (and report no usage), which we handle gracefully.
+      stream_options: { include_usage: true },
       messages: this.toOpenAIMessages(req.system, req.messages),
     }
 
@@ -97,15 +102,23 @@ export class DirectProvider implements Provider {
     const toolCallsByIndex = new Map<number, OpenAIToolCallAccumulator>()
     const emittedToolIndexes = new Set<number>()
     let finishReason: string | undefined
+    let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined
 
     const flushFrames = function* (this: DirectProvider): Generator<ProviderEvent> {
       let separatorIndex = buffer.indexOf('\n\n')
       while (separatorIndex !== -1) {
         const frame = buffer.slice(0, separatorIndex)
         buffer = buffer.slice(separatorIndex + 2)
-        yield* this.parseFrame(frame, toolCallsByIndex, (reason) => {
-          finishReason = reason
-        })
+        yield* this.parseFrame(
+          frame,
+          toolCallsByIndex,
+          (reason) => {
+            finishReason = reason
+          },
+          (reported) => {
+            usage = reported
+          },
+        )
         separatorIndex = buffer.indexOf('\n\n')
       }
     }.bind(this)
@@ -128,9 +141,16 @@ export class DirectProvider implements Provider {
 
     // Parse any trailing frame without a separator.
     if (buffer.trim().length > 0) {
-      yield* this.parseFrame(buffer, toolCallsByIndex, (reason) => {
-        finishReason = reason
-      })
+      yield* this.parseFrame(
+        buffer,
+        toolCallsByIndex,
+        (reason) => {
+          finishReason = reason
+        },
+        (reported) => {
+          usage = reported
+        },
+      )
     }
 
     // Emit any tool calls that were assembled across the stream.
@@ -157,6 +177,20 @@ export class DirectProvider implements Provider {
       yield { kind: 'tool-call', id: acc.id || `call_${index}`, name: acc.name, args }
     }
 
+    if (usage) {
+      const report = {
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        totalTokens: usage.total_tokens,
+      }
+      assistantUsageService.record(report)
+      yield { kind: 'usage', ...report }
+    } else {
+      // No usage reported by the endpoint, but a request still completed — count
+      // it so the request tally (and the server cap) stays accurate.
+      assistantUsageService.record({})
+    }
+
     yield { kind: 'finish', stopReason: this.mapStopReason(finishReason, hasToolCalls) }
   }
 
@@ -164,6 +198,7 @@ export class DirectProvider implements Provider {
     frame: string,
     toolCallsByIndex: Map<number, OpenAIToolCallAccumulator>,
     setFinishReason: (reason: string) => void,
+    setUsage: (usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }) => void,
   ): Generator<ProviderEvent> {
     for (const rawLine of frame.split('\n')) {
       const line = rawLine.trim()
@@ -187,6 +222,7 @@ export class DirectProvider implements Provider {
           }
           finish_reason?: string | null
         }>
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null
         error?: { message?: string }
       }
       try {
@@ -198,6 +234,13 @@ export class DirectProvider implements Provider {
       if (parsed.error) {
         yield { kind: 'error', message: parsed.error.message || 'Unknown error from endpoint' }
         continue
+      }
+
+      // With stream_options.include_usage the endpoint sends a final chunk that
+      // carries `usage` and an empty `choices` array. Capture it before bailing on
+      // the missing choice below.
+      if (parsed.usage) {
+        setUsage(parsed.usage)
       }
 
       const choice = parsed.choices?.[0]

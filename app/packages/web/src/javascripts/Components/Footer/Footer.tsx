@@ -32,6 +32,7 @@ import PreferencesButton from './PreferencesButton'
 import VaultSelectionButton from './VaultSelectionButton'
 import ConnectionStatusIndicator from './ConnectionStatus'
 import NoteStats from './NoteStats'
+import AssistantUsage from './AssistantUsage'
 
 type Props = {
   application: WebApplication
@@ -415,6 +416,15 @@ class Footer extends AbstractComponent<Props, State> {
             */}
             <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
               <NoteStats application={this.application} />
+            </div>
+            {/*
+              AI-usage chip: session token consumption and, when the server proxy
+              enforces a daily request cap, used/limit with a near-limit warning
+              color. Self-hides when AI hasn't been used and no cap is configured.
+              Like NoteStats it is lg+ only to avoid crowding tablet footer widths.
+            */}
+            <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
+              <AssistantUsage application={this.application} />
             </div>
             <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
               <ConnectionStatusIndicator application={this.application} />

@@ -1,3 +1,4 @@
+import { assistantUsageService } from './AssistantUsageService'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 
 export interface ProxyProviderOptions {
@@ -52,6 +53,19 @@ export class ProxyProvider implements Provider {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    let reportedUsage = false
+
+    const handle = (event: ProviderEvent): ProviderEvent => {
+      if (event.kind === 'usage') {
+        reportedUsage = true
+        assistantUsageService.record({
+          promptTokens: event.promptTokens,
+          completionTokens: event.completionTokens,
+          totalTokens: event.totalTokens,
+        })
+      }
+      return event
+    }
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -68,7 +82,7 @@ export class ProxyProvider implements Provider {
 
         const event = this.parseFrame(frame)
         if (event) {
-          yield event
+          yield handle(event)
         }
 
         separatorIndex = buffer.indexOf('\n\n')
@@ -77,7 +91,13 @@ export class ProxyProvider implements Provider {
 
     const trailing = this.parseFrame(buffer)
     if (trailing) {
-      yield trailing
+      yield handle(trailing)
+    }
+
+    // Count the request even when the proxy/provider reported no token usage so
+    // the session request tally stays consistent with the server's request cap.
+    if (!reportedUsage) {
+      assistantUsageService.record({})
     }
   }
 

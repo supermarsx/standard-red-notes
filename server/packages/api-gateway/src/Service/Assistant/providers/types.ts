@@ -41,6 +41,10 @@ export type ProviderEvent =
   | { kind: 'tool-call'; id: string; name: string; args: unknown }
   | { kind: 'finish'; stopReason: ProviderStopReason }
   | { kind: 'error'; message: string }
+  // Token usage reported by the upstream LLM, forwarded to the browser so the
+  // client can surface consumption. Best-effort: emitted only when the upstream
+  // response includes a usage object.
+  | { kind: 'usage'; promptTokens?: number; completionTokens?: number; totalTokens?: number }
 
 export interface Provider {
   readonly id: string

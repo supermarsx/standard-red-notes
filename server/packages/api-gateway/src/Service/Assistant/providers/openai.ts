@@ -61,11 +61,29 @@ export class OpenAIProvider implements Provider {
         },
       })),
       stream: true,
+      // Emit a final usage-only chunk so the proxy can forward token consumption
+      // to the browser footer. Upstreams that don't support it ignore the option.
+      stream_options: { include_usage: true },
     })
 
     const pendingTools = new Map<number, { id: string; name: string; argBuf: string }>()
+    let usage: ProviderEvent | undefined
+    // The model's finish event is deferred so that, when stream_options.include_usage
+    // is honoured, the trailing usage-only chunk (which arrives AFTER finish_reason)
+    // is emitted before the final 'finish'. The browser ends its read on 'finish'.
+    let finish: ProviderEvent | undefined
 
     for await (const chunk of stream) {
+      // The include_usage final chunk carries `usage` and an empty `choices`.
+      if (chunk.usage && !usage) {
+        usage = {
+          kind: 'usage',
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+          totalTokens: chunk.usage.total_tokens,
+        }
+      }
+
       const choice = chunk.choices[0]
       if (!choice) {
         continue
@@ -88,7 +106,7 @@ export class OpenAIProvider implements Provider {
         }
       }
 
-      if (choice.finish_reason) {
+      if (choice.finish_reason && !finish) {
         for (const [, p] of pendingTools) {
           let args: unknown = {}
           try {
@@ -98,7 +116,7 @@ export class OpenAIProvider implements Provider {
           }
           yield { kind: 'tool-call', id: p.id, name: p.name, args }
         }
-        yield {
+        finish = {
           kind: 'finish',
           stopReason:
             choice.finish_reason === 'tool_calls'
@@ -107,8 +125,13 @@ export class OpenAIProvider implements Provider {
                 ? 'max_tokens'
                 : 'end_turn',
         }
-        return
+        // Don't return: keep draining so a trailing usage chunk is captured.
       }
     }
+
+    if (usage) {
+      yield usage
+    }
+    yield finish ?? { kind: 'finish', stopReason: 'end_turn' }
   }
 }
