@@ -50,6 +50,7 @@ import {
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
+import { configureTrustProxy } from '../src/Controller/TrustProxy'
 
 const container = new ContainerConfigLoader()
 void container.load().then((container) => {
@@ -65,6 +66,14 @@ void container.load().then((container) => {
   const server = new InversifyExpressServer(container)
 
   server.setConfig((app) => {
+    // Standard Red Notes: honor X-Forwarded-Proto / X-Forwarded-For when the
+    // stack runs behind a TLS-terminating reverse proxy, so req.secure,
+    // req.protocol and req.ip reflect the real client. Configurable via
+    // TRUST_PROXY (see TrustProxy.ts). Default trusts only loopback/private
+    // (Docker) networks, so direct access still works and a remote client
+    // cannot spoof the forwarded headers.
+    configureTrustProxy(app, env.get('TRUST_PROXY', true))
+
     app.use((request: Request, _response: Response, next: NextFunction) => {
       if (request.hostname.includes('standardnotes.org')) {
         logger.debug('Request is using deprecated domain', {

@@ -16,6 +16,7 @@ import { InversifyExpressServer } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
+import { parseTrustProxyValue } from '../src/Bootstrap/TrustProxy'
 
 const container = new ContainerConfigLoader('server')
 void container.load().then((container) => {
@@ -29,6 +30,13 @@ void container.load().then((container) => {
   const server = new InversifyExpressServer(container)
 
   server.setConfig((app) => {
+    // Standard Red Notes: honor X-Forwarded-Proto / X-Forwarded-For when the
+    // files service runs behind a TLS-terminating reverse proxy, so req.secure /
+    // req.protocol / req.ip reflect the real client. Configurable via TRUST_PROXY.
+    // Default trusts only loopback/private (Docker) networks, so direct access
+    // keeps working and a remote client cannot spoof the forwarded headers.
+    app.set('trust proxy', parseTrustProxyValue(env.get('TRUST_PROXY', true)))
+
     app.use((_request: Request, response: Response, next: NextFunction) => {
       response.setHeader('X-Files-Version', container.get(TYPES.Files_VERSION))
       next()

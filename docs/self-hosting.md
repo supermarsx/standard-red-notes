@@ -12,6 +12,7 @@ Standard Notes. See the [LICENSE](../LICENSE) file for details.
 - [Prerequisites](#prerequisites)
 - [Configuration (the `.env` file)](#configuration-the-env-file)
 - [Choosing a domain and ports](#choosing-a-domain-and-ports)
+- [Running behind a reverse proxy](#running-behind-a-reverse-proxy)
 - [Start, stop, and upgrade](#start-stop-and-upgrade)
 - [Where your data lives](#where-your-data-lives)
 - [Backup and restore](#backup-and-restore)
@@ -210,10 +211,201 @@ server.
   `COOKIE_DOMAIN`, `COOKIE_SECURE=true`, and computes `PUBLIC_FILES_SERVER_URL`
   and the WebAuthn origins for you. Terminate TLS at a reverse proxy
   (nginx/Caddy/Traefik) in front of the published ports - Compose itself serves
-  plain HTTP on the host ports.
+  plain HTTP on the host ports. See
+  [Running behind a reverse proxy](#running-behind-a-reverse-proxy) for the full
+  proxy config (`TRUST_PROXY`, nginx/Traefik examples, websocket upgrade).
 - **Port already in use?** Re-run the setup script and choose different host
   ports, or edit `APP_PORT` / `SERVER_PORT` / `FILES_PORT` / `WEBSOCKET_PORT` in
   `.env`, then `docker compose up -d` again.
+
+---
+
+## Running behind a reverse proxy
+
+For any internet-facing deployment you should terminate TLS at a reverse proxy
+(nginx, Traefik, or Caddy) in front of the stack. The Compose services speak
+plain HTTP on the host ports; the proxy adds HTTPS and forwards requests to
+them. This lets you serve the **whole app under one external host** - the web
+UI, the `/v1` API, the files endpoints, and the realtime websocket - with a
+single certificate.
+
+### Required environment
+
+TLS is terminated at the proxy, so the containers receive plain HTTP. They must
+trust the proxy's forwarded headers and the cookie must be marked Secure:
+
+| Variable | Set to | Why |
+|----------|--------|-----|
+| `TRUST_PROXY` | usually leave at the default | Makes the server honor `X-Forwarded-Proto` / `X-Forwarded-For` so `req.secure` and the client IP are correct. The default (`loopback, linklocal, uniquelocal`) trusts a proxy on loopback or a private/Docker network - which is exactly the case when the proxy is another container or runs on the same host. Set it to `true`, a hop count, or a CSV of proxy IPs/subnets only if your proxy reaches the stack from a public IP. |
+| `COOKIE_SECURE` | `true` | The auth cookie is then only sent over HTTPS. Without this the browser may drop it on an HTTPS origin and every request 401s. |
+| `COOKIE_DOMAIN` | your domain (e.g. `notes.example.com`) | Scopes the auth cookie to your host. Leave empty only for bare-host/IP setups. |
+| `PUBLIC_FILES_SERVER_URL` | `https://notes.example.com` (or a files subpath/host) | The public URL clients use to reach the files service - must be the HTTPS URL the browser can reach, routed by the proxy. |
+| `AUTH_SERVER_U2F_EXPECTED_ORIGIN` | `https://notes.example.com` | WebAuthn/hardware-key origin must match the HTTPS origin. |
+| `AUTH_SERVER_U2F_RELYING_PARTY_ID` | `notes.example.com` | WebAuthn relying-party id (the host, no scheme/port). |
+
+> Why `TRUST_PROXY`? Express only fills `req.secure` / `req.protocol` / `req.ip`
+> from the `X-Forwarded-*` headers when "trust proxy" is configured. Without it,
+> the server thinks every request is plain HTTP from the proxy's address.
+
+### Single external host
+
+Route everything under one hostname by path:
+
+- `/` -> the **web** app (`app` container, port 80)
+- `/v1`, `/v2`, `/healthcheck` -> the **API gateway** (`server` container, port 3000)
+- the **files** endpoints -> the files port (`server` container, port 3104 inside;
+  published as `FILES_PORT`/3125). Point `PUBLIC_FILES_SERVER_URL` at the public
+  URL you route to it.
+- the **websocket** gateway -> the `websocket-gateway` container, port 3106. The
+  browser opens `wss://<host>/...`; set `WEB_SOCKET_SERVER_URL` to that URL.
+
+The web client does not hard-code an API origin - it uses whatever sync-server
+URL you configure in the client - so single-origin routing is purely a proxy
+concern.
+
+### Compose: dropping host ports
+
+The default `docker compose up` publishes host ports so it works standalone. When
+a proxy fronts the stack you can instead attach the proxy-facing services to a
+shared Docker network and stop publishing ports. `docker-compose.yml` ships
+commented examples: create the network once with `docker network create proxy`,
+then uncomment the `# - proxy` network lines (and the Traefik `labels:` blocks)
+on the `app`, `server`, and `websocket-gateway` services. Leaving the examples
+commented keeps the default flow unchanged.
+
+### nginx example
+
+TLS terminates at nginx; it forwards plain HTTP to the published container ports
+(adjust the `proxy_pass` upstreams to your host/ports). Note the explicit
+`Upgrade`/`Connection` handling on the websocket location.
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name notes.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/notes.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/notes.example.com/privkey.pem;
+
+    client_max_body_size 0;   # allow large file uploads (server enforces its own limit)
+
+    # Headers every location needs so the server sees the real scheme + client IP.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+
+    # API gateway (auth, sync, etc.)
+    location /v1/ { proxy_pass http://127.0.0.1:3000; }
+    location /v2/ { proxy_pass http://127.0.0.1:3000; }
+    location /healthcheck { proxy_pass http://127.0.0.1:3000; }
+
+    # Files service (range requests pass through transparently)
+    location /files/ { proxy_pass http://127.0.0.1:3125/; }
+
+    # Realtime websocket gateway - WebSocket Upgrade pass-through is required.
+    location /sockets/ {
+        proxy_pass http://127.0.0.1:3106/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 1h;       # keep long-lived sockets open
+    }
+
+    # Web app (catch-all, last)
+    location / { proxy_pass http://127.0.0.1:3001; }
+}
+```
+
+Set in `.env`: `COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`,
+`PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`,
+`WEB_SOCKET_SERVER_URL=wss://notes.example.com/sockets`, and the WebAuthn
+origins. `TRUST_PROXY` can stay at its default when nginx runs on the same host
+(loopback) or on the Docker network; set it to nginx's address otherwise.
+
+### Traefik example
+
+Traefik (v2/v3) with the Docker provider. Add the stack services to Traefik's
+network and label them. Traefik forwards `X-Forwarded-*` and proxies the
+WebSocket `Upgrade`/`Connection` headers automatically, so no special websocket
+config is needed beyond a router.
+
+```yaml
+# In docker-compose.yml (see the commented examples there):
+services:
+  app:
+    networks: [standard-red-notes, proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.srn-web.rule=Host(`notes.example.com`)"
+      - "traefik.http.routers.srn-web.entrypoints=websecure"
+      - "traefik.http.routers.srn-web.tls.certresolver=le"
+      - "traefik.http.services.srn-web.loadbalancer.server.port=80"
+
+  server:
+    networks: [standard-red-notes, proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.srn-api.rule=Host(`notes.example.com`) && PathPrefix(`/v1`, `/v2`, `/healthcheck`)"
+      - "traefik.http.routers.srn-api.entrypoints=websecure"
+      - "traefik.http.routers.srn-api.tls.certresolver=le"
+      - "traefik.http.routers.srn-api.service=srn-api"
+      - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
+      # A second router/service for the files port (3104) can be added the same way.
+
+  websocket-gateway:
+    networks: [standard-red-notes, proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
+      - "traefik.http.routers.srn-ws.entrypoints=websecure"
+      - "traefik.http.routers.srn-ws.tls.certresolver=le"
+      - "traefik.http.services.srn-ws.loadbalancer.server.port=3106"
+
+networks:
+  proxy:
+    external: true
+```
+
+Because the proxy and the stack share the `proxy` Docker network (a private
+subnet), the default `TRUST_PROXY` already trusts Traefik - no override needed.
+Use the same `.env` values as the nginx example.
+
+### Manual verification
+
+- **Secure cookie behind the proxy.** Against the API gateway, send a forwarded
+  HTTPS header and confirm the auth cookie comes back `Secure` (requires
+  `COOKIE_SECURE=true`):
+
+  ```bash
+  curl -sik -H 'X-Forwarded-Proto: https' \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"you@example.com","password":"...","api":"20200115"}' \
+    https://notes.example.com/v1/login | grep -i set-cookie
+  # expect: Set-Cookie: access_token_...; HttpOnly; Secure; ...
+  ```
+
+- **Websocket upgrade through the proxy.** Confirm the proxy upgrades the
+  connection (HTTP 101):
+
+  ```bash
+  curl -sik -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdA==' \
+    https://notes.example.com/sockets/
+  # expect: HTTP/1.1 101 Switching Protocols
+  ```
+
+- **Real client IP in logs.** With `TRUST_PROXY` set correctly the server logs
+  the client's address (from `X-Forwarded-For`), not the proxy's.
 
 ---
 

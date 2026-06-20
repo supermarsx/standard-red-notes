@@ -24,6 +24,16 @@ x-server-env: &server-env
   COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   COOKIE_PARTITIONED: ${COOKIE_PARTITIONED:-false}
+  # Reverse-proxy support. When the stack runs behind a TLS-terminating proxy
+  # (nginx/Traefik/Caddy), the server must trust the proxy's X-Forwarded-Proto /
+  # X-Forwarded-For headers so req.secure / req.ip reflect the real client.
+  # Default "loopback, linklocal, uniquelocal" trusts a proxy on loopback or a
+  # private/Docker network (the usual compose setup) but NOT arbitrary public
+  # clients, so direct access still works and forwarded headers can't be spoofed.
+  # Set to "true" to trust any number of hops, a number N to trust N hops, or a
+  # CSV of proxy IPs/subnets. See docs/self-hosting.md "Running behind a reverse
+  # proxy". Pair with COOKIE_SECURE=true when TLS is terminated at the proxy.
+  TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   # Comma-separated emails granted the InternalTeamUser (admin) role, which
   # unlocks the in-app Admin panel and the /admin user-management endpoints.
@@ -79,6 +89,9 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    # When fronting with a reverse proxy you can drop the published port and let
+    # the proxy reach this container over the shared `proxy` network (see the
+    # `networks` block at the bottom). To keep direct access, leave `ports` as-is.
     ports:
       - "${APP_PORT:-3001}:80"
     healthcheck:
@@ -89,6 +102,18 @@ services:
       start_period: 20s
     networks:
       - standard-red-notes
+      # - proxy
+    # Example Traefik labels (uncomment with the `proxy` network). The web UI,
+    # the /v1 API and the realtime websocket can all be served under ONE host;
+    # the routers below split by path. Adjust the host rule and TLS resolver.
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.docker.network=proxy"
+    #   # Web UI (catch-all for the host)
+    #   - "traefik.http.routers.srn-web.rule=Host(`notes.example.com`)"
+    #   - "traefik.http.routers.srn-web.entrypoints=websecure"
+    #   - "traefik.http.routers.srn-web.tls.certresolver=le"
+    #   - "traefik.http.services.srn-web.loadbalancer.server.port=80"
 
   server:
     build:
@@ -119,6 +144,20 @@ services:
       start_period: 90s
     networks:
       - standard-red-notes
+      # - proxy
+    # Example Traefik labels (uncomment with the `proxy` network). Route /v1 (the
+    # API gateway, port 3000) and the files endpoints (port 3104) under the same
+    # host as the web UI. Files use Content-Range / Accept-Ranges, which Traefik
+    # passes through transparently.
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.docker.network=proxy"
+    #   # API gateway
+    #   - "traefik.http.routers.srn-api.rule=Host(`notes.example.com`) && PathPrefix(`/v1`, `/v2`, `/healthcheck`)"
+    #   - "traefik.http.routers.srn-api.entrypoints=websecure"
+    #   - "traefik.http.routers.srn-api.tls.certresolver=le"
+    #   - "traefik.http.routers.srn-api.service=srn-api"
+    #   - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
 
   websocket-gateway:
     build:
@@ -152,6 +191,18 @@ services:
       - "${WEBSOCKET_PORT:-3106}:3106"
     networks:
       - standard-red-notes
+      # - proxy
+    # Example Traefik labels (uncomment with the `proxy` network). The gateway
+    # handles the WS Upgrade itself; Traefik proxies Upgrade/Connection headers
+    # transparently, so only a router + service port are needed. Browsers reach
+    # it at wss://<host>/sockets (set WEB_SOCKET_SERVER_URL accordingly).
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.docker.network=proxy"
+    #   - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
+    #   - "traefik.http.routers.srn-ws.entrypoints=websecure"
+    #   - "traefik.http.routers.srn-ws.tls.certresolver=le"
+    #   - "traefik.http.services.srn-ws.loadbalancer.server.port=3106"
 
   mcp:
     profiles:
@@ -238,6 +289,14 @@ services:
 networks:
   standard-red-notes:
     driver: bridge
+  # ---------------------------------------------------------------------------
+  # Optional: attach the proxy-facing services to an EXISTING reverse-proxy
+  # network (e.g. one your Traefik/nginx container already uses) so the proxy can
+  # reach them by service name without publishing host ports. Uncomment this and
+  # the `proxy` entries under the `app`, `server`, and `websocket-gateway`
+  # services, then create the network once: `docker network create proxy`.
+  # proxy:
+  #   external: true
 
 volumes:
   mysql-data:

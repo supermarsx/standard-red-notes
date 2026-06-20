@@ -3,6 +3,7 @@ import 'reflect-metadata'
 import { ControllerContainer, Result, ServiceContainer } from '@standardnotes/domain-core'
 import {
   Service as ApiGatewayService,
+  configureTrustProxy,
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
 } from '@standardnotes/api-gateway'
@@ -113,6 +114,14 @@ export class HomeServer implements HomeServerInterface {
       const server = new InversifyExpressServer(container)
 
       server.setConfig((app) => {
+        // Standard Red Notes: honor X-Forwarded-Proto / X-Forwarded-For when the
+        // self-hosted server runs behind a TLS-terminating reverse proxy, so
+        // req.secure / req.protocol / req.ip reflect the real client. Configurable
+        // via TRUST_PROXY (see api-gateway TrustProxy.ts). Default trusts only
+        // loopback/private (Docker) networks so direct access keeps working and a
+        // remote client cannot spoof the forwarded headers.
+        configureTrustProxy(app, env.get('TRUST_PROXY', true))
+
         /* eslint-disable */
         app.use(
           helmet({
