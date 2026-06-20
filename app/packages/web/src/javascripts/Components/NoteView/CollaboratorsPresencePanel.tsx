@@ -133,7 +133,7 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
           </div>
         )}
       </div>
-      <div className="space-y-1.5">
+      <div className="max-h-44 space-y-1.5 overflow-y-auto overscroll-contain md:max-h-none md:overflow-visible">
         {displayMembers.map((member) => {
           const online = isOnline(member)
           return (

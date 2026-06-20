@@ -304,11 +304,11 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     return (
       <div className="flex h-full flex-grow flex-col overflow-hidden" style={surfaceStyle}>
-        <div className="flex flex-shrink-0 items-center gap-1 border-b border-border bg-contrast px-2 py-1 text-xs">
+        <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-contrast px-2 py-1 text-xs">
           <button
             type="button"
             className={classNames(
-              'rounded px-2 py-0.5 font-semibold',
+              'touch-manipulation whitespace-nowrap rounded px-2 py-1.5 font-semibold md:py-0.5',
               !showPreview ? 'bg-info text-info-contrast' : 'text-neutral hover:bg-default',
             )}
             onClick={() => setShowPreview(false)}
@@ -318,7 +318,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
           <button
             type="button"
             className={classNames(
-              'rounded px-2 py-0.5 font-semibold',
+              'touch-manipulation whitespace-nowrap rounded px-2 py-1.5 font-semibold md:py-0.5',
               showPreview ? 'bg-info text-info-contrast' : 'text-neutral hover:bg-default',
             )}
             onClick={() => setShowPreview(true)}

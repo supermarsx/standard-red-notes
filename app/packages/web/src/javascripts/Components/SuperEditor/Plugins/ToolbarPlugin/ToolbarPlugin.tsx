@@ -1368,7 +1368,7 @@ const ToolbarPlugin = () => {
               key={color}
               type="button"
               aria-label={`Text color ${color}`}
-              className="h-6 w-6 rounded border border-border"
+              className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
               style={{ backgroundColor: color }}
               onClick={() => {
                 applyStyleText({ color })
@@ -1382,7 +1382,7 @@ const ToolbarPlugin = () => {
             Custom
             <input
               type="color"
-              className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
+              className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
               onChange={(event) => applyStyleText({ color: event.target.value })}
             />
           </label>
@@ -1418,7 +1418,7 @@ const ToolbarPlugin = () => {
               key={color}
               type="button"
               aria-label={`Highlight color ${color}`}
-              className="h-6 w-6 rounded border border-border"
+              className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
               style={{ backgroundColor: color }}
               onClick={() => {
                 applyStyleText({ 'background-color': color })
@@ -1432,7 +1432,7 @@ const ToolbarPlugin = () => {
             Custom
             <input
               type="color"
-              className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
+              className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
               onChange={(event) => applyStyleText({ 'background-color': event.target.value })}
             />
           </label>

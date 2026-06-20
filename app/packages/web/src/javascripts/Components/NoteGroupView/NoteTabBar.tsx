@@ -34,14 +34,20 @@ const NoteTabBar: FunctionComponent<Props> = ({
   canAddTab,
 }) => {
   return (
-    <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-contrast px-2 py-1">
+    <div
+      className="note-tab-bar flex flex-shrink-0 items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border bg-contrast px-2 py-1.5 md:py-1"
+      style={{ WebkitOverflowScrolling: 'touch' }}
+      role="tablist"
+      aria-label="Open notes"
+    >
       {controllers.map((controller) => {
         const isActive = controller.runtimeId === activeControllerRuntimeId
         const title = titleForController(controller)
         return (
           <div
             key={controller.runtimeId}
-            role="button"
+            role="tab"
+            aria-selected={isActive}
             tabIndex={0}
             onClick={() => onSelect(controller)}
             onKeyDown={(event) => {
@@ -51,17 +57,17 @@ const NoteTabBar: FunctionComponent<Props> = ({
               }
             }}
             className={classNames(
-              'flex flex-shrink-0 cursor-pointer items-center gap-1 rounded border px-2 py-1 text-xs',
+              'flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
               isActive
                 ? 'border-info bg-default font-semibold text-text'
                 : 'border-border bg-contrast text-passive-0 hover:text-text',
             )}
             title={title}
           >
-            <span className="max-w-[10rem] truncate">{title}</span>
+            <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
             <button
               type="button"
-              className="rounded p-0.5 hover:bg-contrast"
+              className="-mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-contrast md:h-auto md:w-auto md:p-0.5"
               onClick={(event) => {
                 event.stopPropagation()
                 onClose(controller)
@@ -77,7 +83,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
       <button
         type="button"
         className={classNames(
-          'flex flex-shrink-0 items-center rounded border border-border bg-contrast p-1',
+          'flex h-9 w-9 flex-shrink-0 touch-manipulation items-center justify-center rounded border border-border bg-contrast md:h-auto md:w-auto md:p-1',
           canAddTab ? 'text-passive-0 hover:text-text' : 'cursor-not-allowed text-passive-2',
         )}
         onClick={onAddTab}

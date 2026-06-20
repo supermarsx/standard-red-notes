@@ -177,7 +177,7 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         togglePopover={() => setIsAIMenuOpen(!isAIMenuOpen)}
         side="bottom"
         align="end"
-        className="w-64 p-2"
+        className="w-full p-2 md:w-64"
       >
         {!availability.available ? (
           <div className="px-2 py-2 text-sm text-neutral">{availability.reason}</div>

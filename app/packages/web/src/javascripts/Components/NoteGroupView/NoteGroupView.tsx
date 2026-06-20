@@ -13,6 +13,7 @@ import Icon from '../Icon/Icon'
 import TilesToolbar from './TilesToolbar'
 import NoteTabBar from './NoteTabBar'
 import { getTileGridStyle, TileLayout } from './TileLayout'
+import { MediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 
 type State = {
   showMultipleSelectedNotes: boolean
@@ -23,6 +24,13 @@ type State = {
   selectedPane?: AppPaneId
   isInMobileView?: boolean
   tileLayout: TileLayout
+  /**
+   * True when the viewport is below the `lg` breakpoint. In this tablet-sized
+   * range tiling is still allowed (it is only fully disabled below `md`, where
+   * `isInMobileView` takes over), but side-by-side columns/grids become too
+   * narrow to use, so we stack tiles into a single scrollable column instead.
+   */
+  isNarrowTilingViewport: boolean
 }
 
 type Props = {
@@ -32,9 +40,16 @@ type Props = {
 
 class NoteGroupView extends AbstractComponent<Props, State> {
   private removeChangeObserver!: () => void
+  private narrowTilingMediaQuery?: MediaQueryList
+  private narrowTilingMQHandler = (event: MediaQueryListEvent | MediaQueryList) => {
+    // `lg` query matches when width >= 1024px; narrow tiling applies below that.
+    this.setState({ isNarrowTilingViewport: !event.matches })
+  }
 
   constructor(props: Props) {
     super(props, props.application)
+    const lgMatches =
+      typeof window !== 'undefined' ? window.matchMedia(MediaQueryBreakpoints.lg).matches : true
     this.state = {
       showMultipleSelectedNotes: false,
       showMultipleSelectedFiles: false,
@@ -42,11 +57,20 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       activeControllerRuntimeId: undefined,
       selectedFile: undefined,
       tileLayout: TileLayout.Columns,
+      isNarrowTilingViewport: !lgMatches,
     }
   }
 
   override componentDidMount(): void {
     super.componentDidMount()
+
+    const lgMediaQuery = window.matchMedia(MediaQueryBreakpoints.lg)
+    this.narrowTilingMediaQuery = lgMediaQuery
+    if (lgMediaQuery.addEventListener != undefined) {
+      lgMediaQuery.addEventListener('change', this.narrowTilingMQHandler)
+    } else {
+      lgMediaQuery.addListener(this.narrowTilingMQHandler)
+    }
 
     const controllerGroup = this.application.itemControllerGroup
     this.removeChangeObserver = this.application.itemControllerGroup.addActiveControllerChangeObserver(() => {
@@ -92,6 +116,15 @@ class NoteGroupView extends AbstractComponent<Props, State> {
   override deinit() {
     this.removeChangeObserver?.()
     ;(this.removeChangeObserver as unknown) = undefined
+
+    if (this.narrowTilingMediaQuery) {
+      if (this.narrowTilingMediaQuery.removeEventListener != undefined) {
+        this.narrowTilingMediaQuery.removeEventListener('change', this.narrowTilingMQHandler)
+      } else {
+        this.narrowTilingMediaQuery.removeListener(this.narrowTilingMQHandler)
+      }
+      this.narrowTilingMediaQuery = undefined
+    }
 
     super.deinit()
   }
@@ -156,13 +189,33 @@ class NoteGroupView extends AbstractComponent<Props, State> {
             )}
 
             {isTiling ? (
-              <div
-                className="grid min-h-0 w-full flex-grow gap-1 bg-border"
-                style={getTileGridStyle(this.state.tileLayout, controllers.length)}
-              >
+              (() => {
+                /**
+                 * On tablet-sized viewports (below `lg`) side-by-side tiles are
+                 * too narrow to use, so stack them into a single scrollable
+                 * column. `Single` layout still shows just the active tile.
+                 * Desktop (`lg`+) keeps the user-selected layout untouched.
+                 */
+                const effectiveLayout =
+                  this.state.isNarrowTilingViewport && this.state.tileLayout !== TileLayout.Single
+                    ? TileLayout.Rows
+                    : this.state.tileLayout
+                const stackVertically = this.state.isNarrowTilingViewport && effectiveLayout === TileLayout.Rows
+                return (
+                  <div
+                    className={classNames(
+                      'grid w-full flex-grow gap-1 bg-border',
+                      stackVertically ? 'min-h-0 overflow-y-auto' : 'min-h-0',
+                    )}
+                    style={
+                      stackVertically
+                        ? { gridTemplateColumns: '1fr', gridAutoRows: 'minmax(60vh, 1fr)' }
+                        : getTileGridStyle(effectiveLayout, controllers.length)
+                    }
+                  >
                 {controllers.map((controller) => {
                   const isActive = controller.runtimeId === this.state.activeControllerRuntimeId
-                  const isHidden = this.state.tileLayout === TileLayout.Single && !isActive
+                  const isHidden = effectiveLayout === TileLayout.Single && !isActive
                   return (
                     <div
                       key={controller.runtimeId}
@@ -188,7 +241,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
                     </div>
                   )
                 })}
-              </div>
+                  </div>
+                )
+              })()
             ) : (
               /**
                * Non-tiling branch: only one tile is shown (single open note, or mobile

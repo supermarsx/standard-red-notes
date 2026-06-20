@@ -68,7 +68,7 @@ export const NoteAppearanceOptions: FunctionComponent<{
               disabled={disabled}
               value={backgroundColor ?? DefaultBackgroundSwatch}
               onChange={(event) => setBackgroundColor(event.target.value)}
-              className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+              className="h-9 w-11 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-6 md:w-8"
             />
           </span>
         </label>
@@ -83,13 +83,13 @@ export const NoteAppearanceOptions: FunctionComponent<{
               disabled={disabled}
               value={textColor ?? DefaultTextSwatch}
               onChange={(event) => setTextColor(event.target.value)}
-              className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+              className="h-9 w-11 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-6 md:w-8"
             />
           </span>
         </label>
       </div>
 
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
+      <div className="mt-2.5 flex flex-wrap gap-2 md:gap-1.5">
         {NoteAppearancePresets.map((preset) => (
           <button
             key={preset.name}
@@ -98,7 +98,7 @@ export const NoteAppearanceOptions: FunctionComponent<{
             aria-label={`Apply ${preset.name} colors`}
             disabled={disabled}
             onClick={() => applyPreset(preset)}
-            className="h-6 w-6 rounded border border-border disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex h-9 w-9 touch-manipulation items-center justify-center rounded border border-border disabled:cursor-not-allowed disabled:opacity-60 md:h-6 md:w-6"
             style={{ backgroundColor: preset.backgroundColor, color: preset.textColor }}
           >
             <span className="text-xs font-bold">A</span>
@@ -110,7 +110,7 @@ export const NoteAppearanceOptions: FunctionComponent<{
         type="button"
         disabled={disabled || !hasOverride}
         onClick={resetToTheme}
-        className="mt-2.5 self-start rounded px-2 py-1 text-sm text-info enabled:hover:underline disabled:cursor-not-allowed disabled:text-passive-1"
+        className="mt-2.5 self-start touch-manipulation rounded px-2 py-2 text-sm text-info enabled:hover:underline disabled:cursor-not-allowed disabled:text-passive-1 md:py-1"
       >
         Reset to theme
       </button>
