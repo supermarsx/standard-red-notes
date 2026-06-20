@@ -23,7 +23,7 @@
 
 import { createHeadlessEditor } from '@lexical/headless'
 
-import { $createKanbanNode, KanbanNode, KanbanData } from './KanbanNode'
+import { $createKanbanNode, KanbanNode, KanbanData, DEFAULT_BOARD_TITLE } from './KanbanNode'
 import { $createCalendarNode, CalendarNode, CalendarData } from './CalendarNode'
 import { $createDataTableNode, DataTableNode, DataTableData } from './DataTableNode'
 import { $createCalloutNode, CalloutNode, CalloutData } from './CalloutNode'
@@ -75,6 +75,7 @@ function roundTrip<S extends AnySerialized>(
 describe('Editor block node serialization', () => {
   describe('KanbanNode', () => {
     const custom: KanbanData = {
+      title: 'Sprint 42 / Q3 roadmap — fully renamed',
       columns: [
         { id: 'col-1', title: 'Backlog', cards: [{ id: 'card-1', text: 'Write tests' }] },
         { id: 'col-2', title: 'Done', cards: [] },
@@ -102,6 +103,29 @@ describe('Editor block node serialization', () => {
     it('preserves nested column and card fields exactly', () => {
       const { second } = roundTrip(() => $createKanbanNode(custom), KanbanNode.importJSON)
       expect(second.data).toEqual(custom)
+    })
+
+    it('round-trips an edited board title without loss', () => {
+      const { first, second } = roundTrip(() => $createKanbanNode(custom), KanbanNode.importJSON)
+      expect((first.data as KanbanData).title).toBe('Sprint 42 / Q3 roadmap — fully renamed')
+      expect((second.data as KanbanData).title).toBe('Sprint 42 / Q3 roadmap — fully renamed')
+    })
+
+    it('uses the default board title for newly created boards', () => {
+      const { first } = roundTrip(() => $createKanbanNode(), KanbanNode.importJSON)
+      expect((first.data as KanbanData).title).toBe(DEFAULT_BOARD_TITLE)
+    })
+
+    it('backfills a missing title when importing pre-title (legacy) notes', () => {
+      const legacy = {
+        type: 'kanban',
+        version: 1,
+        // legacy notes were serialized before the title field existed
+        data: { columns: [{ id: 'c1', title: 'To do', cards: [] }] } as unknown as KanbanData,
+      } as const
+      const imported = inEditor(() => KanbanNode.importJSON(legacy as never).exportJSON())
+      expect((imported.data as KanbanData).title).toBe(DEFAULT_BOARD_TITLE)
+      expect((imported.data as KanbanData).columns).toEqual([{ id: 'c1', title: 'To do', cards: [] }])
     })
   })
 

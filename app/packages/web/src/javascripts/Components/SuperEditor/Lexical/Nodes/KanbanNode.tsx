@@ -14,11 +14,14 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 
 type KanbanCard = { id: string; text: string }
 type KanbanColumn = { id: string; title: string; cards: KanbanCard[] }
-export type KanbanData = { columns: KanbanColumn[] }
+export type KanbanData = { title: string; columns: KanbanColumn[] }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
+export const DEFAULT_BOARD_TITLE = 'Kanban board'
+
 const DEFAULT_KANBAN: KanbanData = {
+  title: DEFAULT_BOARD_TITLE,
   columns: [
     { id: uid(), title: 'To do', cards: [] },
     { id: uid(), title: 'In progress', cards: [] },
@@ -26,8 +29,20 @@ const DEFAULT_KANBAN: KanbanData = {
   ],
 }
 
+/**
+ * Normalizes data coming from importJSON. Notes serialized before the board
+ * title was editable have no `title` field, so we backfill the default to keep
+ * older notes rendering and round-tripping correctly.
+ */
+function normalize(data: KanbanData): KanbanData {
+  return { title: data.title ?? DEFAULT_BOARD_TITLE, columns: data.columns ?? [] }
+}
+
 function clone(data: KanbanData): KanbanData {
-  return { columns: data.columns.map((c) => ({ ...c, cards: c.cards.map((card) => ({ ...card })) })) }
+  return {
+    title: data.title,
+    columns: data.columns.map((c) => ({ ...c, cards: c.cards.map((card) => ({ ...card })) })),
+  }
 }
 
 function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey }): React.JSX.Element {
@@ -47,6 +62,7 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
     [editor, nodeKey],
   )
 
+  const renameBoard = (title: string) => mutate((d) => (d.title = title))
   const addColumn = () => mutate((d) => d.columns.push({ id: uid(), title: 'New column', cards: [] }))
   const removeColumn = (colId: string) => mutate((d) => (d.columns = d.columns.filter((c) => c.id !== colId)))
   const renameColumn = (colId: string, title: string) =>
@@ -82,9 +98,20 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
 
   return (
     <div className="my-2 rounded border border-border bg-default" data-kanban-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
-        <span className="font-semibold">Kanban board</span>
-        <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={addColumn} type="button">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+        <input
+          key={`board-title-${nodeKey}`}
+          className="min-w-0 flex-grow bg-transparent font-semibold text-text outline-none"
+          defaultValue={data.title}
+          placeholder="Board title…"
+          aria-label="Board title"
+          onBlur={(e) => renameBoard(e.target.value)}
+        />
+        <button
+          className="flex-shrink-0 rounded px-2 py-0.5 hover:bg-contrast"
+          onClick={addColumn}
+          type="button"
+        >
           + Column
         </button>
       </div>
@@ -182,7 +209,7 @@ export class KanbanNode extends DecoratorNode<React.JSX.Element> {
   }
 
   static importJSON(serializedNode: SerializedKanbanNode): KanbanNode {
-    return $createKanbanNode(serializedNode.data)
+    return $createKanbanNode(normalize(serializedNode.data))
   }
 
   exportJSON(): SerializedKanbanNode {
@@ -208,9 +235,11 @@ export class KanbanNode extends DecoratorNode<React.JSX.Element> {
   }
 
   getTextContent(): string {
-    return this.__data.columns
+    const board = `# ${this.__data.title}`
+    const columns = this.__data.columns
       .map((c) => `## ${c.title}\n${c.cards.map((card) => `- ${card.text}`).join('\n')}`)
       .join('\n\n')
+    return columns ? `${board}\n\n${columns}` : board
   }
 
   isInline(): false {
