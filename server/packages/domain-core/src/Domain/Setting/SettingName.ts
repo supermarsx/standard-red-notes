@@ -46,6 +46,15 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // client preference (SearchIndexEnabled) always takes precedence when set.
     // Value is the string 'true' or 'false'.
     SearchIndexEnabled: 'SEARCH_INDEX_ENABLED',
+    // Standard Red Notes: OPTIONAL, OFF-BY-DEFAULT account/password recovery
+    // escrow. Holds a CLIENT-SIDE ciphertext blob (the account master key
+    // encrypted under a key derived from a high-entropy recovery code that is
+    // shown to the user ONCE and never sent to the server). The server stores
+    // only this opaque ciphertext; it CANNOT decrypt it without the user-held
+    // recovery code. This setting exists only for accounts that explicitly
+    // opted in; deleting it removes the escrow. See the Security preferences
+    // "Account recovery" opt-in for the full warning and tradeoff.
+    AccountRecoveryEscrow: 'ACCOUNT_RECOVERY_ESCROW',
   }
 
   get value(): string {

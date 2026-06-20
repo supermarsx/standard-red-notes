@@ -116,6 +116,39 @@ export class SettingsGateway {
     }
   }
 
+  /**
+   * Standard Red Notes: account-recovery escrow accessors. Addressed by raw
+   * setting name so they work regardless of whether the published client-side
+   * SettingName enum includes the name. The server validates the name.
+   */
+  async getRawSetting(settingName: string): Promise<string | undefined> {
+    const response = await this.settingsApi.getSetting(this.userUuid, settingName)
+
+    if (response.status === HttpStatusCode.BadRequest) {
+      return undefined
+    }
+
+    if (isErrorResponse(response)) {
+      throw new Error(getErrorFromErrorResponse(response).message)
+    }
+
+    return response?.data?.setting?.value ?? undefined
+  }
+
+  async updateRawSetting(settingName: string, payload: string, sensitive: boolean): Promise<void> {
+    const response = await this.settingsApi.updateSetting(this.userUuid, settingName, payload, sensitive)
+    if (isErrorResponse(response)) {
+      throw new Error(getErrorFromErrorResponse(response).message)
+    }
+  }
+
+  async deleteRawSetting(settingName: string): Promise<void> {
+    const response = await this.settingsApi.deleteSetting(this.userUuid, settingName)
+    if (isErrorResponse(response)) {
+      throw new Error(getErrorFromErrorResponse(response).message)
+    }
+  }
+
   async getMfaSecret(): Promise<string> {
     const response = await this.settingsApi.getMfaSecret(this.userUuid)
     if (isErrorResponse(response)) {

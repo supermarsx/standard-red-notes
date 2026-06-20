@@ -30,6 +30,12 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.LogSessionUserAgent,
     SettingName.NAMES.RecoveryCodes,
+    // Standard Red Notes: the account-recovery escrow holds only client-side
+    // ciphertext (see SettingName.AccountRecoveryEscrow). It must be retrievable
+    // by the owning client so it can run the recovery flow, so it is not marked
+    // "sensitive" (which would block normal getSetting reads). Confidentiality
+    // comes from the client-side encryption, not from server-side gating.
+    SettingName.NAMES.AccountRecoveryEscrow,
   ]
 
   private readonly CLIENT_IMMUTABLE_SETTINGS = [

@@ -9,6 +9,10 @@ import { ListAuthenticators } from '../../Domain/UseCase/ListAuthenticators/List
 import { AddAuthenticator } from '../../Domain/UseCase/AddAuthenticator/AddAuthenticator'
 import { GetRecoveryCodes } from '../../Domain/UseCase/GetRecoveryCodes/GetRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
+import { EnableAccountRecovery } from '../../Domain/UseCase/AccountRecovery/EnableAccountRecovery'
+import { DisableAccountRecovery } from '../../Domain/UseCase/AccountRecovery/DisableAccountRecovery'
+import { GetAccountRecoveryStatus } from '../../Domain/UseCase/AccountRecovery/GetAccountRecoveryStatus'
+import { RecoverAccount } from '../../Domain/UseCase/AccountRecovery/RecoverAccount'
 import { MigrationService } from '../../Services/Migration/MigrationService'
 import { MfaService } from '../../Services/Mfa/MfaService'
 import { ComponentManager } from '../../Services/ComponentManager/ComponentManager'
@@ -1028,6 +1032,26 @@ export class Dependencies {
         this.get<SettingsService>(TYPES.SettingsService),
         this.get<EncryptionService>(TYPES.EncryptionService),
       )
+    })
+
+    this.factory.set(TYPES.EnableAccountRecovery, () => {
+      return new EnableAccountRecovery(
+        this.get<EncryptionService>(TYPES.EncryptionService),
+        this.get<SettingsService>(TYPES.SettingsService),
+        this.get<PureCryptoInterface>(TYPES.Crypto),
+      )
+    })
+
+    this.factory.set(TYPES.DisableAccountRecovery, () => {
+      return new DisableAccountRecovery(this.get<SettingsService>(TYPES.SettingsService))
+    })
+
+    this.factory.set(TYPES.GetAccountRecoveryStatus, () => {
+      return new GetAccountRecoveryStatus(this.get<SettingsService>(TYPES.SettingsService))
+    })
+
+    this.factory.set(TYPES.RecoverAccount, () => {
+      return new RecoverAccount(this.get<PureCryptoInterface>(TYPES.Crypto))
     })
 
     this.factory.set(TYPES.AddAuthenticator, () => {

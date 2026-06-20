@@ -5,6 +5,7 @@ import { EmailBackupFrequency } from '@standardnotes/settings'
 import { AbstractService, InternalEventBusInterface } from '@standardnotes/services'
 import { SettingsClientInterface } from './SettingsClientInterface'
 import { SettingName } from '@standardnotes/domain-core'
+import { ACCOUNT_RECOVERY_ESCROW_SETTING_NAME } from '../../Domain/UseCase/AccountRecovery/AccountRecoveryEscrowTypes'
 
 export class SettingsService extends AbstractService implements SettingsClientInterface {
   private provider!: SettingsGateway
@@ -69,6 +70,20 @@ export class SettingsService extends AbstractService implements SettingsClientIn
 
   getEmailBackupFrequencyOptionLabel(frequency: EmailBackupFrequency): string {
     return this.frequencyOptionsLabels[frequency]
+  }
+
+  // Standard Red Notes: account-recovery escrow (opt-in) accessors. Addressed by
+  // raw setting name; the value is an opaque client-side ciphertext blob.
+  async getAccountRecoveryEscrow(): Promise<string | undefined> {
+    return this.provider.getRawSetting(ACCOUNT_RECOVERY_ESCROW_SETTING_NAME)
+  }
+
+  async updateAccountRecoveryEscrow(escrowPayload: string): Promise<void> {
+    return this.provider.updateRawSetting(ACCOUNT_RECOVERY_ESCROW_SETTING_NAME, escrowPayload, false)
+  }
+
+  async deleteAccountRecoveryEscrow(): Promise<void> {
+    return this.provider.deleteRawSetting(ACCOUNT_RECOVERY_ESCROW_SETTING_NAME)
   }
 
   override deinit(): void {

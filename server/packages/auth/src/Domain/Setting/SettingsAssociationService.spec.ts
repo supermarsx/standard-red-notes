@@ -75,4 +75,47 @@ describe('SettingsAssociationService', () => {
       createService().getPermissionAssociatedWithSetting(SettingName.create(SettingName.NAMES.ExtensionKey).getValue()),
     ).toBeUndefined()
   })
+
+  describe('account recovery escrow (Standard Red Notes, opt-in)', () => {
+    it('should be a valid, recognized setting name', () => {
+      const result = SettingName.create(SettingName.NAMES.AccountRecoveryEscrow)
+      expect(result.isFailed()).toBeFalsy()
+      expect(result.getValue().value).toEqual('ACCOUNT_RECOVERY_ESCROW')
+    })
+
+    it('should be OFF by default: not part of any default settings for new accounts', () => {
+      const newUserSettings = createService().getDefaultSettingsAndValuesForNewUser()
+      const newVaultSettings = createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount()
+
+      expect(newUserSettings.has(SettingName.NAMES.AccountRecoveryEscrow)).toBeFalsy()
+      expect(newVaultSettings.has(SettingName.NAMES.AccountRecoveryEscrow)).toBeFalsy()
+    })
+
+    it('should be retrievable by the owning client (not server-side sensitive)', () => {
+      // Confidentiality of the escrow comes from CLIENT-SIDE encryption, not from
+      // server-side gating. The owning client must be able to read it back to run
+      // the recovery flow.
+      expect(
+        createService().getSensitivityForSetting(
+          SettingName.create(SettingName.NAMES.AccountRecoveryEscrow).getValue(),
+        ),
+      ).toBeFalsy()
+    })
+
+    it('should be mutable by the client (client creates and deletes the escrow)', () => {
+      expect(
+        createService().isSettingMutableByClient(
+          SettingName.create(SettingName.NAMES.AccountRecoveryEscrow).getValue(),
+        ),
+      ).toBeTruthy()
+    })
+
+    it('should still use default server-side at-rest encryption for the stored ciphertext', () => {
+      expect(
+        createService().getEncryptionVersionForSetting(
+          SettingName.create(SettingName.NAMES.AccountRecoveryEscrow).getValue(),
+        ),
+      ).toEqual(EncryptionVersion.Default)
+    })
+  })
 })

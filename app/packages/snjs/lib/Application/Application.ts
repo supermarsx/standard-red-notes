@@ -127,6 +127,10 @@ import { SNLog } from '../Log'
 import { SignInWithRecoveryCodes } from '@Lib/Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { UseCaseContainerInterface } from '@Lib/Domain/UseCase/UseCaseContainerInterface'
 import { GetRecoveryCodes } from '@Lib/Domain/UseCase/GetRecoveryCodes/GetRecoveryCodes'
+import { EnableAccountRecovery } from '@Lib/Domain/UseCase/AccountRecovery/EnableAccountRecovery'
+import { DisableAccountRecovery } from '@Lib/Domain/UseCase/AccountRecovery/DisableAccountRecovery'
+import { GetAccountRecoveryStatus } from '@Lib/Domain/UseCase/AccountRecovery/GetAccountRecoveryStatus'
+import { RecoverAccount } from '@Lib/Domain/UseCase/AccountRecovery/RecoverAccount'
 import { AddAuthenticator } from '@Lib/Domain/UseCase/AddAuthenticator/AddAuthenticator'
 import { ListAuthenticators } from '@Lib/Domain/UseCase/ListAuthenticators/ListAuthenticators'
 import { DeleteAuthenticator } from '@Lib/Domain/UseCase/DeleteAuthenticator/DeleteAuthenticator'
@@ -950,6 +954,23 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
 
   get getRecoveryCodes(): GetRecoveryCodes {
     return this.dependencies.get<GetRecoveryCodes>(TYPES.GetRecoveryCodes)
+  }
+
+  /** Standard Red Notes: optional, off-by-default account/password recovery escrow. */
+  get enableAccountRecovery(): EnableAccountRecovery {
+    return this.dependencies.get<EnableAccountRecovery>(TYPES.EnableAccountRecovery)
+  }
+
+  get disableAccountRecovery(): DisableAccountRecovery {
+    return this.dependencies.get<DisableAccountRecovery>(TYPES.DisableAccountRecovery)
+  }
+
+  get getAccountRecoveryStatus(): GetAccountRecoveryStatus {
+    return this.dependencies.get<GetAccountRecoveryStatus>(TYPES.GetAccountRecoveryStatus)
+  }
+
+  get recoverAccount(): RecoverAccount {
+    return this.dependencies.get<RecoverAccount>(TYPES.RecoverAccount)
   }
 
   get addAuthenticator(): AddAuthenticator {

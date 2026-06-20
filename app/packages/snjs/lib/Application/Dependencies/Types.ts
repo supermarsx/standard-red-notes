@@ -82,6 +82,11 @@ export const TYPES = {
   // Usecases
   SignInWithRecoveryCodes: Symbol.for('SignInWithRecoveryCodes'),
   GetRecoveryCodes: Symbol.for('GetRecoveryCodes'),
+  // Standard Red Notes: optional, off-by-default account/password recovery escrow.
+  EnableAccountRecovery: Symbol.for('EnableAccountRecovery'),
+  DisableAccountRecovery: Symbol.for('DisableAccountRecovery'),
+  GetAccountRecoveryStatus: Symbol.for('GetAccountRecoveryStatus'),
+  RecoverAccount: Symbol.for('RecoverAccount'),
   AddAuthenticator: Symbol.for('AddAuthenticator'),
   ListAuthenticators: Symbol.for('ListAuthenticators'),
   DeleteAuthenticator: Symbol.for('DeleteAuthenticator'),
