@@ -49,6 +49,12 @@ import { NoteViewController } from './Controller/NoteViewController'
 import { PlainEditor, PlainEditorInterface } from './PlainEditor/PlainEditor'
 import { CanvasEditor, CanvasEditorIdentifier } from './CanvasEditor/CanvasEditor'
 import { BaseEditor, BaseEditorIdentifier } from './BaseEditor/BaseEditor'
+import {
+  SandboxEditor,
+  JsSandboxEditorIdentifier,
+  WebSandboxEditorIdentifier,
+  sandboxModeForIdentifier,
+} from './SandboxEditor/SandboxEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -536,11 +542,14 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       return
     }
 
-    /** Canvas and Base are web-only editors selected via editorIdentifier; they
-     * are not iframe/native components, so skip component-viewer resolution. */
+    /** Canvas, Base, and the Sandbox editors are web-only editors selected via
+     * editorIdentifier; they are not iframe/native components, so skip
+     * component-viewer resolution. */
     if (
       this.note.editorIdentifier === CanvasEditorIdentifier ||
-      this.note.editorIdentifier === BaseEditorIdentifier
+      this.note.editorIdentifier === BaseEditorIdentifier ||
+      this.note.editorIdentifier === JsSandboxEditorIdentifier ||
+      this.note.editorIdentifier === WebSandboxEditorIdentifier
     ) {
       this.destroyCurrentEditorComponent()
       this.setState({ editorStateDidLoad: true })
@@ -868,6 +877,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         ? 'canvas'
         : this.note.editorIdentifier === BaseEditorIdentifier
         ? 'base'
+        : this.note.editorIdentifier === JsSandboxEditorIdentifier ||
+          this.note.editorIdentifier === WebSandboxEditorIdentifier
+        ? 'sandbox'
         : this.note.noteType === NoteType.Super
           ? 'super'
           : this.state.editorStateDidLoad && !this.state.editorComponentViewer
@@ -1050,6 +1062,18 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               key={this.note.uuid}
               application={this.application}
               controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'sandbox' && (
+            <SandboxEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              mode={sandboxModeForIdentifier(this.note.editorIdentifier)}
               readonly={this.state.readonly}
               customBackgroundColor={this.state.customBackgroundColor}
               customTextColor={this.state.customTextColor}

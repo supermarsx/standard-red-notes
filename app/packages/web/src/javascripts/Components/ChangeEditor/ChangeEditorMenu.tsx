@@ -31,6 +31,16 @@ import { CanvasEditorIdentifier } from '../NoteView/CanvasEditor/CanvasEditor'
 import { parseCanvasDocument, serializeCanvasDocument, createEmptyCanvasDocument } from '../NoteView/CanvasEditor/CanvasDocument'
 import { BaseEditorIdentifier } from '../NoteView/BaseEditor/BaseEditor'
 import { parseBaseDocument, serializeBaseDocument, createEmptyBaseDocument } from '../NoteView/BaseEditor/BaseDocument'
+import {
+  JsSandboxEditorIdentifier,
+  WebSandboxEditorIdentifier,
+} from '../NoteView/SandboxEditor/SandboxEditor'
+import {
+  parseSandboxDocument,
+  serializeSandboxDocument,
+  createJsSandboxStarter,
+  createWebSandboxStarter,
+} from '../NoteView/SandboxEditor/SandboxDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -103,9 +113,15 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
 
   const isSelected = useCallback(
     (item: EditorMenuItem) => {
-      // Canvas and Base are selected via editorIdentifier and are not part of the
-      // native feature groups; when active, no native/group item should appear chosen.
-      if (note?.editorIdentifier === CanvasEditorIdentifier || note?.editorIdentifier === BaseEditorIdentifier) {
+      // Canvas, Base, and the Sandbox editors are selected via editorIdentifier
+      // and are not part of the native feature groups; when active, no
+      // native/group item should appear chosen.
+      if (
+        note?.editorIdentifier === CanvasEditorIdentifier ||
+        note?.editorIdentifier === BaseEditorIdentifier ||
+        note?.editorIdentifier === JsSandboxEditorIdentifier ||
+        note?.editorIdentifier === WebSandboxEditorIdentifier
+      ) {
         return false
       }
 
@@ -234,6 +250,56 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     setCurrentFeature(undefined)
     closeMenu()
   }, [application, note, closeMenu])
+
+  const isJsSandboxSelected = note?.editorIdentifier === JsSandboxEditorIdentifier
+  const isWebSandboxSelected = note?.editorIdentifier === WebSandboxEditorIdentifier
+
+  const selectSandbox = useCallback(
+    async (identifier: typeof JsSandboxEditorIdentifier | typeof WebSandboxEditorIdentifier) => {
+      if (!note) {
+        return
+      }
+      if (note.locked) {
+        application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+        return
+      }
+
+      const label = identifier === JsSandboxEditorIdentifier ? 'JS Sandbox' : 'Web App Sandbox'
+
+      // Preserve any non-sandbox content: only overwrite note.text with a fresh
+      // sandbox when the existing text isn't already a recoverable sandbox doc.
+      const { recovered } = parseSandboxDocument(note.text)
+      if (!recovered && note.text.length > 0) {
+        const proceed = await application.alerts.confirm(
+          `Switching this note to a ${label} will replace its current content with a blank sandbox. This cannot be undone.`,
+          `Switch to ${label}?`,
+          `Switch to ${label}`,
+        )
+        if (!proceed) {
+          return
+        }
+      }
+
+      await application.itemListController.insertCurrentIfTemplate()
+
+      await application.changeAndSaveItem.execute(note, (mutator) => {
+        const noteMutator = mutator as NoteMutator
+        noteMutator.noteType = NoteType.Unknown
+        noteMutator.editorIdentifier = identifier
+        if (!recovered || note.text.length === 0) {
+          const starter =
+            identifier === JsSandboxEditorIdentifier ? createJsSandboxStarter() : createWebSandboxStarter()
+          noteMutator.text = serializeSandboxDocument(starter)
+        } else {
+          noteMutator.text = serializeSandboxDocument(parseSandboxDocument(note.text).document)
+        }
+      })
+
+      setCurrentFeature(undefined)
+      closeMenu()
+    },
+    [application, note, closeMenu],
+  )
 
   const handleConversionCompletion = useCallback(
     (item?: EditorMenuItem) => {
@@ -443,6 +509,42 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               <div className="flex items-center">
                 <Icon type="hashtag" className="mr-2 text-neutral" />
                 Base
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectSandbox(JsSandboxEditorIdentifier).catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isJsSandboxSelected}
+            info={'A jsfiddle-like JavaScript playground with a captured console, run in an isolated sandbox.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="code" className="mr-2 text-neutral" />
+                JS Sandbox
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectSandbox(WebSandboxEditorIdentifier).catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isWebSandboxSelected}
+            info={'A codepen-like HTML/CSS/JS playground with a live rendered preview, run in an isolated sandbox.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="code" className="mr-2 text-neutral" />
+                Web App Sandbox
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
                 </Pill>
