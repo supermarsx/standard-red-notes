@@ -23,6 +23,7 @@ import EditorPane from '../NoteGroupView/EditorPane'
 import AssistantView from '../Assistant/AssistantView'
 import ConstellationView from '../Constellation/ConstellationView'
 import DashboardView from '../Dashboard/DashboardView'
+import HomeView from '../Home/HomeView'
 import RemindersView from '../RemindersAggregate/RemindersView'
 import CalendarAggregateView from '../CalendarAggregate/CalendarAggregateView'
 import TodoView from '../TodoAggregate/TodoView'
@@ -237,6 +238,7 @@ const PanesSystemComponent = () => {
     const hasConstellation = panes.includes(AppPaneId.Constellation)
     const hasDashboard =
       panes.includes(AppPaneId.Dashboard) ||
+      panes.includes(AppPaneId.Home) ||
       panes.includes(AppPaneId.Reminders) ||
       panes.includes(AppPaneId.Calendar) ||
       panes.includes(AppPaneId.Todos)
@@ -451,6 +453,12 @@ const PanesSystemComponent = () => {
           return (
             <ErrorBoundary key="dashboard-pane">
               <DashboardView id={ElementIds.DashboardColumn} className={className} application={application} />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Home) {
+          return (
+            <ErrorBoundary key="home-pane">
+              <HomeView id={ElementIds.HomeColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         } else if (pane === AppPaneId.Reminders) {

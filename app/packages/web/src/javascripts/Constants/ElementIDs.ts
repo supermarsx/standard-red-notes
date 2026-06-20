@@ -4,6 +4,7 @@ export const ElementIds = {
   AssistantColumn: 'assistant-column',
   ConstellationColumn: 'constellation-column',
   DashboardColumn: 'dashboard-column',
+  HomeColumn: 'home-column',
   RemindersColumn: 'reminders-column',
   CalendarColumn: 'calendar-aggregate-column',
   TodosColumn: 'todos-column',
