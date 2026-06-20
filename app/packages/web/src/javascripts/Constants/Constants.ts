@@ -63,3 +63,18 @@ export const SupportsPassiveListeners = (() => {
 })()
 
 export const LargeNoteThreshold = 1.5 * BYTES_IN_ONE_MEGABYTE
+
+/**
+ * Files larger than this are treated as "large files": they are kept on this device only
+ * (the file item is flagged `localOnly`, excluding it from the sync upload set) instead of
+ * being uploaded to the server.
+ */
+export const LARGE_FILE_THRESHOLD = 100 * BYTES_IN_ONE_MEGABYTE
+
+/**
+ * Hard upper bound for any attached file. Above this we reject the upload outright. Large
+ * local-only files are persisted (encrypted) in IndexedDB, which is subject to browser
+ * storage quotas, and holding/encrypting the bytes in a tab is memory-intensive, so we cap
+ * the size to keep the tab from crashing. See the stability notes in the PR / report.
+ */
+export const MAX_LOCAL_FILE_SIZE = 500 * BYTES_IN_ONE_MEGABYTE

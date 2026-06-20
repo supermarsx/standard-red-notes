@@ -7,7 +7,7 @@ import {
 import { FilePreviewModalController } from './FilePreviewModalController'
 import { FileItemAction, FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
 import { parsePdfDeepLink } from '@/Components/FilePreview/PdfDeepLink'
-import { BYTES_IN_ONE_MEGABYTE } from '@/Constants/Constants'
+import { BYTES_IN_ONE_MEGABYTE, LARGE_FILE_THRESHOLD, MAX_LOCAL_FILE_SIZE } from '@/Constants/Constants'
 import {
   ArchiveManager,
   confirmDialog,
@@ -480,6 +480,125 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     return false
   }
 
+  /**
+   * Rejects files above the absolute max (500 MB). Large local-only files are persisted
+   * encrypted in IndexedDB and held in memory while encrypting, so we hard-cap the size to
+   * avoid quota errors and tab crashes.
+   */
+  private alertIfFileExceedsLocalMax = (file: File): boolean => {
+    if (file.size > MAX_LOCAL_FILE_SIZE) {
+      addToast({
+        type: ToastType.Error,
+        message: `File too large — "${file.name}" is ${Math.round(
+          file.size / BYTES_IN_ONE_MEGABYTE,
+        )}MB. The maximum is ${MAX_LOCAL_FILE_SIZE / BYTES_IN_ONE_MEGABYTE}MB.`,
+      })
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Asks the user to confirm keeping a large file on this device only (not synced). Returns
+   * true if the user confirms.
+   */
+  private async confirmLargeLocalOnlyFile(file: File): Promise<boolean> {
+    return confirmDialog({
+      title: 'Keep large file on this device only?',
+      text:
+        `"${file.name}" is ${Math.round(file.size / BYTES_IN_ONE_MEGABYTE)}MB, which is over the ` +
+        `${LARGE_FILE_THRESHOLD / BYTES_IN_ONE_MEGABYTE}MB large-file limit. It will be kept on this ` +
+        'device only — it will NOT sync to the server, appear on your other devices, or be backed up. ' +
+        'If you clear this app’s data or switch devices, the file will be lost.',
+      confirmButtonText: 'Keep on this device',
+      confirmButtonStyle: 'info',
+    })
+  }
+
+  /**
+   * Encrypts the file locally and stores it in local (IndexedDB) storage, then creates a
+   * `localOnly`-flagged file item (excluded from sync). Mirrors the chunked read loop used for
+   * server uploads but pushes encrypted bytes into local storage instead of the network.
+   */
+  private async uploadLocalOnlyFile(
+    fileToUpload: File,
+    uuid: string,
+    options: {
+      showToast: boolean
+      onUploadStart?: (fileUuid: string) => void
+      onUploadFinish?: () => void
+    },
+  ): Promise<FileItem | undefined> {
+    const { showToast, onUploadStart, onUploadFinish } = options
+    const minimumChunkSize = this.files.minimumChunkSize()
+
+    let toastId: string | undefined
+    if (showToast) {
+      toastId = addToast({
+        type: ToastType.Progress,
+        message: `Saving file "${fileToUpload.name}" to this device (0%)`,
+        progress: 0,
+      })
+    }
+
+    if (onUploadStart) {
+      onUploadStart(uuid)
+    }
+
+    this.uploadProgressMap.set(uuid, { file: fileToUpload, progress: 0 })
+
+    const operation = this.files.beginNewLocalOnlyFileUpload(fileToUpload.size)
+
+    const onChunk: OnChunkCallbackNoProgress = async ({ data, isLast }) => {
+      this.files.pushBytesForLocalOnlyUpload(operation, data, isLast)
+
+      const percentComplete = Math.round((operation.decryptedSize / Math.max(fileToUpload.size, 1)) * 100)
+      this.uploadProgressMap.set(uuid, { file: fileToUpload, progress: percentComplete })
+      if (toastId) {
+        updateToast(toastId, {
+          message: `Saving file "${fileToUpload.name}" to this device (${percentComplete}%)`,
+          progress: percentComplete,
+        })
+      }
+    }
+
+    const fileResult = await this.reader.readFile(fileToUpload, minimumChunkSize, onChunk)
+
+    if (!fileResult.mimeType) {
+      const { ext } = parseFileName(fileToUpload.name)
+      fileResult.mimeType = await this.archiveService.getMimeType(ext)
+    }
+
+    const savedFile = await this.files.finishLocalOnlyUpload(operation, fileResult, uuid)
+
+    if (toastId) {
+      dismissToast(toastId)
+    }
+
+    if (savedFile instanceof ClientDisplayableError) {
+      addToast({ type: ToastType.Error, message: savedFile.text })
+      return undefined
+    }
+
+    if (onUploadFinish) {
+      onUploadFinish()
+    }
+
+    this.notifyEvent(FilesControllerEvent.FileUploadFinished, {
+      [FilesControllerEvent.FileUploadFinished]: { uploadedFile: savedFile },
+    })
+
+    if (showToast) {
+      addToast({
+        type: ToastType.Success,
+        message: `Saved file "${savedFile.name}" to this device only (not synced)`,
+        autoClose: true,
+      })
+    }
+
+    return savedFile
+  }
+
   public async selectAndUploadNewFiles(note?: SNNote, callback?: (file: FileItem) => void) {
     const selectedFiles = await this.reader.selectFiles()
 
@@ -532,7 +651,21 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         return
       }
 
+      // Reject anything above the absolute local maximum (500 MB).
+      if (this.alertIfFileExceedsLocalMax(fileToUpload)) {
+        return
+      }
+
       const uuid = UuidGenerator.GenerateUuid()
+
+      // Large files (> 100 MB) are kept on this device only and never uploaded/synced.
+      if (fileToUpload.size > LARGE_FILE_THRESHOLD) {
+        const confirmed = await this.confirmLargeLocalOnlyFile(fileToUpload)
+        if (!confirmed) {
+          return undefined
+        }
+        return await this.uploadLocalOnlyFile(fileToUpload, uuid, { showToast, onUploadStart, onUploadFinish })
+      }
 
       this.uploadProgressMap.set(uuid, {
         file: fileToUpload,

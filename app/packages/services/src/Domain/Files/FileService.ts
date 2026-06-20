@@ -23,6 +23,8 @@ import {
   PayloadTimestampDefaults,
   CreateItemFromPayload,
   DecryptedItemInterface,
+  AppDataField,
+  DefaultAppDomain,
 } from '@standardnotes/models'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { LoggerInterface, spaceSeparatedStrings, UuidGenerator } from '@standardnotes/utils'
@@ -46,6 +48,8 @@ import {
   FileMemoryCache,
   readAndDecryptBackupFileUsingBackupService,
   BackupServiceInterface,
+  LocalFileBackendInterface,
+  LocalOnlyFileUploadOperation,
 } from '@standardnotes/files'
 import { AlertService, ButtonType } from '../Alert/AlertService'
 import { ChallengeServiceInterface } from '../Challenge'
@@ -62,6 +66,7 @@ const OneHundredMb = 100 * 1_000_000
 export class FileService extends AbstractService implements FilesClientInterface {
   private encryptedCache: FileMemoryCache = new FileMemoryCache(OneHundredMb)
   private sharedVault: SharedVaultServerInterface
+  private localFileBackend?: LocalFileBackendInterface
 
   constructor(
     private api: FilesApiInterface,
@@ -95,6 +100,131 @@ export class FileService extends AbstractService implements FilesClientInterface
 
   public minimumChunkSize(): number {
     return 5_000_000
+  }
+
+  public setLocalFileBackend(backend: LocalFileBackendInterface): void {
+    this.localFileBackend = backend
+  }
+
+  /**
+   * Begins a "large local-only file" operation. Encrypts pushed chunks (same xchacha20 stream
+   * as a server upload) and accumulates the encrypted bytes in memory. No network calls.
+   */
+  public beginNewLocalOnlyFileUpload(sizeInBytes: number): LocalOnlyFileUploadOperation {
+    const remoteIdentifier = UuidGenerator.GenerateUuid()
+    const key = this.crypto.generateRandomKey(FileProtocolV1Constants.KeySize)
+
+    return new LocalOnlyFileUploadOperation(
+      {
+        key,
+        remoteIdentifier,
+        decryptedSize: sizeInBytes,
+      },
+      this.crypto,
+    )
+  }
+
+  public pushBytesForLocalOnlyUpload(
+    operation: LocalOnlyFileUploadOperation,
+    bytes: Uint8Array,
+    isFinalChunk: boolean,
+  ): void {
+    operation.pushBytes(bytes, isFinalChunk)
+  }
+
+  /**
+   * Persists the accumulated encrypted bytes locally (NOT uploaded to the server) and creates a
+   * `localOnly`-flagged file item so it is excluded from the sync upload set. The local-only
+   * flag lives in appData and, because the item never uploads, never reaches the server.
+   */
+  public async finishLocalOnlyUpload(
+    operation: LocalOnlyFileUploadOperation,
+    fileMetadata: FileMetadata,
+    uuid: string,
+  ): Promise<FileItem | ClientDisplayableError> {
+    if (!this.localFileBackend) {
+      return new ClientDisplayableError('Local file storage is not available on this device')
+    }
+
+    const result = operation.getResult()
+    const encryptedBytes = operation.getEncryptedBytes()
+
+    try {
+      await this.localFileBackend.persistEncryptedBytes(uuid, encryptedBytes)
+    } catch (error) {
+      return new ClientDisplayableError(
+        error instanceof Error && error.name === 'QuotaExceededError'
+          ? 'Not enough local storage space to keep this file on your device.'
+          : 'Could not save the file to local storage.',
+      )
+    }
+
+    const fileContent: FileContentSpecialized = {
+      decryptedSize: result.finalDecryptedSize,
+      encryptedChunkSizes: operation.encryptedChunkSizes,
+      encryptionHeader: result.encryptionHeader,
+      key: result.key,
+      mimeType: fileMetadata.mimeType,
+      name: fileMetadata.name,
+      remoteIdentifier: result.remoteIdentifier,
+    }
+
+    const filledContent = FillItemContent<FileContent>(FillItemContentSpecialized(fileContent))
+    filledContent.appData = {
+      ...filledContent.appData,
+      [DefaultAppDomain]: {
+        ...filledContent.appData?.[DefaultAppDomain],
+        [AppDataField.LocalOnly]: true,
+      },
+    }
+
+    const filePayload = new DecryptedPayload<FileContent>({
+      uuid,
+      content_type: ContentType.TYPES.File,
+      content: filledContent,
+      dirty: true,
+      ...PayloadTimestampDefaults(),
+    })
+
+    const fileItem = CreateItemFromPayload(filePayload) as DecryptedItemInterface<FileContent>
+
+    const insertedItem = await this.mutator.insertItem<FileItem>(fileItem)
+
+    /**
+     * Persist the (local-only) item to the local DB. The sync upload filter excludes local-only
+     * items, so this never uploads, but it does persist the metadata locally so the file
+     * survives a reload.
+     */
+    await this.sync.sync()
+
+    return insertedItem
+  }
+
+  /** Reads + decrypts the locally-persisted bytes for a large local-only file. */
+  private async downloadLocalOnlyFile(
+    file: FileItem,
+    onDecryptedBytes: (decryptedBytes: Uint8Array, progress: FileDownloadProgress) => Promise<void>,
+  ): Promise<ClientDisplayableError | undefined> {
+    if (!this.localFileBackend) {
+      return new ClientDisplayableError('Local file storage is not available on this device')
+    }
+
+    const stored = await this.localFileBackend.readEncryptedBytes(file.uuid)
+    if (!stored) {
+      return new ClientDisplayableError('This file is kept on another device and is not available here.')
+    }
+
+    const decrypted = await this.decryptCachedEntry(file, stored)
+
+    await onDecryptedBytes(decrypted.decryptedBytes, {
+      encryptedFileSize: stored.encryptedBytes.length,
+      encryptedBytesDownloaded: stored.encryptedBytes.length,
+      encryptedBytesRemaining: 0,
+      percentComplete: 100,
+      source: 'local',
+    })
+
+    return undefined
   }
 
   private async createUserValetToken(
@@ -323,6 +453,10 @@ export class FileService extends AbstractService implements FilesClientInterface
     file: FileItem,
     onDecryptedBytes: (decryptedBytes: Uint8Array, progress: FileDownloadProgress) => Promise<void>,
   ): Promise<ClientDisplayableError | undefined> {
+    if (file.localOnly) {
+      return this.downloadLocalOnlyFile(file, onDecryptedBytes)
+    }
+
     const cachedBytes = this.encryptedCache.get(file.uuid)
 
     if (cachedBytes) {
@@ -392,6 +526,15 @@ export class FileService extends AbstractService implements FilesClientInterface
 
   public async deleteFile(file: FileItem): Promise<ClientDisplayableError | undefined> {
     this.encryptedCache.remove(file.uuid)
+
+    if (file.localOnly) {
+      if (this.localFileBackend) {
+        await this.localFileBackend.removeEncryptedBytes(file.uuid).catch(() => undefined)
+      }
+      await this.mutator.setItemToBeDeleted(file)
+      await this.sync.sync()
+      return undefined
+    }
 
     const tokenResult = file.shared_vault_uuid
       ? await this.createSharedVaultValetToken({

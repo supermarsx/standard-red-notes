@@ -33,6 +33,7 @@ import { AccountMenuController } from '@/Controllers/AccountMenu/AccountMenuCont
 import { SubscriptionController } from '@/Controllers/Subscription/SubscriptionController'
 import { PurchaseFlowController } from '@/Controllers/PurchaseFlow/PurchaseFlowController'
 import { FilesController } from '@/Controllers/FilesController'
+import { WebLocalFileStorage } from '../LocalFileStorage'
 import { HistoryModalController } from '@/Controllers/NoteHistory/HistoryModalController'
 import { ImportModalController } from '@/Components/ImportModal/ImportModalController'
 import { ExportModalController } from '@/Controllers/ExportModal/ExportModalController'
@@ -378,6 +379,8 @@ export class WebDependencies extends DependencyContainer {
     })
 
     this.bind(Web_TYPES.FilesController, () => {
+      // Provide the IndexedDB-backed local storage used for large local-only files.
+      application.files.setLocalFileBackend(new WebLocalFileStorage(application.identifier))
       return new FilesController(
         this.get<NotesController>(Web_TYPES.NotesController),
         this.get<FilePreviewModalController>(Web_TYPES.FilePreviewModalController),
