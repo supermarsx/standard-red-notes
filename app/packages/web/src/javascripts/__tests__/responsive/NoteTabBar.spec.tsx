@@ -210,7 +210,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
       }),
     )
     const addButtonDisabled = container.querySelector(
-      'button[aria-label="Open highlighted note in a new tab"]',
+      'button[aria-label="New note tab"]',
     ) as HTMLButtonElement
     expect(addButtonDisabled.disabled).toBe(true)
 
@@ -227,7 +227,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
       }),
     )
     const addButtonEnabled = container.querySelector(
-      'button[aria-label="Open highlighted note in a new tab"]',
+      'button[aria-label="New note tab"]',
     ) as HTMLButtonElement
     expect(addButtonEnabled.disabled).toBe(false)
     act(() => {

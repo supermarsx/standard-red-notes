@@ -66,7 +66,8 @@ describe('NoteView', () => {
       noteViewController.item = {
         protected: true,
         userModifiedDate: new Date(Date.now() - secondsElapsedSinceLastEdit * 1000),
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       await createNoteView().onAppEvent(ApplicationEvent.UnprotectedSessionExpired)
 
@@ -79,7 +80,8 @@ describe('NoteView', () => {
       noteViewController.item = {
         protected: true,
         userModifiedDate: new Date(Date.now() - secondsElapsedSinceLastEdit * 1000),
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       await createNoteView().onAppEvent(ApplicationEvent.UnprotectedSessionExpired)
 
@@ -101,7 +103,8 @@ describe('NoteView', () => {
       noteViewController.item = {
         protected: true,
         userModifiedDate: new Date(Date.now() - secondsElapsedSinceLastModification * 1000),
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       await createNoteView().onAppEvent(ApplicationEvent.UnprotectedSessionExpired)
 
@@ -112,7 +115,8 @@ describe('NoteView', () => {
       noteViewController.item = {
         protected: true,
         userModifiedDate: new Date(),
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       secondsAfterWhichTheNoteShouldHide = ProposedSecondsToDeferUILevelSessionExpirationDuringActiveInteraction
       jest.advanceTimersByTime((secondsAfterWhichTheNoteShouldHide - 1) * 1000)
@@ -127,7 +131,8 @@ describe('NoteView', () => {
     it('should not call any hiding logic', async () => {
       noteViewController.item = {
         protected: false,
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       await createNoteView().onAppEvent(ApplicationEvent.UnprotectedSessionExpired)
 
@@ -139,7 +144,8 @@ describe('NoteView', () => {
     it('should reload editor if noteType changes', async () => {
       noteViewController.item = {
         noteType: NoteType.Code,
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       const view = createNoteView()
       view.reloadEditorComponent = jest.fn()
@@ -147,7 +153,8 @@ describe('NoteView', () => {
 
       const changedItem = {
         noteType: NoteType.Plain,
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
       view.onNoteInnerChange(changedItem, PayloadEmitSource.LocalChanged)
 
       expect(view.reloadEditorComponent).toHaveBeenCalled()
@@ -156,7 +163,8 @@ describe('NoteView', () => {
     it('should reload editor if editorIdentifier changes', async () => {
       noteViewController.item = {
         editorIdentifier: 'foo',
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
 
       const view = createNoteView()
       view.reloadEditorComponent = jest.fn()
@@ -164,7 +172,8 @@ describe('NoteView', () => {
 
       const changedItem = {
         editorIdentifier: 'bar',
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
       view.onNoteInnerChange(changedItem, PayloadEmitSource.LocalChanged)
 
       expect(view.reloadEditorComponent).toHaveBeenCalled()
@@ -175,7 +184,8 @@ describe('NoteView', () => {
     beforeEach(() => {
       noteViewController.item = {
         protected: false,
-      } as jest.Mocked<SNNote>
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
     })
 
     describe('the note has protection sources', () => {
