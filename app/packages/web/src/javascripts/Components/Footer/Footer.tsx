@@ -30,6 +30,7 @@ import AssistantButton from './AssistantButton'
 import ConstellationButton from './ConstellationButton'
 import PreferencesButton from './PreferencesButton'
 import VaultSelectionButton from './VaultSelectionButton'
+import ConnectionStatusIndicator from './ConnectionStatus'
 
 type Props = {
   application: WebApplication
@@ -405,6 +406,9 @@ class Footer extends AbstractComponent<Props, State> {
             )}
           </div>
           <div className="right flex h-full flex-shrink-0">
+            <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+              <ConnectionStatusIndicator application={this.application} />
+            </div>
             {this.state.failedSyncError && (
               <div className="relative z-footer-bar-item flex select-none items-center text-xs font-bold text-neutral">
                 Sync error: {this.state.failedSyncError}
