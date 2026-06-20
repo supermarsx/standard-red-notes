@@ -19,6 +19,7 @@ import VaultSelectionButton from '../Footer/VaultSelectionButton'
 import PreferencesButton from '../Footer/PreferencesButton'
 import TagSearchBar from './TagSearchBar'
 import PaneCollapseButton from '../Panes/PaneCollapseButton'
+import DashboardSectionButton from '../Dashboard/DashboardSectionButton'
 
 type Props = {
   application: WebApplication
@@ -83,6 +84,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       </div>
       <div id="navigation-content" className="flex-grow overflow-y-auto overflow-x-hidden">
         <TagSearchBar navigationController={application.navigationController} />
+        <DashboardSectionButton application={application} />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}

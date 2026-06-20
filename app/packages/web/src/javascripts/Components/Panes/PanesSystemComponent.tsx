@@ -22,6 +22,7 @@ import { useMediaQuery } from '@/Hooks/useMediaQuery'
 import EditorPane from '../NoteGroupView/EditorPane'
 import AssistantView from '../Assistant/AssistantView'
 import ConstellationView from '../Constellation/ConstellationView'
+import DashboardView from '../Dashboard/DashboardView'
 import usePreference from '@/Hooks/usePreference'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
@@ -231,6 +232,7 @@ const PanesSystemComponent = () => {
     const panes = paneController.panes
     const hasAssistant = panes.includes(AppPaneId.Assistant)
     const hasConstellation = panes.includes(AppPaneId.Constellation)
+    const hasDashboard = panes.includes(AppPaneId.Dashboard)
 
     if (isMobile) {
       return {}
@@ -256,9 +258,9 @@ const PanesSystemComponent = () => {
       return { gridTemplateColumns: columns.join(' '), gridTemplateRows: '1fr minmax(0, 40vh)' }
     }
 
-    if (hasAssistant || hasConstellation) {
+    if (hasAssistant || hasConstellation || hasDashboard) {
       // Render fixed-width side panes (navigation/items/assistant) at their set
-      // widths, and let the editor and the constellation graph share the rest.
+      // widths, and let the editor / constellation graph / dashboard share the rest.
       const columns = orderPanesForConstellation(panes).map(columnFor)
       return { gridTemplateColumns: columns.join(' ') }
     }
@@ -436,6 +438,12 @@ const PanesSystemComponent = () => {
                 className={className}
                 application={application}
               />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Dashboard) {
+          return (
+            <ErrorBoundary key="dashboard-pane">
+              <DashboardView id={ElementIds.DashboardColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         }

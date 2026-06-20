@@ -3,6 +3,7 @@ export const ElementIds = {
   EditorColumn: 'editor-column',
   AssistantColumn: 'assistant-column',
   ConstellationColumn: 'constellation-column',
+  DashboardColumn: 'dashboard-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',
