@@ -5,8 +5,17 @@ export interface DirectProviderOptions {
   baseURL: string
   /** Model identifier understood by the endpoint. */
   model: string
-  /** Optional bearer token. Omitted from the request when empty (LM Studio / Ollama need none). */
+  /**
+   * Optional bearer token. Omitted from the request when empty (LM Studio /
+   * Ollama need none). In OpenAI Codex / ChatGPT subscription mode this is the
+   * subscription access token; it is still sent as `Authorization: Bearer`.
+   */
   apiKey?: string
+  /**
+   * Extra headers merged onto every request (e.g. a ChatGPT account id /
+   * OpenAI-Beta flag in subscription mode, or any custom header).
+   */
+  extraHeaders?: Record<string, string>
   signal?: AbortSignal
 }
 
@@ -33,6 +42,7 @@ export class DirectProvider implements Provider {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...(this.options.extraHeaders ?? {}),
     }
     if (this.options.apiKey && this.options.apiKey.trim()) {
       headers['Authorization'] = `Bearer ${this.options.apiKey.trim()}`

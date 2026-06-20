@@ -2,8 +2,13 @@ import { Provider } from './types'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
 import { OllamaProvider } from './ollama'
+import {
+  DEFAULT_OPENAI_BASE_URL,
+  openAiCompatibleConfigured,
+  resolveOpenAiUpstream,
+} from './openaiAuth'
 
-export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+export { DEFAULT_OPENAI_BASE_URL }
 
 /**
  * Server-held Assistant provider configuration.
@@ -29,13 +34,30 @@ export interface AssistantProviderConfig {
   openaiModel?: string
   /** Base URL for the native Ollama (/api/chat) provider. */
   ollamaUrl?: string
-}
 
-function openAiCompatibleConfigured(config: AssistantProviderConfig): boolean {
-  // Configured when either an explicit base URL or an API key is provided. When
-  // neither is set we still fall back to OpenAI's base URL but require a key, so
-  // an empty config does not advertise a non-functional provider.
-  return Boolean(config.openaiBaseURL || config.openaiApiKey)
+  // ---- OpenAI Codex / ChatGPT subscription mode (opt-in) ----
+  /**
+   * Auth mode for the OpenAI-compatible provider. 'api-key' (default) sends the
+   * OpenAI API key; 'subscription' authenticates with a ChatGPT/Codex
+   * subscription access token against the Codex backend base URL.
+   */
+  openaiAuthMode?: 'api-key' | 'subscription'
+  /**
+   * ChatGPT/Codex subscription bearer token (an OAuth access token / session
+   * token from a ChatGPT account). Used only when openaiAuthMode is 'subscription'.
+   */
+  openaiSubscriptionToken?: string
+  /** Base URL for the ChatGPT/Codex subscription backend (subscription mode). */
+  openaiSubscriptionBaseURL?: string
+  /** Optional ChatGPT account id sent as an extra header in subscription mode. */
+  openaiAccountId?: string
+  /** Optional OpenAI-Beta header value (subscription/Codex backends may require one). */
+  openaiBeta?: string
+  /**
+   * Optional extra headers merged onto every upstream OpenAI-compatible request.
+   * JSON object or comma-separated `Key: Value` list. Applies to both auth modes.
+   */
+  openaiExtraHeaders?: string
 }
 
 /**
@@ -85,10 +107,9 @@ export async function listProviderModels(provider: string, config: AssistantProv
         if (!openAiCompatibleConfigured(config)) {
           return []
         }
-        const baseURL = config.openaiBaseURL || DEFAULT_OPENAI_BASE_URL
-        const apiKey = config.openaiApiKey || 'not-required'
-        const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
+        const upstream = resolveOpenAiUpstream(config)
+        const res = await fetch(`${upstream.baseURL.replace(/\/$/, '')}/models`, {
+          headers: { Authorization: `Bearer ${upstream.apiKey}`, ...upstream.defaultHeaders },
         })
         if (!res.ok) {
           return []
@@ -131,11 +152,13 @@ export function resolveProvider(provider: string, model: string, config: Assista
       if (!openAiCompatibleConfigured(config)) {
         throw new Error('OpenAI-compatible provider is not configured on this server')
       }
-      const baseURL = config.openaiBaseURL || DEFAULT_OPENAI_BASE_URL
-      // Local servers (LM Studio / Ollama) accept any non-empty key; send a
-      // placeholder when none is configured so the SDK does not reject it.
-      const apiKey = config.openaiApiKey || 'not-required'
-      return new OpenAIProvider(model || config.openaiModel || '', apiKey, baseURL)
+      const upstream = resolveOpenAiUpstream(config)
+      return new OpenAIProvider(
+        model || config.openaiModel || '',
+        upstream.apiKey,
+        upstream.baseURL,
+        upstream.defaultHeaders,
+      )
     }
     case 'ollama':
       if (!config.ollamaUrl) {

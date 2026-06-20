@@ -49,6 +49,10 @@ export enum PrefKey {
   AssistantConnectionMode = 'assistantConnectionMode',
   AssistantBaseUrl = 'assistantBaseUrl',
   AssistantApiKey = 'assistantApiKey',
+  // OpenAI Codex / ChatGPT subscription auth mode (Direct connection).
+  AssistantAuthMode = 'assistantAuthMode',
+  AssistantSubscriptionToken = 'assistantSubscriptionToken',
+  AssistantExtraHeaders = 'assistantExtraHeaders',
   AssistantSelectionActions = 'assistantSelectionActions',
   AssistantPanelWidth = 'assistantPanelWidth',
   AiPoweredSearchEnabled = 'aiPoweredSearchEnabled',
@@ -164,6 +168,9 @@ export type PrefValue = {
   [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'
   [PrefKey.AssistantBaseUrl]: string
   [PrefKey.AssistantApiKey]: string
+  [PrefKey.AssistantAuthMode]: 'api-key' | 'subscription'
+  [PrefKey.AssistantSubscriptionToken]: string
+  [PrefKey.AssistantExtraHeaders]: string
   [PrefKey.AssistantSelectionActions]: string
   [PrefKey.AiPoweredSearchEnabled]: boolean
   [PrefKey.AddImportsToTag]: boolean

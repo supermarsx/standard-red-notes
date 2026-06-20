@@ -90,6 +90,67 @@ export function getSelectionAIAvailability(application: WebApplication): { avail
   return { available: true }
 }
 
+/**
+ * Parses the AssistantExtraHeaders pref (JSON object or comma-separated
+ * `Key: Value` list) into a header map. Never throws on malformed input.
+ */
+export function parseAssistantExtraHeaders(raw: string): Record<string, string> {
+  if (!raw || !raw.trim()) {
+    return {}
+  }
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k && v != null) {
+          out[k] = `${v}`
+        }
+      }
+      return out
+    } catch {
+      return {}
+    }
+  }
+  const out: Record<string, string> = {}
+  for (const pair of trimmed.split(',')) {
+    const idx = pair.indexOf(':')
+    if (idx === -1) {
+      continue
+    }
+    const key = pair.slice(0, idx).trim()
+    if (key) {
+      out[key] = pair.slice(idx + 1).trim()
+    }
+  }
+  return out
+}
+
+/**
+ * Resolves the Direct-mode bearer token + extra headers. In 'api-key' mode the
+ * bearer is the API key; in 'subscription' (OpenAI Codex / ChatGPT) mode it is
+ * the subscription access token, and any extra headers (account id / OpenAI-Beta)
+ * are merged in.
+ */
+export function resolveDirectAuth(application: WebApplication): {
+  apiKey: string
+  extraHeaders: Record<string, string>
+} {
+  const authMode = application.getPreference(PrefKey.AssistantAuthMode, 'api-key')
+  const extraHeaders = parseAssistantExtraHeaders(application.getPreference(PrefKey.AssistantExtraHeaders, ''))
+  if (authMode === 'subscription') {
+    return {
+      apiKey: application.getPreference(PrefKey.AssistantSubscriptionToken, ''),
+      extraHeaders,
+    }
+  }
+  return {
+    apiKey: application.getPreference(PrefKey.AssistantApiKey, ''),
+    extraHeaders,
+  }
+}
+
 function buildProvider(application: WebApplication, signal?: AbortSignal): Provider {
   const mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
   if (mode === 'proxy') {
@@ -100,10 +161,12 @@ function buildProvider(application: WebApplication, signal?: AbortSignal): Provi
       postStream: (body, sig) => application.assistantStreamRequest('/v1/assistant/stream', body, sig),
     })
   }
+  const auth = resolveDirectAuth(application)
   return new DirectProvider({
     baseURL: application.getPreference(PrefKey.AssistantBaseUrl, ''),
     model: application.getPreference(PrefKey.AssistantModel, ''),
-    apiKey: application.getPreference(PrefKey.AssistantApiKey, ''),
+    apiKey: auth.apiKey,
+    extraHeaders: auth.extraHeaders,
     signal,
   })
 }

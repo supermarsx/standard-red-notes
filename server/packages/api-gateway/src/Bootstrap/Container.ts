@@ -158,6 +158,15 @@ export class ContainerConfigLoader {
       openaiBaseURL: env.get('ASSISTANT_OPENAI_BASE_URL', true) || undefined,
       openaiModel: env.get('ASSISTANT_OPENAI_MODEL', true) || undefined,
       ollamaUrl: env.get('ASSISTANT_OLLAMA_URL', true) || undefined,
+      // OpenAI Codex / ChatGPT subscription mode (opt-in). Leave ASSISTANT_OPENAI_AUTH_MODE
+      // unset or 'api-key' to keep the default OpenAI API-key behavior unchanged.
+      openaiAuthMode:
+        env.get('ASSISTANT_OPENAI_AUTH_MODE', true) === 'subscription' ? 'subscription' : 'api-key',
+      openaiSubscriptionToken: env.get('ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN', true) || undefined,
+      openaiSubscriptionBaseURL: env.get('ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL', true) || undefined,
+      openaiAccountId: env.get('ASSISTANT_OPENAI_ACCOUNT_ID', true) || undefined,
+      openaiBeta: env.get('ASSISTANT_OPENAI_BETA', true) || undefined,
+      openaiExtraHeaders: env.get('ASSISTANT_OPENAI_EXTRA_HEADERS', true) || undefined,
     })
     container
       .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_PROVIDER)

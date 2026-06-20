@@ -10,8 +10,15 @@ export class OpenAIProvider implements Provider {
     private readonly model: string,
     apiKey: string,
     baseURL?: string,
+    defaultHeaders?: Record<string, string>,
   ) {
-    this.client = new OpenAI({ apiKey, baseURL })
+    // defaultHeaders carries the Codex/ChatGPT subscription extras (account id,
+    // OpenAI-Beta, any custom headers). Empty in the default API-key path.
+    this.client = new OpenAI({
+      apiKey,
+      baseURL,
+      defaultHeaders: defaultHeaders && Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
+    })
   }
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {

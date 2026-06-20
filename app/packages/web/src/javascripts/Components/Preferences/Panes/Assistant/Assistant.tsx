@@ -51,6 +51,13 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [provider, setProvider] = useState(() => application.getPreference(PrefKey.AssistantProvider, ''))
   const [baseURL, setBaseURL] = useState(() => application.getPreference(PrefKey.AssistantBaseUrl, ''))
   const [apiKey, setApiKey] = useState(() => application.getPreference(PrefKey.AssistantApiKey, ''))
+  const [authMode, setAuthMode] = useState<'api-key' | 'subscription'>(() =>
+    application.getPreference(PrefKey.AssistantAuthMode, 'api-key'),
+  )
+  const [subscriptionToken, setSubscriptionToken] = useState(() =>
+    application.getPreference(PrefKey.AssistantSubscriptionToken, ''),
+  )
+  const [extraHeaders, setExtraHeaders] = useState(() => application.getPreference(PrefKey.AssistantExtraHeaders, ''))
   const [model, setModel] = useState(() => application.getPreference(PrefKey.AssistantModel, ''))
   const [confirmBeforeWrite, setConfirmBeforeWrite] = useState(() =>
     application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true),
@@ -139,6 +146,30 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     [application],
   )
 
+  const handleAuthModeChange = useCallback(
+    (value: 'api-key' | 'subscription') => {
+      setAuthMode(value)
+      void application.setPreference(PrefKey.AssistantAuthMode, value)
+    },
+    [application],
+  )
+
+  const handleSubscriptionTokenChange = useCallback(
+    (value: string) => {
+      setSubscriptionToken(value)
+      void application.setPreference(PrefKey.AssistantSubscriptionToken, value)
+    },
+    [application],
+  )
+
+  const handleExtraHeadersChange = useCallback(
+    (value: string) => {
+      setExtraHeaders(value)
+      void application.setPreference(PrefKey.AssistantExtraHeaders, value)
+    },
+    [application],
+  )
+
   const handleModelChange = useCallback(
     (value: string) => {
       setModel(value)
@@ -223,8 +254,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     try {
       const url = `${baseURL.replace(/\/$/, '')}/models`
       const headers: Record<string, string> = {}
-      if (apiKey.trim()) {
-        headers['Authorization'] = `Bearer ${apiKey.trim()}`
+      const bearer = authMode === 'subscription' ? subscriptionToken.trim() : apiKey.trim()
+      if (bearer) {
+        headers['Authorization'] = `Bearer ${bearer}`
       }
       const response = await fetch(url, { headers })
       if (!response.ok) {
@@ -241,7 +273,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     } finally {
       setFetchingModels(false)
     }
-  }, [baseURL, apiKey])
+  }, [baseURL, apiKey, authMode, subscriptionToken])
 
   const handleFetchServerModels = useCallback(async () => {
     if (!provider) {
@@ -376,15 +408,69 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
             <HorizontalSeparator classes="my-4" />
 
-            <Subtitle>API key</Subtitle>
-            <Text>Optional. LM Studio and Ollama need none; OpenAI and OpenRouter require a key.</Text>
-            <input
-              className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
-              type="password"
-              value={apiKey}
-              placeholder="(leave empty for local servers)"
-              onChange={(event) => handleApiKeyChange(event.target.value)}
-            />
+            <Subtitle>Authentication</Subtitle>
+            <Text>
+              API key (default) for OpenAI/OpenRouter, or an OpenAI Codex / ChatGPT subscription access token. In
+              subscription mode the browser sends your ChatGPT/Codex token as a bearer credential to the endpoint you set
+              above (point the base URL at the ChatGPT/Codex backend), plus any extra headers below.
+            </Text>
+            <select
+              className="mt-2 rounded border border-border bg-default px-2 py-1.5 text-sm"
+              value={authMode}
+              onChange={(event) => handleAuthModeChange(event.target.value as 'api-key' | 'subscription')}
+            >
+              <option value="api-key">API key</option>
+              <option value="subscription">OpenAI Codex / ChatGPT subscription token</option>
+            </select>
+
+            <HorizontalSeparator classes="my-4" />
+
+            {authMode === 'api-key' ? (
+              <>
+                <Subtitle>API key</Subtitle>
+                <Text>Optional. LM Studio and Ollama need none; OpenAI and OpenRouter require a key.</Text>
+                <input
+                  className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  type="password"
+                  value={apiKey}
+                  placeholder="(leave empty for local servers)"
+                  onChange={(event) => handleApiKeyChange(event.target.value)}
+                />
+              </>
+            ) : (
+              <>
+                <Subtitle>Subscription token</Subtitle>
+                <Text>
+                  ChatGPT/Codex subscription access token (an OAuth access / session token from your ChatGPT account
+                  login). Sent as a bearer credential. Note: acquiring and refreshing this token is a manual/OAuth step —
+                  see the documentation. The ChatGPT/Codex backend contract is not a stable public API and may require
+                  the extra headers below.
+                </Text>
+                <input
+                  className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  type="password"
+                  value={subscriptionToken}
+                  placeholder="ChatGPT/Codex access token"
+                  onChange={(event) => handleSubscriptionTokenChange(event.target.value)}
+                />
+
+                <HorizontalSeparator classes="my-4" />
+
+                <Subtitle>Extra headers</Subtitle>
+                <Text>
+                  Optional headers sent with every request, e.g. an account id or OpenAI-Beta flag the Codex backend may
+                  require. JSON object or comma-separated “Key: Value” list (e.g. {'{'}"ChatGPT-Account-Id":"acct_…"
+                  {'}'} or OpenAI-Beta: responses=v1).
+                </Text>
+                <input
+                  className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  type="text"
+                  value={extraHeaders}
+                  placeholder='{"ChatGPT-Account-Id":"acct_…"}'
+                  onChange={(event) => handleExtraHeadersChange(event.target.value)}
+                />
+              </>
+            )}
 
             <HorizontalSeparator classes="my-4" />
 
