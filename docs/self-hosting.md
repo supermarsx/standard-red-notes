@@ -169,6 +169,35 @@ fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,
 (`ASSISTANT_*`), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list.
 
+### Server-wide shared access key (optional obfuscation gate)
+
+> **This is obfuscation / access-gating, not end-to-end security.** It does not
+> replace and does not strengthen the existing client-side end-to-end
+> encryption, which is what actually protects your note content. The shared key
+> only makes the server refuse to talk to clients that do not present it -
+> analogous to a reverse-proxy "basic auth" gate, but built into the gateway so
+> the official clients can pass it. It deters a casual scanner who stumbles onto
+> your server; it is *not* a defense against an attacker who already has the key
+> (or can read it off a client device). It is also **not** a user password.
+
+Two variables control it, both **OFF by default** (leaving them unset means zero
+behavior change for existing installs):
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `SHARED_SERVER_ACCESS_KEY` | The shared secret. Empty/unset disables the gate entirely. | empty (off) |
+| `SHARED_SERVER_ACCESS_KEY_MODE` | `all` = every request must present the key (the `/healthcheck` path is always exempt so the container stays healthy); `registration` = only new account sign-ups require the key, leaving existing users (sync, sign-in) unaffected. | `all` (only relevant once a key is set) |
+
+When enabled, the api-gateway requires the key in the `X-Shared-Server-Key`
+header and rejects non-matching requests with a generic `401`. The comparison is
+constant-time and the key is never logged.
+
+On each client, enter the same key under **Preferences -> Security -> Server
+Access Key**. It is stored locally on that device (never synced) and attached to
+outgoing requests automatically. Because sign-in and registration also pass
+through the gate, configure the key on a device *before* signing in to a gated
+server.
+
 ---
 
 ## Choosing a domain and ports

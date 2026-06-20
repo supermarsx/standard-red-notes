@@ -45,6 +45,10 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import { TYPES } from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { ResponseLocals } from '../src/Controller/ResponseLocals'
+import {
+  createSharedServerAccessKeyMiddleware,
+  resolveSharedServerAccessKeyConfig,
+} from '../src/Controller/SharedServerAccessKeyMiddleware'
 
 const container = new ContainerConfigLoader()
 void container.load().then((container) => {
@@ -158,6 +162,15 @@ void container.load().then((container) => {
       }
       next()
     })
+
+    // Standard Red Notes: optional server-wide shared access key gate. OFF by
+    // default (zero behavior change). See SharedServerAccessKeyMiddleware for the
+    // security model — this is OBFUSCATION/access-gating, not E2E security.
+    const sharedServerAccessKeyConfig = resolveSharedServerAccessKeyConfig(
+      env.get('SHARED_SERVER_ACCESS_KEY', true),
+      env.get('SHARED_SERVER_ACCESS_KEY_MODE', true),
+    )
+    app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
   })
 
   server.setErrorConfig((app) => {

@@ -12,6 +12,7 @@ import { Environment } from '@standardnotes/models'
 import { isString } from 'lodash'
 import { ErrorMessage } from '../Error'
 import { LoggerInterface } from '@standardnotes/utils'
+import { readSharedServerAccessKey, SHARED_SERVER_ACCESS_KEY_HEADER } from './SharedServerAccessKey'
 
 export class FetchRequestHandler implements RequestHandlerInterface {
   constructor(
@@ -44,6 +45,17 @@ export class FetchRequestHandler implements RequestHandlerInterface {
 
       if (httpRequest.authentication) {
         headers['Authorization'] = 'Bearer ' + httpRequest.authentication
+      }
+
+      // Standard Red Notes: if the operator's self-hosted instance is gated by a
+      // server-wide shared access key, attach it to every (non-external) request
+      // so the official client can pass the gate. This is per-device operator
+      // config stored locally (NOT a synced item) and is OBFUSCATION/access-
+      // gating, not E2E security. When unset, no header is sent and behavior is
+      // identical to upstream.
+      const sharedServerAccessKey = readSharedServerAccessKey()
+      if (sharedServerAccessKey !== undefined && sharedServerAccessKey.length > 0) {
+        headers[SHARED_SERVER_ACCESS_KEY_HEADER] = sharedServerAccessKey
       }
     }
 

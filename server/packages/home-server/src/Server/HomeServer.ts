@@ -1,7 +1,11 @@
 import 'reflect-metadata'
 
 import { ControllerContainer, Result, ServiceContainer } from '@standardnotes/domain-core'
-import { Service as ApiGatewayService } from '@standardnotes/api-gateway'
+import {
+  Service as ApiGatewayService,
+  createSharedServerAccessKeyMiddleware,
+  resolveSharedServerAccessKeyConfig,
+} from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import { Service as AuthService, AuthServiceInterface } from '@standardnotes/auth-server'
@@ -200,6 +204,16 @@ export class HomeServer implements HomeServerInterface {
           }
           next()
         })
+
+        // Standard Red Notes: optional server-wide shared access key gate. OFF by
+        // default (zero behavior change). This is OBFUSCATION/access-gating for a
+        // self-hosted instance, NOT end-to-end security (that is the existing E2E
+        // encryption). See SharedServerAccessKeyMiddleware for the security model.
+        const sharedServerAccessKeyConfig = resolveSharedServerAccessKeyConfig(
+          env.get('SHARED_SERVER_ACCESS_KEY', true),
+          env.get('SHARED_SERVER_ACCESS_KEY_MODE', true),
+        )
+        app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
 
         if (env.get('E2E_TESTING', true) === 'true') {
           app.post('/e2e/activate-premium', (request: Request, response: Response) => {

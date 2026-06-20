@@ -59,6 +59,15 @@ x-server-env: &server-env
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
   # Global per-user daily AI request ceiling enforced by the api-gateway. 0 = unlimited.
   ASSISTANT_DAILY_REQUEST_LIMIT: ${ASSISTANT_DAILY_REQUEST_LIMIT:-0}
+  # Optional server-wide shared access key ("obfuscation gate"). OFF by default
+  # (empty key => zero behavior change). This is OBFUSCATION / access-gating for a
+  # self-hosted instance, NOT end-to-end security (that is the client-side E2E
+  # encryption). When set, the api-gateway requires clients to present this key in
+  # the X-Shared-Server-Key header. SHARED_SERVER_ACCESS_KEY_MODE selects what is
+  # gated: "all" (every request, healthcheck exempt) or "registration" (only new
+  # sign-ups). The container healthcheck path (/healthcheck) is always exempt.
+  SHARED_SERVER_ACCESS_KEY: ${SHARED_SERVER_ACCESS_KEY:-}
+  SHARED_SERVER_ACCESS_KEY_MODE: ${SHARED_SERVER_ACCESS_KEY_MODE:-all}
 
 services:
   app:

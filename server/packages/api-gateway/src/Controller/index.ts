@@ -1,6 +1,7 @@
 export * from './AuthMiddleware'
 export * from './FallbackController'
 export * from './HealthCheckController'
+export * from './SharedServerAccessKeyMiddleware'
 export * from './SubscriptionTokenAuthMiddleware'
 export * from './TokenAuthenticationMethod'
 export * from './WebSocketAuthMiddleware'

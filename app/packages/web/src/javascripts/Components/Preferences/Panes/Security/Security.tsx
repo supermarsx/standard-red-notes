@@ -17,6 +17,7 @@ import MagicLinkView from './TwoFactorAuth/MagicLink/MagicLinkView'
 import AppPasswords from './AppPasswords/AppPasswords'
 import TrustedDevices from './TrustedDevices/TrustedDevices'
 import McpTokens from './McpTokens/McpTokens'
+import ServerAccessKey from './ServerAccessKey/ServerAccessKey'
 
 interface SecurityProps {
   application: WebApplication
@@ -50,6 +51,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
   return (
     <PreferencesPane>
       <Encryption />
+      <ServerAccessKey />
       {props.application.items.invalidNonVaultedItems.length > 0 && <ErroredItems />}
       <Protections application={props.application} />
       <TwoFactorAuthView auth={auth} application={props.application} canDisable2FA={canDisable2FA} />

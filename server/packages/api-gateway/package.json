@@ -28,7 +28,8 @@
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --fix --ext .ts",
     "setup:env": "cp .env.sample .env",
-    "start": "yarn node dist/bin/server.js"
+    "start": "yarn node dist/bin/server.js",
+    "test": "jest --no-cache --config=./jest.config.js --maxWorkers=2"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
