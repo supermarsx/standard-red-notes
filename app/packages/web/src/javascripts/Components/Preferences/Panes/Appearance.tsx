@@ -12,6 +12,7 @@ import PreferencesPane from '../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../PreferencesComponents/PreferencesSegment'
 import EditorAppearance from './Appearance/EditorAppearance'
+import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
 
@@ -100,6 +101,8 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
         <PreferencesSegment>
           <Title>Themes</Title>
           <div className="mt-2">
+            <ColorSchemeModeControl />
+            <HorizontalSeparator classes="my-4" />
             <div className="flex justify-between gap-2 md:items-center">
               <div className="flex flex-col">
                 <Subtitle>Disable translucent UI</Subtitle>

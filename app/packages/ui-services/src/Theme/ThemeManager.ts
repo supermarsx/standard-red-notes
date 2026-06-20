@@ -21,6 +21,7 @@ import { GetAllThemesUseCase } from './GetAllThemesUseCase'
 import { Uuid } from '@standardnotes/domain-core'
 import { ActiveThemeList } from './ActiveThemeList'
 import { Color } from './Color'
+import { resolveColorSchemeTheme } from './ResolveColorSchemeTheme'
 
 const CachedThemesKey = 'cachedThemes'
 const DefaultThemeIdentifier = 'Default'
@@ -30,6 +31,7 @@ export class ThemeManager extends AbstractUIService {
   private lastUseDeviceThemeSettings: boolean | undefined
   private lastAutoLightTheme: string | undefined
   private lastAutoDarkTheme: string | undefined
+  private lastColorSchemeMode: string | undefined
 
   constructor(
     application: WebApplicationInterface,
@@ -88,6 +90,7 @@ export class ThemeManager extends AbstractUIService {
       }
       case ApplicationEvent.StorageReady: {
         await this.activateCachedThemes()
+        await this.applyColorSchemeMode()
         break
       }
       case ApplicationEvent.FeaturesAvailabilityChanged: {
@@ -103,6 +106,7 @@ export class ThemeManager extends AbstractUIService {
             mq.addListener(this.colorSchemeEventHandler)
           }
         }
+        await this.applyColorSchemeMode()
         break
       }
       case ApplicationEvent.LocalPreferencesChanged: {
@@ -174,6 +178,13 @@ export class ThemeManager extends AbstractUIService {
       LocalPrefKey.AutoDarkThemeIdentifier,
       NativeFeatureIdentifier.TYPES.DarkTheme,
     )
+    const colorSchemeMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+
+    const hasColorSchemeModeChanged = colorSchemeMode !== this.lastColorSchemeMode
+    if (hasColorSchemeModeChanged) {
+      this.lastColorSchemeMode = colorSchemeMode
+      await this.applyColorSchemeMode()
+    }
 
     const hasPreferenceChanged =
       useSystemColorScheme !== this.lastUseDeviceThemeSettings ||
@@ -195,6 +206,86 @@ export class ThemeManager extends AbstractUIService {
 
       this.setThemeAsPerColorScheme(prefersDarkColorScheme)
     }
+  }
+
+  /**
+   * Standard Red Notes: resolve the current OS dark-mode preference. Returns
+   * `undefined` when it can't be determined (so Auto can fall back to dark).
+   */
+  private async getSystemPrefersDark(): Promise<boolean | undefined> {
+    if (this.application.isNativeMobileWeb()) {
+      try {
+        return (await this.application.mobileDevice.getColorScheme()) === 'dark'
+      } catch {
+        return undefined
+      }
+    }
+
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined
+    }
+
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    // A media query that matches neither dark nor light means the OS preference
+    // is indeterminate; let the resolver apply its dark fallback.
+    if (!mq.matches && !window.matchMedia('(prefers-color-scheme: light)').matches) {
+      return undefined
+    }
+    return mq.matches
+  }
+
+  /**
+   * Standard Red Notes: applies the active theme according to the auto/light/dark
+   * color-scheme mode. `light` forces Standard Blue, `dark` forces Standard Red,
+   * `auto` follows the OS (dark -> Standard Red, light -> Standard Blue, with a
+   * dark fallback when the OS preference is indeterminate).
+   */
+  async applyColorSchemeMode(): Promise<boolean> {
+    const mode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+
+    const systemPrefersDark = mode === 'auto' ? await this.getSystemPrefersDark() : undefined
+    const themeIdentifier = resolveColorSchemeTheme(mode, systemPrefersDark)
+
+    return this.applyThemeByIdentifier(themeIdentifier)
+  }
+
+  /**
+   * Applies the non-layerable theme with the given identifier. The special
+   * `Default` identifier means the Standard Red base look, applied by toggling
+   * off any active non-layerable theme.
+   */
+  private applyThemeByIdentifier(themeIdentifier: string): boolean {
+    let didChangeTheme = false
+
+    const usecase = new GetAllThemesUseCase(this.application.items)
+    const { thirdParty, native } = usecase.execute({ excludeLayerable: false })
+    const themes = [...thirdParty, ...native]
+
+    const activeTheme = themes.find((theme) => this.components.isThemeActive(theme) && !theme.layerable)
+
+    if (themeIdentifier === DefaultThemeIdentifier) {
+      if (activeTheme) {
+        void this.components.toggleTheme(activeTheme)
+        didChangeTheme = true
+      }
+      return didChangeTheme
+    }
+
+    const theme = themes.find((candidate) => candidate.featureIdentifier === themeIdentifier)
+    if (theme) {
+      if (!this.components.isThemeActive(theme)) {
+        this.components.toggleTheme(theme, true).catch(console.error)
+      } else {
+        this.components.toggleOtherNonLayerableThemes(theme)
+      }
+      didChangeTheme = true
+    } else if (activeTheme) {
+      // Requested theme isn't installed/available; fall back to the base look.
+      void this.components.toggleTheme(activeTheme)
+      didChangeTheme = true
+    }
+
+    return didChangeTheme
   }
 
   private async handleFeaturesAvailabilityChanged() {
@@ -232,6 +323,14 @@ export class ThemeManager extends AbstractUIService {
   }
 
   private colorSchemeEventHandler(event: MediaQueryListEvent) {
+    // Standard Red Notes: when the color-scheme mode is Auto, follow the OS live.
+    const colorSchemeMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+    if (colorSchemeMode === 'auto') {
+      this.applyThemeByIdentifier(resolveColorSchemeTheme('auto', event.matches))
+      return
+    }
+
+    // Legacy "use system color scheme" path (with the two auto theme dropdowns).
     const shouldChangeTheme = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
 
     if (shouldChangeTheme) {

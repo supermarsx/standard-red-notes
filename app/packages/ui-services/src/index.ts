@@ -42,6 +42,7 @@ export * from './UseCase/GetItemTags'
 
 export * from './Theme/ThemeManager'
 export * from './Theme/GetAllThemesUseCase'
+export * from './Theme/ResolveColorSchemeTheme'
 
 export * from './Toast/ToastService'
 export * from './Toast/ToastServiceInterface'
