@@ -7,6 +7,9 @@ export enum AppPaneId {
   Assistant = 'AssistantColumn',
   Constellation = 'ConstellationColumn',
   Dashboard = 'DashboardColumn',
+  Reminders = 'RemindersColumn',
+  Calendar = 'CalendarColumn',
+  Todos = 'TodosColumn',
 }
 
 export const AppPaneIdToDivId = {
@@ -16,4 +19,7 @@ export const AppPaneIdToDivId = {
   [AppPaneId.Assistant]: ElementIds.AssistantColumn,
   [AppPaneId.Constellation]: ElementIds.ConstellationColumn,
   [AppPaneId.Dashboard]: ElementIds.DashboardColumn,
+  [AppPaneId.Reminders]: ElementIds.RemindersColumn,
+  [AppPaneId.Calendar]: ElementIds.CalendarColumn,
+  [AppPaneId.Todos]: ElementIds.TodosColumn,
 }

@@ -23,6 +23,9 @@ import EditorPane from '../NoteGroupView/EditorPane'
 import AssistantView from '../Assistant/AssistantView'
 import ConstellationView from '../Constellation/ConstellationView'
 import DashboardView from '../Dashboard/DashboardView'
+import RemindersView from '../RemindersAggregate/RemindersView'
+import CalendarAggregateView from '../CalendarAggregate/CalendarAggregateView'
+import TodoView from '../TodoAggregate/TodoView'
 import usePreference from '@/Hooks/usePreference'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
@@ -232,7 +235,11 @@ const PanesSystemComponent = () => {
     const panes = paneController.panes
     const hasAssistant = panes.includes(AppPaneId.Assistant)
     const hasConstellation = panes.includes(AppPaneId.Constellation)
-    const hasDashboard = panes.includes(AppPaneId.Dashboard)
+    const hasDashboard =
+      panes.includes(AppPaneId.Dashboard) ||
+      panes.includes(AppPaneId.Reminders) ||
+      panes.includes(AppPaneId.Calendar) ||
+      panes.includes(AppPaneId.Todos)
 
     if (isMobile) {
       return {}
@@ -444,6 +451,24 @@ const PanesSystemComponent = () => {
           return (
             <ErrorBoundary key="dashboard-pane">
               <DashboardView id={ElementIds.DashboardColumn} className={className} application={application} />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Reminders) {
+          return (
+            <ErrorBoundary key="reminders-pane">
+              <RemindersView id={ElementIds.RemindersColumn} className={className} application={application} />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Calendar) {
+          return (
+            <ErrorBoundary key="calendar-aggregate-pane">
+              <CalendarAggregateView id={ElementIds.CalendarColumn} className={className} application={application} />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Todos) {
+          return (
+            <ErrorBoundary key="todos-pane">
+              <TodoView id={ElementIds.TodosColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         }

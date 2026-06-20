@@ -21,6 +21,7 @@ import PreferencesButton from '../Footer/PreferencesButton'
 import TagSearchBar from './TagSearchBar'
 import PaneCollapseButton from '../Panes/PaneCollapseButton'
 import DashboardSectionButton from '../Dashboard/DashboardSectionButton'
+import AggregateViewSectionButtons from '../AggregateViews/AggregateViewSectionButtons'
 
 type Props = {
   application: WebApplication
@@ -87,6 +88,12 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       <div id="navigation-content" className="flex-grow overflow-y-auto overflow-x-hidden">
         <TagSearchBar navigationController={application.navigationController} />
         <DashboardSectionButton application={application} />
+        <AggregateViewSectionButtons
+          application={application}
+          remindersLabel="Reminders"
+          calendarLabel="Calendar"
+          todosLabel="Todos"
+        />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}
