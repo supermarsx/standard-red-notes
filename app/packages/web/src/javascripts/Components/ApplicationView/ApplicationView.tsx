@@ -46,6 +46,8 @@ import CommandPalette from '../CommandPalette/CommandPalette'
 import SuperExportModal from '../NotesOptions/SuperExportModal'
 import { useConflictWarnings } from '@/Hooks/useConflictWarnings'
 import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
+import { useReminderChecker } from '@/Reminders/useReminderChecker'
+import RemindersButton from '@/Reminders/RemindersButton'
 
 type Props = {
   application: WebApplication
@@ -72,6 +74,10 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   // App-wide watcher: show a single debounced "Settings saved and synced" toast
   // when the user changes a preference and that change reaches the server.
   usePreferenceSyncToast(application)
+
+  // App-wide watcher: periodically scan notes for due reminders and fire a
+  // notification + in-app toast (opt-in; nothing fires until the user sets one).
+  useReminderChecker(application)
 
   useEffect(() => {
     const desktopService = application.desktopManager
@@ -386,6 +392,9 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                     <KeyboardShortcutsModal keyboardService={application.keyboardService} />
                     <SuperExportModal />
                     <CommandPalette />
+                    <div className="pointer-events-none fixed bottom-14 right-4 z-footer-bar-item">
+                      <RemindersButton application={application} />
+                    </div>
                   </>
                   {isIOS() && <IosKeyboardClose />}
                 </div>

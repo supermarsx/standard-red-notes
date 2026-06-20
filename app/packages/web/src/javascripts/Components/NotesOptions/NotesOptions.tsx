@@ -32,14 +32,16 @@ import { MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import AddToVaultMenuOption from '../Vaults/AddToVaultMenuOption'
 import MenuSection from '../Menu/MenuSection'
 import { shareBlobOnMobile } from '@/NativeMobileWeb/ShareBlobOnMobile'
-import { isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
-import { encryptShare } from '../SharedView/shareCrypto'
+import ShareLinkModal from './ShareLinkModal'
 import NarrationModal from './NarrationModal'
+import AudioRecorderModal from '@/Components/AudioRecorder/AudioRecorderModal'
 import SplitNoteModal from './SplitNoteModal'
 import SuggestTagsModal from './SuggestTagsModal'
 import AutoOrganizeModal from './AutoOrganizeModal'
 import PublishToGitHubModal from './PublishToGitHubModal'
+import SetReminderModal from '@/Reminders/SetReminderModal'
+import { noteHasReminder } from '@/Reminders/reminders'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
@@ -53,7 +55,10 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const notesController = application.notesController
 
   const [altKeyDown, setAltKeyDown] = useState(false)
+  const [shareLinkOpen, setShareLinkOpen] = useState(false)
   const [narrationOpen, setNarrationOpen] = useState(false)
+  const [audioRecorderOpen, setAudioRecorderOpen] = useState(false)
+  const [reminderOpen, setReminderOpen] = useState(false)
   const [splitOpen, setSplitOpen] = useState(false)
   const [suggestTagsOpen, setSuggestTagsOpen] = useState(false)
   const [publishGitHubOpen, setPublishGitHubOpen] = useState(false)
@@ -112,55 +117,6 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         )
       })
       .catch(console.error)
-  }, [application, notes])
-
-  // Standard Red Notes: create a public, read-only share link for a single note.
-  // The note's title + text are encrypted client-side under a fresh key that lives
-  // in the URL fragment (never sent to the server); the server stores only the
-  // ciphertext keyed by the returned shareId.
-  const createShareLink = useCallback(async () => {
-    const note = notes[0]
-    if (!note) {
-      return
-    }
-
-    try {
-      const { encryptedPayload, keyHex } = await encryptShare({
-        kind: 'note',
-        title: note.title,
-        text: note.text,
-      })
-
-      const response = await application.legacyApi.createShare({ type: 'note', encryptedPayload })
-      if (isErrorResponse(response)) {
-        const data = response.data as { error?: { message?: string } } | undefined
-        addToast({ type: ToastType.Error, message: data?.error?.message ?? 'Failed to create share link.' })
-        return
-      }
-
-      const shareId = (response as { data?: { shareId?: string } }).data?.shareId
-      if (!shareId) {
-        addToast({ type: ToastType.Error, message: 'The server did not return a share link.' })
-        return
-      }
-
-      const link = `${window.location.origin}/?shared=${shareId}#${keyHex}`
-
-      try {
-        await navigator?.clipboard?.writeText(link)
-        addToast({ type: ToastType.Success, message: 'Public read-only share link copied to clipboard.' })
-      } catch {
-        addToast({ type: ToastType.Regular, message: 'Share link created (copy it from the dialog).' })
-      }
-
-      await application.alerts.alert(
-        `Anyone with this link can read this note. The link is read-only and the content is decrypted in the browser; the server never sees the key.\n\n${link}`,
-        'Public share link',
-      )
-    } catch (error) {
-      console.error(error)
-      addToast({ type: ToastType.Error, message: 'Failed to create share link.' })
-    }
   }, [application, notes])
 
   // Standard Red Notes: download every image attached to a single note (uploaded
@@ -261,6 +217,32 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           note={notes[0]}
           isOpen={narrationOpen}
           close={() => setNarrationOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
+        <AudioRecorderModal
+          application={application}
+          filesController={application.filesController}
+          note={notes[0]}
+          isOpen={audioRecorderOpen}
+          close={() => setAudioRecorderOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
+        <ShareLinkModal
+          application={application}
+          note={notes[0]}
+          isOpen={shareLinkOpen}
+          close={() => setShareLinkOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
+        <SetReminderModal
+          application={application}
+          notesController={notesController}
+          note={notes[0]}
+          isOpen={reminderOpen}
+          close={() => setReminderOpen(false)}
         />
       )}
       {notes.length === 1 && (
@@ -457,7 +439,11 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           </MenuItem>
         )}
         {notes.length === 1 && (
-          <MenuItem onClick={createShareLink}>
+          <MenuItem
+            onClick={() => {
+              setShareLinkOpen(true)
+            }}
+          >
             <Icon type="link" className={iconClass} />
             Create share link
           </MenuItem>
@@ -481,6 +467,28 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           >
             <Icon type="file-music" className={iconClass} />
             Narrate / Listen
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setAudioRecorderOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="file-music" className={iconClass} />
+            Record audio / Transcribe…
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setReminderOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="clock" className={iconClass} />
+            {noteHasReminder(notes[0]) ? 'Edit reminder…' : 'Set reminder…'}
           </MenuItem>
         )}
         {notes.length === 1 && (

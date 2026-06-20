@@ -35,6 +35,14 @@ import { CrossControllerEvent } from '../CrossControllerEvent'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { createNoteExport } from '../../Utils/NoteExportUtils'
 import { NoteCustomBackgroundColorKey, NoteCustomTextColorKey } from '../../Utils/NoteAppearance'
+import {
+  NoteRemindersKey,
+  Reminder,
+  getNoteReminders,
+  upsertReminder as upsertReminderInList,
+  removeReminder as removeReminderFromList,
+  markReminderNotified as markReminderNotifiedInList,
+} from '../../Reminders/reminders'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
 
@@ -489,6 +497,46 @@ export class NotesController
 
   async resetNoteAppearance(note: SNNote) {
     await this.setNoteAppearanceColors(note, { backgroundColor: undefined, textColor: undefined })
+  }
+
+  /**
+   * Standard Red Notes: per-note reminders. Reminders are persisted in the
+   * note's encrypted appData (no models/server change) so they sync E2E with the
+   * note and survive across devices. All writes go through `setAppDataItem` and
+   * use the pure helpers in `Reminders/reminders` to compute the next array.
+   */
+  private async writeNoteReminders(note: SNNote, reminders: Reminder[]) {
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        mutator.setAppDataItem(NoteRemindersKey, reminders.length > 0 ? reminders : undefined)
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  /** Add or replace a reminder on a note (matched by id). */
+  async upsertNoteReminder(note: SNNote, reminder: Reminder) {
+    const next = upsertReminderInList(getNoteReminders(note), reminder)
+    await this.writeNoteReminders(note, next)
+  }
+
+  /** Remove a single reminder (by id) from a note. */
+  async removeNoteReminder(note: SNNote, reminderId: string) {
+    const next = removeReminderFromList(getNoteReminders(note), reminderId)
+    await this.writeNoteReminders(note, next)
+  }
+
+  /** Clear all reminders from a note. */
+  async clearNoteReminders(note: SNNote) {
+    await this.writeNoteReminders(note, [])
+  }
+
+  /** Mark a reminder (by id) as notified so the checker won't re-fire it. */
+  async markNoteReminderNotified(note: SNNote, reminderId: string) {
+    const next = markReminderNotifiedInList(getNoteReminders(note), reminderId)
+    await this.writeNoteReminders(note, next)
   }
 
   async addTagToSelectedNotes(tag: SNTag): Promise<void> {
