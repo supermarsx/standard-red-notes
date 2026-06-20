@@ -344,6 +344,7 @@ import { DomainEventFactoryInterface } from '../Domain/Event/DomainEventFactoryI
 import { KeyParamsFactoryInterface } from '../Domain/User/KeyParamsFactoryInterface'
 import { TypeORMSubscriptionSetting } from '../Infra/TypeORM/TypeORMSubscriptionSetting'
 import { SetSettingValue } from '../Domain/UseCase/SetSettingValue/SetSettingValue'
+import { SetUserBanStatus } from '../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { ApplyDefaultSubscriptionSettings } from '../Domain/UseCase/ApplyDefaultSubscriptionSettings/ApplyDefaultSubscriptionSettings'
 import { GetSubscriptionSetting } from '../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
@@ -1444,6 +1445,14 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<SetUserBanStatus>(TYPES.Auth_SetUserBanStatus)
+      .toConstantValue(
+        new SetUserBanStatus(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+        ),
+      )
+    container
       .bind<GenerateRecoveryCodes>(TYPES.Auth_GenerateRecoveryCodes)
       .toConstantValue(
         new GenerateRecoveryCodes(
@@ -2489,6 +2498,7 @@ export class ContainerConfigLoader {
             container.get<CreateSubscriptionToken>(TYPES.Auth_CreateSubscriptionToken),
             container.get<CreateOfflineSubscriptionToken>(TYPES.Auth_CreateOfflineSubscriptionToken),
             container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+            container.get<SetUserBanStatus>(TYPES.Auth_SetUserBanStatus),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
           ),
         )

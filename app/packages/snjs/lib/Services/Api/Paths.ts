@@ -51,6 +51,8 @@ const SettingsPaths = {
 const AdminPaths = {
   lookupUser: (email: string) => `/v1/admin/lookup-user/${encodeURIComponent(email)}`,
   userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
+  userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
+  setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
   registration: '/v1/admin/registration',
 }
 

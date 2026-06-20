@@ -13,6 +13,7 @@ import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { confirmDialog } from '@standardnotes/ui-services'
 
 type Props = {
   application: WebApplication
@@ -46,6 +47,9 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
   const [flagsLoading, setFlagsLoading] = useState(false)
   const [savingLimit, setSavingLimit] = useState(false)
+
+  const [banned, setBanned] = useState(false)
+  const [banningInProgress, setBanningInProgress] = useState(false)
 
   const [registrationDisabled, setRegistrationDisabled] = useState(false)
   const [registrationLoading, setRegistrationLoading] = useState(false)
@@ -96,12 +100,29 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
     [application],
   )
 
+  const loadBanStatus = useCallback(
+    async (lookupEmail: string) => {
+      try {
+        const response = await application.legacyApi.adminGetUserBanStatus(lookupEmail)
+        if (isErrorResponse(response)) {
+          return
+        }
+        const data = (response as { data?: { banned?: boolean } }).data
+        setBanned(Boolean(data?.banned))
+      } catch (error) {
+        console.error(error)
+      }
+    },
+    [application],
+  )
+
   const lookupUser = useCallback(async () => {
     if (!email.trim()) {
       return
     }
     setLookingUp(true)
     setUser(undefined)
+    setBanned(false)
     try {
       const response = await application.legacyApi.adminLookupUser(email.trim())
       if (isErrorResponse(response)) {
@@ -115,14 +136,14 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       }
       const lookedUp = { uuid: data.uuid, email: email.trim() }
       setUser(lookedUp)
-      await loadFlags(lookedUp.uuid)
+      await Promise.all([loadFlags(lookedUp.uuid), loadBanStatus(lookedUp.email)])
     } catch (error) {
       console.error(error)
       addToast({ type: ToastType.Error, message: 'Failed to look up user.' })
     } finally {
       setLookingUp(false)
     }
-  }, [application, email, loadFlags])
+  }, [application, email, loadFlags, loadBanStatus])
 
   const toggleAiEnabled = useCallback(
     async (nextValue: boolean) => {
@@ -206,6 +227,49 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       setSavingLimit(false)
     }
   }, [application, user, aiRequestLimit])
+
+  const toggleBan = useCallback(
+    async (nextBanned: boolean) => {
+      if (!user) {
+        return
+      }
+
+      const confirmed = await confirmDialog({
+        title: nextBanned ? 'Ban user' : 'Unban user',
+        text: nextBanned
+          ? `Ban ${user.email}? They will be signed out and blocked from accessing their account until unbanned.`
+          : `Unban ${user.email}? They will regain access to their account.`,
+        confirmButtonText: nextBanned ? 'Ban user' : 'Unban user',
+        confirmButtonStyle: nextBanned ? 'danger' : 'info',
+      })
+      if (!confirmed) {
+        return
+      }
+
+      const previous = banned
+      setBanned(nextBanned)
+      setBanningInProgress(true)
+      try {
+        const response = await application.legacyApi.adminSetUserBanStatus(user.uuid, nextBanned)
+        if (isErrorResponse(response)) {
+          setBanned(previous)
+          addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+          return
+        }
+        addToast({
+          type: ToastType.Success,
+          message: nextBanned ? 'User has been banned.' : 'User has been unbanned.',
+        })
+      } catch (error) {
+        console.error(error)
+        setBanned(previous)
+        addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+      } finally {
+        setBanningInProgress(false)
+      }
+    },
+    [application, user, banned],
+  )
 
   const toggleRegistration = useCallback(
     async (nextValue: boolean) => {
@@ -346,6 +410,24 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                           'Failed to update live sync access.',
                         )
                       }
+                    />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Account banned</Subtitle>
+                      <Text>
+                        {banned
+                          ? 'This account is banned. The user is blocked from signing in and any existing session is rejected.'
+                          : "Ban this user to block sign-in and revoke access from this user's existing sessions."}
+                      </Text>
+                    </div>
+                    <Switch
+                      checked={banned}
+                      disabled={banningInProgress}
+                      onChange={(checked) => void toggleBan(checked)}
                     />
                   </div>
                 </>

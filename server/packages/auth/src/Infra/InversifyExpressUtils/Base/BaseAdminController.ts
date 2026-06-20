@@ -9,6 +9,7 @@ import { GetSetting } from './../../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
+import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { ListedAuthorSecretsData } from '@standardnotes/settings'
 
 /**
@@ -26,6 +27,7 @@ export class BaseAdminController extends BaseHttpController {
     protected createSubscriptionToken: CreateSubscriptionToken,
     protected createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
     protected setSettingValue: SetSettingValue,
+    protected setUserBanStatus: SetUserBanStatus,
     private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -41,6 +43,8 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.setUserFeatureFlag', this.setUserFeatureFlag.bind(this))
       this.controllerContainer.register('admin.getRegistrationFlag', this.getRegistrationFlag.bind(this))
       this.controllerContainer.register('admin.setRegistrationFlag', this.setRegistrationFlag.bind(this))
+      this.controllerContainer.register('admin.getUserBanStatus', this.getUserBanStatus.bind(this))
+      this.controllerContainer.register('admin.setUserBanStatus', this.setUserBanStatusEndpoint.bind(this))
     }
   }
 
@@ -246,6 +250,72 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     return this.json({ success: true, userUuid, name, value: value ?? null })
+  }
+
+  /**
+   * Standard Red Notes: read a user's current ban status for the admin panel.
+   */
+  async getUserBanStatus(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const usernameOrError = Username.create((request.params.email as string) ?? '', { skipValidation: true })
+    if (usernameOrError.isFailed()) {
+      return this.json({ error: { message: 'Missing email parameter.' } }, 400)
+    }
+
+    const user = await this.userRepository.findOneByUsernameOrEmail(usernameOrError.getValue())
+    if (!user) {
+      return this.json({ error: { message: `No user with email '${usernameOrError.getValue().value}'.` } }, 400)
+    }
+
+    return this.json({
+      uuid: user.uuid,
+      email: user.email,
+      banned: user.isBanned(),
+      bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
+      banReason: user.banReason ?? null,
+    })
+  }
+
+  /**
+   * Standard Red Notes: ban or unban a user by uuid. Admin-only. The body must
+   * carry a boolean `banned` flag and may include an optional `banReason`.
+   * Enforcement happens in SignIn (new sign-ins) and AuthenticateUser (existing
+   * sessions), so a ban takes effect on the user's next authenticated request.
+   */
+  async setUserBanStatusEndpoint(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { banned, banReason } = request.body as { banned?: boolean; banReason?: string | null }
+
+    if (typeof banned !== 'boolean') {
+      return this.json({ error: { message: 'A boolean `banned` flag is required.' } }, 400)
+    }
+
+    const result = await this.setUserBanStatus.execute({
+      userUuid,
+      banned,
+      banReason: banReason ?? null,
+    })
+
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const user = result.getValue()
+
+    return this.json({
+      success: true,
+      uuid: user.uuid,
+      banned: user.isBanned(),
+      bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
+      banReason: user.banReason ?? null,
+    })
   }
 
   /**

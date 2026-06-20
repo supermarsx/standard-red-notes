@@ -729,6 +729,29 @@ export class LegacyApiService
     })
   }
 
+  async adminGetUserBanStatus(email: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.userBanStatus(email)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get user ban status.',
+    })
+  }
+
+  async adminSetUserBanStatus(
+    userUuid: UuidString,
+    banned: boolean,
+    banReason?: string | null,
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.setUserBanStatus(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set user ban status.',
+      params: { banned, banReason: banReason ?? null },
+    })
+  }
+
   async adminGetRegistrationFlag(): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Get,

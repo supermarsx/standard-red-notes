@@ -28,6 +28,7 @@ describe('AuthenticateUser', () => {
 
     user = {} as jest.Mocked<User>
     user.supportsSessions = jest.fn().mockReturnValue(false)
+    user.isBanned = jest.fn().mockReturnValue(false)
 
     session = {} as jest.Mocked<Session>
     session.accessExpiration = new Date(123)
@@ -61,6 +62,27 @@ describe('AuthenticateUser', () => {
     })
 
     expect(response.success).toBeTruthy()
+  })
+
+  it('should not authenticate a banned user', async () => {
+    user.encryptedPassword = 'test'
+    user.isBanned = jest.fn().mockReturnValue(true)
+
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'jwt',
+      claims: {
+        pw_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      },
+      user,
+    })
+
+    const response = await createUseCase().execute({
+      authTokenFromHeaders: 'test',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(response.success).toBeFalsy()
+    expect((response as { failureType?: string }).failureType).toEqual('INVALID_AUTH')
   })
 
   it('should not authenticate a user if the password hashed in JWT token is inavlid', async () => {

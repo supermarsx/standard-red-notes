@@ -218,6 +218,7 @@ const TYPES = {
   Auth_GetPendingMfaApprovalStatus: Symbol.for('Auth_GetPendingMfaApprovalStatus'),
   Auth_ListPendingMfaApprovals: Symbol.for('Auth_ListPendingMfaApprovals'),
   Auth_SetSettingValue: Symbol.for('Auth_SetSettingValue'),
+  Auth_SetUserBanStatus: Symbol.for('Auth_SetUserBanStatus'),
   Auth_GenerateRecoveryCodes: Symbol.for('Auth_GenerateRecoveryCodes'),
   Auth_GetSubscriptionSetting: Symbol.for('Auth_GetSubscriptionSetting'),
   Auth_SetSubscriptionSettingValue: Symbol.for('Auth_SetSubscriptionSettingValue'),

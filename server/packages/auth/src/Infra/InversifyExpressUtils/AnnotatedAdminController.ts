@@ -8,6 +8,7 @@ import { CreateSubscriptionToken } from '../../Domain/UseCase/CreateSubscription
 import { DeleteSetting } from '../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from './../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../Domain/UseCase/SetSettingValue/SetSettingValue'
+import { SetUserBanStatus } from '../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 
 @controller('/admin')
@@ -20,6 +21,7 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_CreateOfflineSubscriptionToken)
     override createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
     @inject(TYPES.Auth_SetSettingValue) override setSettingValue: SetSettingValue,
+    @inject(TYPES.Auth_SetUserBanStatus) override setUserBanStatus: SetUserBanStatus,
   ) {
     super(
       doDeleteSetting,
@@ -28,6 +30,7 @@ export class AnnotatedAdminController extends BaseAdminController {
       createSubscriptionToken,
       createOfflineSubscriptionToken,
       setSettingValue,
+      setUserBanStatus,
     )
   }
 
@@ -76,6 +79,16 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPut('/users/:userUuid/feature-flags')
   override async setUserFeatureFlag(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setUserFeatureFlag(request, response)
+  }
+
+  @httpGet('/users/:email/ban-status')
+  override async getUserBanStatus(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getUserBanStatus(request, response)
+  }
+
+  @httpPut('/users/:userUuid/ban-status')
+  override async setUserBanStatusEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setUserBanStatusEndpoint(request, response)
   }
 
   @httpGet('/registration')

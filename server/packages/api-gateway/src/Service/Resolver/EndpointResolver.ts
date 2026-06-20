@@ -88,6 +88,8 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:admin/lookup-user/:email', 'admin.lookupUser'],
     ['[GET]:admin/users/:userUuid/feature-flags', 'admin.getUserFeatureFlags'],
     ['[PUT]:admin/users/:userUuid/feature-flags', 'admin.setUserFeatureFlag'],
+    ['[GET]:admin/users/:email/ban-status', 'admin.getUserBanStatus'],
+    ['[PUT]:admin/users/:userUuid/ban-status', 'admin.setUserBanStatus'],
     ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
     ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
     // Syncing Server

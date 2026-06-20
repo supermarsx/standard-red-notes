@@ -65,6 +65,34 @@ export class AdminController extends BaseHttpController {
     )
   }
 
+  @httpGet('/users/:email/ban-status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserBanStatus(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'admin/users/:email/ban-status',
+        request.params.email as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpPut('/users/:userUuid/ban-status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async setUserBanStatus(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'PUT',
+        'admin/users/:userUuid/ban-status',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
   @httpGet('/registration', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getRegistrationFlag(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(

@@ -51,6 +51,20 @@ export class AuthenticateUser implements UseCaseInterface {
       }
     }
 
+    /**
+     * Standard Red Notes: a banned user (set by an admin) is treated as
+     * unauthorized on every request, so an already-signed-in banned user
+     * immediately loses access on the next authenticated call.
+     */
+    if (user.isBanned()) {
+      this.logger.debug(`[authenticate-user][${user.uuid}] Banned user attempted to authenticate.`)
+
+      return {
+        success: false,
+        failureType: 'INVALID_AUTH',
+      }
+    }
+
     if (authenticationMethod.type == 'jwt' && user.supportsSessions()) {
       this.logger.debug(
         `[authenticate-user][${user.uuid}] User supports sessions but is trying to authenticate with a JWT.`,

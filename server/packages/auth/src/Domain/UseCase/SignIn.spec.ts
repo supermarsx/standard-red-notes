@@ -54,6 +54,7 @@ describe('SignIn', () => {
       uuid: '1-2-3',
       email: 'test@test.com',
       version: ProtocolVersion.V004,
+      isBanned: () => false,
     } as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
 
@@ -257,6 +258,34 @@ describe('SignIn', () => {
       success: false,
       errorMessage: 'Invalid email or password',
     })
+  })
+
+  it('should not sign in a banned user even with valid credentials', async () => {
+    user = {
+      uuid: '1-2-3',
+      email: 'test@test.com',
+      version: ProtocolVersion.V004,
+      isBanned: () => true,
+    } as jest.Mocked<User>
+    user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+
+    expect(
+      await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      }),
+    ).toEqual({
+      success: false,
+      errorCode: 403,
+      errorMessage: 'This account has been suspended. Please contact an administrator.',
+    })
+
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 
   it('should not sign in a user with invalid code verifier', async () => {

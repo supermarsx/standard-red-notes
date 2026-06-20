@@ -128,6 +128,32 @@ export class User {
   })
   declare numberOfFailedAttempts: number | null
 
+  /**
+   * Standard Red Notes: admin ban flag. Defaults to false so existing users are
+   * unaffected. A banned user is blocked from signing in and any existing
+   * session/token is rejected as unauthorized.
+   */
+  @Column({
+    name: 'banned',
+    type: 'tinyint',
+    default: 0,
+  })
+  declare banned: boolean
+
+  @Column({
+    name: 'banned_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare bannedAt: Date | null
+
+  @Column({
+    name: 'ban_reason',
+    length: 255,
+    nullable: true,
+  })
+  declare banReason: string | null
+
   @OneToMany(
     /* istanbul ignore next */
     () => RevokedSession,
@@ -179,5 +205,9 @@ export class User {
 
   isPotentiallyAPrivateUsernameAccount(): boolean {
     return this.email.length === 64 && !this.email.includes('@')
+  }
+
+  isBanned(): boolean {
+    return this.banned === true
   }
 }

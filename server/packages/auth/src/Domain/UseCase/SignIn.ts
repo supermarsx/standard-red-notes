@@ -105,6 +105,21 @@ export class SignIn implements UseCaseInterface {
       }
     }
 
+    /**
+     * Standard Red Notes: a banned user (set by an admin) cannot sign in even
+     * with valid credentials. Checked after the password verifies so the ban
+     * status is never disclosed to an attacker who does not know the password.
+     */
+    if (user.isBanned()) {
+      this.logger.debug(`[sign-in][${user.uuid}] Banned user attempted to sign in.`)
+
+      return {
+        success: false,
+        errorMessage: 'This account has been suspended. Please contact an administrator.',
+        errorCode: HttpStatusCode.Forbidden,
+      }
+    }
+
     const authResponseFactory = this.authResponseFactoryResolver.resolveAuthResponseFactoryVersion(apiVersion)
 
     await this.sendSignInEmailNotification(user, dto.userAgent)
