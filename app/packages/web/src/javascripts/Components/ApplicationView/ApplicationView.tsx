@@ -44,6 +44,7 @@ import { ProtectionEvent } from '@standardnotes/services'
 import KeyboardShortcutsModal from '../KeyboardShortcutsHelpModal/KeyboardShortcutsHelpModal'
 import CommandPalette from '../CommandPalette/CommandPalette'
 import SuperExportModal from '../NotesOptions/SuperExportModal'
+import { useConflictWarnings } from '@/Hooks/useConflictWarnings'
 
 type Props = {
   application: WebApplication
@@ -62,6 +63,10 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
 
   const currentWriteErrorDialog = useRef<Promise<void> | null>(null)
   const currentLoadErrorDialog = useRef<Promise<void> | null>(null)
+
+  // App-wide watcher: warn the user in real time when a new sync conflict
+  // (conflicted copy) appears, deep-linking them to Preferences → Conflicts.
+  useConflictWarnings(application)
 
   useEffect(() => {
     const desktopService = application.desktopManager
