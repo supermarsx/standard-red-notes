@@ -5,6 +5,7 @@ import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import {
   FileItem,
   SortableItem,
+  CollectionSort,
   PrefKey,
   FileBackupRecord,
   SystemViewId,
@@ -81,7 +82,7 @@ const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) => {
               closeMenu={() => {
                 setContextMenuVisible(false)
               }}
-              shouldShowRenameOption={false}
+              shouldShowRenameOption={true}
               shouldShowAttachOption={false}
               selectedFiles={items as FileItem[]}
             />
@@ -220,7 +221,10 @@ type Props = {
 const ContentTableView = ({ application, items }: Props) => {
   const listHasFiles = items.some((item) => item instanceof FileItem)
 
-  const { sortBy, sortDirection } = application.itemListController.displayOptions
+  const { sortBy: rawSortBy, sortDirection } = application.itemListController.displayOptions
+  // The table layout has no manual-order column; fall back to title for display
+  // purposes when the (list-only) Custom sort is active.
+  const sortBy: keyof SortableItem = rawSortBy === CollectionSort.Custom ? 'title' : (rawSortBy as keyof SortableItem)
   const sortReversed = sortDirection === 'asc'
   const { hideDate, hideEditorIcon: hideIcon, hideTags } = application.itemListController.webDisplayOptions
 
@@ -369,7 +373,7 @@ const ContentTableView = ({ application, items }: Props) => {
             <Menu a11yLabel="File context menu">
               <FileMenuOptions
                 closeMenu={closeContextMenu}
-                shouldShowRenameOption={false}
+                shouldShowRenameOption={true}
                 shouldShowAttachOption={false}
                 selectedFiles={[contextMenuItem]}
               />

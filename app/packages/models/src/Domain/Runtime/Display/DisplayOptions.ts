@@ -29,6 +29,12 @@ export interface TagsAndViewsDisplayOptions extends GenericDisplayOptions {
 export interface DisplayControllerDisplayOptions extends GenericDisplayOptions {
   sortBy: CollectionSortProperty
   sortDirection: CollectionSortDirection
+  /**
+   * Standard Red Notes: explicit user-defined order of item uuids, consulted
+   * only when sortBy is the Custom sentinel. Items not present fall back to a
+   * stable secondary sort and are appended at the end.
+   */
+  customOrder?: string[]
 }
 
 export type NotesAndFilesDisplayControllerOptions = NotesAndFilesDisplayOptions & DisplayControllerDisplayOptions

@@ -863,6 +863,10 @@ export class ItemListController
     const criteria: NotesAndFilesDisplayControllerOptions = {
       sortBy: this.displayOptions.sortBy,
       sortDirection: this.displayOptions.sortDirection,
+      customOrder:
+        this.displayOptions.sortBy === CollectionSort.Custom
+          ? this.preferences.getValue(PrefKey.CustomNotesOrder, PrefDefaults[PrefKey.CustomNotesOrder])
+          : undefined,
       tags: !isFolderSelected && tag instanceof SNTag ? [tag] : [],
       views: !isFolderSelected && tag instanceof SmartView ? [tag] : [],
       folders: isFolderSelected ? [selectedFolder] : [],
@@ -903,6 +907,17 @@ export class ItemListController
       sortBy = CollectionSort.UpdatedAt
     }
     newDisplayOptions.sortBy = sortBy
+
+    /**
+     * Standard Red Notes: in Custom (manual) sort mode the order is driven by the
+     * global CustomNotesOrder pref (an array of uuids), not by an item field.
+     * Carry it so the model's display controller can order accordingly, and so a
+     * drag-reorder (which rewrites the pref) reloads the list below.
+     */
+    newDisplayOptions.customOrder =
+      sortBy === CollectionSort.Custom
+        ? this.preferences.getValue(PrefKey.CustomNotesOrder, PrefDefaults[PrefKey.CustomNotesOrder])
+        : undefined
 
     const currentSortDirection = this.displayOptions.sortDirection
     newDisplayOptions.sortDirection =
@@ -953,9 +968,13 @@ export class ItemListController
       this.preferences.getValue(PrefKey.NotesHideEditorIcon, PrefDefaults[PrefKey.NotesHideEditorIcon]),
     )
 
+    const customOrderChanged =
+      (newDisplayOptions.customOrder ?? []).join(',') !== (this.displayOptions.customOrder ?? []).join(',')
+
     const displayOptionsChanged =
       newDisplayOptions.sortBy !== this.displayOptions.sortBy ||
       newDisplayOptions.sortDirection !== this.displayOptions.sortDirection ||
+      customOrderChanged ||
       newDisplayOptions.includePinned !== this.displayOptions.includePinned ||
       newDisplayOptions.includeArchived !== this.displayOptions.includeArchived ||
       newDisplayOptions.includeTrashed !== this.displayOptions.includeTrashed ||
@@ -1539,6 +1558,47 @@ export class ItemListController
 
       return
     }
+  }
+
+  /** Standard Red Notes: whether the notes list is currently in Custom (manual) sort mode. */
+  get isCustomSortMode(): boolean {
+    return this.displayOptions.sortBy === CollectionSort.Custom
+  }
+
+  /**
+   * Standard Red Notes: persist a new manual order for the notes list after a
+   * drag-and-drop reorder. `orderedUuids` is the full visible ordering the user
+   * produced; we seed the stored CustomNotesOrder with it (merging any other
+   * known uuids not currently visible so they aren't lost), then save. The pref
+   * change re-runs reloadDisplayPreferences which reloads the list.
+   */
+  setCustomNotesOrder = async (orderedUuids: UuidString[]): Promise<void> => {
+    const previous = this.preferences.getValue(PrefKey.CustomNotesOrder, PrefDefaults[PrefKey.CustomNotesOrder])
+    const visibleSet = new Set(orderedUuids)
+    // Preserve previously-ordered uuids that aren't part of this visible reorder
+    // (e.g. notes hidden by the current tag/search filter) by appending them.
+    const preserved = previous.filter((uuid) => !visibleSet.has(uuid))
+    const next = [...orderedUuids, ...preserved]
+    await this.preferences.setValue(PrefKey.CustomNotesOrder, next)
+  }
+
+  /**
+   * Standard Red Notes: move the dragged item so it sits immediately before the
+   * target item in the current rendered order, then persist. Used by the notes
+   * list drag-and-drop handlers.
+   */
+  reorderNoteByDrag = async (draggedUuid: UuidString, targetUuid: UuidString): Promise<void> => {
+    if (draggedUuid === targetUuid) {
+      return
+    }
+    const current = this.items.map((item) => item.uuid)
+    const withoutDragged = current.filter((uuid) => uuid !== draggedUuid)
+    const targetIndex = withoutDragged.indexOf(targetUuid)
+    if (targetIndex === -1) {
+      return
+    }
+    withoutDragged.splice(targetIndex, 0, draggedUuid)
+    await this.setCustomNotesOrder(withoutDragged)
   }
 
   selectPreviousItem = () => {

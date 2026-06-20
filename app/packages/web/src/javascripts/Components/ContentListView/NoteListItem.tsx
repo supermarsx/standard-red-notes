@@ -1,6 +1,6 @@
 import { isFile, SNNote } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
-import { FunctionComponent, MouseEvent, useCallback, useRef } from 'react'
+import { FunctionComponent, MouseEvent, useCallback, useRef, useState } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import ListItemConflictIndicator from './ListItemConflictIndicator'
 import ListItemFlagIcons from './ListItemFlagIcons'
@@ -99,6 +99,41 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
 
   const dragPreview = useRef<HTMLDivElement | undefined>(undefined)
 
+  // Standard Red Notes: when the notes list is in Custom (manual) sort mode,
+  // dropping one note row onto another reorders them and persists the new order.
+  const isCustomSortMode = application.itemListController.isCustomSortMode
+  const [isReorderTarget, setIsReorderTarget] = useState(false)
+
+  const onReorderDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!isCustomSortMode) {
+        return
+      }
+      if (!event.dataTransfer.types.includes(NoteDragDataFormat)) {
+        return
+      }
+      event.preventDefault()
+      setIsReorderTarget(true)
+    },
+    [isCustomSortMode],
+  )
+
+  const onReorderDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      setIsReorderTarget(false)
+      if (!isCustomSortMode) {
+        return
+      }
+      const draggedUuid = event.dataTransfer.getData(NoteDragDataFormat)
+      if (!draggedUuid || draggedUuid === item.uuid) {
+        return
+      }
+      event.preventDefault()
+      void application.itemListController.reorderNoteByDrag(draggedUuid, item.uuid)
+    },
+    [application.itemListController, isCustomSortMode, item.uuid],
+  )
+
   const createDragPreview = () => {
     if (!listItemRef.current) {
       throw new Error('List item ref is not set')
@@ -137,6 +172,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
           : 'border-transparent',
         isPreviousItemTiled && 'mt-3 border-t border-t-border',
         isNextItemTiled && 'mb-3 border-b border-b-border',
+        isReorderTarget && 'border-t-2 !border-t-info',
       )}
       id={item.uuid}
       onClick={onClick}
@@ -152,11 +188,14 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
         dataTransfer.setDragImage(element, 0, 0)
         dataTransfer.setData(NoteDragDataFormat, item.uuid)
       }}
+      onDragOver={onReorderDragOver}
       onDragLeave={() => {
+        setIsReorderTarget(false)
         if (dragPreview.current) {
           dragPreview.current.remove()
         }
       }}
+      onDrop={onReorderDrop}
     >
       {application.itemListController.isMultipleSelectionMode ? (
         <div className="mr-0 flex flex-col items-center justify-between gap-2 p-3 pr-4">

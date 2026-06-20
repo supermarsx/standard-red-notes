@@ -85,6 +85,9 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     const [hadChildren, setHadChildren] = useState(hasChildren)
 
     const [isBeingDraggedOver, setIsBeingDraggedOver] = useState(false)
+    // Standard Red Notes: top-edge hover during a tag drag = reorder before this
+    // tag among its siblings, rather than nesting it as a subtag.
+    const [isReorderBefore, setIsReorderBefore] = useState(false)
 
     const tagHierarchyPrefix = navigationController.isSearching && getTitleForLinkedTag(tag, application)?.titlePrefix
 
@@ -269,6 +272,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
 
     const removeDragIndicator = useCallback(() => {
       setIsBeingDraggedOver(false)
+      setIsReorderBefore(false)
     }, [])
 
     const onDragOver: DragEventHandler<HTMLDivElement> = useCallback(
@@ -278,17 +282,37 @@ export const TagsListItem: FunctionComponent<Props> = observer(
         if ((isTagDrag && !isFlatTag) || isNoteDrag) {
           event.preventDefault()
         }
+        if (isTagDrag && !isFlatTag) {
+          const rect = (event.currentTarget as HTMLDivElement).getBoundingClientRect()
+          const inTopZone = event.clientY - rect.top < rect.height / 4
+          setIsReorderBefore(inTopZone)
+        }
       },
       [isFlatTag],
     )
 
     const onDrop: DragEventHandler<HTMLDivElement> = useCallback(
       async (event) => {
+        const wasReorder = isReorderBefore
         setIsBeingDraggedOver(false)
+        setIsReorderBefore(false)
         const draggedTagUuid = event.dataTransfer.getData(TagDragDataFormat)
         const draggedNoteUuid = event.dataTransfer.getData(NoteDragDataFormat)
         if (draggedTagUuid) {
           if (isFlatTag) {
+            return
+          }
+          if (draggedTagUuid === tag.uuid) {
+            return
+          }
+          if (wasReorder) {
+            // Reorder the dragged tag among this tag's siblings, before it.
+            await navigationController.reorderSiblingByDrag(
+              'tags',
+              navigationController.getTagSiblings(tag),
+              draggedTagUuid,
+              tag.uuid,
+            )
             return
           }
           if (!navigationController.isValidTagParent(tag, { uuid: draggedTagUuid } as SNTag)) {
@@ -308,7 +332,16 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           return
         }
       },
-      [application.items, hasFolders, isFlatTag, linkingController, navigationController, premiumModal, tag],
+      [
+        application.items,
+        hasFolders,
+        isFlatTag,
+        isReorderBefore,
+        linkingController,
+        navigationController,
+        premiumModal,
+        tag,
+      ],
     )
 
     return (
@@ -319,7 +352,8 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           className={classNames(
             'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
             (isSelected || isContextMenuOpenForTag) && 'selected',
-            isBeingDraggedOver && 'is-drag-over',
+            isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
+            isReorderBefore && 'border-t-2 !border-t-info',
           )}
           onClick={selectCurrentTag}
           onDoubleClick={clearSearchAndSelectCurrentTag}

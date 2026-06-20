@@ -3,6 +3,7 @@ import { isDeletedItem, isEncryptedItem } from '../../Abstract/Item'
 import { ItemDelta } from '../Index/ItemDelta'
 import { AnyDisplayOptions, DisplayControllerDisplayOptions, GenericDisplayOptions } from './DisplayOptions'
 import { sortTwoItems } from './SortTwoItems'
+import { CustomSortKey } from '../Collection/CollectionSort'
 import { UuidToSortedPositionMap, DisplayItem, ReadonlyItemCollection } from './Types'
 import { CriteriaValidatorInterface } from './Validator/CriteriaValidatorInterface'
 import { CollectionCriteriaValidator } from './Validator/CollectionCriteriaValidator'
@@ -111,10 +112,13 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
 
       if (passes) {
         if (previousElement != undefined) {
-          /** Check to see if the element has changed its sort value. If so, we need to re-sort. */
-          const previousValue = previousElement[this.options.sortBy]
+          /** Check to see if the element has changed its sort value. If so, we need to re-sort.
+           * In Custom (manual) sort mode there is no per-item sort field; ordering changes only
+           * when the customOrder option itself changes (handled via setDisplayOptions). */
+          const sortKey = this.options.sortBy === CustomSortKey ? undefined : (this.options.sortBy as keyof I)
+          const previousValue = sortKey ? previousElement[sortKey] : undefined
 
-          const newValue = element[this.options.sortBy]
+          const newValue = sortKey ? element[sortKey] : undefined
 
           /** Replace the current element with the new one. */
           this.sortedItems[previousIndex] = element
@@ -148,8 +152,20 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
 
   /** Resort the sortedItems array, and update the saved positions */
   private resortItems() {
+    /**
+     * Standard Red Notes: when a custom (manual) order is active, precompute a
+     * uuid -> index map once per sort so the comparator is O(1) per comparison.
+     */
+    let customOrderMap: Record<string, number> | undefined
+    if (this.options.sortBy === CustomSortKey && this.options.customOrder) {
+      customOrderMap = {}
+      this.options.customOrder.forEach((uuid, index) => {
+        ;(customOrderMap as Record<string, number>)[uuid] = index
+      })
+    }
+
     const resorted = this.sortedItems.sort((a, b) => {
-      return sortTwoItems(a, b, this.options.sortBy, this.options.sortDirection)
+      return sortTwoItems(a, b, this.options.sortBy, this.options.sortDirection, false, customOrderMap)
     })
 
     /**

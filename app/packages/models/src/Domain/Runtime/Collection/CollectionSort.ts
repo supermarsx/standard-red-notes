@@ -8,12 +8,21 @@ export interface SortableItem {
   decryptedSize?: number
 }
 
-export const CollectionSort: Record<string, keyof SortableItem> = {
+/**
+ * Standard Red Notes: sentinel sort "property" denoting a user-defined manual
+ * ordering. Unlike the other CollectionSort values it is NOT a key of
+ * SortableItem; when it is the active sortBy, ordering is driven by an explicit
+ * array of item uuids (the customOrder display option) rather than an item field.
+ */
+export const CustomSortKey = 'custom'
+
+export const CollectionSort = {
   CreatedAt: 'created_at',
   UpdatedAt: 'userModifiedDate',
   Title: 'title',
-}
+  Custom: CustomSortKey,
+} as const
 
 export type CollectionSortDirection = 'asc' | 'dsc'
 
-export type CollectionSortProperty = keyof SortableItem
+export type CollectionSortProperty = keyof SortableItem | typeof CustomSortKey

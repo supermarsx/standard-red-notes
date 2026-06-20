@@ -76,6 +76,15 @@ export enum PrefKey {
   // the "Recent Notes" preferences pane. Stored as a pref so it follows the user
   // across reloads and devices.
   RecentNotesHistory = 'recentNotesHistory',
+  // Standard Red Notes: explicit user-defined ("custom") manual orderings, each
+  // stored as an array of item uuids. These drive ordering when the Custom sort
+  // mode is selected, and are rewritten when the user drags to reorder.
+  // CustomNotesOrder is a single global notes order (v1 scope — not per
+  // folder/tag context). CustomFoldersOrder / CustomTagsOrder order the
+  // navigation sidebar's root-level folders and tags respectively.
+  CustomNotesOrder = 'customNotesOrder',
+  CustomFoldersOrder = 'customFoldersOrder',
+  CustomTagsOrder = 'customTagsOrder',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -166,6 +175,9 @@ export type PrefValue = {
   [PrefKey.SearchQueryCacheSize]: number
   [PrefKey.SearchMinQueryLength]: number
   [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
+  [PrefKey.CustomNotesOrder]: string[]
+  [PrefKey.CustomFoldersOrder]: string[]
+  [PrefKey.CustomTagsOrder]: string[]
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.

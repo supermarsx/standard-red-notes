@@ -1,7 +1,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { FilesController } from '@/Controllers/FilesController'
 import { NotesController } from '@/Controllers/NotesController/NotesController'
-import { SortableItem, SNTag, Uuids } from '@standardnotes/snjs'
+import { CollectionSortProperty, SNTag, Uuids } from '@standardnotes/snjs'
 import { ListableContentItem } from './ListableContentItem'
 
 type KeysOfUnion<T> = T extends T ? keyof T : never
@@ -17,7 +17,7 @@ export type AbstractListItemProps<I extends ListableContentItem> = {
   hidePreview: boolean
   item: I
   selected: boolean
-  sortBy: keyof SortableItem | undefined
+  sortBy: CollectionSortProperty | undefined
   tags: SNTag[]
   isPreviousItemTiled?: boolean
   isNextItemTiled?: boolean

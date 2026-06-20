@@ -1,4 +1,4 @@
-import { CollectionSort, SortableItem } from '@standardnotes/snjs'
+import { CollectionSort, CollectionSortProperty } from '@standardnotes/snjs'
 import { FunctionComponent } from 'react'
 import { ListableContentItem } from './Types/ListableContentItem'
 
@@ -9,7 +9,7 @@ type Props = {
     createdAtString?: ListableContentItem['createdAtString']
   }
   hideDate: boolean
-  sortBy: keyof SortableItem | undefined
+  sortBy: CollectionSortProperty | undefined
 }
 
 const ListItemMetadata: FunctionComponent<Props> = ({ item, hideDate, sortBy }) => {

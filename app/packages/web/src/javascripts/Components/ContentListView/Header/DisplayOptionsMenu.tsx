@@ -237,6 +237,17 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
     toggleSortBy(CollectionSort.Title)
   }, [toggleSortBy])
 
+  /**
+   * Standard Red Notes: select Custom (manual) ordering. Unlike the field-based
+   * sorts there is no A→Z/Z→A direction, so we set sortBy directly rather than
+   * toggling sortReverse.
+   */
+  const selectCustomSort = useCallback(() => {
+    if (preferences.sortBy !== CollectionSort.Custom) {
+      void changePreferences({ sortBy: CollectionSort.Custom })
+    }
+  }, [preferences.sortBy, changePreferences])
+
   const toggleHidePreview = useCallback(() => {
     void changePreferences({ hideNotePreview: !preferences.hideNotePreview })
   }, [preferences, changePreferences])
@@ -351,6 +362,16 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
             <span>Title</span>
             <SortIcon enabled={preferences.sortBy === CollectionSort.Title} reverse={preferences.sortReverse} />
+          </div>
+        </MenuRadioButtonItem>
+        <MenuRadioButtonItem
+          disabled={controlsDisabled || isDailyEntry}
+          className="py-2"
+          onClick={selectCustomSort}
+          checked={preferences.sortBy === CollectionSort.Custom}
+        >
+          <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
+            <span>Custom (drag to reorder)</span>
           </div>
         </MenuRadioButtonItem>
       </MenuSection>

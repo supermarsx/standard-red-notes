@@ -78,6 +78,11 @@ export const PrefDefaults = {
   // Standard Red Notes: the recently-opened-notes history starts empty and is
   // populated as the user opens notes.
   [PrefKey.RecentNotesHistory]: [],
+  // Standard Red Notes: custom manual orderings start empty; until the user
+  // drags to reorder, the Custom sort falls back to its stable secondary sort.
+  [PrefKey.CustomNotesOrder]: [],
+  [PrefKey.CustomFoldersOrder]: [],
+  [PrefKey.CustomTagsOrder]: [],
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

@@ -74,6 +74,10 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
     const [hadChildren, setHadChildren] = useState(hasChildren)
 
     const [isBeingDraggedOver, setIsBeingDraggedOver] = useState(false)
+    // Standard Red Notes: when true, dropping reorders the dragged folder to sit
+    // immediately before this one (rather than nesting it as a child). Set while
+    // the cursor hovers the top edge of the row during a folder drag.
+    const [isReorderBefore, setIsReorderBefore] = useState(false)
 
     const isTemplate = application.items.isTemplateItem(folder)
 
@@ -213,6 +217,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
     const removeDragIndicator = useCallback(() => {
       setIsBeingDraggedOver(false)
+      setIsReorderBefore(false)
     }, [])
 
     const onDragOver: DragEventHandler<HTMLDivElement> = useCallback((event): void => {
@@ -221,11 +226,19 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
       if (isFolderDrag || isNoteDrag) {
         event.preventDefault()
       }
+      // Folder-on-folder: top quarter of the row = reorder before; rest = re-parent.
+      if (isFolderDrag) {
+        const rect = (event.currentTarget as HTMLDivElement).getBoundingClientRect()
+        const inTopZone = event.clientY - rect.top < rect.height / 4
+        setIsReorderBefore(inTopZone)
+      }
     }, [])
 
     const onDrop: DragEventHandler<HTMLDivElement> = useCallback(
       async (event) => {
+        const wasReorder = isReorderBefore
         setIsBeingDraggedOver(false)
+        setIsReorderBefore(false)
         const draggedFolderUuid = event.dataTransfer.getData(TagDragDataFormat)
         const draggedNoteUuid = event.dataTransfer.getData(NoteDragDataFormat)
         if (draggedFolderUuid) {
@@ -234,6 +247,16 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
           }
           if (!hasFolders) {
             premiumModal.activate(TAG_FOLDERS_FEATURE_NAME)
+            return
+          }
+          if (wasReorder) {
+            // Reorder the dragged folder among this folder's siblings, before it.
+            await navigationController.reorderSiblingByDrag(
+              'folders',
+              navigationController.getFolderSiblings(folder),
+              draggedFolderUuid,
+              folder.uuid,
+            )
             return
           }
           // Dropping a folder onto a folder re-parents it.
@@ -246,7 +269,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
           return
         }
       },
-      [application.items, hasFolders, navigationController, premiumModal, folder],
+      [application.items, hasFolders, navigationController, premiumModal, folder, isReorderBefore],
     )
 
     return (
@@ -257,7 +280,8 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
           className={classNames(
             'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
             (isSelected || isContextMenuOpenForFolder) && 'selected',
-            isBeingDraggedOver && 'is-drag-over',
+            isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
+            isReorderBefore && 'border-t-2 !border-t-info',
           )}
           onClick={selectCurrentFolder}
           onKeyDown={(event) => {

@@ -22,6 +22,7 @@ import {
   VectorIconNameOrEmoji,
   isTag,
   PrefKey,
+  ApplicationEvent,
   InternalEventBusInterface,
   InternalEventHandlerInterface,
   InternalEventInterface,
@@ -35,6 +36,8 @@ import {
   FolderMutator,
   FolderContentType,
   FolderContent,
+  FileItem,
+  PrefDefaults,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { FeaturesController } from '../FeaturesController'
@@ -80,6 +83,11 @@ export class NavigationController
 
   searchQuery = ''
 
+  // Standard Red Notes: cached custom (manual drag) orderings for the navigation
+  // sidebar, mirrored from preferences as observable state so reorders re-render.
+  customFoldersOrder_: string[] = []
+  customTagsOrder_: string[] = []
+
   private readonly tagsCountsState: TagsCountsState
 
   constructor(
@@ -99,6 +107,7 @@ export class NavigationController
     super(eventBus)
 
     eventBus.addEventHandler(this, VaultDisplayServiceEvent.VaultDisplayOptionsChanged)
+    eventBus.addEventHandler(this, ApplicationEvent.PreferencesChanged)
 
     this.tagsCountsState = new TagsCountsState(items)
     this.smartViews = items.getSmartViews()
@@ -146,8 +155,13 @@ export class NavigationController
 
       rootTags: computed,
       allLocalRootFolders: computed,
+      allLocalRootTags: computed,
       allLocalFlatTags: computed,
       tagsCount: computed,
+
+      customFoldersOrder_: observable.ref,
+      customTagsOrder_: observable.ref,
+      reloadCustomOrders: action,
 
       createNewTemplate: action,
       undoCreateNewTag: action,
@@ -266,6 +280,8 @@ export class NavigationController
     )
 
     this.setDisplayOptionsAndReloadTags = debounce(this.setDisplayOptionsAndReloadTags, 50)
+
+    this.reloadCustomOrders()
   }
 
   private reloadFolders(): void {
@@ -295,6 +311,10 @@ export class NavigationController
       } else {
         this.selectHomeNavigationView().catch(console.error)
       }
+    } else if (event.type === ApplicationEvent.PreferencesChanged) {
+      // Standard Red Notes: refresh cached custom folder/tag orderings so the
+      // navigation lists re-render after a drag-reorder (or remote pref sync).
+      this.reloadCustomOrders()
     }
   }
 
@@ -442,20 +462,127 @@ export class NavigationController
     this.contextMenuTagSection = section
   }
 
-  public get allLocalRootTags(): SNTag[] {
-    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_)) {
-      return [this.editing_, ...this.rootTags]
+  /**
+   * Standard Red Notes: stable-sort a sibling group of folders/tags by a persisted
+   * custom order (array of uuids). Items present in the order sort by ascending
+   * index; items absent keep their existing relative order and are appended at the
+   * end. Sorting per-sibling-group preserves the parent/child hierarchy — a single
+   * global order array is reused at every level. Template (in-progress create) rows
+   * are never reordered and remain at the front via the callers below.
+   */
+  private applyCustomOrder<T extends { uuid: string }>(items: T[], order: string[]): T[] {
+    if (order.length === 0) {
+      return items
     }
-    return this.rootTags
+    const indexOf = new Map<string, number>()
+    order.forEach((uuid, index) => indexOf.set(uuid, index))
+    return [...items]
+      .map((item, originalIndex) => ({ item, originalIndex }))
+      .sort((a, b) => {
+        const aIndex = indexOf.has(a.item.uuid) ? (indexOf.get(a.item.uuid) as number) : Number.MAX_SAFE_INTEGER
+        const bIndex = indexOf.has(b.item.uuid) ? (indexOf.get(b.item.uuid) as number) : Number.MAX_SAFE_INTEGER
+        if (aIndex !== bIndex) {
+          return aIndex - bIndex
+        }
+        return a.originalIndex - b.originalIndex
+      })
+      .map((entry) => entry.item)
+  }
+
+  private get customTagsOrder(): string[] {
+    return this.customTagsOrder_
+  }
+
+  private get customFoldersOrder(): string[] {
+    return this.customFoldersOrder_
+  }
+
+  /**
+   * Standard Red Notes: refresh the cached custom orderings from preferences. Held
+   * as observable state (rather than read inline) so that MobX re-renders the
+   * navigation lists when the user reorders (which rewrites these prefs). Called on
+   * construction and whenever preferences change.
+   */
+  public reloadCustomOrders(): void {
+    runInAction(() => {
+      this.customFoldersOrder_ = this.preferences.getValue(
+        PrefKey.CustomFoldersOrder,
+        PrefDefaults[PrefKey.CustomFoldersOrder],
+      )
+      this.customTagsOrder_ = this.preferences.getValue(PrefKey.CustomTagsOrder, PrefDefaults[PrefKey.CustomTagsOrder])
+    })
+  }
+
+  public get allLocalRootTags(): SNTag[] {
+    const ordered = this.applyCustomOrder(this.rootTags, this.customTagsOrder)
+    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_)) {
+      return [this.editing_, ...ordered]
+    }
+    return ordered
   }
 
   /** Root-level folders (no parent folder) for the hierarchical Folders section. */
   public get allLocalRootFolders(): SNFolder[] {
-    const roots = this.folders.filter((folder) => !folder.parentId)
+    const roots = this.applyCustomOrder(
+      this.folders.filter((folder) => !folder.parentId),
+      this.customFoldersOrder,
+    )
     if (this.editingFolder_ && this.items.isTemplateItem(this.editingFolder_) && !this.editingFolder_.parentId) {
       return [this.editingFolder_, ...roots]
     }
     return roots
+  }
+
+  /**
+   * Standard Red Notes: persist a new sibling ordering after a drag-reorder.
+   * `orderedSiblingUuids` is the desired order of the reordered group; we merge it
+   * ahead of any previously-ordered uuids not in this group so other levels keep
+   * their order. The pref change streams back through observers and re-renders.
+   */
+  public async reorderFolderSiblings(orderedSiblingUuids: string[]): Promise<void> {
+    await this.persistSiblingOrder(PrefKey.CustomFoldersOrder, this.customFoldersOrder, orderedSiblingUuids)
+  }
+
+  public async reorderTagSiblings(orderedSiblingUuids: string[]): Promise<void> {
+    await this.persistSiblingOrder(PrefKey.CustomTagsOrder, this.customTagsOrder, orderedSiblingUuids)
+  }
+
+  private async persistSiblingOrder(
+    key: PrefKey.CustomFoldersOrder | PrefKey.CustomTagsOrder,
+    previous: string[],
+    orderedSiblingUuids: string[],
+  ): Promise<void> {
+    const groupSet = new Set(orderedSiblingUuids)
+    const preserved = previous.filter((uuid) => !groupSet.has(uuid))
+    await this.preferences.setValue(key, [...orderedSiblingUuids, ...preserved])
+  }
+
+  /**
+   * Standard Red Notes: compute the new sibling order when `draggedUuid` is dropped
+   * onto `targetUuid` within `siblings` (placing the dragged item immediately before
+   * the target), then persist it. Used by the folders/tags drag-reorder handlers.
+   */
+  public async reorderSiblingByDrag(
+    kind: 'folders' | 'tags',
+    siblings: { uuid: string }[],
+    draggedUuid: string,
+    targetUuid: string,
+  ): Promise<void> {
+    if (draggedUuid === targetUuid) {
+      return
+    }
+    const order = siblings.map((sibling) => sibling.uuid)
+    if (!order.includes(draggedUuid) || !order.includes(targetUuid)) {
+      return
+    }
+    const without = order.filter((uuid) => uuid !== draggedUuid)
+    const targetIndex = without.indexOf(targetUuid)
+    without.splice(targetIndex, 0, draggedUuid)
+    if (kind === 'folders') {
+      await this.reorderFolderSiblings(without)
+    } else {
+      await this.reorderTagSiblings(without)
+    }
   }
 
   /** All tags (labels), shown flat. Tags are never folders anymore. */
@@ -472,7 +599,31 @@ export class NavigationController
     if (this.items.isTemplateItem(folder) || this.isSearching) {
       return []
     }
-    return this.folders.filter((candidate) => candidate.parentId === folder.uuid)
+    return this.applyCustomOrder(
+      this.folders.filter((candidate) => candidate.parentId === folder.uuid),
+      this.customFoldersOrder,
+    )
+  }
+
+  /**
+   * Standard Red Notes: the ordered sibling group of a folder (its parent's
+   * children, or the root folders) — used to compute a drag-reorder.
+   */
+  public getFolderSiblings(folder: SNFolder): SNFolder[] {
+    if (folder.parentId) {
+      return this.folders.filter((candidate) => candidate.parentId === folder.parentId)
+    }
+    return this.folders.filter((candidate) => !candidate.parentId)
+  }
+
+  /** Standard Red Notes: the ordered sibling group of a tag (its parent's children, or the root tags). */
+  public getTagSiblings(tag: SNTag): SNTag[] {
+    const parent = this.items.getDisplayableTagParent(tag)
+    if (parent) {
+      const childUuids = this.items.getTagChildren(parent).map((child) => child.uuid)
+      return this.tags.filter((candidate) => childUuids.includes(candidate.uuid))
+    }
+    return this.rootTags
   }
 
   /** The single folder a note lives in (its location), if any. */
@@ -496,6 +647,29 @@ export class NavigationController
     }
     if (folder) {
       await this.mutator.changeItem<FolderMutator>(folder, (m) => m.addNote(note))
+    }
+    await this.sync.sync()
+  }
+
+  /** The single folder a file lives in (its location), if any. */
+  public getFileFolder(file: FileItem): SNFolder | undefined {
+    return this.folders.find((folder) => folder.isReferencingItem(file))
+  }
+
+  /**
+   * Move a file into a folder (its exclusive location), or out of all folders when
+   * `folder` is undefined. Mirrors `moveNoteToFolder` but uses the generic relationship
+   * mutators since folders track files via generic references (not `noteReferences`).
+   */
+  public async moveFileToFolder(file: FileItem, folder: SNFolder | undefined): Promise<void> {
+    const currentFolders = this.folders.filter((candidate) => candidate.isReferencingItem(file))
+    for (const current of currentFolders) {
+      if (current.uuid !== folder?.uuid) {
+        await this.mutator.changeItem<FolderMutator>(current, (m) => m.removeItemAsRelationship(file))
+      }
+    }
+    if (folder) {
+      await this.mutator.changeItem<FolderMutator>(folder, (m) => m.e2ePendingRefactor_addItemAsRelationship(file))
     }
     await this.sync.sync()
   }
@@ -825,7 +999,7 @@ export class NavigationController
 
     const childrenUuids = children.map((childTag) => childTag.uuid)
     const childrenTags = this.tags.filter((tag) => childrenUuids.includes(tag.uuid))
-    return childrenTags
+    return this.applyCustomOrder(childrenTags, this.customTagsOrder)
   }
 
   isValidTagParent(parent: SNTag, tag: SNTag): boolean {
