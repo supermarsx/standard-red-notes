@@ -53,6 +53,12 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
     navigationController.setContextMenuOpen(false)
   }, [navigationController, selectedTag])
 
+  const tagHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedTag)
+  const onClickToggleLocalOnly = useCallback(() => {
+    navigationController.setTagOrFolderNotesLocalOnly(selectedTag, !tagHasLocalOnlyNotes).catch(console.error)
+    navigationController.setContextMenuOpen(false)
+  }, [navigationController, selectedTag, tagHasLocalOnlyNotes])
+
   const tagCreatedAt = useMemo(() => formatDateForContextMenu(selectedTag.created_at), [selectedTag.created_at])
 
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -146,6 +152,17 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
             <div className="flex items-center">
               <Icon type="add" className="mr-2 text-neutral" />
               Add subtag
+            </div>
+          </MenuItem>
+          <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
+            <Icon type="cloud-off" className="mr-2 text-neutral" />
+            <div className="flex flex-col">
+              <div>{tagHasLocalOnlyNotes ? "Re-enable sync for this tag's notes" : "Keep this tag's notes local only"}</div>
+              <div className="mt-0.5 text-xs text-passive-0">
+                {tagHasLocalOnlyNotes
+                  ? 'Notes will sync to the server again.'
+                  : "Notes stay on this device. Won't be backed up or appear on other devices."}
+              </div>
             </div>
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>

@@ -363,6 +363,22 @@ export class NotesController
     }).catch(console.error)
   }
 
+  /**
+   * Marks/unmarks the selected notes as "local only" (kept on this device, never synced).
+   * Clearing the flag re-dirties the note so it uploads on the next sync.
+   */
+  setLocalOnlySelectedNotes(localOnly: boolean): void {
+    this.changeSelectedNotes((mutator) => {
+      mutator.localOnly = localOnly
+    }).catch(console.error)
+  }
+
+  async toggleLocalOnlySelectedNotes(): Promise<void> {
+    const notes = this.selectedNotes
+    const anyLocalOnly = notes.some((note) => note.localOnly)
+    this.setLocalOnlySelectedNotes(!anyLocalOnly)
+  }
+
   async setArchiveSelectedNotes(archived: boolean): Promise<void> {
     if (this.getSelectedNotesList().some((note) => note.locked)) {
       this.application.alerts
@@ -568,7 +584,9 @@ export class NotesController
       locked = 0,
       unlocked = 0,
       protecteds = 0,
-      unprotected = 0
+      unprotected = 0,
+      localOnlyCount = 0,
+      syncedCount = 0
 
     for (let i = 0; i < notes.length; i++) {
       const note = notes[i]
@@ -610,6 +628,11 @@ export class NotesController
       } else {
         unprotected++
       }
+      if (note.localOnly) {
+        localOnlyCount++
+      } else {
+        syncedCount++
+      }
     }
 
     return {
@@ -624,6 +647,7 @@ export class NotesController
       hidePreviews: hiddenPreviews > unhiddenPreviews,
       locked: locked > unlocked,
       protect: protecteds > unprotected,
+      localOnly: localOnlyCount > syncedCount,
     }
   }
 

@@ -44,6 +44,12 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
     navigationController.removeFolder(selectedFolder, true).catch(console.error)
   }, [navigationController, selectedFolder])
 
+  const folderHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedFolder)
+  const onClickToggleLocalOnly = useCallback(() => {
+    navigationController.setTagOrFolderNotesLocalOnly(selectedFolder, !folderHasLocalOnlyNotes).catch(console.error)
+    navigationController.setContextMenuOpen(false)
+  }, [navigationController, selectedFolder, folderHasLocalOnlyNotes])
+
   const folderLastModified = useMemo(
     () => formatDateForContextMenu(selectedFolder.userModifiedDate),
     [selectedFolder.userModifiedDate],
@@ -146,6 +152,21 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
               Add subfolder
             </div>
             {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
+          </MenuItem>
+          <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
+            <Icon type="cloud-off" className="mr-2 text-neutral" />
+            <div className="flex flex-col">
+              <div>
+                {folderHasLocalOnlyNotes
+                  ? "Re-enable sync for this folder's notes"
+                  : "Keep this folder's notes local only"}
+              </div>
+              <div className="mt-0.5 text-xs text-passive-0">
+                {folderHasLocalOnlyNotes
+                  ? 'Notes will sync to the server again.'
+                  : "Notes stay on this device. Won't be backed up or appear on other devices."}
+              </div>
+            </div>
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>
             <Icon type="trash" className="mr-2 text-danger" />

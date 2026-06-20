@@ -1,6 +1,10 @@
 import { LoggerInterface } from '@standardnotes/utils'
 import { SyncSource } from '@standardnotes/services'
 import { SyncService } from './SyncService'
+import {
+  DecryptedItemInterface,
+  DeletedItemInterface,
+} from '@standardnotes/models'
 
 describe('SyncService failure backoff', () => {
   let logger: jest.Mocked<LoggerInterface>
@@ -127,5 +131,72 @@ describe('SyncService failure backoff', () => {
     await service.sync({ source: SyncSource.External })
 
     expect(hasPendingBackoff(service)).toBe(false)
+  })
+})
+
+describe('SyncService local-only exclusion (excludeLocalOnlyItems)', () => {
+  /**
+   * Builds a minimal item shaped enough for the filter, which only inspects:
+   *  - `payload.deleted` (via isDeletedItem)
+   *  - `localOnly` (for decrypted items)
+   */
+  const makeDecryptedItem = (uuid: string, localOnly: boolean): DecryptedItemInterface =>
+    ({
+      uuid,
+      localOnly,
+      payload: { deleted: false },
+    }) as unknown as DecryptedItemInterface
+
+  const makeDeletedItem = (uuid: string): DeletedItemInterface =>
+    ({
+      uuid,
+      payload: { deleted: true },
+    }) as unknown as DeletedItemInterface
+
+  it('keeps a normal (syncing) item in the upload set', () => {
+    const normal = makeDecryptedItem('normal', false)
+
+    const result = SyncService.excludeLocalOnlyItems([normal])
+
+    expect(result).toContain(normal)
+    expect(result).toHaveLength(1)
+  })
+
+  it('removes a local-only item from the upload set', () => {
+    const localOnly = makeDecryptedItem('local-only', true)
+
+    const result = SyncService.excludeLocalOnlyItems([localOnly])
+
+    expect(result).not.toContain(localOnly)
+    expect(result).toHaveLength(0)
+  })
+
+  it('keeps normal items and drops local-only items in a mixed set', () => {
+    const normalA = makeDecryptedItem('a', false)
+    const localOnlyB = makeDecryptedItem('b', true)
+    const normalC = makeDecryptedItem('c', false)
+
+    const result = SyncService.excludeLocalOnlyItems([normalA, localOnlyB, normalC])
+
+    expect(result).toEqual([normalA, normalC])
+  })
+
+  it('re-includes an item once its local-only flag is cleared (re-enable path)', () => {
+    // Simulates the flag being toggled off: the same uuid now reports localOnly === false.
+    const reEnabled = makeDecryptedItem('was-local-only', false)
+
+    const result = SyncService.excludeLocalOnlyItems([reEnabled])
+
+    expect(result).toContain(reEnabled)
+  })
+
+  it('never excludes deleted items, so deletions still propagate', () => {
+    // A deleted item cannot carry the decrypted local-only flag and must always be allowed
+    // through so its deletion can be persisted/uploaded.
+    const deleted = makeDeletedItem('deleted')
+
+    const result = SyncService.excludeLocalOnlyItems([deleted])
+
+    expect(result).toContain(deleted)
   })
 })

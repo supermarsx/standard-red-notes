@@ -21,6 +21,12 @@ export class DecryptedItem<C extends ItemContent = ItemContent>
   public readonly archived: boolean = false
   public readonly locked: boolean = false
   public readonly starred: boolean = false
+  /**
+   * When true, this item is excluded from the sync upload set (kept local to this device).
+   * Default false = item syncs normally. Read locally even for never-uploaded items because
+   * it lives in appData, which the local database persists.
+   */
+  public readonly localOnly: boolean = false
 
   constructor(payload: DecryptedPayloadInterface<C>) {
     super(payload)
@@ -36,6 +42,7 @@ export class DecryptedItem<C extends ItemContent = ItemContent>
     this.pinned = this.getAppDomainValueWithDefault(AppDataField.Pinned, false)
     this.archived = this.getAppDomainValueWithDefault(AppDataField.Archived, false)
     this.locked = this.getAppDomainValueWithDefault(AppDataField.Locked, false)
+    this.localOnly = this.getAppDomainValueWithDefault(AppDataField.LocalOnly, false)
   }
 
   public static DefaultAppDomain() {

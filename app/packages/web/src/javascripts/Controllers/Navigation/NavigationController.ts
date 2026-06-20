@@ -14,6 +14,8 @@ import {
   SNTag,
   TagContent,
   TagMutator,
+  NoteMutator,
+  isNote,
   UuidString,
   isSystemView,
   FindItem,
@@ -671,6 +673,44 @@ export class NavigationController
     if (folder) {
       await this.mutator.changeItem<FolderMutator>(folder, (m) => m.e2ePendingRefactor_addItemAsRelationship(file))
     }
+    await this.sync.sync()
+  }
+
+  /**
+   * Collects the member notes of a tag or folder. Both `SNTag` and `SNFolder` expose
+   * `noteReferences` (the notes they reference). We resolve those references to live note
+   * items, skipping any that no longer exist.
+   */
+  public memberNotesOfTagOrFolder(tagOrFolder: SNTag | SNFolder): SNNote[] {
+    const noteUuids = tagOrFolder.noteReferences.map((ref) => ref.uuid)
+    return this.items.findItems<SNNote>(noteUuids).filter(isNote)
+  }
+
+  public tagOrFolderHasAnyLocalOnlyNotes(tagOrFolder: SNTag | SNFolder): boolean {
+    return this.memberNotesOfTagOrFolder(tagOrFolder).some((note) => note.localOnly)
+  }
+
+  /**
+   * Applies (or clears) the "local only" / exclude-from-sync flag to every member note of a
+   * tag or folder. Per the design, this operates on the member NOTES (not the tag/folder
+   * container itself): excluding the notes is what keeps their content off the server.
+   *
+   * Edge case (documented, not silently handled): a note that is a member of a SYNCED tag
+   * may be marked local-only here. The tag still references it (and the tag continues to
+   * sync, carrying that reference). The note's content stays local; only the membership
+   * reference is visible on the server. We do not strip the reference, to avoid surprising
+   * data changes to the shared tag.
+   */
+  public async setTagOrFolderNotesLocalOnly(tagOrFolder: SNTag | SNFolder, localOnly: boolean): Promise<void> {
+    const notes = this.memberNotesOfTagOrFolder(tagOrFolder)
+    if (notes.length === 0) {
+      return
+    }
+
+    await this.mutator.changeItems<NoteMutator, SNNote>(notes, (mutator) => {
+      mutator.localOnly = localOnly
+    })
+
     await this.sync.sync()
   }
 

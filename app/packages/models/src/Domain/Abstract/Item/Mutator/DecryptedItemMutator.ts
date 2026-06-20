@@ -96,6 +96,19 @@ export class DecryptedItemMutator<
   }
 
   /**
+   * Marks/unmarks this item as "local only" (excluded from the sync upload set).
+   *
+   * Setting this is a dirtying mutation, which matters for the RE-ENABLE path: when
+   * `localOnly` is cleared (set to false), the item becomes dirty with a fresh dirty index
+   * and is therefore picked up by the next sync's upload set and pushed to the server. When
+   * set to true the item is also dirtied, but `SyncService.itemsNeedingSync` filters it out
+   * of the upload set, so it is persisted locally without ever being uploaded.
+   */
+  public set localOnly(localOnly: boolean) {
+    this.setAppDataItem(AppDataField.LocalOnly, localOnly)
+  }
+
+  /**
    * Overwrites the entirety of this domain's data with the data arg.
    */
   public setDomainData(data: DomainDataValueType, domain: ItemDomainKey): void {

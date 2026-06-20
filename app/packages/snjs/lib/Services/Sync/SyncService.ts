@@ -617,7 +617,33 @@ export class SyncService
 
     const itemsWithoutBackoffPenalty = dirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
 
-    return itemsWithoutBackoffPenalty
+    return SyncService.excludeLocalOnlyItems(itemsWithoutBackoffPenalty)
+  }
+
+  /**
+   * Removes "local only" items from a set of dirty items so they are never included in the
+   * sync upload set (and thus never leave the device). This is the single, safe seam where
+   * local-only exclusion is enforced.
+   *
+   * Pure and static so it can be unit-tested in isolation.
+   *
+   * IMPORTANT SAFETY NOTES:
+   * - Excluded items are still persisted to the local database by the normal pre-sync save
+   *   path (they remain dirty until persisted), so they survive reloads.
+   * - Only DECRYPTED items can carry the `localOnly` flag (it lives in decrypted appData).
+   *   Deleted items are intentionally NOT filtered: a local-only item that is deleted still
+   *   needs its local removal to proceed, and a deleted item that was previously synced must
+   *   still be able to push its deletion to the server.
+   */
+  static excludeLocalOnlyItems(
+    items: (DecryptedItemInterface | DeletedItemInterface)[],
+  ): (DecryptedItemInterface | DeletedItemInterface)[] {
+    return items.filter((item) => {
+      if (isDeletedItem(item)) {
+        return true
+      }
+      return item.localOnly !== true
+    })
   }
 
   public async markAllItemsAsNeedingSyncAndPersist(): Promise<void> {

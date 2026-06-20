@@ -50,8 +50,19 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const [narrationOpen, setNarrationOpen] = useState(false)
   const { toggleAppPane } = useResponsiveAppPane()
 
-  const { trashed, notTrashed, pinned, unpinned, starred, archived, unarchived, locked, protect, hidePreviews } =
-    notesController.getNotesInfo(notes)
+  const {
+    trashed,
+    notTrashed,
+    pinned,
+    unpinned,
+    starred,
+    archived,
+    unarchived,
+    locked,
+    protect,
+    hidePreviews,
+    localOnly,
+  } = notesController.getNotesInfo(notes)
 
   const editorForNote = useMemo(
     () => (notes[0] ? application.componentManager.editorForNote(notes[0]) : undefined),
@@ -259,6 +270,21 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         >
           <Icon type="lock" className={iconClass} />
           Password protect
+        </MenuSwitchButtonItem>
+        <MenuSwitchButtonItem
+          checked={localOnly}
+          onChange={(localOnly) => {
+            notesController.setLocalOnlySelectedNotes(localOnly)
+          }}
+          disabled={areSomeNotesInReadonlySharedVault}
+        >
+          <Icon type="cloud-off" className={iconClass} />
+          <div className="flex flex-col">
+            <div>Keep local only — don&apos;t sync to the server</div>
+            <div className="mt-1 text-xs text-passive-0">
+              Stays on this device. Won&apos;t be backed up or appear on your other devices.
+            </div>
+          </div>
         </MenuSwitchButtonItem>
       </MenuSection>
       {notes.length === 1 && (
