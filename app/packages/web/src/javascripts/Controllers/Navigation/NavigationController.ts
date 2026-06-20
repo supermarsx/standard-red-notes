@@ -11,6 +11,7 @@ import {
   ContentType,
   SmartView,
   SNTag,
+  TagContent,
   TagMutator,
   UuidString,
   isSystemView,
@@ -118,6 +119,8 @@ export class NavigationController
       assignParent: action,
 
       rootTags: computed,
+      allLocalRootFolders: computed,
+      allLocalFlatTags: computed,
       tagsCount: computed,
 
       createNewTemplate: action,
@@ -383,6 +386,38 @@ export class NavigationController
     return this.rootTags
   }
 
+  /**
+   * A tag is presented as a folder when it is explicitly flagged OR it already
+   * contains child tags. The "has children" rule means existing nested-tag
+   * hierarchies keep behaving as folders without any data migration.
+   */
+  public isEffectiveFolder(tag: SNTag): boolean {
+    return tag.isFolder === true || this.items.getTagChildren(tag).length > 0
+  }
+
+  /** Root-level folders for the hierarchical Folders section. */
+  public get allLocalRootFolders(): SNTag[] {
+    const folders = this.rootTags.filter((tag) => this.isEffectiveFolder(tag))
+    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && this.editing_.isFolder) {
+      return [this.editing_, ...folders]
+    }
+    return folders
+  }
+
+  /** Top-level standalone tags (no children, not flagged as folders), shown flat. */
+  public get allLocalFlatTags(): SNTag[] {
+    const flat = this.rootTags.filter((tag) => !this.isEffectiveFolder(tag))
+    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && !this.editing_.isFolder) {
+      return [this.editing_, ...flat]
+    }
+    return flat
+  }
+
+  /** Children of a folder; the full subtree is shown within the Folders section. */
+  public getFolderChildren(tag: SNTag): SNTag[] {
+    return this.getChildren(tag)
+  }
+
   public getNotesCount(tag: SNTag): number {
     return this.tagsCountsState.counts[tag.uuid] || 0
   }
@@ -588,6 +623,16 @@ export class NavigationController
       .catch(console.error)
   }
 
+  /** Convert a tag to a folder or back to a plain tag. */
+  public setIsFolder(tag: SNTag, isFolder: boolean) {
+    this._changeAndSaveItem
+      .execute<TagMutator>(tag, (mutator) => {
+        mutator.isFolder = isFolder
+      })
+      .then(() => this.sync.sync())
+      .catch(console.error)
+  }
+
   public get editingTag(): SNTag | SmartView | undefined {
     return this.editing_
   }
@@ -601,14 +646,17 @@ export class NavigationController
     })
   }
 
-  public createNewTemplate() {
+  public createNewTemplate(options: { isFolder?: boolean } = {}) {
     const isAlreadyEditingATemplate = this.editing_ && this.items.isTemplateItem(this.editing_)
 
     if (isAlreadyEditingATemplate) {
       return
     }
 
-    const newTag = this.items.createTemplateItem(ContentType.TYPES.Tag) as SNTag
+    const newTag = this.items.createTemplateItem<TagContent, SNTag>(
+      ContentType.TYPES.Tag,
+      options.isFolder ? ({ isFolder: true } as unknown as TagContent) : undefined,
+    )
 
     runInAction(() => {
       this.selectedLocation = 'all'

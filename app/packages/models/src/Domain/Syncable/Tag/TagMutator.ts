@@ -40,6 +40,14 @@ export class TagMutator<Content extends TagContent = TagContent> extends Decrypt
     }
   }
 
+  set isFolder(isFolder: boolean) {
+    if (isFolder) {
+      this.mutableContent.isFolder = true
+    } else {
+      delete this.mutableContent.isFolder
+    }
+  }
+
   get preferences(): TagPreferences {
     if (!this.mutablePreferences) {
       this.mutableContent.preferences = {}

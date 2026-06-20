@@ -63,6 +63,11 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
     navigationController.setContextMenuOpen(false)
   }, [navigationController, selectedTag])
 
+  const onClickToggleFolder = useCallback(() => {
+    navigationController.setIsFolder(selectedTag, !selectedTag.isFolder)
+    navigationController.setContextMenuOpen(false)
+  }, [navigationController, selectedTag])
+
   const tagCreatedAt = useMemo(() => formatDateForContextMenu(selectedTag.created_at), [selectedTag.created_at])
 
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -150,6 +155,12 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
             <div className="flex items-center">
               <Icon type="star" className="mr-2 text-neutral" />
               {selectedTag.starred ? 'Unfavorite' : 'Favorite'}
+            </div>
+          </MenuItem>
+          <MenuItem className={'justify-between py-1.5'} onClick={onClickToggleFolder}>
+            <div className="flex items-center">
+              <Icon type={selectedTag.isFolder ? 'hashtag' : 'folder'} className="mr-2 text-neutral" />
+              {selectedTag.isFolder ? 'Convert to tag' : 'Convert to folder'}
             </div>
           </MenuItem>
           <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubtag}>

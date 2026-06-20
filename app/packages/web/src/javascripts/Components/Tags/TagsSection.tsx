@@ -2,7 +2,6 @@ import TagsList from '@/Components/Tags/TagsList'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent } from 'react'
 import TagsSectionAddButton from './TagsSectionAddButton'
-import TagsSectionTitle from './TagsSectionTitle'
 import { useApplication } from '../ApplicationProvider'
 
 const TagsSection: FunctionComponent = () => {
@@ -26,11 +25,25 @@ const TagsSection: FunctionComponent = () => {
       <section>
         <div className={'section-title-bar'}>
           <div className="section-title-bar-header">
-            <TagsSectionTitle features={application.featuresController} />
+            <div className="title text-base md:text-sm">
+              <span className="font-bold">Folders</span>
+            </div>
+            {!application.navigationController.isSearching && <TagsSectionAddButton isFolder={true} />}
+          </div>
+        </div>
+        <TagsList type="folders" />
+      </section>
+
+      <section>
+        <div className={'section-title-bar'}>
+          <div className="section-title-bar-header">
+            <div className="title text-base md:text-sm">
+              <span className="font-bold">Tags</span>
+            </div>
             {!application.navigationController.isSearching && <TagsSectionAddButton />}
           </div>
         </div>
-        <TagsList type="all" />
+        <TagsList type="tags" />
       </section>
     </>
   )

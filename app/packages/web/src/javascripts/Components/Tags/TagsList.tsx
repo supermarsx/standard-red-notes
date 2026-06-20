@@ -19,6 +19,12 @@ function getAllTagsForType(controller: NavigationController, type: TagListSectio
     }
     return controller.allLocalRootTags
   }
+  if (type === 'folders') {
+    return controller.allLocalRootFolders
+  }
+  if (type === 'tags') {
+    return controller.allLocalFlatTags
+  }
   return controller.starredTags
 }
 
@@ -53,13 +59,17 @@ const TagsList: FunctionComponent<Props> = ({ type }: Props) => {
   })
 
   if (allTags.length === 0) {
-    return (
-      <div className="px-4 text-base opacity-50 lg:text-sm">
-        {application.navigationController.isSearching
-          ? 'No tags found. Try a different search.'
-          : 'No tags or folders. Create one using the add button above.'}
-      </div>
-    )
+    let emptyMessage: string
+    if (application.navigationController.isSearching) {
+      emptyMessage = 'No tags found. Try a different search.'
+    } else if (type === 'folders') {
+      emptyMessage = 'No folders yet. Create one with the + above.'
+    } else if (type === 'tags') {
+      emptyMessage = 'No tags yet. Create one with the + above.'
+    } else {
+      emptyMessage = 'No tags or folders. Create one using the add button above.'
+    }
+    return <div className="px-4 text-base opacity-50 lg:text-sm">{emptyMessage}</div>
   }
 
   return (
@@ -80,7 +90,7 @@ const TagsList: FunctionComponent<Props> = ({ type }: Props) => {
           )
         })}
       </div>
-      {type === 'all' && <RootTagDropZone tagsState={application.navigationController} />}
+      {type === 'folders' && <RootTagDropZone tagsState={application.navigationController} />}
     </>
   )
 }

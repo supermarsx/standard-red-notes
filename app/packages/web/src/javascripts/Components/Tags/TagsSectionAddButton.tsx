@@ -5,13 +5,17 @@ import { useCallback, useMemo } from 'react'
 import { useKeyboardService } from '../KeyboardServiceProvider'
 import { useApplication } from '../ApplicationProvider'
 
-function TagsSectionAddButton() {
+type Props = {
+  isFolder?: boolean
+}
+
+function TagsSectionAddButton({ isFolder = false }: Props) {
   const application = useApplication()
   const keyboardService = useKeyboardService()
 
   const addNewTag = useCallback(
-    () => application.navigationController.createNewTemplate(),
-    [application.navigationController],
+    () => application.navigationController.createNewTemplate({ isFolder }),
+    [application.navigationController, isFolder],
   )
 
   const shortcut = useMemo(
@@ -23,7 +27,7 @@ function TagsSectionAddButton() {
     <IconButton
       focusable={true}
       icon="add"
-      title={`Create a new tag (${shortcut})`}
+      title={`${isFolder ? 'Create a new folder' : 'Create a new tag'} (${shortcut})`}
       className="p-0 text-neutral"
       onClick={addNewTag}
     />

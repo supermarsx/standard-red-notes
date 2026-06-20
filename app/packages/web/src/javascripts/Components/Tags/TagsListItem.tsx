@@ -67,7 +67,15 @@ export const TagsListItem: FunctionComponent<Props> = observer(
         : navigationController.selectedLocation === type)
     const noteCounts = computed(() => navigationController.getNotesCount(tag))
 
-    const childrenTags = computed(() => navigationController.getChildren(tag)).get()
+    const isFlatTag = type === 'tags'
+
+    const childrenTags = computed(() =>
+      isFlatTag
+        ? []
+        : type === 'folders'
+          ? navigationController.getFolderChildren(tag)
+          : navigationController.getChildren(tag),
+    ).get()
     const hasChildren = childrenTags.length > 0
 
     const hasFolders = features.hasFolders
@@ -239,33 +247,40 @@ export const TagsListItem: FunctionComponent<Props> = observer(
 
     const onDragStart: DragEventHandler<HTMLDivElement> = useCallback(
       (event) => {
+        if (isFlatTag) {
+          return
+        }
         event.dataTransfer.setData(TagDragDataFormat, tag.uuid)
       },
-      [tag.uuid],
+      [isFlatTag, tag.uuid],
     )
 
-    const onDragEnter: DragEventHandler<HTMLDivElement> = useCallback((event): void => {
-      if (
-        event.dataTransfer.types.includes(TagDragDataFormat) ||
-        event.dataTransfer.types.includes(NoteDragDataFormat)
-      ) {
-        event.preventDefault()
-        setIsBeingDraggedOver(true)
-      }
-    }, [])
+    const onDragEnter: DragEventHandler<HTMLDivElement> = useCallback(
+      (event): void => {
+        const isTagDrag = event.dataTransfer.types.includes(TagDragDataFormat)
+        const isNoteDrag = event.dataTransfer.types.includes(NoteDragDataFormat)
+        if ((isTagDrag && !isFlatTag) || isNoteDrag) {
+          event.preventDefault()
+          setIsBeingDraggedOver(true)
+        }
+      },
+      [isFlatTag],
+    )
 
     const removeDragIndicator = useCallback(() => {
       setIsBeingDraggedOver(false)
     }, [])
 
-    const onDragOver: DragEventHandler<HTMLDivElement> = useCallback((event): void => {
-      if (
-        event.dataTransfer.types.includes(TagDragDataFormat) ||
-        event.dataTransfer.types.includes(NoteDragDataFormat)
-      ) {
-        event.preventDefault()
-      }
-    }, [])
+    const onDragOver: DragEventHandler<HTMLDivElement> = useCallback(
+      (event): void => {
+        const isTagDrag = event.dataTransfer.types.includes(TagDragDataFormat)
+        const isNoteDrag = event.dataTransfer.types.includes(NoteDragDataFormat)
+        if ((isTagDrag && !isFlatTag) || isNoteDrag) {
+          event.preventDefault()
+        }
+      },
+      [isFlatTag],
+    )
 
     const onDrop: DragEventHandler<HTMLDivElement> = useCallback(
       async (event) => {
@@ -273,6 +288,9 @@ export const TagsListItem: FunctionComponent<Props> = observer(
         const draggedTagUuid = event.dataTransfer.getData(TagDragDataFormat)
         const draggedNoteUuid = event.dataTransfer.getData(NoteDragDataFormat)
         if (draggedTagUuid) {
+          if (isFlatTag) {
+            return
+          }
           if (!navigationController.isValidTagParent(tag, { uuid: draggedTagUuid } as SNTag)) {
             return
           }
@@ -294,7 +312,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           return
         }
       },
-      [application.items, hasFolders, linkingController, navigationController, premiumModal, tag],
+      [application.items, hasFolders, isFlatTag, linkingController, navigationController, premiumModal, tag],
     )
 
     return (
@@ -337,7 +355,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             e.preventDefault()
             onContextMenu(tag, type, e.clientX, e.clientY)
           }}
-          draggable={!navigationController.isSearching}
+          draggable={!navigationController.isSearching && !isFlatTag}
           onDragStart={onDragStart}
           onDragEnter={onDragEnter}
           onDragExit={removeDragIndicator}
