@@ -209,7 +209,7 @@ services:
       - standard-red-notes
 
   localstack:
-    image: localstack/localstack:3.8
+    image: localstack/localstack:4
     restart: unless-stopped
     environment:
       SERVICES: sns,sqs
