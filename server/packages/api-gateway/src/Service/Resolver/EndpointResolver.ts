@@ -40,6 +40,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:dead-man-switches/', 'auth.deadManSwitches.list'],
     ['[POST]:dead-man-switches/:switchId/check-in', 'auth.deadManSwitches.checkIn'],
     ['[DELETE]:dead-man-switches/:switchId', 'auth.deadManSwitches.delete'],
+    // Email Reminders Controller (Standard Red Notes)
+    ['[POST]:email-reminders/', 'auth.emailReminders.create'],
+    ['[GET]:email-reminders/', 'auth.emailReminders.list'],
+    ['[DELETE]:email-reminders/:reminderId', 'auth.emailReminders.delete'],
     // Trusted Devices Controller (Standard Red Notes)
     ['[POST]:trusted-devices/', 'auth.trustedDevices.create'],
     ['[GET]:trusted-devices/', 'auth.trustedDevices.list'],

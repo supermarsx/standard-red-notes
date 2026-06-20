@@ -106,6 +106,16 @@ const DeadManSwitchPaths = {
   deadManSwitchCheckIn: (id: string) => `/v1/dead-man-switches/${id}/check-in`,
 }
 
+// Standard Red Notes: email reminders. Authed routes let a signed-in user register
+// (create), list, and delete reminders that the server may EMAIL to their account
+// email when due. Unlike in-app reminders (E2E-encrypted in the note appData), the
+// reminder time + message here are stored in PLAINTEXT because the user opted that
+// reminder into email delivery — see SetReminderModal's privacy disclosure.
+const EmailReminderPaths = {
+  emailReminders: '/v1/email-reminders',
+  emailReminder: (id: string) => `/v1/email-reminders/${id}`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -132,6 +142,7 @@ export const Paths = {
     ...McpTokenPaths,
     ...SharePaths,
     ...DeadManSwitchPaths,
+    ...EmailReminderPaths,
     meta: '/v1/meta',
   },
   v2: {

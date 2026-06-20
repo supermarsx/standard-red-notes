@@ -13,6 +13,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
   private readonly UNENCRYPTED_SETTINGS = [
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
+    SettingName.NAMES.EmailRemindersEnabled,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -27,6 +28,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.OneDriveBackupFrequency,
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
+    SettingName.NAMES.EmailRemindersEnabled,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.ListedAuthorSecrets,

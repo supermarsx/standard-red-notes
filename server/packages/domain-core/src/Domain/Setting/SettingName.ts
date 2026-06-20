@@ -62,6 +62,16 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // only (CLIENT-IMMUTABLE); unencrypted/unsensitive so the trigger job can read
     // it without per-user key material.
     EmailBackupLastSent: 'EMAIL_BACKUP_LAST_SENT',
+    // Standard Red Notes: per-user opt-in for EMAIL REMINDERS. When 'true', the
+    // scheduled email-reminder cron is allowed to email this user the reminders
+    // they have EXPLICITLY registered for emailing (see the email_reminders table).
+    // Default disabled (absent/anything-but-'true'). Client-MUTABLE so the user can
+    // opt in/out; unencrypted/unsensitive so the trigger job can read it without
+    // per-user key material. Admin-manageable so an operator can view/override it.
+    // NOTE: enabling this setting alone emails nothing — the user must also opt
+    // INDIVIDUAL reminders into emailing, which sends those reminders' time + text
+    // to the server in PLAINTEXT (they leave end-to-end encryption for that purpose).
+    EmailRemindersEnabled: 'EMAIL_REMINDERS_ENABLED',
   }
 
   get value(): string {

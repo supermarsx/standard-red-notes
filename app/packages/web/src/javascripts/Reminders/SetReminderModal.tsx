@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { SNNote } from '@standardnotes/snjs'
 import { addToast, ToastType } from '@standardnotes/toast'
@@ -17,6 +17,12 @@ import {
   requestNotificationPermission,
   notificationsSupported,
 } from './notificationService'
+import {
+  createEmailReminder,
+  deleteEmailReminder,
+  getEmailRemindersOptIn,
+  setEmailRemindersOptIn,
+} from './emailReminders'
 
 type Props = {
   application: WebApplication
@@ -55,6 +61,19 @@ const SetReminderModalContent = observer(
     const [message, setMessage] = useState<string>(editing?.message ?? '')
     const [permission, setPermission] = useState(() => getNotificationPermission())
 
+    // Email-reminder opt-in state. `emailMe` is the per-reminder checkbox; it starts
+    // checked if this reminder was already registered for email (has an id).
+    const hasAccount = application.hasAccount()
+    const [emailMe, setEmailMe] = useState<boolean>(Boolean(editing?.emailReminderId))
+    const [accountOptIn, setAccountOptIn] = useState<boolean>(false)
+
+    useEffect(() => {
+      if (!hasAccount) {
+        return
+      }
+      void getEmailRemindersOptIn(application).then(setAccountOptIn)
+    }, [application, hasAccount])
+
     const now = Date.now()
 
     const enableNotifications = useCallback(async () => {
@@ -80,12 +99,50 @@ const SetReminderModalContent = observer(
         return
       }
 
+      const dueIso = dueDate.toISOString()
+      const trimmedMessage = message.trim()
+
       const reminder: Reminder = {
         id: editing?.id ?? generateReminderId(),
-        dueAt: dueDate.toISOString(),
-        message: message.trim() || undefined,
+        dueAt: dueIso,
+        message: trimmedMessage || undefined,
         // Editing a reminder's time resets the notified flag so it can fire again.
-        notified: editing && editing.dueAt === dueDate.toISOString() ? editing.notified : false,
+        notified: editing && editing.dueAt === dueIso ? editing.notified : false,
+        emailReminderId: editing?.emailReminderId,
+      }
+
+      // Reconcile the server-side email reminder with the checkbox.
+      //  - turning email OFF (or any save when previously on): cancel the old server
+      //    record (best-effort) so we never email a stale time/message.
+      //  - turning email ON: register a fresh server record (its time + message leave
+      //    end-to-end encryption — disclosed in the UI below).
+      const previousEmailId = editing?.emailReminderId
+      if (emailMe && hasAccount) {
+        if (previousEmailId) {
+          await deleteEmailReminder(application, previousEmailId)
+        }
+        // Ensure the account-level opt-in is on so the server is allowed to email it.
+        if (!accountOptIn) {
+          const enabled = await setEmailRemindersOptIn(application, true)
+          if (enabled) {
+            setAccountOptIn(true)
+          }
+        }
+        const emailText = trimmedMessage || 'Reminder'
+        const newId = await createEmailReminder(application, dueIso, emailText)
+        if (newId) {
+          reminder.emailReminderId = newId
+        } else {
+          reminder.emailReminderId = undefined
+          addToast({
+            type: ToastType.Error,
+            message: 'The reminder was saved, but it could not be registered for email.',
+          })
+        }
+      } else if (previousEmailId) {
+        // Email turned off (or no account): cancel the server record.
+        await deleteEmailReminder(application, previousEmailId)
+        reminder.emailReminderId = undefined
       }
 
       try {
@@ -102,10 +159,15 @@ const SetReminderModalContent = observer(
         })
         console.error(error)
       }
-    }, [close, dueLocal, editing, message, note, notesController])
+    }, [accountOptIn, application, close, dueLocal, editing, emailMe, hasAccount, message, note, notesController])
 
     const clear = useCallback(async () => {
       try {
+        // Best-effort cancel of the server email reminder so a cleared in-app reminder
+        // is never emailed.
+        if (editing?.emailReminderId) {
+          await deleteEmailReminder(application, editing.emailReminderId)
+        }
         await notesController.clearNoteReminders(note)
         addToast({ type: ToastType.Regular, message: 'Reminder cleared.' })
         close()
@@ -113,7 +175,7 @@ const SetReminderModalContent = observer(
         addToast({ type: ToastType.Error, message: 'Could not clear the reminder.' })
         console.error(error)
       }
-    }, [close, note, notesController])
+    }, [application, close, editing, note, notesController])
 
     const previewIso = (() => {
       if (!dueLocal) {
@@ -176,6 +238,28 @@ const SetReminderModalContent = observer(
               onChange={(event) => setMessage(event.target.value)}
             />
           </div>
+
+          {/* Opt-in email delivery for THIS reminder. Only meaningful with an account
+              (an email address is required to receive one). */}
+          {hasAccount && (
+            <div className="flex flex-col gap-1 rounded border border-border p-3">
+              <label className="flex items-center gap-2 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={emailMe}
+                  onChange={(event) => setEmailMe(event.target.checked)}
+                />
+                Also email me this reminder
+              </label>
+              <p className="text-xs text-passive-0">
+                Emailing a reminder sends its time and text to the server in plaintext (it leaves
+                end-to-end encryption) so it can be emailed to you. Only this reminder is shared;
+                your note stays encrypted. Email is sent only if your server operator has enabled and
+                configured email reminders. You can cancel it any time from Preferences &rsaquo;
+                Email reminders, or by clearing this reminder.
+              </p>
+            </div>
+          )}
 
           {/* Opt-in OS notifications. Permission is only requested on this gesture. */}
           {notificationsSupported() ? (

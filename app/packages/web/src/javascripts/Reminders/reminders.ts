@@ -40,6 +40,14 @@ export type Reminder = {
   message?: string
   /** Whether we've already fired a notification for this reminder. */
   notified?: boolean
+  /**
+   * Standard Red Notes: if the user opted THIS reminder into email delivery, the
+   * uuid of the server-side email-reminder record. Stored so we can best-effort
+   * cancel/replace that server record when the in-app reminder is cleared or its
+   * time/message changes. Its presence means the reminder's time + message were
+   * sent to the server in PLAINTEXT (out of end-to-end encryption) for emailing.
+   */
+  emailReminderId?: string
 }
 
 /** A reminder paired with the note it belongs to (for list views/checkers). */

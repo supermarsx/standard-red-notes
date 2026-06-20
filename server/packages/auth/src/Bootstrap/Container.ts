@@ -262,6 +262,19 @@ import { DeleteDeadManSwitch } from '../Domain/UseCase/DeleteDeadManSwitch/Delet
 import { TriggerDueDeadManSwitches } from '../Domain/UseCase/TriggerDueDeadManSwitches/TriggerDueDeadManSwitches'
 import { DeadManSwitchesController } from '../Controller/DeadManSwitchesController'
 import { BaseDeadManSwitchesController } from '../Infra/InversifyExpressUtils/Base/BaseDeadManSwitchesController'
+import { EmailReminder } from '../Domain/EmailReminder/EmailReminder'
+import { EmailReminderRepositoryInterface } from '../Domain/EmailReminder/EmailReminderRepositoryInterface'
+import { EmailReminderPersistenceMapper } from '../Mapping/EmailReminderPersistenceMapper'
+import { EmailReminderHttpProjection } from '../Infra/Http/Projection/EmailReminderHttpProjection'
+import { EmailReminderHttpMapper } from '../Mapping/EmailReminderHttpMapper'
+import { TypeORMEmailReminder } from '../Infra/TypeORM/TypeORMEmailReminder'
+import { TypeORMEmailReminderRepository } from '../Infra/TypeORM/TypeORMEmailReminderRepository'
+import { CreateEmailReminder } from '../Domain/UseCase/CreateEmailReminder/CreateEmailReminder'
+import { ListEmailReminders } from '../Domain/UseCase/ListEmailReminders/ListEmailReminders'
+import { DeleteEmailReminder } from '../Domain/UseCase/DeleteEmailReminder/DeleteEmailReminder'
+import { TriggerDueEmailReminders } from '../Domain/UseCase/TriggerDueEmailReminders/TriggerDueEmailReminders'
+import { EmailRemindersController } from '../Controller/EmailRemindersController'
+import { BaseEmailRemindersController } from '../Infra/InversifyExpressUtils/Base/BaseEmailRemindersController'
 import { TrustedDevice } from '../Domain/TrustedDevice/TrustedDevice'
 import { TrustedDeviceRepositoryInterface } from '../Domain/TrustedDevice/TrustedDeviceRepositoryInterface'
 import { TrustedDevicePersistenceMapper } from '../Mapping/TrustedDevicePersistenceMapper'
@@ -577,6 +590,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<DeadManSwitch, DeadManSwitchHttpProjection>>(TYPES.Auth_DeadManSwitchHttpMapper)
       .toConstantValue(new DeadManSwitchHttpMapper())
     container
+      .bind<MapperInterface<EmailReminder, TypeORMEmailReminder>>(TYPES.Auth_EmailReminderPersistenceMapper)
+      .toConstantValue(new EmailReminderPersistenceMapper())
+    container
+      .bind<MapperInterface<EmailReminder, EmailReminderHttpProjection>>(TYPES.Auth_EmailReminderHttpMapper)
+      .toConstantValue(new EmailReminderHttpMapper())
+    container
       .bind<MapperInterface<TrustedDevice, TypeORMTrustedDevice>>(TYPES.Auth_TrustedDevicePersistenceMapper)
       .toConstantValue(new TrustedDevicePersistenceMapper())
     container
@@ -668,6 +687,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMDeadManSwitch>>(TYPES.Auth_ORMDeadManSwitchRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMDeadManSwitch))
+    container
+      .bind<Repository<TypeORMEmailReminder>>(TYPES.Auth_ORMEmailReminderRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMEmailReminder))
     container
       .bind<Repository<TypeORMTrustedDevice>>(TYPES.Auth_ORMTrustedDeviceRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMTrustedDevice))
@@ -771,6 +793,14 @@ export class ContainerConfigLoader {
         new TypeORMDeadManSwitchRepository(
           container.get(TYPES.Auth_ORMDeadManSwitchRepository),
           container.get(TYPES.Auth_DeadManSwitchPersistenceMapper),
+        ),
+      )
+    container
+      .bind<EmailReminderRepositoryInterface>(TYPES.Auth_EmailReminderRepository)
+      .toConstantValue(
+        new TypeORMEmailReminderRepository(
+          container.get(TYPES.Auth_ORMEmailReminderRepository),
+          container.get(TYPES.Auth_EmailReminderPersistenceMapper),
         ),
       )
     container
@@ -908,6 +938,17 @@ export class ContainerConfigLoader {
     container
       .bind<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED)
       .toConstantValue(env.get('EMAIL_BACKUPS_ENABLED', true) === 'true')
+    // Standard Red Notes: operator switch for scheduled email reminders. Default OFF.
+    // The trigger job additionally requires SMTP to be configured and the per-user
+    // EMAIL_REMINDERS_ENABLED setting before it will send anything.
+    container
+      .bind<boolean>(TYPES.Auth_EMAIL_REMINDERS_ENABLED)
+      .toConstantValue(env.get('EMAIL_REMINDERS_ENABLED', true) === 'true')
+    // "No outgoing-email records" mode. When ON, a sent reminder's row is DELETED
+    // (no sent-history kept) and the recipient/message are not logged. Default OFF.
+    container
+      .bind<boolean>(TYPES.Auth_EMAIL_REMINDER_NO_RECORDS)
+      .toConstantValue(env.get('EMAIL_REMINDER_NO_RECORDS', true) === 'true')
     container.bind<EmailSenderInterface>(TYPES.Auth_EmailSender).toConstantValue(
       new SmtpEmailSender(
         {
@@ -916,6 +957,21 @@ export class ContainerConfigLoader {
           user: container.get(TYPES.Auth_SMTP_USER),
           pass: container.get(TYPES.Auth_SMTP_PASS),
           from: container.get(TYPES.Auth_SMTP_FROM),
+        },
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+      ),
+    )
+    // Standard Red Notes: a dedicated sender for email reminders so operators can
+    // use a distinct From address. Sender resolution: EMAIL_REMINDER_FROM if set,
+    // otherwise fall back to the shared SMTP_FROM. Same SMTP transport/credentials.
+    container.bind<EmailSenderInterface>(TYPES.Auth_EmailReminderSender).toConstantValue(
+      new SmtpEmailSender(
+        {
+          host: container.get(TYPES.Auth_SMTP_HOST),
+          port: container.get(TYPES.Auth_SMTP_PORT),
+          user: container.get(TYPES.Auth_SMTP_USER),
+          pass: container.get(TYPES.Auth_SMTP_PASS),
+          from: env.get('EMAIL_REMINDER_FROM', true) || container.get(TYPES.Auth_SMTP_FROM),
         },
         container.get<winston.Logger>(TYPES.Auth_Logger),
       ),
@@ -1387,6 +1443,15 @@ export class ContainerConfigLoader {
       .bind<DeleteDeadManSwitch>(TYPES.Auth_DeleteDeadManSwitch)
       .toConstantValue(new DeleteDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
     container
+      .bind<CreateEmailReminder>(TYPES.Auth_CreateEmailReminder)
+      .toConstantValue(new CreateEmailReminder(container.get(TYPES.Auth_EmailReminderRepository)))
+    container
+      .bind<ListEmailReminders>(TYPES.Auth_ListEmailReminders)
+      .toConstantValue(new ListEmailReminders(container.get(TYPES.Auth_EmailReminderRepository)))
+    container
+      .bind<DeleteEmailReminder>(TYPES.Auth_DeleteEmailReminder)
+      .toConstantValue(new DeleteEmailReminder(container.get(TYPES.Auth_EmailReminderRepository)))
+    container
       .bind<CreateTrustedDevice>(TYPES.Auth_CreateTrustedDevice)
       .toConstantValue(
         new CreateTrustedDevice(
@@ -1436,6 +1501,19 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_DeadManSwitchRepository),
           container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<TriggerDueEmailReminders>(TYPES.Auth_TriggerDueEmailReminders)
+      .toConstantValue(
+        new TriggerDueEmailReminders(
+          container.get(TYPES.Auth_EmailReminderRepository),
+          container.get(TYPES.Auth_UserRepository),
+          container.get(TYPES.Auth_GetSetting),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailReminderSender),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<boolean>(TYPES.Auth_EMAIL_REMINDERS_ENABLED),
+          container.get<boolean>(TYPES.Auth_EMAIL_REMINDER_NO_RECORDS),
         ),
       )
     container
@@ -2044,6 +2122,16 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<EmailRemindersController>(TYPES.Auth_EmailRemindersController)
+      .toConstantValue(
+        new EmailRemindersController(
+          container.get(TYPES.Auth_CreateEmailReminder),
+          container.get(TYPES.Auth_ListEmailReminders),
+          container.get(TYPES.Auth_DeleteEmailReminder),
+          container.get(TYPES.Auth_EmailReminderHttpMapper),
+        ),
+      )
+    container
       .bind<TrustedDevicesController>(TYPES.Auth_TrustedDevicesController)
       .toConstantValue(
         new TrustedDevicesController(
@@ -2417,6 +2505,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseDeadManSwitchesController(
             container.get(TYPES.Auth_DeadManSwitchesController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseEmailRemindersController>(TYPES.Auth_BaseEmailRemindersController)
+        .toConstantValue(
+          new BaseEmailRemindersController(
+            container.get(TYPES.Auth_EmailRemindersController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

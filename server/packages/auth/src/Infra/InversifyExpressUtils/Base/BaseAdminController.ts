@@ -23,6 +23,10 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   // Standard Red Notes: admin override of a user's scheduled email-backup cadence.
   // Reuses the same get/set feature-flag endpoints; value is validated below.
   SettingName.NAMES.EmailBackupFrequency,
+  // Standard Red Notes: admin view/override of a user's per-account email-reminder
+  // opt-in ('true' to allow emailing reminders that the user opts into; anything
+  // else disables). Reuses the same get/set feature-flag endpoints.
+  SettingName.NAMES.EmailRemindersEnabled,
 ]
 
 /**

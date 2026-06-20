@@ -6,6 +6,7 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedAppPasswordsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMcpTokensController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharesController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedDeadManSwitchesController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedEmailRemindersController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedTrustedDevicesController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedPendingMfaApprovalsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMagicLinkController'
@@ -45,8 +46,10 @@ import { TokenDecoderInterface, WebSocketConnectionTokenData } from '@standardno
 import { ResponseLocals } from '../src/Infra/InversifyExpressUtils/ResponseLocals'
 import { HeapProfiler } from '../src/Domain/Profiler/HeapProfiler'
 import { TriggerDueDeadManSwitches } from '../src/Domain/UseCase/TriggerDueDeadManSwitches/TriggerDueDeadManSwitches'
+import { TriggerDueEmailReminders } from '../src/Domain/UseCase/TriggerDueEmailReminders/TriggerDueEmailReminders'
 
 const DEAD_MAN_SWITCH_SCAN_INTERVAL_MS = 5 * 60 * 1000
+const EMAIL_REMINDER_SCAN_INTERVAL_MS = 60 * 1000
 
 const container = new ContainerConfigLoader()
 void container.load().then(async (container) => {
@@ -185,6 +188,39 @@ void container.load().then(async (container) => {
     void scanDeadManSwitches()
   }, DEAD_MAN_SWITCH_SCAN_INTERVAL_MS)
   deadManSwitchInterval.unref()
+
+  // Email reminder scanner. Runs in-process on the auth server (DB + SMTP access).
+  // Every interval it emails any due, unsent email reminder whose user has opted in,
+  // then marks it sent (or, in EMAIL_REMINDER_NO_RECORDS mode, deletes the record).
+  // Gated internally on EMAIL_REMINDERS_ENABLED + SMTP configured + per-user opt-in,
+  // so a fresh install scans cheaply and sends nothing. Same isRunning/unref guards.
+  const triggerDueEmailReminders = container.get<TriggerDueEmailReminders>(TYPES.Auth_TriggerDueEmailReminders)
+  let emailReminderScanRunning = false
+  const scanEmailReminders = async (): Promise<void> => {
+    if (emailReminderScanRunning) {
+      return
+    }
+    emailReminderScanRunning = true
+    try {
+      const result = await triggerDueEmailReminders.execute({})
+      if (!result.isFailed()) {
+        const sent = result.getValue()
+        if (sent > 0) {
+          logger.info(`Email reminder scan sent ${sent} reminder(s).`)
+        }
+      } else {
+        logger.error(`Email reminder scan failed: ${result.getError()}`)
+      }
+    } catch (error) {
+      logger.error(`Email reminder scan threw: ${(error as Error).message}`)
+    } finally {
+      emailReminderScanRunning = false
+    }
+  }
+  const emailReminderInterval = setInterval(() => {
+    void scanEmailReminders()
+  }, EMAIL_REMINDER_SCAN_INTERVAL_MS)
+  emailReminderInterval.unref()
 
   process.on('SIGTERM', () => {
     logger.info('SIGTERM signal received: closing HTTP server')

@@ -3,6 +3,7 @@ import { FunctionComponent } from 'react'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import DataBackups from './DataBackups'
 import EmailBackups from './EmailBackups'
+import EmailReminders from './EmailReminders'
 import FileBackupsCrossPlatform from './Files/FileBackupsCrossPlatform'
 import { observer } from 'mobx-react-lite'
 import TextBackupsCrossPlatform from './TextBackups/TextBackupsCrossPlatform'
@@ -22,6 +23,7 @@ const Backups: FunctionComponent<Props> = ({ application }) => {
       <PlaintextBackupsCrossPlatform />
       <FileBackupsCrossPlatform application={application} />
       {!isUsingThirdPartyServer && <EmailBackups application={application} />}
+      {!isUsingThirdPartyServer && <EmailReminders application={application} />}
     </PreferencesPane>
   )
 }

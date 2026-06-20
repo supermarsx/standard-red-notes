@@ -1011,6 +1011,41 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: email reminders. These authed routes let a signed-in user
+   * register, list, and delete reminders the server may EMAIL when due. The reminder
+   * time + message are sent in PLAINTEXT (they leave end-to-end encryption) because
+   * the user explicitly opted that reminder into email delivery. Only ever called
+   * for reminders the user has opted in.
+   */
+  async createEmailReminder(body: { dueAt: string; message: string }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.emailReminders),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create email reminder.',
+      params: body,
+    })
+  }
+
+  async listEmailReminders(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.emailReminders),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list email reminders.',
+    })
+  }
+
+  async deleteEmailReminder(id: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.emailReminder(id)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete email reminder.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

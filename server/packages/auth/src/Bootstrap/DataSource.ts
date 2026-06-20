@@ -13,6 +13,7 @@ import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
 import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
 import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
 import { TypeORMDeadManSwitch } from '../Infra/TypeORM/TypeORMDeadManSwitch'
+import { TypeORMEmailReminder } from '../Infra/TypeORM/TypeORMEmailReminder'
 import { TypeORMTrustedDevice } from '../Infra/TypeORM/TypeORMTrustedDevice'
 import { TypeORMPendingMfaApproval } from '../Infra/TypeORM/TypeORMPendingMfaApproval'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
@@ -78,6 +79,7 @@ export class AppDataSource {
         TypeORMMcpToken,
         TypeORMShare,
         TypeORMDeadManSwitch,
+        TypeORMEmailReminder,
         TypeORMTrustedDevice,
         TypeORMPendingMfaApproval,
         TypeORMAuthenticatorChallenge,
