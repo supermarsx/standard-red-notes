@@ -13,8 +13,4 @@ export const ProtectionSessionDurations = [
     valueInSeconds: UnprotectedAccessSecondsDuration.OneHour,
     label: '1 Hour',
   },
-  {
-    valueInSeconds: UnprotectedAccessSecondsDuration.OneWeek,
-    label: '1 Week',
-  },
 ]

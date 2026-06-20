@@ -303,6 +303,27 @@ describe('protections', function () {
     expect(expirey).to.be.ok
   })
 
+  it('clamps an over-long persisted session expiry to the maximum allowed duration', async function () {
+    application = await Factory.createInitAppWithFakeCrypto()
+    await application.addPasscode('passcode')
+
+    // Simulate a stale expiry written by a previous build that offered a longer
+    // (e.g. one-week) duration. It must not be honored beyond the max (1 hour).
+    const oneWeekSeconds = 604800
+    const farFutureExpiry = new Date()
+    farFutureExpiry.setSeconds(farFutureExpiry.getSeconds() + oneWeekSeconds)
+    application.protections.storage.setValue('SessionExpiresAtKey', farFutureExpiry)
+
+    const clampedExpiry = application.protections.getSessionExpiryDate()
+    const maxExpiry = new Date()
+    maxExpiry.setSeconds(maxExpiry.getSeconds() + UnprotectedAccessSecondsDuration.OneHour)
+
+    // Clamped expiry must not exceed the max-allowed horizon (allow small slack
+    // for elapsed test time).
+    expect(clampedExpiry.getTime()).to.be.at.most(maxExpiry.getTime() + 2000)
+    expect(clampedExpiry.getTime()).to.be.below(farFutureExpiry.getTime())
+  })
+
   describe('hasProtectionSources', function () {
     it('no account, no passcode, no biometrics', async function () {
       application = await Factory.createInitAppWithFakeCrypto()

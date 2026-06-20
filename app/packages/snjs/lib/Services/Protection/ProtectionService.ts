@@ -33,7 +33,10 @@ import {
 } from '@standardnotes/services'
 import { ContentType } from '@standardnotes/domain-core'
 import { isValidProtectionSessionLength } from './isValidProtectionSessionLength'
-import { UnprotectedAccessSecondsDuration } from './UnprotectedAccessSecondsDuration'
+import {
+  MaxUnprotectedAccessSecondsDuration,
+  UnprotectedAccessSecondsDuration,
+} from './UnprotectedAccessSecondsDuration'
 import { ChallengeResponse } from '../Challenge'
 
 /**
@@ -437,11 +440,19 @@ export class ProtectionService
 
   public getSessionExpiryDate(): Date {
     const expiresAt = this.storage.getValue<number>(StorageKey.ProtectionExpirey)
-    if (expiresAt) {
-      return new Date(expiresAt)
-    } else {
+    if (!expiresAt) {
       return new Date()
     }
+
+    /**
+     * Clamp any persisted expiry to the maximum allowed session length. This
+     * defends against stale/over-long expiries that may have been written by a
+     * previous build offering longer durations (e.g. a "1 Week" option), which
+     * would otherwise let a protected note stay readable across device reboots
+     * without re-authenticating (forum issue #4063).
+     */
+    const maxAllowedExpiry = Date.now() + MaxUnprotectedAccessSecondsDuration * 1000
+    return new Date(Math.min(expiresAt, maxAllowedExpiry))
   }
 
   public clearSession(): Promise<void> {
