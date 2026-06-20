@@ -16,6 +16,8 @@ const NoteImportTypeColors: Record<string, string> = {
   html: 'bg-accessory-tint-2',
   super: 'bg-accessory-tint-1 text-accessory-tint-1',
   'standard-notes-backup': 'bg-info text-info-contrast',
+  'csv-markdown': 'bg-default border border-border',
+  'csv-spreadsheet': 'bg-accessory-tint-3 text-accessory-tint-3',
 }
 
 const NoteImportTypeIcons: Record<string, string> = {
@@ -27,6 +29,8 @@ const NoteImportTypeIcons: Record<string, string> = {
   html: 'rich-text',
   super: 'file-doc',
   'standard-notes-backup': 'archive',
+  'csv-markdown': 'toc',
+  'csv-spreadsheet': 'spreadsheets',
 }
 
 const countSuccessfulItemsByGroup = (successful: ConversionResult['successful']) => {
@@ -205,6 +209,8 @@ const ImportModalFileItem = ({
                   <option value="plaintext">Plaintext</option>
                   <option value="html">HTML</option>
                   <option value="super">Super</option>
+                  <option value="csv-markdown">CSV (Markdown table)</option>
+                  <option value="csv-spreadsheet">CSV (Spreadsheet)</option>
                   <option value="standard-notes-backup">Standard Red Notes Backup</option>
                 </select>
                 <button

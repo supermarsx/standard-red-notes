@@ -78,6 +78,27 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
           <Icon type="file-doc" className="mr-2 text-accessory-tint-1" />
           Super (JSON)
         </Button>
+        <Button className="flex items-center !py-2" onClick={() => selectFiles('csv-markdown')}>
+          <Icon type="toc" className="mr-2 text-info" />
+          {c('ImportSource').t`CSV (Markdown table)`}
+        </Button>
+        <Button
+          className="flex items-center !py-2"
+          onClick={() => {
+            const isEntitledToSuper =
+              application.features.getFeatureStatus(
+                NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue(),
+              ) === FeatureStatus.Entitled
+            if (!isEntitledToSuper) {
+              application.showPremiumModal(FeatureName.Super)
+              return
+            }
+            selectFiles('csv-spreadsheet').catch(console.error)
+          }}
+        >
+          <Icon type="spreadsheets" className="mr-2 text-accessory-tint-3" />
+          {c('ImportSource').t`CSV (Spreadsheet)`}
+        </Button>
       </div>
     </>
   )

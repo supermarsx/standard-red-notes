@@ -26,6 +26,8 @@ import {
 } from '@standardnotes/models'
 import { HTMLConverter } from './HTMLConverter/HTMLConverter'
 import { SuperConverter } from './SuperConverter/SuperConverter'
+import { CSVMarkdownConverter } from './CSVConverter/CSVMarkdownConverter'
+import { CSVSpreadsheetConverter } from './CSVConverter/CSVSpreadsheetConverter'
 import { CleanupItemsFn, Converter, InsertNoteFn, InsertTagFn, LinkItemsFn, UploadFileFn } from './Converter'
 import { ConversionResult } from './ConversionResult'
 import { FilesClientInterface, SuperConverterHTMLOptions, SuperConverterServiceInterface } from '@standardnotes/files'
@@ -97,6 +99,8 @@ export class Importer {
     this.converters.add(new EvernoteConverter(this._generateUuid))
     this.converters.add(new HTMLConverter())
     this.converters.add(new SuperConverter(this.superConverterService))
+    this.converters.add(new CSVMarkdownConverter())
+    this.converters.add(new CSVSpreadsheetConverter())
   }
 
   detectService = async (file: File): Promise<string | null> => {

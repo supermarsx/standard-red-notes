@@ -8,7 +8,8 @@ import {
   PreferencesServiceEvent,
   UuidGenerator,
 } from '@standardnotes/snjs'
-import { ConversionResult, Importer } from '@standardnotes/ui-services'
+import { ConversionResult, Importer, parseCsv, readFileAsText } from '@standardnotes/ui-services'
+import { addToast, ToastType } from '@standardnotes/toast'
 import { action, makeObservable, observable, runInAction } from 'mobx'
 import { NavigationController } from '../../Controllers/Navigation/NavigationController'
 import { LinkingController } from '@/Controllers/LinkingController'
@@ -147,6 +148,38 @@ export class ImportModalController extends AbstractViewController {
     this.setImportTag(undefined)
   }
 
+  /**
+   * Shows a success/failure toast (with row x column counts) for CSV imports.
+   * No-op for non-CSV services so other importers keep their existing inline-only
+   * feedback.
+   */
+  private maybeShowCsvToast = async (file: ImportModalFile, succeeded: boolean, error?: unknown) => {
+    if (file.service !== 'csv-markdown' && file.service !== 'csv-spreadsheet') {
+      return
+    }
+
+    if (!succeeded) {
+      const message =
+        error instanceof Error ? error.message : 'Could not import CSV file. Check the error console for details.'
+      addToast({ type: ToastType.Error, message: `CSV import failed: ${message}` })
+      return
+    }
+
+    try {
+      const content = await readFileAsText(file.file)
+      const rows = parseCsv(content)
+      const rowCount = rows.length
+      const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
+      const target = file.service === 'csv-spreadsheet' ? 'spreadsheet' : 'Markdown table'
+      addToast({
+        type: ToastType.Success,
+        message: `Imported CSV as ${target}: ${rowCount} row(s) × ${columnCount} column(s).`,
+      })
+    } catch {
+      addToast({ type: ToastType.Success, message: 'CSV imported successfully.' })
+    }
+  }
+
   parseAndImport = async () => {
     if (this.files.length === 0) {
       return
@@ -171,12 +204,14 @@ export class ImportModalController extends AbstractViewController {
           successful,
           errored,
         })
+        await this.maybeShowCsvToast(file, successful.length > 0)
       } catch (error) {
         this.updateFile({
           ...file,
           status: 'error',
           error: error instanceof Error ? error : new Error('Could not import file'),
         })
+        await this.maybeShowCsvToast(file, false, error)
         console.error(error)
       }
     }
