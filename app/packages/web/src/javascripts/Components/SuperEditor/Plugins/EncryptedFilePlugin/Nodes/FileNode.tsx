@@ -22,6 +22,9 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
   __width: number | undefined
   __caption: string | undefined
   __float: ImageFloat
+  // Fold/collapse state. undefined = no explicit choice; the component derives a
+  // per-type default (PDFs collapsed, others expanded). An explicit stored value wins.
+  __collapsed: boolean | undefined
 
   static getType(): string {
     return 'snfile'
@@ -35,6 +38,7 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
     width?: number,
     caption?: string,
     float?: ImageFloat,
+    collapsed?: boolean,
   ) {
     super(format, key)
     this.__id = id
@@ -42,6 +46,7 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
     this.__width = width
     this.__caption = caption
     this.__float = float || 'none'
+    this.__collapsed = collapsed
   }
 
   static clone(node: FileNode): FileNode {
@@ -53,6 +58,7 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
       node.__width,
       node.__caption,
       node.__float,
+      node.__collapsed,
     )
   }
 
@@ -67,6 +73,7 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
       .setWidth(serializedNode.width)
       .setCaption(serializedNode.caption)
       .setFloat(serializedNode.float ?? 'none')
+      .setCollapsed(serializedNode.collapsed)
   }
 
   exportJSON(): SerializedFileNode {
@@ -77,6 +84,7 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
       width: this.__width,
       caption: this.__caption,
       float: this.__float,
+      collapsed: this.__collapsed,
     }
   }
 
@@ -134,6 +142,12 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
     return self
   }
 
+  setCollapsed(collapsed: boolean | undefined): this {
+    const self = this.getWritable()
+    self.__collapsed = collapsed
+    return self
+  }
+
   decorate(_editor: LexicalEditor, config: EditorConfig): React.JSX.Element {
     const embedBlockTheme = config.theme.embedBlock || {}
     const className = {
@@ -156,6 +170,8 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
         setCaption={this.setCaption.bind(this)}
         float={this.__float}
         setFloat={this.setFloat.bind(this)}
+        collapsed={this.__collapsed}
+        setCollapsed={this.setCollapsed.bind(this)}
       />
     )
   }

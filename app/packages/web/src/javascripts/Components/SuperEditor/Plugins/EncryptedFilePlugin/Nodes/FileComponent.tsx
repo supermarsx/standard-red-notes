@@ -17,6 +17,9 @@ import { observer } from 'mobx-react-lite'
 import Spinner from '@/Components/Spinner/Spinner'
 import { FilesControllerEvent } from '@/Controllers/FilesController'
 import { ImageFloat } from '../../ImageTools/ImageToolsTypes'
+import Icon from '@/Components/Icon/Icon'
+import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
+import { formatSizeToReadableString } from '@standardnotes/filepicker'
 
 export type FileComponentProps = Readonly<{
   className: Readonly<{
@@ -35,7 +38,19 @@ export type FileComponentProps = Readonly<{
   setCaption: (caption: string | undefined) => void
   float: ImageFloat
   setFloat: (float: ImageFloat) => void
+  collapsed: boolean | undefined
+  setCollapsed: (collapsed: boolean | undefined) => void
 }>
+
+/**
+ * Per-type default fold state for embedded files that have no explicit stored
+ * `collapsed` value (existing notes / freshly inserted files). PDFs collapse by
+ * default so notes stay short; images (which have zoom/resize tools) and other
+ * types default to expanded. An explicit stored value always wins.
+ */
+function defaultCollapsedForMimeType(mimeType: string): boolean {
+  return mimeType === 'application/pdf'
+}
 
 function FileComponent({
   className,
@@ -51,6 +66,8 @@ function FileComponent({
   setCaption,
   float,
   setFloat,
+  collapsed,
+  setCollapsed,
 }: FileComponentProps) {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
@@ -148,6 +165,23 @@ function FileComponent({
     [editor, setFloat],
   )
 
+  const changeCollapsed = useCallback(
+    (newCollapsed: boolean) =>
+      editor.update(
+        () => {
+          setCollapsed(newCollapsed)
+        },
+        { tag: SKIP_DOM_SELECTION_TAG },
+      ),
+    [editor, setCollapsed],
+  )
+
+  const openInLightbox = useCallback(() => {
+    if (file && file.mimeType.startsWith('image/')) {
+      application.filePreviewModalController.activate(file)
+    }
+  }, [application, file])
+
   useEffect(() => {
     return editor.registerCommand<MouseEvent>(
       CLICK_COMMAND,
@@ -212,19 +246,59 @@ function FileComponent({
     )
   }
 
-  const openInLightbox = useCallback(() => {
-    if (file && file.mimeType.startsWith('image/')) {
-      application.filePreviewModalController.activate(file)
-    }
-  }, [application, file])
+  const isImage = file.mimeType.startsWith('image/')
+  // Explicit stored value wins; otherwise fall back to the per-type default.
+  const isCollapsed = collapsed ?? defaultCollapsedForMimeType(file.mimeType)
+  const fileIcon = getIconForFileType(file.mimeType)
+  const readableSize = file.decryptedSize ? formatSizeToReadableString(file.decryptedSize) : undefined
+
+  if (isCollapsed) {
+    return (
+      <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
+        <div ref={blockWrapperRef}>
+          <div className="flex items-center gap-2 rounded border border-border bg-default px-3 py-2">
+            <button
+              className="flex flex-shrink-0 items-center justify-center rounded p-1 text-neutral hover:bg-contrast"
+              aria-label="Expand file preview"
+              title="Expand file preview"
+              onClick={() => changeCollapsed(false)}
+            >
+              <Icon type="chevron-right" size="medium" />
+            </button>
+            <button
+              className="flex min-w-0 flex-grow items-center gap-2 text-left"
+              title={`Expand "${file.name}"`}
+              onClick={() => changeCollapsed(false)}
+            >
+              <Icon type={fileIcon} className="flex-shrink-0 text-neutral" size="medium" />
+              <span className="min-w-0 truncate font-medium">{file.name}</span>
+              {readableSize && <span className="flex-shrink-0 text-sm text-passive-1">{readableSize}</span>}
+            </button>
+          </div>
+        </div>
+      </BlockWithAlignableContents>
+    )
+  }
 
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
       <div
         ref={blockWrapperRef}
-        onDoubleClick={file.mimeType.startsWith('image/') ? openInLightbox : undefined}
-        title={file.mimeType.startsWith('image/') ? 'Double-click to open zoomable preview' : undefined}
+        onDoubleClick={isImage ? openInLightbox : undefined}
+        title={isImage ? 'Double-click to open zoomable preview' : undefined}
       >
+        <div className="mb-1 flex items-center gap-2">
+          <button
+            className="flex items-center justify-center rounded p-1 text-neutral hover:bg-contrast"
+            aria-label="Collapse file"
+            title="Collapse file"
+            onClick={() => changeCollapsed(true)}
+          >
+            <Icon type="chevron-down" size="medium" />
+          </button>
+          <Icon type={fileIcon} className="flex-shrink-0 text-neutral" size="medium" />
+          <span className="min-w-0 truncate text-sm text-passive-0">{file.name}</span>
+        </div>
         {canLoad && (
           <FilePreview
             isEmbeddedInSuper={true}

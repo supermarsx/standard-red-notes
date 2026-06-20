@@ -85,6 +85,34 @@ describe('Super image node serialization (Word-style attributes)', () => {
       expect(imported.caption).toBeUndefined()
       expect(imported.float).toBe('none')
     })
+
+    it('round-trips the collapsed fold state (both true and false)', () => {
+      const collapsed = inEditor(() => {
+        const node = $createFileNode('file-uuid-collapsed').setCollapsed(true)
+        const first = node.exportJSON()
+        const second = FileNode.importJSON(first).exportJSON()
+        return { first, second }
+      })
+      expect(collapsed.first.collapsed).toBe(true)
+      expect(collapsed.second).toEqual(collapsed.first)
+
+      const expanded = inEditor(() => {
+        const node = $createFileNode('file-uuid-expanded').setCollapsed(false)
+        const first = node.exportJSON()
+        const second = FileNode.importJSON(first).exportJSON()
+        return { first, second }
+      })
+      expect(expanded.first.collapsed).toBe(false)
+      expect(expanded.second).toEqual(expanded.first)
+    })
+
+    it('imports OLD json (no collapsed) leaving collapsed undefined so the per-type default applies', () => {
+      const imported = inEditor(() => {
+        const legacy = { type: 'snfile', version: 1, format: '', fileUuid: 'old-uuid', zoomLevel: 100 } as never
+        return FileNode.importJSON(legacy).exportJSON()
+      })
+      expect(imported.collapsed).toBeUndefined()
+    })
   })
 
   describe('RemoteImageNode', () => {

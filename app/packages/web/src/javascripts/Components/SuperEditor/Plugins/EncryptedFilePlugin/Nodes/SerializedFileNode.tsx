@@ -12,6 +12,13 @@ export type SerializedFileNode = Spread<
     caption?: string
     /** Margin-based float within the node's own block (not true text-wrap). */
     float?: ImageFloat
+    /**
+     * Fold/collapse state of the embedded file. When collapsed the preview is
+     * replaced by a compact clickable row (icon + filename). Undefined = no
+     * explicit choice yet; the component derives a sensible per-type default
+     * (PDFs collapsed, images/others expanded) for backward compatibility.
+     */
+    collapsed?: boolean
   },
   SerializedDecoratorBlockNode
 >
