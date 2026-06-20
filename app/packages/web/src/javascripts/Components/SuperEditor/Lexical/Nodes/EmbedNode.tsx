@@ -11,7 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { toEmbedUrl } from './toEmbedUrl'
+import { toTrustedEmbedUrl } from './toEmbedUrl'
 
 export type EmbedData = { url: string }
 
@@ -35,8 +35,14 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
     [editor, nodeKey],
   )
 
-  const embedUrl = data.url ? toEmbedUrl(data.url) : ''
-  const isHttps = embedUrl.startsWith('https://') || embedUrl.startsWith('http://')
+  // Only a recognized, trusted provider (YouTube / Vimeo) yields a non-null
+  // embed URL. Arbitrary http(s) origins return null and are NEVER loaded in an
+  // allow-same-origin iframe — see toEmbedUrl's security note.
+  const embedUrl = data.url ? toTrustedEmbedUrl(data.url) : null
+  const rawUrl = data.url.trim()
+  // Only expose an "Open in new tab" link for http(s) URLs so we never render an
+  // href for dangerous schemes (javascript:, data:, etc.).
+  const safeRawHref = /^https?:\/\//i.test(rawUrl) ? rawUrl : null
 
   return (
     <div className="my-2 rounded border border-border bg-default" data-embed-block="true">
@@ -54,7 +60,7 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
         <div className="p-2">
           <input
             className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
-            placeholder="Paste a URL (YouTube, Vimeo, or any embeddable page)…"
+            placeholder="Paste a YouTube or Vimeo URL…"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -65,26 +71,55 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
             autoFocus
           />
         </div>
-      ) : isHttps ? (
+      ) : embedUrl ? (
         /* 16:9 responsive container so the video fills the width instead of
            rendering as a thin strip; the iframe stretches to fill it. */
         <div className="aspect-video w-full">
-          {/* Safety tradeoff: the YouTube/Vimeo player needs scripts + same-origin
-              (its embed shell) + presentation/popups (fullscreen, "watch on
-              YouTube"). A stricter sandbox (e.g. dropping allow-scripts or
-              allow-same-origin) blocks the player from loading/playing. */}
+          {/* `allow-same-origin` is only safe here because `embedUrl` is gated by
+              toTrustedEmbedUrl: it is always a canonical YouTube/Vimeo embed
+              origin, never an arbitrary attacker-chosen URL. The player needs
+              scripts + same-origin (its embed shell) + presentation (fullscreen).
+              We drop allow-popups, and add no-referrer to avoid leaking the note
+              URL — matching the hardened WebEmbedNode iframe. */}
           <iframe
             title="Embedded content"
             src={embedUrl}
             className="h-full w-full"
-            sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-presentation"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
             referrerPolicy="no-referrer"
           />
         </div>
+      ) : rawUrl ? (
+        /* Unrecognized / unsupported URL. We deliberately do NOT load it in an
+           allow-same-origin iframe (that would let an arbitrary origin run
+           scripts in its own real origin). Show a safe card with the raw URL and
+           an "Open in new tab" link, and point at the click-to-load website
+           embed for arbitrary pages. */
+        <div className="p-3 text-sm">
+          <p className="text-foreground">
+            This URL is not a supported video embed (YouTube or Vimeo).
+          </p>
+          <p className="mt-1 break-all text-xs text-passive-1">{rawUrl}</p>
+          {safeRawHref ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <a
+                href={safeRawHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded border border-border px-3 py-1 text-sm hover:bg-contrast"
+              >
+                Open in a new tab
+              </a>
+            </div>
+          ) : null}
+          <p className="mt-2 text-xs text-passive-1">
+            To embed an arbitrary web page, use the “Embed website” block, which loads only after you confirm.
+          </p>
+        </div>
       ) : (
-        <div className="p-2 text-sm text-danger">Enter a valid http(s) URL to embed.</div>
+        <div className="p-2 text-sm text-danger">Enter a YouTube or Vimeo URL to embed.</div>
       )}
     </div>
   )
