@@ -59,6 +59,12 @@ import {
   serializeTimelineDocument,
   createEmptyTimelineDocument,
 } from '../NoteView/TimelineEditor/TimelineDocument'
+import { FlashcardsEditorIdentifier } from '../NoteView/FlashcardsEditor/FlashcardsEditor'
+import {
+  parseFlashcardsDocument,
+  serializeFlashcardsDocument,
+  createFlashcardsStarter,
+} from '../NoteView/FlashcardsEditor/FlashcardsDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -448,6 +454,48 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     closeMenu()
   }, [application, note, closeMenu])
 
+  const isFlashcardsSelected = note?.editorIdentifier === FlashcardsEditorIdentifier
+
+  const selectFlashcards = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-flashcards content: only overwrite note.text with a
+    // starter deck when the existing text isn't already a recoverable deck.
+    const { recovered } = parseFlashcardsDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to Flashcards will replace its current content with an empty deck. This cannot be undone.',
+        'Switch to Flashcards?',
+        'Switch to Flashcards',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = FlashcardsEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeFlashcardsDocument(createFlashcardsStarter())
+      } else {
+        noteMutator.text = serializeFlashcardsDocument(parseFlashcardsDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
+
   const handleConversionCompletion = useCallback(
     (item?: EditorMenuItem) => {
       const conversionItem = item || pendingConversionItem
@@ -746,6 +794,24 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               <div className="flex items-center">
                 <Icon type="history" className="mr-2 text-neutral" />
                 Timeline
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectFlashcards().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isFlashcardsSelected}
+            info={'A deck of front/back cards with an edit mode and a spaced-repetition-lite study mode.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="copy" className="mr-2 text-neutral" />
+                Flashcards
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
                 </Pill>

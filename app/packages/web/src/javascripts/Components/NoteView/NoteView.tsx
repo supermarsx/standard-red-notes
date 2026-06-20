@@ -60,6 +60,7 @@ import {
 import { CalendarEditor, CalendarEditorIdentifier } from './CalendarEditor/CalendarEditor'
 import { KanbanEditor, KanbanEditorIdentifier } from './KanbanEditor/KanbanEditor'
 import { TimelineEditor, TimelineEditorIdentifier } from './TimelineEditor/TimelineEditor'
+import { FlashcardsEditor, FlashcardsEditorIdentifier } from './FlashcardsEditor/FlashcardsEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -559,7 +560,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       this.note.editorIdentifier === WebSandboxEditorIdentifier ||
       this.note.editorIdentifier === CalendarEditorIdentifier ||
       this.note.editorIdentifier === KanbanEditorIdentifier ||
-      this.note.editorIdentifier === TimelineEditorIdentifier
+      this.note.editorIdentifier === TimelineEditorIdentifier ||
+      this.note.editorIdentifier === FlashcardsEditorIdentifier
     ) {
       this.destroyCurrentEditorComponent()
       this.setState({ editorStateDidLoad: true })
@@ -902,6 +904,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         ? 'kanban'
         : this.note.editorIdentifier === TimelineEditorIdentifier
         ? 'timeline'
+        : this.note.editorIdentifier === FlashcardsEditorIdentifier
+        ? 'flashcards'
         : this.note.noteType === NoteType.Super
           ? 'super'
           : this.state.editorStateDidLoad && !this.state.editorComponentViewer
@@ -1128,6 +1132,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
           {editorMode === 'timeline' && (
             <TimelineEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'flashcards' && (
+            <FlashcardsEditor
               key={this.note.uuid}
               application={this.application}
               controller={this.controller}
