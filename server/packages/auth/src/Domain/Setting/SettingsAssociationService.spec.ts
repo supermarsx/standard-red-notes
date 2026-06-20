@@ -118,4 +118,38 @@ describe('SettingsAssociationService', () => {
       ).toEqual(EncryptionVersion.Default)
     })
   })
+
+  describe('client default settings (Standard Red Notes): conflict-resolution & search-index', () => {
+    const clientDefaultSettings = [
+      SettingName.NAMES.ConflictResolutionStrategy,
+      SettingName.NAMES.SearchIndexEnabled,
+    ]
+
+    it.each(clientDefaultSettings)('should be a valid, recognized setting name (%s)', (name) => {
+      const result = SettingName.create(name)
+      expect(result.isFailed()).toBeFalsy()
+      expect(result.getValue().value).toEqual(name)
+    })
+
+    it.each(clientDefaultSettings)('should be retrievable as a plain value (not sensitive) (%s)', (name) => {
+      // These carry an admin-provided default value the web client reads back; a
+      // "sensitive" setting returns no value, which would defeat the purpose.
+      expect(createService().getSensitivityForSetting(SettingName.create(name).getValue())).toBeFalsy()
+    })
+
+    it.each(clientDefaultSettings)('should be mutable by the client (%s)', (name) => {
+      expect(createService().isSettingMutableByClient(SettingName.create(name).getValue())).toBeTruthy()
+    })
+
+    it.each(clientDefaultSettings)(
+      'should be OFF by default: not part of any default settings for new accounts (%s)',
+      (name) => {
+        const newUserSettings = createService().getDefaultSettingsAndValuesForNewUser()
+        const newVaultSettings = createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount()
+
+        expect(newUserSettings.has(name)).toBeFalsy()
+        expect(newVaultSettings.has(name)).toBeFalsy()
+      },
+    )
+  })
 })

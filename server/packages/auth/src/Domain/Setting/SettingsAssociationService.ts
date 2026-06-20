@@ -36,6 +36,13 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // "sensitive" (which would block normal getSetting reads). Confidentiality
     // comes from the client-side encryption, not from server-side gating.
     SettingName.NAMES.AccountRecoveryEscrow,
+    // Standard Red Notes: admin-provided client DEFAULTS that the web client
+    // reads back via the standard getSetting endpoint (the Conflicts and
+    // Assistant/Search panes). They carry no secret — just a plain default value
+    // ('ask'|'keepBoth'|... and 'true'|'false') — so they must be retrievable as
+    // a normal value rather than gated as "sensitive" (which returns no value).
+    SettingName.NAMES.ConflictResolutionStrategy,
+    SettingName.NAMES.SearchIndexEnabled,
   ]
 
   private readonly CLIENT_IMMUTABLE_SETTINGS = [

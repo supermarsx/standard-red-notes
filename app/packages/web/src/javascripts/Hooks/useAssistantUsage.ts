@@ -39,7 +39,14 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
   // (a request just completed) and on a slow heartbeat as a safety net.
   useEffect(() => {
     const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
-    if (connectionMode !== 'proxy' || !application.hasAccount()) {
+    // Only poll the authenticated /v1/assistant/usage endpoint when there is an
+    // actual signed-in server session whose access token can be attached. Note
+    // hasAccount() is true for passcode-only / offline accounts that have NO
+    // server session, which previously caused the usage chip to poll without a
+    // token and spam 401s. Gate on isSignedIn() instead (the same signed-in check
+    // the Footer uses) so signed-out / offline users just see local session token
+    // usage (no cap) and never issue an unauthenticated request.
+    if (connectionMode !== 'proxy' || !application.sessions.isSignedIn()) {
       setCap(null)
       return
     }

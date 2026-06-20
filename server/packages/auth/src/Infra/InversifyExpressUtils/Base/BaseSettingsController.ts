@@ -119,10 +119,23 @@ export class BaseSettingsController extends BaseHttpController {
       shouldVerifyUserServerPassword: true,
     })
     if (resultOrError.isFailed()) {
+      // Standard Red Notes: reading an optional, unset setting is a normal case
+      // (e.g. the Conflicts / Search panes read admin-provided client defaults
+      // that most accounts never have set). Treat "not found" as an empty 200 so
+      // clients can fall back to their own default without the request showing up
+      // as a console-spamming 400. Genuine errors (invalid name, sensitivity,
+      // subscription-only, password) still return 400.
+      const errorMessage = resultOrError.getError()
+      if (errorMessage.includes('not found')) {
+        return this.json({
+          success: true,
+        })
+      }
+
       return this.json(
         {
           error: {
-            message: resultOrError.getError(),
+            message: errorMessage,
           },
         },
         400,
