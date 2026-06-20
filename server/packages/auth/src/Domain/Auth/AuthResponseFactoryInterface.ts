@@ -11,5 +11,6 @@ export interface AuthResponseFactoryInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<AuthResponseCreationResult>
 }

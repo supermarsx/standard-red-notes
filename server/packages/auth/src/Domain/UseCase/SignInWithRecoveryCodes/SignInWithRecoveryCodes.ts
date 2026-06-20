@@ -132,6 +132,7 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
       readonlyAccess: false,
       snjs: dto.snjs,
       application: dto.application,
+      ipAddress: dto.ipAddress,
     })
 
     const generateNewRecoveryCodesResult = await this.generateRecoveryCodes.execute({

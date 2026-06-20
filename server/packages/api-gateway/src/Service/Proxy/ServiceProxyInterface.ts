@@ -61,6 +61,7 @@ export interface ServiceProxyInterface {
       application?: string
       userAgent?: string
       secChUa?: string
+      ip?: string
     }
     cookies?: Map<string, string[]>
     retryAttempt?: number

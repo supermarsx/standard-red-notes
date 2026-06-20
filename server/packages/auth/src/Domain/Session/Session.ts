@@ -65,6 +65,14 @@ export class Session {
   declare userAgent: string | null
 
   @Column({
+    name: 'ip_address',
+    type: 'varchar',
+    length: 45,
+    nullable: true,
+  })
+  declare ipAddress: string | null
+
+  @Column({
     name: 'created_at',
     type: 'datetime',
   })

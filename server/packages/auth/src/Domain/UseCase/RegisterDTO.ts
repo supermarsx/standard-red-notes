@@ -12,4 +12,5 @@ export type RegisterDTO = {
   version?: string
   snjs?: string
   application?: string
+  ipAddress?: string | null
 }

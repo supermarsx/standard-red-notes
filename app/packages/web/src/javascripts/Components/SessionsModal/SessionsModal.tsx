@@ -148,21 +148,21 @@ const SessionsModalContent: FunctionComponent<{
                   {sessions.map((session) => (
                     <li key={session.uuid}>
                       <h2 className="text-base font-bold">{session.device_info}</h2>
+                      {session.ip_address && <p>IP {session.ip_address}</p>}
+                      <p>Signed in on {formatter.format(new Date(session.created_at))}</p>
+                      <p>Last active {formatter.format(new Date(session.updated_at))}</p>
                       {session.current ? (
                         <span className="font-bold text-info">Current session</span>
                       ) : (
-                        <>
-                          <p>Signed in on {formatter.format(new Date(session.created_at))}</p>
-                          <Button
-                            primary
-                            small
-                            colorStyle="danger"
-                            disabled={session.revoking}
-                            onClick={() => setRevokingSessionUuid(session.uuid)}
-                          >
-                            <span>Revoke</span>
-                          </Button>
-                        </>
+                        <Button
+                          primary
+                          small
+                          colorStyle="danger"
+                          disabled={session.revoking}
+                          onClick={() => setRevokingSessionUuid(session.uuid)}
+                        >
+                          <span>Revoke</span>
+                        </Button>
                       )}
                     </li>
                   ))}

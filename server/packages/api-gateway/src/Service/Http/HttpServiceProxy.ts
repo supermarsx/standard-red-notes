@@ -39,6 +39,7 @@ export class HttpServiceProxy implements ServiceProxyInterface {
       application?: string
       userAgent?: string
       secChUa?: string
+      ip?: string
     }
     cookies?: Map<string, string[]>
     retryAttempt?: number
@@ -66,6 +67,7 @@ export class HttpServiceProxy implements ServiceProxyInterface {
           'x-application-version': dto.requestMetadata.application,
           'x-origin-user-agent': dto.requestMetadata.userAgent,
           'x-origin-sec-ch-ua': dto.requestMetadata.secChUa,
+          'x-origin-ip': dto.requestMetadata.ip,
           'x-origin-url': dto.requestMetadata.url,
           'x-origin-method': dto.requestMetadata.method,
         },
@@ -227,6 +229,7 @@ export class HttpServiceProxy implements ServiceProxyInterface {
       headers['x-application-version'] = request.headers['x-application-version'] as string
       headers['x-origin-user-agent'] = request.headers['user-agent'] as string
       headers['x-origin-sec-ch-ua'] = request.headers['sec-ch-ua'] as string
+      headers['x-origin-ip'] = this.clientIpFromRequest(request)
 
       delete headers.host
       delete headers['content-length']
@@ -358,6 +361,19 @@ export class HttpServiceProxy implements ServiceProxyInterface {
 
       response.send(serviceResponse.data)
     }
+  }
+
+  private clientIpFromRequest(request: Request): string {
+    const forwardedFor = request.headers['x-forwarded-for']
+    if (forwardedFor) {
+      const value = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
+      const leftmost = value.split(',')[0]?.trim()
+      if (leftmost) {
+        return leftmost
+      }
+    }
+
+    return request.socket?.remoteAddress ?? request.ip ?? ''
   }
 
   private getRequestData(

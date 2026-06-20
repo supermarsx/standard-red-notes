@@ -8,4 +8,5 @@ export type SignInDTO = {
   hvmToken?: string
   snjs?: string
   application?: string
+  ipAddress?: string | null
 }

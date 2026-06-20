@@ -22,6 +22,7 @@ export class SessionProjector implements ProjectorInterface<Session> {
       created_at: this.timer.convertDateToISOString(session.createdAt),
       updated_at: this.timer.convertDateToISOString(session.updatedAt),
       device_info: this.sessionService.getDeviceInfo(session),
+      ip_address: session.ipAddress ?? null,
       readonly_access: session.readonlyAccess,
       access_expiration: this.timer.convertDateToISOString(session.accessExpiration),
       refresh_expiration: this.timer.convertDateToISOString(session.refreshExpiration),
@@ -37,6 +38,7 @@ export class SessionProjector implements ProjectorInterface<Session> {
           created_at: this.timer.convertDateToISOString(session.createdAt),
           updated_at: this.timer.convertDateToISOString(session.updatedAt),
           device_info: this.sessionService.getDeviceInfo(session),
+          ip_address: session.ipAddress ?? null,
           current: session.uuid === currentSession.uuid,
           readonly_access: session.readonlyAccess,
         }

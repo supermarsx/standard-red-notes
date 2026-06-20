@@ -61,6 +61,14 @@ export class RevokedSession {
   declare userAgent: string | null
 
   @Column({
+    name: 'ip_address',
+    type: 'varchar',
+    length: 45,
+    nullable: true,
+  })
+  declare ipAddress: string | null
+
+  @Column({
     name: 'api_version',
     length: 255,
     nullable: true,

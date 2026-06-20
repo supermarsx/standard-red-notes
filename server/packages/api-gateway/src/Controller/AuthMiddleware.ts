@@ -67,6 +67,7 @@ export abstract class AuthMiddleware extends BaseMiddleware {
             method: request.method,
             userAgent: request.headers['user-agent'],
             secChUa: request.headers['sec-ch-ua'] as string,
+            ip: this.clientIpFromRequest(request),
           },
           cookies: cookiesFromHeaders,
         })
@@ -156,6 +157,19 @@ export abstract class AuthMiddleware extends BaseMiddleware {
     response: Response,
     next: NextFunction,
   ): boolean
+
+  private clientIpFromRequest(request: Request): string {
+    const forwardedFor = request.headers['x-forwarded-for']
+    if (forwardedFor) {
+      const value = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
+      const leftmost = value.split(',')[0]?.trim()
+      if (leftmost) {
+        return leftmost
+      }
+    }
+
+    return request.socket?.remoteAddress ?? request.ip ?? ''
+  }
 
   private getCrossServiceTokenCacheExpireTimestamp(token: CrossServiceTokenData): number {
     const crossServiceTokenDefaultCacheExpiration = this.timer.getTimestampInSeconds() + this.crossServiceTokenCacheTTL

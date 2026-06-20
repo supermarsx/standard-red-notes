@@ -12,6 +12,7 @@ export interface SessionServiceInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<SessionCreationResult>
   createNewEphemeralSessionForUser(dto: {
     user: User
@@ -20,6 +21,7 @@ export interface SessionServiceInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<SessionCreationResult>
   refreshTokens(dto: {
     session: Session

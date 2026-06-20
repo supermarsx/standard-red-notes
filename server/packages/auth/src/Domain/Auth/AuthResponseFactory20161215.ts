@@ -28,6 +28,7 @@ export class AuthResponseFactory20161215 implements AuthResponseFactoryInterface
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<AuthResponseCreationResult> {
     this.logger.debug(`Creating JWT auth response for user ${dto.user.uuid}`)
 

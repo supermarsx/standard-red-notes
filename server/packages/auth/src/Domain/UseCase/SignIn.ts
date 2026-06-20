@@ -117,6 +117,7 @@ export class SignIn implements UseCaseInterface {
       readonlyAccess: false,
       snjs: dto.snjs,
       application: dto.application,
+      ipAddress: dto.ipAddress,
     })
 
     return {

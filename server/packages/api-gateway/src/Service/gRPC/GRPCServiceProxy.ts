@@ -42,6 +42,7 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       application?: string
       userAgent?: string
       secChUa?: string
+      ip?: string
     }
     cookies?: Map<string, string[]>
     retryAttempt?: number
@@ -77,6 +78,9 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
         metadata.set('x-application-version', dto.requestMetadata.application as string)
         metadata.set('x-origin-user-agent', dto.requestMetadata.userAgent as string)
         metadata.set('x-origin-sec-ch-ua', dto.requestMetadata.secChUa as string)
+        if (dto.requestMetadata.ip) {
+          metadata.set('x-origin-ip', dto.requestMetadata.ip)
+        }
         metadata.set('x-origin-url', dto.requestMetadata.url)
         metadata.set('x-origin-method', dto.requestMetadata.method)
 

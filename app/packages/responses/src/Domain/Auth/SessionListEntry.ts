@@ -5,4 +5,5 @@ export type SessionListEntry = {
   created_at: string
   updated_at: string
   device_info: string
+  ip_address?: string | null
 }

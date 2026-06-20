@@ -38,6 +38,7 @@ export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<AuthResponseCreationResult> {
     if (!dto.user.supportsSessions()) {
       this.logger.debug(`User ${dto.user.uuid} does not support sessions. Falling back to JWT auth response`)
@@ -71,6 +72,7 @@ export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<SessionCreationResult> {
     if (dto.ephemeralSession) {
       return this.sessionService.createNewEphemeralSessionForUser(dto)

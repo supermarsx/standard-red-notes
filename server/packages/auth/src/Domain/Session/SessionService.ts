@@ -54,6 +54,7 @@ export class SessionService implements SessionServiceInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<SessionCreationResult> {
     const session = await this.createSession({
       ephemeral: false,
@@ -91,6 +92,7 @@ export class SessionService implements SessionServiceInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<SessionCreationResult> {
     const ephemeralSession = await this.createSession({
       ephemeral: true,
@@ -239,6 +241,7 @@ export class SessionService implements SessionServiceInterface {
     revokedSession.createdAt = this.timer.getUTCDate()
     revokedSession.apiVersion = session.apiVersion
     revokedSession.userAgent = session.userAgent
+    revokedSession.ipAddress = session.ipAddress
     revokedSession.privateIdentifier = session.privateIdentifier
 
     await this.revokedSessionRepository.insert(revokedSession)
@@ -254,6 +257,7 @@ export class SessionService implements SessionServiceInterface {
     readonlyAccess: boolean
     snjs?: string
     application?: string
+    ipAddress?: string | null
   }): Promise<Session> {
     let session = new Session()
     if (dto.ephemeral) {
@@ -264,6 +268,7 @@ export class SessionService implements SessionServiceInterface {
     if (await this.isLoggingUserAgentEnabledOnSessions(dto.user)) {
       session.userAgent = dto.userAgent
     }
+    session.ipAddress = dto.ipAddress ?? null
     session.snjs = dto.snjs ?? null
     session.application = dto.application ?? null
     session.userUuid = dto.user.uuid

@@ -8,4 +8,5 @@ export interface SignInWithRecoveryCodesDTO {
   hvmToken?: string
   snjs?: string
   application?: string
+  ipAddress?: string | null
 }

@@ -170,6 +170,7 @@ export class BaseAuthController extends BaseHttpController {
       hvmToken: request.body.hvm_token,
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,
+      ipAddress: (request.headers['x-origin-ip'] as string) ?? null,
     })
 
     if (!signInResult.success) {
@@ -247,6 +248,7 @@ export class BaseAuthController extends BaseHttpController {
       hvmToken: request.body.hvm_token,
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,
+      ipAddress: (request.headers['x-origin-ip'] as string) ?? null,
     })
 
     if (result.isFailed()) {
@@ -411,6 +413,7 @@ export class BaseAuthController extends BaseHttpController {
       version: request.body.version,
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,
+      ipAddress: (request.headers['x-origin-ip'] as string) ?? null,
     })
 
     if (!registerResult.success) {
