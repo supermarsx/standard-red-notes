@@ -27,6 +27,7 @@ import FilePreviewModalWrapper from '@/Components/FilePreview/FilePreviewModal'
 import FileContextMenuWrapper from '@/Components/FileContextMenu/FileContextMenu'
 import PermissionsModalWrapper from '@/Components/PermissionsModal/PermissionsModalWrapper'
 import TagContextMenuWrapper from '@/Components/Tags/TagContextMenuWrapper'
+import FolderContextMenuWrapper from '@/Components/Tags/FolderContextMenuWrapper'
 import FileDragNDropProvider from '../FileDragNDropProvider'
 import ResponsivePaneProvider from '../Panes/ResponsivePaneProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
@@ -352,6 +353,10 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                   <>
                     <NotesContextMenu />
                     <TagContextMenuWrapper
+                      navigationController={application.navigationController}
+                      featuresController={application.featuresController}
+                    />
+                    <FolderContextMenuWrapper
                       navigationController={application.navigationController}
                       featuresController={application.featuresController}
                     />

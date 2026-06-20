@@ -31,6 +31,10 @@ import {
   AlertService,
   PreferenceServiceInterface,
   ChangeAndSaveItem,
+  SNFolder,
+  FolderMutator,
+  FolderContentType,
+  FolderContent,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { FeaturesController } from '../FeaturesController'
@@ -52,8 +56,13 @@ export class NavigationController
   implements Persistable<NavigationControllerPersistableValue>, InternalEventHandlerInterface
 {
   tags: SNTag[] = []
+  folders: SNFolder[] = []
   smartViews: SmartView[] = []
   starredTags: SNTag[] = []
+  selectedFolder_: SNFolder | undefined = undefined
+  editingFolder_: SNFolder | undefined = undefined
+  addingSubfolderTo: SNFolder | undefined = undefined
+  contextMenuFolder: SNFolder | undefined = undefined
   allNotesCount_ = 0
   allFilesCount_ = 0
   selectedUuid: AnyTag['uuid'] | undefined = undefined
@@ -93,11 +102,27 @@ export class NavigationController
 
     this.tagsCountsState = new TagsCountsState(items)
     this.smartViews = items.getSmartViews()
+    this.folders = items.getItems<SNFolder>(FolderContentType)
 
     makeObservable(this, {
       tags: observable,
+      folders: observable,
       starredTags: observable,
       smartViews: observable.ref,
+
+      selectedFolder_: observable.ref,
+      selectedFolder: computed,
+      setSelectedFolder: action,
+      editingFolder_: observable.ref,
+      editingFolder: computed,
+      setEditingFolder: action,
+      addingSubfolderTo: observable.ref,
+      setAddingSubfolderTo: action,
+      contextMenuFolder: observable.ref,
+      setContextMenuFolder: action,
+      createFolder: action,
+      removeFolder: action,
+      createNewFolderTemplate: action,
       allNotesCount_: observable,
       allFilesCount_: observable,
       allNotesCount: computed,
@@ -177,6 +202,34 @@ export class NavigationController
     )
 
     this.disposers.push(
+      this.items.streamItems<SNFolder>([FolderContentType], ({ removed }) => {
+        this.reloadFolders()
+
+        if (this.contextMenuFolder && FindItem(removed, this.contextMenuFolder.uuid)) {
+          this.setContextMenuFolder(undefined)
+        }
+
+        runInAction(() => {
+          const currentSelectedFolder = this.selectedFolder_
+          if (!currentSelectedFolder) {
+            return
+          }
+          const updated = this.folders.find((folder) => folder.uuid === currentSelectedFolder.uuid)
+          if (updated) {
+            this.selectedFolder_ = updated
+            if (this.selectedUuid === currentSelectedFolder.uuid) {
+              this.selected_ = updated as unknown as AnyTag
+            }
+          } else if (FindItem(removed, currentSelectedFolder.uuid)) {
+            void this.selectHomeNavigationView()
+          }
+        })
+
+        void this.runFolderMigrationIfNeeded()
+      }),
+    )
+
+    this.disposers.push(
       this.items.addNoteCountChangeObserver((tagUuid) => {
         if (!tagUuid) {
           this.setAllNotesCount(this.items.allCountableNotesCount())
@@ -213,6 +266,12 @@ export class NavigationController
     )
 
     this.setDisplayOptionsAndReloadTags = debounce(this.setDisplayOptionsAndReloadTags, 50)
+  }
+
+  private reloadFolders(): void {
+    runInAction(() => {
+      this.folders = this.items.getItems<SNFolder>(FolderContentType)
+    })
   }
 
   private reloadTags(): void {
@@ -280,6 +339,9 @@ export class NavigationController
     super.deinit()
     ;(this.featuresController as unknown) = undefined
     ;(this.tags as unknown) = undefined
+    ;(this.folders as unknown) = undefined
+    ;(this.selectedFolder_ as unknown) = undefined
+    ;(this.editingFolder_ as unknown) = undefined
     ;(this.smartViews as unknown) = undefined
     ;(this.selected_ as unknown) = undefined
     ;(this.previouslySelected_ as unknown) = undefined
@@ -290,7 +352,7 @@ export class NavigationController
     destroyAllObjectProperties(this)
   }
 
-  async createSubtagAndAssignParent(parent: SNTag, title: string, isFolder = false) {
+  async createSubtagAndAssignParent(parent: SNTag, title: string) {
     const hasEmptyTitle = title.length === 0
 
     if (hasEmptyTitle) {
@@ -309,12 +371,6 @@ export class NavigationController
       this.setAddingSubtagTo(undefined)
       this.remove(createdTag, false).catch(console.error)
       return
-    }
-
-    if (isFolder) {
-      await this._changeAndSaveItem.execute<TagMutator>(createdTag, (mutator) => {
-        mutator.isFolder = true
-      })
     }
 
     this.assignParent(createdTag.uuid, parent.uuid).catch(console.error)
@@ -393,37 +449,35 @@ export class NavigationController
     return this.rootTags
   }
 
-  /** A tag is a folder ONLY when explicitly flagged — folders are never inferred from tags. */
-  public isFolderTag(tag: SNTag): boolean {
-    return tag.isFolder === true
-  }
-
-  /** Root-level folders for the hierarchical Folders section. */
-  public get allLocalRootFolders(): SNTag[] {
-    const folders = this.rootTags.filter((tag) => tag.isFolder)
-    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && this.editing_.isFolder) {
-      return [this.editing_, ...folders]
+  /** Root-level folders (no parent folder) for the hierarchical Folders section. */
+  public get allLocalRootFolders(): SNFolder[] {
+    const roots = this.folders.filter((folder) => !folder.parentId)
+    if (this.editingFolder_ && this.items.isTemplateItem(this.editingFolder_) && !this.editingFolder_.parentId) {
+      return [this.editingFolder_, ...roots]
     }
-    return folders
+    return roots
   }
 
-  /** All tags (labels), shown flat. Tags are never contained inside folders. */
+  /** All tags (labels), shown flat. Tags are never folders anymore. */
   public get allLocalFlatTags(): SNTag[] {
-    const flat = this.tags.filter((tag) => !tag.isFolder)
-    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && !this.editing_.isFolder) {
+    const flat = this.tags
+    if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_)) {
       return [this.editing_, ...flat]
     }
     return flat
   }
 
   /** Subfolders of a folder. The Folders tree shows folders only; a folder's notes appear in the note list. */
-  public getFolderChildren(tag: SNTag): SNTag[] {
-    return this.getChildren(tag).filter((child) => child.isFolder)
+  public getFolderChildren(folder: SNFolder): SNFolder[] {
+    if (this.items.isTemplateItem(folder) || this.isSearching) {
+      return []
+    }
+    return this.folders.filter((candidate) => candidate.parentId === folder.uuid)
   }
 
   /** The single folder a note lives in (its location), if any. */
-  public getNoteFolder(note: SNNote): SNTag | undefined {
-    return this.tags.find((tag) => tag.isFolder && tag.noteReferences.some((ref) => ref.uuid === note.uuid))
+  public getNoteFolder(note: SNNote): SNFolder | undefined {
+    return this.folders.find((folder) => folder.noteReferences.some((ref) => ref.uuid === note.uuid))
   }
 
   /**
@@ -431,19 +485,327 @@ export class NavigationController
    * `folder` is undefined. Folder membership is single-valued — unlike tags, which
    * stay many-to-many labels.
    */
-  public async moveNoteToFolder(note: SNNote, folder: SNTag | undefined): Promise<void> {
-    const currentFolders = this.tags.filter(
-      (tag) => tag.isFolder && tag.noteReferences.some((ref) => ref.uuid === note.uuid),
+  public async moveNoteToFolder(note: SNNote, folder: SNFolder | undefined): Promise<void> {
+    const currentFolders = this.folders.filter((candidate) =>
+      candidate.noteReferences.some((ref) => ref.uuid === note.uuid),
     )
     for (const current of currentFolders) {
       if (current.uuid !== folder?.uuid) {
-        await this.mutator.unlinkItems(note, current)
+        await this.mutator.changeItem<FolderMutator>(current, (m) => m.removeNote(note))
       }
     }
     if (folder) {
-      await this.mutator.addTagToNote(note, folder, false)
+      await this.mutator.changeItem<FolderMutator>(folder, (m) => m.addNote(note))
     }
     await this.sync.sync()
+  }
+
+  public get selectedFolder(): SNFolder | undefined {
+    return this.selectedFolder_
+  }
+
+  setContextMenuFolder(folder: SNFolder | undefined, section: TagListSectionType = 'folders'): void {
+    this.contextMenuFolder = folder
+    this.contextMenuTagSection = section
+  }
+
+  setAddingSubfolderTo(folder: SNFolder | undefined): void {
+    this.addingSubfolderTo = folder
+  }
+
+  public get editingFolder(): SNFolder | undefined {
+    return this.editingFolder_
+  }
+
+  setEditingFolder(folder: SNFolder | undefined): void {
+    runInAction(() => {
+      this.editingFolder_ = folder
+    })
+  }
+
+  /**
+   * Select a folder so the note list filters to the notes it references. We publish the
+   * same TagChanged event the tag selection uses so ItemListController re-runs its display
+   * options (which now include the selected folder as a criterion). The selected tag/view
+   * is cleared so only the folder filter applies.
+   */
+  public async setSelectedFolder(
+    folder: SNFolder,
+    options?: { userTriggered: boolean; scrollIntoView?: boolean },
+  ): Promise<void> {
+    const { userTriggered = false } = options || {}
+
+    if (this.items.isTemplateItem(folder)) {
+      return
+    }
+
+    if (userTriggered) {
+      this.paneController.setPaneLayout(PaneLayout.ItemSelection)
+    }
+
+    this.previouslySelected_ = this.selected_
+
+    await runInAction(async () => {
+      this.selectedFolder_ = folder
+      this.selected_ = folder as unknown as AnyTag
+      this.selectedUuid = folder.uuid
+      this.selectedLocation = 'folders'
+
+      this.recents.add(folder.uuid)
+
+      await this.eventBus.publishSync(
+        {
+          type: CrossControllerEvent.TagChanged,
+          payload: { tag: folder, previousTag: this.previouslySelected_, userTriggered },
+        },
+        InternalEventPublishStrategy.SEQUENCE,
+      )
+    })
+  }
+
+  /** Create a new SNFolder, optionally nested under `parent`, then select it. */
+  public async createFolder(title: string, parent?: SNFolder): Promise<void> {
+    if (title.length === 0) {
+      this.setAddingSubfolderTo(undefined)
+      this.setEditingFolder(undefined)
+      return
+    }
+
+    const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
+      title,
+    } as unknown as FolderContent)
+
+    const created = await this.mutator.insertItem<SNFolder>(template)
+
+    if (parent) {
+      await this.mutator.changeItem<FolderMutator>(created, (m) => m.makeChildOf(parent))
+    }
+
+    await this.sync.sync()
+
+    this.reloadFolders()
+
+    const inserted = this.folders.find((folder) => folder.uuid === created.uuid) || created
+
+    runInAction(() => {
+      this.setAddingSubfolderTo(undefined)
+      this.setEditingFolder(undefined)
+      void this.setSelectedFolder(inserted, { userTriggered: true })
+    })
+  }
+
+  /** Begin the inline-create flow for a new root folder (renders an editable template row). */
+  public createNewFolderTemplate(): void {
+    if (this.editingFolder_ && this.items.isTemplateItem(this.editingFolder_)) {
+      return
+    }
+    const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
+      title: '',
+    } as unknown as FolderContent)
+    runInAction(() => {
+      this.selectedLocation = 'folders'
+      this.editingFolder_ = template
+    })
+  }
+
+  public setFolderExpanded(folder: SNFolder, expanded: boolean): void {
+    if (folder.expanded === expanded) {
+      return
+    }
+    this._changeAndSaveItem
+      .execute<FolderMutator>(folder, (mutator) => {
+        mutator.expanded = expanded
+      })
+      .catch(console.error)
+  }
+
+  public setFolderIcon(folder: SNFolder, icon: VectorIconNameOrEmoji): void {
+    this._changeAndSaveItem
+      .execute<FolderMutator>(folder, (mutator) => {
+        mutator.iconString = icon as string
+      })
+      .catch(console.error)
+  }
+
+  public setFolderColor(folder: SNFolder, color: string | undefined): void {
+    this._changeAndSaveItem
+      .execute<FolderMutator>(folder, (mutator) => {
+        mutator.color = color
+      })
+      .catch(console.error)
+  }
+
+  public async renameFolder(folder: SNFolder, newTitle: string): Promise<void> {
+    const trimmed = newTitle.trim()
+    if (trimmed.length === 0 || trimmed === folder.title) {
+      return
+    }
+    await this._changeAndSaveItem.execute<FolderMutator>(folder, (mutator) => {
+      mutator.title = trimmed
+    })
+  }
+
+  /** Re-parent a folder under another folder, or to the root when `parent` is undefined. */
+  public async assignFolderParent(folderUuid: string, parentUuid: string | undefined): Promise<void> {
+    const folder = this.items.findItem<SNFolder>(folderUuid)
+    if (!folder) {
+      return
+    }
+
+    if (folder.parentId === parentUuid) {
+      return
+    }
+
+    // Prevent cycles: a folder cannot become a descendant of itself.
+    if (parentUuid) {
+      let cursor: SNFolder | undefined = this.folders.find((f) => f.uuid === parentUuid)
+      while (cursor) {
+        if (cursor.uuid === folderUuid) {
+          return
+        }
+        cursor = cursor.parentId ? this.folders.find((f) => f.uuid === cursor?.parentId) : undefined
+      }
+    }
+
+    const parent = parentUuid ? this.items.findItem<SNFolder>(parentUuid) : undefined
+
+    await this.mutator.changeItem<FolderMutator>(folder, (mutator) => {
+      if (parent) {
+        mutator.makeChildOf(parent)
+      } else {
+        mutator.unsetParent()
+      }
+    })
+
+    await this.sync.sync()
+  }
+
+  public async removeFolder(folder: SNFolder, userTriggered: boolean): Promise<void> {
+    let shouldDelete = !userTriggered
+    if (userTriggered) {
+      shouldDelete = await confirmDialog({
+        title: StringUtils.deleteTag(folder.title),
+        text: STRING_DELETE_TAG,
+        confirmButtonStyle: 'danger',
+      })
+    }
+    if (!shouldDelete) {
+      return
+    }
+
+    // Re-parent any direct children to this folder's parent so they are not orphaned.
+    const parent = folder.parentId ? this.items.findItem<SNFolder>(folder.parentId) : undefined
+    const children = this.folders.filter((candidate) => candidate.parentId === folder.uuid)
+    for (const child of children) {
+      await this.mutator.changeItem<FolderMutator>(child, (mutator) => {
+        if (parent) {
+          mutator.makeChildOf(parent)
+        } else {
+          mutator.unsetParent()
+        }
+      })
+    }
+
+    await this.mutator.deleteItem(folder)
+    await this.sync.sync()
+
+    if (this.selectedUuid === folder.uuid) {
+      await this.setSelectedTag(this.smartViews[0], 'views')
+    }
+  }
+
+  private async runFolderMigrationIfNeeded(): Promise<void> {
+    const MIGRATION_FLAG = 'srn_folders_migrated_v1'
+    try {
+      if (typeof localStorage === 'undefined' || localStorage.getItem(MIGRATION_FLAG)) {
+        return
+      }
+    } catch {
+      return
+    }
+
+    const legacyFolderTags = this.items
+      .getItems<SNTag>(ContentType.TYPES.Tag)
+      .filter((tag) => (tag as unknown as { isFolder?: boolean }).isFolder === true)
+
+    if (legacyFolderTags.length === 0) {
+      try {
+        localStorage.setItem(MIGRATION_FLAG, '1')
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+
+    // Map old folder-tag uuid -> newly created SNFolder, so we can rebuild parentage.
+    const tagUuidToNewFolder = new Map<string, SNFolder>()
+    let migratedAny = false
+
+    try {
+      for (const tag of legacyFolderTags) {
+        const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
+          title: tag.title,
+          iconString: tag.iconString,
+          expanded: tag.expanded,
+          color: tag.color,
+        } as unknown as FolderContent)
+        const created = await this.mutator.insertItem<SNFolder>(template)
+        tagUuidToNewFolder.set(tag.uuid, created)
+
+        const referencedNoteUuids = tag.noteReferences.map((ref) => ref.uuid)
+        if (referencedNoteUuids.length > 0) {
+          await this.mutator.changeItem<FolderMutator>(created, (mutator) => {
+            for (const noteUuid of referencedNoteUuids) {
+              const note = this.items.findItem<SNNote>(noteUuid)
+              if (note) {
+                mutator.addNote(note)
+              }
+            }
+          })
+        }
+        migratedAny = true
+      }
+
+      // Rebuild parent relationships among the migrated folders.
+      for (const tag of legacyFolderTags) {
+        const parentTag = this.items.getTagParent(tag)
+        if (!parentTag) {
+          continue
+        }
+        const newChild = tagUuidToNewFolder.get(tag.uuid)
+        const newParent = tagUuidToNewFolder.get(parentTag.uuid)
+        if (newChild && newParent) {
+          await this.mutator.changeItem<FolderMutator>(newChild, (mutator) => {
+            mutator.makeChildOf(newParent)
+          })
+        }
+      }
+
+      // Only delete the old folder-tags once every one was successfully recreated.
+      const allMigrated = legacyFolderTags.every((tag) => tagUuidToNewFolder.has(tag.uuid))
+      if (allMigrated) {
+        for (const tag of legacyFolderTags) {
+          await this.mutator.deleteItem(tag)
+        }
+      } else {
+        console.warn('Folder migration: not all folder-tags were recreated; leaving originals intact.')
+      }
+
+      await this.sync.sync()
+      this.reloadFolders()
+    } catch (error) {
+      console.error('Folder migration failed; leaving legacy folder-tags intact.', error)
+      // Do not set the flag so we can retry on a future run; avoid data loss.
+      return
+    }
+
+    if (migratedAny || legacyFolderTags.length === 0) {
+      try {
+        localStorage.setItem(MIGRATION_FLAG, '1')
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   public getNotesCount(tag: SNTag): number {
@@ -651,16 +1013,6 @@ export class NavigationController
       .catch(console.error)
   }
 
-  /** Convert a tag to a folder or back to a plain tag. */
-  public setIsFolder(tag: SNTag, isFolder: boolean) {
-    this._changeAndSaveItem
-      .execute<TagMutator>(tag, (mutator) => {
-        mutator.isFolder = isFolder
-      })
-      .then(() => this.sync.sync())
-      .catch(console.error)
-  }
-
   public get editingTag(): SNTag | SmartView | undefined {
     return this.editing_
   }
@@ -674,17 +1026,14 @@ export class NavigationController
     })
   }
 
-  public createNewTemplate(options: { isFolder?: boolean } = {}) {
+  public createNewTemplate() {
     const isAlreadyEditingATemplate = this.editing_ && this.items.isTemplateItem(this.editing_)
 
     if (isAlreadyEditingATemplate) {
       return
     }
 
-    const newTag = this.items.createTemplateItem<TagContent, SNTag>(
-      ContentType.TYPES.Tag,
-      options.isFolder ? ({ isFolder: true } as unknown as TagContent) : undefined,
-    )
+    const newTag = this.items.createTemplateItem<TagContent, SNTag>(ContentType.TYPES.Tag)
 
     runInAction(() => {
       this.selectedLocation = 'all'

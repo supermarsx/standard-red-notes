@@ -3,13 +3,14 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import Menu from '@/Components/Menu/Menu'
 import MenuItem from '@/Components/Menu/MenuItem'
-import { SNTag, VectorIconNameOrEmoji, DefaultTagIconName } from '@standardnotes/snjs'
+import { usePremiumModal } from '@/Hooks/usePremiumModal'
+import { SNFolder, VectorIconNameOrEmoji, DefaultFolderIconName } from '@standardnotes/snjs'
 import { NavigationController } from '@/Controllers/Navigation/NavigationController'
 import HorizontalSeparator from '../Shared/HorizontalSeparator'
 import { formatDateForContextMenu } from '@/Utils/DateUtils'
+import { PremiumFeatureIconClass, PremiumFeatureIconName } from '../Icon/PremiumFeatureIcon'
 import Popover from '../Popover/Popover'
 import IconPicker from '../Icon/IconPicker'
-import AddToVaultMenuOption from '../Vaults/AddToVaultMenuOption'
 import { useApplication } from '../ApplicationProvider'
 import MenuSection from '../Menu/MenuSection'
 import DecoratedInput from '../Input/DecoratedInput'
@@ -18,37 +19,48 @@ import TagColorPicker from './TagColorPicker'
 
 type ContextMenuProps = {
   navigationController: NavigationController
-  selectedTag: SNTag
+  isEntitledToFolders: boolean
+  selectedFolder: SNFolder
 }
 
-const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps) => {
+const FolderContextMenu = ({ navigationController, isEntitledToFolders, selectedFolder }: ContextMenuProps) => {
   const application = useApplication()
+
+  const premiumModal = usePremiumModal()
 
   const { contextMenuOpen, contextMenuClickLocation } = navigationController
 
-  const onClickDelete = useCallback(() => {
-    navigationController.remove(selectedTag, true).catch(console.error)
-  }, [navigationController, selectedTag])
+  const onClickAddSubfolder = useCallback(() => {
+    if (!isEntitledToFolders) {
+      premiumModal.activate('Folders')
+      return
+    }
 
-  const tagLastModified = useMemo(
-    () => formatDateForContextMenu(selectedTag.userModifiedDate),
-    [selectedTag.userModifiedDate],
+    navigationController.setContextMenuOpen(false)
+    navigationController.setAddingSubfolderTo(selectedFolder)
+  }, [isEntitledToFolders, navigationController, selectedFolder, premiumModal])
+
+  const onClickDelete = useCallback(() => {
+    navigationController.removeFolder(selectedFolder, true).catch(console.error)
+  }, [navigationController, selectedFolder])
+
+  const folderLastModified = useMemo(
+    () => formatDateForContextMenu(selectedFolder.userModifiedDate),
+    [selectedFolder.userModifiedDate],
   )
 
   const handleIconChange = (value?: VectorIconNameOrEmoji) => {
-    navigationController.setIcon(selectedTag, value || DefaultTagIconName)
+    navigationController.setFolderIcon(selectedFolder, value || DefaultFolderIconName)
   }
 
   const handleColorChange = (color: string | undefined) => {
-    navigationController.setColor(selectedTag, color)
+    navigationController.setFolderColor(selectedFolder, color)
   }
 
-  const onClickStar = useCallback(() => {
-    navigationController.setFavorite(selectedTag, !selectedTag.starred).catch(console.error)
-    navigationController.setContextMenuOpen(false)
-  }, [navigationController, selectedTag])
-
-  const tagCreatedAt = useMemo(() => formatDateForContextMenu(selectedTag.created_at), [selectedTag.created_at])
+  const folderCreatedAt = useMemo(
+    () => formatDateForContextMenu(selectedFolder.created_at),
+    [selectedFolder.created_at],
+  )
 
   const titleInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -66,7 +78,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
       }
       const value = titleInputRef.current.value.trim()
       navigationController
-        .save(selectedTag, value)
+        .renameFolder(selectedFolder, value)
         .catch(console.error)
         .finally(() => {
           if (closeMenu) {
@@ -74,12 +86,12 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           }
         })
     },
-    [navigationController, selectedTag],
+    [navigationController, selectedFolder],
   )
 
   return (
     <Popover
-      title="Tag options"
+      title="Folder options"
       open={contextMenuOpen}
       anchorPoint={contextMenuClickLocation}
       togglePopover={() => navigationController.setContextMenuOpen(!contextMenuOpen)}
@@ -94,8 +106,8 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
               container: 'flex-grow',
               input: 'text-mobile-menu-item md:text-tablet-menu-item lg:text-menu-item',
             }}
-            defaultValue={selectedTag.title}
-            key={selectedTag.uuid}
+            defaultValue={selectedFolder.title}
+            key={selectedFolder.uuid}
             onBlur={() => saveTitle()}
             onKeyDown={(event) => {
               if (event.key === KeyboardKey.Enter) {
@@ -104,7 +116,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
             }}
           />
           <button
-            aria-label="Save tag name"
+            aria-label="Save folder name"
             className="rounded border border-border bg-transparent px-1.5 active:bg-default translucent-ui:border-[--popover-border-color] md:hidden"
             onClick={() => saveTitle(true)}
           >
@@ -113,11 +125,11 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
         </div>
       </div>
       <HorizontalSeparator classes="my-2" />
-      <Menu a11yLabel="Tag context menu">
+      <Menu a11yLabel="Folder context menu">
         <IconPicker
-          key={selectedTag.uuid}
+          key={selectedFolder.uuid}
           onIconChange={handleIconChange}
-          selectedValue={selectedTag.iconString}
+          selectedValue={selectedFolder.iconString}
           platform={application.platform}
           className={'py-1.5 md:px-3'}
           useIconGrid={true}
@@ -125,17 +137,15 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           autoFocus={false}
         />
         <div className="px-4 py-1.5 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
-          <TagColorPicker selectedColor={selectedTag.color} onChange={handleColorChange} />
+          <TagColorPicker selectedColor={selectedFolder.color} onChange={handleColorChange} />
         </div>
         <MenuSection>
-          {application.featuresController.isVaultsEnabled() && (
-            <AddToVaultMenuOption iconClassName="mr-2 text-neutral" items={[selectedTag]} />
-          )}
-          <MenuItem className={'justify-between py-1.5'} onClick={onClickStar}>
+          <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubfolder}>
             <div className="flex items-center">
-              <Icon type="star" className="mr-2 text-neutral" />
-              {selectedTag.starred ? 'Unfavorite' : 'Favorite'}
+              <Icon type="add" className="mr-2 text-neutral" />
+              Add subfolder
             </div>
+            {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>
             <Icon type="trash" className="mr-2 text-danger" />
@@ -146,17 +156,17 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
       <HorizontalSeparator classes="my-2" />
       <div className="px-4 pb-1.5 pt-1 text-sm font-medium text-neutral md:px-3 lg:text-xs">
         <div className="mb-1">
-          <span className="font-semibold">Last modified:</span> {tagLastModified}
+          <span className="font-semibold">Last modified:</span> {folderLastModified}
         </div>
         <div className="mb-1">
-          <span className="font-semibold">Created:</span> {tagCreatedAt}
+          <span className="font-semibold">Created:</span> {folderCreatedAt}
         </div>
         <div>
-          <span className="font-semibold">Tag ID:</span> {selectedTag.uuid}
+          <span className="font-semibold">Folder ID:</span> {selectedFolder.uuid}
         </div>
       </div>
     </Popover>
   )
 }
 
-export default observer(TagContextMenu)
+export default observer(FolderContextMenu)

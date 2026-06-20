@@ -4,7 +4,7 @@ import Icon from '@/Components/Icon/Icon'
 import { NavigationController } from '@/Controllers/Navigation/NavigationController'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import Popover from '../Popover/Popover'
-import { classNames, SNNote, SNTag } from '@standardnotes/snjs'
+import { classNames, SNFolder, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '../ApplicationProvider'
 import MenuItem from '../Menu/MenuItem'
 import Menu from '../Menu/Menu'
@@ -17,7 +17,7 @@ type Props = {
 }
 
 type FolderListEntry = {
-  folder: SNTag
+  folder: SNFolder
   depth: number
 }
 
@@ -35,7 +35,7 @@ const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, no
   // Build a flat, depth-indented list of all folders by recursing the folder tree.
   const folderEntries = useMemo<FolderListEntry[]>(() => {
     const entries: FolderListEntry[] = []
-    const visit = (folder: SNTag, depth: number) => {
+    const visit = (folder: SNFolder, depth: number) => {
       entries.push({ folder, depth })
       for (const child of navigationController.getFolderChildren(folder)) {
         visit(child, depth + 1)
@@ -50,7 +50,7 @@ const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, no
   const currentFolder = navigationController.getNoteFolder(note)
 
   const moveToFolder = useCallback(
-    (folder: SNTag | undefined) => {
+    (folder: SNFolder | undefined) => {
       navigationController.moveNoteToFolder(note, folder).catch(console.error)
       setIsOpen(false)
     },

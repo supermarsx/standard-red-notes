@@ -9,7 +9,7 @@ type Props = {
   featuresController: FeaturesController
 }
 
-const TagContextMenuWrapper = ({ navigationController, featuresController }: Props) => {
+const TagContextMenuWrapper = ({ navigationController }: Props) => {
   const selectedTag = navigationController.contextMenuTag
 
   if (!selectedTag || !(selectedTag instanceof SNTag)) {
@@ -17,11 +17,7 @@ const TagContextMenuWrapper = ({ navigationController, featuresController }: Pro
   }
 
   return (
-    <TagContextMenu
-      navigationController={navigationController}
-      isEntitledToFolders={featuresController.hasFolders}
-      selectedTag={selectedTag}
-    />
+    <TagContextMenu navigationController={navigationController} selectedTag={selectedTag} />
   )
 }
 

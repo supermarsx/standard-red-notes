@@ -13,10 +13,13 @@ function TagsSectionAddButton({ isFolder = false }: Props) {
   const application = useApplication()
   const keyboardService = useKeyboardService()
 
-  const addNewTag = useCallback(
-    () => application.navigationController.createNewTemplate({ isFolder }),
-    [application.navigationController, isFolder],
-  )
+  const addNewTag = useCallback(() => {
+    if (isFolder) {
+      application.navigationController.createNewFolderTemplate()
+    } else {
+      application.navigationController.createNewTemplate()
+    }
+  }, [application.navigationController, isFolder])
 
   const shortcut = useMemo(
     () => keyboardStringForShortcut(keyboardService.keyboardShortcutForCommand(CREATE_NEW_TAG_COMMAND)),

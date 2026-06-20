@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/utils'
-import { ContentType, DecryptedItemInterface, SNNote, SNTag } from '@standardnotes/snjs'
+import { ContentType, DecryptedItemInterface, SNNote } from '@standardnotes/snjs'
 import Icon from '../Icon/Icon'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
@@ -57,25 +57,16 @@ const LinkedItemBubblesContainer = ({
 
   const navigationController = application.navigationController
 
-  // A note lives in exactly one folder (its location); folders must not appear as tag
-  // chips. Exclude folder-tags from the displayed tag list so only real labels show.
-  const tagLinksWithoutFolders = useMemo(
-    () =>
-      tagsLinkedToItem.filter(
-        (link) => !(link.item instanceof SNTag && navigationController.isFolderTag(link.item)),
-      ),
-    [tagsLinkedToItem, navigationController],
-  )
-
   // The single folder the note currently lives in, rendered as a distinct chip below.
+  // Folders are no longer tags, so the tag chip list needs no folder exclusion.
   const noteFolder = useMemo(
     () => (item instanceof SNNote ? navigationController.getNoteFolder(item) : undefined),
     [item, navigationController],
   )
 
   const allItemsLinkedToItem: ItemLink[] = useMemo(
-    () => new Array<ItemLink>().concat(notesLinkedToItem, filesLinkedToItem, tagLinksWithoutFolders),
-    [filesLinkedToItem, notesLinkedToItem, tagLinksWithoutFolders],
+    () => new Array<ItemLink>().concat(notesLinkedToItem, filesLinkedToItem, tagsLinkedToItem),
+    [filesLinkedToItem, notesLinkedToItem, tagsLinkedToItem],
   )
 
   const linkInputRef = useRef<HTMLInputElement>(null)
@@ -226,7 +217,7 @@ const LinkedItemBubblesContainer = ({
             )}
             title={`Folder: ${noteFolder.title}`}
             onClick={() => {
-              void navigationController.setSelectedTag(noteFolder, 'folders', { userTriggered: true })
+              void navigationController.setSelectedFolder(noteFolder, { userTriggered: true })
             }}
           >
             <Icon type="folder" className="mr-1 flex-shrink-0 text-info" size="small" />

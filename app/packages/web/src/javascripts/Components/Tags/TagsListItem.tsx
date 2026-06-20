@@ -70,18 +70,11 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     const isFlatTag = type === 'tags'
 
     const childrenTags = computed(() =>
-      isFlatTag
-        ? []
-        : type === 'folders'
-          ? navigationController.getFolderChildren(tag)
-          : navigationController.getChildren(tag),
+      isFlatTag ? [] : navigationController.getChildren(tag),
     ).get()
     const hasChildren = childrenTags.length > 0
 
-    // In the Folders section, render a folder glyph for container rows (unless the
-    // user picked a custom icon), so the tree reads like a filesystem.
-    const isFolderRow = type === 'folders' && (tag.isFolder || hasChildren)
-    const displayIconType = (isFolderRow && tag.iconString === 'hashtag' ? 'folder' : tag.iconString) as IconType
+    const displayIconType = tag.iconString as IconType
 
     const hasFolders = features.hasFolders
 
@@ -186,11 +179,9 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     }, [])
 
     const onSubtagInputBlur = useCallback(() => {
-      // Creating inside a folder makes a subfolder; inside the flat tags list it
-      // makes a plain tag.
-      navigationController.createSubtagAndAssignParent(tag, subtagTitle, type === 'folders').catch(console.error)
+      navigationController.createSubtagAndAssignParent(tag, subtagTitle).catch(console.error)
       setSubtagTitle('')
-    }, [subtagTitle, tag, navigationController, type])
+    }, [subtagTitle, tag, navigationController])
 
     const onSubtagKeyDown: KeyboardEventHandler = useCallback(
       (e) => {
@@ -311,13 +302,8 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           return
         } else if (draggedNoteUuid) {
           const note = application.items.findSureItem<SNNote>(draggedNoteUuid)
-          if (tag.isFolder) {
-            // Dropping a note on a folder MOVES it there — a note lives in one folder.
-            await navigationController.moveNoteToFolder(note, tag)
-          } else {
-            // Dropping a note on a tag just applies the label (additive).
-            await linkingController.linkItems(note, tag)
-          }
+          // Dropping a note on a tag just applies the label (additive).
+          await linkingController.linkItems(note, tag)
           return
         }
       },

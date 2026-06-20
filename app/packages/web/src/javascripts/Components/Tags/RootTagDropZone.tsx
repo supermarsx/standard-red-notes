@@ -31,7 +31,7 @@ const RootTagDropZone: FunctionComponent<Props> = ({ tagsState }) => {
         return
       }
       if (draggedTagUuid) {
-        void tagsState.assignParent(draggedTagUuid, undefined)
+        void tagsState.assignFolderParent(draggedTagUuid, undefined)
       }
     },
     [tagsState],

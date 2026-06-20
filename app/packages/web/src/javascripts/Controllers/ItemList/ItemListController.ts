@@ -35,6 +35,7 @@ import {
   isNote,
   ChallengeReason,
   KeyboardModifier,
+  FolderContentType,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { WebDisplayOptions } from './WebDisplayOptions'
@@ -215,6 +216,16 @@ export class ItemListController
           }
         },
       ),
+    )
+
+    this.disposers.push(
+      itemManager.streamItems(FolderContentType, () => {
+        /** A folder's note references could have changed, so reload the filter if one is selected. */
+        if (this.navigationController.selectedFolder) {
+          this.reloadNotesDisplayOptions()
+          void this.reloadItems(ItemsReloadSource.ItemStream)
+        }
+      }),
     )
 
     eventBus.addEventHandler(this, ApplicationEvent.PreferencesChanged)
@@ -672,11 +683,15 @@ export class ItemListController
       includeTrashed = this.displayOptions.includeTrashed ?? false
     }
 
+    const selectedFolder = this.navigationController.selectedFolder
+    const isFolderSelected = selectedFolder && selectedFolder.uuid === this.navigationController.selectedUuid
+
     const criteria: NotesAndFilesDisplayControllerOptions = {
       sortBy: this.displayOptions.sortBy,
       sortDirection: this.displayOptions.sortDirection,
-      tags: tag instanceof SNTag ? [tag] : [],
-      views: tag instanceof SmartView ? [tag] : [],
+      tags: !isFolderSelected && tag instanceof SNTag ? [tag] : [],
+      views: !isFolderSelected && tag instanceof SmartView ? [tag] : [],
+      folders: isFolderSelected ? [selectedFolder] : [],
       includeArchived,
       includeTrashed,
       includePinned: this.displayOptions.includePinned,
