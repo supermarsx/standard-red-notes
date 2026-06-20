@@ -291,6 +291,21 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               : 'In Server proxy mode your Standard Red Notes server relays one model turn at a time to the AI provider using a server-held API key.'}
           </Text>
 
+          <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+            <Subtitle className="text-warning">The assistant sends note content to an external AI provider</Subtitle>
+            <Text className="mt-1">
+              Tool execution runs locally in your browser, but the model calls do not. Your messages, and any note
+              content the assistant reads while answering, are sent to the AI model you configure. This can expose
+              information you did not intend to share — especially with cloud providers.
+            </Text>
+            <Text className="mt-1">
+              In Direct mode the content goes straight from your browser to the endpoint you configure below (e.g.
+              OpenAI, OpenRouter, or a local LM Studio / Ollama server). In Server proxy mode it is relayed through your
+              Standard Red Notes server and then on to the provider. Either way, end-to-end-encrypted content leaves your
+              device once you use the assistant. Only use it with notes you are comfortable sharing this way.
+            </Text>
+          </div>
+
           <HorizontalSeparator classes="my-4" />
 
           <Subtitle>Connection mode</Subtitle>

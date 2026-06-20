@@ -37,6 +37,18 @@ type Props = {
   onUsageChange?: (usage: { used: number; limit: number } | null) => void
 }
 
+// "Don't show again" for the data-exposure notice is kept in localStorage rather
+// than a synced PrefKey so this view stays out of the models package.
+const DATA_EXPOSURE_NOTICE_DISMISSED_KEY = 'assistant-data-exposure-notice-dismissed'
+
+const readNoticeDismissed = () => {
+  try {
+    return localStorage.getItem(DATA_EXPOSURE_NOTICE_DISMISSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
 function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange }: Props) {
   const { presentPane } = useResponsiveAppPane()
 
@@ -46,6 +58,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
   const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null)
   const [queue, setQueue] = useState<string[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
+  const [noticeDismissed, setNoticeDismissed] = useState(() => readNoticeDismissed())
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Mirror of `messages` kept in sync synchronously so a queued run started from
@@ -303,6 +316,15 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
     setInput('')
   }, [input, notifyFirstMessage])
 
+  const dismissNotice = useCallback(() => {
+    setNoticeDismissed(true)
+    try {
+      localStorage.setItem(DATA_EXPOSURE_NOTICE_DISMISSED_KEY, 'true')
+    } catch {
+      // Persisting the dismissal is best-effort; ignore storage failures.
+    }
+  }, [])
+
   const removeQueued = useCallback((index: number) => {
     queueRef.current = queueRef.current.filter((_, i) => i !== index)
     setQueue(queueRef.current)
@@ -360,6 +382,26 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       )}
 
       <div ref={scrollRef} className="flex-grow overflow-y-auto px-4 py-4">
+        {!noticeDismissed && (
+          <div className="mb-4 rounded border border-solid border-warning bg-warning-faded p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="text-sm font-semibold text-warning">Your messages and note content are sent to an AI provider</div>
+              <button
+                className="-mr-1 -mt-1 flex-shrink-0 rounded p-1 text-warning hover:bg-warning-faded"
+                onClick={dismissNotice}
+                aria-label="Dismiss notice"
+                title="Dismiss"
+              >
+                <Icon type="close" size="small" />
+              </button>
+            </div>
+            <div className="mt-1 text-sm text-warning">
+              Tools run locally in your browser, but model calls do not. Whatever you type and any note content the
+              assistant reads is sent to your configured AI provider, which may expose information you did not intend to
+              share — especially with cloud providers.
+            </div>
+          </div>
+        )}
         {!isConfigured && (
           <div className="mb-4 rounded border border-border bg-contrast p-3 text-sm text-neutral">
             The assistant is not configured yet. Open Preferences → Assistant to set the connection mode, endpoint
@@ -379,6 +421,9 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       </div>
 
       <div className="border-t border-border bg-contrast p-3">
+        <div className="mb-2 text-xs text-warning">
+          Messages and note content the assistant reads are sent to your configured AI provider.
+        </div>
         {queue.length > 0 && (
           <div className="mb-2 flex flex-col gap-1">
             {queue.map((item, index) => (
