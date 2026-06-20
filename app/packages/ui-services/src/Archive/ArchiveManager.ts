@@ -1,4 +1,5 @@
 import { parseFileName, createZippableFileName, sanitizeFileName } from '@standardnotes/utils'
+import { createBackupFileName } from './BackupFileName'
 import {
   BackupFile,
   BackupFileDecryptedContextualPayload,
@@ -74,6 +75,10 @@ export class ArchiveManager {
     const fileName = createZippableFileName('Standard Notes Backup and Import File')
     await zipWriter.add(fileName, new zip.BlobReader(blob))
 
+    // Track the FINAL (sanitized) zip entry paths we've used so two items that
+    // sanitize to the same readable name never silently overwrite one another.
+    const usedItemEntryPaths = new Set<string>()
+
     for (let index = 0; index < items.length; index++) {
       const item = items[index]
       let name, contents
@@ -92,11 +97,29 @@ export class ArchiveManager {
       }
 
       const blob = new Blob([contents], { type: 'text/plain' })
-      // Use the FULL uuid (not just the first 8 hex chars) so two items with the
-      // same title can never collide on the same zip entry and silently overwrite
-      // each other (data loss in the readable backup).
-      const fileName =
-        `Items/${sanitizeFileName(item.content_type)}/` + createZippableFileName(name, `-${item.uuid}`)
+      // Human-readable name (forum issue 4013): prefer the item title and append the
+      // item's OWN created_at as `YYYY-MM-DDTHH.mm.ss` instead of the opaque uuid,
+      // so a folder of backups is browsable. A short uuid suffix is added only when
+      // needed so two items sharing a title (and second) never overwrite each other.
+      const timestamp = item.created_at instanceof Date ? item.created_at : new Date(item.created_at)
+      const baseEntryName = createBackupFileName(name, timestamp, 'txt')
+      const { name: baseEntryStem, ext: baseEntryExt } = parseFileName(baseEntryName)
+      const folder = `Items/${sanitizeFileName(item.content_type)}/`
+
+      // The disambiguator (short uuid) is filesystem-safe, so build the collided name
+      // by inserting it before the extension rather than re-sanitizing the stem (which
+      // would turn the dots in the timestamp into underscores).
+      const shortUuid = item.uuid.split('-')[0]
+      let entryName = baseEntryName
+      let counter = 0
+      while (usedItemEntryPaths.has(folder + entryName)) {
+        counter += 1
+        const disambiguator = counter === 1 ? `-${shortUuid}` : `-${shortUuid}-${counter - 1}`
+        entryName = `${baseEntryStem}${disambiguator}.${baseEntryExt}`
+      }
+      usedItemEntryPaths.add(folder + entryName)
+
+      const fileName = folder + entryName
       await zipWriter.add(fileName, new zip.BlobReader(blob))
     }
 
