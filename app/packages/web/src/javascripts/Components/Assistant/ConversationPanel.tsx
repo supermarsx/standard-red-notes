@@ -15,6 +15,9 @@ import { DirectProvider } from '@/Assistant/DirectProvider'
 import { Provider } from '@/Assistant/types'
 import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
+import ContextSelector from './ContextSelector'
+import { AssistantContextScope } from '@/Assistant/assistantContext'
+import { AssistantContextSelection, buildContextForSelection } from '@/Assistant/assistantContextSource'
 
 type ToolEntry = {
   id: string
@@ -41,11 +44,28 @@ type Props = {
 // than a synced PrefKey so this view stays out of the models package.
 const DATA_EXPOSURE_NOTICE_DISMISSED_KEY = 'assistant-data-exposure-notice-dismissed'
 
+// Last-used context scope is likewise persisted in localStorage (cheap, local,
+// avoids touching the synced models package). Collection sub-selections are not
+// persisted — only the high-level scope, defaulting to the current note.
+const CONTEXT_SCOPE_KEY = 'assistant-context-scope'
+
 const readNoticeDismissed = () => {
   try {
     return localStorage.getItem(DATA_EXPOSURE_NOTICE_DISMISSED_KEY) === 'true'
   } catch {
     return false
+  }
+}
+
+const isContextScope = (value: string | null): value is AssistantContextScope =>
+  value === 'current-note' || value === 'all-notes' || value === 'collection'
+
+const readContextScope = (): AssistantContextScope => {
+  try {
+    const stored = localStorage.getItem(CONTEXT_SCOPE_KEY)
+    return isContextScope(stored) ? stored : 'current-note'
+  } catch {
+    return 'current-note'
   }
 }
 
@@ -59,6 +79,9 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
   const [queue, setQueue] = useState<string[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [noticeDismissed, setNoticeDismissed] = useState(() => readNoticeDismissed())
+  const [contextSelection, setContextSelection] = useState<AssistantContextSelection>(() => ({
+    scope: readContextScope(),
+  }))
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Mirror of `messages` kept in sync synchronously so a queued run started from
@@ -80,6 +103,27 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       return next
     })
   }, [])
+
+  // Mirror the context selection so an in-flight run reads the latest scope
+  // without re-creating runPrompt on every selection change.
+  const contextSelectionRef = useRef<AssistantContextSelection>(contextSelection)
+  contextSelectionRef.current = contextSelection
+
+  const handleContextChange = useCallback((next: AssistantContextSelection) => {
+    setContextSelection(next)
+    try {
+      localStorage.setItem(CONTEXT_SCOPE_KEY, next.scope)
+    } catch {
+      // Persisting the scope is best-effort; ignore storage failures.
+    }
+  }, [])
+
+  // A live preview of what the current scope would send, used to (a) surface the
+  // active context in the UI and (b) make the data-exposure warning concrete.
+  const contextPreview = useMemo(
+    () => buildContextForSelection(application, contextSelection),
+    [application, contextSelection],
+  )
 
   const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
 
@@ -209,11 +253,20 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 
       const tools = new AssistantTools(application, toolContext)
 
+      // Assemble the user-chosen context (current note / all notes / collection)
+      // and append it to the system prompt so the model can answer about the
+      // selected notes without first calling tools. Bounded by a character budget
+      // inside buildAssistantContext so broad scopes can't blow the token budget.
+      const builtContext = buildContextForSelection(application, contextSelectionRef.current)
+      const systemPrompt = builtContext.text
+        ? `${ASSISTANT_SYSTEM_PROMPT}\n\n--- NOTE CONTEXT ---\n${builtContext.text}`
+        : ASSISTANT_SYSTEM_PROMPT
+
       try {
         const result = await run([...priorHistory, { role: 'user', content: promptText }], {
           provider: agentProvider,
           session: tools,
-          systemPrompt: ASSISTANT_SYSTEM_PROMPT,
+          systemPrompt,
           signal: controller.signal,
           control: {
             // Drain and inject any steering messages queued during this run.
@@ -347,8 +400,29 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       Boolean(application.getPreference(PrefKey.AssistantModel, ''))
   }, [application])
 
+  // A short, human-readable summary of what the active scope would send, shared
+  // by the inline warning and the data-exposure notice so the user always knows
+  // how much note content reaches the AI provider.
+  const contextSummary = useMemo(() => {
+    const { scope, noteCount, characters, truncated } = contextPreview
+    if (noteCount === 0) {
+      return scope === 'current-note'
+        ? 'No active note — only your message will be sent.'
+        : 'No notes in this context yet — only your message will be sent.'
+    }
+    const noteLabel = `${noteCount} note${noteCount === 1 ? '' : 's'}`
+    const sizeLabel = `~${characters.toLocaleString()} chars`
+    return `Sending ${noteLabel} / ${sizeLabel}${truncated ? ' (truncated)' : ''} to the AI provider.`
+  }, [contextPreview])
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      <ContextSelector
+        application={application}
+        selection={contextSelection}
+        onChange={handleContextChange}
+        disabled={isRunning}
+      />
       {todos.length > 0 && (
         <div className="border-b border-border bg-default px-4 py-2">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-passive-1">Plan</div>
@@ -400,6 +474,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
               assistant reads is sent to your configured AI provider, which may expose information you did not intend to
               share — especially with cloud providers.
             </div>
+            <div className="mt-2 text-sm font-semibold text-warning">{contextSummary}</div>
           </div>
         )}
         {!isConfigured && (
@@ -422,7 +497,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 
       <div className="border-t border-border bg-contrast p-3">
         <div className="mb-2 text-xs text-warning">
-          Messages and note content the assistant reads are sent to your configured AI provider.
+          Messages and note content the assistant reads are sent to your configured AI provider. {contextSummary}
         </div>
         {queue.length > 0 && (
           <div className="mb-2 flex flex-col gap-1">
