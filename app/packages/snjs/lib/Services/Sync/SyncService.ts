@@ -276,9 +276,7 @@ export class SyncService
     const jitter = cappedDelay * FAILURE_BACKOFF_JITTER_RATIO * Math.random()
     const delay = Math.round(cappedDelay + jitter)
 
-    this.logger.debug(
-      `Scheduling sync backoff retry #${this.consecutiveFailureCount} in ${delay}ms`,
-    )
+    this.logger.debug(`Scheduling sync backoff retry #${this.consecutiveFailureCount} in ${delay}ms`)
 
     this.failureBackoffTimeout = setTimeout(() => {
       this.failureBackoffTimeout = undefined
@@ -296,6 +294,7 @@ export class SyncService
    */
   private handleOnlineSyncFailure(): void {
     this.consecutiveFailureCount += 1
+    this.logger.debug(`Online sync failed (consecutive failures: ${this.consecutiveFailureCount})`)
     this.scheduleFailureBackoffRetry()
   }
 
@@ -306,6 +305,32 @@ export class SyncService
     }
     this.consecutiveFailureCount = 0
     this.cancelFailureBackoff()
+  }
+
+  /**
+   * Single decision seam for what to do once an online sync attempt finishes. Kept pure and
+   * dependency-free (beyond the failure/success handlers) so it can be unit-tested in isolation.
+   *
+   * - A failed ONLINE attempt increments the consecutive-failure counter and schedules a
+   *   backoff retry.
+   * - A successful ONLINE attempt resets the counter and cancels any pending retry.
+   * - Offline (no-server) attempts are intentionally ignored: a benign offline save must not
+   *   trip the online backoff loop.
+   *
+   * Returns whether a backoff retry was scheduled, primarily for testability.
+   */
+  applyOnlineSyncResult(hasError: boolean, online: boolean): boolean {
+    if (!online) {
+      return false
+    }
+
+    if (hasError) {
+      this.handleOnlineSyncFailure()
+      return true
+    }
+
+    this.handleOnlineSyncSuccess()
+    return false
   }
 
   /**
@@ -1100,15 +1125,11 @@ export class SyncService
     releaseLock()
 
     const { hasError } = await this.handleSyncOperationFinish(operation, options, neverSyncedDeleted, syncMode)
-    if (hasError) {
-      if (online) {
-        this.handleOnlineSyncFailure()
-      }
-      return
-    }
 
-    if (online) {
-      this.handleOnlineSyncSuccess()
+    this.applyOnlineSyncResult(hasError, online)
+
+    if (hasError) {
+      return
     }
 
     const didSyncAgain = await this.potentiallySyncAgainAfterSyncCompletion(
