@@ -24,14 +24,14 @@
     "@standardnotes/styles": "workspace:^",
     "@standardnotes/toast": "workspace:^",
     "@standardnotes/utils": "workspace:^",
-    "mobx": "^6.15.4",
+    "mobx": "^6.16.1",
     "mobx-react-lite": "^4.1.1"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
-    "eslint": "^8.57.0",
+    "eslint": "^8.57.1",
     "eslint-plugin-prettier": "*",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.11",
