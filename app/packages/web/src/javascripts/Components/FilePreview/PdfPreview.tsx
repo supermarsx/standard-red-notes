@@ -5,6 +5,13 @@ import StyledTooltip from '../StyledTooltip/StyledTooltip'
 import { copyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import { formatPdfDeepLink, PdfDeepLinkTarget } from './PdfDeepLink'
 import { getPdfjs, PDFDocumentProxy, PDFPageProxy } from './pdfjs'
+import {
+  findMatchesAcrossPages,
+  joinTextItems,
+  PdfPageText,
+  PdfSearchMatch,
+  wrapMatchIndex,
+} from './pdfSearch'
 
 type Props = {
   bytes: Uint8Array
@@ -17,10 +24,8 @@ type Props = {
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
 const SCALE_STEP = 0.2
-
-type SearchMatch = {
-  pageNumber: number
-}
+/** Debounce (ms) before a typed query is committed and matches recomputed. */
+const SEARCH_DEBOUNCE_MS = 250
 
 /**
  * Renders a single PDF page (canvas + selectable text layer) once it scrolls
@@ -34,9 +39,10 @@ const PdfPage: FunctionComponent<{
   pageNumber: number
   scale: number
   searchQuery: string
+  matchCase: boolean
   isActiveMatchPage: boolean
   registerContainer: (pageNumber: number, el: HTMLElement | null) => void
-}> = ({ pdfjs, page, pageNumber, scale, searchQuery, isActiveMatchPage, registerContainer }) => {
+}> = ({ pdfjs, page, pageNumber, scale, searchQuery, matchCase, isActiveMatchPage, registerContainer }) => {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
@@ -163,11 +169,13 @@ const PdfPage: FunctionComponent<{
     }
 
     const spans = Array.from(textLayerDiv.querySelectorAll('span'))
-    const query = searchQuery.trim().toLowerCase()
+    const rawQuery = searchQuery.trim()
+    const query = matchCase ? rawQuery : rawQuery.toLowerCase()
 
     let firstMatch: HTMLElement | undefined
     for (const span of spans) {
-      const text = (span.textContent || '').toLowerCase()
+      const spanText = span.textContent || ''
+      const text = matchCase ? spanText : spanText.toLowerCase()
       const matched = query.length > 0 && text.includes(query)
       span.classList.toggle('pdf-search-highlight', matched)
       span.classList.toggle('pdf-search-highlight-active', matched && isActiveMatchPage)
@@ -179,7 +187,7 @@ const PdfPage: FunctionComponent<{
     if (isActiveMatchPage && firstMatch) {
       firstMatch.scrollIntoView({ block: 'center', behavior: 'smooth' })
     }
-  }, [searchQuery, isRendered, isActiveMatchPage])
+  }, [searchQuery, matchCase, isRendered, isActiveMatchPage])
 
   return (
     <div
@@ -214,10 +222,12 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [committedQuery, setCommittedQuery] = useState('')
-  const [matches, setMatches] = useState<SearchMatch[]>([])
+  const [matchCase, setMatchCase] = useState(false)
+  const [matches, setMatches] = useState<PdfSearchMatch[]>([])
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const pageContainers = useRef<Map<number, HTMLElement>>(new Map())
   const didApplyInitialTarget = useRef(false)
 
@@ -346,10 +356,18 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
     return () => observer.disconnect()
   }, [pages])
 
-  // Compute search matches across all pages when a query is committed.
+  // Debounce typed input -> committed query so we don't re-scan the whole
+  // document on every keystroke.
+  useEffect(() => {
+    const handle = window.setTimeout(() => setCommittedQuery(searchQuery), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(handle)
+  }, [searchQuery])
+
+  // Compute search matches across all pages when the committed query (or the
+  // match-case toggle) changes. Page text is extracted lazily here, not on load.
   useEffect(() => {
     let cancelled = false
-    const query = committedQuery.trim().toLowerCase()
+    const query = committedQuery.trim()
     if (!query || pages.length === 0) {
       setMatches([])
       setActiveMatchIndex(0)
@@ -357,23 +375,15 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
     }
 
     const run = async () => {
-      const found: SearchMatch[] = []
+      const pageTexts: PdfPageText[] = []
       for (const page of pages) {
         const content = await page.getTextContent()
         if (cancelled) {
           return
         }
-        const text = content.items
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((item: any) => ('str' in item ? item.str : ''))
-          .join(' ')
-          .toLowerCase()
-        let index = text.indexOf(query)
-        while (index !== -1) {
-          found.push({ pageNumber: page.pageNumber })
-          index = text.indexOf(query, index + query.length)
-        }
+        pageTexts.push({ pageNumber: page.pageNumber, text: joinTextItems(content.items) })
       }
+      const found = findMatchesAcrossPages(pageTexts, query, matchCase)
       if (!cancelled) {
         setMatches(found)
         setActiveMatchIndex(0)
@@ -387,7 +397,7 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
     return () => {
       cancelled = true
     }
-  }, [committedQuery, pages, scrollToPage])
+  }, [committedQuery, matchCase, pages, scrollToPage])
 
   const activeMatchPage = matches[activeMatchIndex]?.pageNumber
 
@@ -396,11 +406,47 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
       if (matches.length === 0) {
         return
       }
-      const next = (activeMatchIndex + delta + matches.length) % matches.length
+      const next = wrapMatchIndex(activeMatchIndex, delta, matches.length)
       setActiveMatchIndex(next)
       scrollToPage(matches[next].pageNumber)
     },
     [matches, activeMatchIndex, scrollToPage],
+  )
+
+  const openSearch = useCallback(() => {
+    setShowSearch(true)
+    // Focus the input on the next tick (after it mounts / re-renders).
+    window.setTimeout(() => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }, 0)
+  }, [])
+
+  const closeSearch = useCallback(() => {
+    setShowSearch(false)
+    setSearchQuery('')
+    setCommittedQuery('')
+  }, [])
+
+  // Ctrl/Cmd+F opens (or re-focuses) the in-document find bar. The listener is
+  // scoped to the PDF view's root, so it does not hijack the global app find
+  // shortcut anywhere else. We only preventDefault when actually inside the PDF.
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'f' || event.key === 'F')) {
+        event.preventDefault()
+        event.stopPropagation()
+        openSearch()
+        return
+      }
+      if (event.key === 'Escape' && showSearch) {
+        // Let Escape close the find bar without bubbling to the modal's own
+        // Escape-to-dismiss handler.
+        event.stopPropagation()
+        closeSearch()
+      }
+    },
+    [openSearch, closeSearch, showSearch],
   )
 
   const zoomIn = () => setScale((s) => Math.min(MAX_SCALE, Math.round((s + SCALE_STEP) * 100) / 100))
@@ -479,7 +525,7 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
   }
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <div className="flex h-full w-full flex-col" onKeyDown={handleKeyDown}>
       {/* Toolbar */}
       <div className="flex flex-shrink-0 flex-wrap items-center gap-1 border-b border-border bg-default px-2 py-1.5">
         <div className="flex items-center gap-1">
@@ -560,10 +606,10 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
         <div className="mx-1 h-5 w-px bg-border" />
 
         <div className="flex items-center gap-1">
-          <StyledTooltip label="Search in document" className="!z-modal">
+          <StyledTooltip label="Search in document (Ctrl/Cmd+F)" className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
-              onClick={() => setShowSearch((s) => !s)}
+              onClick={() => (showSearch ? closeSearch() : openSearch())}
               aria-label="Search in document"
             >
               <Icon type="search" className="text-neutral" />
@@ -596,6 +642,7 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
         {showSearch && (
           <div className="ml-auto flex items-center gap-1">
             <input
+              ref={searchInputRef}
               className="w-40 rounded border border-border bg-default px-2 py-0.5 text-sm text-text"
               placeholder="Find in document"
               autoFocus
@@ -603,12 +650,33 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  setCommittedQuery(searchQuery)
+                  // Commit immediately (skip the debounce) and jump to next match.
+                  if (committedQuery === searchQuery && matches.length > 0) {
+                    goToMatch(e.shiftKey ? -1 : 1)
+                  } else {
+                    setCommittedQuery(searchQuery)
+                  }
                 }
               }}
             />
-            <span className="min-w-[3.5rem] text-center text-xs text-passive-1">
-              {committedQuery ? `${matches.length === 0 ? 0 : activeMatchIndex + 1}/${matches.length}` : ''}
+            <StyledTooltip label="Match case" className="!z-modal">
+              <button
+                className={`flex cursor-pointer rounded border-0 p-1 text-sm font-bold ${
+                  matchCase ? 'bg-info text-info-contrast' : 'bg-transparent text-neutral hover:bg-contrast'
+                }`}
+                onClick={() => setMatchCase((m) => !m)}
+                aria-label="Match case"
+                aria-pressed={matchCase}
+              >
+                Aa
+              </button>
+            </StyledTooltip>
+            <span className="min-w-[4.5rem] text-center text-xs text-passive-1">
+              {committedQuery
+                ? matches.length === 0
+                  ? 'No results'
+                  : `${activeMatchIndex + 1} of ${matches.length}`
+                : ''}
             </span>
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast disabled:opacity-40"
@@ -628,11 +696,7 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
             </button>
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
-              onClick={() => {
-                setShowSearch(false)
-                setSearchQuery('')
-                setCommittedQuery('')
-              }}
+              onClick={closeSearch}
               aria-label="Close search"
             >
               <Icon type="close" className="text-neutral" size="small" />
@@ -651,6 +715,7 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
             pageNumber={index + 1}
             scale={scale}
             searchQuery={committedQuery}
+            matchCase={matchCase}
             isActiveMatchPage={activeMatchPage === index + 1}
             registerContainer={registerContainer}
           />
