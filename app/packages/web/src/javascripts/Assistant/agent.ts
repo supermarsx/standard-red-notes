@@ -7,12 +7,27 @@ import {
   ToolSession,
 } from './types'
 
+/**
+ * Live control channel for an in-flight run. Lets the UI steer the agent
+ * (inject guidance) between model steps without restarting the run.
+ */
+export interface AgentControl {
+  /**
+   * Drain any queued steering messages. Each is injected as a user turn before
+   * the next model step, so the agent adjusts course mid-run. Called by the loop
+   * at every step boundary; return an empty array when there is nothing pending.
+   */
+  drainSteers(): string[]
+}
+
 export interface AgentOptions {
   provider: Provider
   session: ToolSession
   maxSteps?: number
   systemPrompt: string
   signal?: AbortSignal
+  /** Live steering channel; polled at each step boundary. */
+  control?: AgentControl
   /** Stream final assistant text deltas (UI rendering). */
   onTextDelta?: (chunk: string) => void
   /** Called when the model requests a tool. */
@@ -21,6 +36,8 @@ export interface AgentOptions {
   onToolResult?: (callId: string, result: string, isError: boolean) => void
   /** Called when the assistant finishes a turn and a new assistant message begins. */
   onAssistantMessage?: (text: string) => void
+  /** Called when a queued steering message is injected into the run. */
+  onSteer?: (text: string) => void
 }
 
 export interface AgentResult {
@@ -38,10 +55,24 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
   const history: ChatMessage[] = [...messages]
   let finalText = ''
 
+  const injectSteers = () => {
+    const steers = opts.control?.drainSteers() ?? []
+    for (const steer of steers) {
+      if (steer.trim().length === 0) {
+        continue
+      }
+      history.push({ role: 'user', content: steer })
+      opts.onSteer?.(steer)
+    }
+  }
+
   for (let step = 1; step <= maxSteps; step++) {
     if (opts.signal?.aborted) {
       return { finalText, steps: step, stopReason: 'aborted' }
     }
+
+    // Pick up any guidance the user injected since the previous step.
+    injectSteers()
 
     let assistantText = ''
     const toolCalls: AssistantToolCall[] = []

@@ -54,6 +54,26 @@ export interface AssistantToolContext {
   requestConfirmation: (description: string) => Promise<boolean>
   /** Presents the given pane (used for app.navigate / app.openNote). */
   presentPane: (paneId: AppPaneId) => void
+  /**
+   * Runs a focused sub-agent for a self-contained subtask and resolves with its
+   * final summary. Provided only at the top level; sub-agents cannot delegate.
+   */
+  runSubAgent?: (task: string, contextText?: string) => Promise<string>
+}
+
+const DELEGATE_TOOL: ToolDefinition = {
+  name: 'delegate',
+  description:
+    'Hand a focused, self-contained subtask to a sub-agent that has the same tools, and get back a summary of what it did. Use for genuinely separable parts of a larger task; do simple steps yourself.',
+  mutating: false,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task: { type: 'string', description: 'The subtask for the sub-agent to carry out, stated self-containedly.' },
+      context: { type: 'string', description: 'Optional extra context (e.g. relevant note uuids) the sub-agent needs.' },
+    },
+    required: ['task'],
+  },
 }
 
 function noteSummary(note: SNNote) {
@@ -82,15 +102,22 @@ export class AssistantTools implements ToolSession {
   constructor(
     private readonly application: WebApplication,
     private readonly context: AssistantToolContext,
+    /** When false (sub-agents) the delegate tool is withheld to prevent recursion. */
+    private readonly enableDelegate = true,
   ) {}
 
   tools(): ToolDefinition[] {
+    if (this.enableDelegate && this.context.runSubAgent) {
+      return [...TOOL_DEFINITIONS, DELEGATE_TOOL]
+    }
     return TOOL_DEFINITIONS
   }
 
   async call(name: string, rawArgs: unknown): Promise<unknown> {
     const args = (rawArgs ?? {}) as Record<string, unknown>
-    const definition = TOOL_DEFINITIONS.find((t) => t.name === name)
+    // Resolve against the live tool list so a withheld tool (e.g. delegate inside
+    // a sub-agent) is rejected as unknown rather than silently executing.
+    const definition = this.tools().find((t) => t.name === name)
     if (!definition) {
       throw new Error(`Unknown tool: ${name}`)
     }
@@ -133,6 +160,8 @@ export class AssistantTools implements ToolSession {
         return this.appNoteAction(args)
       case 'app.navigate':
         return this.appNavigate(args)
+      case 'delegate':
+        return this.delegate(args)
       default:
         throw new Error(`Unhandled tool: ${name}`)
     }
@@ -343,6 +372,19 @@ export class AssistantTools implements ToolSession {
     }
     this.context.presentPane(paneId)
     return { ok: true, navigatedTo: target }
+  }
+
+  private async delegate(args: Record<string, unknown>) {
+    if (!this.context.runSubAgent) {
+      throw new Error('Delegation is not available in this context')
+    }
+    const task = typeof args.task === 'string' ? args.task.trim() : ''
+    if (!task) {
+      throw new Error('A "task" string describing the subtask is required')
+    }
+    const contextText = typeof args.context === 'string' ? args.context : undefined
+    const result = await this.context.runSubAgent(task, contextText)
+    return { ok: true, result }
   }
 }
 
