@@ -32,6 +32,7 @@ import DatetimePlugin from './Plugins/DateTimePlugin/DateTimePlugin'
 import PasswordPlugin from './Plugins/PasswordPlugin/PasswordPlugin'
 import { CheckListPlugin } from './Plugins/CheckListPlugin'
 import GoogleDocsPastePlugin from './Plugins/GoogleDocsPastePlugin/GoogleDocsPastePlugin'
+import MultiCursorPlugin from './Plugins/MultiCursorPlugin/MultiCursorPlugin'
 import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
 import { WebApplication } from '@/Application/WebApplication'
 
@@ -144,6 +145,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <PasswordPlugin />
       <AutoLinkPlugin />
       <GoogleDocsPastePlugin />
+      <MultiCursorPlugin />
       {!readonly && floatingAnchorElem && (
         <>
           <DraggableBlockPlugin anchorElem={floatingAnchorElem} />
