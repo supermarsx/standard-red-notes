@@ -137,6 +137,10 @@ export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, D
       case 'USER_INVITED_TO_SHARED_VAULT':
         void this.notifyEvent(WebSocketsServiceEvent.UserInvitedToSharedVault, eventData.payload)
         break
+      case 'MFA_APPROVAL_REQUESTED':
+        // Standard Red Notes: push-MFA approval request from a new device.
+        void this.notifyEvent(WebSocketsServiceEvent.MfaApprovalRequested, eventData)
+        break
       default:
         break
     }

@@ -263,6 +263,13 @@ export class LegacyApiService
      * the MCP bridge so they do not need a live TOTP code.
      */
     appPassword?: string
+    /**
+     * Standard Red Notes: a trusted-device token. When present and valid, the
+     * server treats the interactive 2FA challenge as satisfied for this sign-in
+     * only (see auth server VerifyTrustedDevice). If omitted, the token stored by
+     * this browser (if any) is used automatically.
+     */
+    trustedDeviceToken?: string
   }): Promise<HttpResponse<KeyParamsResponse>> {
     const codeVerifier = this.crypto.generateRandomKey(256)
     this.inMemoryStore.setValue(StorageKey.CodeVerifier, codeVerifier)
@@ -286,6 +293,16 @@ export class LegacyApiService
       params['app_password'] = dto.appPassword
     }
 
+    // Standard Red Notes: trusted-device 2FA bypass. If this browser previously
+    // marked itself trusted, present the stored device token so the server can
+    // skip the interactive second factor for THIS sign-in. The server fails
+    // closed: a wrong/expired/revoked token is ignored and the normal MFA prompt
+    // still appears. Trust never bypasses the account password.
+    const trustedDeviceToken = dto.trustedDeviceToken ?? this.readTrustedDeviceTokenFromStorage()
+    if (trustedDeviceToken !== undefined && trustedDeviceToken.length > 0) {
+      params['trusted_device_token'] = trustedDeviceToken
+    }
+
     return this.request({
       verb: HttpVerb.Post,
       url: joinPaths(this.host, Paths.v2.keyParams),
@@ -294,6 +311,23 @@ export class LegacyApiService
       /** A session is optional here, if valid, endpoint bypasses 2FA and returns additional params */
       authentication: this.getSessionAccessToken(),
     })
+  }
+
+  /**
+   * Standard Red Notes: reads the trusted-device token persisted by the web
+   * Security preferences pane (sn_trusted_device_token in localStorage). Returns
+   * undefined when storage is unavailable (e.g. non-browser runtime or private
+   * mode), in which case the normal interactive 2FA flow applies.
+   */
+  private readTrustedDeviceTokenFromStorage(): string | undefined {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return undefined
+      }
+      return localStorage.getItem('sn_trusted_device_token') ?? undefined
+    } catch {
+      return undefined
+    }
   }
 
   async signIn(dto: {
@@ -747,6 +781,76 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to delete app password.',
     })
+  }
+
+  /**
+   * Standard Red Notes: trusted devices. These hit the gateway
+   * /v1/trusted-devices routes (cross-service-token protected). Marking a device
+   * trusted is only possible from an already-authenticated (already-2FA'd)
+   * session. `createTrustedDevice` returns a plaintext device token EXACTLY ONCE;
+   * the caller persists it (see persistTrustedDeviceToken) and presents it as
+   * `trusted_device_token` on the login-params request to skip the interactive
+   * second factor. Trust bypasses ONLY the 2FA gate, never the account password.
+   */
+  async listTrustedDevices(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.trustedDevices),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list trusted devices.',
+    })
+  }
+
+  async createTrustedDevice(label: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.trustedDevices),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to trust this device.',
+      params: { label },
+    })
+  }
+
+  async deleteTrustedDevice(deviceId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.trustedDevice(deviceId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke trusted device.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: push-MFA approvals.
+   *  - listPendingMfaApprovals / resolvePendingMfaApproval are called by an
+   *    already-authenticated trusted session.
+   *  - getPendingMfaApprovalStatus is called UNAUTHENTICATED by the new device
+   *    while it waits for approval; it is gated only by the high-entropy,
+   *    single-use challenge id returned in the 2FA error payload.
+   */
+  async listPendingMfaApprovals(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.pendingMfaApprovals),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list pending sign-in approvals.',
+    })
+  }
+
+  async resolvePendingMfaApproval(challengeId: string, approve: boolean): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.resolvePendingMfaApproval(challengeId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to resolve sign-in approval.',
+      params: { approve },
+    })
+  }
+
+  async getPendingMfaApprovalStatus(challengeId: string): Promise<HttpResponse> {
+    // Unauthenticated: the new device is not signed in yet. The challenge id is
+    // the only credential and is high-entropy + single-use.
+    return this.httpService.get(joinPaths(this.host, Paths.v1.pendingMfaApprovalStatus(challengeId)), {}, {})
   }
 
   /**

@@ -63,6 +63,18 @@ const AppPasswordPaths = {
   appPassword: (appPasswordId: string) => `/v1/app-passwords/${appPasswordId}`,
 }
 
+// Standard Red Notes: trusted devices and push-MFA approvals. These hit the
+// gateway /v1/trusted-devices and /v1/pending-mfa-approvals routes which proxy
+// to the auth server. A trusted device may skip the interactive second factor
+// on future sign-ins (bypasses ONLY the 2FA gate, never the account password).
+const TrustedDevicePaths = {
+  trustedDevices: '/v1/trusted-devices',
+  trustedDevice: (deviceId: string) => `/v1/trusted-devices/${deviceId}`,
+  pendingMfaApprovals: '/v1/pending-mfa-approvals',
+  resolvePendingMfaApproval: (challengeId: string) => `/v1/pending-mfa-approvals/${challengeId}/resolve`,
+  pendingMfaApprovalStatus: (challengeId: string) => `/v1/pending-mfa-approvals/${challengeId}/status`,
+}
+
 // Standard Red Notes: MCP scoped tokens. These hit the gateway /v1/mcp-tokens
 // routes (cross-service-token protected), which proxy to the auth server. They
 // let the headless MCP bridge authenticate and obtain client-side-wrapped items
@@ -114,6 +126,7 @@ export const Paths = {
     ...UserPaths,
     ...AdminPaths,
     ...AppPasswordPaths,
+    ...TrustedDevicePaths,
     ...McpTokenPaths,
     ...SharePaths,
     ...DeadManSwitchPaths,
