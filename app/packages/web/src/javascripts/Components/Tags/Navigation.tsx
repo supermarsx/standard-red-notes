@@ -23,6 +23,7 @@ import PaneCollapseButton from '../Panes/PaneCollapseButton'
 import DashboardSectionButton from '../Dashboard/DashboardSectionButton'
 import HomeSectionButton from '../Home/HomeSectionButton'
 import AggregateViewSectionButtons from '../AggregateViews/AggregateViewSectionButtons'
+import ResearchSectionButton from '../Research/ResearchSectionButton'
 
 type Props = {
   application: WebApplication
@@ -96,6 +97,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           calendarLabel="Calendar"
           todosLabel="Todos"
         />
+        <ResearchSectionButton application={application} />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}

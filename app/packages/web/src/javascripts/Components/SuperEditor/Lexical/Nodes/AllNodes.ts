@@ -38,6 +38,7 @@ import { SqlQueryNode } from './SqlQueryNode'
 import { GanttChartNode } from './GanttChartNode'
 import { TimingDiagramNode } from './TimingDiagramNode'
 import { MusicStaffNode } from './MusicStaffNode'
+import { ClockNode } from './ClockNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -84,6 +85,7 @@ const CommonNodes = [
   GanttChartNode,
   TimingDiagramNode,
   MusicStaffNode,
+  ClockNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

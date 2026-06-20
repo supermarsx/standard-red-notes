@@ -36,6 +36,14 @@ import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { createNoteExport } from '../../Utils/NoteExportUtils'
 import { NoteCustomBackgroundColorKey, NoteCustomTextColorKey } from '../../Utils/NoteAppearance'
 import {
+  NoteHeroHeaderKey,
+  HeroHeader,
+  getNoteHeroHeader,
+  clampHeroHeight,
+  clampHeroFocalY,
+  normalizeHeroImageDataUrl,
+} from '../../HeroHeader/heroHeader'
+import {
   NoteRemindersKey,
   Reminder,
   getNoteReminders,
@@ -499,6 +507,64 @@ export class NotesController
 
   async resetNoteAppearance(note: SNNote) {
     await this.setNoteAppearanceColors(note, { backgroundColor: undefined, textColor: undefined })
+  }
+
+  /**
+   * Standard Red Notes: per-note hero header (cover banner). The config is
+   * persisted in the note's encrypted appData (no models/server change) so the
+   * cover syncs E2E with the note. The image is a bounded, pre-compressed JPEG
+   * data URL — see HeroHeader/heroHeader.ts for the appData-bloat tradeoff. Writes
+   * never bypass the note's locked state (callers must guard / we guard here).
+   */
+  private async writeNoteHeroHeader(note: SNNote, hero: HeroHeader | undefined) {
+    if (note.locked) {
+      return
+    }
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        mutator.setAppDataItem(NoteHeroHeaderKey, hero)
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  /** Set (or replace) the note's cover image from an already-bounded data URL. */
+  async setNoteHeroImage(note: SNNote, imageDataUrl: string) {
+    const normalized = normalizeHeroImageDataUrl(imageDataUrl)
+    if (!normalized) {
+      return
+    }
+    const current = getNoteHeroHeader(note)
+    await this.writeNoteHeroHeader(note, {
+      imageDataUrl: normalized,
+      height: current?.height ?? clampHeroHeight(undefined),
+      focalY: current?.focalY ?? clampHeroFocalY(undefined),
+    })
+  }
+
+  /** Adjust the cover banner height (no-op when there is no cover). */
+  async setNoteHeroHeight(note: SNNote, height: number) {
+    const current = getNoteHeroHeader(note)
+    if (!current) {
+      return
+    }
+    await this.writeNoteHeroHeader(note, { ...current, height: clampHeroHeight(height) })
+  }
+
+  /** Reposition the cover's vertical focal point, 0..1 (no-op without a cover). */
+  async setNoteHeroFocalY(note: SNNote, focalY: number) {
+    const current = getNoteHeroHeader(note)
+    if (!current) {
+      return
+    }
+    await this.writeNoteHeroHeader(note, { ...current, focalY: clampHeroFocalY(focalY) })
+  }
+
+  /** Remove the note's cover image (reverts to no-banner behavior). */
+  async removeNoteHeroHeader(note: SNNote) {
+    await this.writeNoteHeroHeader(note, undefined)
   }
 
   /**

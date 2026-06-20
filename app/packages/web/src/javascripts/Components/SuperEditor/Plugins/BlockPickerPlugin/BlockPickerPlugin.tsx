@@ -48,6 +48,7 @@ import { GetSqlQueryBlockOption } from '../Blocks/SqlQuery'
 import { GetGanttChartBlockOption } from '../Blocks/GanttChart'
 import { GetTimingDiagramBlockOption } from '../Blocks/TimingDiagram'
 import { GetMusicStaffBlockOption } from '../Blocks/MusicStaff'
+import { GetClockBlockOption } from '../Blocks/Clock'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -94,6 +95,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetGanttChartBlockOption(editor),
       GetTimingDiagramBlockOption(editor),
       GetMusicStaffBlockOption(editor),
+      GetClockBlockOption(editor),
       GetDataviewBlockOption(editor),
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),

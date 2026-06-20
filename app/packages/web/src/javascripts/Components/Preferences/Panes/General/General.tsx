@@ -12,6 +12,7 @@ import NewNoteDefaults from './NewNoteDefaults'
 import Language from './Language'
 import AutoEmptyTrash from './AutoEmptyTrash'
 import DiaryMode from './DiaryMode'
+import TimezonePreference from './TimezonePreference'
 import FileUploadPrivacy from './FileUploadPrivacy'
 import { useApplication } from '@/Components/ApplicationProvider'
 
@@ -27,6 +28,7 @@ const General: FunctionComponent = () => {
       <AutoEmptyTrash />
       <FileUploadPrivacy />
       <DiaryMode application={application} />
+      <TimezonePreference application={application} />
       <NewNoteDefaults />
       <Tools application={application} />
       <SmartViews application={application} featuresController={application.featuresController} />

@@ -8,6 +8,7 @@ export const ElementIds = {
   RemindersColumn: 'reminders-column',
   CalendarColumn: 'calendar-aggregate-column',
   TodosColumn: 'todos-column',
+  ResearchColumn: 'research-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

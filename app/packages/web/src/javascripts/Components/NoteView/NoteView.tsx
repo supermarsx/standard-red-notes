@@ -61,6 +61,7 @@ import { CalendarEditor, CalendarEditorIdentifier } from './CalendarEditor/Calen
 import { KanbanEditor, KanbanEditorIdentifier } from './KanbanEditor/KanbanEditor'
 import { TimelineEditor, TimelineEditorIdentifier } from './TimelineEditor/TimelineEditor'
 import { FlashcardsEditor, FlashcardsEditorIdentifier } from './FlashcardsEditor/FlashcardsEditor'
+import { MapEditor, MapEditorIdentifier } from './MapEditor/MapEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -71,6 +72,9 @@ import NoteConflictResolutionModal from './NoteConflictResolutionModal/NoteConfl
 import Icon from '../Icon/Icon'
 import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPadding'
 import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
+import HeroHeaderBanner from '../../HeroHeader/HeroHeaderBanner'
+import { getNoteHeroHeader, HeroHeader } from '../../HeroHeader/heroHeader'
+import { addToast, ToastType } from '@standardnotes/toast'
 
 function sortAlphabetically(array: ComponentInterface[]): ComponentInterface[] {
   return array.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
@@ -104,6 +108,7 @@ type State = {
   focusModeEnabled?: boolean
   customBackgroundColor?: string
   customTextColor?: string
+  heroHeader: HeroHeader | null
 
   conflictedNotes: SNNote[]
   showConflictResolutionModal: boolean
@@ -156,6 +161,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       showConflictResolutionModal: false,
       customBackgroundColor: getNoteCustomBackgroundColor(this.controller.item),
       customTextColor: getNoteCustomTextColor(this.controller.item),
+      heroHeader: getNoteHeroHeader(this.controller.item),
     }
 
     this.noteViewElementRef = createRef<HTMLDivElement>()
@@ -347,6 +353,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     this.reloadLineWidth()
 
     this.reloadAppearanceColors(note)
+
+    this.reloadHeroHeader(note)
 
     const isTemplateNoteInsertedToBeInteractableWithEditor = source === PayloadEmitSource.LocalInserted && note.dirty
     if (isTemplateNoteInsertedToBeInteractableWithEditor) {
@@ -561,7 +569,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       this.note.editorIdentifier === CalendarEditorIdentifier ||
       this.note.editorIdentifier === KanbanEditorIdentifier ||
       this.note.editorIdentifier === TimelineEditorIdentifier ||
-      this.note.editorIdentifier === FlashcardsEditorIdentifier
+      this.note.editorIdentifier === FlashcardsEditorIdentifier ||
+      this.note.editorIdentifier === MapEditorIdentifier
     ) {
       this.destroyCurrentEditorComponent()
       this.setState({ editorStateDidLoad: true })
@@ -720,6 +729,28 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         customTextColor,
       })
     }
+  }
+
+  /**
+   * Standard Red Notes: keep the cover banner reactive. Re-reads the note's
+   * hero-header appData and updates state only when it changed (a new/removed
+   * cover or an adjusted height/focal point), so setting a cover updates live.
+   */
+  reloadHeroHeader(note: SNNote) {
+    const heroHeader = getNoteHeroHeader(note)
+    const prev = this.state.heroHeader
+    const changed =
+      (prev === null) !== (heroHeader === null) ||
+      prev?.imageDataUrl !== heroHeader?.imageDataUrl ||
+      prev?.height !== heroHeader?.height ||
+      prev?.focalY !== heroHeader?.focalY
+    if (changed) {
+      this.setState({ heroHeader })
+    }
+  }
+
+  showHeroError = (message: string) => {
+    addToast({ type: ToastType.Error, message })
   }
 
   async reloadPreferences() {
@@ -906,6 +937,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         ? 'timeline'
         : this.note.editorIdentifier === FlashcardsEditorIdentifier
         ? 'flashcards'
+        : this.note.editorIdentifier === MapEditorIdentifier
+        ? 'map'
         : this.note.noteType === NoteType.Super
           ? 'super'
           : this.state.editorStateDidLoad && !this.state.editorComponentViewer
@@ -938,6 +971,16 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           <EditingDisabledBanner
             onClick={() => this.application.notesController.setLockSelectedNotes(!this.state.noteLocked)}
             noteLocked={this.state.noteLocked}
+          />
+        )}
+
+        {this.note && (this.state.heroHeader || !(this.state.noteLocked || this.state.readonly)) && (
+          <HeroHeaderBanner
+            note={this.note}
+            hero={this.state.heroHeader}
+            notesController={this.application.notesController}
+            disabled={this.state.noteLocked || !!this.state.readonly}
+            onError={this.showHeroError}
           />
         )}
 
@@ -1143,6 +1186,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
           {editorMode === 'flashcards' && (
             <FlashcardsEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'map' && (
+            <MapEditor
               key={this.note.uuid}
               application={this.application}
               controller={this.controller}

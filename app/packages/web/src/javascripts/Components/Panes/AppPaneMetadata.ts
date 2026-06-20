@@ -11,6 +11,7 @@ export enum AppPaneId {
   Reminders = 'RemindersColumn',
   Calendar = 'CalendarColumn',
   Todos = 'TodosColumn',
+  Research = 'ResearchColumn',
 }
 
 export const AppPaneIdToDivId = {
@@ -24,4 +25,5 @@ export const AppPaneIdToDivId = {
   [AppPaneId.Reminders]: ElementIds.RemindersColumn,
   [AppPaneId.Calendar]: ElementIds.CalendarColumn,
   [AppPaneId.Todos]: ElementIds.TodosColumn,
+  [AppPaneId.Research]: ElementIds.ResearchColumn,
 }

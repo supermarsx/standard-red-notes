@@ -65,6 +65,12 @@ import {
   serializeFlashcardsDocument,
   createFlashcardsStarter,
 } from '../NoteView/FlashcardsEditor/FlashcardsDocument'
+import { MapEditorIdentifier } from '../NoteView/MapEditor/MapEditor'
+import {
+  parseMapDocument,
+  serializeMapDocument,
+  createMindMapStarter,
+} from '../NoteView/MapEditor/MapDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -496,6 +502,48 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     closeMenu()
   }, [application, note, closeMenu])
 
+  const isMapSelected = note?.editorIdentifier === MapEditorIdentifier
+
+  const selectMap = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-map content: only overwrite note.text with a starter map
+    // when the existing text isn't already a recoverable map doc.
+    const { recovered } = parseMapDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to a Map will replace its current content with an empty map. This cannot be undone.',
+        'Switch to Map?',
+        'Switch to Map',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = MapEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeMapDocument(createMindMapStarter())
+      } else {
+        noteMutator.text = serializeMapDocument(parseMapDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
+
   const handleConversionCompletion = useCallback(
     (item?: EditorMenuItem) => {
       const conversionItem = item || pendingConversionItem
@@ -812,6 +860,24 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               <div className="flex items-center">
                 <Icon type="copy" className="mr-2 text-neutral" />
                 Flashcards
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectMap().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isMapSelected}
+            info={'A node-graph canvas for family trees, mind maps, and diagrams with draggable linked nodes.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="share" className="mr-2 text-neutral" />
+                Map
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
                 </Pill>

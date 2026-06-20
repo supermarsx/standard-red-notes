@@ -25,6 +25,7 @@ import { NoteAppearanceOptions } from './NoteAppearanceOptions'
 import { NoteSizeWarning } from './NoteSizeWarning'
 import { iconClass } from './ClassNames'
 import SuperNoteOptions from './SuperNoteOptions'
+import SpreadsheetNoteOptions from './SpreadsheetNoteOptions'
 import MenuSwitchButtonItem from '../Menu/MenuSwitchButtonItem'
 import MenuItem from '../Menu/MenuItem'
 import { useApplication } from '../ApplicationProvider'
@@ -635,6 +636,10 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
       {notes.length === 1 && (
         <>
           {notes[0].noteType === NoteType.Super && <SuperNoteOptions closeMenu={closeMenu} />}
+
+          {notes[0].noteType === NoteType.Spreadsheet && (
+            <SpreadsheetNoteOptions note={notes[0]} closeMenu={closeMenu} />
+          )}
 
           {editorForNote && (
             <MenuSection>
