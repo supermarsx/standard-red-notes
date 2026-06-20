@@ -75,6 +75,9 @@ export const PrefDefaults = {
   [PrefKey.SearchIndexEnabled]: true,
   [PrefKey.SearchQueryCacheSize]: 50,
   [PrefKey.SearchMinQueryLength]: 2,
+  // Standard Red Notes: the recently-opened-notes history starts empty and is
+  // populated as the user opens notes.
+  [PrefKey.RecentNotesHistory]: [],
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

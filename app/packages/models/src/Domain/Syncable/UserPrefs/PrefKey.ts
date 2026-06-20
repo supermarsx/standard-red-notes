@@ -71,6 +71,11 @@ export enum PrefKey {
   SearchIndexEnabled = 'searchIndexEnabled',
   SearchQueryCacheSize = 'searchQueryCacheSize',
   SearchMinQueryLength = 'searchMinQueryLength',
+  // Standard Red Notes: a capped, most-recent-first history of notes the user has
+  // opened, persisted as a JSON array of { uuid, openedAt } entries. Surfaced in
+  // the "Recent Notes" preferences pane. Stored as a pref so it follows the user
+  // across reloads and devices.
+  RecentNotesHistory = 'recentNotesHistory',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -88,6 +93,16 @@ export enum PrefKey {
  * describe what to do when auto-resolution is enabled.
  */
 export type ConflictResolutionStrategyValue = 'ask' | 'keepBoth' | 'keepLocal' | 'keepRemote'
+
+/**
+ * Standard Red Notes: a single entry in the recently-opened-notes history. `uuid`
+ * references the opened note; `openedAt` is the epoch-millisecond timestamp of the
+ * most recent open. Entries are stored most-recent-first and capped client-side.
+ */
+export type RecentNoteEntry = {
+  uuid: string
+  openedAt: number
+}
 
 export type PrefValue = {
   [PrefKey.TagsPanelWidth]: number
@@ -150,6 +165,7 @@ export type PrefValue = {
   [PrefKey.SearchIndexEnabled]: boolean
   [PrefKey.SearchQueryCacheSize]: number
   [PrefKey.SearchMinQueryLength]: number
+  [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.

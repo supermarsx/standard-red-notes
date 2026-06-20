@@ -82,6 +82,7 @@ import { PersistenceService } from '@/Controllers/Abstract/PersistenceService'
 import { removeFromArray } from '@standardnotes/utils'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
 import { RecentActionsState } from './Recents'
+import { RecentNotesState } from '@/Components/Preferences/Panes/RecentNotes/RecentNotesState'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
@@ -99,6 +100,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   public devMode?: DevMode
   public recents = new RecentActionsState()
+  // Standard Red Notes: tracks recently-opened notes for the "Recent Notes"
+  // preferences pane. Created in createBackgroundServices() so it observes note
+  // opens from app start, even while the preferences modal is closed.
+  private _recentNotesState?: RecentNotesState
 
   constructor(
     deviceInterface: WebOrDesktopDevice,
@@ -158,6 +163,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     }
     void this.momentsService
     void this.routeService
+    // Standard Red Notes: eagerly create the recent-notes tracker so it begins
+    // observing note opens immediately.
+    void this.recentNotesState
 
     if (isDev) {
       this.devMode = new DevMode(this)
@@ -201,6 +209,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       disposer()
     }
     this.disposers.length = 0
+
+    // Standard Red Notes: tear down the recent-notes observer.
+    this._recentNotesState?.deinit()
+    this._recentNotesState = undefined
 
     this.deps.deinit()
 
@@ -687,6 +699,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   get preferencesController(): PreferencesController {
     return this.deps.get<PreferencesController>(Web_TYPES.PreferencesController)
+  }
+
+  // Standard Red Notes: the recently-opened-notes tracker backing the Recent Notes
+  // preferences pane. Lazily instantiated and cached.
+  get recentNotesState(): RecentNotesState {
+    if (!this._recentNotesState) {
+      this._recentNotesState = new RecentNotesState(this)
+    }
+    return this._recentNotesState
   }
 
   get isNativeMobileWebUseCase(): IsNativeMobileWeb {

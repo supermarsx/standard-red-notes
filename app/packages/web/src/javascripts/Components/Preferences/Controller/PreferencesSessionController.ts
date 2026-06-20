@@ -49,6 +49,9 @@ export class PreferencesSessionController {
     // Standard Red Notes: sync conflict review & resolution pane.
     menuItems.push({ id: 'conflicts', label: 'Sync Conflicts', icon: 'sync', order: 9 })
 
+    // Standard Red Notes: recently-opened notes history pane.
+    menuItems.push({ id: 'recent-notes', label: 'Recent Notes', icon: 'history', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()
