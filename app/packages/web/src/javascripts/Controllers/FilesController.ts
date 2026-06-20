@@ -43,6 +43,8 @@ import { NotesController } from './NotesController/NotesController'
 import { downloadOrShareBlobBasedOnPlatform } from '@/Utils/DownloadOrShareBasedOnPlatform'
 import { truncateString } from '@/Components/SuperEditor/Utils'
 import { RecentActionsState } from '../Application/Recents'
+import { stripImageMetadata } from '@/Utils/StripImageMetadata'
+import { getStripImageMetadataEnabled } from '@/Utils/StripImageMetadataSetting'
 
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
@@ -319,6 +321,24 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
 
     return {
       didHandleAction: true,
+    }
+  }
+
+  /**
+   * If the "Strip image metadata on upload" setting is enabled (default ON) and
+   * the file is an image, return a metadata-stripped copy; otherwise return the
+   * original file unchanged. Never throws — falls back to the original file on
+   * any error so uploads always proceed.
+   */
+  private async maybeStripImageMetadata(file: File): Promise<File> {
+    if (!file.type.startsWith('image/') || !getStripImageMetadataEnabled()) {
+      return file
+    }
+    try {
+      return await stripImageMetadata(file)
+    } catch (error) {
+      console.error('Failed to strip image metadata; uploading original', error)
+      return file
     }
   }
 
@@ -736,16 +756,22 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     try {
       const minimumChunkSize = this.files.minimumChunkSize()
 
-      const fileToUpload =
+      const resolvedFile =
         fileOrHandle instanceof File
           ? fileOrHandle
           : fileOrHandle instanceof FileSystemFileHandle && this.shouldUseStreamingAPI
             ? await fileOrHandle.getFile()
             : undefined
 
-      if (!fileToUpload) {
+      if (!resolvedFile) {
         return
       }
+
+      // Privacy: strip EXIF/GPS/metadata from images before they are read,
+      // encrypted, and uploaded (default ON; user can opt out). Only images are
+      // touched; non-image files pass through untouched. Applies to both synced
+      // and local-only uploads since the local-only branch reuses fileToUpload.
+      const fileToUpload = await this.maybeStripImageMetadata(resolvedFile)
 
       if (this.alertIfFileExceedsSizeLimit(fileToUpload)) {
         return

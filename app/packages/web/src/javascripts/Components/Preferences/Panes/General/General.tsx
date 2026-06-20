@@ -12,6 +12,7 @@ import NewNoteDefaults from './NewNoteDefaults'
 import Language from './Language'
 import AutoEmptyTrash from './AutoEmptyTrash'
 import DiaryMode from './DiaryMode'
+import FileUploadPrivacy from './FileUploadPrivacy'
 import { useApplication } from '@/Components/ApplicationProvider'
 
 const General: FunctionComponent = () => {
@@ -24,6 +25,7 @@ const General: FunctionComponent = () => {
       <Defaults application={application} />
       <Spellcheck application={application} />
       <AutoEmptyTrash />
+      <FileUploadPrivacy />
       <DiaryMode application={application} />
       <NewNoteDefaults />
       <Tools application={application} />

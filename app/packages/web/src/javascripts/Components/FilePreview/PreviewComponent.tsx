@@ -11,6 +11,7 @@ import { PreviewableTextFileTypes, RequiresNativeFilePreview } from './isFilePre
 import TextPreview from './TextPreview'
 import { parseFileName, sanitizeFileName } from '@standardnotes/utils'
 import VideoPreview from './VideoPreview'
+import AudioPreview from './AudioPreview'
 import { PdfDeepLinkTarget } from './PdfDeepLink'
 
 // PDF.js is large; lazy-load the viewer so it's code-split out of the main bundle.
@@ -125,11 +126,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
   }
 
   if (file.mimeType.startsWith('audio/')) {
-    return (
-      <div className="flex h-full w-full items-center justify-center">
-        <audio src={objectUrl} controls />
-      </div>
-    )
+    return <AudioPreview file={file} filesController={application.filesController} objectUrl={objectUrl} />
   }
 
   if (PreviewableTextFileTypes.includes(file.mimeType)) {
