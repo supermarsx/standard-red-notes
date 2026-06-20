@@ -248,6 +248,26 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
     }
   }, [preferences.sortBy, changePreferences])
 
+  /**
+   * Standard Red Notes: the "Relevance" sort is a web-only presentation mode that
+   * only applies while searching. It is auto-engaged when a search begins and
+   * reverts when the query clears; here the user can also toggle it manually
+   * (selecting it engages relevance ordering; picking any field sort exits it).
+   */
+  const itemListController = application.itemListController
+  const isSearching = itemListController.isRelevanceSortAvailable
+  const isRelevanceSortActive = itemListController.relevanceSortActive
+
+  const selectRelevanceSort = useCallback(() => {
+    itemListController.selectRelevanceSort()
+  }, [itemListController])
+
+  const exitRelevanceSortIfActive = useCallback(() => {
+    if (itemListController.relevanceSortActive) {
+      itemListController.exitRelevanceSort()
+    }
+  }, [itemListController])
+
   const toggleHidePreview = useCallback(() => {
     void changePreferences({ hideNotePreview: !preferences.hideNotePreview })
   }, [preferences, changePreferences])
@@ -331,44 +351,77 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
       )}
 
       <MenuSection title="Sort by">
+        {(isSearching || isRelevanceSortActive) && (
+          <MenuRadioButtonItem
+            disabled={controlsDisabled || isDailyEntry || !isSearching}
+            className="py-2"
+            onClick={selectRelevanceSort}
+            checked={isRelevanceSortActive}
+          >
+            <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
+              <span>Relevance (best match)</span>
+            </div>
+          </MenuRadioButtonItem>
+        )}
         <MenuRadioButtonItem
           disabled={controlsDisabled || isDailyEntry}
           className="py-2"
-          onClick={toggleSortByDateModified}
-          checked={preferences.sortBy === CollectionSort.UpdatedAt}
+          onClick={() => {
+            exitRelevanceSortIfActive()
+            toggleSortByDateModified()
+          }}
+          checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.UpdatedAt}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
             <span>Date modified</span>
-            <SortIcon enabled={preferences.sortBy === CollectionSort.UpdatedAt} reverse={preferences.sortReverse} />
+            <SortIcon
+              enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.UpdatedAt}
+              reverse={preferences.sortReverse}
+            />
           </div>
         </MenuRadioButtonItem>
         <MenuRadioButtonItem
           disabled={controlsDisabled || isDailyEntry}
           className="py-2"
-          onClick={toggleSortByCreationDate}
-          checked={preferences.sortBy === CollectionSort.CreatedAt}
+          onClick={() => {
+            exitRelevanceSortIfActive()
+            toggleSortByCreationDate()
+          }}
+          checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.CreatedAt}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
             <span>Creation date</span>
-            <SortIcon enabled={preferences.sortBy === CollectionSort.CreatedAt} reverse={preferences.sortReverse} />
+            <SortIcon
+              enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.CreatedAt}
+              reverse={preferences.sortReverse}
+            />
           </div>
         </MenuRadioButtonItem>
         <MenuRadioButtonItem
           disabled={controlsDisabled || isDailyEntry}
           className="py-2"
-          onClick={toggleSortByTitle}
-          checked={preferences.sortBy === CollectionSort.Title}
+          onClick={() => {
+            exitRelevanceSortIfActive()
+            toggleSortByTitle()
+          }}
+          checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Title}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
             <span>Title</span>
-            <SortIcon enabled={preferences.sortBy === CollectionSort.Title} reverse={preferences.sortReverse} />
+            <SortIcon
+              enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Title}
+              reverse={preferences.sortReverse}
+            />
           </div>
         </MenuRadioButtonItem>
         <MenuRadioButtonItem
           disabled={controlsDisabled || isDailyEntry}
           className="py-2"
-          onClick={selectCustomSort}
-          checked={preferences.sortBy === CollectionSort.Custom}
+          onClick={() => {
+            exitRelevanceSortIfActive()
+            selectCustomSort()
+          }}
+          checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Custom}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
             <span>Custom (drag to reorder)</span>

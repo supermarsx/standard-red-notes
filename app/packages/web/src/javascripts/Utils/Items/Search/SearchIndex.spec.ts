@@ -69,6 +69,20 @@ describe('SearchIndex', () => {
     expect(index.search('flour nonexistentterm')).toEqual([])
   })
 
+  it('matches a term that only appears in the note body (full-text)', () => {
+    const index = build()
+    // "receipts" appears only in n2's body, never in any title.
+    const result = index.search('receipts')
+    expect(new Set(result)).toEqual(new Set(['n2']))
+  })
+
+  it('matches a term that only appears in a note title', () => {
+    const index = build()
+    // "recipe" appears only in n3's title.
+    const result = index.search('recipe')
+    expect(new Set(result)).toEqual(new Set(['n3']))
+  })
+
   it('returns null for a query with no indexable tokens', () => {
     const index = build()
     expect(index.search('!')).toBeNull()
