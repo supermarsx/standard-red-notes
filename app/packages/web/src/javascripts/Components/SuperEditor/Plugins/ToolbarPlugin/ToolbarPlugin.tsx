@@ -41,7 +41,7 @@ import {
 } from '@lexical/list'
 import { $isHeadingNode, $isQuoteNode } from '@lexical/rich-text'
 import { $patchStyleText, $getSelectionStyleValueForProperty, $setBlocksType } from '@lexical/selection'
-import { $createCodeNode } from '@lexical/code'
+import { $createCodeNode, $isCodeNode } from '@lexical/code'
 import {
   ComponentPropsWithoutRef,
   ForwardedRef,
@@ -108,6 +108,29 @@ import { useLocalPreference } from '@/Hooks/usePreference'
 import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
+import {
+  $deleteTableColumnAtSelection,
+  $deleteTableRowAtSelection,
+  $getTableCellNodeFromLexicalNode,
+  $getTableColumnIndexFromTableCellNode,
+  $getTableNodeFromLexicalNodeOrThrow,
+  $getTableRowIndexFromTableCellNode,
+  $insertTableColumnAtSelection,
+  $insertTableRowAtSelection,
+  $isTableCellNode,
+  $isTableNode,
+  $isTableRowNode,
+  TableCellHeaderStates,
+} from '@lexical/table'
+import {
+  ContextualWidget,
+  ContextualWidgetKind,
+  DECORATOR_BLOCK_LABELS,
+  isDecoratorBlockType,
+  isImageNodeType,
+  resolveContextualWidget,
+} from './ContextualToolbar'
+import BlockZoomOverlay from './BlockZoomOverlay'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -304,6 +327,14 @@ const ToolbarPlugin = () => {
   const [linkNode, setLinkNode] = useState<LinkNode | null>(null)
   const [linkTextNode, setLinkTextNode] = useState<TextNode | null>(null)
   const [isEditingLink, setIsEditingLink] = useState(false)
+
+  // Feature #273: which special widget (if any) the selection is currently in,
+  // driving the dynamic contextual toolbar group. Feature #287: the key + label
+  // of the active top-level block, used to zoom into it.
+  const [contextualWidget, setContextualWidget] = useState<ContextualWidget | null>(null)
+  const [activeBlockKey, setActiveBlockKey] = useState<string | null>(null)
+  const [activeBlockLabel, setActiveBlockLabel] = useState<string>('Block')
+  const [zoomBlockKey, setZoomBlockKey] = useState<string | null>(null)
 
   const [isTOCOpen, setIsTOCOpen] = useState(false)
   const tocAnchorRef = useRef<HTMLButtonElement>(null)
@@ -515,8 +546,54 @@ const ToolbarPlugin = () => {
 
     setElementFormat(($isElementNode(node) ? node.getFormatType() : parent?.getFormatType()) || 'left')
 
+    // Feature #273 — detect the active special widget for the contextual group.
+    // Tables: the caret is inside a table cell. Images: a selected/adjacent node
+    // is an image-like node. Link: reuse the link detection above. Code: the
+    // top-level element is a code block. Decorator blocks: matched by type.
+    const tableCellNode = $getTableCellNodeFromLexicalNode(node)
+    const isTable = tableCellNode != null || $isTableNode(element)
+
+    const selectedNodes = selection.getNodes()
+    const isImage =
+      isImageNodeType(node.getType()) ||
+      (parent != null && isImageNodeType(parent.getType())) ||
+      selectedNodes.some((n) => isImageNodeType(n.getType()))
+
+    const isLinkActive = $isLinkNode(node) || $isLinkNode(parent)
+    const isCodeBlock = $isCodeNode(element)
+    const activeBlockType = element.getType()
+
+    setContextualWidget(
+      resolveContextualWidget({
+        isTable,
+        isImage,
+        isLink: isLinkActive,
+        isCode: isCodeBlock,
+        activeBlockType,
+      }),
+    )
+
+    // Feature #287 — remember the active top-level block so it can be zoomed.
+    // For a table cell we want the table node, not the cell, as the zoom target.
+    let zoomTarget = element
+    if (tableCellNode != null) {
+      zoomTarget = $getTableNodeFromLexicalNodeOrThrow(tableCellNode)
+    }
+    setActiveBlockKey(zoomTarget.getKey())
+    setActiveBlockLabel(
+      isTable
+        ? 'Table'
+        : isCodeBlock
+          ? 'Code Block'
+          : isImage
+            ? 'Image'
+            : isDecoratorBlockType(activeBlockType)
+              ? DECORATOR_BLOCK_LABELS[activeBlockType]
+              : blockTypeToBlockName[blockType] || 'Block',
+    )
+
     updateToolbarFloatingPosition()
-  }, [activeEditor, updateToolbarFloatingPosition])
+  }, [activeEditor, updateToolbarFloatingPosition, blockType])
 
   const clearContainerFloatingStyles = useCallback(() => {
     const containerElement = containerRef.current
@@ -706,6 +783,85 @@ const ToolbarPlugin = () => {
       }
     })
   }, [activeEditor])
+
+  // ----- Feature #273: contextual widget actions -------------------------
+  // These reuse the same Lexical operations the existing inline widget UIs use
+  // (@lexical/table ops, FORMAT_ELEMENT_COMMAND for alignment, the link toggle
+  // command, the code-language popover) — surfaced as a single contextual group.
+
+  const runTableAction = useCallback(
+    (action: (cell: ReturnType<typeof $getTableCellNodeFromLexicalNode>) => void) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection)) {
+          return
+        }
+        const cell = $getTableCellNodeFromLexicalNode(selection.anchor.getNode())
+        if (!cell) {
+          return
+        }
+        action(cell)
+      })
+    },
+    [activeEditor],
+  )
+
+  const toggleTableRowHeader = useCallback(() => {
+    runTableAction((cell) => {
+      if (!cell) {
+        return
+      }
+      const tableNode = $getTableNodeFromLexicalNodeOrThrow(cell)
+      const rowIndex = $getTableRowIndexFromTableCellNode(cell)
+      const row = tableNode.getChildren()[rowIndex]
+      if (!$isTableRowNode(row)) {
+        return
+      }
+      row.getChildren().forEach((c) => {
+        if ($isTableCellNode(c)) {
+          c.toggleHeaderStyle(TableCellHeaderStates.ROW)
+        }
+      })
+    })
+  }, [runTableAction])
+
+  const toggleTableColumnHeader = useCallback(() => {
+    runTableAction((cell) => {
+      if (!cell) {
+        return
+      }
+      const tableNode = $getTableNodeFromLexicalNodeOrThrow(cell)
+      const colIndex = $getTableColumnIndexFromTableCellNode(cell)
+      tableNode.getChildren().forEach((row) => {
+        if (!$isTableRowNode(row)) {
+          return
+        }
+        const c = row.getChildren()[colIndex]
+        if ($isTableCellNode(c)) {
+          c.toggleHeaderStyle(TableCellHeaderStates.COLUMN)
+        }
+      })
+    })
+  }, [runTableAction])
+
+  const deleteTable = useCallback(() => {
+    runTableAction((cell) => {
+      if (!cell) {
+        return
+      }
+      $getTableNodeFromLexicalNodeOrThrow(cell).remove()
+    })
+  }, [runTableAction])
+
+  const removeLink = useCallback(() => {
+    activeEditor.dispatchCommand(TOGGLE_LINK_COMMAND, null)
+  }, [activeEditor])
+
+  const enterZoom = useCallback(() => {
+    if (activeBlockKey) {
+      setZoomBlockKey(activeBlockKey)
+    }
+  }, [activeBlockKey])
 
   useEffect(() => {
     if (isMobile) {
@@ -1193,6 +1349,122 @@ const ToolbarPlugin = () => {
     group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
 
+  // Feature #273 — build the dynamic contextual group for the active widget. It
+  // is appended *after* the config-resolved groups (never part of the persisted
+  // config), so show/hide/reorder customization is unaffected. Always ends with
+  // a "Zoom into block" action (Feature #287) for the active block.
+  const contextualButtons: ReactNode[] = []
+  if (contextualWidget) {
+    switch (contextualWidget.kind) {
+      case ContextualWidgetKind.Table:
+        contextualButtons.push(
+          <ToolbarButton
+            key="ctx-row-above"
+            name="Insert row above"
+            iconName="arrow-up"
+            onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(false))}
+          />,
+          <ToolbarButton
+            key="ctx-row-below"
+            name="Insert row below"
+            iconName="arrow-down"
+            onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(true))}
+          />,
+          <ToolbarButton
+            key="ctx-col-left"
+            name="Insert column left"
+            iconName="arrow-left"
+            onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(false))}
+          />,
+          <ToolbarButton
+            key="ctx-col-right"
+            name="Insert column right"
+            iconName="arrow-right"
+            onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(true))}
+          />,
+          <ToolbarButton
+            key="ctx-del-row"
+            name="Delete row"
+            iconName="trash"
+            onSelect={() => activeEditor.update(() => $deleteTableRowAtSelection())}
+          />,
+          <ToolbarButton
+            key="ctx-del-col"
+            name="Delete column"
+            iconName="trash-sweep"
+            onSelect={() => activeEditor.update(() => $deleteTableColumnAtSelection())}
+          />,
+          <ToolbarButton
+            key="ctx-row-header"
+            name="Toggle row header"
+            iconName="tasks"
+            onSelect={toggleTableRowHeader}
+          />,
+          <ToolbarButton
+            key="ctx-col-header"
+            name="Toggle column header"
+            iconName="select-all"
+            onSelect={toggleTableColumnHeader}
+          />,
+          <ToolbarButton key="ctx-del-table" name="Delete table" iconName="trash-filled" onSelect={deleteTable} />,
+        )
+        break
+      case ContextualWidgetKind.Image:
+        contextualButtons.push(
+          <ToolbarButton
+            key="ctx-img-left"
+            name="Align left"
+            iconName="align-left"
+            active={elementFormat === 'left'}
+            onSelect={() => LeftAlignBlock.onSelect(activeEditor)}
+          />,
+          <ToolbarButton
+            key="ctx-img-center"
+            name="Align center"
+            iconName="align-center"
+            active={elementFormat === 'center'}
+            onSelect={() => CenterAlignBlock.onSelect(activeEditor)}
+          />,
+          <ToolbarButton
+            key="ctx-img-right"
+            name="Align right"
+            iconName="align-right"
+            active={elementFormat === 'right'}
+            onSelect={() => RightAlignBlock.onSelect(activeEditor)}
+          />,
+        )
+        break
+      case ContextualWidgetKind.Link:
+        contextualButtons.push(
+          <ToolbarButton
+            key="ctx-link-edit"
+            name="Edit link"
+            iconName="pencil"
+            onSelect={() => activeEditor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')}
+          />,
+          <ToolbarButton key="ctx-link-remove" name="Remove link" iconName="link-off" onSelect={removeLink} />,
+        )
+        break
+      case ContextualWidgetKind.Code:
+        // Language selection is handled by the dedicated CodeOptionsPlugin
+        // popover; the contextual group surfaces the zoom affordance (below).
+        break
+      case ContextualWidgetKind.Block:
+        break
+    }
+
+    // Every contextual widget gets a "Zoom into block" affordance (Feature #287).
+    contextualButtons.push(
+      <ToolbarButton
+        key="ctx-zoom"
+        name="Zoom into block"
+        iconName="fullscreen"
+        disabled={!activeBlockKey}
+        onSelect={enterZoom}
+      />,
+    )
+  }
+
   return (
     <>
       {modal}
@@ -1243,6 +1515,20 @@ const ToolbarPlugin = () => {
                 ))}
               </Fragment>
             ))}
+            {contextualWidget && contextualButtons.length > 0 && (
+              <Fragment key="contextual">
+                <ToolbarSeparator />
+                {/* Word-style contextual ribbon tab: a small label identifying
+                    the active widget, then its tailored actions. */}
+                <span
+                  aria-hidden
+                  className="mx-1 hidden flex-shrink-0 select-none self-center whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info md:inline-block"
+                >
+                  {contextualWidget.label}
+                </span>
+                {contextualButtons}
+              </Fragment>
+            )}
           </Toolbar>
           {isMobile && (
             <button
@@ -1764,6 +2050,14 @@ const ToolbarPlugin = () => {
           </MenuItem>
         </Menu>
       </Popover>
+      {zoomBlockKey && (
+        <BlockZoomOverlay
+          blockKey={zoomBlockKey}
+          label={contextualWidget?.label ?? activeBlockLabel}
+          onClose={() => setZoomBlockKey(null)}
+          portalElement={popoverDocumentElement}
+        />
+      )}
     </>
   )
 }
