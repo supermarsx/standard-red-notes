@@ -21,6 +21,7 @@ import { Component, PackageManagerInterface } from '../Packages/PackageManagerIn
 import { SearchManagerInterface } from '../Search/SearchManagerInterface'
 import { RemoteDataInterface } from './DataInterface'
 import { MediaManagerInterface } from '../Media/MediaManagerInterface'
+import { SpellcheckerLanguage, SpellcheckerManager } from '../SpellcheckerManager'
 
 /**
  * Read https://github.com/electron/remote to understand how electron/remote works.
@@ -38,6 +39,7 @@ export class RemoteBridge implements CrossProcessBridge {
     private media: MediaManagerInterface,
     private homeServerManager: HomeServerManagerInterface,
     private directoryManager: DirectoryManagerInterface,
+    private spellcheckerManager: SpellcheckerManager | undefined,
   ) {}
 
   get exposableValue(): CrossProcessBridge {
@@ -92,6 +94,9 @@ export class RemoteBridge implements CrossProcessBridge {
       getHomeServerLogs: this.getHomeServerLogs.bind(this),
       getHomeServerUrl: this.getHomeServerUrl.bind(this),
       getHomeServerLastErrorMessage: this.getHomeServerLastErrorMessage.bind(this),
+      isSpellCheckerManagerAvailable: this.isSpellCheckerManagerAvailable.bind(this),
+      getSpellCheckerLanguages: this.getSpellCheckerLanguages.bind(this),
+      setSpellCheckerLanguages: this.setSpellCheckerLanguages.bind(this),
     }
   }
 
@@ -301,5 +306,24 @@ export class RemoteBridge implements CrossProcessBridge {
 
   async getHomeServerLastErrorMessage(): Promise<string | undefined> {
     return this.homeServerManager.getHomeServerLastErrorMessage()
+  }
+
+  /**
+   * Returns false when the spellchecker languages cannot be chosen by the app,
+   * i.e. on macOS where the OS owns spellchecking and the manager is undefined.
+   */
+  isSpellCheckerManagerAvailable(): boolean {
+    return this.spellcheckerManager !== undefined
+  }
+
+  getSpellCheckerLanguages(): SpellcheckerLanguage[] {
+    if (!this.spellcheckerManager) {
+      return []
+    }
+    return this.spellcheckerManager.languages()
+  }
+
+  setSpellCheckerLanguages(codes: string[]): void {
+    this.spellcheckerManager?.setLanguages(codes)
   }
 }

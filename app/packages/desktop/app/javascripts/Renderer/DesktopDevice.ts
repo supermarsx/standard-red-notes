@@ -212,4 +212,20 @@ export class DesktopDevice extends WebOrDesktopDevice implements DesktopDeviceIn
   askForMediaAccess(type: 'camera' | 'microphone'): Promise<boolean> {
     return this.remoteBridge.askForMediaAccess(type)
   }
+
+  /**
+   * Spellchecker language selection (desktop only). On macOS the OS owns
+   * spellchecking, so isSpellCheckerManagerAvailable() returns false.
+   */
+  isSpellCheckerManagerAvailable(): boolean {
+    return this.remoteBridge.isSpellCheckerManagerAvailable()
+  }
+
+  getSpellCheckerLanguages() {
+    return this.remoteBridge.getSpellCheckerLanguages()
+  }
+
+  setSpellCheckerLanguages(codes: string[]): void {
+    this.remoteBridge.setSpellCheckerLanguages(codes)
+  }
 }

@@ -78,6 +78,7 @@ export async function createWindowState({
     services.mediaManager,
     services.homeServerManager,
     services.directoryManager,
+    services.spellcheckerManager,
   )
 
   const shouldOpenUrl = (url: string) => url.startsWith('http') || url.startsWith('mailto')

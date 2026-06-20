@@ -24,8 +24,6 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
 
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
-  const spellcheck = usePreference(PrefKey.EditorSpellcheck)
-
   const addNoteToParentFolders = usePreference(PrefKey.NoteAddToParentFolders)
 
   const alwaysShowSuperToolbar = usePreference(PrefKey.AlwaysShowSuperToolbar)
@@ -51,10 +49,6 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
     [],
   )
 
-  const toggleSpellcheck = () => {
-    application.toggleGlobalSpellcheck().catch(console.error)
-  }
-
   const toggleAndroidConfirmBeforeExit = () => {
     const newValue = !androidConfirmBeforeExit
     setAndroidConfirmBeforeExit(newValue)
@@ -77,17 +71,6 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
             <HorizontalSeparator classes="my-4" />
           </>
         )}
-        <div className="flex justify-between gap-2 md:items-center">
-          <div className="flex flex-col">
-            <Subtitle>Spellcheck</Subtitle>
-            <Text>
-              The default spellcheck value for new notes. Spellcheck can be configured per note from the note context
-              menu. Spellcheck may degrade overall typing performance with long notes.
-            </Text>
-          </div>
-          <Switch onChange={toggleSpellcheck} checked={spellcheck} />
-        </div>
-        <HorizontalSeparator classes="my-4" />
         <div className="flex justify-between gap-2 md:items-center">
           <div className="flex flex-col">
             <Subtitle>Add all parent tags when adding a nested tag to a note</Subtitle>

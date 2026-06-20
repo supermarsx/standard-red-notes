@@ -2,6 +2,7 @@ import { FunctionComponent } from 'react'
 import { observer } from 'mobx-react-lite'
 import Tools from './Tools'
 import Defaults from './Defaults'
+import Spellcheck from './Spellcheck'
 import LabsPane from './Labs/Labs'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import Persistence from './Persistence'
@@ -17,6 +18,7 @@ const General: FunctionComponent = () => {
     <PreferencesPane>
       <Persistence application={application} />
       <Defaults application={application} />
+      <Spellcheck application={application} />
       <NewNoteDefaults />
       <Tools application={application} />
       <SmartViews application={application} featuresController={application.featuresController} />

@@ -66,14 +66,22 @@ function log(...message: unknown[]) {
   console.log('spellcheckerMaager:', ...message)
 }
 
+export interface SpellcheckerLanguage {
+  code: string
+  name: string
+  enabled: boolean
+}
+
 export interface SpellcheckerManager {
-  languages(): Array<{
-    code: string
-    name: string
-    enabled: boolean
-  }>
+  languages(): Array<SpellcheckerLanguage>
   addLanguage(code: string): void
   removeLanguage(code: string): void
+  /**
+   * Replaces the entire set of selected languages at once. Used by the
+   * renderer (web settings UI) so that a multi-select can be persisted/applied
+   * in a single operation.
+   */
+  setLanguages(codes: string[]): void
 }
 
 export function createSpellcheckerManager(
@@ -211,6 +219,18 @@ export function createSpellcheckerManager(
       selectedCodes.delete(code)
       store.set(StoreKeys.SelectedSpellCheckerLanguageCodes, selectedCodes)
       session.setSpellCheckerLanguages(Array.from(selectedCodes))
+    },
+    setLanguages(codes: string[]) {
+      /**
+       * Only persist/apply codes that Electron actually reports as available
+       * and that map to a known Language. This keeps the Store sanitized and
+       * prevents setSpellCheckerLanguages from throwing on unknown codes.
+       */
+      const sanitized = new Set<Language>(
+        codes.filter((code): code is Language => isLanguage(code) && availableSpellCheckerLanguages.includes(code)),
+      )
+      store.set(StoreKeys.SelectedSpellCheckerLanguageCodes, sanitized)
+      session.setSpellCheckerLanguages(Array.from(sanitized))
     },
   }
 }
