@@ -293,7 +293,6 @@ deliberate, opt-in trade-off — use them knowingly.
 
 - **Keyboard shortcuts:** press **Ctrl/Cmd + /** in the app.
 - **Running your own server:** see the [self-hosting guide](self-hosting.md).
-- **Project direction & plans:** see the [Roadmap](ROADMAP.md).
 - **Bugs / feature requests:** open an issue on the project's repository.
 
 Because Standard Red Notes is AGPL-3.0 and self-hostable, you're always in

@@ -237,11 +237,8 @@ for third-party hosted services.
 
 See:
 
-- [Roadmap](docs/ROADMAP.md)
 - [MCP Support Plan](docs/MCP_SUPPORT_PLAN.md)
-- [No-Entitlement Plan](docs/NO_ENTITLEMENT_PLAN.md)
 - [Dependency Upgrade Audit](docs/DEPENDENCY_UPGRADE_AUDIT.md)
-- [Fork Compliance Notes](docs/FORK_COMPLIANCE.md)
 
 ## License
 
