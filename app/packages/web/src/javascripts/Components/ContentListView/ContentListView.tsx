@@ -40,6 +40,7 @@ import FilesFolderBar, {
   FilesFolderFilterAll,
   filterItemsByFolder,
 } from './FilesFolderBar'
+import QuickActionsBar from '../QuickActions/QuickActionsBar'
 
 type Props = {
   application: WebApplication
@@ -360,6 +361,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             />
           </div>
         </div>
+        {!itemListController.isMultipleSelectionMode && <QuickActionsBar application={application} />}
         {isFilesSmartView && (
           <FilesFolderBar
             navigationController={navigationController}
