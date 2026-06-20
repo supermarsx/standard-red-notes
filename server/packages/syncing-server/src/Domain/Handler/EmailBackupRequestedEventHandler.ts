@@ -28,6 +28,28 @@ export class EmailBackupRequestedEventHandler implements DomainEventHandlerInter
     await this.requestEmailWithBackupFile(event, this.primaryItemRepository)
   }
 
+  // ---------------------------------------------------------------------------
+  // Standard Red Notes — DELIVERY GAP (scaffolded, not fully wired):
+  //
+  // This handler produces the user's ALREADY end-to-end-encrypted items as a
+  // backup file in the S3 backup bucket, then publishes an EMAIL_REQUESTED domain
+  // event whose `attachments[].filePath` points at that S3 object.
+  //
+  // In upstream Standard Notes, EMAIL_REQUESTED was consumed by a separate,
+  // closed-source `email` micro-service (via SNS/SQS) that fetched the attachment
+  // from S3 and sent it over SMTP. THIS FORK HAS NO EMAIL_REQUESTED CONSUMER, so
+  // the backup file is generated but never actually emailed.
+  //
+  // To fully wire delivery, a new EMAIL_REQUESTED handler is needed that, when the
+  // operator has enabled email backups (EMAIL_BACKUPS_ENABLED) and SMTP is
+  // configured, (1) fetches the attachment object from the S3 backup bucket and
+  // (2) calls an SMTP sender with the attachment (the existing
+  // auth/.../SmtpEmailSender currently only sends text bodies, so it would need an
+  // attachment-capable send path, or a dedicated sender here). SMTP creds are the
+  // remaining operator-supplied config. See TriggerEmailBackupForAllUsers for the
+  // operator gate and per-user due-calculation that drive this event.
+  // ---------------------------------------------------------------------------
+
   private async requestEmailWithBackupFile(
     event: EmailBackupRequestedEvent,
     itemRepository: ItemRepositoryInterface,

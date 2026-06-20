@@ -12,6 +12,7 @@ import { SettingsAssociationServiceInterface } from './SettingsAssociationServic
 export class SettingsAssociationService implements SettingsAssociationServiceInterface {
   private readonly UNENCRYPTED_SETTINGS = [
     SettingName.NAMES.EmailBackupFrequency,
+    SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -25,6 +26,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.GoogleDriveBackupFrequency,
     SettingName.NAMES.OneDriveBackupFrequency,
     SettingName.NAMES.EmailBackupFrequency,
+    SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.ListedAuthorSecrets,
@@ -49,6 +51,9 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.FileUploadBytesLimit,
     SettingName.NAMES.FileUploadBytesUsed,
+    // Standard Red Notes: last-sent bookkeeping for scheduled email backups is
+    // written only by the server-side trigger job; clients may not mutate it.
+    SettingName.NAMES.EmailBackupLastSent,
   ]
 
   private readonly permissionsAssociatedWithSettings = new Map<string, PermissionName>([

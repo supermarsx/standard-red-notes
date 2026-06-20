@@ -119,6 +119,44 @@ describe('SettingsAssociationService', () => {
     })
   })
 
+  describe('email backup last-sent bookkeeping (Standard Red Notes, scheduled backups)', () => {
+    it('should be a valid, recognized setting name', () => {
+      const result = SettingName.create(SettingName.NAMES.EmailBackupLastSent)
+      expect(result.isFailed()).toBeFalsy()
+      expect(result.getValue().value).toEqual('EMAIL_BACKUP_LAST_SENT')
+    })
+
+    it('should be stored unencrypted so the trigger job can read it without user key material', () => {
+      expect(
+        createService().getEncryptionVersionForSetting(
+          SettingName.create(SettingName.NAMES.EmailBackupLastSent).getValue(),
+        ),
+      ).toEqual(EncryptionVersion.Unencrypted)
+    })
+
+    it('should be unsensitive (plain readable value)', () => {
+      expect(
+        createService().getSensitivityForSetting(SettingName.create(SettingName.NAMES.EmailBackupLastSent).getValue()),
+      ).toBeFalsy()
+    })
+
+    it('should be immutable by the client (server-written only)', () => {
+      expect(
+        createService().isSettingMutableByClient(
+          SettingName.create(SettingName.NAMES.EmailBackupLastSent).getValue(),
+        ),
+      ).toBeFalsy()
+    })
+
+    it('should not be part of any default settings for new accounts', () => {
+      const newUserSettings = createService().getDefaultSettingsAndValuesForNewUser()
+      const newVaultSettings = createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount()
+
+      expect(newUserSettings.has(SettingName.NAMES.EmailBackupLastSent)).toBeFalsy()
+      expect(newVaultSettings.has(SettingName.NAMES.EmailBackupLastSent)).toBeFalsy()
+    })
+  })
+
   describe('client default settings (Standard Red Notes): conflict-resolution & search-index', () => {
     const clientDefaultSettings = [
       SettingName.NAMES.ConflictResolutionStrategy,

@@ -902,6 +902,12 @@ export class ContainerConfigLoader {
     container.bind(TYPES.Auth_SMTP_USER).toConstantValue(env.get('SMTP_USER', true))
     container.bind(TYPES.Auth_SMTP_PASS).toConstantValue(env.get('SMTP_PASS', true))
     container.bind(TYPES.Auth_SMTP_FROM).toConstantValue(env.get('SMTP_FROM', true))
+    // Standard Red Notes: operator switch for scheduled email backups. Default OFF.
+    // The trigger job additionally requires SMTP to be configured before it will
+    // generate/send anything (see TriggerEmailBackupForAllUsers).
+    container
+      .bind<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED)
+      .toConstantValue(env.get('EMAIL_BACKUPS_ENABLED', true) === 'true')
     container.bind<EmailSenderInterface>(TYPES.Auth_EmailSender).toConstantValue(
       new SmtpEmailSender(
         {
@@ -1903,7 +1909,14 @@ export class ContainerConfigLoader {
         new TriggerEmailBackupForAllUsers(
           container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
           container.get<TriggerEmailBackupForUser>(TYPES.Auth_TriggerEmailBackupForUser),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
+          // Email delivery is "configured" when the SMTP sender reports itself
+          // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
         ),
       )
     container

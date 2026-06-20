@@ -10,14 +10,26 @@ import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSett
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
-import { ListedAuthorSecretsData } from '@standardnotes/settings'
+import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/settings'
 
 /**
  * Standard Red Notes: settings an admin (INTERNAL_TEAM_USER) is allowed to set
  * on behalf of another user via the admin panel. Keep this allow-list tight so
  * the admin endpoints can never be used to mutate arbitrary/sensitive settings.
  */
-const ADMIN_MANAGEABLE_SETTINGS: string[] = [SettingName.NAMES.AiEnabled, SettingName.NAMES.AiRequestLimit]
+const ADMIN_MANAGEABLE_SETTINGS: string[] = [
+  SettingName.NAMES.AiEnabled,
+  SettingName.NAMES.AiRequestLimit,
+  // Standard Red Notes: admin override of a user's scheduled email-backup cadence.
+  // Reuses the same get/set feature-flag endpoints; value is validated below.
+  SettingName.NAMES.EmailBackupFrequency,
+]
+
+/**
+ * Standard Red Notes: per-setting value validators for admin-managed settings.
+ * Only settings with stricter-than-free-form constraints need an entry.
+ */
+const VALID_EMAIL_BACKUP_FREQUENCIES: string[] = Object.values(EmailBackupFrequency)
 
 export class BaseAdminController extends BaseHttpController {
   constructor(
@@ -236,6 +248,19 @@ export class BaseAdminController extends BaseHttpController {
 
     if (!name || !ADMIN_MANAGEABLE_SETTINGS.includes(name)) {
       return this.json({ error: { message: `Setting ${name} is not admin-manageable.` } }, 400)
+    }
+
+    // Standard Red Notes: validate the email-backup cadence value so the admin
+    // panel can only set a real frequency (disabled | daily | weekly | monthly).
+    if (
+      name === SettingName.NAMES.EmailBackupFrequency &&
+      value != null &&
+      !VALID_EMAIL_BACKUP_FREQUENCIES.includes(value)
+    ) {
+      return this.json(
+        { error: { message: `Invalid email backup frequency '${value}'.` } },
+        400,
+      )
     }
 
     const result = await this.setSettingValue.execute({

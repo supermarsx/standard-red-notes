@@ -89,9 +89,17 @@ const EmailBackups = ({ application }: Props) => {
         <Title>Email backups</Title>
         {!isDesktopApplication() && (
           <Text className="mb-3">
-            Receive daily encrypted email backups of all your notes directly in your email inbox.
+            Receive encrypted email backups of all your notes directly in your email inbox, on the schedule you
+            choose below.
           </Text>
         )}
+
+        <Text className="mb-3">
+          Your data is emailed exactly as it is stored on the server: end-to-end encrypted. The server already holds
+          this ciphertext, so emailing it does not weaken your end-to-end encryption or expose your notes — anyone who
+          intercepts the email still cannot read it. You will need your account password to decrypt and restore the
+          backup. Backups are only sent if the server operator has enabled and configured email backups.
+        </Text>
 
         <div className={`${!hasAccount ? 'pointer-events-none cursor-default opacity-50' : ''}`}>
           <Subtitle>Frequency</Subtitle>

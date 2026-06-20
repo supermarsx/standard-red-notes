@@ -55,6 +55,13 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // opted in; deleting it removes the escrow. See the Security preferences
     // "Account recovery" opt-in for the full warning and tradeoff.
     AccountRecoveryEscrow: 'ACCOUNT_RECOVERY_ESCROW',
+    // Standard Red Notes: server-managed bookkeeping for scheduled email backups.
+    // Records the last time an email backup was triggered for the user, as a
+    // millisecond epoch string. Used by the due-calculation so a single cron can
+    // serve daily/weekly/monthly cadences and catch up missed runs. Server-written
+    // only (CLIENT-IMMUTABLE); unencrypted/unsensitive so the trigger job can read
+    // it without per-user key material.
+    EmailBackupLastSent: 'EMAIL_BACKUP_LAST_SENT',
   }
 
   get value(): string {

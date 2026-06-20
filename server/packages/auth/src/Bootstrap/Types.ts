@@ -330,6 +330,7 @@ const TYPES = {
   Auth_SMTP_USER: Symbol.for('Auth_SMTP_USER'),
   Auth_SMTP_PASS: Symbol.for('Auth_SMTP_PASS'),
   Auth_SMTP_FROM: Symbol.for('Auth_SMTP_FROM'),
+  Auth_EMAIL_BACKUPS_ENABLED: Symbol.for('Auth_EMAIL_BACKUPS_ENABLED'),
   Auth_BaseSubscriptionInvitesController: Symbol.for('Auth_BaseSubscriptionInvitesController'),
   Auth_BaseUserRequestsController: Symbol.for('Auth_BaseUserRequestsController'),
   Auth_BaseWebSocketsController: Symbol.for('Auth_BaseWebSocketsController'),
