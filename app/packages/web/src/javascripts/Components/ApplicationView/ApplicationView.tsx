@@ -11,6 +11,7 @@ import {
   LocalPrefDefaults,
 } from '@standardnotes/snjs'
 import { applyEditorFont } from '@/Utils/editorFont'
+import { reapplyPersistedCustomTheme } from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
 import { alertDialog, isIOS, RouteType } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
 import Footer from '@/Components/Footer/Footer'
@@ -234,6 +235,29 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
 
     return () => {
       removeSyncedObserver()
+      removeLaunchObserver()
+      removeLocalObserver()
+    }
+  }, [application])
+
+  // Standard Red Notes: re-assert the selected custom-theme :root override on
+  // launch and whenever the base theme changes (auto light/dark switches fire
+  // LocalPreferencesChanged), so it stays layered on top of the base theme.
+  useEffect(() => {
+    if (application.isLaunched()) {
+      reapplyPersistedCustomTheme()
+    }
+
+    const removeLaunchObserver = application.addEventObserver(async () => {
+      reapplyPersistedCustomTheme()
+    }, ApplicationEvent.Launched)
+
+    const removeLocalObserver = application.addEventObserver(async () => {
+      // Defer so the base theme's stylesheet has been applied first.
+      setTimeout(() => reapplyPersistedCustomTheme(), 50)
+    }, ApplicationEvent.LocalPreferencesChanged)
+
+    return () => {
       removeLaunchObserver()
       removeLocalObserver()
     }

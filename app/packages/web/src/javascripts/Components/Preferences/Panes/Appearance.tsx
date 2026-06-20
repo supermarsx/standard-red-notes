@@ -13,6 +13,7 @@ import PreferencesGroup from '../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../PreferencesComponents/PreferencesSegment'
 import EditorAppearance from './Appearance/EditorAppearance'
 import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
+import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
 
@@ -146,6 +147,7 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
                 />
               </div>
             </div>
+            <CustomThemesSection />
           </div>
         </PreferencesSegment>
       </PreferencesGroup>
