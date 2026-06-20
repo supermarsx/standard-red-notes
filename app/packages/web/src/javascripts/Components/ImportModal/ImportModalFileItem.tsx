@@ -11,6 +11,8 @@ const NoteImportTypeColors: Record<string, string> = {
   evernote: 'bg-[#14cc45] text-[#000]',
   simplenote: 'bg-[#3360cc] text-default',
   'google-keep': 'bg-[#fbbd00] text-[#000]',
+  onenote: 'bg-[#7719aa] text-default',
+  'zoho-notebook': 'bg-[#f9b21d] text-[#000]',
   aegis: 'bg-[#0d47a1] text-default',
   plaintext: 'bg-default border border-border',
   html: 'bg-accessory-tint-2',
@@ -24,6 +26,8 @@ const NoteImportTypeIcons: Record<string, string> = {
   evernote: 'evernote',
   simplenote: 'simplenote',
   'google-keep': 'gkeep',
+  onenote: 'rich-text',
+  'zoho-notebook': 'rich-text',
   aegis: 'aegis',
   plaintext: 'plain-text',
   html: 'rich-text',
@@ -205,6 +209,8 @@ const ImportModalFileItem = ({
                   <option value="evernote">Evernote</option>
                   <option value="simplenote">Simplenote</option>
                   <option value="google-keep">Google Keep</option>
+                  <option value="onenote">OneNote (exported HTML/Markdown page)</option>
+                  <option value="zoho-notebook">Zoho Notebook (exported HTML/.zhtml card)</option>
                   <option value="aegis">Aegis</option>
                   <option value="plaintext">Plaintext</option>
                   <option value="html">HTML</option>

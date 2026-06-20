@@ -25,6 +25,8 @@ import {
   isFile,
 } from '@standardnotes/models'
 import { HTMLConverter } from './HTMLConverter/HTMLConverter'
+import { OneNoteConverter } from './OneNoteConverter/OneNoteConverter'
+import { ZohoNotebookConverter } from './ZohoNotebookConverter/ZohoNotebookConverter'
 import { SuperConverter } from './SuperConverter/SuperConverter'
 import { CSVMarkdownConverter } from './CSVConverter/CSVMarkdownConverter'
 import { CSVSpreadsheetConverter } from './CSVConverter/CSVSpreadsheetConverter'
@@ -97,6 +99,11 @@ export class Importer {
     this.converters.add(new SimplenoteConverter())
     this.converters.add(new PlaintextConverter())
     this.converters.add(new EvernoteConverter(this._generateUuid))
+    // OneNote/Zoho must be registered before the generic HTMLConverter: the
+    // HTML converter matches any `text/html` file (isContentValid always true),
+    // so these stricter converters need to be checked first during detection.
+    this.converters.add(new OneNoteConverter())
+    this.converters.add(new ZohoNotebookConverter())
     this.converters.add(new HTMLConverter())
     this.converters.add(new SuperConverter(this.superConverterService))
     this.converters.add(new CSVMarkdownConverter())

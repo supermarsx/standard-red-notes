@@ -45,6 +45,24 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
           <Icon type="gkeep" className="mr-2 text-[#fbbd00]" />
           Google Keep
         </Button>
+        <Button
+          className="flex items-center !py-2"
+          title={c('ImportSource')
+            .t`OneNote has no open export format. Export a page as a Web Page (.html) or Markdown (.md) and import that. The proprietary .one file is not supported.`}
+          onClick={() => selectFiles('onenote')}
+        >
+          <Icon type="rich-text" className="mr-2 text-[#7719aa]" />
+          OneNote (HTML / Markdown)
+        </Button>
+        <Button
+          className="flex items-center !py-2"
+          title={c('ImportSource')
+            .t`Zoho Notebook exports a notebook as a .zip of HTML/.zhtml notecards. Unzip it and import the card files.`}
+          onClick={() => selectFiles('zoho-notebook')}
+        >
+          <Icon type="rich-text" className="mr-2 text-[#f9b21d]" />
+          Zoho Notebook (HTML / .zhtml)
+        </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('simplenote')}>
           <Icon type="simplenote" className="mr-2 text-[#3360cc]" />
           Simplenote
