@@ -13,7 +13,7 @@ import { run } from '@/Assistant/agent'
 import { ProxyProvider } from '@/Assistant/ProxyProvider'
 import { DirectProvider } from '@/Assistant/DirectProvider'
 import { Provider } from '@/Assistant/types'
-import { AssistantTools, AssistantToolContext } from '@/Assistant/tools'
+import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
 import { openOrFocusAssistantWindow } from '@/Assistant/assistantWindow'
 
@@ -49,6 +49,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
   const [isRunning, setIsRunning] = useState(false)
   const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null)
   const [queue, setQueue] = useState<string[]>([])
+  const [todos, setTodos] = useState<TodoItem[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Mirror of `messages` kept in sync synchronously so a queued run started from
@@ -125,6 +126,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
         { kind: 'user', id: newId(), text: promptText },
         { kind: 'assistant', id: assistantId, text: '', tools: [], streaming: true },
       ])
+      setTodos([])
       setIsRunning(true)
 
       const updateAssistant = (updater: (message: Extract<UIMessage, { kind: 'assistant' }>) => void) => {
@@ -161,7 +163,10 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
       // Sub-agent runner backing the "delegate" tool: a focused nested run that
       // shares the provider and tools but cannot itself delegate (recursion guard).
       const runSubAgent = async (task: string, contextText?: string): Promise<string> => {
-        const subTools = new AssistantTools(application, toolContext, false)
+        // Sub-agents share the tools but report neither todos nor delegation to the
+        // UI (the top-level run owns the visible plan).
+        const subContext: AssistantToolContext = { ...toolContext, onTodosChanged: undefined }
+        const subTools = new AssistantTools(application, subContext, false)
         const subPrompt = contextText ? `${task}\n\nContext:\n${contextText}` : task
         const sub = await run([{ role: 'user', content: subPrompt }], {
           provider: agentProvider,
@@ -184,6 +189,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
           }),
         presentPane: (paneId: AppPaneId) => presentPane(paneId),
         runSubAgent,
+        onTodosChanged: (next) => setTodos(next),
       }
 
       const tools = new AssistantTools(application, toolContext)
@@ -348,6 +354,38 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
           )}
         </div>
       </div>
+
+      {todos.length > 0 && (
+        <div className="border-b border-border bg-default px-4 py-2">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-passive-1">Plan</div>
+          <ul className="flex flex-col gap-1">
+            {todos.map((todo, index) => (
+              <li key={index} className="flex items-start gap-2 text-sm">
+                <span
+                  className={classNames(
+                    'mt-0.5 w-4 flex-shrink-0 text-center',
+                    todo.status === 'completed' && 'text-success',
+                    todo.status === 'in_progress' && 'text-info',
+                    todo.status === 'pending' && 'text-passive-1',
+                  )}
+                  aria-hidden
+                >
+                  {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◐' : '○'}
+                </span>
+                <span
+                  className={classNames(
+                    todo.status === 'completed' && 'text-passive-1 line-through',
+                    todo.status === 'in_progress' && 'font-medium text-text',
+                    todo.status === 'pending' && 'text-neutral',
+                  )}
+                >
+                  {todo.content}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div ref={scrollRef} className="flex-grow overflow-y-auto px-4 py-4">
         {!isConfigured && (

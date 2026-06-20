@@ -16,6 +16,16 @@ import { doesItemMatchSearchQuery } from '@/Utils/Items/Search/doesItemMatchSear
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ToolDefinition, ToolSession } from './types'
+import { retrieve } from './retrieval'
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TodoItem {
+  content: string
+  status: TodoStatus
+}
+
+const TODO_STATUSES: TodoStatus[] = ['pending', 'in_progress', 'completed']
 
 /**
  * PrefKeys the assistant is allowed to set via app.setPreference. Anything not
@@ -59,6 +69,8 @@ export interface AssistantToolContext {
    * final summary. Provided only at the top level; sub-agents cannot delegate.
    */
   runSubAgent?: (task: string, contextText?: string) => Promise<string>
+  /** Called when the agent rewrites its todo list, so the UI can render it. */
+  onTodosChanged?: (todos: TodoItem[]) => void
 }
 
 const DELEGATE_TOOL: ToolDefinition = {
@@ -106,6 +118,8 @@ export class AssistantTools implements ToolSession {
     private readonly enableDelegate = true,
   ) {}
 
+  private todos: TodoItem[] = []
+
   tools(): ToolDefinition[] {
     if (this.enableDelegate && this.context.runSubAgent) {
       return [...TOOL_DEFINITIONS, DELEGATE_TOOL]
@@ -134,6 +148,8 @@ export class AssistantTools implements ToolSession {
         return this.notesList(args)
       case 'notes.search':
         return this.notesSearch(args)
+      case 'notes.retrieve':
+        return this.notesRetrieve(args)
       case 'notes.read':
         return this.notesRead(args)
       case 'notes.create':
@@ -162,6 +178,8 @@ export class AssistantTools implements ToolSession {
         return this.appNavigate(args)
       case 'delegate':
         return this.delegate(args)
+      case 'todo.write':
+        return this.todoWrite(args)
       default:
         throw new Error(`Unhandled tool: ${name}`)
     }
@@ -219,6 +237,38 @@ export class AssistantTools implements ToolSession {
       )
       .slice(0, limit)
     return { count: matches.length, notes: matches.map(noteSummary) }
+  }
+
+  private notesRetrieve(args: Record<string, unknown>) {
+    const query = typeof args.query === 'string' ? args.query : ''
+    if (!query) {
+      throw new Error('A retrieval "query" string is required')
+    }
+    const limit = typeof args.limit === 'number' ? args.limit : 5
+    const perNote = args.perNote !== false
+    const docs = this.allNotes()
+      .filter((note) => !note.trashed)
+      .map((note) => ({ uuid: note.uuid, title: note.title, text: note.text }))
+    const results = retrieve(docs, query, { limit, perNote })
+    return { count: results.length, results }
+  }
+
+  private todoWrite(args: Record<string, unknown>) {
+    const rawTodos = Array.isArray(args.todos) ? args.todos : []
+    const todos: TodoItem[] = rawTodos
+      .map((entry): TodoItem => {
+        const item = (entry ?? {}) as Record<string, unknown>
+        const content = typeof item.content === 'string' ? item.content.trim() : ''
+        const status =
+          typeof item.status === 'string' && TODO_STATUSES.includes(item.status as TodoStatus)
+            ? (item.status as TodoStatus)
+            : 'pending'
+        return { content, status }
+      })
+      .filter((todo) => todo.content.length > 0)
+    this.todos = todos
+    this.context.onTodosChanged?.(todos)
+    return { ok: true, todos }
   }
 
   private notesRead(args: Record<string, unknown>) {
@@ -430,6 +480,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'notes.retrieve',
+    description:
+      'Relevance-rank the user notes for a question and return the most relevant passages (snippets) with their note uuids and scores. Prefer this over reading many notes when answering a question — it finds the right context across the whole corpus. Use notes.read on a returned uuid to get the full note.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The question or topic to retrieve relevant passages for.' },
+        limit: { type: 'number', description: 'Max passages to return (default 5).' },
+        perNote: { type: 'boolean', description: 'Return at most one passage per note (default true).' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'notes.read',
     description: 'Read the full text and tags of a single note by uuid.',
     mutating: false,
@@ -565,6 +630,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: { target: { type: 'string', enum: Object.keys(PANE_NAVIGATION_TARGETS) } },
       required: ['target'],
+    },
+  },
+  {
+    name: 'todo.write',
+    description:
+      'Record or update a short plan for a multi-step task. Pass the FULL todo list each time (it replaces the previous one). Keep exactly one item in_progress at a time and mark items completed as you finish them. Use this to plan before acting and to show the user progress; skip it for trivial one-step requests.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todos: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'Short imperative description of the step.' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+            },
+            required: ['content', 'status'],
+          },
+        },
+      },
+      required: ['todos'],
     },
   },
 ]
