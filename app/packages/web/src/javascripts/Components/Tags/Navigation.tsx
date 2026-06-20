@@ -18,6 +18,7 @@ import QuickSettingsButton from '../Footer/QuickSettingsButton'
 import VaultSelectionButton from '../Footer/VaultSelectionButton'
 import PreferencesButton from '../Footer/PreferencesButton'
 import TagSearchBar from './TagSearchBar'
+import PaneCollapseButton from '../Panes/PaneCollapseButton'
 
 type Props = {
   application: WebApplication
@@ -27,7 +28,7 @@ type Props = {
 }
 
 const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, children, id }, ref) => {
-  const { setPaneLayout, presentPane } = useResponsiveAppPane()
+  const { setPaneLayout, presentPane, toggleNavigationPane } = useResponsiveAppPane()
 
   const [hasPasscode, setHasPasscode] = useState(() => application.hasPasscode())
   useEffect(() => {
@@ -72,6 +73,14 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       )}
       ref={mergeRefs([ref, setElement])}
     >
+      <div className="hidden flex-shrink-0 items-center justify-end px-2 pt-2 md:flex">
+        <PaneCollapseButton
+          onClick={toggleNavigationPane}
+          label="Collapse tags panel"
+          icon="menu-close"
+          expanded={true}
+        />
+      </div>
       <div id="navigation-content" className="flex-grow overflow-y-auto overflow-x-hidden">
         <TagSearchBar navigationController={application.navigationController} />
         <SmartViewsSection

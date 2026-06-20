@@ -5,6 +5,7 @@ import { ForwardedRef, forwardRef } from 'react'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { usePaneSwipeGesture } from '../Panes/usePaneGesture'
 import NoteGroupView from './NoteGroupView'
+import EditorPaneExpandControls from './EditorPaneExpandControls'
 
 type Props = {
   application: WebApplication
@@ -25,6 +26,7 @@ const EditorPane = forwardRef(({ application, className, id }: Props, ref: Forwa
       ref={mergeRefs([ref, setElement])}
       className={`flex h-full flex-grow flex-col bg-default pt-safe-top ${className}`}
     >
+      <EditorPaneExpandControls />
       <NoteGroupView className={className} application={application} />
     </div>
   )

@@ -15,6 +15,8 @@ import SearchButton from './SearchButton'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { PaneController } from '@/Controllers/PaneController/PaneController'
 import ListItemVaultInfo from '../ListItemVaultInfo'
+import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
+import PaneCollapseButton from '@/Components/Panes/PaneCollapseButton'
 
 type Props = {
   application: WebApplication
@@ -53,6 +55,8 @@ const ContentListHeader = ({
   const matchesMd = useMediaQuery(MediaQueryBreakpoints.md)
   const isTouchScreen = !useMediaQuery(MediaQueryBreakpoints.pointerFine)
   const isTablet = matchesMd && isTouchScreen
+
+  const { isNavigationPaneCollapsed, toggleNavigationPane, toggleListPane } = useResponsiveAppPane()
 
   const [syncSubtitle, setSyncSubtitle] = useState('')
   const [outOfSync, setOutOfSync] = useState(false)
@@ -200,15 +204,39 @@ const ContentListHeader = ({
     return (
       <div className={'flex w-full justify-between md:flex'}>
         <NavigationMenuButton />
+        {isNavigationPaneCollapsed && (
+          <PaneCollapseButton
+            onClick={toggleNavigationPane}
+            label="Expand tags panel"
+            icon="menu-variant"
+            expanded={false}
+            className="mr-2 mt-1 lg:mt-0"
+          />
+        )}
         {FolderName}
         <div className="flex items-start gap-3 md:items-center">
           {SearchBarButton}
           {OptionsMenu}
           {AddButton}
+          <PaneCollapseButton
+            onClick={toggleListPane}
+            label="Collapse notes panel"
+            icon="menu-close"
+            expanded={true}
+            className="mt-1 lg:mt-0"
+          />
         </div>
       </div>
     )
-  }, [FolderName, SearchBarButton, OptionsMenu, AddButton])
+  }, [
+    FolderName,
+    SearchBarButton,
+    OptionsMenu,
+    AddButton,
+    isNavigationPaneCollapsed,
+    toggleNavigationPane,
+    toggleListPane,
+  ])
 
   const TabletLayout = useMemo(() => {
     return (
