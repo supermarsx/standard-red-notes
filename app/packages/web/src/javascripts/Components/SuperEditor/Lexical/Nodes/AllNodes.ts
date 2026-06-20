@@ -35,6 +35,9 @@ import { QrCodeNode } from './QrCodeNode'
 import { TradingViewNode } from './TradingViewNode'
 import { StockChartNode } from './StockChartNode'
 import { SqlQueryNode } from './SqlQueryNode'
+import { GanttChartNode } from './GanttChartNode'
+import { TimingDiagramNode } from './TimingDiagramNode'
+import { MusicStaffNode } from './MusicStaffNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -78,6 +81,9 @@ const CommonNodes = [
   TradingViewNode,
   StockChartNode,
   SqlQueryNode,
+  GanttChartNode,
+  TimingDiagramNode,
+  MusicStaffNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

@@ -45,6 +45,9 @@ import { GetQrCodeBlockOption } from '../Blocks/QrCode'
 import { GetTradingViewBlockOption } from '../Blocks/TradingView'
 import { GetStockChartBlockOption } from '../Blocks/StockChart'
 import { GetSqlQueryBlockOption } from '../Blocks/SqlQuery'
+import { GetGanttChartBlockOption } from '../Blocks/GanttChart'
+import { GetTimingDiagramBlockOption } from '../Blocks/TimingDiagram'
+import { GetMusicStaffBlockOption } from '../Blocks/MusicStaff'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -88,6 +91,9 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetTradingViewBlockOption(editor),
       GetStockChartBlockOption(editor),
       GetSqlQueryBlockOption(editor),
+      GetGanttChartBlockOption(editor),
+      GetTimingDiagramBlockOption(editor),
+      GetMusicStaffBlockOption(editor),
       GetDataviewBlockOption(editor),
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),

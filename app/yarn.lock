@@ -12235,6 +12235,7 @@ __metadata:
     "@types/react-dom": ^19.2.3
     "@types/wicg-file-system-access": ^2023.10.7
     "@zip.js/zip.js": ^2.8.26
+    abcjs: ^6.6.3
     autoprefixer: ^10.5.0
     babel-loader: ^10.1.1
     circular-dependency-plugin: ^5.2.2
@@ -12283,6 +12284,7 @@ __metadata:
     ttag: ^1.8.12
     typescript: 6.0.3
     unicode-script: ^1.2.0
+    wavedrom: ^3.6.1
     webextension-polyfill: ^0.12.0
     webpack: ^5.107.2
     webpack-dev-server: ^5.2.5
@@ -14611,6 +14613,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"abcjs@npm:^6.6.3":
+  version: 6.6.3
+  resolution: "abcjs@npm:6.6.3"
+  checksum: 3936f2fa0169a2d0d600f9fa4f2b54938177d80c9b92e1e3241ff1e6357198f495b997e5ab65b087395017a52b9ce2aefb75fa63388927e71bbc39233030bbb2
+  languageName: node
+  linkType: hard
+
 "abort-controller@npm:^3.0.0":
   version: 3.0.0
   resolution: "abort-controller@npm:3.0.0"
@@ -16084,6 +16093,20 @@ __metadata:
   dependencies:
     file-uri-to-path: 1.0.0
   checksum: 65b6b48095717c2e6105a021a7da4ea435aa8d3d3cd085cb9e85bcb6e5773cf318c4745c3f7c504412855940b585bdf9b918236612a1c7a7942491de176f1ae7
+  languageName: node
+  linkType: hard
+
+"bit-field@npm:^1.9.0":
+  version: 1.9.0
+  resolution: "bit-field@npm:1.9.0"
+  dependencies:
+    fs-extra: ^11.2.0
+    onml: ^2.1.0
+    tspan: ^0.4.0
+    yargs: ^17.7.2
+  bin:
+    bitfield: bin/bitfield.js
+  checksum: 4a4fdfd3965f71fdb53791a9fb7ddc6f4c9c1e9c94797c728d28dcec0ff8071f893c7449ba0524aad07a0010218dd59f66e98bdc240a2b39b9b04f8273af837f
   languageName: node
   linkType: hard
 
@@ -26729,6 +26752,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"logidrom@npm:^0.3.1":
+  version: 0.3.1
+  resolution: "logidrom@npm:0.3.1"
+  dependencies:
+    estraverse: ^5.1.0
+    tspan: ^0.4.0
+  checksum: b1405710436e5c9a81ac8fc7e9fc6b29ec67bb578d65190b357feb8a632fc8cb1c19e0608aa3723ad079365241ea0102706e4d7dd0826cc38b27600da3fc88eb
+  languageName: node
+  linkType: hard
+
 "logkitty@npm:^0.7.1":
   version: 0.7.1
   resolution: "logkitty@npm:0.7.1"
@@ -29116,6 +29149,15 @@ __metadata:
   dependencies:
     mimic-function: ^5.0.0
   checksum: eb08d2da9339819e2f9d52cab9caf2557d80e9af8c7d1ae86e1a0fef027d00a88e9f5bd67494d350df360f7c559fbb44e800b32f310fb989c860214eacbb561c
+  languageName: node
+  linkType: hard
+
+"onml@npm:^2.1.0":
+  version: 2.1.0
+  resolution: "onml@npm:2.1.0"
+  dependencies:
+    sax: ^1.2.1
+  checksum: 0b505224db95c170934ee5bc3f639dbde3fe59b6b9771ad4f6a15dc4339b9af06411bd29055f53a0c46ecfa2f944c20de55ece8a7cdb5ea94bd3a6a3f4ad81e5
   languageName: node
   linkType: hard
 
@@ -32333,7 +32375,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"sax@npm:^1.5.0":
+"sax@npm:^1.2.1, sax@npm:^1.5.0":
   version: 1.6.0
   resolution: "sax@npm:1.6.0"
   checksum: 83ae2a17f524bd35b1b7d1c867700b1fab41e4cbb4f7635b7e66398421e06ff2cd43ec651c151cb99c67c3681ec7d0493cb6a98fd2e7799ea15b5d0a4615f870
@@ -34873,6 +34915,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tspan@npm:^0.4.0":
+  version: 0.4.0
+  resolution: "tspan@npm:0.4.0"
+  checksum: e5954bdaf5ebc9588fae8770638439ad33fdf6d2f8e022a71457c7c02f08f3d9ba6129c6b857897ccc37c63b371bfde37ce6339df1e58b38e4444f3b42c6a045
+  languageName: node
+  linkType: hard
+
 "tsutils@npm:^3.21.0":
   version: 3.21.0
   resolution: "tsutils@npm:3.21.0"
@@ -36047,6 +36096,21 @@ __metadata:
     glob-to-regexp: ^0.4.1
     graceful-fs: ^4.1.2
   checksum: 44a6030e923fbbe2cbc51cd7fb7abdff58bc35ba68d6c3ca46e63b46f8b3502c7253e6ada384387e946df5515d3854227a84cec49eb88a315186f5c9a67a3e79
+  languageName: node
+  linkType: hard
+
+"wavedrom@npm:^3.6.1":
+  version: 3.6.1
+  resolution: "wavedrom@npm:3.6.1"
+  dependencies:
+    bit-field: ^1.9.0
+    json5: ^2.2.3
+    logidrom: ^0.3.1
+    onml: ^2.1.0
+    tspan: ^0.4.0
+  bin:
+    wavedrom: bin/cli.js
+  checksum: fb527f584ffa88fc4c7d9d6c8692a73c0f7aaaadeee0b8ee79d1036a59411f5af0519e0d4ab28d57de5939c67f1e729f6661bd271cca9902aac6e8a6dc9ad273
   languageName: node
   linkType: hard
 
