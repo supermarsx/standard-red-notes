@@ -54,6 +54,10 @@ export class PreferencesSessionController {
     // Standard Red Notes: sync conflict review & resolution pane.
     menuItems.push({ id: 'conflicts', label: 'Sync Conflicts', icon: 'sync', order: 9 })
 
+    // Standard Red Notes: Sync control pane — overview of synced vs. local-only
+    // items, the list of what's kept on this device, and selective-sync config.
+    menuItems.push({ id: 'sync', label: 'Sync', icon: 'sync', order: 9 })
+
     // Standard Red Notes: recently-opened notes history pane.
     menuItems.push({ id: 'recent-notes', label: 'Recent Notes', icon: 'history', order: 9 })
 

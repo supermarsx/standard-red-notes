@@ -19,6 +19,7 @@ const PREFERENCE_PANE_IDS = [
   'recent-notes',
   'achievements',
   'sharing',
+  'sync',
 ] as const
 
 export type PreferencePaneId = (typeof PREFERENCE_PANE_IDS)[number]

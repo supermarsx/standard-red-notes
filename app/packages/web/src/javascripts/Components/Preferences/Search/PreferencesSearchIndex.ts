@@ -138,4 +138,17 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
   conflicts: ['sync conflicts', 'conflict', 'merge', 'resolve conflicts', 'duplicates'],
 
   'recent-notes': ['recent notes', 'history', 'recently opened', 'recently viewed'],
+
+  sync: [
+    'sync',
+    'selective sync',
+    'local only',
+    'local-only',
+    'offline',
+    'device only',
+    'synced',
+    "what's synced",
+    'exclude from sync',
+    'keep on device',
+  ],
 }
