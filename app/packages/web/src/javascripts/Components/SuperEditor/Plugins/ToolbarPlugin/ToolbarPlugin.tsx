@@ -32,8 +32,16 @@ import {
   $getNearestBlockElementAncestorOrThrow,
 } from '@lexical/utils'
 import { $isLinkNode, TOGGLE_LINK_COMMAND, LinkNode } from '@lexical/link'
-import { $isListNode, ListNode } from '@lexical/list'
+import {
+  $isListNode,
+  ListNode,
+  INSERT_ORDERED_LIST_COMMAND,
+  INSERT_UNORDERED_LIST_COMMAND,
+  REMOVE_LIST_COMMAND,
+} from '@lexical/list'
 import { $isHeadingNode, $isQuoteNode } from '@lexical/rich-text'
+import { $patchStyleText, $getSelectionStyleValueForProperty, $setBlocksType } from '@lexical/selection'
+import { $createCodeNode } from '@lexical/code'
 import {
   ComponentPropsWithoutRef,
   ForwardedRef,
@@ -115,6 +123,49 @@ const blockTypeToIconName = {
   number: 'list-numbered',
   paragraph: 'paragraph',
   quote: 'quote',
+}
+
+const COLOR_PRESETS = [
+  '#000000',
+  '#5b5b5b',
+  '#e11d48',
+  '#ea580c',
+  '#ca8a04',
+  '#16a34a',
+  '#0891b2',
+  '#2563eb',
+  '#7c3aed',
+  '#db2777',
+]
+
+const FONT_FAMILIES: { name: string; value: string | null }[] = [
+  { name: 'Default', value: null },
+  { name: 'Sans-serif', value: 'sans-serif' },
+  { name: 'Serif', value: 'serif' },
+  { name: 'Monospace', value: 'monospace' },
+  { name: 'Arial', value: 'Arial, sans-serif' },
+  { name: 'Georgia', value: 'Georgia, serif' },
+  { name: 'Times New Roman', value: '"Times New Roman", serif' },
+  { name: 'Courier New', value: '"Courier New", monospace' },
+  { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
+]
+
+const MIN_FONT_SIZE = 10
+const MAX_FONT_SIZE = 48
+const FONT_SIZE_STEP = 2
+
+const parseFontSize = (value: string): number => {
+  const parsed = parseInt(value, 10)
+  return Number.isNaN(parsed) ? 16 : parsed
+}
+
+const toCamelCase = (text: string): string => {
+  const words = text.split(/[^a-zA-Z0-9]+/).filter((word) => word.length > 0)
+  return words
+    .map((word, index) =>
+      index === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+    )
+    .join('')
 }
 
 interface ToolbarButtonProps extends Omit<ComponentPropsWithoutRef<'button'>, 'name'> {
@@ -249,6 +300,20 @@ const ToolbarPlugin = () => {
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false)
   const insertAnchorRef = useRef<HTMLButtonElement>(null)
 
+  const [isTextColorMenuOpen, setIsTextColorMenuOpen] = useState(false)
+  const textColorAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const [isBgColorMenuOpen, setIsBgColorMenuOpen] = useState(false)
+  const bgColorAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const [isFontFamilyMenuOpen, setIsFontFamilyMenuOpen] = useState(false)
+  const fontFamilyAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false)
+  const caseAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const [currentFontFamily, setCurrentFontFamily] = useState<string>('')
+
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
 
@@ -350,6 +415,8 @@ const ToolbarPlugin = () => {
     setIsCode(selection.hasFormat('code'))
     setIsHighlight(selection.hasFormat('highlight'))
 
+    setCurrentFontFamily($getSelectionStyleValueForProperty(selection, 'font-family', ''))
+
     // Update links
     const node = getSelectedNode(selection)
     const parent = node.getParent()
@@ -439,6 +506,86 @@ const ToolbarPlugin = () => {
       }
     })
   }, [activeEditor])
+
+  const applyStyleText = useCallback(
+    (styles: Record<string, string | null>) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          $patchStyleText(selection, styles)
+        }
+      })
+    },
+    [activeEditor],
+  )
+
+  const stepFontSize = useCallback(
+    (direction: 1 | -1) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection)) {
+          return
+        }
+        const current = parseFontSize($getSelectionStyleValueForProperty(selection, 'font-size', '16px'))
+        const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, current + direction * FONT_SIZE_STEP))
+        $patchStyleText(selection, { 'font-size': `${next}px` })
+      })
+    },
+    [activeEditor],
+  )
+
+  const toggleList = useCallback(
+    (listType: 'number' | 'bullet') => {
+      const isActive = blockType === listType
+      if (isActive) {
+        activeEditor.dispatchCommand(REMOVE_LIST_COMMAND, undefined)
+      } else if (listType === 'number') {
+        activeEditor.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined)
+      } else {
+        activeEditor.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined)
+      }
+    },
+    [activeEditor, blockType],
+  )
+
+  const insertCodeBlock = useCallback(() => {
+    activeEditor.update(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection)) {
+        return
+      }
+      if (selection.isCollapsed()) {
+        $setBlocksType(selection, () => $createCodeNode())
+      } else {
+        const textContent = selection.getTextContent()
+        const codeNode = $createCodeNode()
+        selection.insertNodes([codeNode])
+        const newSelection = $getSelection()
+        if ($isRangeSelection(newSelection)) {
+          newSelection.insertRawText(textContent)
+        }
+      }
+    })
+  }, [activeEditor])
+
+  const transformCase = useCallback(
+    (transform: 'upper' | 'lower' | 'camel') => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection) || selection.isCollapsed()) {
+          return
+        }
+        const text = selection.getTextContent()
+        if (text.length === 0) {
+          return
+        }
+        const transformed =
+          transform === 'upper' ? text.toUpperCase() : transform === 'lower' ? text.toLowerCase() : toCamelCase(text)
+        selection.insertText(transformed)
+      })
+    },
+    [activeEditor],
+  )
 
   useEffect(() => {
     if (isMobile) {
@@ -770,6 +917,75 @@ const ToolbarPlugin = () => {
               className={isTextFormatMenuOpen ? 'md:bg-default' : ''}
             >
               <Icon type="text" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              name="Text color"
+              onSelect={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
+              ref={textColorAnchorRef}
+              className={isTextColorMenuOpen ? 'md:bg-default' : ''}
+            >
+              <span className="flex flex-col items-center justify-center leading-none">
+                <span className="text-sm font-semibold">A</span>
+                <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
+              </span>
+            </ToolbarButton>
+            <ToolbarButton
+              name="Highlight color"
+              onSelect={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
+              ref={bgColorAnchorRef}
+              className={isBgColorMenuOpen ? 'md:bg-default' : ''}
+            >
+              <span className="flex h-4 w-4 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-3.5 md:w-3.5">
+                H
+              </span>
+            </ToolbarButton>
+            <ToolbarButton
+              name="Decrease font size"
+              onSelect={() => stepFontSize(-1)}
+            >
+              <span className="text-xs font-semibold leading-none">A&minus;</span>
+            </ToolbarButton>
+            <ToolbarButton
+              name="Increase font size"
+              onSelect={() => stepFontSize(1)}
+            >
+              <span className="text-sm font-semibold leading-none">A+</span>
+            </ToolbarButton>
+            <ToolbarButton
+              name="Font family"
+              onSelect={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
+              ref={fontFamilyAnchorRef}
+              className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
+            >
+              <Icon type="text" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              name="Bulleted List"
+              iconName="list-bulleted"
+              active={blockType === 'bullet'}
+              onSelect={() => toggleList('bullet')}
+            />
+            <ToolbarButton
+              name="Numbered List"
+              iconName="list-numbered"
+              active={blockType === 'number'}
+              onSelect={() => toggleList('number')}
+            />
+            <ToolbarButton
+              name="Code Block"
+              iconName="code"
+              active={blockType === 'code'}
+              onSelect={insertCodeBlock}
+            />
+            <ToolbarButton
+              name="Change case"
+              onSelect={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
+              ref={caseAnchorRef}
+              className={isCaseMenuOpen ? 'md:bg-default' : ''}
+            >
+              <span className="text-xs font-semibold leading-none">aA</span>
               <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
             </ToolbarButton>
             <ToolbarButton
@@ -1130,6 +1346,184 @@ const ToolbarPlugin = () => {
             iconName={EmbedBlock.iconName}
             onClick={() => EmbedBlock.onSelect(editor)}
           />
+        </Menu>
+      </Popover>
+      <Popover
+        title="Text color"
+        anchorElement={textColorAnchorRef}
+        open={isTextColorMenuOpen}
+        togglePopover={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="p-3"
+        disableMobileFullscreenTakeover
+        disableFlip
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="mb-2 text-sm font-semibold text-text">Text color</div>
+        <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
+          {COLOR_PRESETS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              aria-label={`Text color ${color}`}
+              className="h-6 w-6 rounded border border-border"
+              style={{ backgroundColor: color }}
+              onClick={() => {
+                applyStyleText({ color })
+                setIsTextColorMenuOpen(false)
+              }}
+            />
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-2" onMouseDown={(e) => e.preventDefault()}>
+          <label className="flex items-center gap-2 text-sm">
+            Custom
+            <input
+              type="color"
+              className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
+              onChange={(event) => applyStyleText({ color: event.target.value })}
+            />
+          </label>
+          <button
+            type="button"
+            className="ml-auto rounded px-2 py-1 text-sm hover:bg-contrast"
+            onClick={() => {
+              applyStyleText({ color: null })
+              setIsTextColorMenuOpen(false)
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </Popover>
+      <Popover
+        title="Highlight color"
+        anchorElement={bgColorAnchorRef}
+        open={isBgColorMenuOpen}
+        togglePopover={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="p-3"
+        disableMobileFullscreenTakeover
+        disableFlip
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="mb-2 text-sm font-semibold text-text">Highlight color</div>
+        <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
+          {COLOR_PRESETS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              aria-label={`Highlight color ${color}`}
+              className="h-6 w-6 rounded border border-border"
+              style={{ backgroundColor: color }}
+              onClick={() => {
+                applyStyleText({ 'background-color': color })
+                setIsBgColorMenuOpen(false)
+              }}
+            />
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-2" onMouseDown={(e) => e.preventDefault()}>
+          <label className="flex items-center gap-2 text-sm">
+            Custom
+            <input
+              type="color"
+              className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
+              onChange={(event) => applyStyleText({ 'background-color': event.target.value })}
+            />
+          </label>
+          <button
+            type="button"
+            className="ml-auto rounded px-2 py-1 text-sm hover:bg-contrast"
+            onClick={() => {
+              applyStyleText({ 'background-color': null })
+              setIsBgColorMenuOpen(false)
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </Popover>
+      <Popover
+        title="Font family"
+        anchorElement={fontFamilyAnchorRef}
+        open={isFontFamilyMenuOpen}
+        togglePopover={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Font family" className="!px-0" onClick={() => setIsFontFamilyMenuOpen(false)}>
+          {FONT_FAMILIES.map((font) => {
+            const isActive =
+              font.value === null ? currentFontFamily === '' : currentFontFamily === font.value
+            return (
+              <MenuItem
+                key={font.name}
+                className={classNames(
+                  'overflow-hidden md:py-2',
+                  isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast',
+                )}
+                onClick={() => applyStyleText({ 'font-family': font.value })}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <span
+                  className="overflow-hidden text-ellipsis whitespace-nowrap"
+                  style={{ fontFamily: font.value ?? undefined }}
+                >
+                  {font.name}
+                </span>
+                {isActive && <Icon type="check" className="ml-auto" />}
+              </MenuItem>
+            )
+          })}
+        </Menu>
+      </Popover>
+      <Popover
+        title="Change case"
+        anchorElement={caseAnchorRef}
+        open={isCaseMenuOpen}
+        togglePopover={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Change case" className="!px-0" onClick={() => setIsCaseMenuOpen(false)}>
+          <MenuItem
+            className="overflow-hidden hover:bg-contrast md:py-2"
+            onClick={() => transformCase('upper')}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">UPPERCASE</span>
+          </MenuItem>
+          <MenuItem
+            className="overflow-hidden hover:bg-contrast md:py-2"
+            onClick={() => transformCase('lower')}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">lowercase</span>
+          </MenuItem>
+          <MenuItem
+            className="overflow-hidden hover:bg-contrast md:py-2"
+            onClick={() => transformCase('camel')}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">camelCase</span>
+          </MenuItem>
         </Menu>
       </Popover>
     </>
