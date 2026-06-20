@@ -1306,7 +1306,28 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'The agent works through the same encrypted sync as any client — it decrypts locally using the credentials you provide.',
           },
         ],
-        related: ['automation/mcp-setup', 'assistant/overview'],
+        related: ['automation/mcp-setup', 'automation/http-api', 'assistant/overview'],
+      },
+      {
+        id: 'automation/http-api',
+        title: 'The HTTP API',
+        summary: 'Your server exposes a documented HTTP API for sync, auth, and automation.',
+        blocks: [
+          {
+            type: 'paragraph',
+            text: 'Your self-hosted server exposes the full Standard Notes HTTP API through its gateway: PKCE sign-in, sync, items and files, settings, sessions, two-factor, collaboration, and this fork’s additions (app passwords, scoped MCP tokens, public share links, and the AI assistant proxy).',
+          },
+          {
+            type: 'paragraph',
+            text: 'The full reference — base URL and versioning, the authentication model, a curl walkthrough, and every endpoint grouped by area — lives in the project repository at docs/API.md (also linked from the README’s "API" section).',
+          },
+          {
+            type: 'callout',
+            variant: 'info',
+            text: 'Because notes are end-to-end encrypted, item payloads are ciphertext. The easiest faithful client is the bundled srn-client CLI, which runs the real sign-in and items-key protocol so changes sync back encrypted exactly like the app.',
+          },
+        ],
+        related: ['automation/mcp-overview', 'automation/capabilities', 'self-hosting/overview'],
       },
     ],
   },

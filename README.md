@@ -34,10 +34,12 @@ endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
 
 - [Why this fork](#why-this-fork)
 - [What's different / improved](#whats-different--improved)
+- [Feature comparison](#feature-comparison)
 - [Repository layout](#repository-layout)
 - [Docker quickstart](#docker-quickstart)
 - [Building from source](#building-from-source)
 - [Command-line tools](#command-line-tools)
+- [API](#api)
 - [Product direction](#product-direction)
 - [License](#license)
 
@@ -89,6 +91,42 @@ of features. The highlights below are all present in this repository:
 > locally but send the content you point them at to the AI provider you
 > configure. See the [onboarding guide](docs/onboarding.md#security-what-leaves-your-device)
 > for an honest breakdown of what crosses the end-to-end boundary.
+
+## Feature comparison
+
+How the upstream hosted **Standard Notes** offering compares with **Standard Red
+Notes** (this fork). Standard Notes is excellent software with a sustainable
+business; it offers a capable free tier and reserves a number of "Productivity"
+features for its paid subscription. Standard Red Notes targets self-hosting
+instead: every included feature is on for every account, with no paid tier — the
+trade-off is that **you run and maintain the server yourself**. This table is
+cross-checked against the "What's different / improved" features this repository
+actually ships.
+
+| Capability | Standard Notes (free) | Standard Notes (paid / Productivity) | Standard Red Notes (this fork) |
+| --- | --- | --- | --- |
+| End-to-end encryption | Yes | Yes | Yes |
+| Unlimited notes, tags, nested folders | Yes | Yes | Yes |
+| Multi-device sync | Yes | Yes | Yes |
+| Plain text / basic editing | Yes | Yes | Yes |
+| Rich / Super block editor, Markdown, code, advanced note types | Limited | Subscription-gated | Included (Super blocks, Canvas, Bases, Calendar, Kanban, Timeline, code sandboxes) |
+| Themes / appearance | Default theme | Extra themes via subscription | Included (auto light/dark + extra themes) |
+| Encrypted file attachments / storage | Not on free tier | Subscription-gated (storage quota) | Included (limits are your server's storage) |
+| Note history / revisions | Short retention | Extended retention via subscription | Included (retention is your server's config) |
+| Two-factor authentication | Yes | Yes | Yes (TOTP, magic link, WebAuthn) |
+| Encrypted backups & email backups | Local export | Email/cloud backups via subscription | Included (export, and email/automatic where configured) |
+| Collaboration / shared vaults | No | Yes (on supported plans) | Included (vaults, contacts, invites, realtime relay) |
+| AI assistant / actions | Not offered | Not offered | Included (bring-your-own OpenAI-compatible endpoint or server proxy) |
+| Public share links, dead-man's switch, email reminders | No | No | Included (fork-specific) |
+| App passwords / scoped MCP tokens / MCP bridge | No | No | Included (fork-specific) |
+| Hosting | Managed by Standard Notes | Managed by Standard Notes | Self-hosted by you |
+| Cost | Free | Paid subscription | Free (you provide the server) |
+
+> "Subscription-gated" reflects upstream's hosted product at a high level and may
+> shift over time; check [standardnotes.com](https://standardnotes.com) for their
+> current plans. The right-most column reflects what this repository ships today.
+> Self-hosting means you are responsible for running, securing, and backing up
+> the server.
 
 ## Repository layout
 
@@ -183,6 +221,22 @@ the app/server lockfiles):
 - **`srn-server`** — operator helpers for the Docker stack: health checks, stack
   status, logs, config validation, and thin `docker compose` wrappers. Zero
   runtime dependencies. See [`cli/srn-server/README.md`](cli/srn-server/README.md).
+
+## API
+
+Your self-hosted server exposes the full Standard Notes HTTP API through the API
+gateway — sign-in (PKCE), sync (`POST /v1/items`), items/files, settings,
+sessions, two-factor, collaboration, plus this fork's additions (app passwords,
+MCP tokens, public share links, the AI assistant proxy, and more).
+
+See **[docs/API.md](docs/API.md)** for the full reference: base URL and
+versioning, the authentication model (PKCE + bcrypt-derived server password,
+`Authorization: Bearer` access tokens, refresh), a curl walkthrough, and every
+endpoint grouped by area. Because notes are end-to-end encrypted, item payloads
+are ciphertext — the easiest faithful client is the bundled
+[`srn-client`](cli/srn-client/README.md), which runs the real protocol. The API
+docs are also linked in-app under **Preferences → Documentation → Automation
+(MCP) → The HTTP API**.
 
 ## Product direction
 
