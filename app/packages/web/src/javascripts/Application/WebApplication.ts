@@ -756,6 +756,46 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
     return (await response.json()) as T
   }
+
+  /**
+   * Authenticated JSON POST helper for server-mediated integrations (e.g. the
+   * optional "Publish note to GitHub" feature). Sends the access token as a
+   * Bearer header, like {@link assistantStreamRequest}, and returns the parsed
+   * JSON response plus the HTTP status so callers can map errors.
+   *
+   * NOTE: the caller is responsible for the privacy disclosure — this can carry
+   * decrypted note content and a GitHub PAT to the server.
+   */
+  public async serverJsonRequest<T>(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T }> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    const url = `${host.replace(/\/$/, '')}${path}`
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
+
+    let data: T
+    try {
+      data = (await response.json()) as T
+    } catch {
+      data = {} as T
+    }
+
+    return { status: response.status, ok: response.ok, data }
+  }
 }
 
 function extractAccessToken(session: unknown): string | undefined {

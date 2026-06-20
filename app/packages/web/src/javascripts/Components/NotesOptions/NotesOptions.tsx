@@ -38,6 +38,8 @@ import { encryptShare } from '../SharedView/shareCrypto'
 import NarrationModal from './NarrationModal'
 import SplitNoteModal from './SplitNoteModal'
 import SuggestTagsModal from './SuggestTagsModal'
+import AutoOrganizeModal from './AutoOrganizeModal'
+import PublishToGitHubModal from './PublishToGitHubModal'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
@@ -54,6 +56,9 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const [narrationOpen, setNarrationOpen] = useState(false)
   const [splitOpen, setSplitOpen] = useState(false)
   const [suggestTagsOpen, setSuggestTagsOpen] = useState(false)
+  const [publishGitHubOpen, setPublishGitHubOpen] = useState(false)
+  const [organizeNoteOpen, setOrganizeNoteOpen] = useState(false)
+  const [organizeAllOpen, setOrganizeAllOpen] = useState(false)
   const { toggleAppPane } = useResponsiveAppPane()
 
   const {
@@ -262,6 +267,30 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         />
       )}
       {notes.length === 1 && (
+        <PublishToGitHubModal
+          application={application}
+          note={notes[0]}
+          isOpen={publishGitHubOpen}
+          close={() => setPublishGitHubOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
+        <AutoOrganizeModal
+          application={application}
+          note={notes[0]}
+          mode="current-note"
+          isOpen={organizeNoteOpen}
+          close={() => setOrganizeNoteOpen(false)}
+        />
+      )}
+      <AutoOrganizeModal
+        application={application}
+        note={notes[0]}
+        mode="all-notes"
+        isOpen={organizeAllOpen}
+        close={() => setOrganizeAllOpen(false)}
+      />
+      {notes.length === 1 && (
         <>
           <MenuSection>
             <MenuItem onClick={openRevisionHistoryModal}>
@@ -417,6 +446,17 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         {notes.length === 1 && (
           <MenuItem
             onClick={() => {
+              setPublishGitHubOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="upload" className={iconClass} />
+            Publish to GitHub…
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
               setNarrationOpen(true)
             }}
           >
@@ -446,6 +486,26 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
             Suggest tags (AI)
           </MenuItem>
         )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setOrganizeNoteOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault || !aiAvailability.available}
+          >
+            <Icon type="folder" className={iconClass} />
+            Auto-organize note (AI)
+          </MenuItem>
+        )}
+        <MenuItem
+          onClick={() => {
+            setOrganizeAllOpen(true)
+          }}
+          disabled={!aiAvailability.available}
+        >
+          <Icon type="folder" className={iconClass} />
+          Auto-organize all notes (AI)
+        </MenuItem>
         {application.platform === Platform.Android && (
           <MenuItem onClick={shareSelectedItems}>
             <Icon type="share" className={iconClass} />

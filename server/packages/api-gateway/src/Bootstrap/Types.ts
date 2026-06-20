@@ -47,4 +47,6 @@ export const TYPES = {
   ApiGateway_EndpointResolver: Symbol.for('ApiGateway_EndpointResolver'),
   ApiGateway_GRPCAuthClient: Symbol.for('ApiGateway_GRPCAuthClient'),
   ApiGateway_GRPCSyncingClient: Symbol.for('ApiGateway_GRPCSyncingClient'),
+  // Standard Red Notes: optional server-mediated "Publish note to GitHub" use-case.
+  ApiGateway_GitHubPublishService: Symbol.for('ApiGateway_GitHubPublishService'),
 }

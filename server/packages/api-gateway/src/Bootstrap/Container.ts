@@ -35,6 +35,7 @@ import { SNSDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
 import { DomainEventFactory } from '../Event/DomainEventFactory'
 import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
+import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 
 export class ContainerConfigLoader {
   async load(configuration?: {
@@ -178,6 +179,13 @@ export class ContainerConfigLoader {
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
       .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
+
+    // Standard Red Notes: optional server-mediated "Publish note to GitHub".
+    // Uses the runtime's global fetch for the outbound GitHub Contents API call.
+    // The service holds no credentials of its own — the PAT arrives per request.
+    container
+      .bind<GitHubPublishService>(TYPES.ApiGateway_GitHubPublishService)
+      .toConstantValue(new GitHubPublishService(globalThis.fetch.bind(globalThis) as unknown as FetchLike))
 
     // Middleware
     container
