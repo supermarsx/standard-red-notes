@@ -6,6 +6,7 @@ import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
+import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
@@ -81,9 +82,10 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
   )
 
   return (
-    <PreferencesGroup>
-      <PreferencesSegment>
-        <Title>Share Links</Title>
+    <PreferencesPane>
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Share Links</Title>
         <Text>
           Share links let anyone with the URL read a note (or tag bundle) without an account. The content is encrypted
           in your browser under a secret key that lives only in the link's fragment and is never sent to the server —
@@ -117,8 +119,9 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
               {!share.revoked && <Button label="Revoke" onClick={() => handleRevoke(share.uuid)} />}
             </div>
           ))}
-      </PreferencesSegment>
-    </PreferencesGroup>
+        </PreferencesSegment>
+      </PreferencesGroup>
+    </PreferencesPane>
   )
 }
 
