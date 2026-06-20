@@ -36,6 +36,7 @@ import { isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { encryptShare } from '../SharedView/shareCrypto'
 import NarrationModal from './NarrationModal'
+import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -148,6 +149,21 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
       console.error(error)
       addToast({ type: ToastType.Error, message: 'Failed to create share link.' })
     }
+  }, [application, notes])
+
+  // Standard Red Notes: download every image attached to a single note (uploaded
+  // image files referenced by the note, plus best-effort remote image URLs) as a
+  // single ZIP named after the note. Empty/partial-failure handling lives in the
+  // helper, which surfaces toasts.
+  const downloadImages = useCallback(() => {
+    const note = notes[0]
+    if (!note) {
+      return
+    }
+    downloadNoteImagesAsZip(application, note).catch((error) => {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to download images.' })
+    })
   }, [application, notes])
 
   const closeMenuAndToggleNotesList = useCallback(() => {
@@ -363,6 +379,12 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <Icon type="download" className={iconClass} />
           Export
         </MenuItem>
+        {notes.length === 1 && (
+          <MenuItem onClick={downloadImages}>
+            <Icon type="image" className={iconClass} />
+            Download images (.zip)
+          </MenuItem>
+        )}
         {notes.length === 1 && (
           <MenuItem onClick={createShareLink}>
             <Icon type="link" className={iconClass} />
