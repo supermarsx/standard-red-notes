@@ -37,6 +37,8 @@ type Props = {
   locked: boolean
   onFocus: () => void
   onBlur: (event: FocusEvent) => void
+  customBackgroundColor?: string
+  customTextColor?: string
 }
 
 export type PlainEditorInterface = {
@@ -44,7 +46,7 @@ export type PlainEditorInterface = {
 }
 
 export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
-  ({ application, spellcheck, controller, locked, onFocus, onBlur }, ref) => {
+  ({ application, spellcheck, controller, locked, onFocus, onBlur, customBackgroundColor, customTextColor }, ref) => {
     const [editorText, setEditorText] = useState<string | undefined>()
     const [showPreview, setShowPreview] = useState(false)
     const [textareaUnloading, setTextareaUnloading] = useState(false)
@@ -292,8 +294,16 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
       return null
     }
 
+    // Standard Red Notes: per-note custom appearance. When no override is set
+    // these are `undefined`, so no inline color is emitted and the theme/CSS
+    // fully controls the surface.
+    const surfaceStyle = {
+      backgroundColor: customBackgroundColor,
+      color: customTextColor,
+    }
+
     return (
-      <div className="flex h-full flex-grow flex-col overflow-hidden">
+      <div className="flex h-full flex-grow flex-col overflow-hidden" style={surfaceStyle}>
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-border bg-contrast px-2 py-1 text-xs">
           <button
             type="button"
@@ -319,6 +329,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
         {showPreview ? (
           <div
             className={classNames('markdown-preview font-editor flex-grow overflow-auto p-4', responsiveFontSize)}
+            style={surfaceStyle}
             dangerouslySetInnerHTML={{ __html: sanitizeHtmlString(markdownToHtml(editorText ?? '')) }}
           />
         ) : (
@@ -333,6 +344,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
             ref={onRef}
             spellCheck={spellcheck}
             value={editorText}
+            style={surfaceStyle}
             className={classNames(
               'editable font-editor flex-grow',
               lineHeight && `leading-${lineHeight.toLowerCase()}`,

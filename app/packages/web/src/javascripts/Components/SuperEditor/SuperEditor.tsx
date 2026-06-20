@@ -53,6 +53,8 @@ type Props = {
   readonly?: boolean
   onFocus?: (event: FocusEvent) => void
   onBlur?: (event: FocusEvent) => void
+  customBackgroundColor?: string
+  customTextColor?: string
 }
 
 export const SuperEditor: FunctionComponent<Props> = ({
@@ -64,6 +66,8 @@ export const SuperEditor: FunctionComponent<Props> = ({
   readonly,
   onFocus,
   onBlur,
+  customBackgroundColor,
+  customTextColor,
 }) => {
   const note = useRef(controller.item)
   const changeEditorFunction = useRef<ChangeEditorFunction | undefined>(undefined)
@@ -291,6 +295,10 @@ export const SuperEditor: FunctionComponent<Props> = ({
         {
           '--line-height': EditorLineHeightValues[lineHeight],
           '--font-size': responsiveFontSize,
+          // Standard Red Notes: per-note custom appearance. Omitted (undefined)
+          // when the note has no override so the theme controls the surface.
+          backgroundColor: customBackgroundColor,
+          color: customTextColor,
         } as CSSProperties
       }
       ref={ref}

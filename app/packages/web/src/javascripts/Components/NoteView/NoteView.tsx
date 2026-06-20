@@ -55,6 +55,7 @@ import ModalOverlay from '../Modal/ModalOverlay'
 import NoteConflictResolutionModal from './NoteConflictResolutionModal/NoteConflictResolutionModal'
 import Icon from '../Icon/Icon'
 import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPadding'
+import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
 
 function sortAlphabetically(array: ComponentInterface[]): ComponentInterface[] {
   return array.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
@@ -85,6 +86,8 @@ type State = {
   editorFeatureIdentifier?: string
   noteType?: NoteType
   focusModeEnabled?: boolean
+  customBackgroundColor?: string
+  customTextColor?: string
 
   conflictedNotes: SNNote[]
   showConflictResolutionModal: boolean
@@ -135,6 +138,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       noteType: this.controller.item.noteType,
       conflictedNotes: [],
       showConflictResolutionModal: false,
+      customBackgroundColor: getNoteCustomBackgroundColor(this.controller.item),
+      customTextColor: getNoteCustomTextColor(this.controller.item),
     }
 
     this.noteViewElementRef = createRef<HTMLDivElement>()
@@ -324,6 +329,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     this.reloadSpellcheck().catch(console.error)
 
     this.reloadLineWidth()
+
+    this.reloadAppearanceColors(note)
 
     const isTemplateNoteInsertedToBeInteractableWithEditor = source === PayloadEmitSource.LocalInserted && note.dirty
     if (isTemplateNoteInsertedToBeInteractableWithEditor) {
@@ -669,6 +676,18 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     })
   }
 
+  reloadAppearanceColors(note: SNNote) {
+    const customBackgroundColor = getNoteCustomBackgroundColor(note)
+    const customTextColor = getNoteCustomTextColor(note)
+
+    if (customBackgroundColor !== this.state.customBackgroundColor || customTextColor !== this.state.customTextColor) {
+      this.setState({
+        customBackgroundColor,
+        customTextColor,
+      })
+    }
+  }
+
   async reloadPreferences() {
     log(LoggingDomain.NoteView, 'Reload preferences')
     const monospaceFont = this.application.preferences.getLocalValue(
@@ -871,6 +890,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           <div
             id="editor-title-bar"
             className="content-title-bar section-title-bar z-editor-title-bar w-full bg-default pt-4"
+            style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
           >
             <div
               className={classNames(
@@ -894,6 +914,11 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                     spellCheck={false}
                     value={this.state.editorTitle}
                     autoComplete="off"
+                    style={
+                      this.state.customTextColor
+                        ? { backgroundColor: 'transparent', color: this.state.customTextColor }
+                        : undefined
+                    }
                   />
                 </div>
                 <NoteStatusIndicator
@@ -987,11 +1012,16 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               locked={this.state.noteLocked || !!this.state.readonly}
               onFocus={this.onEditorFocus}
               onBlur={this.onEditorBlur}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
             />
           )}
 
           {editorMode === 'super' && (
-            <div className={classNames('blocks-editor w-full flex-grow overflow-hidden')}>
+            <div
+              className={classNames('blocks-editor w-full flex-grow overflow-hidden')}
+              style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
+            >
               <SuperEditor
                 key={this.note.uuid}
                 application={this.application}
@@ -1002,6 +1032,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 readonly={this.state.readonly}
                 onFocus={this.onEditorFocus}
                 onBlur={this.onEditorBlur}
+                customBackgroundColor={this.state.customBackgroundColor}
+                customTextColor={this.state.customTextColor}
               />
             </div>
           )}

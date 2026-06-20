@@ -21,6 +21,7 @@ import { MenuItemIconSize } from '@/Constants/TailwindClassNames'
 import { KeyboardShortcutIndicator } from '../KeyboardShortcutIndicator/KeyboardShortcutIndicator'
 import { NoteAttributes } from './NoteAttributes'
 import { SpellcheckOptions } from './SpellcheckOptions'
+import { NoteAppearanceOptions } from './NoteAppearanceOptions'
 import { NoteSizeWarning } from './NoteSizeWarning'
 import { iconClass } from './ClassNames'
 import SuperNoteOptions from './SuperNoteOptions'
@@ -445,6 +446,14 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
               />
             </MenuSection>
           )}
+
+          <MenuSection>
+            <NoteAppearanceOptions
+              notesController={notesController}
+              note={notes[0]}
+              disabled={areSomeNotesInReadonlySharedVault}
+            />
+          </MenuSection>
 
           <NoteAttributes className="mb-2" application={application} note={notes[0]} />
 

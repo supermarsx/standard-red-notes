@@ -32,6 +32,7 @@ import { NotesControllerInterface } from './NotesControllerInterface'
 import { CrossControllerEvent } from '../CrossControllerEvent'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { createNoteExport } from '../../Utils/NoteExportUtils'
+import { NoteCustomBackgroundColorKey, NoteCustomTextColorKey } from '../../Utils/NoteAppearance'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
 
@@ -442,6 +443,34 @@ export class NotesController
       MutationType.NoUpdateUserTimestamps,
     )
     this.application.sync.sync().catch(console.error)
+  }
+
+  /**
+   * Standard Red Notes: per-note custom appearance. Background/text colors are
+   * persisted in the note's encrypted appData (no models/server change). Passing
+   * `undefined` for a color clears that override and reverts to theme defaults.
+   */
+  async setNoteAppearanceColors(
+    note: SNNote,
+    colors: { backgroundColor?: string | undefined; textColor?: string | undefined },
+  ) {
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        if ('backgroundColor' in colors) {
+          mutator.setAppDataItem(NoteCustomBackgroundColorKey, colors.backgroundColor)
+        }
+        if ('textColor' in colors) {
+          mutator.setAppDataItem(NoteCustomTextColorKey, colors.textColor)
+        }
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  async resetNoteAppearance(note: SNNote) {
+    await this.setNoteAppearanceColors(note, { backgroundColor: undefined, textColor: undefined })
   }
 
   async addTagToSelectedNotes(tag: SNTag): Promise<void> {
