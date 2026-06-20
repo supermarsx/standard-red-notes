@@ -6,7 +6,8 @@ import {
   SmartViewDefaultIconName,
   VectorIconNameOrEmoji,
 } from '@standardnotes/snjs'
-import { action, makeObservable, observable } from 'mobx'
+import { action, computed, makeObservable, observable } from 'mobx'
+import { PredicatePreset, presetToJsonString, validatePredicateJsonString } from './PredicateGuidance'
 
 export class AddSmartViewModalController {
   isAddingSmartView = false
@@ -39,7 +40,22 @@ export class AddSmartViewModalController {
       isCustomJsonValidPredicate: observable,
       setCustomPredicateJson: action,
       setIsCustomJsonValidPredicate: action,
+      insertPreset: action,
+
+      customPredicateValidationError: computed,
     })
+  }
+
+  /**
+   * Live validation of the custom JSON the user is typing. Returns the
+   * human-readable error (or undefined when valid/empty) so the UI can show
+   * inline feedback without the user having to click "Validate".
+   */
+  get customPredicateValidationError(): string | undefined {
+    if (this.customPredicateJson === undefined || this.customPredicateJson.length === 0) {
+      return undefined
+    }
+    return validatePredicateJsonString(this.customPredicateJson).error
   }
 
   setIsAddingSmartView = (isAddingSmartView: boolean) => {
@@ -60,10 +76,24 @@ export class AddSmartViewModalController {
 
   setCustomPredicateJson = (customPredicateJson: string) => {
     this.customPredicateJson = customPredicateJson
+    if (customPredicateJson.length === 0) {
+      this.isCustomJsonValidPredicate = undefined
+    } else {
+      this.isCustomJsonValidPredicate = validatePredicateJsonString(customPredicateJson).isValid
+    }
   }
 
   setIsCustomJsonValidPredicate = (isCustomJsonValidPredicate: boolean | undefined) => {
     this.isCustomJsonValidPredicate = isCustomJsonValidPredicate
+  }
+
+  /**
+   * Insert a preset predicate into the custom JSON field, pretty-printed and
+   * marked valid so the user can immediately save or tweak it.
+   */
+  insertPreset = (preset: PredicatePreset) => {
+    this.customPredicateJson = presetToJsonString(preset)
+    this.isCustomJsonValidPredicate = true
   }
 
   closeModal = () => {

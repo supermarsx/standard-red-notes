@@ -7,6 +7,7 @@ import { Platform, SmartViewDefaultIconName, VectorIconNameOrEmoji } from '@stan
 import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AddSmartViewModalController } from './AddSmartViewModalController'
+import { getPredicatePresets } from './PredicateGuidance'
 import TabPanel from '../Tabs/TabPanel'
 import { useTabState } from '../Tabs/useTabState'
 import TabsContainer from '../Tabs/TabsContainer'
@@ -67,9 +68,12 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
     customPredicateJson,
     setCustomPredicateJson,
     isCustomJsonValidPredicate,
-    setIsCustomJsonValidPredicate,
     validateAndPrettifyCustomPredicate,
+    customPredicateValidationError,
+    insertPreset,
   } = controller
+
+  const presets = useMemo(() => getPredicatePresets(), [])
 
   const titleInputRef = useRef<HTMLInputElement>(null)
   const customJsonInputRef = useRef<HTMLTextAreaElement>(null)
@@ -211,39 +215,104 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
                   value={customPredicateJson}
                   onChange={(event) => {
                     setCustomPredicateJson(event.target.value)
-                    setIsCustomJsonValidPredicate(undefined)
                   }}
                   spellCheck={false}
                   ref={customJsonInputRef}
+                  aria-label="Custom predicate JSON"
+                  aria-invalid={isCustomJsonValidPredicate === false}
+                  aria-describedby="custom-predicate-validation"
                 />
-                {customPredicateJson && isCustomJsonValidPredicate === false && (
-                  <div className="border-t border-border px-2.5 py-1.5 text-sm text-danger">
-                    Invalid JSON. Double check your entry and try again.
-                  </div>
-                )}
+                <div
+                  id="custom-predicate-validation"
+                  aria-live="polite"
+                  className="border-t border-border px-2.5 py-1.5 text-sm"
+                >
+                  {customPredicateJson && isCustomJsonValidPredicate === false && (
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <Icon type="warning" className="mt-0.5 flex-shrink-0" size="small" />
+                      <span>{customPredicateValidationError ?? 'Invalid predicate. Double check your entry.'}</span>
+                    </div>
+                  )}
+                  {customPredicateJson && isCustomJsonValidPredicate === true && (
+                    <div className="flex items-center gap-1.5 text-success">
+                      <Icon type="check-circle-filled" className="flex-shrink-0" size="small" />
+                      <span>Valid predicate. This smart view is ready to save.</span>
+                    </div>
+                  )}
+                  {!customPredicateJson && (
+                    <span className="text-passive-0">
+                      Paste a predicate below, or pick an example from the list underneath.
+                    </span>
+                  )}
+                </div>
               </TabPanel>
             </TabsContainer>
             {tabState.activeTab === 'custom' && (
-              <div className="flex flex-col gap-1.5 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3">
-                <Disclosure
-                  store={jsonExamplesDisclosure}
-                  className="flex items-center justify-between focus:shadow-none focus:outline-none"
-                >
-                  <div className="text-sm font-semibold">Examples</div>
-                  <Icon type={showingJsonExamples ? 'chevron-up' : 'chevron-down'} />
-                </Disclosure>
-                <DisclosureContent
-                  store={jsonExamplesDisclosure}
-                  className={classNames(showingJsonExamples && 'flex', 'flex-col gap-2.5')}
-                >
-                  <div className="text-sm font-medium">1. List notes that are conflicted copies of another note:</div>
-                  <CopyableCodeBlock code={ConflictedNotesExampleCode} />
-                  <div className="text-sm font-medium">
-                    2. List notes that have the tag `todo` but not the tag `completed`:
+              <>
+                <div className="flex flex-col gap-1.5 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <Icon type="info" className="flex-shrink-0 text-info" size="small" />
+                    <div className="text-sm font-semibold">What is a smart view?</div>
                   </div>
-                  <CopyableCodeBlock code={ComplexCompoundExampleCode} />
-                </DisclosureContent>
-              </div>
+                  <div className="text-sm text-passive-0">
+                    A smart view automatically collects every note that matches a rule you define, called a{' '}
+                    <span className="font-semibold">predicate</span>. A predicate is a small JSON object with three
+                    parts: a <span className="font-mono">keypath</span> (the field to look at, such as{' '}
+                    <span className="font-mono">pinned</span> or <span className="font-mono">tags</span>), an{' '}
+                    <span className="font-mono">operator</span> (such as <span className="font-mono">=</span>,{' '}
+                    <span className="font-mono">includes</span>, or <span className="font-mono">{'>'}</span>), and a{' '}
+                    <span className="font-mono">value</span> to compare against. Use{' '}
+                    <span className="font-mono">and</span>, <span className="font-mono">or</span>, and{' '}
+                    <span className="font-mono">not</span> operators to combine several rules. Pick a ready-made example
+                    below to get started, then tweak it.
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2 rounded-md border border-border px-4 py-3">
+                  <div className="text-sm font-semibold">Insert an example</div>
+                  <div className="flex flex-wrap gap-2">
+                    {presets.map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        title={preset.description}
+                        className="flex items-center gap-1.5 rounded border border-border bg-default px-2.5 py-1 text-sm hover:bg-contrast focus:bg-contrast"
+                        onClick={() => {
+                          insertPreset(preset)
+                          customJsonInputRef.current?.focus()
+                        }}
+                      >
+                        <Icon type="add" size="small" className="flex-shrink-0" />
+                        <span>{preset.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-xs text-passive-1">
+                    Selecting an example fills the editor above with a valid predicate you can save as-is or edit.
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3">
+                  <Disclosure
+                    store={jsonExamplesDisclosure}
+                    className="flex items-center justify-between focus:shadow-none focus:outline-none"
+                  >
+                    <div className="text-sm font-semibold">Advanced examples</div>
+                    <Icon type={showingJsonExamples ? 'chevron-up' : 'chevron-down'} />
+                  </Disclosure>
+                  <DisclosureContent
+                    store={jsonExamplesDisclosure}
+                    className={classNames(showingJsonExamples && 'flex', 'flex-col gap-2.5')}
+                  >
+                    <div className="text-sm font-medium">1. List notes that are conflicted copies of another note:</div>
+                    <CopyableCodeBlock code={ConflictedNotesExampleCode} />
+                    <div className="text-sm font-medium">
+                      2. List notes that have the tag `todo` but not the tag `completed`:
+                    </div>
+                    <CopyableCodeBlock code={ComplexCompoundExampleCode} />
+                  </DisclosureContent>
+                </div>
+              </>
             )}
           </div>
         </div>
