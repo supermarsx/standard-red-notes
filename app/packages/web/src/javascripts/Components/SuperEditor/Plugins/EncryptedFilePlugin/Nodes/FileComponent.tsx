@@ -212,9 +212,19 @@ function FileComponent({
     )
   }
 
+  const openInLightbox = useCallback(() => {
+    if (file && file.mimeType.startsWith('image/')) {
+      application.filePreviewModalController.activate(file)
+    }
+  }, [application, file])
+
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
-      <div ref={blockWrapperRef}>
+      <div
+        ref={blockWrapperRef}
+        onDoubleClick={file.mimeType.startsWith('image/') ? openInLightbox : undefined}
+        title={file.mimeType.startsWith('image/') ? 'Double-click to open zoomable preview' : undefined}
+      >
         {canLoad && (
           <FilePreview
             isEmbeddedInSuper={true}

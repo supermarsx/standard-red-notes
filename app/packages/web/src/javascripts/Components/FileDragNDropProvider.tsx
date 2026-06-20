@@ -202,17 +202,33 @@ const FileDragNDropProvider = ({ application, children }: Props) => {
       }
 
       if (event.dataTransfer?.items.length) {
-        Array.from(event.dataTransfer.items).forEach(async (item) => {
-          const fileOrHandle = StreamingFileReader.available()
-            ? ((await item.getAsFileSystemHandle!()) as FileSystemFileHandle)
-            : item.getAsFile()
+        // The DataTransfer/DataTransferItemList becomes inert once this event
+        // handler returns, so synchronously kick off retrieval of each item's
+        // File / FileSystemFileHandle *before* awaiting anything. Awaiting first
+        // (the previous behaviour) could detach the transfer and silently drop
+        // items, which is one way a dropped image ends up neither embedded nor
+        // (reliably) uploaded.
+        const useStreaming = StreamingFileReader.available()
+        const pendingFilesOrHandles = Array.from(event.dataTransfer.items)
+          .filter((item) => item.kind === 'file')
+          .map((item) =>
+            useStreaming
+              ? (item.getAsFileSystemHandle!() as Promise<FileSystemFileHandle | null>)
+              : Promise.resolve(item.getAsFile()),
+          )
+
+        const dragTarget = closestDragTarget ? dragTargets.current.get(closestDragTarget) : undefined
+
+        pendingFilesOrHandles.forEach(async (pending) => {
+          const fileOrHandle = await pending
 
           if (!fileOrHandle) {
             return
           }
 
-          const dragTarget = closestDragTarget ? dragTargets.current.get(closestDragTarget) : undefined
-
+          // A drag target that knows how to embed (e.g. a Super note) is given
+          // the file directly; it owns the single upload + node insertion so we
+          // must NOT also run the generic upload below (which would duplicate it).
           if (dragTarget?.handleFileUpload) {
             dragTarget.handleFileUpload(fileOrHandle)
             return

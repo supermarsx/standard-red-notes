@@ -1,6 +1,5 @@
-import { IconType, PrefKey } from '@standardnotes/snjs'
+import { PrefKey } from '@standardnotes/snjs'
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
-import IconButton from '@/Components/Button/IconButton'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import usePreference from '@/Hooks/usePreference'
 import { getCSSValueFromAlignment } from './ImageAlignmentOptions'
@@ -13,16 +12,14 @@ import {
   ImageSizePreset,
   widthForPreset,
 } from '@/Components/SuperEditor/Plugins/ImageTools/ImageToolsTypes'
+import ZoomableImage from './ZoomableImage'
 
 type Props = {
   objectUrl: string
   isEmbeddedInSuper: boolean
 } & OptionalSuperEmbeddedImageProps
 
-const MinimumZoomPercent = 10
 const DefaultZoomPercent = 100
-const MaximumZoomPercent = 1000
-const ZoomPercentModifier = 10
 const PercentageDivisor = 100
 
 const ImagePreview: FunctionComponent<Props> = ({
@@ -43,7 +40,7 @@ const ImagePreview: FunctionComponent<Props> = ({
   const [imageWidth, setImageWidth] = useState(0)
   const [imageHeight, setImageHeight] = useState<number>(0)
   const [imageZoomPercent, setImageZoomPercent] = useState(imageZoomLevel ? imageZoomLevel : DefaultZoomPercent)
-  const [isZoomInputVisible, setIsZoomInputVisible] = useState(false)
+  const defaultSuperImageAlignment = usePreference(PrefKey.SuperNoteImageAlignment)
 
   // Word-style tools state. `liveWidth` reflects an in-progress drag for instant
   // visual feedback; the value is persisted to the node only on drag end.
@@ -64,14 +61,6 @@ const ImagePreview: FunctionComponent<Props> = ({
   useEffect(() => {
     setImageZoomPercent(imageZoomLevel ? imageZoomLevel : DefaultZoomPercent)
   }, [imageZoomLevel])
-
-  const setImageZoom = useCallback(
-    (zoomLevel: number) => {
-      setImageZoomPercent(zoomLevel)
-      setImageZoomLevel?.(zoomLevel)
-    },
-    [setImageZoomLevel],
-  )
 
   useEffect(() => {
     const image = new Image()
@@ -120,99 +109,27 @@ const ImagePreview: FunctionComponent<Props> = ({
     })
   }, [setCaption])
 
-  const imageResizer = (
-    <>
-      <span className="mr-1.5">{isEmbeddedInSuper ? 'Size' : 'Zoom'}:</span>
-      <IconButton
-        className="rounded p-1 hover:bg-contrast"
-        icon={'subtract' as IconType}
-        title={isEmbeddedInSuper ? 'Decrease size' : 'Zoom Out'}
-        focusable={true}
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          const newPercent = imageZoomPercent - ZoomPercentModifier
-          if (newPercent >= ZoomPercentModifier) {
-            setImageZoom(newPercent)
-          } else {
-            setImageZoom(imageZoomPercent)
-          }
-        }}
-        onMouseDown={(e) => {
-          e.preventDefault()
-        }}
-      />
-      {isZoomInputVisible ? (
-        <div className="mx-2">
-          <input
-            type="number"
-            className="w-10 bg-default text-center"
-            defaultValue={imageZoomPercent}
-            onKeyDown={(event) => {
-              event.stopPropagation()
-              if (event.key === 'Enter') {
-                const value = parseInt(event.currentTarget.value)
-                if (value >= MinimumZoomPercent && value <= MaximumZoomPercent) {
-                  setImageZoom(value)
-                }
-                setIsZoomInputVisible(false)
-              }
-            }}
-            onBlur={(event) => {
-              setIsZoomInputVisible(false)
-              const value = parseInt(event.currentTarget.value)
-              if (value >= MinimumZoomPercent && value <= MaximumZoomPercent) {
-                setImageZoom(value)
-              }
-            }}
-          />
-          %
-        </div>
-      ) : (
-        <button
-          className="mx-1 rounded px-1.5 py-1 hover:bg-contrast"
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setIsZoomInputVisible((visible) => !visible)
-          }}
-        >
-          {imageZoomPercent}%
-        </button>
-      )}
-      <IconButton
-        className="rounded p-1 hover:bg-contrast"
-        icon="add"
-        title={isEmbeddedInSuper ? 'Increase size' : 'Zoom In'}
-        focusable={true}
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setImageZoom(imageZoomPercent + ZoomPercentModifier)
-        }}
-        onMouseDown={(e) => {
-          e.preventDefault()
-        }}
-      />
-    </>
-  )
+  // Non-embedded preview (the full-screen file lightbox) gets a proper
+  // pan/zoom viewport: wheel zoom centred on the cursor, drag-to-pan, pinch on
+  // touch, double-click to toggle, and fit/1:1/+/- controls. The embedded Super
+  // case keeps the in-document Word-style resizer below.
+  if (!isEmbeddedInSuper) {
+    return <ZoomableImage objectUrl={objectUrl} />
+  }
 
-  const defaultSuperImageAlignment = usePreference(PrefKey.SuperNoteImageAlignment)
   const finalAlignment = alignment || defaultSuperImageAlignment
   // When the image is floated, alignment is expressed via the CSS float (left/right
   // within the node's own block); otherwise we use flex justify for left/center/right.
-  const isFloating = isEmbeddedInSuper && float !== 'none'
-  const justifyContent = isEmbeddedInSuper
-    ? isFloating
-      ? float === 'left'
-        ? 'start'
-        : 'end'
-      : getCSSValueFromAlignment(finalAlignment)
-    : 'center'
+  const isFloating = float !== 'none'
+  const justifyContent = isFloating
+    ? float === 'left'
+      ? 'start'
+      : 'end'
+    : getCSSValueFromAlignment(finalAlignment)
 
   // The new Word-style toolbar is shown when the embedding decorator node is
   // selected; it also stays available on hover/focus for discoverability.
-  const showSuperToolbar = isEmbeddedInSuper && !!changeAlignment
+  const showSuperToolbar = !!changeAlignment
 
   return (
     <div
@@ -225,46 +142,20 @@ const ImagePreview: FunctionComponent<Props> = ({
     >
       <div
         ref={resizeWrapperRef}
-        className={
-          isEmbeddedInSuper
-            ? 'relative flex h-full items-center justify-center overflow-visible'
-            : 'relative flex h-full w-full items-center justify-center overflow-auto'
-        }
+        className="relative flex h-full items-center justify-center overflow-visible"
         style={{
-          width: isEmbeddedInSuper ? `${widthIfEmbedded}px` : '',
-          maxWidth: isEmbeddedInSuper ? '100%' : undefined,
-          aspectRatio: isEmbeddedInSuper ? `${imageWidth} / ${imageHeight}` : '',
+          width: `${widthIfEmbedded}px`,
+          maxWidth: '100%',
+          aspectRatio: `${imageWidth} / ${imageHeight}`,
         }}
       >
-        <img
-          src={objectUrl}
-          className={isEmbeddedInSuper ? 'h-full w-full' : undefined}
-          style={{
-            height: isEmbeddedInSuper ? '100%' : `${imageZoomPercent}%`,
-            ...(isEmbeddedInSuper
-              ? {}
-              : imageZoomPercent <= DefaultZoomPercent
-                ? {
-                    minWidth: '100%',
-                    objectFit: 'contain',
-                  }
-                : {
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    margin: 'auto',
-                    maxWidth: 'none',
-                  }),
-          }}
+        <img src={objectUrl} className="h-full w-full" style={{ height: '100%' }} />
+        <ImageResizer
+          active={isImageSelected}
+          targetRef={resizeWrapperRef}
+          onResize={handleResize}
+          onResizeEnd={handleResizeEnd}
         />
-        {isEmbeddedInSuper && (
-          <ImageResizer
-            active={isImageSelected}
-            targetRef={resizeWrapperRef}
-            onResize={handleResize}
-            onResizeEnd={handleResizeEnd}
-          />
-        )}
         {showSuperToolbar && (
           <div
             className={
@@ -286,17 +177,10 @@ const ImagePreview: FunctionComponent<Props> = ({
             />
           </div>
         )}
-        {isEmbeddedInSuper && (
-          <div className="absolute left-0 top-full w-full">
-            <ImageCaption caption={caption ?? ''} enabled={captionEnabled} onChange={(c) => setCaption?.(c)} />
-          </div>
-        )}
-      </div>
-      {!isEmbeddedInSuper && (
-        <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center rounded border border-solid border-border bg-default px-3 py-1">
-          {imageResizer}
+        <div className="absolute left-0 top-full w-full">
+          <ImageCaption caption={caption ?? ''} enabled={captionEnabled} onChange={(c) => setCaption?.(c)} />
         </div>
-      )}
+      </div>
     </div>
   )
 }
