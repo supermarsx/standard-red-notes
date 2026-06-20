@@ -12,6 +12,7 @@ import {
 import { PreferencePaneId } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
 import { openOrFocusConstellationWindow } from '../Constellation/constellationWindow'
+import { openOrCreateDiaryEntry } from '@/Diary/diaryService'
 
 /**
  * A single command exposed in the command palette that is available globally
@@ -61,6 +62,13 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     icon: 'folder',
     shortcut: CREATE_NEW_TAG_COMMAND,
     run: (application) => application.keyboardService.triggerCommand(CREATE_NEW_TAG_COMMAND),
+  },
+  {
+    id: 'global-open-diary-entry',
+    title: "Open today's diary entry",
+    keywords: ['diary', 'journal', 'today', 'daily'],
+    icon: 'pencil-off',
+    run: (application) => void openOrCreateDiaryEntry(application),
   },
 
   // --- Navigation / search ------------------------------------------------

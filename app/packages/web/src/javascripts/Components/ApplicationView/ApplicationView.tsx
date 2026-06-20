@@ -47,6 +47,7 @@ import SuperExportModal from '../NotesOptions/SuperExportModal'
 import { useConflictWarnings } from '@/Hooks/useConflictWarnings'
 import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
 import { useReminderChecker } from '@/Reminders/useReminderChecker'
+import { useDiaryScheduler } from '@/Diary/useDiaryScheduler'
 import RemindersButton from '@/Reminders/RemindersButton'
 
 type Props = {
@@ -78,6 +79,11 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   // App-wide watcher: periodically scan notes for due reminders and fire a
   // notification + in-app toast (opt-in; nothing fires until the user sets one).
   useReminderChecker(application)
+
+  // App-wide watcher: when Diary mode is enabled, fire a single once-a-day
+  // notification (at the configured time) prompting the user to write today's
+  // diary entry. Opt-in; nothing fires until the user enables it.
+  useDiaryScheduler(application)
 
   useEffect(() => {
     const desktopService = application.desktopManager

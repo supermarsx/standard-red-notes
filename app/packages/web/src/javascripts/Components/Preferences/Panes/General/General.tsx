@@ -11,6 +11,7 @@ import Moments from './Moments'
 import NewNoteDefaults from './NewNoteDefaults'
 import Language from './Language'
 import AutoEmptyTrash from './AutoEmptyTrash'
+import DiaryMode from './DiaryMode'
 import { useApplication } from '@/Components/ApplicationProvider'
 
 const General: FunctionComponent = () => {
@@ -23,6 +24,7 @@ const General: FunctionComponent = () => {
       <Defaults application={application} />
       <Spellcheck application={application} />
       <AutoEmptyTrash />
+      <DiaryMode application={application} />
       <NewNoteDefaults />
       <Tools application={application} />
       <SmartViews application={application} featuresController={application.featuresController} />
