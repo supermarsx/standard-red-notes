@@ -28,6 +28,16 @@ module.exports = (env) => {
     { from: 'src/500.html' },
     { from: 'src/index.html' },
     { from: 'src/manifest.webmanifest' },
+    {
+      // App-shell service worker, served from the server root (scope `/`).
+      // It's copied verbatim (not part of the webpack graph), so we inline the
+      // current web version here to produce a fresh cache name per deploy.
+      from: 'src/service-worker.js',
+      transform(content) {
+        const version = require('./package.json').version
+        return content.toString().replace(/__SW_VERSION__/g, version)
+      },
+    },
     { from: 'src/robots.txt' },
     { from: 'src/.well-known', to: '.well-known' },
   ]

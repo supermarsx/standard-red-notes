@@ -1,20 +1,12 @@
 {
-  "app": {
-    "launch": {
-      "urls": [
-        "https://standard-red-notes.local/"
-      ],
-      "web_url": "https://standard-red-notes.local",
-      "container": "tab"
-    }
-  },
-  "offline_enabled": true,
-  "permissions": [],
-  "requirements": {
-    "3D": {
-      "features": []
-    }
-  },
+  "name": "Standard Red Notes",
+  "short_name": "Red Notes",
+  "description": "A self-hosted-first encrypted note-taking app for private notes, documents, and files.",
+  "start_url": ".",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
   "icons": [
     {
       "src": "favicon/android-chrome-192x192.png",
@@ -24,16 +16,8 @@
     {
       "src": "favicon/android-chrome-512x512.png",
       "sizes": "512x512",
-      "purpose": "any maskable",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
-  ],
-  "name": "Standard Red Notes",
-  "description": "A self-hosted encrypted notes app",
-  "version": "1.0",
-  "manifest_version": 2,
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
-  "display": "standalone",
-  "start_url": ".."
+  ]
 }
