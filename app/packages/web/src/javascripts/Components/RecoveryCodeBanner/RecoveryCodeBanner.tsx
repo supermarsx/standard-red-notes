@@ -1,4 +1,5 @@
 import { WebApplication } from '@/Application/WebApplication'
+import { addToast, ToastType } from '@standardnotes/toast'
 import { useState } from 'react'
 
 import Button from '../Button/Button'
@@ -47,7 +48,15 @@ const RecoveryCodeBanner = ({ application }: { application: WebApplication }) =>
             <button
               className="absolute right-2 top-2 flex rounded border border-border bg-default p-1 opacity-0 hover:bg-contrast focus:opacity-100 group-hover:opacity-100"
               onClick={() => {
-                void navigator.clipboard.writeText(recoveryCode)
+                navigator.clipboard.writeText(recoveryCode).then(
+                  () => {
+                    addToast({ type: ToastType.Success, message: 'Recovery code copied to clipboard' })
+                  },
+                  (error) => {
+                    console.error(error)
+                    addToast({ type: ToastType.Error, message: "Couldn't copy to clipboard" })
+                  },
+                )
               }}
             >
               <Icon type="copy" size="small" />

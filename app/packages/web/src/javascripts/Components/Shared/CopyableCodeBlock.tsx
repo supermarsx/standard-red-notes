@@ -30,6 +30,10 @@ const CopyableCodeBlock = ({ code }: Props) => {
             navigator.clipboard.writeText(code).then(
               () => {
                 setDidCopy(true)
+                addToast({
+                  type: ToastType.Success,
+                  message: 'Copied to clipboard',
+                })
                 setTimeout(() => {
                   setDidCopy(false)
                   buttonRef.current?.blur()

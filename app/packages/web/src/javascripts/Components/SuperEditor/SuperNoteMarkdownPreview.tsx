@@ -18,7 +18,7 @@ export const SuperNoteMarkdownPreview: FunctionComponent<Props> = ({ note, close
   const [didCopy, setDidCopy] = useState(false)
 
   const copy = useCallback(() => {
-    copyTextToClipboard(markdown)
+    copyTextToClipboard(markdown, 'Note copied to clipboard')
     setDidCopy(true)
     setTimeout(() => {
       setDidCopy(false)

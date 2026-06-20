@@ -158,7 +158,7 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
             <Text className="mb-2">This secret will not be shown again.</Text>
             <div className="flex flex-row items-center gap-2">
               <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdSecret}</code>
-              <CopyButton copyValue={createdSecret} />
+              <CopyButton copyValue={createdSecret} successMessage="App password copied to clipboard" />
             </div>
             <Button className="mt-3" label="Done" onClick={() => setCreatedSecret(null)} />
           </div>

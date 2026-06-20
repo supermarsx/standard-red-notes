@@ -6,6 +6,7 @@ import { useElementResize } from '@/Hooks/useElementRect'
 import { $isAutoLinkNode, LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
 import { mergeRegister } from '@lexical/utils'
 import { classNames } from '@standardnotes/snjs'
+import { addToast, ToastType } from '@standardnotes/toast'
 import { COMMAND_PRIORITY_LOW, LexicalEditor, SELECTION_CHANGE_COMMAND } from 'lexical'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { getDOMRangeRect } from '../../Lexical/Utils/getDOMRangeRect'
@@ -139,7 +140,15 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
           <button
             className="flex select-none items-center justify-center rounded p-2 enabled:hover:bg-default disabled:opacity-50 md:border md:border-transparent enabled:hover:md:translucent-ui:border-[--popover-border-color]"
             onClick={() => {
-              navigator.clipboard.writeText(linkUrl).catch(console.error)
+              navigator.clipboard.writeText(linkUrl).then(
+                () => {
+                  addToast({ type: ToastType.Success, message: 'Link copied to clipboard' })
+                },
+                (error) => {
+                  console.error(error)
+                  addToast({ type: ToastType.Error, message: "Couldn't copy to clipboard" })
+                },
+              )
             }}
             onMouseDown={(event) => event.preventDefault()}
           >

@@ -23,7 +23,7 @@ const SaveSecretKey: FunctionComponent<Props> = ({ activation: act }) => {
           <DecoratedInput
             disabled={true}
             right={[
-              <CopyButton copyValue={act.secretKey} />,
+              <CopyButton copyValue={act.secretKey} successMessage="Secret key copied to clipboard" />,
               <IconButton
                 focusable={false}
                 title="Download"

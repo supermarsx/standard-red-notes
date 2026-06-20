@@ -266,7 +266,7 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
             </Text>
             <div className="flex flex-row items-center gap-2">
               <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdToken}</code>
-              <CopyButton copyValue={createdToken} />
+              <CopyButton copyValue={createdToken} successMessage="MCP token copied to clipboard" />
             </div>
             <Button className="mt-3" label="Done" onClick={() => setCreatedToken(null)} />
           </div>

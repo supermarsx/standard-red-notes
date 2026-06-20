@@ -1,3 +1,5 @@
+import { addToast, ToastType } from '@standardnotes/toast'
+
 export function fallbackCopyTextToClipboard(text: string) {
   const textArea = document.createElement('textarea')
   textArea.value = text
@@ -7,20 +9,35 @@ export function fallbackCopyTextToClipboard(text: string) {
   document.body.appendChild(textArea)
   textArea.focus()
   textArea.select()
+  let succeeded = false
   try {
-    document.execCommand('copy')
+    succeeded = document.execCommand('copy')
   } catch (err) {
     console.error('Unable to copy', err)
   }
 
   document.body.removeChild(textArea)
+  return succeeded
 }
 
-export function copyTextToClipboard(text: string) {
+export function copyTextToClipboard(text: string, successMessage = 'Copied to clipboard') {
   if (!navigator.clipboard) {
-    fallbackCopyTextToClipboard(text)
+    const succeeded = fallbackCopyTextToClipboard(text)
+    if (succeeded) {
+      addToast({ type: ToastType.Success, message: successMessage })
+    } else {
+      addToast({ type: ToastType.Error, message: "Couldn't copy to clipboard" })
+    }
     return
   }
 
-  void navigator.clipboard.writeText(text)
+  navigator.clipboard.writeText(text).then(
+    () => {
+      addToast({ type: ToastType.Success, message: successMessage })
+    },
+    (error) => {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: "Couldn't copy to clipboard" })
+    },
+  )
 }
