@@ -83,6 +83,7 @@ import { removeFromArray } from '@standardnotes/utils'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
 import { RecentActionsState } from './Recents'
 import { RecentNotesState } from '@/Components/Preferences/Panes/RecentNotes/RecentNotesState'
+import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
@@ -104,6 +105,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // preferences pane. Created in createBackgroundServices() so it observes note
   // opens from app start, even while the preferences modal is closed.
   private _recentNotesState?: RecentNotesState
+  // Standard Red Notes: auto-empty-trash maintenance service. Created in
+  // createBackgroundServices() so it can react to the first full sync and
+  // periodically purge aged trashed notes while the app is open.
+  private _autoEmptyTrashService?: AutoEmptyTrashService
 
   constructor(
     deviceInterface: WebOrDesktopDevice,
@@ -166,6 +171,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: eagerly create the recent-notes tracker so it begins
     // observing note opens immediately.
     void this.recentNotesState
+    // Standard Red Notes: eagerly create the auto-empty-trash service so it
+    // subscribes to sync events from app start.
+    void this.autoEmptyTrashService
 
     if (isDev) {
       this.devMode = new DevMode(this)
@@ -213,6 +221,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: tear down the recent-notes observer.
     this._recentNotesState?.deinit()
     this._recentNotesState = undefined
+
+    // Standard Red Notes: tear down the auto-empty-trash service.
+    this._autoEmptyTrashService?.deinit()
+    this._autoEmptyTrashService = undefined
 
     this.deps.deinit()
 
@@ -708,6 +720,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       this._recentNotesState = new RecentNotesState(this)
     }
     return this._recentNotesState
+  }
+
+  // Standard Red Notes: the auto-empty-trash maintenance service. Lazily
+  // instantiated and cached.
+  get autoEmptyTrashService(): AutoEmptyTrashService {
+    if (!this._autoEmptyTrashService) {
+      this._autoEmptyTrashService = new AutoEmptyTrashService(this)
+    }
+    return this._autoEmptyTrashService
   }
 
   get isNativeMobileWebUseCase(): IsNativeMobileWeb {

@@ -9,6 +9,8 @@ import Persistence from './Persistence'
 import SmartViews from './SmartViews/SmartViews'
 import Moments from './Moments'
 import NewNoteDefaults from './NewNoteDefaults'
+import Language from './Language'
+import AutoEmptyTrash from './AutoEmptyTrash'
 import { useApplication } from '@/Components/ApplicationProvider'
 
 const General: FunctionComponent = () => {
@@ -16,9 +18,11 @@ const General: FunctionComponent = () => {
 
   return (
     <PreferencesPane>
+      <Language />
       <Persistence application={application} />
       <Defaults application={application} />
       <Spellcheck application={application} />
+      <AutoEmptyTrash />
       <NewNoteDefaults />
       <Tools application={application} />
       <SmartViews application={application} featuresController={application.featuresController} />
