@@ -105,4 +105,37 @@ describe('ItemGroupController tabs/tiles', () => {
     expect(group.itemControllers).toHaveLength(1)
     expect(group.activeItemViewController).toBe(first)
   })
+
+  describe('split/tile state', () => {
+    /**
+     * The tab bar "Split" control drives the group into a multi-controller state so
+     * NoteGroupView's `controllers.length > 1` tiling branch renders the open notes
+     * side by side. These tests exercise that underlying group transition.
+     */
+    it('splitting a single open note into a second tile yields the multi-tile state', async () => {
+      const first = await addTab()
+      expect(group.itemControllers).toHaveLength(1)
+
+      // Equivalent to the split action opening a second note as a tile.
+      const second = await addTab()
+
+      expect(group.itemControllers).toHaveLength(2)
+      expect(group.itemControllers).toContain(first)
+      expect(group.itemControllers).toContain(second)
+      // 2+ open controllers is exactly the condition NoteGroupView tiles on.
+      expect(group.itemControllers.length > 1).toBe(true)
+    })
+
+    it('returning to single by closing a tile keeps the remaining note open', async () => {
+      const first = await addTab()
+      const second = await addTab()
+      expect(group.itemControllers.length > 1).toBe(true)
+
+      group.closeItemController(second as NoteViewController)
+
+      expect(group.itemControllers).toHaveLength(1)
+      expect(group.itemControllers.length > 1).toBe(false)
+      expect(group.activeItemViewController).toBe(first)
+    })
+  })
 })

@@ -160,6 +160,52 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     void this.application.itemListController.openNoteInNewTile()
   }
 
+  /**
+   * Tab-bar driven split toggle. Transitions the group between the single-visible
+   * (tabbed) view and the side-by-side tiled view, reusing the same controller set
+   * and TileLayout that the TilesToolbar drives.
+   *
+   * - When already split (tiling with a multi-column/row/grid layout), collapses
+   *   back to a single visible tile via `TileLayout.Single` (the tab bar still
+   *   switches between the open notes, i.e. behaves like tabs again).
+   * - When showing a single note, opens a second tile so the group can tile: the
+   *   list-highlighted note if available/not already open, otherwise a brand new
+   *   note. Then forces a real split layout (Columns).
+   * - When multiple notes are open but collapsed to `Single`, just expands to the
+   *   Columns split layout.
+   */
+  private toggleSplit = () => {
+    const controllers = this.state.controllers
+    const isSplit = controllers.length > 1 && this.state.tileLayout !== TileLayout.Single
+
+    if (isSplit) {
+      this.setTileLayout(TileLayout.Single)
+      return
+    }
+
+    if (controllers.length > 1) {
+      // Already multiple tiles open, just collapsed to Single: expand into a split.
+      this.setTileLayout(TileLayout.Columns)
+      return
+    }
+
+    // Only one note open: open a second one so we have something to tile with.
+    const itemListController = this.application.itemListController
+    const beforeCount = this.application.itemControllerGroup.itemControllers.length
+
+    void (async () => {
+      // Prefer splitting with the list-highlighted note; this is a no-op if it is
+      // already the open note, in which case fall back to creating a new note.
+      await itemListController.openNoteInNewTile()
+
+      if (this.application.itemControllerGroup.itemControllers.length === beforeCount) {
+        await itemListController.openNewNoteInNewTile()
+      }
+
+      this.setTileLayout(TileLayout.Columns)
+    })()
+  }
+
   private renderController(controller: NoteViewController | FileViewController) {
     return controller instanceof NoteViewController ? (
       <NoteView key={controller.runtimeId} application={this.application} controller={controller} />
@@ -191,6 +237,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               onClose={this.closeTile}
               onAddTab={this.addTab}
               canAddTab={true}
+              onToggleSplit={this.toggleSplit}
+              isSplit={isTiling && this.state.tileLayout !== TileLayout.Single}
+              canSplit={!this.state.isInMobileView}
             />
 
             {isTiling && (

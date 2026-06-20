@@ -13,6 +13,22 @@ type Props = {
   onClose: (controller: Controller) => void
   onAddTab: () => void
   canAddTab: boolean
+  /**
+   * Toggles between the single-visible (tabbed) view and the side-by-side tiled
+   * view for the open notes. Driven from the tab bar so users can split without
+   * first having to discover the tiles toolbar.
+   */
+  onToggleSplit: () => void
+  /**
+   * Whether the open notes are currently shown side by side (tiled). Controls the
+   * split button's pressed state and label.
+   */
+  isSplit: boolean
+  /**
+   * When false the split button is disabled (e.g. nothing to split with, or on
+   * mobile where tiling collapses to a single column).
+   */
+  canSplit: boolean
 }
 
 const titleForController = (controller: Controller): string => {
@@ -32,6 +48,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onClose,
   onAddTab,
   canAddTab,
+  onToggleSplit,
+  isSplit,
+  canSplit,
 }) => {
   return (
     <div
@@ -92,6 +111,24 @@ const NoteTabBar: FunctionComponent<Props> = ({
         title="New note tab"
       >
         <Icon type="add" size="small" />
+      </button>
+      <button
+        type="button"
+        className={classNames(
+          'flex h-9 w-9 flex-shrink-0 touch-manipulation items-center justify-center rounded border md:h-auto md:w-auto md:p-1',
+          isSplit
+            ? 'border-info bg-info text-info-contrast'
+            : 'border-border bg-contrast',
+          canSplit && !isSplit ? 'text-passive-0 hover:text-text' : '',
+          !canSplit ? 'cursor-not-allowed text-passive-2' : '',
+        )}
+        onClick={onToggleSplit}
+        disabled={!canSplit}
+        aria-label={isSplit ? 'Return to single note view' : 'Split: show notes side by side'}
+        aria-pressed={isSplit}
+        title={isSplit ? 'Return to single note view' : 'Split: show notes side by side'}
+      >
+        <Icon type="open-in" size="small" />
       </button>
     </div>
   )
