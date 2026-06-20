@@ -1,10 +1,17 @@
-import { forwardRef, ReactNode, useCallback, useState } from 'react'
+import { forwardRef, ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { openOrFocusAssistantWindow } from '@/Assistant/assistantWindow'
+import {
+  ChatTab,
+  DEFAULT_TAB_TITLE,
+  deriveTitleFromMessage,
+  persistTabs,
+  readPersistedTabs,
+} from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
 
 type Props = {
@@ -17,63 +24,119 @@ type Props = {
   children?: ReactNode
 }
 
-type Tab = { id: string; title: string }
-
 const newId = () => Math.random().toString(36).slice(2)
 
-const titleFromMessage = (text: string) => {
-  const trimmed = text.trim()
-  if (!trimmed) {
-    return 'New chat'
-  }
-  return trimmed.length > 22 ? `${trimmed.slice(0, 22)}…` : trimmed
-}
+const createTab = (): ChatTab => ({ id: newId(), title: DEFAULT_TAB_TITLE, userRenamed: false })
+
+/** Anchor + tab the tab context menu is open against. */
+type MenuState = { tabId: string; x: number; y: number }
 
 const AssistantView = forwardRef<HTMLDivElement, Props>(
   ({ application, className, id, standalone, children }, ref) => {
     const { dismissLastPane } = useResponsiveAppPane()
 
-    const [tabs, setTabs] = useState<Tab[]>(() => [{ id: newId(), title: 'New chat' }])
+    const [tabs, setTabs] = useState<ChatTab[]>(() => readPersistedTabs() ?? [createTab()])
     const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
     const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null)
+    // Tab whose label is currently an inline-editable input, if any.
+    const [editingTabId, setEditingTabId] = useState<string | null>(null)
+    // Open context menu (right-click or caret), if any.
+    const [menu, setMenu] = useState<MenuState | null>(null)
+    const editInputRef = useRef<HTMLInputElement | null>(null)
+
+    // Persist the tab strip (id + title + userRenamed) so it survives a reload.
+    useEffect(() => {
+      persistTabs(tabs)
+    }, [tabs])
+
+    // Focus + select the inline rename input when editing starts.
+    useEffect(() => {
+      if (editingTabId) {
+        const input = editInputRef.current
+        input?.focus()
+        input?.select()
+      }
+    }, [editingTabId])
 
     const handlePopOut = useCallback(() => {
       openOrFocusAssistantWindow()
     }, [])
 
     const addTab = useCallback(() => {
-      const tab = { id: newId(), title: 'New chat' }
+      const tab = createTab()
       setTabs((prev) => [...prev, tab])
       setActiveTabId(tab.id)
     }, [])
 
-    const closeTab = useCallback(
-      (tabId: string) => {
-        setTabs((prev) => {
-          if (prev.length <= 1) {
-            return prev
+    const closeTab = useCallback((tabId: string) => {
+      setTabs((prev) => {
+        if (prev.length <= 1) {
+          return prev
+        }
+        const index = prev.findIndex((tab) => tab.id === tabId)
+        if (index === -1) {
+          return prev
+        }
+        const next = prev.filter((tab) => tab.id !== tabId)
+        setActiveTabId((current) => {
+          if (current !== tabId) {
+            return current
           }
-          const index = prev.findIndex((tab) => tab.id === tabId)
-          if (index === -1) {
-            return prev
-          }
-          const next = prev.filter((tab) => tab.id !== tabId)
-          setActiveTabId((current) => {
-            if (current !== tabId) {
-              return current
-            }
-            const fallback = next[index] ?? next[index - 1] ?? next[0]
-            return fallback.id
-          })
-          return next
+          const fallback = next[index] ?? next[index - 1] ?? next[0]
+          return fallback.id
         })
-      },
-      [],
-    )
-
-    const setTabTitle = useCallback((tabId: string, title: string) => {
-      setTabs((prev) => prev.map((tab) => (tab.id === tabId ? { ...tab, title } : tab)))
+        return next
+      })
     }, [])
+
+    // Auto-name from the first user message, but never clobber a user-chosen title.
+    const autoNameTab = useCallback((tabId: string, text: string) => {
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId && !tab.userRenamed ? { ...tab, title: deriveTitleFromMessage(text) } : tab,
+        ),
+      )
+    }, [])
+
+    // Commit a manual rename: mark the tab userRenamed so auto-naming won't override.
+    const renameTab = useCallback((tabId: string, rawTitle: string) => {
+      const title = rawTitle.trim()
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId ? { ...tab, title: title || DEFAULT_TAB_TITLE, userRenamed: true } : tab,
+        ),
+      )
+    }, [])
+
+    const startEditing = useCallback((tabId: string) => {
+      setMenu(null)
+      setActiveTabId(tabId)
+      setEditingTabId(tabId)
+    }, [])
+
+    const openMenu = useCallback((event: { clientX: number; clientY: number }, tabId: string) => {
+      setActiveTabId(tabId)
+      setMenu({ tabId, x: event.clientX, y: event.clientY })
+    }, [])
+
+    // Close the menu on any outside click / Escape.
+    useEffect(() => {
+      if (!menu) {
+        return
+      }
+      const close = () => setMenu(null)
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          setMenu(null)
+        }
+      }
+      window.addEventListener('click', close)
+      window.addEventListener('keydown', onKey)
+      return () => {
+        window.removeEventListener('click', close)
+        window.removeEventListener('keydown', onKey)
+      }
+    }, [menu])
 
     return (
       <div
@@ -118,16 +181,28 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
         <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-contrast px-2 py-1">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId
+            const isEditing = tab.id === editingTabId
             return (
               <div
                 key={tab.id}
                 role="button"
                 tabIndex={0}
                 onClick={() => setActiveTabId(tab.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  openMenu(event, tab.id)
+                }}
                 onKeyDown={(event) => {
+                  if (isEditing) {
+                    return
+                  }
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
                     setActiveTabId(tab.id)
+                  } else if (event.key === 'F2') {
+                    // F2 is the conventional rename key; reachable without a mouse.
+                    event.preventDefault()
+                    startEditing(tab.id)
                   }
                 }}
                 className={classNames(
@@ -138,8 +213,47 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
                 )}
                 title={tab.title}
               >
-                <span className="max-w-[10rem] truncate">{tab.title}</span>
-                {tabs.length > 1 && (
+                {isEditing ? (
+                  <input
+                    ref={editInputRef}
+                    className="w-[10rem] rounded border border-info bg-default px-1 text-xs text-text focus:outline-none"
+                    defaultValue={tab.title}
+                    aria-label="Rename chat"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      event.stopPropagation()
+                      if (event.key === 'Enter') {
+                        renameTab(tab.id, (event.target as HTMLInputElement).value)
+                        setEditingTabId(null)
+                      } else if (event.key === 'Escape') {
+                        setEditingTabId(null)
+                      }
+                    }}
+                    onBlur={(event) => {
+                      renameTab(tab.id, event.target.value)
+                      setEditingTabId(null)
+                    }}
+                  />
+                ) : (
+                  <span className="max-w-[10rem] truncate">{tab.title}</span>
+                )}
+                {/* Caret affordance: keyboard- and touch-reachable way to open the
+                    same menu as right-click (right-click is unavailable on touch). */}
+                {!isEditing && (
+                  <button
+                    className="rounded p-0.5 text-passive-1 hover:bg-contrast hover:text-text"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      openMenu(event, tab.id)
+                    }}
+                    aria-label="Chat options"
+                    aria-haspopup="menu"
+                    title="Chat options"
+                  >
+                    <Icon type="chevron-down" size="small" />
+                  </button>
+                )}
+                {!isEditing && tabs.length > 1 && (
                   <button
                     className="rounded p-0.5 hover:bg-contrast"
                     onClick={(event) => {
@@ -165,13 +279,56 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
           </button>
         </div>
 
+        {menu && (
+          <div
+            role="menu"
+            className="fixed z-[10000] min-w-[10rem] rounded border border-border bg-default py-1 text-sm shadow-md"
+            style={{ top: menu.y, left: menu.x }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text hover:bg-contrast"
+              onClick={() => startEditing(menu.tabId)}
+            >
+              <Icon type="pencil-filled" size="small" />
+              Rename
+            </button>
+            <button
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text hover:bg-contrast"
+              onClick={() => {
+                setMenu(null)
+                addTab()
+              }}
+            >
+              <Icon type="add" size="small" />
+              New chat
+            </button>
+            {tabs.length > 1 && (
+              <button
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-danger hover:bg-contrast"
+                onClick={() => {
+                  const tabId = menu.tabId
+                  setMenu(null)
+                  closeTab(tabId)
+                }}
+              >
+                <Icon type="close" size="small" />
+                Close
+              </button>
+            )}
+          </div>
+        )}
+
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
           return (
             <div key={tab.id} className={isActive ? 'contents' : 'hidden'}>
               <ConversationPanel
                 application={application}
-                onFirstUserMessage={(text) => setTabTitle(tab.id, titleFromMessage(text))}
+                onFirstUserMessage={(text) => autoNameTab(tab.id, text)}
                 onUsageChange={isActive ? setUsage : undefined}
               />
             </div>
