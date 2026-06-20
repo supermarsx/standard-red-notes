@@ -3,6 +3,7 @@ import { usePremiumModal } from '@/Hooks/usePremiumModal'
 import { FeaturesController } from '@/Controllers/FeaturesController'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
 
 type Props = {
@@ -12,6 +13,7 @@ type Props = {
 const TagsSectionTitle: FunctionComponent<Props> = ({ features }) => {
   const entitledToFolders = features.hasFolders
   const modal = usePremiumModal()
+  const { t } = useTranslation('navigation')
 
   const showPremiumAlert = useCallback(() => {
     modal.activate(TAG_FOLDERS_FEATURE_NAME)
@@ -21,7 +23,7 @@ const TagsSectionTitle: FunctionComponent<Props> = ({ features }) => {
     return (
       <>
         <div className="title text-base md:text-sm">
-          <span className="font-bold">Folders</span>
+          <span className="font-bold">{t('folders')}</span>
         </div>
       </>
     )
@@ -30,10 +32,10 @@ const TagsSectionTitle: FunctionComponent<Props> = ({ features }) => {
   return (
     <>
       <div className="title text-base md:text-sm">
-        <span className="font-bold">Tags</span>
+        <span className="font-bold">{t('tags')}</span>
         <StyledTooltip label={TAG_FOLDERS_FEATURE_TOOLTIP}>
           <label className="ml-1 cursor-pointer font-bold text-passive-2" onClick={showPremiumAlert}>
-            Folders
+            {t('folders')}
           </label>
         </StyledTooltip>
       </div>

@@ -3,6 +3,7 @@ import { NavigationController } from '@/Controllers/Navigation/NavigationControl
 import { SmartView } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import SmartViewsListItem from './SmartViewsListItem'
 import { useListKeyboardNavigation } from '@/Hooks/useListKeyboardNavigation'
 
@@ -18,6 +19,7 @@ const SmartViewsList: FunctionComponent<Props> = ({
   setEditingSmartView,
 }: Props) => {
   const allViews = navigationController.smartViews
+  const { t } = useTranslation('navigation')
 
   const [container, setContainer] = useState<HTMLDivElement | null>(null)
 
@@ -30,7 +32,7 @@ const SmartViewsList: FunctionComponent<Props> = ({
 
   if (allViews.length === 0 && navigationController.isSearching) {
     return (
-      <div className="px-4 py-1 text-base opacity-60 lg:text-sm">No smart views found. Try a different search.</div>
+      <div className="px-4 py-1 text-base opacity-60 lg:text-sm">{t('noSmartViewsFound')}</div>
     )
   }
 

@@ -2,6 +2,7 @@ import IconButton from '@/Components/Button/IconButton'
 import { CREATE_NEW_TAG_COMMAND, keyboardStringForShortcut } from '@standardnotes/ui-services'
 import { observer } from 'mobx-react-lite'
 import { useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useKeyboardService } from '../KeyboardServiceProvider'
 import { useApplication } from '../ApplicationProvider'
 
@@ -12,6 +13,7 @@ type Props = {
 function TagsSectionAddButton({ isFolder = false }: Props) {
   const application = useApplication()
   const keyboardService = useKeyboardService()
+  const { t } = useTranslation('navigation')
 
   const addNewTag = useCallback(() => {
     if (isFolder) {
@@ -30,7 +32,7 @@ function TagsSectionAddButton({ isFolder = false }: Props) {
     <IconButton
       focusable={true}
       icon="add"
-      title={`${isFolder ? 'Create a new folder' : 'Create a new tag'} (${shortcut})`}
+      title={`${isFolder ? t('createNewFolder') : t('createNewTag')} (${shortcut})`}
       className="p-0 text-neutral"
       onClick={addNewTag}
     />

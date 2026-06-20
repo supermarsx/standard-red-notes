@@ -4,6 +4,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { ApplicationEvent, PrefKey, WebAppEvent } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { forwardRef, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { classNames } from '@standardnotes/utils'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
@@ -30,6 +31,7 @@ type Props = {
 
 const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, children, id }, ref) => {
   const { setPaneLayout, presentPane, toggleNavigationPane } = useResponsiveAppPane()
+  const { t } = useTranslation('navigation')
 
   const [hasPasscode, setHasPasscode] = useState(() => application.hasPasscode())
   useEffect(() => {
@@ -77,7 +79,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       <div className="hidden flex-shrink-0 items-center justify-end px-2 pt-2 md:flex">
         <PaneCollapseButton
           onClick={toggleNavigationPane}
-          label="Collapse tags panel"
+          label={t('collapseTagsPanel')}
           icon="menu-close"
           expanded={true}
         />
@@ -104,7 +106,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           onClick={() => {
             setPaneLayout(PaneLayout.ItemSelection)
           }}
-          label="Go to items list"
+          label={t('goToItemsList')}
           icon="chevron-left"
         />
         <RoundIconButton
@@ -112,7 +114,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           onClick={() => {
             application.accountMenuController.toggleShow()
           }}
-          label="Go to account menu"
+          label={t('goToAccountMenu')}
           icon="account-circle"
         />
         {hasPasscode && (

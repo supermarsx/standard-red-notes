@@ -1,11 +1,13 @@
 import TagsList from '@/Components/Tags/TagsList'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent } from 'react'
+import { useTranslation } from 'react-i18next'
 import TagsSectionAddButton from './TagsSectionAddButton'
 import { useApplication } from '../ApplicationProvider'
 
 const TagsSection: FunctionComponent = () => {
   const application = useApplication()
+  const { t } = useTranslation('navigation')
 
   return (
     <>
@@ -14,7 +16,7 @@ const TagsSection: FunctionComponent = () => {
           <div className={'section-title-bar'}>
             <div className="section-title-bar-header">
               <div className="title text-base md:text-sm">
-                <span className="font-bold">Favorites</span>
+                <span className="font-bold">{t('favorites')}</span>
               </div>
             </div>
           </div>
@@ -26,7 +28,7 @@ const TagsSection: FunctionComponent = () => {
         <div className={'section-title-bar'}>
           <div className="section-title-bar-header">
             <div className="title text-base md:text-sm">
-              <span className="font-bold">Folders</span>
+              <span className="font-bold">{t('folders')}</span>
             </div>
             {!application.navigationController.isSearching && <TagsSectionAddButton isFolder={true} />}
           </div>
@@ -38,7 +40,7 @@ const TagsSection: FunctionComponent = () => {
         <div className={'section-title-bar'}>
           <div className="section-title-bar-header">
             <div className="title text-base md:text-sm">
-              <span className="font-bold">Tags</span>
+              <span className="font-bold">{t('tags')}</span>
             </div>
             {!application.navigationController.isSearching && <TagsSectionAddButton />}
           </div>
