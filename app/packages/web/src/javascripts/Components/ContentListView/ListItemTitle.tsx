@@ -7,7 +7,7 @@ export const ListItemTitle: FunctionComponent<{ item: ListableContentItem }> = (
   return (
     <div
       className={classNames(
-        'break-word mr-2 overflow-hidden text-lg font-semibold leading-[1.3] lg:text-base lg:leading-[1.3]',
+        'break-word mr-2 overflow-hidden text-base font-semibold leading-[1.25] lg:text-sm lg:leading-[1.25]',
         item.archived ? 'opacity-60' : '',
       )}
     >

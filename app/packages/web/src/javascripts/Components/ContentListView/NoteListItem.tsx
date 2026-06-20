@@ -159,17 +159,17 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
       }}
     >
       {application.itemListController.isMultipleSelectionMode ? (
-        <div className="mr-0 flex flex-col items-center justify-between gap-2 p-4 pr-4">
+        <div className="mr-0 flex flex-col items-center justify-between gap-2 p-3 pr-4">
           <CheckIndicator className="md:!h-5 md:!w-5" checked={selected} />
         </div>
       ) : !hideIcon ? (
-        <div className="mr-0 flex flex-col items-center justify-between gap-2 p-4 pr-4">
+        <div className="mr-0 flex flex-col items-center justify-between gap-2 p-3 pr-4">
           <Icon type={icon} className={`text-accessory-tint-${tint}`} />
         </div>
       ) : (
         <div className="pr-4" />
       )}
-      <div className={`min-w-0 flex-grow ${hasOffsetBorder && 'border-b border-solid border-border'} px-0 py-4`}>
+      <div className={`min-w-0 flex-grow ${hasOffsetBorder && 'border-b border-solid border-border'} px-0 py-3`}>
         <ListItemTitle item={item} />
         <ListItemNotePreviewText item={item} hidePreview={hidePreview} />
         <ListItemMetadata item={item} hideDate={hideDate} sortBy={sortBy} />
@@ -177,7 +177,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
         <ListItemConflictIndicator item={item} />
         <ListItemVaultInfo item={item} className="mt-1.5" />
       </div>
-      <ListItemFlagIcons className="p-4" item={item} hasFiles={hasFiles} hasBorder={hasOffsetBorder} />
+      <ListItemFlagIcons className="p-3" item={item} hasFiles={hasFiles} hasBorder={hasOffsetBorder} />
     </div>
   )
 }

@@ -15,20 +15,20 @@ const ListItemNotePreviewText: FunctionComponent<Props> = ({ item, hidePreview, 
   return (
     <div
       className={classNames(
-        'overflow-hidden overflow-ellipsis text-base lg:text-sm',
+        'overflow-hidden overflow-ellipsis text-sm lg:text-xs',
         item.archived ? 'opacity-60' : '',
       )}
     >
       {item.preview_html && (
         <div
-          className="my-1"
+          className="my-0.5"
           dangerouslySetInnerHTML={{
             __html: sanitizeHtmlString(item.preview_html),
           }}
         ></div>
       )}
       {!item.preview_html && item.preview_plain && (
-        <div className={`leading-1.3 line-clamp-${lineLimit} mt-1 overflow-hidden`}>{item.preview_plain}</div>
+        <div className={`leading-1.3 line-clamp-${lineLimit} mt-0.5 overflow-hidden`}>{item.preview_plain}</div>
       )}
     </div>
   )
