@@ -12,17 +12,23 @@ const U2FDescription: FunctionComponent<Props> = ({ is2FAEnabled }) => {
   const application = useApplication()
 
   if (application.sessions.getUser() === undefined) {
-    return <Text>Sign in or register for an account to configure hardware security keys.</Text>
+    return <Text>Sign in or register for an account to configure passkeys and hardware security keys.</Text>
   }
 
   return (
     <div>
-      <Text>Authenticate with a hardware security key such as YubiKey.</Text>
+      <Text>
+        Authenticate with a passkey (Touch ID, Windows Hello, your phone) or a hardware security key such as a YubiKey.
+        A passkey is a strong WebAuthn authentication factor; your account password is still required to decrypt your
+        data.
+      </Text>
       {!application.isFullU2FClient && (
-        <Text className="italic">Please visit the web app in order to add a hardware security key.</Text>
+        <Text className="italic">Please visit the web app in order to add a passkey or security key.</Text>
       )}
       {!is2FAEnabled && (
-        <Text className="italic">You must enable two-factor authentication before adding a hardware security key.</Text>
+        <Text className="italic">
+          You must enable two-factor authentication before adding a passkey or security key.
+        </Text>
       )}
     </div>
   )

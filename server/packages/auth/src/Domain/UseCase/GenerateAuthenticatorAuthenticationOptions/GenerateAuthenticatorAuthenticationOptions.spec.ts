@@ -112,4 +112,19 @@ describe('GenerateAuthenticatorAuthenticationOptions', () => {
     expect(result.isFailed()).toBe(false)
     expect(authenticatorChallengeRepository.save).toHaveBeenCalled()
   })
+
+  it('should prefer user verification so passkeys (platform authenticators) are accepted during sign-in', async () => {
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      username: 'test@test.te',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const options = result.getValue()
+
+    expect(options.userVerification).toBe('preferred')
+    // The user's registered credentials (which may be passkeys) are offered for the assertion.
+    expect(options.allowCredentials).toHaveLength(1)
+  })
 })

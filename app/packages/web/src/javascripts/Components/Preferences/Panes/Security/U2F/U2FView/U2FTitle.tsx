@@ -8,10 +8,10 @@ const U2FTitle: FunctionComponent = () => {
   const application = useApplication()
 
   if (application.sessions.getUser() === undefined) {
-    return <Title>Hardware security key authentication not available</Title>
+    return <Title>Passkeys & security key authentication not available</Title>
   }
 
-  return <Title>Hardware security key authentication</Title>
+  return <Title>Passkeys & security key authentication</Title>
 }
 
 export default observer(U2FTitle)

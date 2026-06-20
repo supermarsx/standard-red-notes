@@ -56,8 +56,14 @@ export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterfac
       userID: new TextEncoder().encode(userUuid.value),
       userName: username.value,
       attestationType: 'none',
+      // Passkey-friendly selection: allow BOTH platform authenticators (Touch ID / Windows Hello /
+      // Android) and cross-platform security keys, request a discoverable (resident) credential so the
+      // credential can be used as a passkey, and prefer user verification (PIN / biometric).
+      // Omitting `authenticatorAttachment` lets the browser surface every available authenticator type.
       authenticatorSelection: {
-        authenticatorAttachment: 'cross-platform',
+        residentKey: 'preferred',
+        requireResidentKey: false,
+        userVerification: 'preferred',
       },
       excludeCredentials: authenticators.map((authenticator) => ({
         id: Buffer.from(authenticator.props.credentialId).toString('base64url'),

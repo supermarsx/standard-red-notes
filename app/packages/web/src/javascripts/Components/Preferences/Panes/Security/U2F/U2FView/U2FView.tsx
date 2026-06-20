@@ -65,7 +65,7 @@ const U2FView: FunctionComponent<Props> = ({ application, is2FAEnabled, loadAuth
           <Button
             className="mt-1"
             disabled={!application.isFullU2FClient || !is2FAEnabled}
-            label="Add Device"
+            label="Add Passkey or Security Key"
             primary
             onClick={handleAddDeviceClick}
           />

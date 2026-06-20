@@ -56,7 +56,7 @@ const U2FAddDeviceView: FunctionComponent<Props> = ({ addAuthenticator, onDevice
 
   return (
     <Modal
-      title="Add Security Key"
+      title="Add Passkey or Security Key"
       close={closeModal}
       actions={[
         {
@@ -81,7 +81,7 @@ const U2FAddDeviceView: FunctionComponent<Props> = ({ addAuthenticator, onDevice
       <div className="flex px-4 py-4">
         <div className="ml-4 flex flex-grow flex-col gap-1">
           <label htmlFor="u2f-device-name" className="mb-2 text-sm font-semibold">
-            Device Name
+            Passkey or Device Name
           </label>
           <DecoratedInput
             autofocus

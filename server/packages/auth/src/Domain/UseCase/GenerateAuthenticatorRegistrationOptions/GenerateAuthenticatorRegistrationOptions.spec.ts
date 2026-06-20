@@ -134,4 +134,37 @@ describe('GenerateAuthenticatorRegistrationOptions', () => {
     expect(result.isFailed()).toBe(false)
     expect(authenticatorChallengeRepository.save).toHaveBeenCalled()
   })
+
+  it('should allow passkeys: permit platform authenticators and request a resident (discoverable) key', async () => {
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      username: 'username',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const options = result.getValue()
+
+    expect(options.authenticatorSelection).toBeDefined()
+    // Must NOT restrict to cross-platform security keys only, otherwise platform passkeys are blocked.
+    expect(options.authenticatorSelection?.authenticatorAttachment).toBeUndefined()
+    // A discoverable/resident credential is what makes the credential usable as a passkey.
+    expect(options.authenticatorSelection?.residentKey).toBe('preferred')
+    expect(options.authenticatorSelection?.userVerification).toBe('preferred')
+  })
+
+  it('should exclude already-registered credentials so the same authenticator is not enrolled twice', async () => {
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      username: 'username',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const options = result.getValue()
+
+    expect(options.excludeCredentials).toHaveLength(1)
+  })
 })
