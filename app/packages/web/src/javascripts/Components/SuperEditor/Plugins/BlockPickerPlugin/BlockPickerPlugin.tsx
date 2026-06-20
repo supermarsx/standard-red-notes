@@ -41,6 +41,7 @@ import { GetMathBlockOption } from '../Blocks/Math'
 import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
 import { GetFootnoteBlockOption } from '../Blocks/Footnote'
 import { GetTimelineBlockOption } from '../Blocks/Timeline'
+import { GetQrCodeBlockOption } from '../Blocks/QrCode'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -80,6 +81,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetKanbanBlockOption(editor),
       GetCalendarBlockOption(editor),
       GetTimelineBlockOption(editor),
+      GetQrCodeBlockOption(editor),
       GetDataviewBlockOption(editor),
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),
