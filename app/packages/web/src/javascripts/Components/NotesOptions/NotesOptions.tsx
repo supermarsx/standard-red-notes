@@ -36,6 +36,7 @@ import { isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { encryptShare } from '../SharedView/shareCrypto'
 import NarrationModal from './NarrationModal'
+import SplitNoteModal from './SplitNoteModal'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
 const iconSize = MenuItemIconSize
@@ -49,6 +50,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
 
   const [altKeyDown, setAltKeyDown] = useState(false)
   const [narrationOpen, setNarrationOpen] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
   const { toggleAppPane } = useResponsiveAppPane()
 
   const {
@@ -239,6 +241,14 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         />
       )}
       {notes.length === 1 && (
+        <SplitNoteModal
+          application={application}
+          note={notes[0]}
+          isOpen={splitOpen}
+          close={() => setSplitOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
         <>
           <MenuSection>
             <MenuItem onClick={openRevisionHistoryModal}>
@@ -399,6 +409,17 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           >
             <Icon type="file-music" className={iconClass} />
             Narrate / Listen
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setSplitOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="menu-arrow-down" className={iconClass} />
+            Split note…
           </MenuItem>
         )}
         {application.platform === Platform.Android && (

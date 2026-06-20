@@ -25,7 +25,9 @@ import {
   ContentReference,
   pluralize,
   NoteType,
+  NativeFeatureIdentifier,
 } from '@standardnotes/snjs'
+import { NotePart, SplitNoteOptions, splitNoteContent } from '../../Utils/NoteSplitting/splitNoteContent'
 import { makeObservable, observable, action, computed, runInAction, reaction } from 'mobx'
 import { AbstractViewController } from '../Abstract/AbstractViewController'
 import { NotesControllerInterface } from './NotesControllerInterface'
@@ -560,6 +562,106 @@ export class NotesController
       await this.application.mutator.addTagToNote(templateNote, selectedTag, shouldAddTagHierarchy)
     }
     return note
+  }
+
+  /**
+   * Computes the parts a note would split into, without creating anything.
+   * Useful for showing a live preview count in the split dialog.
+   */
+  previewSplitNote(note: SNNote, options: Omit<SplitNoteOptions, 'noteType'>): NotePart[] {
+    return splitNoteContent(note.text ?? '', { ...options, noteType: note.noteType })
+  }
+
+  /**
+   * Standard Red Notes: split a single note into multiple separate notes.
+   *
+   * The text is split via {@link splitNoteContent} (by headings, horizontal
+   * rule, or a custom delimiter). Each part becomes a new PLAIN-text note
+   * created through the real insert+tag path. For Super notes we split the
+   * extracted plaintext (Lexical JSON can't be cleanly split here), so the
+   * resulting parts are plain notes — the dialog warns the user about this.
+   *
+   * Options:
+   *  - inheritTags: apply the original note's tags to each new part.
+   *  - keepOriginal: keep the original as-is; when false the original is moved
+   *    to TRASH (never hard-deleted).
+   *  - linkParts: link each created part to the next (and to the original).
+   *
+   * Returns the created notes (empty if there was nothing to split on), and
+   * selects/opens the first new note.
+   */
+  async splitNote(
+    note: SNNote,
+    options: Omit<SplitNoteOptions, 'noteType'> & {
+      inheritTags: boolean
+      keepOriginal: boolean
+      linkParts: boolean
+    },
+  ): Promise<SNNote[]> {
+    const parts = this.previewSplitNote(note, { mode: options.mode, delimiter: options.delimiter })
+
+    if (parts.length < 2) {
+      addToast({
+        type: ToastType.Regular,
+        message: 'There was nothing to split this note on.',
+      })
+      return []
+    }
+
+    const originalTags = options.inheritTags ? this.application.items.getSortedTagsForItem(note) : []
+    const shouldLinkToParentFolders = this.application.preferences.getValue(PrefKey.NoteAddToParentFolders, true)
+
+    const createdNotes: SNNote[] = []
+    for (const part of parts) {
+      const templateNote = this.application.items.createTemplateItem<NoteContent, SNNote>(ContentType.TYPES.Note, {
+        title: part.title,
+        text: part.content,
+        references: [],
+        noteType: NoteType.Plain,
+        editorIdentifier: NativeFeatureIdentifier.TYPES.PlainEditor,
+      })
+      const createdNote = await this.application.mutator.insertItem<SNNote>(templateNote)
+
+      for (const tag of originalTags) {
+        await this.application.mutator.addTagToNote(createdNote, tag, shouldLinkToParentFolders)
+      }
+
+      createdNotes.push(createdNote)
+    }
+
+    if (options.linkParts) {
+      // Link the original to the first part, then chain the parts together.
+      try {
+        if (options.keepOriginal && createdNotes[0]) {
+          await this.application.mutator.linkNoteToNote(note, createdNotes[0])
+        }
+        for (let i = 0; i < createdNotes.length - 1; i++) {
+          await this.application.mutator.linkNoteToNote(createdNotes[i], createdNotes[i + 1])
+        }
+      } catch (error) {
+        console.error(error)
+      }
+    }
+
+    if (!options.keepOriginal) {
+      await this.application.mutator.changeItem<NoteMutator>(note, (mutator) => {
+        mutator.trashed = true
+      })
+    }
+
+    void this.application.sync.sync()
+
+    const firstNote = createdNotes[0]
+    if (firstNote) {
+      this.application.itemListController.selectUuids([firstNote.uuid], true).catch(console.error)
+    }
+
+    addToast({
+      type: ToastType.Success,
+      message: `Split note into ${createdNotes.length} ${pluralize(createdNotes.length, 'note', 'notes')}.`,
+    })
+
+    return createdNotes
   }
 
   showSuperExportModal = () => {
