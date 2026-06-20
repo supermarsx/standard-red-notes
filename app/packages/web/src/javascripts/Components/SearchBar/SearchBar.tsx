@@ -2,6 +2,7 @@ import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import { useCallback, KeyboardEventHandler, useRef } from 'react'
 import SearchOptions from '@/Components/SearchOptions/SearchOptions'
+import AdvancedSearchOptions from '@/Components/SearchOptions/AdvancedSearchOptions'
 import { SearchOptionsController } from '@/Controllers/SearchOptionsController'
 import Icon from '../Icon/Icon'
 import DecoratedInput from '../Input/DecoratedInput'
@@ -64,10 +65,13 @@ const SearchBar = ({ itemListController, searchOptionsController, hideOptions = 
 
       <div
         className={classNames(
-          'animate-fade-from-top',
-          hideOptions ? 'hidden' : !noteFilterText && 'hidden group-focus-within:flex',
+          'animate-fade-from-top flex-col gap-2',
+          hideOptions ? 'hidden' : !noteFilterText ? 'hidden group-focus-within:flex' : 'flex',
         )}
       >
+        <div className="mt-3 flex items-center px-1">
+          <AdvancedSearchOptions itemListController={itemListController} />
+        </div>
         <SearchOptions searchOptions={searchOptionsController} />
       </div>
     </div>

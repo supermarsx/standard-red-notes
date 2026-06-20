@@ -3,6 +3,12 @@ import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
 import { IndexableNote, SearchIndex } from '@/Utils/Items/Search/SearchIndex'
 import { rankNotesByRelevance } from '@/Utils/Items/Search/RelevanceScore'
+import {
+  buildSearchPredicate,
+  parseSearchQuery,
+  ParsedSearchQuery,
+  SearchableNote,
+} from '@/Utils/Items/Search/SearchQueryParser'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import {
   ApplicationEvent,
@@ -105,6 +111,13 @@ export class ItemListController
    * scorer instead of by the underlying field sort.
    */
   relevanceSortActive = false
+
+  /**
+   * Standard Red Notes: when true, the free-text portion of the advanced search
+   * query is matched case-sensitively. Toggled from the advanced-search options
+   * panel. Default false (the historical behavior).
+   */
+  searchCaseSensitive = false
 
   displayOptions: NotesAndFilesDisplayControllerOptions = {
     sortBy: CollectionSort.CreatedAt,
@@ -212,9 +225,11 @@ export class ItemListController
       renderedItems: observable,
       showDisplayOptionsMenu: observable,
       relevanceSortActive: observable,
+      searchCaseSensitive: observable,
 
       reloadItems: action,
       setRelevanceSortActive: action,
+      setSearchCaseSensitive: action,
       reloadPanelTitle: action,
       reloadDisplayPreferences: action,
       resetPagination: action,
@@ -227,6 +242,7 @@ export class ItemListController
       optionsSubtitle: computed,
       activeControllerItem: computed,
       isRelevanceSortAvailable: computed,
+      parsedSearchQuery: computed,
 
       selectedUuids: observable,
       selectedItems: observable,
@@ -528,6 +544,98 @@ export class ItemListController
     return !!this.noteFilterText && this.noteFilterText.length > 0
   }
 
+  /**
+   * Standard Red Notes: the current search bar text parsed into structured
+   * operators + free text. Recomputed only when noteFilterText changes. Operators
+   * (tag:, type:, is:, in:, created:, updated:, negation, quoted phrases) are
+   * applied as a web-side predicate; the residual free text is what the existing
+   * model substring search / relevance / index path operates on.
+   */
+  get parsedSearchQuery(): ParsedSearchQuery {
+    return parseSearchQuery(this.noteFilterText)
+  }
+
+  /**
+   * The portion of the search text that should drive the existing full-text
+   * match. Equal to the whole query when no operators are used (preserving the
+   * original behavior); otherwise just the free-text remainder.
+   */
+  private get searchFreeText(): string {
+    return this.parsedSearchQuery.freeText
+  }
+
+  setSearchCaseSensitive = (caseSensitive: boolean): void => {
+    if (this.searchCaseSensitive === caseSensitive) {
+      return
+    }
+    this.searchCaseSensitive = caseSensitive
+    if (this.isFiltering) {
+      this.reloadNotesDisplayOptions()
+      void this.reloadItems(ItemsReloadSource.FilterTextChange)
+    }
+  }
+
+  /** Map a displayable note/file into the shape the search predicate consumes. */
+  private toSearchableNote(item: ListableContentItem): SearchableNote {
+    const noteLike = item as unknown as {
+      title?: string
+      text?: string
+      noteType?: NoteType
+      editorIdentifier?: string
+      protected?: boolean
+      pinned?: boolean
+      archived?: boolean
+      starred?: boolean
+      trashed?: boolean
+      locked?: boolean
+    }
+    const rawText = noteLike.text ?? ''
+    const text = rawText.length > 0 ? extractPlaintextFromNoteText(rawText, noteLike.noteType) : ''
+    const tagTitles = this.itemManager.getSortedTagsForItem(item).map((tag) => tag.title)
+    // Prefer the editor identifier's trailing segment (e.g. "code" from
+    // org.standardnotes.code) so `editor:code` works even when noteType is unset,
+    // falling back to the structured NoteType.
+    const editorType = noteLike.editorIdentifier?.split('.').pop()
+    const noteType = noteLike.noteType ?? editorType
+
+    return {
+      title: noteLike.title ?? '',
+      text,
+      noteType,
+      tagTitles,
+      protected: noteLike.protected ?? false,
+      pinned: noteLike.pinned ?? false,
+      archived: noteLike.archived ?? false,
+      starred: noteLike.starred ?? false,
+      trashed: noteLike.trashed ?? false,
+      locked: noteLike.locked ?? false,
+      createdAt: item.created_at?.getTime() ?? 0,
+      updatedAt: (item.userModifiedDate ?? item.created_at)?.getTime() ?? 0,
+    }
+  }
+
+  /**
+   * Standard Red Notes: apply the advanced-search operator predicate (tag:, type:,
+   * is:, in:, created:/updated:, negation, quoted phrases) to the already
+   * model-filtered items. When the query has no operators this is a no-op, so the
+   * original full-text behavior is preserved exactly. The free-text part of the
+   * query is still enforced by the model substring filter; here we additionally
+   * enforce operator constraints and any negated / scoped (`in:`) free text.
+   */
+  private applyOperatorFilter(items: ListableContentItem[]): ListableContentItem[] {
+    const parsed = this.parsedSearchQuery
+    const needsPredicate =
+      parsed.hasOperators ||
+      parsed.freeTextTerms.some((term) => term.negated) ||
+      this.searchCaseSensitive
+    if (!needsPredicate || items.length === 0) {
+      return items
+    }
+
+    const predicate = buildSearchPredicate(parsed, { caseSensitive: this.searchCaseSensitive })
+    return items.filter((item) => predicate(this.toSearchableNote(item)))
+  }
+
   reloadPanelTitle = () => {
     let title = this.panelTitle
 
@@ -559,7 +667,9 @@ export class ItemListController
 
     const notes = this.itemManager.getDisplayableNotes()
 
-    const items = this.applySearchOrdering(this.itemManager.getDisplayableNotesAndFiles())
+    const items = this.applySearchOrdering(
+      this.applyOperatorFilter(this.itemManager.getDisplayableNotesAndFiles()),
+    )
 
     const renderedItems = items.slice(0, this.notesToDisplay)
 
@@ -581,7 +691,7 @@ export class ItemListController
    * client-side over decrypted items, so end-to-end encryption is preserved.
    */
   private applyAiSearchRanking(items: ListableContentItem[]): ListableContentItem[] {
-    const query = this.noteFilterText
+    const query = this.searchFreeText
     if (!query || query.length === 0 || items.length === 0) {
       return items
     }
@@ -688,7 +798,7 @@ export class ItemListController
    * the substring filter surfaced disappears.
    */
   private applyRelevanceOrdering(items: ListableContentItem[]): ListableContentItem[] | null {
-    const query = this.noteFilterText
+    const query = this.searchFreeText
     if (!this.relevanceSortActive || !query || query.trim().length === 0 || items.length === 0) {
       return null
     }
@@ -727,7 +837,7 @@ export class ItemListController
    * first time it is needed, then kept fresh incrementally from the item stream.
    */
   private applySearchIndexOrdering(items: ListableContentItem[]): ListableContentItem[] | null {
-    const query = this.noteFilterText
+    const query = this.searchFreeText
     if (!query || items.length === 0 || !this.isSearchIndexEnabled) {
       return null
     }
@@ -937,8 +1047,15 @@ export class ItemListController
   reloadNotesDisplayOptions = () => {
     const tag = this.navigationController.selected
 
-    const searchText = this.noteFilterText.toLowerCase()
-    const isSearching = searchText.length
+    // The model substring filter only sees the free-text portion; operators
+    // (tag:, is:, created:, etc.) are enforced web-side in applyOperatorFilter.
+    // When no operators are present this equals the full query, preserving the
+    // original behavior exactly. We lowercase to match the model's behavior, but
+    // case-sensitive matching (when enabled) is enforced by the operator predicate.
+    const searchText = this.searchFreeText.toLowerCase()
+    // "Searching" stays keyed off the raw box text so an operator-only query
+    // (e.g. `is:pinned`) still counts as an active search.
+    const isSearching = this.noteFilterText.trim().length
     let includeArchived: boolean
     let includeTrashed: boolean
 
@@ -948,6 +1065,20 @@ export class ItemListController
     } else {
       includeArchived = this.displayOptions.includeArchived ?? false
       includeTrashed = this.displayOptions.includeTrashed ?? false
+    }
+
+    // When the advanced query explicitly asks for archived/trashed notes
+    // (`is:archived` / `is:trashed`), the model must include them so the operator
+    // predicate has something to narrow down — otherwise the result would always
+    // be empty since the model would have pre-excluded them.
+    for (const op of this.parsedSearchQuery.operators) {
+      if (op.kind === 'is' && !op.negated) {
+        if (op.flag === 'archived') {
+          includeArchived = true
+        } else if (op.flag === 'trashed') {
+          includeTrashed = true
+        }
+      }
     }
 
     const selectedFolder = this.navigationController.selectedFolder
