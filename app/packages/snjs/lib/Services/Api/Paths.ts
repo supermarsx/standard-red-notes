@@ -63,6 +63,16 @@ const AppPasswordPaths = {
   appPassword: (appPasswordId: string) => `/v1/app-passwords/${appPasswordId}`,
 }
 
+// Standard Red Notes: MCP scoped tokens. These hit the gateway /v1/mcp-tokens
+// routes (cross-service-token protected), which proxy to the auth server. They
+// let the headless MCP bridge authenticate and obtain client-side-wrapped items
+// keys without the account email + password. The server only ever stores the
+// ciphertext wrapping; the wrap secret is appended to the token client-side.
+const McpTokenPaths = {
+  mcpTokens: '/v1/mcp-tokens',
+  mcpToken: (mcpTokenId: string) => `/v1/mcp-tokens/${mcpTokenId}`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -85,6 +95,7 @@ export const Paths = {
     ...UserPaths,
     ...AdminPaths,
     ...AppPasswordPaths,
+    ...McpTokenPaths,
     meta: '/v1/meta',
   },
   v2: {

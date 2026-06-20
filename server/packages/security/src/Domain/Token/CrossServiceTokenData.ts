@@ -26,4 +26,14 @@ export type CrossServiceTokenData = {
   }
   extensionKey?: string
   hasContentLimit?: boolean
+  /**
+   * Standard Red Notes: present only on sessions minted by an MCP scoped token.
+   * MUST stay optional so existing tokens still validate. `access: 'read'`
+   * mirrors `session.readonly_access`; `tagUuids` is enforced client-side by the
+   * MCP bridge (the server cannot filter encrypted note content by tag).
+   */
+  mcp_scope?: {
+    access: 'read' | 'write'
+    tagUuids?: string[]
+  }
 }

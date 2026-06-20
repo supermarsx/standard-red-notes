@@ -749,6 +749,49 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: MCP scoped tokens. These hit the gateway /v1/mcp-tokens
+   * routes (cross-service-token protected) and let the headless MCP bridge
+   * authenticate without the account email + password. The body carries the
+   * account's items keys wrapped client-side under a secret the server never
+   * sees; the full token (server token + wrap secret) is only assembled in the
+   * browser and returned to the user once by `createMcpToken`.
+   */
+  async listMcpTokens(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.mcpTokens),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list MCP tokens.',
+    })
+  }
+
+  async createMcpToken(body: {
+    label: string
+    scope: string
+    scopeTagUuids?: string[]
+    wrappedKeys: string
+    kdfSalt: string
+    kdfParams: string
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.mcpTokens),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create MCP token.',
+      params: body,
+    })
+  }
+
+  async deleteMcpToken(mcpTokenId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.mcpToken(mcpTokenId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete MCP token.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

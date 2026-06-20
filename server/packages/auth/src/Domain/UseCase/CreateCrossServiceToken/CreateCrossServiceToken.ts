@@ -99,7 +99,9 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       }
     }
 
+    let resolvedSession: Session | undefined = undefined
     if (dto.session !== undefined) {
+      resolvedSession = dto.session
       authTokenData.session = this.projectSession(dto.session)
     } else if (dto.sessionUuid !== undefined) {
       const activeSessionsResponse = await this.getActiveSessions.execute({
@@ -107,7 +109,18 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
         sessionUuid: dto.sessionUuid,
       })
       if (activeSessionsResponse.sessions.length) {
+        resolvedSession = activeSessionsResponse.sessions[0]
         authTokenData.session = this.projectSession(activeSessionsResponse.sessions[0])
+      }
+    }
+
+    // Standard Red Notes: thread MCP scope from the session into the
+    // cross-service token. read/write derives from `readonlyAccess` (reused),
+    // and the optional tag-scope is carried verbatim for client-side enforcement.
+    if (resolvedSession !== undefined) {
+      const mcpScope = this.projectMcpScope(resolvedSession)
+      if (mcpScope !== undefined) {
+        authTokenData.mcp_scope = mcpScope
       }
     }
 
@@ -137,6 +150,33 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       readonly_access: boolean
       access_expiration: string
       refresh_expiration: string
+    }
+  }
+
+  private projectMcpScope(session: Session): { access: 'read' | 'write'; tagUuids?: string[] } | undefined {
+    let tagUuids: string[] | undefined = undefined
+    if (session.mcpScopeTagUuids !== null && session.mcpScopeTagUuids !== undefined) {
+      try {
+        const parsed = JSON.parse(session.mcpScopeTagUuids)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          tagUuids = parsed as string[]
+        }
+      } catch {
+        tagUuids = undefined
+      }
+    }
+
+    // Only emit mcp_scope when the session actually carries a tag-scope. A plain
+    // read/write MCP session without tag-scope is already fully represented by
+    // `session.readonly_access`, which the syncing-server enforces. Emitting
+    // mcp_scope for every readonly session would mislabel non-MCP sessions.
+    if (tagUuids === undefined) {
+      return undefined
+    }
+
+    return {
+      access: session.readonlyAccess ? 'read' : 'write',
+      tagUuids,
     }
   }
 

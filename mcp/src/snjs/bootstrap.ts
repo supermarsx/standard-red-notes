@@ -1,6 +1,7 @@
 import snjs from '@standardnotes/snjs'
 import { SNWebCrypto } from '@standardnotes/sncrypto-web'
 import { NodeDevice } from './NodeDevice.js'
+import { signInWithMcpToken, type McpTokenSignInResult } from './tokenAuth.js'
 
 const {
   SNApplication,
@@ -55,6 +56,11 @@ export interface HeadlessApp {
   readonly app: any
   register(email: string, password: string): Promise<void>
   signIn(email: string, password: string, mfaCode?: string): Promise<void>
+  /**
+   * Standard Red Notes: sign in with an MCP scoped token (no email/password/MFA).
+   * Establishes a session and injects the account's items keys so notes decrypt.
+   */
+  signInWithToken(fullToken: string): Promise<McpTokenSignInResult>
   isSignedIn(): boolean
   sync(): Promise<void>
   /** Begin continuous background sync (idempotent). Call after sign-in. */
@@ -219,8 +225,17 @@ export async function bootstrapHeadlessApp(options: BootstrapOptions): Promise<H
       }
     },
 
+    async signInWithToken(fullToken: string): Promise<McpTokenSignInResult> {
+      const res = await signInWithMcpToken(app, options.serverUrl, fullToken)
+      consecutiveSyncFailures = 0
+      lastSyncError = undefined
+      return res
+    },
+
     isSignedIn(): boolean {
-      return Boolean(app.hasAccount?.() ?? app.getUser?.())
+      // The token path establishes a session without app.hasAccount() (no root
+      // key), so also treat an authenticated session layer as signed in.
+      return Boolean(app.hasAccount?.() ?? app.getUser?.() ?? app.sessions?.isSignedIn?.())
     },
 
     getMfaChallengeCount(): number {

@@ -9,7 +9,10 @@ import { SnjsBackedClient } from "./snjs/SnjsBackedClient.js";
 
 const serverUrl =
   process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3000";
-const allowWrites = process.env.STANDARD_RED_NOTES_ALLOW_WRITES === "1";
+// MCP scoped token: when set, the bridge authenticates with this token INSTEAD
+// of email/password/MFA. Its scope (read vs read-write) is enforced below.
+const mcpToken = process.env.STANDARD_RED_NOTES_MCP_TOKEN;
+let allowWrites = process.env.STANDARD_RED_NOTES_ALLOW_WRITES === "1";
 const email = process.env.STANDARD_RED_NOTES_EMAIL;
 const password = process.env.STANDARD_RED_NOTES_PASSWORD;
 const mfaCode = process.env.STANDARD_RED_NOTES_MFA_CODE;
@@ -32,9 +35,9 @@ function getClient(): Promise<SnjsBackedClient> {
   }
   if (!initPromise) {
     initPromise = (async () => {
-      if (!email || !password) {
+      if (!mcpToken && (!email || !password)) {
         throw new Error(
-          "Account not configured. Set STANDARD_RED_NOTES_EMAIL and STANDARD_RED_NOTES_PASSWORD.",
+          "Account not configured. Set STANDARD_RED_NOTES_MCP_TOKEN, or STANDARD_RED_NOTES_EMAIL and STANDARD_RED_NOTES_PASSWORD.",
         );
       }
       headless = await bootstrapHeadlessApp({
@@ -44,11 +47,20 @@ function getClient(): Promise<SnjsBackedClient> {
         password,
         syncIntervalMs,
       });
-      if (!headless.isSignedIn()) {
+      if (mcpToken) {
+        // Token path: authenticate with the scoped token (no email/password).
+        // A read-only token forcibly disables writes regardless of the
+        // STANDARD_RED_NOTES_ALLOW_WRITES env, so the bridge never attempts a
+        // write the server would reject.
+        const result = await headless.signInWithToken(mcpToken);
+        if (result.readOnly) {
+          allowWrites = false;
+        }
+      } else if (!headless.isSignedIn()) {
         if (allowRegister) {
-          await headless.register(email, password);
+          await headless.register(email as string, password as string);
         } else {
-          await headless.signIn(email, password, mfaCode);
+          await headless.signIn(email as string, password as string, mfaCode);
         }
       } else {
         await headless.sync();
@@ -101,9 +113,10 @@ server.registerTool(
     },
   },
   async () => {
+    const accountConfigured = Boolean(mcpToken || (email && password));
     let signedIn = false;
     try {
-      if (email && password) {
+      if (accountConfigured) {
         await getClient();
         signedIn = headless?.isSignedIn() ?? false;
       }
@@ -116,7 +129,7 @@ server.registerTool(
       transport: "stdio",
       serverUrl,
       writes: allowWrites,
-      accountConfigured: Boolean(email && password),
+      accountConfigured,
       signedIn,
       // A signed-in bridge whose background sync keeps failing is a "zombie":
       // it looks fine but no data moves. Surface that explicitly.

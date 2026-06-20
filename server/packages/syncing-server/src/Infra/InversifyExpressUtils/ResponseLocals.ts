@@ -18,6 +18,10 @@ export interface ResponseLocals {
     refresh_expiration: string
   }
   readOnlyAccess: boolean
+  mcpScope?: {
+    access: 'read' | 'write'
+    tagUuids?: string[]
+  }
   sharedVaultOwnerContext?: {
     upload_bytes_limit: number
   }

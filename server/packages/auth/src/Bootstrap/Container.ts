@@ -221,6 +221,20 @@ import { DeleteAppPassword } from '../Domain/UseCase/DeleteAppPassword/DeleteApp
 import { VerifyAppPassword } from '../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
 import { AppPasswordsController } from '../Controller/AppPasswordsController'
 import { BaseAppPasswordsController } from '../Infra/InversifyExpressUtils/Base/BaseAppPasswordsController'
+import { McpToken } from '../Domain/McpToken/McpToken'
+import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
+import { McpTokenPersistenceMapper } from '../Mapping/McpTokenPersistenceMapper'
+import { McpTokenRepositoryInterface } from '../Domain/McpToken/McpTokenRepositoryInterface'
+import { TypeORMMcpTokenRepository } from '../Infra/TypeORM/TypeORMMcpTokenRepository'
+import { McpTokenHttpProjection } from '../Infra/Http/Projection/McpTokenHttpProjection'
+import { McpTokenHttpMapper } from '../Mapping/McpTokenHttpMapper'
+import { CreateMcpToken } from '../Domain/UseCase/CreateMcpToken/CreateMcpToken'
+import { ListMcpTokens } from '../Domain/UseCase/ListMcpTokens/ListMcpTokens'
+import { DeleteMcpToken } from '../Domain/UseCase/DeleteMcpToken/DeleteMcpToken'
+import { AuthenticateWithMcpToken } from '../Domain/UseCase/AuthenticateWithMcpToken/AuthenticateWithMcpToken'
+import { GetMcpTokenKeys } from '../Domain/UseCase/GetMcpTokenKeys/GetMcpTokenKeys'
+import { McpTokensController } from '../Controller/McpTokensController'
+import { BaseMcpTokensController } from '../Infra/InversifyExpressUtils/Base/BaseMcpTokensController'
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -481,6 +495,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<AppPassword, AppPasswordHttpProjection>>(TYPES.Auth_AppPasswordHttpMapper)
       .toConstantValue(new AppPasswordHttpMapper())
     container
+      .bind<MapperInterface<McpToken, TypeORMMcpToken>>(TYPES.Auth_McpTokenPersistenceMapper)
+      .toConstantValue(new McpTokenPersistenceMapper())
+    container
+      .bind<MapperInterface<McpToken, McpTokenHttpProjection>>(TYPES.Auth_McpTokenHttpMapper)
+      .toConstantValue(new McpTokenHttpMapper())
+    container
       .bind<
         MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
@@ -547,6 +567,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMAppPassword>>(TYPES.Auth_ORMAppPasswordRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAppPassword))
+    container
+      .bind<Repository<TypeORMMcpToken>>(TYPES.Auth_ORMMcpTokenRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMMcpToken))
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
@@ -620,6 +643,14 @@ export class ContainerConfigLoader {
         new TypeORMAppPasswordRepository(
           container.get(TYPES.Auth_ORMAppPasswordRepository),
           container.get(TYPES.Auth_AppPasswordPersistenceMapper),
+        ),
+      )
+    container
+      .bind<McpTokenRepositoryInterface>(TYPES.Auth_McpTokenRepository)
+      .toConstantValue(
+        new TypeORMMcpTokenRepository(
+          container.get(TYPES.Auth_ORMMcpTokenRepository),
+          container.get(TYPES.Auth_McpTokenPersistenceMapper),
         ),
       )
     container
@@ -1165,6 +1196,23 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_UserRepository),
         ),
       )
+    container
+      .bind<CreateMcpToken>(TYPES.Auth_CreateMcpToken)
+      .toConstantValue(
+        new CreateMcpToken(container.get(TYPES.Auth_McpTokenRepository), container.get(TYPES.Auth_UserRepository)),
+      )
+    container
+      .bind<ListMcpTokens>(TYPES.Auth_ListMcpTokens)
+      .toConstantValue(new ListMcpTokens(container.get(TYPES.Auth_McpTokenRepository)))
+    container
+      .bind<DeleteMcpToken>(TYPES.Auth_DeleteMcpToken)
+      .toConstantValue(new DeleteMcpToken(container.get(TYPES.Auth_McpTokenRepository)))
+    container
+      .bind<AuthenticateWithMcpToken>(TYPES.Auth_AuthenticateWithMcpToken)
+      .toConstantValue(new AuthenticateWithMcpToken(container.get(TYPES.Auth_McpTokenRepository)))
+    container
+      .bind<GetMcpTokenKeys>(TYPES.Auth_GetMcpTokenKeys)
+      .toConstantValue(new GetMcpTokenKeys(container.get(TYPES.Auth_McpTokenRepository)))
     container
       .bind<SetSettingValue>(TYPES.Auth_SetSettingValue)
       .toConstantValue(
@@ -1718,6 +1766,21 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<McpTokensController>(TYPES.Auth_McpTokensController)
+      .toConstantValue(
+        new McpTokensController(
+          container.get(TYPES.Auth_CreateMcpToken),
+          container.get(TYPES.Auth_ListMcpTokens),
+          container.get(TYPES.Auth_DeleteMcpToken),
+          container.get(TYPES.Auth_AuthenticateWithMcpToken),
+          container.get(TYPES.Auth_GetMcpTokenKeys),
+          container.get(TYPES.Auth_McpTokenHttpMapper),
+          container.get(TYPES.Auth_AuthResponseFactoryResolver),
+          container.get(TYPES.Auth_UserRepository),
+          container.get(TYPES.Auth_SessionRepository),
+        ),
+      )
+    container
       .bind<MagicLinkController>(TYPES.Auth_MagicLinkController)
       .toConstantValue(
         new MagicLinkController(
@@ -2044,6 +2107,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseAppPasswordsController(
             container.get(TYPES.Auth_AppPasswordsController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseMcpTokensController>(TYPES.Auth_BaseMcpTokensController)
+        .toConstantValue(
+          new BaseMcpTokensController(
+            container.get(TYPES.Auth_McpTokensController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

@@ -15,6 +15,7 @@ import U2FView from './U2F/U2FView/U2FView'
 import TwoFactorAuthView from './TwoFactorAuth/TwoFactorAuthView/TwoFactorAuthView'
 import MagicLinkView from './TwoFactorAuth/MagicLink/MagicLinkView'
 import AppPasswords from './AppPasswords/AppPasswords'
+import McpTokens from './McpTokens/McpTokens'
 
 interface SecurityProps {
   application: WebApplication
@@ -60,6 +61,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
       )}
       {props.application.sessions.getUser() && <MagicLinkView application={props.application} />}
       {props.application.sessions.getUser() && <AppPasswords application={props.application} />}
+      {props.application.sessions.getUser() && <McpTokens application={props.application} />}
       {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
       <PasscodeLock application={props.application} />
       {isNativeMobileWeb && <BiometricsLock application={props.application} />}

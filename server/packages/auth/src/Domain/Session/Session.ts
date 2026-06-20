@@ -108,4 +108,17 @@ export class Session {
     nullable: true,
   })
   declare snjs: string | null
+
+  /**
+   * Standard Red Notes: when a session is minted by an MCP token, this carries
+   * the optional tag-scope (JSON array of tag UUIDs) so it can be threaded into
+   * the cross-service token's `mcp_scope`. Tag-scope is enforced client-side by
+   * the bridge; the read/write scope reuses `readonlyAccess`.
+   */
+  @Column({
+    name: 'mcp_scope_tag_uuids',
+    type: 'text',
+    nullable: true,
+  })
+  declare mcpScopeTagUuids: string | null
 }

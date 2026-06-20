@@ -24,6 +24,12 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:app-passwords/', 'auth.appPasswords.list'],
     ['[POST]:app-passwords/', 'auth.appPasswords.create'],
     ['[DELETE]:app-passwords/:appPasswordId', 'auth.appPasswords.delete'],
+    // MCP Tokens Controller (Standard Red Notes)
+    ['[GET]:mcp-tokens/', 'auth.mcpTokens.list'],
+    ['[POST]:mcp-tokens/', 'auth.mcpTokens.create'],
+    ['[DELETE]:mcp-tokens/:mcpTokenId', 'auth.mcpTokens.delete'],
+    ['[GET]:mcp-tokens/keys/:mcpTokenId', 'auth.mcpTokens.getKeys'],
+    ['[POST]:mcp-tokens/authenticate', 'auth.mcpTokens.authenticate'],
     // Magic Link Controller
     ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
     ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],

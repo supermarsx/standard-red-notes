@@ -26,12 +26,19 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
 
       const decodedToken = verify(authToken, this.authJWTSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
 
+      // Standard Red Notes: an MCP scoped token with access=read must be hard
+      // enforced as read-only server-side (writes are rejected at SaveItems).
+      // Tag-scope is carried for the client-side bridge only; not enforced here.
+      const mcpScope = decodedToken.mcp_scope
+      const readOnlyAccess = (decodedToken.session?.readonly_access ?? false) || mcpScope?.access === 'read'
+
       Object.assign(response.locals, {
         user: decodedToken.user,
         roles: decodedToken.roles,
         isFreeUser: decodedToken.roles.length === 1 && decodedToken.roles[0].name === RoleName.NAMES.CoreUser,
         session: decodedToken.session,
-        readOnlyAccess: decodedToken.session?.readonly_access ?? false,
+        readOnlyAccess,
+        mcpScope,
         sharedVaultOwnerContext: decodedToken.shared_vault_owner_context,
         hasContentLimit: decodedToken.hasContentLimit,
       } as ResponseLocals)
