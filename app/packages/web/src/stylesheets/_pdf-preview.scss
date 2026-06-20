@@ -1,0 +1,48 @@
+/**
+ * Styles for the PDF.js-based file preview (Components/FilePreview/PdfPreview).
+ * The text-layer rules are adapted from pdfjs-dist/web/pdf_viewer.css so the
+ * selectable/searchable text overlay aligns with the rendered canvas. Kept
+ * local (not imported from the package) so the viewer is fully self-contained.
+ */
+
+.pdf-text-layer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+
+  :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+  }
+
+  span.markedContent {
+    top: 0;
+    height: 0;
+  }
+
+  ::selection {
+    background: rgba(0, 100, 255, 0.35);
+  }
+
+  // Search-match highlights painted onto the otherwise-transparent text spans.
+  .pdf-search-highlight {
+    color: transparent;
+    background-color: rgba(255, 226, 0, 0.5);
+    border-radius: 2px;
+  }
+
+  .pdf-search-highlight-active {
+    background-color: rgba(255, 145, 0, 0.7);
+  }
+}

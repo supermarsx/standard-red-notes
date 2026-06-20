@@ -25,7 +25,7 @@ type Props = {
 }
 
 const FilePreviewModal = observer(({ application }: Props) => {
-  const { currentFile, setCurrentFile, otherFiles, dismiss } = application.filePreviewModalController
+  const { currentFile, setCurrentFile, otherFiles, dismiss, pdfTarget } = application.filePreviewModalController
 
   const [isRenaming, setIsRenaming] = useState(false)
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -268,7 +268,12 @@ const FilePreviewModal = observer(({ application }: Props) => {
               showFileInfoPanel && 'border-t border-border md:border-b-0 md:border-r',
             )}
           >
-            <FilePreview file={currentFile} application={application} key={currentFile.uuid} />
+            <FilePreview
+              file={currentFile}
+              application={application}
+              key={currentFile.uuid}
+              pdfTarget={pdfTarget}
+            />
           </div>
           {showFileInfoPanel && <FilePreviewInfoPanel file={currentFile} />}
         </div>

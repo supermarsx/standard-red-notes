@@ -14,17 +14,20 @@ import PreviewComponent from './PreviewComponent'
 import Button from '../Button/Button'
 import { ProtectedIllustration } from '@standardnotes/icons'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
+import { PdfDeepLinkTarget } from './PdfDeepLink'
 
 type Props = {
   application: WebApplication
   file: FileItem
   isEmbeddedInSuper?: boolean
+  pdfTarget?: PdfDeepLinkTarget
 } & OptionalSuperEmbeddedImageProps
 
 const FilePreview = ({
   file,
   application,
   isEmbeddedInSuper = false,
+  pdfTarget,
   imageZoomLevel,
   setImageZoomLevel,
   alignment,
@@ -150,6 +153,7 @@ const FilePreview = ({
       file={file}
       bytes={downloadedBytes}
       isEmbeddedInSuper={isEmbeddedInSuper}
+      pdfTarget={pdfTarget}
       imageZoomLevel={imageZoomLevel}
       setImageZoomLevel={setImageZoomLevel}
       alignment={alignment}

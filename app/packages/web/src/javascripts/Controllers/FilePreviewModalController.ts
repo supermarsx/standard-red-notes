@@ -1,10 +1,13 @@
 import { ContentType, FileItem, ItemManagerInterface } from '@standardnotes/snjs'
 import { action, makeObservable, observable } from 'mobx'
+import { PdfDeepLinkTarget } from '@/Components/FilePreview/PdfDeepLink'
 
 export class FilePreviewModalController {
   isOpen = false
   currentFile: FileItem | undefined = undefined
   otherFiles: FileItem[] = []
+  /** Optional deep-link location (page/quote) to open a PDF at. */
+  pdfTarget: PdfDeepLinkTarget | undefined = undefined
 
   eventObservers: (() => void)[] = []
 
@@ -13,6 +16,7 @@ export class FilePreviewModalController {
       isOpen: observable,
       currentFile: observable,
       otherFiles: observable,
+      pdfTarget: observable.ref,
 
       activate: action,
       dismiss: action,
@@ -54,15 +58,17 @@ export class FilePreviewModalController {
     this.currentFile = currentFile
   }
 
-  activate = (currentFile: FileItem, otherFiles?: FileItem[]) => {
+  activate = (currentFile: FileItem, otherFiles?: FileItem[], pdfTarget?: PdfDeepLinkTarget) => {
     this.currentFile = currentFile
     if (otherFiles) {
       this.otherFiles = otherFiles
     }
+    this.pdfTarget = pdfTarget
     this.isOpen = true
   }
 
   dismiss = () => {
     this.isOpen = false
+    this.pdfTarget = undefined
   }
 }

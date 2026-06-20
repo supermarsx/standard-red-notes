@@ -1,7 +1,8 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { getBase64FromBlob } from '@/Utils'
-import { FileItem, classNames } from '@standardnotes/snjs'
-import { FunctionComponent, useCallback, useEffect, useMemo, useRef } from 'react'
+import { FileItem } from '@standardnotes/snjs'
+import { FunctionComponent, lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import Spinner from '@/Components/Spinner/Spinner'
 import Button from '../Button/Button'
 import { createObjectURLWithRef } from './CreateObjectURLWithRef'
 import ImagePreview from './ImagePreview'
@@ -10,12 +11,17 @@ import { PreviewableTextFileTypes, RequiresNativeFilePreview } from './isFilePre
 import TextPreview from './TextPreview'
 import { parseFileName, sanitizeFileName } from '@standardnotes/utils'
 import VideoPreview from './VideoPreview'
+import { PdfDeepLinkTarget } from './PdfDeepLink'
+
+// PDF.js is large; lazy-load the viewer so it's code-split out of the main bundle.
+const PdfPreview = lazy(() => import('./PdfPreview'))
 
 type Props = {
   application: WebApplication
   file: FileItem
   bytes: Uint8Array
   isEmbeddedInSuper: boolean
+  pdfTarget?: PdfDeepLinkTarget
 } & OptionalSuperEmbeddedImageProps
 
 const PreviewComponent: FunctionComponent<Props> = ({
@@ -34,6 +40,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
   float,
   setFloat,
   isImageSelected,
+  pdfTarget,
 }) => {
   const objectUrlRef = useRef<string | undefined>(undefined)
 
@@ -131,12 +138,22 @@ const PreviewComponent: FunctionComponent<Props> = ({
 
   const isPDF = file.mimeType === 'application/pdf'
 
-  return (
-    <object
-      className={classNames('h-full w-full', isPDF && 'min-h-[65vh]')}
-      data={isPDF ? objectUrl + '#view=FitV' : objectUrl}
-    />
-  )
+  if (isPDF) {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex flex-grow flex-col items-center justify-center">
+            <Spinner className="h-6 w-6" />
+            <span className="mt-3 text-sm text-passive-0">Loading PDF viewer...</span>
+          </div>
+        }
+      >
+        <PdfPreview bytes={bytes} fileUuid={file.uuid} target={pdfTarget} />
+      </Suspense>
+    )
+  }
+
+  return <object className="h-full w-full" data={objectUrl} />
 }
 
 export default PreviewComponent

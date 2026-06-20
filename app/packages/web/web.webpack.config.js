@@ -100,7 +100,7 @@ module.exports = (env) => {
         : [],
     ),
     resolve: {
-      extensions: ['.ts', '.tsx', '.js'],
+      extensions: ['.ts', '.tsx', '.js', '.mjs'],
       fallback: {
         crypto: false,
         path: false,
@@ -123,6 +123,24 @@ module.exports = (env) => {
           loader: 'worker-loader',
           options: {
             inline: 'fallback',
+          },
+        },
+        {
+          // PDF.js worker is shipped as a prebuilt .mjs. Emit it as a resource so
+          // it's bundled locally and served from our own origin (fully offline,
+          // no CDN). The viewer points GlobalWorkerOptions.workerSrc at this URL.
+          test: /pdf\.worker(\.min)?\.mjs$/,
+          type: 'asset/resource',
+          generator: {
+            filename: 'assets/pdf/[name][ext]',
+          },
+        },
+        {
+          // PDF.js main library is a prebuilt ES module; let webpack consume it as
+          // a normal module without running it through babel/ts-loader.
+          test: /pdfjs-dist[\\/].*\.mjs$/,
+          resolve: {
+            fullySpecified: false,
           },
         },
         {

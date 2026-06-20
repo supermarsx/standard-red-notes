@@ -6,6 +6,7 @@ import {
 } from '@standardnotes/files'
 import { FilePreviewModalController } from './FilePreviewModalController'
 import { FileItemAction, FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
+import { parsePdfDeepLink } from '@/Components/FilePreview/PdfDeepLink'
 import { BYTES_IN_ONE_MEGABYTE } from '@/Constants/Constants'
 import {
   ArchiveManager,
@@ -235,6 +236,34 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
   renameFile = async (file: FileItem, fileName: string) => {
     await this.mutator.renameFile(file, fileName)
     void this.sync.sync()
+  }
+
+  /**
+   * Open a PDF (or any) file from an `sn-file://<uuid>#page=N[&quote=...]` deep
+   * link, jumping the viewer to the encoded page/quote. This is the entry point
+   * a note's link system can call when a deep link is clicked.
+   */
+  openFileDeepLink = async (link: string): Promise<boolean> => {
+    const parsed = parsePdfDeepLink(link)
+    if (!parsed) {
+      return false
+    }
+
+    const file = this.items.findItem(parsed.fileUuid)
+    if (!file || !isFile(file)) {
+      return false
+    }
+
+    if (file.protected) {
+      const authorized = await this.authorizeProtectedActionForFile(file, ChallengeReason.AccessProtectedFile)
+      if (!authorized) {
+        return false
+      }
+    }
+
+    this.filePreviewModalController.activate(file, undefined, { page: parsed.page, quote: parsed.quote })
+    this.recents.add(file.uuid)
+    return true
   }
 
   handleFileAction = async (
