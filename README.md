@@ -10,6 +10,8 @@ This repository currently preserves the upstream package boundaries:
 
 The app and server still use their upstream Yarn projects internally. The root package is a coordinator for monorepo scripts and new packages while the larger workspace migration is phased in.
 
+> New here? Read the [onboarding guide](docs/onboarding.md) to learn how to use the app — accounts, editors, organizing notes, the AI assistant, and what stays private.
+
 ## Commands
 
 ```powershell
