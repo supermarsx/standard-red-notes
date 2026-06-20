@@ -39,6 +39,7 @@ import { GetEmbedBlockOption } from '../Blocks/Embed'
 import { GetWebEmbedBlockOption } from '../Blocks/WebEmbed'
 import { GetMathBlockOption } from '../Blocks/Math'
 import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
+import { GetFootnoteBlockOption } from '../Blocks/Footnote'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -83,6 +84,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetWebEmbedBlockOption(editor),
       GetMathBlockOption(editor),
       GetInlineMathBlockOption(editor),
+      GetFootnoteBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

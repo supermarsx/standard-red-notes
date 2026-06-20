@@ -77,6 +77,7 @@ import { EmbedBlock } from '../Blocks/Embed'
 import { WebEmbedBlock } from '../Blocks/WebEmbed'
 import { MathBlock } from '../Blocks/Math'
 import { InlineMathBlock } from '../Blocks/InlineMath'
+import { FootnoteBlock } from '../Blocks/Footnote'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -1419,6 +1420,11 @@ const ToolbarPlugin = () => {
             name={InlineMathBlock.name}
             iconName={InlineMathBlock.iconName}
             onClick={() => InlineMathBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={FootnoteBlock.name}
+            iconName={FootnoteBlock.iconName}
+            onClick={() => FootnoteBlock.onSelect(editor)}
           />
         </Menu>
       </Popover>

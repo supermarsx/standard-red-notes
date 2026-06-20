@@ -28,6 +28,8 @@ import { EmbedNode } from './EmbedNode'
 import { WebEmbedNode } from './WebEmbedNode'
 import { MathNode } from './MathNode'
 import { InlineMathNode } from './InlineMathNode'
+import { FootnoteReferenceNode } from './FootnoteReferenceNode'
+import { FootnotesNode } from './FootnotesNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -64,6 +66,8 @@ const CommonNodes = [
   WebEmbedNode,
   MathNode,
   InlineMathNode,
+  FootnoteReferenceNode,
+  FootnotesNode,
 ]
 
 export const BlockEditorNodes = CommonNodes
