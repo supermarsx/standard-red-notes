@@ -4,6 +4,7 @@ Thumbs.db
 .env
 .env.*
 !.env.sample
+!.env.example
 
 node_modules/
 **/node_modules/

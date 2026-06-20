@@ -26,6 +26,28 @@ yarn --cwd app build:all
 yarn --cwd server build
 ```
 
+## Self-hosting
+
+The fastest way to run your own server is the setup script, which generates a
+complete `.env` (with securely-generated secrets), lets you customize the
+domain/ports, and brings the Docker Compose stack up.
+
+```bash
+# macOS / Linux
+./scripts/setup.sh
+
+# Windows (PowerShell)
+./scripts/setup.ps1
+```
+
+Then open `http://localhost:3001`. Add `--up` (bash) / `-Up` (PowerShell) to
+start the stack automatically, or `--yes` / `-Yes` to accept all defaults.
+
+See [docs/self-hosting.md](docs/self-hosting.md) for the full guide: the
+5-minute tutorial, what each service does, every environment variable explained,
+choosing a domain/ports, start/stop/upgrade, where data lives, and
+backup/restore + troubleshooting. `.env.example` documents every key.
+
 ## Docker
 
 ```powershell
