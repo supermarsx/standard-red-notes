@@ -29,6 +29,8 @@ import SuperNoteConverter from '../SuperEditor/SuperNoteConverter'
 import MenuSection from '../Menu/MenuSection'
 import { CanvasEditorIdentifier } from '../NoteView/CanvasEditor/CanvasEditor'
 import { parseCanvasDocument, serializeCanvasDocument, createEmptyCanvasDocument } from '../NoteView/CanvasEditor/CanvasDocument'
+import { BaseEditorIdentifier } from '../NoteView/BaseEditor/BaseEditor'
+import { parseBaseDocument, serializeBaseDocument, createEmptyBaseDocument } from '../NoteView/BaseEditor/BaseDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -101,9 +103,9 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
 
   const isSelected = useCallback(
     (item: EditorMenuItem) => {
-      // Canvas is selected via editorIdentifier and is not part of the native
-      // feature groups; when active, no native/group item should appear chosen.
-      if (note?.editorIdentifier === CanvasEditorIdentifier) {
+      // Canvas and Base are selected via editorIdentifier and are not part of the
+      // native feature groups; when active, no native/group item should appear chosen.
+      if (note?.editorIdentifier === CanvasEditorIdentifier || note?.editorIdentifier === BaseEditorIdentifier) {
         return false
       }
 
@@ -184,6 +186,48 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
         noteMutator.text = serializeCanvasDocument(createEmptyCanvasDocument())
       } else {
         noteMutator.text = serializeCanvasDocument(parseCanvasDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
+
+  const isBaseSelected = note?.editorIdentifier === BaseEditorIdentifier
+
+  const selectBase = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-base content: only overwrite note.text with an empty base
+    // when the existing text isn't already a recoverable base definition.
+    const { recovered } = parseBaseDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to a Base will replace its current content with an empty table definition. This cannot be undone.',
+        'Switch to Base?',
+        'Switch to Base',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = BaseEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeBaseDocument(createEmptyBaseDocument())
+      } else {
+        noteMutator.text = serializeBaseDocument(parseBaseDocument(note.text).document)
       }
     })
 
@@ -381,6 +425,24 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               <div className="flex items-center">
                 <Icon type="editor" className="mr-2 text-neutral" />
                 Canvas
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectBase().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isBaseSelected}
+            info={'A database/table view over your notes with columns, filters, and sorting.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="hashtag" className="mr-2 text-neutral" />
+                Base
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
                 </Pill>

@@ -48,6 +48,7 @@ import { SuperEditorContentId } from '../SuperEditor/Constants'
 import { NoteViewController } from './Controller/NoteViewController'
 import { PlainEditor, PlainEditorInterface } from './PlainEditor/PlainEditor'
 import { CanvasEditor, CanvasEditorIdentifier } from './CanvasEditor/CanvasEditor'
+import { BaseEditor, BaseEditorIdentifier } from './BaseEditor/BaseEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -535,9 +536,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       return
     }
 
-    /** Canvas is a web-only editor selected via editorIdentifier; it is not an
-     * iframe/native component, so skip component-viewer resolution entirely. */
-    if (this.note.editorIdentifier === CanvasEditorIdentifier) {
+    /** Canvas and Base are web-only editors selected via editorIdentifier; they
+     * are not iframe/native components, so skip component-viewer resolution. */
+    if (
+      this.note.editorIdentifier === CanvasEditorIdentifier ||
+      this.note.editorIdentifier === BaseEditorIdentifier
+    ) {
       this.destroyCurrentEditorComponent()
       this.setState({ editorStateDidLoad: true })
       return
@@ -862,6 +866,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     const editorMode =
       this.note.editorIdentifier === CanvasEditorIdentifier
         ? 'canvas'
+        : this.note.editorIdentifier === BaseEditorIdentifier
+        ? 'base'
         : this.note.noteType === NoteType.Super
           ? 'super'
           : this.state.editorStateDidLoad && !this.state.editorComponentViewer
@@ -1030,6 +1036,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
           {editorMode === 'canvas' && (
             <CanvasEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'base' && (
+            <BaseEditor
               key={this.note.uuid}
               application={this.application}
               controller={this.controller}
