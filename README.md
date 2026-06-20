@@ -108,84 +108,40 @@ workspace migration is phased in.
 
 ## Docker quickstart
 
-The fastest way to run your own instance. This gets you a local server with the
-web app open in your browser; for production (custom domain, TLS, reverse proxy)
-follow the [full self-hosting guide](docs/self-hosting.md).
-
-### Prerequisites
-
-- **Docker** and the **Docker Compose** plugin installed and running.
-- A copy of this repository.
-
-### 1. Get the code
+Run your own instance in three commands. **Prerequisite:** Docker with the
+Compose plugin, installed and running.
 
 ```bash
 git clone https://github.com/supermarsx/standard-red-notes.git
 cd standard-red-notes
+./scripts/setup.sh --up        # Windows (PowerShell): ./scripts/setup.ps1 -Up
 ```
 
-### 2. Run the setup script
+`setup` generates a complete `.env` with secure secrets; `--up` then brings the
+stack up (web app, server, MySQL, Redis, LocalStack). When it finishes, open
+**<http://localhost:3001>** and choose **Register** — every feature is included,
+nothing to purchase.
 
-The setup script checks that Docker is present, asks a few questions (press
-Enter through them for a localhost install), generates all secrets, and writes a
-complete `.env` file.
+<details>
+<summary>Manual setup &amp; everyday commands</summary>
 
 ```bash
-# macOS / Linux
-./scripts/setup.sh
-
-# Windows (PowerShell)
-./scripts/setup.ps1
+./scripts/setup.sh             # write .env only (add --yes to accept all defaults)
+docker compose up -d           # start the stack
+docker compose ps              # what's running
+docker compose logs -f         # follow logs (append a service name to narrow)
+docker compose down            # stop
+docker compose pull && docker compose up -d    # update and restart
+docker compose --profile mcp run --rm mcp      # optional MCP stdio bridge
 ```
 
-Helpful flags:
+Other endpoints: API gateway <http://localhost:3000>, files
+<http://localhost:3125>.
+</details>
 
-- `--up` (bash) / `-Up` (PowerShell) — also run `docker compose up -d` once the
-  `.env` is written.
-- `--yes` (bash) / `-Yes` (PowerShell) — non-interactive; accept all defaults.
-
-### 3. Start the stack
-
-If you did not pass the "up" flag:
-
-```bash
-docker compose up -d
-```
-
-This builds and starts the web app, the all-in-one self-hosted server, MySQL,
-Redis, and a LocalStack SNS/SQS for messaging.
-
-### 4. Open it
-
-- Web app: <http://localhost:3001>
-- API gateway: <http://localhost:3000>
-- Files service: <http://localhost:3125>
-
-Choose **Register** in the web app to create your account. There is nothing to
-purchase — self-hosted instances ship with all features included.
-
-### Everyday operations
-
-```bash
-docker compose ps              # see what's running
-docker compose logs -f         # follow logs (add a service name to narrow)
-docker compose down            # stop the stack
-docker compose pull && docker compose up -d   # update and restart
-```
-
-The optional MCP stdio bridge is only started when a client needs it:
-
-```bash
-docker compose --profile mcp run --rm mcp
-```
-
-### Full guide and reverse proxy
-
-For the complete walkthrough — every environment variable explained, choosing a
-domain and ports, **running behind a reverse proxy (nginx / Traefik)**, where
-your data lives, upgrades, and backup/restore — see
-**[docs/self-hosting.md](docs/self-hosting.md)**. `.env.example` documents every
-configuration key.
+For production — every environment variable, **reverse proxy (nginx / Traefik)**,
+data locations, upgrades, and backup/restore — see the
+**[self-hosting guide](docs/self-hosting.md)**.
 
 ## Building from source
 
