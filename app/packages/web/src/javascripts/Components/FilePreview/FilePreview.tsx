@@ -29,6 +29,13 @@ const FilePreview = ({
   setImageZoomLevel,
   alignment,
   changeAlignment,
+  imageWidth,
+  setImageWidth,
+  caption,
+  setCaption,
+  float,
+  setFloat,
+  isImageSelected,
 }: Props) => {
   const [isAuthorized, setIsAuthorized] = useState(application.isAuthorizedToRenderItem(file))
 
@@ -147,6 +154,13 @@ const FilePreview = ({
       setImageZoomLevel={setImageZoomLevel}
       alignment={alignment}
       changeAlignment={changeAlignment}
+      imageWidth={imageWidth}
+      setImageWidth={setImageWidth}
+      caption={caption}
+      setCaption={setCaption}
+      float={float}
+      setFloat={setFloat}
+      isImageSelected={isImageSelected}
     />
   ) : (
     <FilePreviewError

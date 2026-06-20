@@ -7,16 +7,21 @@ import {
   ElementFormatType,
   LexicalEditor,
   LexicalNode,
+  LexicalUpdateJSON,
   NodeKey,
   Spread,
 } from 'lexical'
 import InlineFileComponent from './InlineFileComponent'
+import { ImageFloat } from '../ImageTools/ImageToolsTypes'
 
 type SerializedInlineFileNode = Spread<
   {
     fileName: string | undefined
     mimeType: string
     src: string
+    width?: number
+    caption?: string
+    float?: ImageFloat
   },
   SerializedDecoratorBlockNode
 >
@@ -25,20 +30,44 @@ export class InlineFileNode extends DecoratorBlockNode {
   __fileName: string | undefined
   __mimeType: string
   __src: string
+  __width: number | undefined
+  __caption: string | undefined
+  __float: ImageFloat
 
   static getType(): string {
     return 'inline-file'
   }
 
-  constructor(src: string, mimeType: string, fileName: string | undefined, format?: ElementFormatType, key?: NodeKey) {
+  constructor(
+    src: string,
+    mimeType: string,
+    fileName: string | undefined,
+    format?: ElementFormatType,
+    key?: NodeKey,
+    width?: number,
+    caption?: string,
+    float?: ImageFloat,
+  ) {
     super(format, key)
     this.__src = src
     this.__mimeType = mimeType
     this.__fileName = fileName
+    this.__width = width
+    this.__caption = caption
+    this.__float = float || 'none'
   }
 
   static clone(node: InlineFileNode): InlineFileNode {
-    return new InlineFileNode(node.__src, node.__mimeType, node.__fileName, node.__format, node.__key)
+    return new InlineFileNode(
+      node.__src,
+      node.__mimeType,
+      node.__fileName,
+      node.__format,
+      node.__key,
+      node.__width,
+      node.__caption,
+      node.__float,
+    )
   }
 
   static importJSON(serializedNode: SerializedInlineFileNode): InlineFileNode {
@@ -50,13 +79,42 @@ export class InlineFileNode extends DecoratorBlockNode {
     return node
   }
 
+  updateFromJSON(serializedNode: LexicalUpdateJSON<SerializedInlineFileNode>): this {
+    return super
+      .updateFromJSON(serializedNode)
+      .setWidth(serializedNode.width)
+      .setCaption(serializedNode.caption)
+      .setFloat(serializedNode.float ?? 'none')
+  }
+
   exportJSON(): SerializedInlineFileNode {
     return {
       ...super.exportJSON(),
       src: this.__src,
       mimeType: this.__mimeType,
       fileName: this.__fileName,
+      width: this.__width,
+      caption: this.__caption,
+      float: this.__float,
     }
+  }
+
+  setWidth(width: number | undefined): this {
+    const self = this.getWritable()
+    self.__width = width
+    return self
+  }
+
+  setCaption(caption: string | undefined): this {
+    const self = this.getWritable()
+    self.__caption = caption
+    return self
+  }
+
+  setFloat(float: ImageFloat): this {
+    const self = this.getWritable()
+    self.__float = float
+    return self
   }
 
   static importDOM(): DOMConversionMap<HTMLDivElement> | null {
@@ -179,6 +237,12 @@ export class InlineFileNode extends DecoratorBlockNode {
         src={this.__src}
         mimeType={this.__mimeType}
         fileName={this.__fileName}
+        width={this.__width}
+        setWidth={this.setWidth.bind(this)}
+        caption={this.__caption}
+        setCaption={this.setCaption.bind(this)}
+        float={this.__float}
+        setFloat={this.setFloat.bind(this)}
       />
     )
   }

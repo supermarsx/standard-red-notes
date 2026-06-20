@@ -1,11 +1,18 @@
 import { IconType, PrefKey } from '@standardnotes/snjs'
-import { FunctionComponent, useCallback, useEffect, useState } from 'react'
+import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
 import IconButton from '@/Components/Button/IconButton'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import usePreference from '@/Hooks/usePreference'
-import { getCSSValueFromAlignment, ImageAlignmentOptions } from './ImageAlignmentOptions'
+import { getCSSValueFromAlignment } from './ImageAlignmentOptions'
 import { ElementIds } from '../../Constants/ElementIDs'
-import { getOverflows } from '@/Components/Popover/Utils/Collisions'
+import ImageResizer from '@/Components/SuperEditor/Plugins/ImageTools/ImageResizer'
+import ImageToolbar from '@/Components/SuperEditor/Plugins/ImageTools/ImageToolbar'
+import ImageCaption from '@/Components/SuperEditor/Plugins/ImageTools/ImageCaption'
+import {
+  clampImageWidth,
+  ImageSizePreset,
+  widthForPreset,
+} from '@/Components/SuperEditor/Plugins/ImageTools/ImageToolsTypes'
 
 type Props = {
   objectUrl: string
@@ -25,11 +32,34 @@ const ImagePreview: FunctionComponent<Props> = ({
   setImageZoomLevel,
   alignment,
   changeAlignment,
+  imageWidth: persistedWidth,
+  setImageWidth: persistImageWidth,
+  caption,
+  setCaption,
+  float = 'none',
+  setFloat,
+  isImageSelected = false,
 }) => {
   const [imageWidth, setImageWidth] = useState(0)
   const [imageHeight, setImageHeight] = useState<number>(0)
   const [imageZoomPercent, setImageZoomPercent] = useState(imageZoomLevel ? imageZoomLevel : DefaultZoomPercent)
   const [isZoomInputVisible, setIsZoomInputVisible] = useState(false)
+
+  // Word-style tools state. `liveWidth` reflects an in-progress drag for instant
+  // visual feedback; the value is persisted to the node only on drag end.
+  const resizeWrapperRef = useRef<HTMLDivElement>(null)
+  const [liveWidth, setLiveWidth] = useState<number | undefined>(persistedWidth)
+  const [captionEnabled, setCaptionEnabled] = useState<boolean>(() => !!caption)
+
+  useEffect(() => {
+    setLiveWidth(persistedWidth)
+  }, [persistedWidth])
+
+  useEffect(() => {
+    if (caption) {
+      setCaptionEnabled(true)
+    }
+  }, [caption])
 
   useEffect(() => {
     setImageZoomPercent(imageZoomLevel ? imageZoomLevel : DefaultZoomPercent)
@@ -52,7 +82,43 @@ const ImagePreview: FunctionComponent<Props> = ({
     }
   }, [objectUrl])
 
-  const widthIfEmbedded = imageWidth * (imageZoomPercent / PercentageDivisor)
+  // Effective embedded width: an explicit px width (from the Word-style resizer /
+  // presets) takes precedence; otherwise we fall back to the legacy zoom-percent
+  // sizing so existing notes keep rendering exactly as before.
+  const effectiveWidth = liveWidth ?? imageWidth * (imageZoomPercent / PercentageDivisor)
+  const widthIfEmbedded = effectiveWidth
+
+  const handleResize = useCallback((width: number) => {
+    setLiveWidth(width)
+  }, [])
+
+  const handleResizeEnd = useCallback(
+    (width: number) => {
+      setLiveWidth(width)
+      persistImageWidth?.(clampImageWidth(width))
+    },
+    [persistImageWidth],
+  )
+
+  const handlePresetSelect = useCallback(
+    (preset: ImageSizePreset) => {
+      const width = widthForPreset(preset)
+      setLiveWidth(width)
+      persistImageWidth?.(width)
+    },
+    [persistImageWidth],
+  )
+
+  const handleToggleCaption = useCallback(() => {
+    setCaptionEnabled((enabled) => {
+      const next = !enabled
+      // Turning the caption off clears any stored text.
+      if (!next) {
+        setCaption?.(undefined)
+      }
+      return next
+    })
+  }, [setCaption])
 
   const imageResizer = (
     <>
@@ -133,7 +199,20 @@ const ImagePreview: FunctionComponent<Props> = ({
 
   const defaultSuperImageAlignment = usePreference(PrefKey.SuperNoteImageAlignment)
   const finalAlignment = alignment || defaultSuperImageAlignment
-  const justifyContent = isEmbeddedInSuper ? getCSSValueFromAlignment(finalAlignment) : 'center'
+  // When the image is floated, alignment is expressed via the CSS float (left/right
+  // within the node's own block); otherwise we use flex justify for left/center/right.
+  const isFloating = isEmbeddedInSuper && float !== 'none'
+  const justifyContent = isEmbeddedInSuper
+    ? isFloating
+      ? float === 'left'
+        ? 'start'
+        : 'end'
+      : getCSSValueFromAlignment(finalAlignment)
+    : 'center'
+
+  // The new Word-style toolbar is shown when the embedding decorator node is
+  // selected; it also stays available on hover/focus for discoverability.
+  const showSuperToolbar = isEmbeddedInSuper && !!changeAlignment
 
   return (
     <div
@@ -145,14 +224,21 @@ const ImagePreview: FunctionComponent<Props> = ({
       }}
     >
       <div
-        className="relative flex h-full w-full items-center justify-center overflow-auto"
+        ref={resizeWrapperRef}
+        className={
+          isEmbeddedInSuper
+            ? 'relative flex h-full items-center justify-center overflow-visible'
+            : 'relative flex h-full w-full items-center justify-center overflow-auto'
+        }
         style={{
           width: isEmbeddedInSuper ? `${widthIfEmbedded}px` : '',
+          maxWidth: isEmbeddedInSuper ? '100%' : undefined,
           aspectRatio: isEmbeddedInSuper ? `${imageWidth} / ${imageHeight}` : '',
         }}
       >
         <img
           src={objectUrl}
+          className={isEmbeddedInSuper ? 'h-full w-full' : undefined}
           style={{
             height: isEmbeddedInSuper ? '100%' : `${imageZoomPercent}%`,
             ...(isEmbeddedInSuper
@@ -171,36 +257,44 @@ const ImagePreview: FunctionComponent<Props> = ({
                   }),
           }}
         />
+        {isEmbeddedInSuper && (
+          <ImageResizer
+            active={isImageSelected}
+            targetRef={resizeWrapperRef}
+            onResize={handleResize}
+            onResizeEnd={handleResizeEnd}
+          />
+        )}
+        {showSuperToolbar && (
+          <div
+            className={
+              isImageSelected
+                ? 'visible'
+                : 'invisible focus-within:visible group-hover:visible [.embedBlockFocused_&]:visible'
+            }
+          >
+            <ImageToolbar
+              visible={true}
+              alignment={finalAlignment}
+              onAlignmentChange={changeAlignment!}
+              onPresetSelect={handlePresetSelect}
+              float={float}
+              onFloatChange={(next) => setFloat?.(next)}
+              captionEnabled={captionEnabled}
+              onToggleCaption={handleToggleCaption}
+              boundaryElement={document.getElementById(ElementIds.SuperEditorContent)}
+            />
+          </div>
+        )}
+        {isEmbeddedInSuper && (
+          <div className="absolute left-0 top-full w-full">
+            <ImageCaption caption={caption ?? ''} enabled={captionEnabled} onChange={(c) => setCaption?.(c)} />
+          </div>
+        )}
       </div>
       {!isEmbeddedInSuper && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center rounded border border-solid border-border bg-default px-3 py-1">
           {imageResizer}
-        </div>
-      )}
-      {isEmbeddedInSuper && (
-        <div
-          className="invisible absolute bottom-full left-1/2 z-10 w-max -translate-x-1/2 px-1 pb-1 focus-within:visible group-hover:visible [.embedBlockFocused_&]:visible"
-          ref={(popover) => {
-            const editorRoot = document.getElementById(ElementIds.SuperEditorContent)
-            if (!popover || !editorRoot) {
-              return
-            }
-            const editorRootRect = editorRoot.getBoundingClientRect()
-            const popoverRect = popover.getBoundingClientRect()
-            const overflows = getOverflows(popoverRect, editorRootRect)
-            if (overflows.top > 0) {
-              popover.style.setProperty('--tw-translate-y', `${overflows.top}px`)
-            }
-          }}
-        >
-          <div className="flex divide-x divide-border rounded border border-border bg-default">
-            {changeAlignment && (
-              <div className="flex items-center gap-1 px-1 py-0.5">
-                <ImageAlignmentOptions alignment={finalAlignment} changeAlignment={changeAlignment} />
-              </div>
-            )}
-            <div className="flex items-center px-2 py-0.5 text-sm">{imageResizer}</div>
-          </div>
         </div>
       )}
     </div>

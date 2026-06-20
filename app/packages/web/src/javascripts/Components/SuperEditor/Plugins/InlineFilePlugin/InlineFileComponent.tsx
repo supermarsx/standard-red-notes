@@ -1,17 +1,17 @@
 import { BlockWithAlignableContents } from '@lexical/react/LexicalBlockWithAlignableContents'
-import { Platform, PrefKey, classNames } from '@standardnotes/snjs'
-import { ElementFormatType, NodeKey } from 'lexical'
+import { Platform, classNames } from '@standardnotes/snjs'
+import { $getNodeByKey, CLICK_COMMAND, COMMAND_PRIORITY_LOW, ElementFormatType, NodeKey } from 'lexical'
 import { InlineFileNode } from './InlineFileNode'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import { useApplication } from '@/Components/ApplicationProvider'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { $createFileNode } from '../EncryptedFilePlugin/Nodes/FileUtils'
 import { isIOS } from '@standardnotes/ui-services'
 import Icon from '@/Components/Icon/Icon'
 import Spinner from '@/Components/Spinner/Spinner'
-import usePreference from '@/Hooks/usePreference'
-import { getCSSValueFromAlignment, ImageAlignmentOptions } from '@/Components/FilePreview/ImageAlignmentOptions'
-import { getOverflows } from '@/Components/Popover/Utils/Collisions'
+import SuperEmbeddedImage from '../ImageTools/SuperEmbeddedImage'
+import { ImageFloat } from '../ImageTools/ImageToolsTypes'
 
 type Props = {
   fileName: string | undefined
@@ -25,11 +25,52 @@ type Props = {
   setFormat: (format: ElementFormatType) => void
   node: InlineFileNode
   nodeKey: NodeKey
+  width: number | undefined
+  setWidth: (width: number | undefined) => void
+  caption: string | undefined
+  setCaption: (caption: string | undefined) => void
+  float: ImageFloat
+  setFloat: (float: ImageFloat) => void
 }
 
-const InlineFileComponent = ({ className, src, mimeType, fileName, format, setFormat, node, nodeKey }: Props) => {
+const InlineFileComponent = ({
+  className,
+  src,
+  mimeType,
+  fileName,
+  format,
+  setFormat,
+  node,
+  nodeKey,
+  width,
+  setWidth,
+  caption,
+  setCaption,
+  float,
+  setFloat,
+}: Props) => {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
+  const imageWrapperRef = useRef<HTMLDivElement>(null)
+  const [isSelected, setSelected] = useLexicalNodeSelection(nodeKey)
+
+  useEffect(() => {
+    return editor.registerCommand<MouseEvent>(
+      CLICK_COMMAND,
+      (event) => {
+        if (imageWrapperRef.current?.contains(event.target as Node)) {
+          event.preventDefault()
+          $getNodeByKey(nodeKey)?.selectEnd()
+          setTimeout(() => {
+            setSelected(!isSelected)
+          })
+          return true
+        }
+        return false
+      },
+      COMMAND_PRIORITY_LOW,
+    )
+  }, [editor, isSelected, nodeKey, setSelected])
 
   const [isSaving, setIsSaving] = useState(false)
   const saveToFilesAndReplaceNode = useCallback(async () => {
@@ -61,9 +102,6 @@ const InlineFileComponent = ({ className, src, mimeType, fileName, format, setFo
 
   const isPDF = mimeType === 'application/pdf'
 
-  const defaultSuperImageAlignment = usePreference(PrefKey.SuperNoteImageAlignment)
-  const finalAlignment = format || defaultSuperImageAlignment
-  const alignItems: 'start' | 'center' | 'end' = getCSSValueFromAlignment(finalAlignment)
   const changeAlignment = useCallback(
     (format: ElementFormatType) => {
       editor.update(() => {
@@ -72,38 +110,43 @@ const InlineFileComponent = ({ className, src, mimeType, fileName, format, setFo
     },
     [editor, setFormat],
   )
+  const changeWidth = useCallback(
+    (newWidth: number | undefined) => editor.update(() => setWidth(newWidth)),
+    [editor, setWidth],
+  )
+  const changeCaption = useCallback(
+    (newCaption: string | undefined) => editor.update(() => setCaption(newCaption)),
+    [editor, setCaption],
+  )
+  const changeFloat = useCallback(
+    (newFloat: ImageFloat) => editor.update(() => setFloat(newFloat)),
+    [editor, setFloat],
+  )
 
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
       {mimeType.startsWith('image') ? (
         <div
+          ref={imageWrapperRef}
           className="group relative flex min-h-[2rem] flex-col gap-2.5"
-          style={{ alignItems }}
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
           }}
         >
-          <img alt={fileName} src={src} />
-          <div
-            className="invisible absolute bottom-full left-1/2 z-10 w-max -translate-x-1/2 px-1 pb-1 focus-within:visible group-hover:visible [.embedBlockFocused_&]:visible"
-            ref={(popover) => {
-              const editorRoot = editor.getRootElement()
-              if (!popover || !editorRoot) {
-                return
-              }
-              const editorRootRect = editorRoot.getBoundingClientRect()
-              const popoverRect = popover.getBoundingClientRect()
-              const overflows = getOverflows(popoverRect, editorRootRect)
-              if (overflows.top > 0) {
-                popover.style.setProperty('--tw-translate-y', `${overflows.top}px`)
-              }
-            }}
-          >
-            <div className="flex gap-1 rounded border border-border bg-default px-1 py-0.5">
-              <ImageAlignmentOptions alignment={finalAlignment} changeAlignment={changeAlignment} />
-            </div>
-          </div>
+          <SuperEmbeddedImage
+            src={src}
+            alt={fileName}
+            alignment={format ?? ''}
+            onAlignmentChange={changeAlignment}
+            width={width}
+            onWidthChange={changeWidth}
+            caption={caption}
+            onCaptionChange={changeCaption}
+            float={float}
+            onFloatChange={changeFloat}
+            isSelected={isSelected}
+          />
         </div>
       ) : mimeType.startsWith('video') ? (
         <video className="h-full w-full" controls autoPlay>

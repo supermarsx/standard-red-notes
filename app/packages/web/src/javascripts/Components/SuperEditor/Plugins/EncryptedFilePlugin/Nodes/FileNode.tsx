@@ -13,23 +13,47 @@ import { $createFileNode, convertToFileElement } from './FileUtils'
 import FileComponent from './FileComponent'
 import { SerializedFileNode } from './SerializedFileNode'
 import { ItemNodeInterface } from '../../ItemNodeInterface'
+import { ImageFloat } from '../../ImageTools/ImageToolsTypes'
 
 export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
   __id: string
   __zoomLevel: number
+  // Word-style image attributes (backward-compatible: undefined/defaults for old notes).
+  __width: number | undefined
+  __caption: string | undefined
+  __float: ImageFloat
 
   static getType(): string {
     return 'snfile'
   }
 
-  constructor(id: string, format?: ElementFormatType, key?: NodeKey, zoomLevel?: number) {
+  constructor(
+    id: string,
+    format?: ElementFormatType,
+    key?: NodeKey,
+    zoomLevel?: number,
+    width?: number,
+    caption?: string,
+    float?: ImageFloat,
+  ) {
     super(format, key)
     this.__id = id
     this.__zoomLevel = zoomLevel || 100
+    this.__width = width
+    this.__caption = caption
+    this.__float = float || 'none'
   }
 
   static clone(node: FileNode): FileNode {
-    return new FileNode(node.__id, node.__format, node.__key, node.__zoomLevel)
+    return new FileNode(
+      node.__id,
+      node.__format,
+      node.__key,
+      node.__zoomLevel,
+      node.__width,
+      node.__caption,
+      node.__float,
+    )
   }
 
   static importJSON(serializedNode: SerializedFileNode): FileNode {
@@ -37,7 +61,12 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
   }
 
   updateFromJSON(serializedNode: LexicalUpdateJSON<SerializedFileNode>): this {
-    return super.updateFromJSON(serializedNode).setZoomLevel(serializedNode.zoomLevel)
+    return super
+      .updateFromJSON(serializedNode)
+      .setZoomLevel(serializedNode.zoomLevel)
+      .setWidth(serializedNode.width)
+      .setCaption(serializedNode.caption)
+      .setFloat(serializedNode.float ?? 'none')
   }
 
   exportJSON(): SerializedFileNode {
@@ -45,6 +74,9 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
       ...super.exportJSON(),
       fileUuid: this.getId(),
       zoomLevel: this.__zoomLevel,
+      width: this.__width,
+      caption: this.__caption,
+      float: this.__float,
     }
   }
 
@@ -84,6 +116,24 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
     return self
   }
 
+  setWidth(width: number | undefined): this {
+    const self = this.getWritable()
+    self.__width = width
+    return self
+  }
+
+  setCaption(caption: string | undefined): this {
+    const self = this.getWritable()
+    self.__caption = caption
+    return self
+  }
+
+  setFloat(float: ImageFloat): this {
+    const self = this.getWritable()
+    self.__float = float
+    return self
+  }
+
   decorate(_editor: LexicalEditor, config: EditorConfig): React.JSX.Element {
     const embedBlockTheme = config.theme.embedBlock || {}
     const className = {
@@ -100,6 +150,12 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
         fileUuid={this.__id}
         zoomLevel={this.__zoomLevel}
         setZoomLevel={this.setZoomLevel.bind(this)}
+        width={this.__width}
+        setWidth={this.setWidth.bind(this)}
+        caption={this.__caption}
+        setCaption={this.setCaption.bind(this)}
+        float={this.__float}
+        setFloat={this.setFloat.bind(this)}
       />
     )
   }

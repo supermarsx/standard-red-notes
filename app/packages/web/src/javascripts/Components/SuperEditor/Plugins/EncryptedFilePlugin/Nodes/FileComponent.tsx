@@ -16,6 +16,7 @@ import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import { observer } from 'mobx-react-lite'
 import Spinner from '@/Components/Spinner/Spinner'
 import { FilesControllerEvent } from '@/Controllers/FilesController'
+import { ImageFloat } from '../../ImageTools/ImageToolsTypes'
 
 export type FileComponentProps = Readonly<{
   className: Readonly<{
@@ -28,6 +29,12 @@ export type FileComponentProps = Readonly<{
   fileUuid: string
   zoomLevel: number
   setZoomLevel: (zoomLevel: number) => void
+  width: number | undefined
+  setWidth: (width: number | undefined) => void
+  caption: string | undefined
+  setCaption: (caption: string | undefined) => void
+  float: ImageFloat
+  setFloat: (float: ImageFloat) => void
 }>
 
 function FileComponent({
@@ -38,6 +45,12 @@ function FileComponent({
   fileUuid,
   zoomLevel,
   setZoomLevel,
+  width,
+  setWidth,
+  caption,
+  setCaption,
+  float,
+  setFloat,
 }: FileComponentProps) {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
@@ -101,6 +114,39 @@ function FileComponent({
   )
 
   const [isSelected, setSelected] = useLexicalNodeSelection(nodeKey)
+
+  const changeWidth = useCallback(
+    (newWidth: number | undefined) =>
+      editor.update(
+        () => {
+          setWidth(newWidth)
+        },
+        { tag: SKIP_DOM_SELECTION_TAG },
+      ),
+    [editor, setWidth],
+  )
+
+  const changeCaption = useCallback(
+    (newCaption: string | undefined) =>
+      editor.update(
+        () => {
+          setCaption(newCaption)
+        },
+        { tag: SKIP_DOM_SELECTION_TAG },
+      ),
+    [editor, setCaption],
+  )
+
+  const changeFloat = useCallback(
+    (newFloat: ImageFloat) =>
+      editor.update(
+        () => {
+          setFloat(newFloat)
+        },
+        { tag: SKIP_DOM_SELECTION_TAG },
+      ),
+    [editor, setFloat],
+  )
 
   useEffect(() => {
     return editor.registerCommand<MouseEvent>(
@@ -178,6 +224,13 @@ function FileComponent({
             setImageZoomLevel={setImageZoomLevel}
             alignment={format}
             changeAlignment={changeAlignment}
+            imageWidth={width}
+            setImageWidth={changeWidth}
+            caption={caption}
+            setCaption={changeCaption}
+            float={float}
+            setFloat={changeFloat}
+            isImageSelected={isSelected}
           />
         )}
       </div>

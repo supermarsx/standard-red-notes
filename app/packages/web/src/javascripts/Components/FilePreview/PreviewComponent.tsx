@@ -27,6 +27,13 @@ const PreviewComponent: FunctionComponent<Props> = ({
   setImageZoomLevel,
   alignment,
   changeAlignment,
+  imageWidth,
+  setImageWidth,
+  caption,
+  setCaption,
+  float,
+  setFloat,
+  isImageSelected,
 }) => {
   const objectUrlRef = useRef<string | undefined>(undefined)
 
@@ -88,6 +95,13 @@ const PreviewComponent: FunctionComponent<Props> = ({
         setImageZoomLevel={setImageZoomLevel}
         alignment={alignment}
         changeAlignment={changeAlignment}
+        imageWidth={imageWidth}
+        setImageWidth={setImageWidth}
+        caption={caption}
+        setCaption={setCaption}
+        float={float}
+        setFloat={setFloat}
+        isImageSelected={isImageSelected}
       />
     )
   }
