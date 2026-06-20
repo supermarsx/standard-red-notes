@@ -21,7 +21,7 @@ function getAllTagsForType(controller: NavigationController, type: TagListSectio
     return controller.allLocalRootTags
   }
   if (type === 'tags') {
-    return controller.allLocalFlatTags
+    return controller.allLocalRootTags
   }
   return controller.starredTags
 }

@@ -67,7 +67,8 @@ export const TagsListItem: FunctionComponent<Props> = observer(
         : navigationController.selectedLocation === type)
     const noteCounts = computed(() => navigationController.getNotesCount(tag))
 
-    const isFlatTag = type === 'tags'
+    // Tags support subtags (a nestable label hierarchy), shown as a collapsible tree.
+    const isFlatTag = false
 
     const childrenTags = computed(() =>
       isFlatTag ? [] : navigationController.getChildren(tag),

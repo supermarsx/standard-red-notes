@@ -30,6 +30,11 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
     navigationController.remove(selectedTag, true).catch(console.error)
   }, [navigationController, selectedTag])
 
+  const onClickAddSubtag = useCallback(() => {
+    navigationController.setContextMenuOpen(false)
+    navigationController.setAddingSubtagTo(selectedTag)
+  }, [navigationController, selectedTag])
+
   const tagLastModified = useMemo(
     () => formatDateForContextMenu(selectedTag.userModifiedDate),
     [selectedTag.userModifiedDate],
@@ -135,6 +140,12 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
             <div className="flex items-center">
               <Icon type="star" className="mr-2 text-neutral" />
               {selectedTag.starred ? 'Unfavorite' : 'Favorite'}
+            </div>
+          </MenuItem>
+          <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubtag}>
+            <div className="flex items-center">
+              <Icon type="add" className="mr-2 text-neutral" />
+              Add subtag
             </div>
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>
