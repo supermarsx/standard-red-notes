@@ -33,6 +33,8 @@ import VaultSelectionButton from './VaultSelectionButton'
 import ConnectionStatusIndicator from './ConnectionStatus'
 import NoteStats from './NoteStats'
 import AssistantUsage from './AssistantUsage'
+import { ToastType, addToast } from '@standardnotes/toast'
+import { getManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
 
 type Props = {
   application: WebApplication
@@ -51,6 +53,8 @@ type State = {
   hasError: boolean
   arbitraryStatusMessage?: string
   failedSyncError?: string
+  manualSyncMode: boolean
+  syncingNow: boolean
 }
 
 class Footer extends AbstractComponent<Props, State> {
@@ -60,6 +64,7 @@ class Footer extends AbstractComponent<Props, State> {
   private showingDownloadStatus = false
   private webEventListenerDestroyer: () => void
   private removeStatusObserver!: () => void
+  private removeManualSyncObserver?: () => void
 
   constructor(props: Props) {
     super(props, props.application)
@@ -73,7 +78,13 @@ class Footer extends AbstractComponent<Props, State> {
       showBetaWarning: false,
       showSyncResolution: false,
       newUpdateAvailable: false,
+      manualSyncMode: getManualSyncModeEnabled(),
+      syncingNow: false,
     }
+
+    this.removeManualSyncObserver = subscribeManualSyncMode(() => {
+      this.setState({ manualSyncMode: getManualSyncModeEnabled() })
+    })
 
     this.webEventListenerDestroyer = props.application.addWebEventObserver((event, data) => {
       const statusService = this.application.status
@@ -115,6 +126,11 @@ class Footer extends AbstractComponent<Props, State> {
 
     this.webEventListenerDestroyer()
     ;(this.webEventListenerDestroyer as unknown) = undefined
+
+    if (this.removeManualSyncObserver) {
+      this.removeManualSyncObserver()
+      this.removeManualSyncObserver = undefined
+    }
 
     super.deinit()
 
@@ -321,6 +337,23 @@ class Footer extends AbstractComponent<Props, State> {
     this.application.lock().catch(console.error)
   }
 
+  // Explicit user-initiated sync from the footer affordance (shown in manual sync mode).
+  syncNowClickHandler = async () => {
+    if (this.state.syncingNow) {
+      return
+    }
+    this.setState({ syncingNow: true })
+    try {
+      await this.application.sync.sync({ isUserInitiated: true })
+      addToast({ type: ToastType.Success, message: 'Sync complete.' })
+    } catch (error) {
+      console.error('Manual sync failed', error)
+      addToast({ type: ToastType.Error, message: 'Sync failed. Check your connection and try again.' })
+    } finally {
+      this.setState({ syncingNow: false })
+    }
+  }
+
   onNewUpdateAvailable = () => {
     this.setState({
       newUpdateAvailable: true,
@@ -426,6 +459,21 @@ class Footer extends AbstractComponent<Props, State> {
             <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
               <AssistantUsage application={this.application} />
             </div>
+            {this.state.manualSyncMode && (
+              <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+                <StyledTooltip label="Manual sync is on — your changes only reach your account when you sync">
+                  <button
+                    onClick={this.syncNowClickHandler}
+                    disabled={this.state.syncingNow}
+                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-bold text-warning hover:bg-contrast disabled:opacity-60"
+                    aria-label="Sync now (manual sync mode is on)"
+                  >
+                    <Icon type="sync" size="small" className={this.state.syncingNow ? 'animate-spin' : ''} />
+                    {this.state.syncingNow ? 'Syncing…' : 'Sync now'}
+                  </button>
+                </StyledTooltip>
+              </div>
+            )}
             <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
               <ConnectionStatusIndicator application={this.application} />
             </div>

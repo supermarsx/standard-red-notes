@@ -266,6 +266,130 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
   })
 })
 
+describe('SyncService manual sync mode gating', () => {
+  let logger: jest.Mocked<LoggerInterface>
+
+  const createService = (): SyncService => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+
+    const noop = () => undefined
+
+    return new SyncService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      {} as never,
+      {} as never,
+      { addEventHandler: noop } as never,
+    )
+  }
+
+  it('defaults to automatic mode (manual mode off)', () => {
+    const service = createService()
+    expect(service.isManualSyncModeEnabled()).toBe(false)
+  })
+
+  it('reflects the manual mode flag after setManualSyncMode', () => {
+    const service = createService()
+    service.setManualSyncMode(true)
+    expect(service.isManualSyncModeEnabled()).toBe(true)
+    service.setManualSyncMode(false)
+    expect(service.isManualSyncModeEnabled()).toBe(false)
+  })
+
+  describe('shouldSuppressAutomaticSync', () => {
+    it('never suppresses anything while in automatic (default) mode', () => {
+      const service = createService()
+      for (const source of Object.values(SyncSource) as SyncSource[]) {
+        expect(service.shouldSuppressAutomaticSync({ source })).toBe(false)
+      }
+    })
+
+    it('suppresses ambient automatic sources when manual mode is on', () => {
+      const service = createService()
+      service.setManualSyncMode(true)
+
+      expect(service.shouldSuppressAutomaticSync({ source: SyncSource.External })).toBe(true)
+      expect(service.shouldSuppressAutomaticSync({ source: SyncSource.NetworkReturned })).toBe(true)
+      expect(service.shouldSuppressAutomaticSync({ source: SyncSource.BackoffRetry })).toBe(true)
+    })
+
+    it('never suppresses an explicit user-initiated sync, even in manual mode', () => {
+      const service = createService()
+      service.setManualSyncMode(true)
+
+      expect(service.shouldSuppressAutomaticSync({ source: SyncSource.External, isUserInitiated: true })).toBe(false)
+    })
+
+    it('never suppresses continuation sources of an in-flight sync, even in manual mode', () => {
+      const service = createService()
+      service.setManualSyncMode(true)
+
+      const continuations = [
+        SyncSource.ResolveQueue,
+        SyncSource.SpawnQueue,
+        SyncSource.MoreDirtyItems,
+        SyncSource.DownloadFirst,
+        SyncSource.AfterDownloadFirst,
+        SyncSource.IntegrityCheck,
+        SyncSource.ResolveOutOfSync,
+      ]
+      for (const source of continuations) {
+        expect(service.shouldSuppressAutomaticSync({ source })).toBe(false)
+      }
+    })
+  })
+
+  it('sync() short-circuits (no performSync) for a suppressed automatic source in manual mode', async () => {
+    const service = createService()
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    const performSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { performSync: unknown }).performSync = performSync
+
+    service.setManualSyncMode(true)
+    await service.sync({ source: SyncSource.External })
+
+    expect(performSync).not.toHaveBeenCalled()
+  })
+
+  it('sync() still runs an explicit user-initiated sync in manual mode', async () => {
+    const service = createService()
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    const performSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { performSync: unknown }).performSync = performSync
+
+    service.setManualSyncMode(true)
+    await service.sync({ source: SyncSource.External, isUserInitiated: true })
+
+    expect(performSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('sync() runs normally for an automatic source when manual mode is OFF (auto mode unchanged)', async () => {
+    const service = createService()
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    const performSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { performSync: unknown }).performSync = performSync
+
+    await service.sync({ source: SyncSource.External })
+
+    expect(performSync).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('SyncService local-only exclusion (excludeLocalOnlyItems)', () => {
   /**
    * Builds a minimal item shaped enough for the filter, which only inspects:

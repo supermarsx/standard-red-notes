@@ -7,6 +7,7 @@ import {
   DesktopDeviceInterface,
   isDesktopDevice,
   DeinitMode,
+  ApplicationEvent,
   PrefKey,
   SNTag,
   ContentType,
@@ -50,6 +51,7 @@ import { PreferencePaneId } from '@standardnotes/services'
 import { MobileWebReceiver, NativeMobileEventListener } from '../NativeMobileWeb/MobileWebReceiver'
 import { setCustomViewportHeight } from '@/setViewportHeightWithFallback'
 import { FeatureName } from '@/Controllers/FeatureName'
+import { getManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
 import { VisibilityObserver } from './VisibilityObserver'
 import { DevMode } from './DevMode'
 import { ToastType, addToast, dismissToast } from '@standardnotes/toast'
@@ -204,6 +206,34 @@ export class WebApplication extends SNApplication implements WebApplicationInter
         this.notifyWebEvent(event)
       })
     }
+
+    this.wireManualSyncMode()
+  }
+
+  /**
+   * Standard Red Notes: bridge the web-local "Manual sync" toggle into the snjs SyncService.
+   *
+   * The flag is stored web-locally (localStorage, see ManualSyncSetting). We push the current
+   * value into SyncService as soon as the local database is loaded (the SyncService is ready
+   * by then), and re-apply whenever the toggle changes (same-tab or cross-tab). When ON, the
+   * sync engine suppresses automatic syncs; the user must trigger "Sync now" explicitly.
+   */
+  private wireManualSyncMode(): void {
+    const apply = () => {
+      try {
+        this.sync.setManualSyncMode(getManualSyncModeEnabled())
+      } catch {
+        // SyncService not ready yet / app torn down; safe to ignore — it is re-applied on launch.
+      }
+    }
+
+    this.disposers.push(
+      this.addEventObserver(async () => {
+        apply()
+      }, ApplicationEvent.LocalDataLoaded),
+    )
+
+    this.disposers.push(subscribeManualSyncMode(apply))
   }
 
   override deinit(mode: DeinitMode, source: DeinitSource): void {

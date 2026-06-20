@@ -21,8 +21,14 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
+import Switch from '@/Components/Switch/Switch'
 import { formatDateAndTimeForNote } from '@/Utils/DateUtils'
 import { useConnectionStatus } from '@/Hooks/useConnectionStatus'
+import {
+  getManualSyncModeEnabled,
+  setManualSyncModeEnabled,
+  subscribeManualSyncMode,
+} from '@/Utils/ManualSyncSetting'
 
 import { LocalOnlyItem, SyncItemLike, SyncSummary, summarizeSync } from './syncSummary'
 
@@ -98,6 +104,49 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
 
   const [summary, setSummary] = useState<SyncSummary>(() => summarizeSync(collectSyncItems(application)))
   const [busyUuid, setBusyUuid] = useState<string | undefined>(undefined)
+
+  // --- Manual sync mode (web-local toggle) -----------------------------------
+  const [manualSyncMode, setManualSyncModeState] = useState<boolean>(() => getManualSyncModeEnabled())
+  const [syncingNow, setSyncingNow] = useState(false)
+
+  // Keep local UI state in sync with the web-local setting (e.g. cross-tab changes).
+  useEffect(() => subscribeManualSyncMode(() => setManualSyncModeState(getManualSyncModeEnabled())), [])
+
+  /**
+   * Toggle Manual sync mode. Persists web-locally and immediately pushes the new mode into the
+   * sync engine. When turning the mode OFF, we trigger one explicit sync so any changes that
+   * piled up while manual was on get flushed to the server right away (resuming automatic sync).
+   */
+  const toggleManualSyncMode = useCallback(
+    async (enabled: boolean) => {
+      setManualSyncModeState(enabled)
+      setManualSyncModeEnabled(enabled)
+      application.sync.setManualSyncMode(enabled)
+      if (!enabled) {
+        // Returning to automatic: flush anything that accumulated while manual was on.
+        try {
+          await application.sync.sync({ isUserInitiated: true })
+        } catch (error) {
+          console.error('Failed to sync after disabling manual mode', error)
+        }
+      }
+    },
+    [application],
+  )
+
+  /** Explicit user-initiated sync ("Sync now"). Always runs, even in manual mode. */
+  const syncNow = useCallback(async () => {
+    setSyncingNow(true)
+    try {
+      await application.sync.sync({ isUserInitiated: true })
+      addToast({ type: ToastType.Success, message: 'Sync complete.' })
+    } catch (error) {
+      console.error('Manual sync failed', error)
+      addToast({ type: ToastType.Error, message: 'Sync failed. Check your connection and try again.' })
+    } finally {
+      setSyncingNow(false)
+    }
+  }, [application])
 
   // --- throttled recompute from local item state (mirror Dashboard) ----------
   useEffect(() => {
@@ -280,6 +329,56 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                 </span>
               </span>
             </div>
+          </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      {/* Manual sync mode */}
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Manual sync</Title>
+          <div className="flex items-center justify-between gap-2 md:items-center">
+            <div className="flex flex-col">
+              <Subtitle>Only sync when I press “Sync now”</Subtitle>
+              <Text>
+                When on, automatic syncing is turned off: edits stay on this device and are not sent to your account
+                until you sync manually. Background syncing, the periodic timer, and live updates from other devices are
+                paused. Turn this off to resume automatic syncing.
+              </Text>
+            </div>
+            <Switch onChange={(checked) => void toggleManualSyncMode(checked)} checked={manualSyncMode} />
+          </div>
+
+          {manualSyncMode && (
+            <div className="mt-3 rounded-md border border-warning bg-warning-faded p-3 text-sm">
+              <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
+                <Icon type="warning" size="small" className="flex-shrink-0" />
+                Unsynced changes are at risk
+              </div>
+              <Text>
+                While manual sync is on, your latest changes live only on this device. If this device is lost, wiped, or
+                its data is cleared before you sync, those changes will be gone. Press “Sync now” regularly, and always
+                before closing the app or switching devices.
+              </Text>
+            </div>
+          )}
+
+          <HorizontalSeparator classes="my-4" />
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col">
+              <Subtitle>Sync now</Subtitle>
+              <Text>
+                Push local changes and pull the latest from your account.{' '}
+                {connection.lastSyncDate ? `Last synced ${lastSyncLabel}.` : 'No sync yet this session.'}
+              </Text>
+            </div>
+            <Button
+              primary
+              label={syncingNow ? 'Syncing…' : 'Sync now'}
+              disabled={syncingNow || connection.signedOut}
+              onClick={() => void syncNow()}
+            />
           </div>
         </PreferencesSegment>
       </PreferencesGroup>

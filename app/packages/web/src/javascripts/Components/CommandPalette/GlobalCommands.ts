@@ -285,6 +285,23 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     run: (application) => application.exportModalController.setIsVisible(true),
   },
 
+  // --- Sync ---------------------------------------------------------------
+  {
+    id: 'global-sync-now',
+    title: 'Sync now',
+    keywords: ['sync', 'refresh', 'push', 'pull', 'manual', 'update'],
+    icon: 'sync',
+    // Explicit user-initiated sync. Always runs, even when Manual sync mode is on.
+    run: (application) => void application.sync.sync({ isUserInitiated: true }),
+  },
+  {
+    id: 'global-open-pref-sync',
+    title: 'Open Sync preferences',
+    keywords: ['settings', 'manual', 'local-only', 'selective'],
+    icon: 'sync',
+    run: openPreferencesPane('sync'),
+  },
+
   // --- Maintenance / security --------------------------------------------
   {
     id: 'global-empty-trash',

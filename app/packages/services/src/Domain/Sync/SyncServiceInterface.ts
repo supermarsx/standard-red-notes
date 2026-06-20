@@ -31,5 +31,14 @@ export interface SyncServiceInterface extends AbstractService<SyncEvent> {
   getLastSyncDate(): Date | undefined
   getSyncStatus(): SyncOpStatus
 
+  /**
+   * Enable/disable Manual Sync mode. When ON, automatic syncs (item-change-triggered,
+   * the periodic interval, network-return, backoff retries, and websocket-notification
+   * pulls/pushes) are suppressed; only an explicit user-initiated sync runs. Local
+   * persistence and offline behavior are unaffected. Default is OFF (automatic syncing).
+   */
+  setManualSyncMode(enabled: boolean): void
+  isManualSyncModeEnabled(): boolean
+
   completedOnlineDownloadFirstSync: boolean
 }

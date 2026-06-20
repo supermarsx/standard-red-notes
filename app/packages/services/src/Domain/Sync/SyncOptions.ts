@@ -25,4 +25,11 @@ export type SyncOptions = {
 
   /** If true and sharedVaultUuids is present, excludes sending global syncToken as part of request */
   syncSharedVaultsFromScratch?: boolean
+
+  /**
+   * Marks this sync as having been explicitly requested by the user (e.g. the "Sync now"
+   * button / command). When Manual Sync mode is enabled, AUTOMATIC syncs are suppressed,
+   * but a sync carrying this flag always runs. Has no effect when manual mode is off.
+   */
+  isUserInitiated?: boolean
 }

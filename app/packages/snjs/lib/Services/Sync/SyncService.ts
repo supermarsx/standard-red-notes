@@ -173,6 +173,14 @@ export class SyncService
   private autoSyncInterval?: NodeJS.Timeout
   private wasNotifiedOfItemsChangeOnServer = false
 
+  /**
+   * Manual Sync mode. When true, AUTOMATIC syncs are suppressed and only an explicit
+   * user-initiated sync runs. Defaults to false (normal automatic syncing). Local
+   * persistence/offline behavior is unaffected by this flag — only the automatic
+   * NETWORK sync is gated. Set via setManualSyncMode() by the web app when the pref changes.
+   */
+  private manualSyncMode = false
+
   /** Number of consecutive failed sync attempts. Reset on any successful sync or network return. */
   private consecutiveFailureCount = 0
   /** Pending exponential-backoff auto-retry timer (only set while in a failure-retry loop). */
@@ -403,6 +411,62 @@ export class SyncService
   }
 
   /**
+   * Enable/disable Manual Sync mode. When enabled, automatic syncs are suppressed; the
+   * user must explicitly trigger a sync (sync({ isUserInitiated: true })). This only gates
+   * the automatic NETWORK sync — items are still persisted locally and offline behavior is
+   * unchanged. Toggling the mode off does not itself sync; callers that want to flush
+   * pending changes should request a user-initiated sync afterward.
+   */
+  public setManualSyncMode(enabled: boolean): void {
+    this.logger.debug(`Setting manual sync mode to ${enabled}`)
+    this.manualSyncMode = enabled
+  }
+
+  public isManualSyncModeEnabled(): boolean {
+    return this.manualSyncMode
+  }
+
+  /**
+   * The set of automatic sync sources that Manual Sync mode suppresses. These are the
+   * triggers that fire WITHOUT direct user action:
+   *  - External: item-change-triggered syncs (and other ambient callers) — but note that a
+   *    user-initiated sync also uses External, so it is distinguished by `isUserInitiated`.
+   *  - NetworkReturned: online/focus/visibility "sync ASAP".
+   *  - BackoffRetry: the post-failure auto-retry loop.
+   *
+   * Continuation sources of an already-permitted sync (ResolveQueue, SpawnQueue,
+   * MoreDirtyItems, AfterDownloadFirst, DownloadFirst, IntegrityCheck, ResolveOutOfSync)
+   * are intentionally NOT in this set: once a user-initiated sync is underway it must be
+   * allowed to run to completion and reconcile correctly.
+   */
+  private static AutomaticSyncSources: ReadonlySet<SyncSource> = new Set([
+    SyncSource.External,
+    SyncSource.NetworkReturned,
+    SyncSource.BackoffRetry,
+  ])
+
+  /**
+   * Decide whether a sync request should be suppressed because Manual Sync mode is on.
+   * A request is suppressed only when ALL of the following hold:
+   *  - manual mode is enabled,
+   *  - it is not explicitly user-initiated,
+   *  - and its source is one of the ambient/automatic sources above.
+   *
+   * Kept dependency-free so it can be unit-tested in isolation.
+   */
+  shouldSuppressAutomaticSync(options: SyncOptions): boolean {
+    if (!this.manualSyncMode) {
+      return false
+    }
+
+    if (options.isUserInitiated) {
+      return false
+    }
+
+    return SyncService.AutomaticSyncSources.has(options.source)
+  }
+
+  /**
    * Called by application when sign in or registration occurs.
    */
   public resetSyncState(): void {
@@ -530,6 +594,11 @@ export class SyncService
   }
 
   private autoSync(): void {
+    if (this.manualSyncMode) {
+      this.logger.debug('Manual sync mode is on; skipping periodic auto sync')
+      return
+    }
+
     if (!this.sockets.isWebSocketConnectionOpen()) {
       this.logger.debug('WebSocket connection is closed, doing autosync')
 
@@ -783,6 +852,21 @@ export class SyncService
     const fullyResolvedOptions: SyncOptions = {
       source: SyncSource.External,
       ...options,
+    }
+
+    /**
+     * Manual Sync mode: suppress AUTOMATIC syncs. Pending changes have already been (or will
+     * be) persisted locally through the normal item/persist path, so nothing is lost — the
+     * change simply doesn't go to the server until the user explicitly syncs. A
+     * user-initiated sync (isUserInitiated) and all continuation sources bypass this gate.
+     */
+    if (this.shouldSuppressAutomaticSync(fullyResolvedOptions)) {
+      this.logger.debug(
+        'Manual sync mode is on; suppressing automatic sync',
+        SyncSource[fullyResolvedOptions.source],
+        fullyResolvedOptions.sourceDescription,
+      )
+      return
     }
 
     /**
@@ -1717,6 +1801,17 @@ export class SyncService
    */
   private async handleItemsPushedOverWebSocket(data: SyncItemsPushedData): Promise<void> {
     if (this.dealloced) {
+      return
+    }
+
+    /**
+     * Manual Sync mode: do NOT auto-pull/apply server-pushed items. Just remember that the
+     * server has changes so the UI can reflect it; the next user-initiated sync will reconcile
+     * normally (the token is left untouched, so that sync pulls everything we skipped).
+     */
+    if (this.manualSyncMode) {
+      this.logger.debug('Manual sync mode is on; ignoring websocket items-pushed (will reconcile on next manual sync)')
+      this.wasNotifiedOfItemsChangeOnServer = true
       return
     }
 
