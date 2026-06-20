@@ -30,6 +30,7 @@ import { MathNode } from './MathNode'
 import { InlineMathNode } from './InlineMathNode'
 import { FootnoteReferenceNode } from './FootnoteReferenceNode'
 import { FootnotesNode } from './FootnotesNode'
+import { TimelineNode } from './TimelineNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -68,6 +69,7 @@ const CommonNodes = [
   InlineMathNode,
   FootnoteReferenceNode,
   FootnotesNode,
+  TimelineNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

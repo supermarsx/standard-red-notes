@@ -71,6 +71,7 @@ import { Toolbar, ToolbarItem, useToolbarStore } from '@ariakit/react'
 import { PasswordBlock } from '../Blocks/Password'
 import { KanbanBlock } from '../Blocks/Kanban'
 import { CalendarBlock } from '../Blocks/Calendar'
+import { TimelineBlock } from '../Blocks/Timeline'
 import { DataviewBlock } from '../Blocks/Dataview'
 import { CalloutBlock } from '../Blocks/Callout'
 import { EmbedBlock } from '../Blocks/Embed'
@@ -1390,6 +1391,11 @@ const ToolbarPlugin = () => {
             name={CalendarBlock.name}
             iconName={CalendarBlock.iconName}
             onClick={() => CalendarBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={TimelineBlock.name}
+            iconName={TimelineBlock.iconName}
+            onClick={() => TimelineBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
             name={DataviewBlock.name}
