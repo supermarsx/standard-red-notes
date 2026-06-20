@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/utils'
-import { ContentType, DecryptedItemInterface } from '@standardnotes/snjs'
+import { ContentType, DecryptedItemInterface, SNNote, SNTag } from '@standardnotes/snjs'
+import Icon from '../Icon/Icon'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
 import { FOCUS_TAGS_INPUT_COMMAND, keyboardStringForShortcut } from '@standardnotes/ui-services'
@@ -54,9 +55,27 @@ const LinkedItemBubblesContainer = ({
   const { notesLinkedToItem, filesLinkedToItem, tagsLinkedToItem, notesLinkingToItem, filesLinkingToItem } =
     useItemLinks(item)
 
+  const navigationController = application.navigationController
+
+  // A note lives in exactly one folder (its location); folders must not appear as tag
+  // chips. Exclude folder-tags from the displayed tag list so only real labels show.
+  const tagLinksWithoutFolders = useMemo(
+    () =>
+      tagsLinkedToItem.filter(
+        (link) => !(link.item instanceof SNTag && navigationController.isFolderTag(link.item)),
+      ),
+    [tagsLinkedToItem, navigationController],
+  )
+
+  // The single folder the note currently lives in, rendered as a distinct chip below.
+  const noteFolder = useMemo(
+    () => (item instanceof SNNote ? navigationController.getNoteFolder(item) : undefined),
+    [item, navigationController],
+  )
+
   const allItemsLinkedToItem: ItemLink[] = useMemo(
-    () => new Array<ItemLink>().concat(notesLinkedToItem, filesLinkedToItem, tagsLinkedToItem),
-    [filesLinkedToItem, notesLinkedToItem, tagsLinkedToItem],
+    () => new Array<ItemLink>().concat(notesLinkedToItem, filesLinkedToItem, tagLinksWithoutFolders),
+    [filesLinkedToItem, notesLinkedToItem, tagLinksWithoutFolders],
   )
 
   const linkInputRef = useRef<HTMLInputElement>(null)
@@ -199,6 +218,21 @@ const LinkedItemBubblesContainer = ({
       >
         {!!vault && <VaultNameBadge vault={vault} />}
         {!!lastEditedByContact && <LastEditedByBadge contact={lastEditedByContact} />}
+        {noteFolder && (
+          <button
+            className={classNames(
+              'group flex h-6 flex-shrink-0 cursor-pointer items-center rounded border border-border py-2 pl-1 pr-2',
+              'align-middle text-sm text-text hover:bg-contrast focus:bg-contrast lg:text-xs',
+            )}
+            title={`Folder: ${noteFolder.title}`}
+            onClick={() => {
+              void navigationController.setSelectedTag(noteFolder, 'folders', { userTriggered: true })
+            }}
+          >
+            <Icon type="folder" className="mr-1 flex-shrink-0 text-info" size="small" />
+            <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">{noteFolder.title}</span>
+          </button>
+        )}
         {visibleItems.map((link) => (
           <LinkedItemBubble
             link={link}

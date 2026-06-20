@@ -31,6 +31,9 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
 
   const { contextMenuOpen, contextMenuClickLocation } = navigationController
 
+  // Only folders are containers; tags are labels and don't get a subfolder action.
+  const isFolderContext = navigationController.isFolderTag(selectedTag)
+
   const onClickAddSubtag = useCallback(() => {
     if (!isEntitledToFolders) {
       premiumModal.activate('Folders')
@@ -163,13 +166,15 @@ const TagContextMenu = ({ navigationController, isEntitledToFolders, selectedTag
               {selectedTag.isFolder ? 'Convert to tag' : 'Convert to folder'}
             </div>
           </MenuItem>
-          <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubtag}>
-            <div className="flex items-center">
-              <Icon type="add" className="mr-2 text-neutral" />
-              Add subtag
-            </div>
-            {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
-          </MenuItem>
+          {isFolderContext && (
+            <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubtag}>
+              <div className="flex items-center">
+                <Icon type="add" className="mr-2 text-neutral" />
+                Add subfolder
+              </div>
+              {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
+            </MenuItem>
+          )}
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>
             <Icon type="trash" className="mr-2 text-danger" />
             <span className="text-danger">Delete</span>

@@ -11,6 +11,7 @@ import {
 } from '@standardnotes/ui-services'
 import ChangeEditorOption from './ChangeEditorOption'
 import AddTagOption from './AddTagOption'
+import MoveToFolderOption from './MoveToFolderOption'
 import { NotesOptionsProps } from './NotesOptionsProps'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
@@ -275,6 +276,14 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
             navigationController={application.navigationController}
             selectedItems={notes}
             linkingController={application.linkingController}
+            disabled={areSomeNotesInReadonlySharedVault}
+          />
+        )}
+        {notes.length === 1 && (
+          <MoveToFolderOption
+            iconClassName={iconClass}
+            navigationController={application.navigationController}
+            note={notes[0]}
             disabled={areSomeNotesInReadonlySharedVault}
           />
         )}

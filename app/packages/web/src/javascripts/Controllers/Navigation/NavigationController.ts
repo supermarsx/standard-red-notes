@@ -10,6 +10,7 @@ import { SMART_TAGS_FEATURE_NAME } from '@/Constants/Constants'
 import {
   ContentType,
   SmartView,
+  SNNote,
   SNTag,
   TagContent,
   TagMutator,
@@ -289,7 +290,7 @@ export class NavigationController
     destroyAllObjectProperties(this)
   }
 
-  async createSubtagAndAssignParent(parent: SNTag, title: string) {
+  async createSubtagAndAssignParent(parent: SNTag, title: string, isFolder = false) {
     const hasEmptyTitle = title.length === 0
 
     if (hasEmptyTitle) {
@@ -308,6 +309,12 @@ export class NavigationController
       this.setAddingSubtagTo(undefined)
       this.remove(createdTag, false).catch(console.error)
       return
+    }
+
+    if (isFolder) {
+      await this._changeAndSaveItem.execute<TagMutator>(createdTag, (mutator) => {
+        mutator.isFolder = true
+      })
     }
 
     this.assignParent(createdTag.uuid, parent.uuid).catch(console.error)
@@ -386,36 +393,57 @@ export class NavigationController
     return this.rootTags
   }
 
-  /**
-   * A tag is presented as a folder when it is explicitly flagged OR it already
-   * contains child tags. The "has children" rule means existing nested-tag
-   * hierarchies keep behaving as folders without any data migration.
-   */
-  public isEffectiveFolder(tag: SNTag): boolean {
-    return tag.isFolder === true || this.items.getTagChildren(tag).length > 0
+  /** A tag is a folder ONLY when explicitly flagged — folders are never inferred from tags. */
+  public isFolderTag(tag: SNTag): boolean {
+    return tag.isFolder === true
   }
 
   /** Root-level folders for the hierarchical Folders section. */
   public get allLocalRootFolders(): SNTag[] {
-    const folders = this.rootTags.filter((tag) => this.isEffectiveFolder(tag))
+    const folders = this.rootTags.filter((tag) => tag.isFolder)
     if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && this.editing_.isFolder) {
       return [this.editing_, ...folders]
     }
     return folders
   }
 
-  /** Top-level standalone tags (no children, not flagged as folders), shown flat. */
+  /** All tags (labels), shown flat. Tags are never contained inside folders. */
   public get allLocalFlatTags(): SNTag[] {
-    const flat = this.rootTags.filter((tag) => !this.isEffectiveFolder(tag))
+    const flat = this.tags.filter((tag) => !tag.isFolder)
     if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_) && !this.editing_.isFolder) {
       return [this.editing_, ...flat]
     }
     return flat
   }
 
-  /** Children of a folder; the full subtree is shown within the Folders section. */
+  /** Subfolders of a folder. The Folders tree shows folders only; a folder's notes appear in the note list. */
   public getFolderChildren(tag: SNTag): SNTag[] {
-    return this.getChildren(tag)
+    return this.getChildren(tag).filter((child) => child.isFolder)
+  }
+
+  /** The single folder a note lives in (its location), if any. */
+  public getNoteFolder(note: SNNote): SNTag | undefined {
+    return this.tags.find((tag) => tag.isFolder && tag.noteReferences.some((ref) => ref.uuid === note.uuid))
+  }
+
+  /**
+   * Move a note into a folder (its exclusive location), or out of all folders when
+   * `folder` is undefined. Folder membership is single-valued — unlike tags, which
+   * stay many-to-many labels.
+   */
+  public async moveNoteToFolder(note: SNNote, folder: SNTag | undefined): Promise<void> {
+    const currentFolders = this.tags.filter(
+      (tag) => tag.isFolder && tag.noteReferences.some((ref) => ref.uuid === note.uuid),
+    )
+    for (const current of currentFolders) {
+      if (current.uuid !== folder?.uuid) {
+        await this.mutator.unlinkItems(note, current)
+      }
+    }
+    if (folder) {
+      await this.mutator.addTagToNote(note, folder, false)
+    }
+    await this.sync.sync()
   }
 
   public getNotesCount(tag: SNTag): number {

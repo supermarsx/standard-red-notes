@@ -78,6 +78,11 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     ).get()
     const hasChildren = childrenTags.length > 0
 
+    // In the Folders section, render a folder glyph for container rows (unless the
+    // user picked a custom icon), so the tree reads like a filesystem.
+    const isFolderRow = type === 'folders' && (tag.isFolder || hasChildren)
+    const displayIconType = (isFolderRow && tag.iconString === 'hashtag' ? 'folder' : tag.iconString) as IconType
+
     const hasFolders = features.hasFolders
 
     const premiumModal = usePremiumModal()
@@ -181,9 +186,11 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     }, [])
 
     const onSubtagInputBlur = useCallback(() => {
-      navigationController.createSubtagAndAssignParent(tag, subtagTitle).catch(console.error)
+      // Creating inside a folder makes a subfolder; inside the flat tags list it
+      // makes a plain tag.
+      navigationController.createSubtagAndAssignParent(tag, subtagTitle, type === 'folders').catch(console.error)
       setSubtagTitle('')
-    }, [subtagTitle, tag, navigationController])
+    }, [subtagTitle, tag, navigationController, type])
 
     const onSubtagKeyDown: KeyboardEventHandler = useCallback(
       (e) => {
@@ -247,6 +254,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
 
     const onDragStart: DragEventHandler<HTMLDivElement> = useCallback(
       (event) => {
+        // Tags are flat labels and are not drag sources; only folders re-nest.
         if (isFlatTag) {
           return
         }
@@ -302,12 +310,13 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           void navigationController.assignParent(draggedTagUuid, tag.uuid)
           return
         } else if (draggedNoteUuid) {
-          const currentTag = navigationController.selected
-          const shouldSwapTags = currentTag instanceof SNTag && currentTag.uuid !== tag.uuid
           const note = application.items.findSureItem<SNNote>(draggedNoteUuid)
-          await linkingController.linkItems(note, tag)
-          if (shouldSwapTags) {
-            await linkingController.unlinkItems(note, currentTag)
+          if (tag.isFolder) {
+            // Dropping a note on a folder MOVES it there — a note lives in one folder.
+            await navigationController.moveNoteToFolder(note, tag)
+          } else {
+            // Dropping a note on a tag just applies the label (additive).
+            await linkingController.linkItems(note, tag)
           }
           return
         }
@@ -377,7 +386,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
               style={tag.color ? { color: tag.color } : undefined}
             >
               <Icon
-                type={tag.iconString as IconType}
+                type={displayIconType}
                 className={classNames(
                   'cursor-pointer',
                   tag.color ? 'fill-current' : isSelected ? 'text-info' : 'text-neutral group-hover:text-text',
