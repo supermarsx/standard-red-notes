@@ -94,12 +94,13 @@ const LinkedItemBubblesContainer = ({
   )
 
   const [focusedId, setFocusedId] = useState<string>()
+  // Keep the focus order matching the visual order: outgoing links, the autocomplete input, then backlinks.
   const focusableIds = allItemsLinkedToItem
     .map((link) => link.id)
     .concat(
+      [ElementIds.ItemLinkAutocompleteInput],
       notesLinkingToItem.map((link) => link.id),
       filesLinkingToItem.map((link) => link.id),
-      [ElementIds.ItemLinkAutocompleteInput],
     )
 
   const focusPreviousItem = useCallback(() => {
@@ -141,14 +142,26 @@ const LinkedItemBubblesContainer = ({
     )
   }
 
-  const itemsToDisplay = allItemsLinkedToItem.concat(notesLinkingToItem).concat(filesLinkingToItem)
+  // Outgoing links (this note -> others) and incoming links / backlinks (others -> this note),
+  // kept as separate groups so both directions are clearly visible at a glance.
+  const outgoingLinks = allItemsLinkedToItem
+  const backlinks = useMemo(
+    () => new Array<ItemLink>().concat(notesLinkingToItem, filesLinkingToItem),
+    [notesLinkingToItem, filesLinkingToItem],
+  )
+
+  const itemsToDisplay = outgoingLinks.concat(backlinks)
   const ItemsToShowWhenCollapsed = 5
   const [isCollapsed, setIsCollapsed] = useState(
     itemsToDisplay.length < ItemsToShowWhenCollapsed ? false : isCollapsedByDefault,
   )
 
-  const visibleItems = isCollapsed ? itemsToDisplay.slice(0, ItemsToShowWhenCollapsed) : itemsToDisplay
-  const nonVisibleItems = itemsToDisplay.length - visibleItems.length
+  // When collapsed, share the limited budget across both groups, prioritizing outgoing links.
+  const visibleOutgoingLinks = isCollapsed ? outgoingLinks.slice(0, ItemsToShowWhenCollapsed) : outgoingLinks
+  const remainingCollapsedBudget = Math.max(ItemsToShowWhenCollapsed - visibleOutgoingLinks.length, 0)
+  const visibleBacklinks = isCollapsed ? backlinks.slice(0, remainingCollapsedBudget) : backlinks
+  const nonVisibleItems =
+    outgoingLinks.length - visibleOutgoingLinks.length + (backlinks.length - visibleBacklinks.length)
 
   const [canShowContainerToggle, setCanShowContainerToggle] = useState(true)
   const [linkContainer, setLinkContainer] = useState<HTMLDivElement | null>(null)
@@ -189,6 +202,23 @@ const LinkedItemBubblesContainer = ({
     return null
   }
 
+  const renderBubble = (link: ItemLink) => (
+    <LinkedItemBubble
+      link={link}
+      key={link.id}
+      activateItem={activateItemAndTogglePane}
+      unlinkItem={unlinkItem}
+      focusPreviousItem={focusPreviousItem}
+      focusNextItem={focusNextItem}
+      focusedId={focusedId}
+      setFocusedId={setFocusedId}
+      isBidirectional={isItemBidirectionallyLinked(link)}
+      readonly={readonly}
+    />
+  )
+
+  const groupLabelClassName = 'mr-0.5 flex-shrink-0 select-none text-xs font-semibold uppercase text-passive-1'
+
   return (
     <div
       className={classNames(
@@ -200,9 +230,9 @@ const LinkedItemBubblesContainer = ({
     >
       <div
         className={classNames(
-          'note-view-linking-container flex min-w-80 max-w-full items-center gap-2 bg-transparent',
+          'note-view-linking-container flex min-w-0 max-w-full items-center gap-2 bg-transparent md:min-w-80',
           allItemsLinkedToItem.length || notesLinkingToItem.length ? 'mt-1' : 'mt-0.5',
-          isCollapsed ? 'overflow-hidden' : 'flex-wrap',
+          isCollapsed ? 'overflow-x-auto' : 'flex-wrap',
           !shouldHideToggle && 'mr-2',
         )}
         ref={setLinkContainer}
@@ -224,21 +254,14 @@ const LinkedItemBubblesContainer = ({
             <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">{noteFolder.title}</span>
           </button>
         )}
-        {visibleItems.map((link) => (
-          <LinkedItemBubble
-            link={link}
-            key={link.id}
-            activateItem={activateItemAndTogglePane}
-            unlinkItem={unlinkItem}
-            focusPreviousItem={focusPreviousItem}
-            focusNextItem={focusNextItem}
-            focusedId={focusedId}
-            setFocusedId={setFocusedId}
-            isBidirectional={isItemBidirectionallyLinked(link)}
-            readonly={readonly}
-          />
-        ))}
-        {isCollapsed && nonVisibleItems > 0 && <span className="flex-shrink-0">and {nonVisibleItems} more...</span>}
+
+        {(visibleOutgoingLinks.length > 0 || !readonly) && (
+          <span className="flex flex-shrink-0 items-center gap-1" title="Items this note links to">
+            <Icon type="link" className="flex-shrink-0 text-passive-1" size="small" />
+            <span className={groupLabelClassName}>Links{outgoingLinks.length > 0 ? ` (${outgoingLinks.length})` : ''}</span>
+          </span>
+        )}
+        {visibleOutgoingLinks.map(renderBubble)}
         {!readonly && (
           <ItemLinkAutocompleteInput
             ref={linkInputRef}
@@ -250,6 +273,19 @@ const LinkedItemBubblesContainer = ({
             item={item}
           />
         )}
+
+        {backlinks.length > 0 && (
+          <span
+            className="ml-1 flex flex-shrink-0 items-center gap-1 border-l border-border pl-2"
+            title="Notes and files that link to this note"
+          >
+            <Icon type="link-off" className="flex-shrink-0 text-passive-1" size="small" />
+            <span className={groupLabelClassName}>Linked By ({backlinks.length})</span>
+          </span>
+        )}
+        {visibleBacklinks.map(renderBubble)}
+
+        {isCollapsed && nonVisibleItems > 0 && <span className="flex-shrink-0">and {nonVisibleItems} more...</span>}
       </div>
       {itemsToDisplay.length > 0 && !shouldHideToggle && (
         <RoundIconButton
