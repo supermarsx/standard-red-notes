@@ -31,6 +31,70 @@ const jsonWithListContent = {
 
 export const jsonListContentData = JSON.stringify(jsonWithListContent)
 
+export const jsonWithLabels = {
+  color: 'DEFAULT',
+  isTrashed: false,
+  isPinned: true,
+  isArchived: true,
+  textContent: 'Note with labels.',
+  title: 'Labelled note',
+  userEditedTimestampUsec: 1618528050144000,
+  createdTimestampUsec: 1618528000000000,
+  labels: [{ name: 'Work' }, { name: 'Personal' }],
+}
+
+export const jsonWithAnnotations = {
+  color: 'DEFAULT',
+  isTrashed: false,
+  isPinned: false,
+  isArchived: false,
+  textContent: 'See these links.',
+  title: 'Links note',
+  userEditedTimestampUsec: 1618528050144000,
+  annotations: [
+    { url: 'https://example.com', title: 'Example', source: 'WEBLINK' },
+    { url: 'https://standardnotes.com' },
+  ],
+}
+
+export const jsonWithAttachments = {
+  color: 'DEFAULT',
+  isTrashed: false,
+  isPinned: false,
+  isArchived: false,
+  textContent: 'Has an image.',
+  title: 'Image note',
+  userEditedTimestampUsec: 1618528050144000,
+  attachments: [{ filePath: 'image.jpg', mimetype: 'image/jpeg' }],
+}
+
+export const jsonTrashed = {
+  color: 'DEFAULT',
+  isTrashed: true,
+  isPinned: false,
+  isArchived: false,
+  textContent: 'In the trash.',
+  title: 'Trashed note',
+  userEditedTimestampUsec: 1618528050144000,
+}
+
+export const jsonNoTitle = {
+  color: 'DEFAULT',
+  isTrashed: false,
+  isPinned: false,
+  isArchived: false,
+  textContent: 'First line becomes the title\nSecond line of body.',
+  title: '',
+  userEditedTimestampUsec: 1618528050144000,
+}
+
+/** A textContent note with most metadata fields missing (older Takeout export). */
+export const jsonMissingFields = {
+  textContent: 'Only the text is here.',
+}
+
+export const jsonArrayData = JSON.stringify([jsonWithTextContent, jsonWithListContent, jsonWithLabels])
+
 export const htmlTestData = `<?xml version="1.0" ?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
 <title>Testing 2</title>

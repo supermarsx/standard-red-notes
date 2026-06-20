@@ -180,6 +180,38 @@ export class ImportModalController extends AbstractViewController {
     }
   }
 
+  /**
+   * Shows a success/failure toast for Google Keep imports, reporting how many
+   * notes were imported and how many entries were skipped (malformed/partial
+   * JSON entries surface in the `errored` list).
+   */
+  private maybeShowGoogleKeepToast = (file: ImportModalFile, succeeded: boolean, error?: unknown) => {
+    if (file.service !== 'google-keep') {
+      return
+    }
+
+    if (!succeeded) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Could not import Google Keep file. Check the error console for details.'
+      addToast({ type: ToastType.Error, message: `Google Keep import failed: ${message}` })
+      return
+    }
+
+    if (file.status !== 'finished') {
+      return
+    }
+
+    const importedNotes = file.successful.filter((item) => item.content_type === ContentType.TYPES.Note).length
+    const skipped = file.errored.length
+    const skippedSuffix = skipped > 0 ? `, ${skipped} skipped` : ''
+    addToast({
+      type: skipped > 0 ? ToastType.Regular : ToastType.Success,
+      message: `Imported ${importedNotes} Google Keep note(s)${skippedSuffix}.`,
+    })
+  }
+
   parseAndImport = async () => {
     if (this.files.length === 0) {
       return
@@ -198,13 +230,15 @@ export class ImportModalController extends AbstractViewController {
       try {
         const { successful, errored } = await this.importer.importFromFile(file.file, file.service)
         importedItems.push(...successful)
-        this.updateFile({
+        const finishedFile: ImportModalFile = {
           ...file,
           status: 'finished',
           successful,
           errored,
-        })
+        }
+        this.updateFile(finishedFile)
         await this.maybeShowCsvToast(file, successful.length > 0)
+        this.maybeShowGoogleKeepToast(finishedFile, true)
       } catch (error) {
         this.updateFile({
           ...file,
@@ -212,6 +246,7 @@ export class ImportModalController extends AbstractViewController {
           error: error instanceof Error ? error : new Error('Could not import file'),
         })
         await this.maybeShowCsvToast(file, false, error)
+        this.maybeShowGoogleKeepToast(file, false, error)
         console.error(error)
       }
     }
