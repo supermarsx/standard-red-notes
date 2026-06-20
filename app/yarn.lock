@@ -12275,6 +12275,7 @@ __metadata:
     react-refresh: ^0.18.0
     sass: ^1.101.0
     sass-loader: "*"
+    sql.js: ^1.13.0
     svg-jest: ^1.0.1
     tailwindcss: ^4.3.1
     ts-jest: ^29.4.11
@@ -33429,6 +33430,13 @@ __metadata:
   version: 1.0.3
   resolution: "sprintf-js@npm:1.0.3"
   checksum: 19d79aec211f09b99ec3099b5b2ae2f6e9cdefe50bc91ac4c69144b6d3928a640bb6ae5b3def70c2e85a2c3d9f5ec2719921e3a59d3ca3ef4b2fd1a4656a0df3
+  languageName: node
+  linkType: hard
+
+"sql.js@npm:^1.13.0":
+  version: 1.14.1
+  resolution: "sql.js@npm:1.14.1"
+  checksum: 8a2e10f050b47c68189c0fba5265d83c4eb700fe368f6aabe0a2ee10015531417b58f491829ef7c7cc7e08b194a0b3fde8b06423d146ac5ce6580b40fdb93b5b
   languageName: node
   linkType: hard
 

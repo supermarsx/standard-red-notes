@@ -32,6 +32,9 @@ import { FootnoteReferenceNode } from './FootnoteReferenceNode'
 import { FootnotesNode } from './FootnotesNode'
 import { TimelineNode } from './TimelineNode'
 import { QrCodeNode } from './QrCodeNode'
+import { TradingViewNode } from './TradingViewNode'
+import { StockChartNode } from './StockChartNode'
+import { SqlQueryNode } from './SqlQueryNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -72,6 +75,9 @@ const CommonNodes = [
   FootnotesNode,
   TimelineNode,
   QrCodeNode,
+  TradingViewNode,
+  StockChartNode,
+  SqlQueryNode,
 ]
 
 export const BlockEditorNodes = CommonNodes
