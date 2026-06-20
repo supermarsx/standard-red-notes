@@ -2,6 +2,8 @@ import { ListableContentItem } from '@/Components/ContentListView/Types/Listable
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
 import { IndexableNote, SearchIndex } from '@/Utils/Items/Search/SearchIndex'
+import { rankNotesByRelevance } from '@/Utils/Items/Search/RelevanceScore'
+import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import {
   ApplicationEvent,
   CollectionSort,
@@ -37,6 +39,7 @@ import {
   ChallengeReason,
   KeyboardModifier,
   FolderContentType,
+  NoteType,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { WebDisplayOptions } from './WebDisplayOptions'
@@ -84,6 +87,16 @@ export class ItemListController
   renderedItems: ListableContentItem[] = []
   searchSubmitted = false
   showDisplayOptionsMenu = false
+
+  /**
+   * Standard Red Notes: web-only "Relevance" sort state. Relevance ordering only
+   * makes sense while a search query is active, so rather than persisting it as a
+   * model CollectionSort it is tracked here as a presentation-layer flag. When
+   * active (and searching) the search results are ordered by the pure relevance
+   * scorer instead of by the underlying field sort.
+   */
+  relevanceSortActive = false
+
   displayOptions: NotesAndFilesDisplayControllerOptions = {
     sortBy: CollectionSort.CreatedAt,
     sortDirection: 'dsc',
@@ -177,8 +190,10 @@ export class ItemListController
       items: observable,
       renderedItems: observable,
       showDisplayOptionsMenu: observable,
+      relevanceSortActive: observable,
 
       reloadItems: action,
+      setRelevanceSortActive: action,
       reloadPanelTitle: action,
       reloadDisplayPreferences: action,
       resetPagination: action,
@@ -190,6 +205,7 @@ export class ItemListController
 
       optionsSubtitle: computed,
       activeControllerItem: computed,
+      isRelevanceSortAvailable: computed,
 
       selectedUuids: observable,
       selectedItems: observable,
@@ -577,15 +593,23 @@ export class ItemListController
   /**
    * Map a note/file item to the shape the search index consumes. Files have no
    * text body; only their title is indexable.
+   *
+   * Super notes store Lexical editor-state JSON in `text`; indexing that raw JSON
+   * would let the index match on internal node keys instead of the readable
+   * prose. We run {@link extractPlaintextFromNoteText} so Super notes are indexed
+   * (and therefore searched/ranked) by their visible text. Plain notes pass the
+   * text through unchanged.
    */
-  private toIndexableNote(item: { uuid: string; title?: string; text?: string }): IndexableNote {
-    return { uuid: item.uuid, title: item.title ?? '', text: item.text ?? '' }
+  private toIndexableNote(item: { uuid: string; title?: string; text?: string; noteType?: NoteType }): IndexableNote {
+    const rawText = item.text ?? ''
+    const text = rawText.length > 0 ? extractPlaintextFromNoteText(rawText, item.noteType) : ''
+    return { uuid: item.uuid, title: item.title ?? '', text }
   }
 
   /** Buffer item-stream changes for a debounced, coalesced incremental index update. */
   private collectIndexUpdates(
-    changed: { uuid: string; title?: string; text?: string }[],
-    inserted: { uuid: string; title?: string; text?: string }[],
+    changed: { uuid: string; title?: string; text?: string; noteType?: NoteType }[],
+    inserted: { uuid: string; title?: string; text?: string; noteType?: NoteType }[],
     removed: { uuid: string }[],
   ): void {
     if (!this.searchIndex.isBuilt) {
@@ -617,11 +641,55 @@ export class ItemListController
    * Falls back to substring order whenever the index can't handle the query.
    */
   private applySearchOrdering(items: ListableContentItem[]): ListableContentItem[] {
+    const relevance = this.applyRelevanceOrdering(items)
+    if (relevance) {
+      return relevance
+    }
     const indexed = this.applySearchIndexOrdering(items)
     if (indexed) {
       return indexed
     }
     return this.applyAiSearchRanking(items)
+  }
+
+  /**
+   * Standard Red Notes: highest-precedence search ordering. When the user has the
+   * "Relevance" sort active and a query is present, order the already
+   * substring-filtered items by the pure relevance scorer (best match first).
+   *
+   * Returns null (so the caller falls back to index/BM25/substring order) when
+   * relevance sort is off or there is no active query. Items that score 0 for the
+   * query keep their existing relative order after the scored matches, so nothing
+   * the substring filter surfaced disappears.
+   */
+  private applyRelevanceOrdering(items: ListableContentItem[]): ListableContentItem[] | null {
+    const query = this.noteFilterText
+    if (!this.relevanceSortActive || !query || query.trim().length === 0 || items.length === 0) {
+      return null
+    }
+
+    const scorable = items.map((item) => ({
+      uuid: item.uuid,
+      title: item.title ?? '',
+      text: extractPlaintextFromNoteText(
+        (item as { text?: string }).text ?? '',
+        (item as { noteType?: NoteType }).noteType,
+      ),
+    }))
+
+    const rankedUuids = rankNotesByRelevance(scorable, query)
+    if (rankedUuids.length === 0) {
+      return null
+    }
+
+    const rankByUuid = new Map<string, number>()
+    rankedUuids.forEach((uuid, index) => rankByUuid.set(uuid, index))
+
+    return [...items].sort((a, b) => {
+      const rankA = rankByUuid.has(a.uuid) ? (rankByUuid.get(a.uuid) as number) : Number.MAX_SAFE_INTEGER
+      const rankB = rankByUuid.has(b.uuid) ? (rankByUuid.get(b.uuid) as number) : Number.MAX_SAFE_INTEGER
+      return rankA - rankB
+    })
   }
 
   /**
@@ -1012,6 +1080,7 @@ export class ItemListController
     title?: string,
     createdAt?: Date,
     autofocusBehavior: TemplateNoteViewAutofocusBehavior = 'editor',
+    openInNewTile = false,
   ) {
     const selectedTag = this.navigationController.selected
 
@@ -1025,7 +1094,24 @@ export class ItemListController
         autofocusBehavior,
         vault: this.vaultDisplayService.exclusivelyShownVault,
       },
+      openInNewTile,
     })
+  }
+
+  /**
+   * Creates a brand new note and opens it as an additional tab/tile without closing
+   * any currently open ones. Used by the "+" button in the tabbed/tiled editor, which
+   * must always produce a new tab (unlike `openNoteInNewTile`, which is a no-op when the
+   * highlighted note is already open).
+   */
+  openNewNoteInNewTile = async (): Promise<void> => {
+    const useTitle = this.titleForNewNote()
+
+    const controller = await this.createNewNoteController(useTitle, undefined, 'editor', true)
+
+    this.scrollToItem(controller.item)
+
+    await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
   }
 
   titleForNewNote = (createdAt?: Date) => {
@@ -1175,8 +1261,76 @@ export class ItemListController
       return
     }
 
+    const wasFiltering = this.noteFilterText.trim().length > 0
+    const isNowFiltering = text.trim().length > 0
+
     this.noteFilterText = text
+
+    // Standard Red Notes: auto-engage Relevance when a search begins, and revert
+    // to the prior field sort when the query is cleared.
+    if (isNowFiltering && !wasFiltering) {
+      this.engageRelevanceSortForSearch()
+    } else if (!isNowFiltering && wasFiltering) {
+      this.disengageRelevanceSort()
+    }
+
     this.handleFilterTextChanged()
+  }
+
+  /**
+   * Standard Red Notes: whether a Relevance sort is meaningful right now (i.e. a
+   * search query is active). The sort menu uses this to surface/enable the
+   * Relevance option only while searching.
+   */
+  get isRelevanceSortAvailable(): boolean {
+    return this.noteFilterText.trim().length > 0
+  }
+
+  setRelevanceSortActive = (active: boolean): void => {
+    this.relevanceSortActive = active
+  }
+
+  /**
+   * User explicitly selects the Relevance sort from the display-options menu.
+   * Only has an effect while searching. The underlying model field sort
+   * (displayOptions.sortBy) is left untouched, so clearing the query (which
+   * turns this flag off) automatically reverts to whatever field sort was active.
+   */
+  selectRelevanceSort = (): void => {
+    if (!this.isRelevanceSortAvailable || this.relevanceSortActive) {
+      return
+    }
+    this.setRelevanceSortActive(true)
+    void this.reloadItems(ItemsReloadSource.DisplayOptionsChange)
+  }
+
+  /**
+   * Leaving Relevance for a field sort while still searching: drop the relevance
+   * flag so the model field sort (date/title/custom) takes over again.
+   */
+  exitRelevanceSort = (): void => {
+    if (!this.relevanceSortActive) {
+      return
+    }
+    this.setRelevanceSortActive(false)
+    void this.reloadItems(ItemsReloadSource.DisplayOptionsChange)
+  }
+
+  /** Auto-engage Relevance as a search starts. */
+  private engageRelevanceSortForSearch(): void {
+    if (!this.relevanceSortActive) {
+      this.setRelevanceSortActive(true)
+    }
+  }
+
+  /**
+   * Revert when the search query is cleared. Because the model field sort was
+   * never changed, simply dropping the relevance flag restores the prior order.
+   */
+  private disengageRelevanceSort(): void {
+    if (this.relevanceSortActive) {
+      this.setRelevanceSortActive(false)
+    }
   }
 
   handleEditorChange = async () => {

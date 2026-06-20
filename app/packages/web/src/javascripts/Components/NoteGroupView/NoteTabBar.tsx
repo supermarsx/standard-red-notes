@@ -23,7 +23,7 @@ const titleForController = (controller: Controller): string => {
 /**
  * Browser-style tab bar for the open note/file controllers. Operates on the SAME
  * `itemControllers` set as the tiled editor: clicking a tab marks it active, the ×
- * closes that controller, and "+" opens the list-highlighted note in a new tab.
+ * closes that controller, and "+" opens a brand new note in its own tab.
  */
 const NoteTabBar: FunctionComponent<Props> = ({
   controllers,
@@ -88,8 +88,8 @@ const NoteTabBar: FunctionComponent<Props> = ({
         )}
         onClick={onAddTab}
         disabled={!canAddTab}
-        aria-label="Open highlighted note in a new tab"
-        title="Open highlighted note in a new tab"
+        aria-label="New note tab"
+        title="New note tab"
       >
         <Icon type="add" size="small" />
       </button>

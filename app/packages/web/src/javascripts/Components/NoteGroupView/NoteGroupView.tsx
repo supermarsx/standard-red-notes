@@ -141,6 +141,21 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     this.application.itemControllerGroup.closeItemController(controller)
   }
 
+  /**
+   * Opens a brand new note in its own tab/tile. Used by the "+" button. We create a
+   * new note rather than re-opening the list-highlighted one because the highlighted
+   * note is normally already the active tab, which would make `openNoteInNewTile` a
+   * no-op (its `alreadyOpen` guard returns early).
+   */
+  private addTab = () => {
+    void this.application.itemListController.openNewNoteInNewTile()
+  }
+
+  /**
+   * Opens the currently list-highlighted note as an additional tile alongside the
+   * open ones (no-op if it is already open). Used by the "Add tile" button which is
+   * only shown while already tiling.
+   */
   private addTile = () => {
     void this.application.itemListController.openNoteInNewTile()
   }
@@ -174,8 +189,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               activeControllerRuntimeId={this.state.activeControllerRuntimeId}
               onSelect={this.setActiveController}
               onClose={this.closeTile}
-              onAddTab={this.addTile}
-              canAddTab={!!this.application.itemListController.firstSelectedItem}
+              onAddTab={this.addTab}
+              canAddTab={true}
             />
 
             {isTiling && (
