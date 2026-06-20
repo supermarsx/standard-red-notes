@@ -17,10 +17,29 @@ import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 
 type ItemControllerGroupChangeCallback = (activeController: NoteViewController | FileViewController | undefined) => void
 
+export type CreateItemControllerContext = {
+  file?: FileItem
+  note?: SNNote
+  templateOptions?: TemplateNoteViewControllerOptions
+  /**
+   * When true, the new controller is opened as an additional "tile" alongside the
+   * currently open ones instead of replacing the active controller. Used by the
+   * tiled multi-note editor. Defaults to false (legacy single-note behavior).
+   */
+  openInNewTile?: boolean
+}
+
 export class ItemGroupController {
   public itemControllers: (NoteViewController | FileViewController)[] = []
   changeObservers: ItemControllerGroupChangeCallback[] = []
   eventObservers: (() => void)[] = []
+
+  /**
+   * Explicit reference to the active controller. When tiling is off there is only
+   * ever one controller and this points at it. When multiple tiles are open this
+   * tracks which tile keyboard/commands target.
+   */
+  private activeControllerRef: NoteViewController | FileViewController | undefined = undefined
 
   constructor(
     private items: ItemManagerInterface,
@@ -49,12 +68,13 @@ export class ItemGroupController {
     this.itemControllers.length = 0
   }
 
-  async createItemController(context: {
-    file?: FileItem
-    note?: SNNote
-    templateOptions?: TemplateNoteViewControllerOptions
-  }): Promise<NoteViewController | FileViewController> {
-    if (this.activeItemViewController) {
+  async createItemController(context: CreateItemControllerContext): Promise<NoteViewController | FileViewController> {
+    /**
+     * Default (legacy) behavior replaces the active tile by closing it first, so that
+     * selecting a note in the list reuses the single open editor. When `openInNewTile`
+     * is set we keep the existing controllers open and simply add a new one.
+     */
+    if (!context.openInNewTile && this.activeItemViewController) {
       this.closeItemController(this.activeItemViewController, { notify: false })
     }
 
@@ -93,6 +113,8 @@ export class ItemGroupController {
 
     this.itemControllers.push(controller)
 
+    this.activeControllerRef = controller
+
     await controller.initialize()
 
     this.notifyObservers()
@@ -111,9 +133,31 @@ export class ItemGroupController {
 
     removeFromArray(this.itemControllers, controller)
 
+    if (this.activeControllerRef === controller) {
+      this.activeControllerRef = this.itemControllers[this.itemControllers.length - 1]
+    }
+
     if (notify) {
       this.notifyObservers()
     }
+  }
+
+  /**
+   * Marks a given open controller (tile) as the active one without opening/closing
+   * anything. Used by the tiled editor when the user clicks into a tile so that
+   * keyboard/commands target that note.
+   */
+  setActiveItemController(controller: NoteViewController | FileViewController): void {
+    if (this.activeControllerRef === controller) {
+      return
+    }
+
+    if (!this.itemControllers.includes(controller)) {
+      return
+    }
+
+    this.activeControllerRef = controller
+    this.notifyObservers()
   }
 
   closeActiveItemController(): void {
@@ -125,14 +169,20 @@ export class ItemGroupController {
   }
 
   closeAllItemControllers(): void {
-    for (const controller of this.itemControllers) {
+    for (const controller of [...this.itemControllers]) {
       this.closeItemController(controller, { notify: false })
     }
+
+    this.activeControllerRef = undefined
 
     this.notifyObservers()
   }
 
   get activeItemViewController(): NoteViewController | FileViewController | undefined {
+    if (this.activeControllerRef && this.itemControllers.includes(this.activeControllerRef)) {
+      return this.activeControllerRef
+    }
+
     return this.itemControllers[0]
   }
 

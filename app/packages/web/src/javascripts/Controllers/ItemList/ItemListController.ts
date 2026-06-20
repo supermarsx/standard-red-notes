@@ -399,6 +399,36 @@ export class ItemListController
     await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
   }
 
+  /**
+   * Opens a note as an additional tile in the tiled multi-note editor without
+   * closing any currently open tiles. If no uuid is provided the currently
+   * highlighted-in-list note (firstSelectedItem) is used.
+   */
+  async openNoteInNewTile(uuid?: string): Promise<void> {
+    const targetUuid = uuid ?? this.firstSelectedItem?.uuid
+
+    if (!targetUuid) {
+      return
+    }
+
+    const alreadyOpen = this.itemControllerGroup.itemControllers.some(
+      (controller) => controller.item.uuid === targetUuid,
+    )
+    if (alreadyOpen) {
+      return
+    }
+
+    const note = this.itemManager.findItem<SNNote>(targetUuid)
+    if (!note) {
+      console.warn('Tried opening a non-existant note in new tile of UUID ' + targetUuid)
+      return
+    }
+
+    await this.itemControllerGroup.createItemController({ note, openInNewTile: true })
+
+    await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
+  }
+
   async openFile(fileUuid: string): Promise<void> {
     if (this.getActiveItemController()?.item.uuid === fileUuid) {
       return
