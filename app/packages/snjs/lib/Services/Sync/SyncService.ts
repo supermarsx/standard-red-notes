@@ -87,6 +87,7 @@ import {
   WebSocketsServiceEvent,
   WebSocketsService,
   SyncBackoffServiceInterface,
+  SyncItemsPushedData,
 } from '@standardnotes/services'
 import { OfflineSyncResponse } from './Offline/Response'
 import {
@@ -1675,8 +1676,125 @@ export class SyncService
       case WebSocketsServiceEvent.ItemsChangedOnServer:
         this.wasNotifiedOfItemsChangeOnServer = true
         break
+      case WebSocketsServiceEvent.SyncItemsPushed:
+        await this.handleItemsPushedOverWebSocket(event.payload as SyncItemsPushedData)
+        break
+      case WebSocketsServiceEvent.WebSocketDidOpen:
+        await this.handleWebSocketReconnect()
+        break
       default:
         break
+    }
+  }
+
+  /**
+   * Standard Red Notes (Phase 1A): on a websocket (re)connect, ALWAYS run a full
+   * HTTP sync to backfill anything missed while the socket was down. HTTP sync is
+   * the source of truth; the realtime push is only an optimization on top of it.
+   */
+  private async handleWebSocketReconnect(): Promise<void> {
+    this.logger.debug('WebSocket (re)connected; performing full HTTP sync to backfill')
+    void this.sync({ source: SyncSource.External, sourceDescription: 'WebSocket reconnect backfill' })
+  }
+
+  /**
+   * Standard Red Notes (Phase 1A): apply encrypted item payloads pushed over the
+   * websocket WITHOUT an HTTP pull, but only when it is provably safe.
+   *
+   * SAFETY RULES (HTTP sync is always the reliable backstop):
+   * 1. Token continuity: we only fast-apply when our current sync token EXACTLY
+   *    equals the push's `baseSyncToken` (the server's state immediately before
+   *    the change). Any mismatch/gap means we may be missing intermediate
+   *    changes, so we DISCARD the push and trigger a normal HTTP sync.
+   * 2. Never while a sync is in progress / before the DB is loaded: defer to HTTP.
+   * 3. Any failure during decrypt/apply/persist falls back to a full HTTP sync.
+   *
+   * The pushed payloads are run through the SAME decryption + conflict pipeline
+   * (`processServerPayloads` -> `ServerSyncResponseResolver` -> `emitDeltaEmit`)
+   * as HTTP-retrieved items, then persisted, and only then is the sync token
+   * advanced — mirroring `handleSuccessServerResponse`. So data can never be
+   * dropped or corrupted: a discarded/failed push simply results in an HTTP pull.
+   */
+  private async handleItemsPushedOverWebSocket(data: SyncItemsPushedData): Promise<void> {
+    if (this.dealloced) {
+      return
+    }
+
+    const triggerReconcilingHttpSync = (reason: string) => {
+      this.logger.debug(`Discarding websocket sync push (${reason}); falling back to HTTP sync`)
+      this.wasNotifiedOfItemsChangeOnServer = true
+      void this.sync({ source: SyncSource.External, sourceDescription: `WebSocket push fallback: ${reason}` })
+    }
+
+    if (!this.databaseLoaded || this.opStatus.syncInProgress || this.syncLock) {
+      triggerReconcilingHttpSync('sync busy or database not loaded')
+      return
+    }
+
+    const currentToken = await this.getLastSyncToken()
+
+    // Token-continuity gate: only apply if we are exactly caught up to the
+    // server state the push is based on. Otherwise we might miss intermediate
+    // changes — reconcile via HTTP (the source of truth).
+    if (!currentToken || currentToken !== data.baseSyncToken) {
+      triggerReconcilingHttpSync('sync token mismatch/gap')
+      return
+    }
+
+    // Hold the sync lock for the duration of the apply so a concurrent HTTP sync
+    // cannot interleave and double-advance the token. A normal sync that arrives
+    // while we hold it simply defers (its own lock check), and our token advance
+    // makes it a no-op pull anyway. If acquisition races, defer to HTTP.
+    if (this.syncLock) {
+      triggerReconcilingHttpSync('sync busy or database not loaded')
+      return
+    }
+    this.syncLock = true
+
+    try {
+      const decryptedPayloads = await this.processServerPayloads(
+        data.items as FilteredServerItem[],
+        PayloadSource.RemoteRetrieved,
+      )
+
+      const masterCollection = this.payloadManager.getMasterCollection()
+      const historyMap = this.historyService.getHistoryMapCopy()
+
+      const resolver = new ServerSyncResponseResolver(
+        {
+          retrievedPayloads: decryptedPayloads,
+          savedPayloads: [],
+          conflicts: {},
+        },
+        masterCollection,
+        [],
+        historyMap,
+      )
+
+      const emits = resolver.result()
+      for (const emit of emits) {
+        const payloadsToPersist = await this.payloadManager.emitDeltaEmit(emit)
+        await this.persistPayloads(payloadsToPersist)
+      }
+
+      // Advance the sync token EXACTLY as an HTTP pull would, so the next HTTP
+      // sync starts from the new server position and we don't re-pull the change.
+      await this.setLastSyncToken(data.syncToken)
+
+      this.lastSyncDate = new Date()
+
+      await this.notifyEvent(SyncEvent.PaginatedSyncRequestCompleted, {
+        retrievedPayloads: data.items,
+        source: SyncSource.External,
+      })
+
+      this.logger.debug(`Applied ${decryptedPayloads.length} item(s) from websocket push without HTTP pull`)
+    } catch (error) {
+      // Never drop or corrupt data: on ANY failure, fall back to a full HTTP sync.
+      this.logger.error('Failed to apply websocket sync push; falling back to HTTP sync', error)
+      triggerReconcilingHttpSync('apply error')
+    } finally {
+      this.syncLock = false
     }
   }
 

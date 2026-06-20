@@ -22,7 +22,25 @@ export type CollaborationFrame =
 
 const COLLABORATION_FRAME_TYPES = new Set(['room-join', 'room-leave', 'room-sync', 'yjs', 'awareness'])
 
-export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, DomainEventInterface> {
+/**
+ * Standard Red Notes (Phase 1A): payload carried by a SYNC_ITEMS_PUSHED message.
+ * `items` are the SAME end-to-end-encrypted item representations the client
+ * already receives for retrieved items over HTTP — the gateway and this service
+ * never see plaintext. `baseSyncToken` is the server's sync token immediately
+ * BEFORE the change; the client only fast-applies when its current token equals
+ * it, otherwise it discards and reconciles via HTTP. `syncToken` is the new
+ * token to adopt after applying.
+ */
+export interface SyncItemsPushedData {
+  items: unknown[]
+  syncToken: string
+  baseSyncToken: string
+}
+
+export class WebSocketsService extends AbstractService<
+  WebSocketsServiceEvent,
+  DomainEventInterface | SyncItemsPushedData | undefined
+> {
   private CLOSE_CONNECTION_CODE = 3123
   private HEARTBEAT_DELAY = 360_000
 
@@ -133,6 +151,11 @@ export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, D
     }, this.RECONNECT_STABLE_MS)
 
     this.beginWebSocketHeartbeat()
+
+    // On every (re)connect, tell the rest of the app the socket is live so the
+    // sync service can run a full HTTP sync and backfill anything missed while
+    // disconnected. HTTP remains the source of truth for catch-up.
+    void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidOpen)
   }
 
   private clearReconnectTimeout(): void {
@@ -221,6 +244,28 @@ export class WebSocketsService extends AbstractService<WebSocketsServiceEvent, D
     switch (eventData.type) {
       case 'ITEMS_CHANGED_ON_SERVER':
         void this.notifyEvent(WebSocketsServiceEvent.ItemsChangedOnServer, eventData)
+        break
+      case 'SYNC_ITEMS_PUSHED':
+        // Standard Red Notes (Phase 1A): the server pushed the changed encrypted
+        // payloads + tokens. Forward the payload to the sync service, which
+        // decides whether to fast-apply (token continuity) or fall back to HTTP.
+        // Defensive parsing: a malformed push must not throw — it just won't be
+        // applied, and the regular HTTP sync remains the backstop.
+        if (
+          eventData.payload &&
+          Array.isArray(eventData.payload.items) &&
+          typeof eventData.payload.syncToken === 'string' &&
+          typeof eventData.payload.baseSyncToken === 'string'
+        ) {
+          void this.notifyEvent(WebSocketsServiceEvent.SyncItemsPushed, {
+            items: eventData.payload.items,
+            syncToken: eventData.payload.syncToken,
+            baseSyncToken: eventData.payload.baseSyncToken,
+          })
+        } else {
+          // Malformed/unknown push shape — degrade to a normal notify-then-pull.
+          void this.notifyEvent(WebSocketsServiceEvent.ItemsChangedOnServer, eventData)
+        }
         break
       case 'USER_ROLES_CHANGED':
         void this.notifyEvent(WebSocketsServiceEvent.UserRoleMessageReceived, eventData)

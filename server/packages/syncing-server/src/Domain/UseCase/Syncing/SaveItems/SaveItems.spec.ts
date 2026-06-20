@@ -14,6 +14,8 @@ import { ItemsChangedOnServerEvent } from '@standardnotes/domain-events'
 import { SendEventToClients } from '../SendEventToClients/SendEventToClients'
 import { SharedVaultAssociation } from '../../../SharedVault/SharedVaultAssociation'
 import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLimit'
+import { MapperInterface } from '@standardnotes/domain-core'
+import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
 
 describe('SaveItems', () => {
   let itemSaveValidator: ItemSaveValidatorInterface
@@ -28,6 +30,9 @@ describe('SaveItems', () => {
   let sendEventToClients: SendEventToClients
   let domainEventFactory: DomainEventFactoryInterface
   let checkForContentLimit: CheckForContentLimit
+  let itemHttpMapper: MapperInterface<Item, ItemHttpRepresentation>
+  let websocketSyncPushEnabled: boolean
+  let websocketSyncPushMaxItems: number
 
   const createUseCase = () =>
     new SaveItems(
@@ -40,6 +45,9 @@ describe('SaveItems', () => {
       sendEventToClients,
       domainEventFactory,
       checkForContentLimit,
+      itemHttpMapper,
+      websocketSyncPushEnabled,
+      websocketSyncPushMaxItems,
       logger,
     )
 
@@ -54,9 +62,19 @@ describe('SaveItems', () => {
     sendEventToClients.execute = jest.fn().mockReturnValue(Result.ok())
 
     domainEventFactory = {} as jest.Mocked<DomainEventFactoryInterface>
-    domainEventFactory.createItemsChangedOnServerEvent = jest
-      .fn()
-      .mockReturnValue({} as jest.Mocked<ItemsChangedOnServerEvent>)
+    domainEventFactory.createItemsChangedOnServerEvent = jest.fn().mockReturnValue({
+      type: 'ITEMS_CHANGED_ON_SERVER',
+      createdAt: new Date(1),
+      meta: { correlation: { userIdentifier: 'user-uuid', userIdentifierType: 'uuid' }, origin: 'syncing-server' },
+      payload: {},
+    } as unknown as jest.Mocked<ItemsChangedOnServerEvent>)
+
+    itemHttpMapper = {} as jest.Mocked<MapperInterface<Item, ItemHttpRepresentation>>
+    itemHttpMapper.toProjection = jest.fn().mockReturnValue({ uuid: 'projected', content: 'enc' })
+
+    // Default: push optimization enabled with a generous item ceiling.
+    websocketSyncPushEnabled = true
+    websocketSyncPushMaxItems = 50
 
     itemSaveValidator = {} as jest.Mocked<ItemSaveValidatorInterface>
     itemSaveValidator.validate = jest.fn().mockResolvedValue({ passed: true })
@@ -503,5 +521,92 @@ describe('SaveItems', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
+  })
+
+  describe('websocket sync push (Phase 1A)', () => {
+    const baseDto = {
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    }
+
+    it('pushes a SYNC_ITEMS_PUSHED message with encrypted payloads and tokens when enabled and small', async () => {
+      websocketSyncPushEnabled = true
+      // Item saved with a newer updatedAt than the pre-save timestamp (the
+      // realistic case), so the post-change token advances past the base token.
+      const newerItem = Item.create({
+        ...savedItem.props,
+        timestamps: Timestamps.create(500, 500).getValue(),
+      }).getValue()
+      saveNewItem.execute = jest.fn().mockReturnValue(Result.ok(newerItem))
+      const useCase = createUseCase()
+
+      const result = await useCase.execute({ ...baseDto, itemHashes: [itemHash1] })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(itemHttpMapper.toProjection).toHaveBeenCalledWith(newerItem)
+      expect(sendEventToClient.execute).toHaveBeenCalledTimes(1)
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('SYNC_ITEMS_PUSHED')
+      expect(event.payload.syncToken).toEqual(result.getValue().syncToken)
+      // base token is the pre-save server state and must differ from the
+      // post-change token whenever the save advanced the latest-updated time.
+      expect(event.payload.baseSyncToken).not.toEqual(event.payload.syncToken)
+      expect(event.payload.items).toEqual([{ uuid: 'projected', content: 'enc' }])
+    })
+
+    it('falls back to the plain notification when the change set exceeds the size threshold', async () => {
+      websocketSyncPushMaxItems = 1
+      const useCase = createUseCase()
+
+      const itemHash2 = ItemHash.create({
+        ...itemHash1.props,
+        uuid: '00000000-0000-0000-0000-000000000009',
+      }).getValue()
+
+      const result = await useCase.execute({ ...baseDto, itemHashes: [itemHash1, itemHash2] })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(itemHttpMapper.toProjection).not.toHaveBeenCalled()
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+      expect(event.payload.items).toBeUndefined()
+    })
+
+    it('falls back to the plain notification when the push optimization is disabled', async () => {
+      websocketSyncPushEnabled = false
+      const useCase = createUseCase()
+
+      const result = await useCase.execute({ ...baseDto, itemHashes: [itemHash1] })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(itemHttpMapper.toProjection).not.toHaveBeenCalled()
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+    })
+
+    it('never pushes payloads across users for shared-vault items (plain notification only)', async () => {
+      savedItem = Item.create({
+        ...savedItem.props,
+        sharedVaultAssociation: SharedVaultAssociation.create({
+          sharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
+          lastEditedBy: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+        }).getValue(),
+      }).getValue()
+      itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
+      updateExistingItem.execute = jest.fn().mockResolvedValue(Result.ok(savedItem))
+
+      const useCase = createUseCase()
+      await useCase.execute({ ...baseDto, userUuid: '00000000-0000-0000-0000-000000000000', itemHashes: [itemHash1] })
+
+      // shared-vault fan-out (sendEventToClients) always carries the plain notification
+      const sharedEvent = (sendEventToClients.execute as jest.Mock).mock.calls[0][0].event
+      expect(sharedEvent.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+    })
   })
 })

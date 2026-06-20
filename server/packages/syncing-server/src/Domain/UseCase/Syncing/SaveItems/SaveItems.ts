@@ -1,4 +1,4 @@
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { MapperInterface, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { SaveItemsResult } from './SaveItemsResult'
 import { SaveItemsDTO } from './SaveItemsDTO'
@@ -15,6 +15,8 @@ import { SendEventToClient } from '../SendEventToClient/SendEventToClient'
 import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 import { SendEventToClients } from '../SendEventToClients/SendEventToClients'
 import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLimit'
+import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
+import { DomainEventInterface } from '@standardnotes/domain-events'
 
 export class SaveItems implements UseCaseInterface<SaveItemsResult> {
   private readonly SYNC_TOKEN_VERSION = 2
@@ -29,6 +31,20 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     private sendEventToClients: SendEventToClients,
     private domainEventFactory: DomainEventFactoryInterface,
     private checkForContentLimit: CheckForContentLimit,
+    private itemHttpMapper: MapperInterface<Item, ItemHttpRepresentation>,
+    // Standard Red Notes (Phase 1A "websockets as primary sync path"):
+    // when enabled, push the changed encrypted item payloads + the new sync
+    // token over the websocket so other devices can apply them WITHOUT an HTTP
+    // pull. This is purely an OPTIMIZATION layered on top of the existing
+    // notify-then-pull flow: the client always degrades to a normal HTTP sync
+    // if this is disabled, the change set is too large, the base token doesn't
+    // match, or anything goes wrong. HTTP sync remains the source of truth.
+    private websocketSyncPushEnabled: boolean,
+    // Upper bound on the number of items we will inline into a single push. A
+    // larger change set sends the plain ITEMS_CHANGED_ON_SERVER notification
+    // only (the client then pulls via HTTP as today), so we never blow up a
+    // single websocket frame.
+    private websocketSyncPushMaxItems: number,
     private logger: Logger,
   ) {}
 
@@ -156,7 +172,13 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
     const syncToken = this.calculateSyncToken(lastUpdatedTimestamp, savedItems)
 
-    await this.notifyOtherClientsOfTheUserThatItemsChanged(dto, savedItems, lastUpdatedTimestamp)
+    // The token representing the server's state immediately BEFORE this batch
+    // was applied. A receiving device only fast-applies the pushed payloads if
+    // its own current sync token equals this base token (i.e. it was exactly
+    // caught up); otherwise it discards the push and reconciles over HTTP.
+    const baseSyncToken = this.calculateSyncToken(lastUpdatedTimestamp, [])
+
+    await this.notifyOtherClientsOfTheUserThatItemsChanged(dto, savedItems, lastUpdatedTimestamp, syncToken, baseSyncToken)
 
     return Result.ok({
       savedItems,
@@ -165,10 +187,60 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     })
   }
 
+  /**
+   * Build the realtime websocket message for a set of changed items. When the
+   * change set is small enough and the push optimization is enabled, this is a
+   * SYNC_ITEMS_PUSHED message carrying the already-encrypted item payloads plus
+   * the new and base sync tokens, so other devices can apply the change without
+   * an HTTP pull. Otherwise it falls back to the plain ITEMS_CHANGED_ON_SERVER
+   * notification (the client then pulls via HTTP exactly as it does today).
+   *
+   * Never sends plaintext: the payloads are the same end-to-end-encrypted
+   * representation the client already receives for retrieved items over HTTP.
+   */
+  private buildItemsChangedMessage(
+    dto: SaveItemsDTO,
+    savedItems: Item[],
+    lastUpdatedTimestamp: number,
+    syncToken: string,
+    baseSyncToken: string,
+  ): DomainEventInterface {
+    const notification = this.domainEventFactory.createItemsChangedOnServerEvent({
+      userUuid: dto.userUuid,
+      sessionUuid: dto.sessionUuid ?? '',
+      timestamp: lastUpdatedTimestamp,
+    })
+
+    const canPush =
+      this.websocketSyncPushEnabled &&
+      savedItems.length > 0 &&
+      savedItems.length <= this.websocketSyncPushMaxItems
+
+    if (!canPush) {
+      return notification
+    }
+
+    return {
+      type: 'SYNC_ITEMS_PUSHED',
+      createdAt: notification.createdAt,
+      meta: notification.meta,
+      payload: {
+        userUuid: dto.userUuid,
+        sessionUuid: dto.sessionUuid ?? '',
+        timestamp: lastUpdatedTimestamp,
+        syncToken,
+        baseSyncToken,
+        items: savedItems.map((item) => this.itemHttpMapper.toProjection(item)),
+      },
+    }
+  }
+
   private async notifyOtherClientsOfTheUserThatItemsChanged(
     dto: SaveItemsDTO,
     savedItems: Item[],
     lastUpdatedTimestamp: number,
+    syncToken: string,
+    baseSyncToken: string,
   ): Promise<void> {
     // Emit on any saved item so realtime push works even when the session is
     // not propagated into the sync context (self-hosted/cross-service). Without
@@ -178,11 +250,27 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       return
     }
 
+    // Plain notification for cross-user shared-vault fan-out. We deliberately do
+    // NOT inline payloads across users: the base-token continuity guarantee only
+    // holds within a single user's own devices, so collaborators always pull via
+    // HTTP (unchanged behaviour).
     const itemsChangedEvent = this.domainEventFactory.createItemsChangedOnServerEvent({
       userUuid: dto.userUuid,
       sessionUuid: dto.sessionUuid ?? '',
       timestamp: lastUpdatedTimestamp,
     })
+
+    // The personal realtime message to the user's OTHER devices: SYNC_ITEMS_PUSHED
+    // (encrypted payloads + tokens) when small enough and enabled, otherwise the
+    // plain notification. Either way the gateway excludes the originating session.
+    const personalMessage = this.buildItemsChangedMessage(
+      dto,
+      savedItems,
+      lastUpdatedTimestamp,
+      syncToken,
+      baseSyncToken,
+    )
+
     // Standard Red Notes: live-sync gating. When disabled for this user, skip the
     // personal realtime push only. The save has already persisted; clients will
     // still pick up the change on their next regular sync. The shared-vault
@@ -191,7 +279,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       const result = await this.sendEventToClient.execute({
         userUuid: dto.userUuid,
         originatingSessionUuid: dto.sessionUuid ?? undefined,
-        event: itemsChangedEvent,
+        event: personalMessage,
       })
       /* istanbul ignore next */
       if (result.isFailed()) {

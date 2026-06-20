@@ -1,9 +1,10 @@
 import { LoggerInterface } from '@standardnotes/utils'
-import { SyncSource } from '@standardnotes/services'
+import { SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
 import {
   DecryptedItemInterface,
   DeletedItemInterface,
+  ImmutablePayloadCollection,
 } from '@standardnotes/models'
 
 describe('SyncService failure backoff', () => {
@@ -131,6 +132,137 @@ describe('SyncService failure backoff', () => {
     await service.sync({ source: SyncSource.External })
 
     expect(hasPendingBackoff(service)).toBe(false)
+  })
+})
+
+describe('SyncService websocket push apply (Phase 1A)', () => {
+  let logger: jest.Mocked<LoggerInterface>
+  let storage: { values: Record<string, string>; getValue: jest.Mock; setValue: jest.Mock }
+  let payloadManager: { getMasterCollection: jest.Mock; emitDeltaEmit: jest.Mock }
+  let historyService: { getHistoryMapCopy: jest.Mock }
+  let encryptionService: { decryptSplit: jest.Mock }
+
+  const StorageKeyLastSyncToken = 'syncToken'
+
+  const createService = (currentToken?: string): SyncService => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+
+    const noop = () => undefined
+
+    storage = {
+      values: currentToken ? { [StorageKeyLastSyncToken]: currentToken } : {},
+      getValue: jest.fn(),
+      setValue: jest.fn(),
+    }
+    storage.getValue.mockImplementation((key: string) => storage.values[key])
+    storage.setValue.mockImplementation((key: string, value: string) => {
+      storage.values[key] = value
+    })
+
+    payloadManager = {
+      getMasterCollection: jest.fn().mockReturnValue(ImmutablePayloadCollection.WithPayloads([])),
+      emitDeltaEmit: jest.fn().mockResolvedValue([]),
+    }
+    historyService = { getHistoryMapCopy: jest.fn().mockReturnValue({}) }
+    encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      encryptionService as never,
+      storage as never, // storageService
+      payloadManager as never,
+      {} as never, // apiService
+      historyService as never,
+      {} as never, // device
+      'test-identifier',
+      {} as never, // options
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+
+    // Default: database loaded, nothing in progress.
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus = { syncInProgress: false } as never
+    ;(service as unknown as { syncLock: boolean }).syncLock = false
+
+    return service
+  }
+
+  const dispatchPush = (service: SyncService, data: unknown) =>
+    service.handleEvent({ type: WebSocketsServiceEvent.SyncItemsPushed, payload: data } as never)
+
+  it('applies an in-order push directly without an HTTP sync and advances the token', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+    // The pushed items are decrypted/applied via the real pipeline; with no items
+    // the resolver emits empty deltas and we just advance the token.
+    ;(service as unknown as { persistPayloads: jest.Mock }).persistPayloads = jest.fn().mockResolvedValue(undefined)
+
+    await dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' })
+
+    expect(syncSpy).not.toHaveBeenCalled()
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('new-token')
+  })
+
+  it('discards the push and triggers an HTTP sync on a token mismatch/gap', async () => {
+    const service = createService('different-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' })
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    // Token must NOT be advanced when we discard the push.
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('different-token')
+    expect((service as unknown as { wasNotifiedOfItemsChangeOnServer: boolean }).wasNotifiedOfItemsChangeOnServer).toBe(
+      true,
+    )
+  })
+
+  it('discards the push and triggers an HTTP sync when a sync is already in progress', async () => {
+    const service = createService('base-token')
+    ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus.syncInProgress = true
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' })
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+  })
+
+  it('falls back to an HTTP sync if applying the push throws, without advancing the token', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+    // Force the apply pipeline to throw.
+    ;(service as unknown as { processServerPayloads: jest.Mock }).processServerPayloads = jest
+      .fn()
+      .mockRejectedValue(new Error('boom'))
+
+    await dispatchPush(service, { items: [{ uuid: 'x' }], syncToken: 'new-token', baseSyncToken: 'base-token' })
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('performs a full HTTP sync on websocket (re)connect to backfill', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await service.handleEvent({ type: WebSocketsServiceEvent.WebSocketDidOpen } as never)
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceDescription: 'WebSocket reconnect backfill' }),
+    )
   })
 })
 

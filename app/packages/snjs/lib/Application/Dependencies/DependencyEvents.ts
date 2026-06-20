@@ -41,6 +41,9 @@ export function RegisterApplicationServicesEvents(container: Dependencies, event
   events.addEventHandler(container.get(TYPES.SubscriptionManager), SessionEvent.Restored)
   events.addEventHandler(container.get(TYPES.SyncService), IntegrityEvent.IntegrityCheckCompleted)
   events.addEventHandler(container.get(TYPES.SyncService), WebSocketsServiceEvent.ItemsChangedOnServer)
+  // Standard Red Notes (Phase 1A): direct apply of pushed payloads + reconnect backfill.
+  events.addEventHandler(container.get(TYPES.SyncService), WebSocketsServiceEvent.SyncItemsPushed)
+  events.addEventHandler(container.get(TYPES.SyncService), WebSocketsServiceEvent.WebSocketDidOpen)
   events.addEventHandler(container.get(TYPES.UserService), AccountEvent.SignedInOrRegistered)
   events.addEventHandler(container.get(TYPES.VaultInviteService), ApplicationEvent.Launched)
   events.addEventHandler(container.get(TYPES.VaultInviteService), SyncEvent.ReceivedSharedVaultInvites)

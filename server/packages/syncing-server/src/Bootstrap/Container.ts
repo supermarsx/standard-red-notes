@@ -724,6 +724,13 @@ export class ContainerConfigLoader {
           container.get<SendEventToClients>(TYPES.Sync_SendEventToClients),
           container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
           container.get<CheckForContentLimit>(TYPES.Sync_CheckForContentLimit),
+          container.get<MapperInterface<Item, ItemHttpRepresentation>>(TYPES.Sync_ItemHttpMapper),
+          // Standard Red Notes: websocket sync-push optimization. Default ON; the
+          // client always degrades to HTTP cleanly if disabled or inconsistent.
+          env.get('WEBSOCKET_SYNC_PUSH_ENABLED', true) !== 'false',
+          env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)
+            ? +env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)
+            : 50,
           container.get<Logger>(TYPES.Sync_Logger),
         ),
       )
