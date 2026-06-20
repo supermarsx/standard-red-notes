@@ -104,6 +104,11 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
   const isCustomSortMode = application.itemListController.isCustomSortMode
   const [isReorderTarget, setIsReorderTarget] = useState(false)
 
+  // Standard Red Notes: briefly highlight a row right after the user creates it,
+  // so the new note visibly catches the eye. Keyed off the controller's
+  // recentlyCreatedNoteUuid, which auto-clears after ~1.2s.
+  const isRecentlyCreated = application.itemListController.recentlyCreatedNoteUuid === item.uuid
+
   const onReorderDragOver = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       if (!isCustomSortMode) {
@@ -173,6 +178,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
         isPreviousItemTiled && 'mt-3 border-t border-t-border',
         isNextItemTiled && 'mb-3 border-b border-b-border',
         isReorderTarget && 'border-t-2 !border-t-info',
+        isRecentlyCreated && 'note-just-created',
       )}
       id={item.uuid}
       onClick={onClick}

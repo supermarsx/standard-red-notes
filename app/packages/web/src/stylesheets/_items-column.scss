@@ -110,7 +110,24 @@
     background-color: var(--items-column-items-background-color);
   }
 
+  // Standard Red Notes: brief one-shot highlight pulse applied to a note row
+  // right after the user creates it, so the new note catches the eye. Uses the
+  // theme info color token (no hardcoded colors) and self-clears via the
+  // controller after ~1.2s.
+  @keyframes note-just-created-pulse {
+    0% {
+      background-color: color-mix(in srgb, var(--sn-stylekit-info-color) 28%, transparent);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
   .content-list-item {
+    &.note-just-created {
+      animation: note-just-created-pulse 1.2s ease-out;
+    }
+
     @media screen and (hover: hover) {
       &:hover {
         background-color: var(--item-cell-selected-background-color);

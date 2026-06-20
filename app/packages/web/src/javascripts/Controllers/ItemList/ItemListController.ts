@@ -54,6 +54,7 @@ import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewCon
 import { FileViewController } from '@/Components/NoteView/Controller/FileViewController'
 import { TemplateNoteViewAutofocusBehavior } from '@/Components/NoteView/Controller/TemplateNoteViewControllerOptions'
 import { ItemsReloadSource } from './ItemsReloadSource'
+import { addToast, ToastType } from '@standardnotes/toast'
 import {
   IsNativeMobileWeb,
   KeyboardService,
@@ -72,6 +73,14 @@ import { RecentActionsState } from '../../Application/Recents'
 const MinNoteCellHeight = 51.0
 const DefaultListNumNotes = 20
 const ElementIdScrollContainer = 'notes-scrollable'
+
+/**
+ * Standard Red Notes: how long the newly-created note's row keeps its
+ * "just created" highlight, and the shared toast id used so rapid note
+ * creation replaces (rather than stacks) the confirmation toast.
+ */
+const NoteCreatedHighlightDurationMs = 1200
+const NoteCreatedToastId = 'new-note-created'
 
 export class ItemListController
   extends AbstractViewController
@@ -148,8 +157,20 @@ export class ItemListController
 
   isMultipleSelectionMode = false
 
+  /**
+   * Standard Red Notes: uuid of the most recently user-created note. Set briefly
+   * (NoteCreatedHighlightDurationMs) so the list cell can flash a "just created"
+   * highlight, then cleared. Only set for explicit user-initiated creation, never
+   * for placeholder/daily/auto creation.
+   */
+  recentlyCreatedNoteUuid: UuidString | undefined = undefined
+  private recentlyCreatedNoteTimeout: ReturnType<typeof setTimeout> | undefined = undefined
+
   override deinit() {
     super.deinit()
+    if (this.recentlyCreatedNoteTimeout) {
+      clearTimeout(this.recentlyCreatedNoteTimeout)
+    }
     ;(this.noteFilterText as unknown) = undefined
     ;(this.notes as unknown) = undefined
     ;(this.renderedItems as unknown) = undefined
@@ -224,6 +245,10 @@ export class ItemListController
       isMultipleSelectionMode: observable,
       enableMultipleSelectionMode: action,
       cancelMultipleSelection: action,
+
+      recentlyCreatedNoteUuid: observable,
+      flashNoteCreated: action,
+      clearRecentlyCreatedNote: action,
     })
 
     eventBus.addEventHandler(this, CrossControllerEvent.TagChanged)
@@ -1099,6 +1124,37 @@ export class ItemListController
   }
 
   /**
+   * Standard Red Notes: gives feedback that an explicit, user-initiated note was
+   * created — a short, deduped confirmation toast plus a brief row highlight keyed
+   * off the new note's uuid. Reusing a fixed toast id means rapid creation replaces
+   * the existing toast instead of stacking noisy ones. Never called for
+   * placeholder/daily/auto creation.
+   */
+  flashNoteCreated = (uuid: UuidString) => {
+    addToast({
+      id: NoteCreatedToastId,
+      type: ToastType.Success,
+      message: 'New note created',
+      autoClose: true,
+      duration: 1500,
+    })
+
+    this.recentlyCreatedNoteUuid = uuid
+
+    if (this.recentlyCreatedNoteTimeout) {
+      clearTimeout(this.recentlyCreatedNoteTimeout)
+    }
+    this.recentlyCreatedNoteTimeout = setTimeout(() => {
+      this.clearRecentlyCreatedNote()
+    }, NoteCreatedHighlightDurationMs)
+  }
+
+  clearRecentlyCreatedNote = () => {
+    this.recentlyCreatedNoteUuid = undefined
+    this.recentlyCreatedNoteTimeout = undefined
+  }
+
+  /**
    * Creates a brand new note and opens it as an additional tab/tile without closing
    * any currently open ones. Used by the "+" button in the tabbed/tiled editor, which
    * must always produce a new tab (unlike `openNoteInNewTile`, which is a no-op when the
@@ -1110,6 +1166,8 @@ export class ItemListController
     const controller = await this.createNewNoteController(useTitle, undefined, 'editor', true)
 
     this.scrollToItem(controller.item)
+
+    this.flashNoteCreated(controller.item.uuid)
 
     await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
   }
@@ -1153,7 +1211,17 @@ export class ItemListController
     return formatDateAndTimeForNote(createdAt || new Date())
   }
 
-  createNewNote = async (title?: string, createdAt?: Date, autofocusBehavior?: TemplateNoteViewAutofocusBehavior) => {
+  createNewNote = async (
+    title?: string,
+    createdAt?: Date,
+    autofocusBehavior?: TemplateNoteViewAutofocusBehavior,
+    /**
+     * Standard Red Notes: whether this is an explicit user action (create button,
+     * command, quick action). Only then do we show the confirmation toast + row
+     * highlight. Placeholder/daily/auto creation pass false to avoid spam.
+     */
+    userTriggered = false,
+  ) => {
     void this.publishCrossControllerEventSync(CrossControllerEvent.UnselectAllNotes)
 
     if (
@@ -1169,6 +1237,10 @@ export class ItemListController
     const controller = await this.createNewNoteController(useTitle, createdAt, autofocusBehavior)
 
     this.scrollToItem(controller.item)
+
+    if (userTriggered) {
+      this.flashNoteCreated(controller.item.uuid)
+    }
   }
 
   createPlaceholderNote = () => {

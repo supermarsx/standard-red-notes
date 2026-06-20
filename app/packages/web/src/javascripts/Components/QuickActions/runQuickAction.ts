@@ -70,7 +70,7 @@ export async function runQuickAction(application: WebApplication, action: QuickA
       if (isTag(target) || target instanceof SmartView) {
         await navigateToTag(application, target as SNTag | SmartView)
       }
-      await application.itemListController.createNewNote()
+      await application.itemListController.createNewNote(undefined, undefined, undefined, true)
       application.paneController.setPaneLayout(PaneLayout.Editing)
       break
     }

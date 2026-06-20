@@ -180,7 +180,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
 
         void filesController.selectAndUploadNewFiles()
       } else {
-        await createNewNote()
+        await createNewNote(undefined, undefined, undefined, true)
         setPaneLayout(PaneLayout.Editing)
       }
     }, [isFilesSmartView, application, filesController, createNewNote, setPaneLayout])
