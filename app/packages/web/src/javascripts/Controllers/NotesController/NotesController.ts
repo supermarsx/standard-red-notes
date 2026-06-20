@@ -42,6 +42,8 @@ import {
   upsertReminder as upsertReminderInList,
   removeReminder as removeReminderFromList,
   markReminderNotified as markReminderNotifiedInList,
+  advanceRecurringReminder,
+  isRecurring,
 } from '../../Reminders/reminders'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
@@ -537,6 +539,53 @@ export class NotesController
   async markNoteReminderNotified(note: SNNote, reminderId: string) {
     const next = markReminderNotifiedInList(getNoteReminders(note), reminderId)
     await this.writeNoteReminders(note, next)
+  }
+
+  /**
+   * Standard Red Notes: after a reminder fires, settle its state.
+   *
+   *  - One-shot reminder: mark it `notified` (unchanged legacy behavior).
+   *  - Recurring reminder: advance `dueAt` to the next future occurrence (looping
+   *    forward past any intervals missed while offline) and clear `notified` so it
+   *    re-arms. If "email me" is on, the next occurrence is re-registered with the
+   *    server (best-effort) since the server-side email reminder is single-shot —
+   *    we delete the previous server record and create a new one for the new time.
+   *
+   * Returns the resulting reminder (after advance) so callers can act on it; for a
+   * one-shot it returns the input unchanged.
+   */
+  async settleFiredReminder(note: SNNote, reminderId: string, now: number): Promise<Reminder | undefined> {
+    const current = getNoteReminders(note).find((reminder) => reminder.id === reminderId)
+    if (!current) {
+      return undefined
+    }
+
+    if (!isRecurring(current)) {
+      await this.markNoteReminderNotified(note, reminderId)
+      return current
+    }
+
+    const advanced = advanceRecurringReminder(current, now)
+
+    // Re-register the next email occurrence (best-effort). The server email
+    // reminder is single-shot, so on each advance we cancel the prior record and
+    // create one for the new dueAt. Failures are swallowed: the in-app reminder
+    // still advances; only the email for the next cycle may be missed.
+    if (current.emailReminderId) {
+      try {
+        const { deleteEmailReminder, createEmailReminder } = await import('../../Reminders/emailReminders')
+        await deleteEmailReminder(this.application, current.emailReminderId)
+        const emailText = advanced.message?.trim() || 'Reminder'
+        const newId = await createEmailReminder(this.application, advanced.dueAt, emailText)
+        advanced.emailReminderId = newId ?? undefined
+      } catch (error) {
+        console.error(error)
+        advanced.emailReminderId = undefined
+      }
+    }
+
+    await this.upsertNoteReminder(note, advanced)
+    return advanced
   }
 
   async addTagToSelectedNotes(tag: SNTag): Promise<void> {

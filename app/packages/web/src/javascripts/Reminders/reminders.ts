@@ -30,6 +30,29 @@ import { AppDataField, SNNote } from '@standardnotes/snjs'
 
 export const NoteRemindersKey = 'reminders' as unknown as AppDataField
 
+/**
+ * Standard Red Notes: how often a reminder repeats.
+ *
+ *  - `none` (or a missing recurrence): one-shot — fires once and is then marked
+ *    `notified`, exactly as reminders behaved before this feature.
+ *  - `daily` / `weekly` / `monthly` / `yearly`: repeat at the natural interval.
+ *  - `custom`: repeat every `interval` units of `unit` (e.g. every 2 weeks).
+ *
+ * For the fixed frequencies `interval`/`unit` are ignored. They only matter for
+ * `custom`. The shape is intentionally permissive so old data (no recurrence at
+ * all) and partial data never throw — see `normalizeRecurrence`.
+ */
+export type RecurrenceFrequency = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom'
+export type RecurrenceUnit = 'day' | 'week' | 'month' | 'year'
+
+export type Recurrence = {
+  frequency: RecurrenceFrequency
+  /** For `custom`: how many `unit`s between occurrences (>= 1). */
+  interval?: number
+  /** For `custom`: the unit the interval is measured in. */
+  unit?: RecurrenceUnit
+}
+
 /** A single reminder attached to a note (generalizes to tasks/events). */
 export type Reminder = {
   /** Stable id so a note can carry more than one reminder. */
@@ -40,6 +63,12 @@ export type Reminder = {
   message?: string
   /** Whether we've already fired a notification for this reminder. */
   notified?: boolean
+  /**
+   * Standard Red Notes: optional repeat schedule. When absent the reminder is a
+   * one-shot (treated as `{ frequency: 'none' }`). Stored on the reminder so the
+   * checker can advance `dueAt` to the next occurrence after firing.
+   */
+  recurrence?: Recurrence
   /**
    * Standard Red Notes: if the user opted THIS reminder into email delivery, the
    * uuid of the server-side email-reminder record. Stored so we can best-effort
@@ -164,6 +193,212 @@ export function generateReminderId(): string {
   }
   idCounter += 1
   return `reminder-${Date.now().toString(36)}-${idCounter.toString(36)}`
+}
+
+/**
+ * Standard Red Notes: coerce any stored/partial recurrence into a sane value.
+ * Never throws — old reminders (no recurrence) and malformed data normalize to
+ * one-shot `{ frequency: 'none' }`.
+ */
+export function normalizeRecurrence(recurrence: Recurrence | undefined): Recurrence {
+  if (!recurrence || typeof recurrence !== 'object') {
+    return { frequency: 'none' }
+  }
+  const frequency = recurrence.frequency
+  switch (frequency) {
+    case 'daily':
+    case 'weekly':
+    case 'monthly':
+    case 'yearly':
+      return { frequency }
+    case 'custom': {
+      const rawInterval = Number(recurrence.interval)
+      const interval = Number.isFinite(rawInterval) && rawInterval >= 1 ? Math.floor(rawInterval) : 1
+      const unit: RecurrenceUnit =
+        recurrence.unit === 'day' ||
+        recurrence.unit === 'week' ||
+        recurrence.unit === 'month' ||
+        recurrence.unit === 'year'
+          ? recurrence.unit
+          : 'day'
+      return { frequency: 'custom', interval, unit }
+    }
+    default:
+      return { frequency: 'none' }
+  }
+}
+
+/** True if the reminder repeats (its normalized frequency is not 'none'). */
+export function isRecurring(reminder: Reminder): boolean {
+  return normalizeRecurrence(reminder.recurrence).frequency !== 'none'
+}
+
+/** Reduce a recurrence to a plain (interval, unit) step. Not called for 'none'. */
+function recurrenceStep(recurrence: Recurrence): { interval: number; unit: RecurrenceUnit } {
+  const normalized = normalizeRecurrence(recurrence)
+  switch (normalized.frequency) {
+    case 'daily':
+      return { interval: 1, unit: 'day' }
+    case 'weekly':
+      return { interval: 1, unit: 'week' }
+    case 'monthly':
+      return { interval: 1, unit: 'month' }
+    case 'yearly':
+      return { interval: 1, unit: 'year' }
+    case 'custom':
+      return { interval: normalized.interval ?? 1, unit: normalized.unit ?? 'day' }
+    default:
+      // 'none' — caller guards against this; default to a day to avoid an infinite loop.
+      return { interval: 1, unit: 'day' }
+  }
+}
+
+/**
+ * Advance a timestamp by one recurrence step.
+ *
+ * Day/week steps are pure millisecond arithmetic (so a "weekly" reminder lands
+ * at the same wall-clock time even across a DST boundary the Date object will
+ * normalize; using local-date setters keeps the local hour stable). Month/year
+ * steps use local-date setters and CLAMP overflow: e.g. Jan 31 + 1 month is
+ * Feb 28 (or Feb 29 in a leap year), not the JS default of rolling into March.
+ */
+function addStep(ms: number, interval: number, unit: RecurrenceUnit): number {
+  const date = new Date(ms)
+  switch (unit) {
+    case 'day':
+      date.setDate(date.getDate() + interval)
+      return date.getTime()
+    case 'week':
+      date.setDate(date.getDate() + interval * 7)
+      return date.getTime()
+    case 'month':
+      return addMonths(date, interval).getTime()
+    case 'year':
+      return addMonths(date, interval * 12).getTime()
+    default:
+      return ms
+  }
+}
+
+/**
+ * Add `count` whole months to a local date, clamping the day-of-month so we never
+ * spill into the following month. Jan 31 + 1 month => Feb 28/29; Mar 31 + 1 =>
+ * Apr 30. The time-of-day is preserved.
+ */
+function addMonths(date: Date, count: number): Date {
+  const year = date.getFullYear()
+  const month = date.getMonth()
+  const day = date.getDate()
+  const targetMonthIndex = month + count
+  const targetYear = year + Math.floor(targetMonthIndex / 12)
+  const targetMonth = ((targetMonthIndex % 12) + 12) % 12
+  // Last day of the target month (day 0 of the next month).
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate()
+  const clampedDay = Math.min(day, daysInTargetMonth)
+  return new Date(
+    targetYear,
+    targetMonth,
+    clampedDay,
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+  )
+}
+
+/**
+ * Standard Red Notes: compute the next occurrence after `dueAt` for a recurring
+ * reminder.
+ *
+ * Returns `undefined` for a one-shot (`none`/missing) recurrence. Otherwise
+ * returns the timestamp exactly one recurrence step after `dueAt`. This is the
+ * single-step primitive; the checker loops it (`advanceRecurringReminder`) to
+ * catch up when several intervals elapsed while the app was closed.
+ *
+ * `dueAt` may be an ISO string or an epoch-ms number. An unparseable value
+ * yields `undefined` (we never throw on bad data).
+ */
+export function computeNextOccurrence(
+  dueAt: string | number,
+  recurrence: Recurrence | undefined,
+): number | undefined {
+  const normalized = normalizeRecurrence(recurrence)
+  if (normalized.frequency === 'none') {
+    return undefined
+  }
+  const baseMs = typeof dueAt === 'number' ? dueAt : Date.parse(dueAt)
+  if (Number.isNaN(baseMs)) {
+    return undefined
+  }
+  const { interval, unit } = recurrenceStep(normalized)
+  return addStep(baseMs, interval, unit)
+}
+
+/**
+ * Standard Red Notes: advance a recurring reminder past `now`.
+ *
+ * Loops `computeNextOccurrence` forward until the new `dueAt` is strictly in the
+ * future (so multiple missed intervals while offline are skipped in one pass),
+ * and clears `notified` so the advanced reminder can fire again at its next time.
+ *
+ * Returns the same reminder unchanged for a one-shot recurrence (caller should
+ * fall back to marking it notified), or if the dueAt can't be parsed/advanced.
+ * A safety cap prevents pathological loops on tiny intervals + huge gaps.
+ */
+export function advanceRecurringReminder(reminder: Reminder, now: number): Reminder {
+  const normalized = normalizeRecurrence(reminder.recurrence)
+  if (normalized.frequency === 'none') {
+    return reminder
+  }
+  let nextMs = computeNextOccurrence(reminder.dueAt, normalized)
+  if (nextMs === undefined) {
+    return reminder
+  }
+  // Skip any occurrences already in the past (missed while offline). Cap the
+  // iterations defensively so a misconfigured tiny interval can't spin forever.
+  let guard = 0
+  const MAX_CATCHUP_STEPS = 100_000
+  while (nextMs <= now && guard < MAX_CATCHUP_STEPS) {
+    const advanced = computeNextOccurrence(nextMs, normalized)
+    if (advanced === undefined || advanced <= nextMs) {
+      break
+    }
+    nextMs = advanced
+    guard += 1
+  }
+  return {
+    ...reminder,
+    dueAt: new Date(nextMs).toISOString(),
+    notified: false,
+  }
+}
+
+/**
+ * Standard Red Notes: a concise human summary of a recurrence, e.g.
+ * "Repeats daily", "Repeats every 2 weeks". Returns undefined for one-shot.
+ */
+export function describeRecurrence(recurrence: Recurrence | undefined): string | undefined {
+  const normalized = normalizeRecurrence(recurrence)
+  switch (normalized.frequency) {
+    case 'none':
+      return undefined
+    case 'daily':
+      return 'Repeats daily'
+    case 'weekly':
+      return 'Repeats weekly'
+    case 'monthly':
+      return 'Repeats monthly'
+    case 'yearly':
+      return 'Repeats yearly'
+    case 'custom': {
+      const interval = normalized.interval ?? 1
+      const unit = normalized.unit ?? 'day'
+      const plural = interval === 1 ? unit : `${unit}s`
+      return interval === 1 ? `Repeats every ${unit}` : `Repeats every ${interval} ${plural}`
+    }
+    default:
+      return undefined
+  }
 }
 
 /** Format a reminder's due time relative to `now` for compact display. */

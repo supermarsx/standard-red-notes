@@ -2,11 +2,16 @@ import { SNNote } from '@standardnotes/snjs'
 import {
   NoteRemindersKey,
   Reminder,
+  advanceRecurringReminder,
   clearReminderNotified,
+  computeNextOccurrence,
+  describeRecurrence,
   formatReminderRelative,
   getNoteReminders,
+  isRecurring,
   isReminderDue,
   markReminderNotified,
+  normalizeRecurrence,
   noteHasPendingReminder,
   noteHasReminder,
   removeReminder,
@@ -183,6 +188,200 @@ describe('selectDueReminders', () => {
       { note, reminder: reminder({ id: 'notified', dueAt: '2026-06-20T11:00:00.000Z', notified: true }) },
     ]
     expect(selectDueReminders(pairs, NOW).map((p) => p.reminder.id)).toEqual(['due'])
+  })
+})
+
+describe('normalizeRecurrence (backward-compat)', () => {
+  it('treats missing recurrence as one-shot none', () => {
+    expect(normalizeRecurrence(undefined)).toEqual({ frequency: 'none' })
+  })
+
+  it('a legacy reminder with no recurrence is not recurring', () => {
+    expect(isRecurring(reminder())).toBe(false)
+  })
+
+  it('passes through fixed frequencies, dropping irrelevant interval/unit', () => {
+    expect(normalizeRecurrence({ frequency: 'daily' })).toEqual({ frequency: 'daily' })
+    expect(normalizeRecurrence({ frequency: 'monthly', interval: 5 } as never)).toEqual({
+      frequency: 'monthly',
+    })
+  })
+
+  it('normalizes custom interval/unit and defaults bad values', () => {
+    expect(normalizeRecurrence({ frequency: 'custom', interval: 2, unit: 'week' })).toEqual({
+      frequency: 'custom',
+      interval: 2,
+      unit: 'week',
+    })
+    expect(normalizeRecurrence({ frequency: 'custom', interval: 0, unit: 'week' })).toEqual({
+      frequency: 'custom',
+      interval: 1,
+      unit: 'week',
+    })
+    expect(normalizeRecurrence({ frequency: 'custom' } as never)).toEqual({
+      frequency: 'custom',
+      interval: 1,
+      unit: 'day',
+    })
+  })
+
+  it('never throws on malformed data, falling back to none', () => {
+    expect(normalizeRecurrence({ frequency: 'bogus' } as never)).toEqual({ frequency: 'none' })
+    expect(normalizeRecurrence('nope' as never)).toEqual({ frequency: 'none' })
+  })
+})
+
+describe('computeNextOccurrence', () => {
+  const iso = (s: string) => Date.parse(s)
+
+  it('returns undefined for one-shot / missing recurrence', () => {
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', undefined)).toBeUndefined()
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', { frequency: 'none' })).toBeUndefined()
+  })
+
+  it('advances daily by one day', () => {
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', { frequency: 'daily' })).toBe(
+      iso('2026-06-21T13:00:00.000Z'),
+    )
+  })
+
+  it('advances weekly by seven days', () => {
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', { frequency: 'weekly' })).toBe(
+      iso('2026-06-27T13:00:00.000Z'),
+    )
+  })
+
+  it('advances monthly by one calendar month', () => {
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', { frequency: 'monthly' })).toBe(
+      iso('2026-07-20T13:00:00.000Z'),
+    )
+  })
+
+  it('advances yearly by one calendar year', () => {
+    expect(computeNextOccurrence('2026-06-20T13:00:00.000Z', { frequency: 'yearly' })).toBe(
+      iso('2027-06-20T13:00:00.000Z'),
+    )
+  })
+
+  it('advances custom every-N-units', () => {
+    expect(
+      computeNextOccurrence('2026-06-20T13:00:00.000Z', {
+        frequency: 'custom',
+        interval: 2,
+        unit: 'week',
+      }),
+    ).toBe(iso('2026-07-04T13:00:00.000Z'))
+    expect(
+      computeNextOccurrence('2026-06-20T13:00:00.000Z', {
+        frequency: 'custom',
+        interval: 3,
+        unit: 'day',
+      }),
+    ).toBe(iso('2026-06-23T13:00:00.000Z'))
+  })
+
+  it('clamps Jan 31 + 1 month to the last day of February (non-leap)', () => {
+    // 2027 is not a leap year -> Feb 28. Use noon UTC to avoid local TZ wrap.
+    const next = computeNextOccurrence('2027-01-31T12:00:00.000Z', { frequency: 'monthly' })
+    const d = new Date(next!)
+    expect(d.getMonth()).toBe(1) // February
+    expect(d.getDate()).toBe(28)
+  })
+
+  it('clamps Jan 31 + 1 month to Feb 29 in a leap year', () => {
+    const next = computeNextOccurrence('2028-01-31T12:00:00.000Z', { frequency: 'monthly' })
+    const d = new Date(next!)
+    expect(d.getMonth()).toBe(1) // February
+    expect(d.getDate()).toBe(29) // 2028 is a leap year
+  })
+
+  it('clamps Mar 31 + 1 month to Apr 30', () => {
+    const next = computeNextOccurrence('2026-03-31T12:00:00.000Z', { frequency: 'monthly' })
+    const d = new Date(next!)
+    expect(d.getMonth()).toBe(3) // April
+    expect(d.getDate()).toBe(30)
+  })
+
+  it('clamps Feb 29 + 1 year to Feb 28 in the following (non-leap) year', () => {
+    const next = computeNextOccurrence('2028-02-29T12:00:00.000Z', { frequency: 'yearly' })
+    const d = new Date(next!)
+    expect(d.getFullYear()).toBe(2029)
+    expect(d.getMonth()).toBe(1)
+    expect(d.getDate()).toBe(28)
+  })
+
+  it('returns undefined for an unparseable dueAt', () => {
+    expect(computeNextOccurrence('garbage', { frequency: 'daily' })).toBeUndefined()
+  })
+
+  it('accepts an epoch-ms number as the base', () => {
+    const base = iso('2026-06-20T13:00:00.000Z')
+    expect(computeNextOccurrence(base, { frequency: 'daily' })).toBe(iso('2026-06-21T13:00:00.000Z'))
+  })
+})
+
+describe('advanceRecurringReminder', () => {
+  it('leaves a one-shot reminder unchanged', () => {
+    const r = reminder({ dueAt: '2026-06-20T11:00:00.000Z' })
+    expect(advanceRecurringReminder(r, NOW)).toBe(r)
+  })
+
+  it('advances a daily reminder to the next future occurrence and clears notified', () => {
+    const r = reminder({
+      dueAt: '2026-06-20T11:00:00.000Z',
+      notified: true,
+      recurrence: { frequency: 'daily' },
+    })
+    const advanced = advanceRecurringReminder(r, NOW)
+    expect(advanced.dueAt).toBe('2026-06-21T11:00:00.000Z')
+    expect(advanced.notified).toBe(false)
+  })
+
+  it('catches up past multiple missed intervals in one pass', () => {
+    // dueAt 5 days ago at 11:00, daily, now = 2026-06-20T12:00. The Jun 20 11:00
+    // occurrence is still <= now (11:00 < 12:00), so the first FUTURE occurrence
+    // is Jun 21 11:00 — proving the loop skips every missed interval at once.
+    const r = reminder({
+      dueAt: '2026-06-15T11:00:00.000Z',
+      notified: true,
+      recurrence: { frequency: 'daily' },
+    })
+    const advanced = advanceRecurringReminder(r, NOW)
+    expect(advanced.dueAt).toBe('2026-06-21T11:00:00.000Z')
+    expect(Date.parse(advanced.dueAt)).toBeGreaterThan(NOW)
+    expect(Date.parse(advanced.dueAt)).toBeLessThanOrEqual(NOW + 24 * 3600 * 1000)
+  })
+
+  it('advances exactly one step when the single next occurrence is already future', () => {
+    const r = reminder({
+      dueAt: '2026-06-20T11:30:00.000Z',
+      recurrence: { frequency: 'custom', interval: 2, unit: 'week' },
+    })
+    const advanced = advanceRecurringReminder(r, NOW)
+    expect(advanced.dueAt).toBe('2026-07-04T11:30:00.000Z')
+  })
+})
+
+describe('describeRecurrence', () => {
+  it('summarizes fixed frequencies', () => {
+    expect(describeRecurrence(undefined)).toBeUndefined()
+    expect(describeRecurrence({ frequency: 'none' })).toBeUndefined()
+    expect(describeRecurrence({ frequency: 'daily' })).toBe('Repeats daily')
+    expect(describeRecurrence({ frequency: 'weekly' })).toBe('Repeats weekly')
+    expect(describeRecurrence({ frequency: 'monthly' })).toBe('Repeats monthly')
+    expect(describeRecurrence({ frequency: 'yearly' })).toBe('Repeats yearly')
+  })
+
+  it('summarizes custom intervals with pluralization', () => {
+    expect(describeRecurrence({ frequency: 'custom', interval: 1, unit: 'week' })).toBe(
+      'Repeats every week',
+    )
+    expect(describeRecurrence({ frequency: 'custom', interval: 2, unit: 'week' })).toBe(
+      'Repeats every 2 weeks',
+    )
+    expect(describeRecurrence({ frequency: 'custom', interval: 3, unit: 'month' })).toBe(
+      'Repeats every 3 months',
+    )
   })
 })
 

@@ -59,10 +59,14 @@ export const useReminderChecker = (application: WebApplication): void => {
       const due = collectDueReminders(notes, now)
 
       for (const { note, reminder } of due) {
-        if (firedThisSession.has(reminder.id)) {
+        // Key by id + dueAt so a RECURRING reminder (whose id is stable but whose
+        // dueAt advances after firing) can fire again on its next occurrence; a
+        // one-shot still fires at most once for its single dueAt.
+        const fireKey = `${reminder.id}@${reminder.dueAt}`
+        if (firedThisSession.has(fireKey)) {
           continue
         }
-        firedThisSession.add(reminder.id)
+        firedThisSession.add(fireKey)
 
         const title = note.title?.trim() || 'Reminder'
         const body = reminder.message?.trim() || 'A reminder you set is now due.'
@@ -85,9 +89,12 @@ export const useReminderChecker = (application: WebApplication): void => {
           ],
         })
 
-        // Persist notified so it doesn't re-fire after a reload / on other
-        // devices. Fire-and-forget; the in-memory set covers the interim.
-        application.notesController.markNoteReminderNotified(note, reminder.id).catch(console.error)
+        // Settle the fired reminder: a one-shot is marked notified (so it won't
+        // re-fire after reload / on other devices); a recurring one advances its
+        // dueAt to the next future occurrence and re-arms (and re-registers its
+        // email occurrence if opted in). Fire-and-forget; the in-memory set covers
+        // the interim before the appData write lands.
+        application.notesController.settleFiredReminder(note, reminder.id, now).catch(console.error)
       }
     }
 

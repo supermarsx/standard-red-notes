@@ -8,9 +8,14 @@ import Modal from '@/Components/Modal/Modal'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import {
   Reminder,
+  Recurrence,
+  RecurrenceFrequency,
+  RecurrenceUnit,
   generateReminderId,
   getNoteReminders,
   formatReminderRelative,
+  describeRecurrence,
+  normalizeRecurrence,
 } from './reminders'
 import {
   getNotificationPermission,
@@ -61,6 +66,29 @@ const SetReminderModalContent = observer(
     const [message, setMessage] = useState<string>(editing?.message ?? '')
     const [permission, setPermission] = useState(() => getNotificationPermission())
 
+    // Recurrence selector state, seeded from the existing reminder (normalized so
+    // legacy reminders with no recurrence start as one-shot 'none').
+    const editingRecurrence = useMemo(
+      () => normalizeRecurrence(editing?.recurrence),
+      [editing],
+    )
+    const [frequency, setFrequency] = useState<RecurrenceFrequency>(editingRecurrence.frequency)
+    const [customInterval, setCustomInterval] = useState<number>(
+      editingRecurrence.frequency === 'custom' ? editingRecurrence.interval ?? 1 : 1,
+    )
+    const [customUnit, setCustomUnit] = useState<RecurrenceUnit>(
+      editingRecurrence.frequency === 'custom' ? editingRecurrence.unit ?? 'day' : 'week',
+    )
+
+    const recurrence: Recurrence = useMemo(() => {
+      if (frequency === 'custom') {
+        return { frequency: 'custom', interval: Math.max(1, customInterval), unit: customUnit }
+      }
+      return { frequency }
+    }, [frequency, customInterval, customUnit])
+
+    const recurrenceSummary = describeRecurrence(recurrence)
+
     // Email-reminder opt-in state. `emailMe` is the per-reminder checkbox; it starts
     // checked if this reminder was already registered for email (has an id).
     const hasAccount = application.hasAccount()
@@ -108,6 +136,9 @@ const SetReminderModalContent = observer(
         message: trimmedMessage || undefined,
         // Editing a reminder's time resets the notified flag so it can fire again.
         notified: editing && editing.dueAt === dueIso ? editing.notified : false,
+        // Persist the repeat schedule (omit it entirely for a one-shot to keep the
+        // stored payload minimal and backward-compatible).
+        recurrence: recurrence.frequency === 'none' ? undefined : recurrence,
         emailReminderId: editing?.emailReminderId,
       }
 
@@ -159,7 +190,7 @@ const SetReminderModalContent = observer(
         })
         console.error(error)
       }
-    }, [accountOptIn, application, close, dueLocal, editing, emailMe, hasAccount, message, note, notesController])
+    }, [accountOptIn, application, close, dueLocal, editing, emailMe, hasAccount, message, note, notesController, recurrence])
 
     const clear = useCallback(async () => {
       try {
@@ -237,6 +268,55 @@ const SetReminderModalContent = observer(
               value={message}
               onChange={(event) => setMessage(event.target.value)}
             />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-semibold" htmlFor="reminder-recurrence">
+              Repeat
+            </label>
+            <select
+              id="reminder-recurrence"
+              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              value={frequency}
+              onChange={(event) => setFrequency(event.target.value as RecurrenceFrequency)}
+            >
+              <option value="none">Does not repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="custom">Custom…</option>
+            </select>
+
+            {frequency === 'custom' && (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm text-passive-0">Every</span>
+                <input
+                  type="number"
+                  min={1}
+                  className="w-16 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  value={customInterval}
+                  onChange={(event) => {
+                    const parsed = parseInt(event.target.value, 10)
+                    setCustomInterval(Number.isFinite(parsed) && parsed >= 1 ? parsed : 1)
+                  }}
+                />
+                <select
+                  className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  value={customUnit}
+                  onChange={(event) => setCustomUnit(event.target.value as RecurrenceUnit)}
+                >
+                  <option value="day">{customInterval === 1 ? 'day' : 'days'}</option>
+                  <option value="week">{customInterval === 1 ? 'week' : 'weeks'}</option>
+                  <option value="month">{customInterval === 1 ? 'month' : 'months'}</option>
+                  <option value="year">{customInterval === 1 ? 'year' : 'years'}</option>
+                </select>
+              </div>
+            )}
+
+            {recurrenceSummary && (
+              <span className="text-xs text-passive-0">{recurrenceSummary}</span>
+            )}
           </div>
 
           {/* Opt-in email delivery for THIS reminder. Only meaningful with an account
