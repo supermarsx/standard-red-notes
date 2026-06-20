@@ -18,7 +18,7 @@
 
 ## Phase 1 - Monorepo Foundation
 
-- Initialize root git repository and private GitHub remote.
+- Initialize root git repository and GitHub remote.
 - Keep `app/` and `server/` as nested projects initially.
 - Add root scripts for build, test, lint, dependency audit, and MCP development.
 - Add root documentation for roadmap, MCP, dependency updates, no-entitlement design, and fork compliance.

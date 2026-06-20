@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Standard Red Notes monorepo for the app, server, and MCP bridge.",
-  "license": "AGPL-3.0-or-later",
+  "license": "AGPL-3.0-only",
   "packageManager": "yarn@4.15.0",
   "engines": {
     "node": ">=22.0.0"

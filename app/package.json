@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "author": "Standard Red Notes",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git://github.com/supermarsx/standard-red-notes",

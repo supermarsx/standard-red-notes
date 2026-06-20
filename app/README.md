@@ -6,13 +6,13 @@ Standard Red Notes is a self-hosted-first fork of the Standard Notes app. It kee
 
 - End-to-end encrypted sync. Only you can read your notes.
 - Fast encrypted cross-platform sync on unlimited devices.
-- Self-hosted app and server defaults for private deployments.
-- Public source code under the upstream AGPL license.
+- Self-hosted app and server defaults for your own deployments.
+- Open source under the AGPL-3.0 license (see the repository LICENSE file).
 
-### Creating your private notes account
+### Creating your encrypted notes account
 
 1. Launch the Standard Red Notes web app.
-2. Click Register to create your private notes account.
+2. Click Register to create your end-to-end encrypted notes account.
 3. Build or install the forked clients for your devices.
 4. You're all set. Standard Red Notes keeps end-to-end encrypted sync on all your devices.
 

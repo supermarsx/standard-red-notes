@@ -2,6 +2,7 @@
   "name": "@standard-red-notes/server-monorepo",
   "private": true,
   "author": "Standard Red Notes",
+  "license": "AGPL-3.0-only",
   "workspaces": {
     "packages": [
       "packages/*"

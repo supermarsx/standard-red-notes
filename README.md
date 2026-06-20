@@ -1,6 +1,6 @@
 # Standard Red Notes
 
-Standard Red Notes is a private fork workspace that brings the Standard Notes app and server into one repository, adds a new MCP bridge package, and tracks the work required to make the self-hosted product fully featured.
+Standard Red Notes is an open, AGPL-3.0 licensed, self-hosted fork of Standard Notes that brings the Standard Notes app and server into one repository, adds a new MCP bridge package, and tracks the work required to make the self-hosted product fully featured.
 
 This repository currently preserves the upstream package boundaries:
 
@@ -79,3 +79,15 @@ See:
 - [No-Entitlement Plan](docs/NO_ENTITLEMENT_PLAN.md)
 - [Dependency Upgrade Audit](docs/DEPENDENCY_UPGRADE_AUDIT.md)
 - [Fork Compliance Notes](docs/FORK_COMPLIANCE.md)
+
+## License
+
+Standard Red Notes is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See the [LICENSE](LICENSE) file for the full text. Because the AGPL
+covers network use, anyone you offer this software to over a network is entitled
+to its corresponding source.
+
+This project is a self-hosted fork of [Standard Notes](https://standardnotes.com),
+which is also distributed under the AGPL-3.0. Upstream copyright and attribution
+notices are preserved. Standard Red Notes is an independent project and is not
+affiliated with, sponsored by, or endorsed by Standard Notes.
