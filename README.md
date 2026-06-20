@@ -66,26 +66,36 @@ target:
 ## What's different / improved
 
 On top of the upstream client and server, this fork adds and unlocks a broad set
-of features. The highlights below are all present in this repository:
+of features — and brings the whole project up to date: the **frontend and backend
+dependencies and toolchain have been modernized** (libraries updated, builds and
+Docker/reverse-proxy setup refreshed) so you're running a current, maintained stack
+rather than a frozen snapshot. The highlights below are all present in this repository:
 
 | Area | What you get |
 | --- | --- |
 | **All features included** | The server runs in `included` features mode, so no feature or note type is gated behind a subscription. |
-| **AI assistant** | An optional assistant (Preferences → Assistant) you point at any OpenAI-compatible endpoint — local (LM Studio, Ollama) or hosted. You pick the **context scope** (current note, whole notebook, a tag/folder/selection) so it only sees what you choose. |
-| **Assistant actions** | **Suggest tags**, **auto-organize** notes, **conflict merge** assistance, and note **narration / text-to-speech** (model voices or your device's built-in browser voices). |
-| **Many note types** | Plain text, **Super** rich blocks, **Canvas** (freeform drawing), **Bases**, **Calendar**, **Kanban**, **Timeline**, and code **sandboxes** — a JS Sandbox (jsfiddle-style) and a Web App Sandbox (codepen-style live preview). |
-| **Super editor blocks** | Checklists, tables, code, **math** (inline and block), **footnotes**, **web embeds**, **kanban**, and **timeline** blocks — inserted from the `/` block picker. |
-| **Super editing power** | Collapsible / **foldable** sections and **multi-cursor** editing. |
-| **PDF viewer** | A built-in **PDF.js** preview with **deep links** to a specific page/position. |
-| **Search** | Full-text search across titles and content, plus an optional local **search index** and **relevance ranking** that run entirely in your browser. |
-| **Linking & navigation** | **Bidirectional links** (notes and their backlinks), the **constellation** graph (an interactive "star map" of how notes connect), and a keyboard-driven **command palette**. |
-| **Collaboration** | Vaults, contacts, and invites for sharing notes with others. |
-| **Privacy controls** | **Protected notes**, **selective sync** (local-only notes that never upload), and **trusted devices**. |
-| **Appearance** | Auto **light/dark** theme that follows your system, plus additional themes. |
+| **Modernized stack** | Frontend and backend **dependencies and build toolchain updated**, **reverse-proxy-friendly Docker** setup, a top-level `Makefile`, and documented [HTTP API](docs/API.md). |
+| **AI assistant** | An optional assistant (Preferences → Assistant) you point at any OpenAI-compatible endpoint — local (LM Studio, Ollama) or hosted. You pick the **context scope** (current note, whole notebook, a tag/folder/selection) so it only sees what you choose. AI features are **opt-in and off by default**. |
+| **Assistant actions** | **Suggest tags**, **auto-organize** notes, **conflict-merge** assistance, **AI auto-resolve conflicts**, note **narration / text-to-speech**, **speech-to-text / dictation**, **contextual AI search** (re-rank results), and a bounded **deep-research** mode over your own notes. |
+| **Many note types** | Plain text, **Super** rich blocks, **Canvas** (freeform drawing), **Bases**, **Calendar**, **Kanban**, **Timeline**, **Flashcards** (with study mode), a **Map** type (mind maps / family trees), and code **sandboxes** — a JS Sandbox (jsfiddle-style) and a Web App Sandbox (codepen-style live preview). |
+| **Super editor blocks** | Checklists, tables, code, **math**, **footnotes**, **web embeds**, **kanban**, **timeline**, **QR codes**, **TradingView** & **stock charts**, an in-browser **SQL** block, **gantt / timing / music-staff** charts, and a live **clock / world-clock** — from the `/` block picker. |
+| **Super editing power** | Collapsible / **foldable** sections, **multi-cursor** editing, a **customizable** Word-style toolbar with **contextual widget groups**, and **block zoom**. |
+| **Reminders & journaling** | Per-note **reminders** (one-off and **recurring**), browser **notifications**, optional server-sent **email reminders**, and a **diary mode** that prompts a daily entry. |
+| **Dashboards & views** | A **Dashboard** with account stats, **Achievements**, and aggregate views for **Reminders**, **Calendar**, **Todos**, and a Zotero-like **Research** library — plus a fully **customizable Home** page. |
+| **Sync & real-time** | **Websocket-first** delta sync (HTTP fallback), an optional **manual-sync** mode, live **co-editing + presence** in shared vaults, and a **Sync control** pane showing what's local-only. |
+| **Search** | Full-text search with a local **index** and **relevance ranking**, **advanced operators** (`tag:`, `type:`, `is:`, dates…), **find-in-PDF**, and optional **AI re-ranking** — all in your browser. |
+| **Files** | **Bulk file & folder uploads**, **large local-only files**, automatic **EXIF/metadata stripping** on image upload, in-app **audio playback**, and download-all-images-as-zip. |
+| **Account & security** | **Passkey** sign-in and **passkey app-lock**, **multiple workspaces per email** (server-configurable), **trusted devices**, **burn-note** one-view shares, **bannable users**, **app passwords / MCP tokens**, and scheduled **encrypted email backups**. |
+| **Import / export** | Import from **Evernote, Google Keep, OneNote, Zoho Notebook, CSV**; export to **`.ics`**, **Excel/Word** (spreadsheets), **print/PDF**, and encrypted backups. |
+| **Linking & navigation** | **Bidirectional links** and backlinks, the **constellation** graph, and an extended keyboard-driven **command palette**. |
+| **Collaboration** | Vaults, contacts, and invites, surfaced in a **Sharing** settings pane. |
+| **Privacy controls** | **Protected notes**, **selective sync**, **trusted devices**, and configurable **trash auto-cleanup**. |
+| **Appearance & personalization** | Auto **light/dark** theme, **custom themes with custom accent colors**, **font ligatures**, per-note colors, a per-note **hero cover image**, and a **profile picture**. |
+| **Localization** | An i18n framework with **16 locales** (including European Portuguese), switchable in settings. |
 | **Spellcheck** | Multi-language spellcheck configuration. |
 | **CLI tools** | `srn-client` (real end-to-end-encrypted note CRUD from the terminal) and `srn-server` (operator helpers: health, status, logs, config validation). |
 | **MCP bridge** | An MCP stdio bridge (`mcp/`) so MCP-capable clients can talk to your server. |
-| **Self-hosting** | One-command setup scripts (`scripts/setup.sh` / `scripts/setup.ps1`) and a documented Docker Compose stack. |
+| **Self-hosting** | One-command setup scripts (`scripts/setup.sh` / `scripts/setup.ps1`) and a documented, reverse-proxy-ready Docker Compose stack. |
 
 > A note on accuracy: features like the AI assistant and narration decrypt notes
 > locally but send the content you point them at to the AI provider you
