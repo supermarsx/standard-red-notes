@@ -64,6 +64,11 @@ export const PrefDefaults = {
   [PrefKey.AddImportsToTag]: true,
   [PrefKey.AlwaysCreateNewTagForImports]: true,
   [PrefKey.ExistingTagForImports]: undefined,
+  // Standard Red Notes: default to surfacing conflicts for manual review, with
+  // auto-resolution off. The server may override the strategy default via the
+  // CONFLICT_RESOLUTION_STRATEGY setting; the client pref always wins when set.
+  [PrefKey.ConflictResolutionStrategy]: 'ask',
+  [PrefKey.ConflictResolutionAutoResolve]: false,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

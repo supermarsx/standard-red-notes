@@ -34,6 +34,12 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // disables the feature (opt-in disable).
     CollaborationEnabled: 'COLLABORATION_ENABLED',
     LiveSyncEnabled: 'LIVE_SYNC_ENABLED',
+    // Standard Red Notes: server-provided DEFAULT strategy for resolving sync
+    // conflicts (conflicted copies). Valid values mirror the client pref:
+    // 'ask' | 'keepBoth' | 'keepLocal' | 'keepRemote'. The client reads this via
+    // the standard getSetting endpoint and uses it only as a fallback default;
+    // the per-user client preference always takes precedence when set.
+    ConflictResolutionStrategy: 'CONFLICT_RESOLUTION_STRATEGY',
   }
 
   get value(): string {

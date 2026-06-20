@@ -46,6 +46,9 @@ export class PreferencesSessionController {
     // Standard Red Notes: survivor switch (dead man's switch) management pane.
     menuItems.push({ id: 'survivor-switch', label: 'Survivor Switch', icon: 'pencil-off', order: 9 })
 
+    // Standard Red Notes: sync conflict review & resolution pane.
+    menuItems.push({ id: 'conflicts', label: 'Sync Conflicts', icon: 'sync', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()

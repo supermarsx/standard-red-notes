@@ -56,6 +56,12 @@ export enum PrefKey {
   AddImportsToTag = 'addImportsToTag',
   AlwaysCreateNewTagForImports = 'alwaysCreateNewTagForImports',
   ExistingTagForImports = 'existingTagForImports',
+  // Standard Red Notes: how sync conflicts (conflicted copies) should be resolved.
+  // 'ask' surfaces them in the Conflicts pane; the others auto-resolve when
+  // ConflictResolutionAutoResolve is enabled. The client pref takes precedence over
+  // the server-provided CONFLICT_RESOLUTION_STRATEGY default.
+  ConflictResolutionStrategy = 'conflictResolutionStrategy',
+  ConflictResolutionAutoResolve = 'conflictResolutionAutoResolve',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -66,6 +72,13 @@ export enum PrefKey {
   DEPRECATED_EditorLineWidth = 'editorLineWidth',
   DEPRECATED_EditorFontSize = 'editorFontSize',
 }
+
+/**
+ * Standard Red Notes: the configurable default strategy for resolving sync
+ * conflicts. `ask` always defers to the user via the Conflicts pane. The others
+ * describe what to do when auto-resolution is enabled.
+ */
+export type ConflictResolutionStrategyValue = 'ask' | 'keepBoth' | 'keepLocal' | 'keepRemote'
 
 export type PrefValue = {
   [PrefKey.TagsPanelWidth]: number
@@ -123,6 +136,8 @@ export type PrefValue = {
   [PrefKey.AddImportsToTag]: boolean
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined
+  [PrefKey.ConflictResolutionStrategy]: ConflictResolutionStrategyValue
+  [PrefKey.ConflictResolutionAutoResolve]: boolean
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.
