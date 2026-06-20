@@ -125,6 +125,16 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
           Note: an app password only satisfies the server's two-factor challenge. It does not unlock your encrypted
           data — that still requires your real account password.
         </Text>
+
+        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <Subtitle className="text-warning">An app password can sign in and reach your decrypted notes</Subtitle>
+          <Text className="mt-1">
+            A headless or automation client holding this secret can sign in to your account without an interactive
+            two-factor prompt and, once it has your account password, access your decrypted notes. Treat an app password
+            like a full account password: store it securely, never share it, and revoke it immediately if it is leaked
+            or no longer needed.
+          </Text>
+        </div>
       </PreferencesSegment>
 
       <HorizontalSeparator classes="my-4" />

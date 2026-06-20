@@ -186,6 +186,16 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
           The full token is shown once at creation and never again. Revoke a token to immediately cut off the bridge
           using it.
         </Text>
+
+        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <Subtitle className="text-warning">The full token can decrypt and read your notes</Subtitle>
+          <Text className="mt-1">
+            This token grants the MCP bridge programmatic, decrypting access to your notes within the scope you choose
+            (read-only or read-write, optionally limited to selected tags). Because the full token carries the wrapped
+            key material needed to decrypt your content, anyone who obtains it can read your notes — not just the bridge
+            you intended. Keep the full token secret, and revoke it immediately if it is leaked or no longer needed.
+          </Text>
+        </div>
       </PreferencesSegment>
 
       <HorizontalSeparator classes="my-4" />

@@ -99,6 +99,17 @@ const ContactInviteModal: FunctionComponent<Props> = ({ vault, onCloseDialog }) 
   return (
     <Modal title="Add New Contact" close={handleDialogClose} actions={modalActions}>
       <div className={classNames('flex w-full flex-col gap-3 px-4.5 py-4', isLoadingContacts && 'items-center')}>
+        {!isLoadingContacts && contacts.length > 0 && (
+          <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-warning">
+            <div className="text-base font-semibold">Inviting a contact shares this vault's notes with them</div>
+            <div className="mt-1 text-sm">
+              The contacts you invite will be able to access the notes and files in this shared vault, according to the
+              permission you grant. The server relays the vault's encrypted items and group key material between members
+              so they can decrypt the shared content. Only invite people you trust with this vault, and remove a member
+              to revoke their future access.
+            </div>
+          </div>
+        )}
         {isLoadingContacts ? (
           <Spinner className="h-5 w-5" />
         ) : contacts.length > 0 ? (

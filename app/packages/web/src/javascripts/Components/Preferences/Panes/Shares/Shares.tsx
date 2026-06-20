@@ -91,6 +91,18 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
           in your browser under a secret key that lives only in the link's fragment and is never sent to the server —
           the server stores only ciphertext. Revoke a link any time to immediately cut off access.
         </Text>
+
+        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <Subtitle className="text-warning">Anyone with the link can read the shared content</Subtitle>
+          <Text className="mt-1">
+            A share link removes end-to-end encryption for whatever you share: anyone who has the full URL can read it,
+            and it can be forwarded or leaked beyond who you intended. The encrypted content and the link itself live on
+            the server, which mediates every view. The server cannot decrypt the content on its own (the key stays in
+            the link), but anyone who obtains the full link can. Only share content you are comfortable exposing this
+            way, and revoke the link to immediately cut off access.
+          </Text>
+        </div>
+
         <Text className="mt-2">
           Create a share link from a note's options menu ("Create share link"). Manage and revoke your existing links
           below.

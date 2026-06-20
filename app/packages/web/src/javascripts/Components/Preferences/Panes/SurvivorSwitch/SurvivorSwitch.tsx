@@ -212,8 +212,10 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
             <Text className="mt-1">
               Unlike a normal share link — where the decryption key never leaves your browser — a survivor switch stores
               the full link, including its decryption key, on the server. This is necessary so the content can be
-              delivered to your recipient when you are gone. Anyone who can read the server's stored switches could
-              decrypt the shared content, so only use this for content you are comfortable entrusting to the server.
+              delivered to your recipient when you are gone. As a result, both your recipient (once the switch triggers)
+              and the server itself can access the shared content: anyone who can read the server's stored switches could
+              decrypt it without waiting for the switch to fire. Only use this for content you are comfortable entrusting
+              to the server and your recipient. Delete the switch to remove the stored link and key from the server.
             </Text>
           </div>
         </PreferencesSegment>
