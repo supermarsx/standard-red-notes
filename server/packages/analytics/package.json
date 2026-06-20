@@ -39,7 +39,7 @@
     "@types/ioredis": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/mixpanel": "^2.14.9",
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.0.0",
     "babel-jest": "^30.4.1",
     "jest": "^30.4.2",
     "jest-util": "^30.2.0",
