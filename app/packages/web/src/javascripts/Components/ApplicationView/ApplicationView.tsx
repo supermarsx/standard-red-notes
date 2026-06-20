@@ -49,6 +49,8 @@ import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
 import { useReminderChecker } from '@/Reminders/useReminderChecker'
 import { useDiaryScheduler } from '@/Diary/useDiaryScheduler'
 import RemindersButton from '@/Reminders/RemindersButton'
+import AppLockPasskeyScreen from './AppLockPasskeyScreen'
+import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
 
 type Props = {
   application: WebApplication
@@ -64,6 +66,11 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   const [launched, setLaunched] = useState(false)
   const [needsUnlock, setNeedsUnlock] = useState(true)
   const [challenges, setChallenges] = useState<Challenge[]>([])
+  // Local passkey app-lock gate: when a passkey is registered, the app stays
+  // gated (after the existing passcode/biometric unlock) until a successful
+  // WebAuthn assertion. This gates LOCAL UI access on this device only; it does
+  // not affect the E2E encryption keys.
+  const [passkeyUnlockPending, setPasskeyUnlockPending] = useState(false)
 
   const currentWriteErrorDialog = useRef<Promise<void> | null>(null)
   const currentLoadErrorDialog = useRef<Promise<void> | null>(null)
@@ -138,11 +145,19 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     })
   }, [application])
 
+  // Engage the local passkey gate iff a passkey is registered on this device.
+  // Called whenever the existing local unlock (passcode/biometric/launch) clears,
+  // so the passkey assertion is required on each fresh unlock.
+  const engagePasskeyGateIfRegistered = useCallback(() => {
+    setPasskeyUnlockPending(isAppLockPasskeyRegistered(application))
+  }, [application])
+
   const onAppLaunch = useCallback(() => {
     setLaunched(true)
     setNeedsUnlock(false)
+    engagePasskeyGateIfRegistered()
     handleDemoSignInFromParamsIfApplicable()
-  }, [handleDemoSignInFromParamsIfApplicable])
+  }, [engagePasskeyGateIfRegistered, handleDemoSignInFromParamsIfApplicable])
 
   useEffect(() => {
     if (application.isStarted()) {
@@ -228,13 +243,16 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     const disposer = application.protections.addEventObserver(async (eventName) => {
       if (eventName === ProtectionEvent.BiometricsSoftLockEngaged) {
         setNeedsUnlock(true)
+        // Re-arm the passkey gate so it is required again on the next unlock.
+        setPasskeyUnlockPending(isAppLockPasskeyRegistered(application))
       } else if (eventName === ProtectionEvent.BiometricsSoftLockDisengaged) {
         setNeedsUnlock(false)
+        engagePasskeyGateIfRegistered()
       }
     })
 
     return disposer
-  }, [application])
+  }, [application, engagePasskeyGateIfRegistered])
 
   useEffect(() => {
     const removeObserver = application.addWebEventObserver(async (eventName) => {
@@ -250,9 +268,21 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     }
   }, [application])
 
+  // The passkey lock screen shows once the existing local unlock has cleared
+  // (passcode/biometric/launch) but the registered passkey assertion is still
+  // pending. It is never shown before the existing unlock, so the passcode lock
+  // continues to gate first and remains the fallback.
+  const showPasskeyLockScreen = useMemo(() => {
+    return !needsUnlock && launched && passkeyUnlockPending
+  }, [needsUnlock, launched, passkeyUnlockPending])
+
   const renderAppContents = useMemo(() => {
-    return !needsUnlock && launched
-  }, [needsUnlock, launched])
+    return !needsUnlock && launched && !passkeyUnlockPending
+  }, [needsUnlock, launched, passkeyUnlockPending])
+
+  const onPasskeyUnlocked = useCallback(() => {
+    setPasskeyUnlockPending(false)
+  }, [])
 
   const renderChallenges = useCallback(() => {
     return challenges.map((challenge) => (
@@ -271,7 +301,10 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   if (!renderAppContents) {
     return (
       <ApplicationProvider application={application}>
-        <AndroidBackHandlerProvider application={application}>{renderChallenges()}</AndroidBackHandlerProvider>
+        <AndroidBackHandlerProvider application={application}>
+          {renderChallenges()}
+          {showPasskeyLockScreen && <AppLockPasskeyScreen application={application} onUnlocked={onPasskeyUnlocked} />}
+        </AndroidBackHandlerProvider>
       </ApplicationProvider>
     )
   }

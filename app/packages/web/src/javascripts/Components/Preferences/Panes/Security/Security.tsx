@@ -9,6 +9,7 @@ import Protections from './Protections'
 import ErroredItems from './ErroredItems'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import BiometricsLock from '@/Components/Preferences/Panes/Security/BiometricsLock'
+import PasskeyLock from '@/Components/Preferences/Panes/Security/PasskeyLock'
 import MultitaskingPrivacy from '@/Components/Preferences/Panes/Security/MultitaskingPrivacy'
 import { TwoFactorAuth, is2FAEnabled as checkIf2FAIsEnabled } from './TwoFactorAuth/TwoFactorAuth'
 import U2FView from './U2F/U2FView/U2FView'
@@ -70,6 +71,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
       {props.application.sessions.getUser() && <AccountRecovery application={props.application} />}
       {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
       <PasscodeLock application={props.application} />
+      {!isNativeMobileWeb && <PasskeyLock application={props.application} />}
       {isNativeMobileWeb && <BiometricsLock application={props.application} />}
       {props.application.sessions.getUser() && <Privacy application={props.application} />}
     </PreferencesPane>
