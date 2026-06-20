@@ -23,6 +23,10 @@ import { CookieFactoryInterface } from '../../../Domain/Auth/Cookies/CookieFacto
 import { SignInWithRecoveryCodes } from '../../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { DeleteSessionByToken } from '../../../Domain/UseCase/DeleteSessionByToken/DeleteSessionByToken'
 import { VerifyAppPassword } from '../../../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
+import { VerifyTrustedDevice } from '../../../Domain/UseCase/VerifyTrustedDevice/VerifyTrustedDevice'
+import { CreatePendingMfaApproval } from '../../../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
+import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
+import { Username } from '@standardnotes/domain-core'
 import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
 
 export class BaseAuthController extends BaseHttpController {
@@ -44,6 +48,9 @@ export class BaseAuthController extends BaseHttpController {
     protected deleteSessionByToken: DeleteSessionByToken,
     protected captchaUIUrl: string,
     protected verifyAppPassword: VerifyAppPassword,
+    protected verifyTrustedDevice: VerifyTrustedDevice,
+    protected createPendingMfaApproval: CreatePendingMfaApproval,
+    protected userRepository: UserRepositoryInterface,
     protected controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -115,7 +122,28 @@ export class BaseAuthController extends BaseHttpController {
       appPasswordSatisfiesMfa = !appPasswordResult.isFailed() && appPasswordResult.getValue() === true
     }
 
-    const verifyMFAResponse: VerifyMFAResponse = appPasswordSatisfiesMfa
+    // Standard Red Notes: trusted-device 2FA bypass. If the request carries a
+    // valid, non-expired trusted-device token for this account we treat the
+    // interactive MFA challenge as satisfied for THIS sign-in only. This mirrors
+    // the app-password bypass above and obeys the same fail-closed contract:
+    // VerifyTrustedDevice returns false for any wrong/expired/revoked/missing
+    // token, in which case we fall through to normal MFA enforcement. Trust
+    // bypasses ONLY the second factor — the account password is still verified
+    // in SignIn, and the e2e encryption key is still derived client-side from
+    // the real account password (trust never grants decryption).
+    let trustedDeviceSatisfiesMfa = false
+    if (!appPasswordSatisfiesMfa) {
+      const presentedDeviceToken = request.body.trusted_device_token
+      if (typeof presentedDeviceToken === 'string' && presentedDeviceToken.length > 0) {
+        const trustedDeviceResult = await this.verifyTrustedDevice.execute({
+          email: request.body.email as string,
+          deviceToken: presentedDeviceToken,
+        })
+        trustedDeviceSatisfiesMfa = !trustedDeviceResult.isFailed() && trustedDeviceResult.getValue() === true
+      }
+    }
+
+    const verifyMFAResponse: VerifyMFAResponse = appPasswordSatisfiesMfa || trustedDeviceSatisfiesMfa
       ? { success: true }
       : await this.verifyMFA.execute({
           email: request.body.email as string,
@@ -124,12 +152,42 @@ export class BaseAuthController extends BaseHttpController {
         })
 
     if (!verifyMFAResponse.success) {
+      // Standard Red Notes: push-MFA. When an untrusted device hits the 2FA
+      // challenge, create a short-lived pending approval and push a request to
+      // the user's other trusted sessions over the websocket gateway. The
+      // challenge id is returned alongside the normal MFA error so the new
+      // device can ADDITIONALLY poll for push approval while still showing the
+      // interactive TOTP input. Best-effort: any failure here leaves the
+      // standard TOTP flow fully intact.
+      let mfaApprovalChallengeId: string | undefined
+      try {
+        const usernameOrError = Username.create(request.body.email as string, { skipValidation: true })
+        if (!usernameOrError.isFailed()) {
+          const user = await this.userRepository.findOneByUsernameOrEmail(usernameOrError.getValue())
+          if (user) {
+            const approvalResult = await this.createPendingMfaApproval.execute({
+              userUuid: user.uuid,
+              requestingUserAgent: (request.headers['user-agent'] as string) ?? '',
+              requestingIpAddress: (request.headers['x-origin-ip'] as string) ?? null,
+            })
+            if (!approvalResult.isFailed()) {
+              mfaApprovalChallengeId = approvalResult.getValue().challengeId
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.debug(`Could not create pending MFA approval: ${(error as Error).message}`)
+      }
+
       return this.json(
         {
           error: {
             tag: verifyMFAResponse.errorTag,
             message: verifyMFAResponse.errorMessage,
-            payload: verifyMFAResponse.errorPayload,
+            payload: {
+              ...verifyMFAResponse.errorPayload,
+              ...(mfaApprovalChallengeId ? { mfa_approval_challenge_id: mfaApprovalChallengeId } : {}),
+            },
           },
         },
         401,

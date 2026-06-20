@@ -40,6 +40,14 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:dead-man-switches/', 'auth.deadManSwitches.list'],
     ['[POST]:dead-man-switches/:switchId/check-in', 'auth.deadManSwitches.checkIn'],
     ['[DELETE]:dead-man-switches/:switchId', 'auth.deadManSwitches.delete'],
+    // Trusted Devices Controller (Standard Red Notes)
+    ['[POST]:trusted-devices/', 'auth.trustedDevices.create'],
+    ['[GET]:trusted-devices/', 'auth.trustedDevices.list'],
+    ['[DELETE]:trusted-devices/:deviceId', 'auth.trustedDevices.delete'],
+    // Pending MFA Approvals Controller (Standard Red Notes)
+    ['[GET]:pending-mfa-approvals/', 'auth.pendingMfaApprovals.list'],
+    ['[POST]:pending-mfa-approvals/:challengeId/resolve', 'auth.pendingMfaApprovals.resolve'],
+    ['[GET]:pending-mfa-approvals/:challengeId/status', 'auth.pendingMfaApprovals.status'],
     // Magic Link Controller
     ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
     ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],

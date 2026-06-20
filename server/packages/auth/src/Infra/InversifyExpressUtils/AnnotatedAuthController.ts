@@ -20,6 +20,9 @@ import { CookieFactoryInterface } from '../../Domain/Auth/Cookies/CookieFactoryI
 import { SignInWithRecoveryCodes } from '../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { DeleteSessionByToken } from '../../Domain/UseCase/DeleteSessionByToken/DeleteSessionByToken'
 import { VerifyAppPassword } from '../../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
+import { VerifyTrustedDevice } from '../../Domain/UseCase/VerifyTrustedDevice/VerifyTrustedDevice'
+import { CreatePendingMfaApproval } from '../../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
+import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 
 @controller('/auth')
 export class AnnotatedAuthController extends BaseAuthController {
@@ -41,6 +44,9 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_DeleteSessionByToken) override deleteSessionByToken: DeleteSessionByToken,
     @inject(TYPES.Auth_CAPTCHA_UI_URL) override captchaUIUrl: string,
     @inject(TYPES.Auth_VerifyAppPassword) override verifyAppPassword: VerifyAppPassword,
+    @inject(TYPES.Auth_VerifyTrustedDevice) override verifyTrustedDevice: VerifyTrustedDevice,
+    @inject(TYPES.Auth_CreatePendingMfaApproval) override createPendingMfaApproval: CreatePendingMfaApproval,
+    @inject(TYPES.Auth_UserRepository) override userRepository: UserRepositoryInterface,
   ) {
     super(
       verifyMFA,
@@ -60,6 +66,9 @@ export class AnnotatedAuthController extends BaseAuthController {
       deleteSessionByToken,
       captchaUIUrl,
       verifyAppPassword,
+      verifyTrustedDevice,
+      createPendingMfaApproval,
+      userRepository,
     )
   }
 

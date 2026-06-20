@@ -262,6 +262,32 @@ import { DeleteDeadManSwitch } from '../Domain/UseCase/DeleteDeadManSwitch/Delet
 import { TriggerDueDeadManSwitches } from '../Domain/UseCase/TriggerDueDeadManSwitches/TriggerDueDeadManSwitches'
 import { DeadManSwitchesController } from '../Controller/DeadManSwitchesController'
 import { BaseDeadManSwitchesController } from '../Infra/InversifyExpressUtils/Base/BaseDeadManSwitchesController'
+import { TrustedDevice } from '../Domain/TrustedDevice/TrustedDevice'
+import { TrustedDeviceRepositoryInterface } from '../Domain/TrustedDevice/TrustedDeviceRepositoryInterface'
+import { TrustedDevicePersistenceMapper } from '../Mapping/TrustedDevicePersistenceMapper'
+import { TrustedDeviceHttpProjection } from '../Infra/Http/Projection/TrustedDeviceHttpProjection'
+import { TrustedDeviceHttpMapper } from '../Mapping/TrustedDeviceHttpMapper'
+import { TypeORMTrustedDevice } from '../Infra/TypeORM/TypeORMTrustedDevice'
+import { TypeORMTrustedDeviceRepository } from '../Infra/TypeORM/TypeORMTrustedDeviceRepository'
+import { CreateTrustedDevice } from '../Domain/UseCase/CreateTrustedDevice/CreateTrustedDevice'
+import { ListTrustedDevices } from '../Domain/UseCase/ListTrustedDevices/ListTrustedDevices'
+import { DeleteTrustedDevice } from '../Domain/UseCase/DeleteTrustedDevice/DeleteTrustedDevice'
+import { VerifyTrustedDevice } from '../Domain/UseCase/VerifyTrustedDevice/VerifyTrustedDevice'
+import { TrustedDevicesController } from '../Controller/TrustedDevicesController'
+import { BaseTrustedDevicesController } from '../Infra/InversifyExpressUtils/Base/BaseTrustedDevicesController'
+import { PendingMfaApproval } from '../Domain/PendingMfaApproval/PendingMfaApproval'
+import { PendingMfaApprovalRepositoryInterface } from '../Domain/PendingMfaApproval/PendingMfaApprovalRepositoryInterface'
+import { PendingMfaApprovalPersistenceMapper } from '../Mapping/PendingMfaApprovalPersistenceMapper'
+import { PendingMfaApprovalHttpProjection } from '../Infra/Http/Projection/PendingMfaApprovalHttpProjection'
+import { PendingMfaApprovalHttpMapper } from '../Mapping/PendingMfaApprovalHttpMapper'
+import { TypeORMPendingMfaApproval } from '../Infra/TypeORM/TypeORMPendingMfaApproval'
+import { TypeORMPendingMfaApprovalRepository } from '../Infra/TypeORM/TypeORMPendingMfaApprovalRepository'
+import { CreatePendingMfaApproval } from '../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
+import { ResolvePendingMfaApproval } from '../Domain/UseCase/ResolvePendingMfaApproval/ResolvePendingMfaApproval'
+import { GetPendingMfaApprovalStatus } from '../Domain/UseCase/GetPendingMfaApprovalStatus/GetPendingMfaApprovalStatus'
+import { ListPendingMfaApprovals } from '../Domain/UseCase/ListPendingMfaApprovals/ListPendingMfaApprovals'
+import { PendingMfaApprovalsController } from '../Controller/PendingMfaApprovalsController'
+import { BasePendingMfaApprovalsController } from '../Infra/InversifyExpressUtils/Base/BasePendingMfaApprovalsController'
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -416,6 +442,16 @@ export class ContainerConfigLoader {
     const captchaServerUrl = env.get('CAPTCHA_SERVER_URL', true)
     const captchaUIUrl = env.get('CAPTCHA_UI_URL', true)
 
+    // Standard Red Notes: how long (in days) a "trusted device" may bypass the
+    // interactive second factor before the user must complete 2FA again.
+    // Defaults to 30 days. Trust never bypasses the account password.
+    const trustedDeviceDurationDays = +(env.get('AUTH_TRUSTED_DEVICE_DURATION_DAYS', true) || '30')
+
+    // Standard Red Notes: how long (in seconds) a push-MFA approval request
+    // remains actionable before the new device must fall back to interactive
+    // TOTP. Short by design. Defaults to 120 seconds.
+    const pendingMfaApprovalTtlSeconds = +(env.get('AUTH_MFA_APPROVAL_TTL_SECONDS', true) || '120')
+
     container
       .bind<boolean>(TYPES.Auth_IS_CONFIGURED_FOR_HOME_SERVER_OR_SELF_HOSTING)
       .toConstantValue(isConfiguredForHomeServerOrSelfHosting)
@@ -540,6 +576,22 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<DeadManSwitch, DeadManSwitchHttpProjection>>(TYPES.Auth_DeadManSwitchHttpMapper)
       .toConstantValue(new DeadManSwitchHttpMapper())
     container
+      .bind<MapperInterface<TrustedDevice, TypeORMTrustedDevice>>(TYPES.Auth_TrustedDevicePersistenceMapper)
+      .toConstantValue(new TrustedDevicePersistenceMapper())
+    container
+      .bind<MapperInterface<TrustedDevice, TrustedDeviceHttpProjection>>(TYPES.Auth_TrustedDeviceHttpMapper)
+      .toConstantValue(new TrustedDeviceHttpMapper())
+    container
+      .bind<
+        MapperInterface<PendingMfaApproval, TypeORMPendingMfaApproval>
+      >(TYPES.Auth_PendingMfaApprovalPersistenceMapper)
+      .toConstantValue(new PendingMfaApprovalPersistenceMapper())
+    container
+      .bind<
+        MapperInterface<PendingMfaApproval, PendingMfaApprovalHttpProjection>
+      >(TYPES.Auth_PendingMfaApprovalHttpMapper)
+      .toConstantValue(new PendingMfaApprovalHttpMapper())
+    container
       .bind<
         MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
@@ -615,6 +667,12 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMDeadManSwitch>>(TYPES.Auth_ORMDeadManSwitchRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMDeadManSwitch))
+    container
+      .bind<Repository<TypeORMTrustedDevice>>(TYPES.Auth_ORMTrustedDeviceRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMTrustedDevice))
+    container
+      .bind<Repository<TypeORMPendingMfaApproval>>(TYPES.Auth_ORMPendingMfaApprovalRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMPendingMfaApproval))
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
@@ -712,6 +770,22 @@ export class ContainerConfigLoader {
         new TypeORMDeadManSwitchRepository(
           container.get(TYPES.Auth_ORMDeadManSwitchRepository),
           container.get(TYPES.Auth_DeadManSwitchPersistenceMapper),
+        ),
+      )
+    container
+      .bind<TrustedDeviceRepositoryInterface>(TYPES.Auth_TrustedDeviceRepository)
+      .toConstantValue(
+        new TypeORMTrustedDeviceRepository(
+          container.get(TYPES.Auth_ORMTrustedDeviceRepository),
+          container.get(TYPES.Auth_TrustedDevicePersistenceMapper),
+        ),
+      )
+    container
+      .bind<PendingMfaApprovalRepositoryInterface>(TYPES.Auth_PendingMfaApprovalRepository)
+      .toConstantValue(
+        new TypeORMPendingMfaApprovalRepository(
+          container.get(TYPES.Auth_ORMPendingMfaApprovalRepository),
+          container.get(TYPES.Auth_PendingMfaApprovalPersistenceMapper),
         ),
       )
     container
@@ -1305,6 +1379,49 @@ export class ContainerConfigLoader {
     container
       .bind<DeleteDeadManSwitch>(TYPES.Auth_DeleteDeadManSwitch)
       .toConstantValue(new DeleteDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
+    container
+      .bind<CreateTrustedDevice>(TYPES.Auth_CreateTrustedDevice)
+      .toConstantValue(
+        new CreateTrustedDevice(
+          container.get(TYPES.Auth_TrustedDeviceRepository),
+          container.get(TYPES.Auth_UserRepository),
+          trustedDeviceDurationDays,
+        ),
+      )
+    container
+      .bind<ListTrustedDevices>(TYPES.Auth_ListTrustedDevices)
+      .toConstantValue(new ListTrustedDevices(container.get(TYPES.Auth_TrustedDeviceRepository)))
+    container
+      .bind<DeleteTrustedDevice>(TYPES.Auth_DeleteTrustedDevice)
+      .toConstantValue(new DeleteTrustedDevice(container.get(TYPES.Auth_TrustedDeviceRepository)))
+    container
+      .bind<VerifyTrustedDevice>(TYPES.Auth_VerifyTrustedDevice)
+      .toConstantValue(
+        new VerifyTrustedDevice(
+          container.get(TYPES.Auth_TrustedDeviceRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval)
+      .toConstantValue(
+        new CreatePendingMfaApproval(
+          container.get(TYPES.Auth_PendingMfaApprovalRepository),
+          container.get(TYPES.Auth_DomainEventPublisher),
+          container.get(TYPES.Auth_DomainEventFactory),
+          container.get(TYPES.Auth_Logger),
+          pendingMfaApprovalTtlSeconds,
+        ),
+      )
+    container
+      .bind<ResolvePendingMfaApproval>(TYPES.Auth_ResolvePendingMfaApproval)
+      .toConstantValue(new ResolvePendingMfaApproval(container.get(TYPES.Auth_PendingMfaApprovalRepository)))
+    container
+      .bind<GetPendingMfaApprovalStatus>(TYPES.Auth_GetPendingMfaApprovalStatus)
+      .toConstantValue(new GetPendingMfaApprovalStatus(container.get(TYPES.Auth_PendingMfaApprovalRepository)))
+    container
+      .bind<ListPendingMfaApprovals>(TYPES.Auth_ListPendingMfaApprovals)
+      .toConstantValue(new ListPendingMfaApprovals(container.get(TYPES.Auth_PendingMfaApprovalRepository)))
     container
       .bind<TriggerDueDeadManSwitches>(TYPES.Auth_TriggerDueDeadManSwitches)
       .toConstantValue(
@@ -1905,6 +2022,26 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<TrustedDevicesController>(TYPES.Auth_TrustedDevicesController)
+      .toConstantValue(
+        new TrustedDevicesController(
+          container.get(TYPES.Auth_CreateTrustedDevice),
+          container.get(TYPES.Auth_ListTrustedDevices),
+          container.get(TYPES.Auth_DeleteTrustedDevice),
+          container.get(TYPES.Auth_TrustedDeviceHttpMapper),
+        ),
+      )
+    container
+      .bind<PendingMfaApprovalsController>(TYPES.Auth_PendingMfaApprovalsController)
+      .toConstantValue(
+        new PendingMfaApprovalsController(
+          container.get(TYPES.Auth_ListPendingMfaApprovals),
+          container.get(TYPES.Auth_ResolvePendingMfaApproval),
+          container.get(TYPES.Auth_GetPendingMfaApprovalStatus),
+          container.get(TYPES.Auth_PendingMfaApprovalHttpMapper),
+        ),
+      )
+    container
       .bind<MagicLinkController>(TYPES.Auth_MagicLinkController)
       .toConstantValue(
         new MagicLinkController(
@@ -2212,6 +2349,9 @@ export class ContainerConfigLoader {
           container.get<DeleteSessionByToken>(TYPES.Auth_DeleteSessionByToken),
           container.get<string>(TYPES.Auth_CAPTCHA_UI_URL),
           container.get<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword),
+          container.get<VerifyTrustedDevice>(TYPES.Auth_VerifyTrustedDevice),
+          container.get<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
           container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
         ),
       )
@@ -2255,6 +2395,22 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseDeadManSwitchesController(
             container.get(TYPES.Auth_DeadManSwitchesController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseTrustedDevicesController>(TYPES.Auth_BaseTrustedDevicesController)
+        .toConstantValue(
+          new BaseTrustedDevicesController(
+            container.get(TYPES.Auth_TrustedDevicesController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BasePendingMfaApprovalsController>(TYPES.Auth_BasePendingMfaApprovalsController)
+        .toConstantValue(
+          new BasePendingMfaApprovalsController(
+            container.get(TYPES.Auth_PendingMfaApprovalsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )
