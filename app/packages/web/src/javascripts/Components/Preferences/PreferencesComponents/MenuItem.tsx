@@ -7,6 +7,11 @@ import CountBubble from './CountBubble'
 interface Props {
   iconType: IconType
   label: string
+  /**
+   * Optional secondary line shown beneath the label, used by Preferences search
+   * to hint which matching section/keyword the user can jump to.
+   */
+  secondaryLabel?: string
   selected: boolean
   bubbleCount?: number
   hasErrorIndicator?: boolean
@@ -16,6 +21,7 @@ interface Props {
 const PreferencesMenuItem: FunctionComponent<Props> = ({
   iconType,
   label,
+  secondaryLabel,
   selected,
   onClick,
   bubbleCount,
@@ -39,7 +45,10 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
       <CountBubble position="left" count={bubbleCount} />
     </div>
     <div className="min-w-1" />
-    <span className="flex-grow">{label}</span>
+    <span className="flex flex-grow flex-col">
+      <span>{label}</span>
+      {secondaryLabel && <span className="text-xs font-normal capitalize text-passive-1">{secondaryLabel}</span>}
+    </span>
     {hasErrorIndicator && (
       <span className="ml-2">
         <ErrorCircle />
