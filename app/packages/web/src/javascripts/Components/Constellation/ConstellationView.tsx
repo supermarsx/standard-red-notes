@@ -12,6 +12,12 @@ import {
   ConstellationScopeKind,
   selectConstellationNoteUuids,
 } from './selectConstellationNotes'
+import {
+  screenToWorld as cameraScreenToWorld,
+  wheelDeltaToFactor,
+  zoomByFactor,
+  zoomToward,
+} from './constellationCamera'
 
 const FolderContentType = 'Folder'
 
@@ -226,6 +232,12 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     moved: false,
   })
   const rafRef = useRef<number | null>(null)
+  // Active pointers for multi-touch. We track each pointer's last canvas-local
+  // position; once two are down we switch from pan/drag into pinch-zoom mode.
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  // Distance between the two pinching fingers on the previous move, used to derive
+  // the incremental zoom factor. Null when not pinching.
+  const pinchDistRef = useRef<number | null>(null)
   // Forward reference to the recenter callback (defined later) so scope-change
   // effects can re-center the camera without a declaration-order problem.
   const recenterRef = useRef<() => void>(() => {})
@@ -255,10 +267,10 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     reheat(1)
   }, [application, reheat])
 
-  const screenToWorld = useCallback((screenX: number, screenY: number) => {
-    const camera = cameraRef.current
-    return { x: (screenX - camera.x) / camera.scale, y: (screenY - camera.y) / camera.scale }
-  }, [])
+  const screenToWorld = useCallback(
+    (screenX: number, screenY: number) => cameraScreenToWorld(cameraRef.current, screenX, screenY),
+    [],
+  )
 
   const nodeRadius = useCallback((node: GraphNode) => 3 + Math.min(9, Math.sqrt(node.degree) * 2.2), [])
 
@@ -534,6 +546,17 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     (event: React.PointerEvent) => {
       ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
       const { x, y } = localPoint(event)
+      pointersRef.current.set(event.pointerId, { x, y })
+
+      // Second finger down → enter pinch mode and cancel any in-progress
+      // single-pointer pan/drag so they don't fight the zoom.
+      if (pointersRef.current.size === 2) {
+        const [a, b] = [...pointersRef.current.values()]
+        pinchDistRef.current = Math.hypot(a.x - b.x, a.y - b.y)
+        dragRef.current = { node: null, panning: false, startX: 0, startY: 0, moved: true }
+        return
+      }
+
       const node = hitTest(x, y)
       dragRef.current = { node, panning: node === null, startX: x, startY: y, moved: false }
       reheat(node !== null ? 0.5 : 0.1)
@@ -544,6 +567,25 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
       const { x, y } = localPoint(event)
+
+      // --- pinch-to-zoom -------------------------------------------------
+      if (pointersRef.current.has(event.pointerId)) {
+        pointersRef.current.set(event.pointerId, { x, y })
+      }
+      if (pointersRef.current.size === 2) {
+        const [a, b] = [...pointersRef.current.values()]
+        const dist = Math.hypot(a.x - b.x, a.y - b.y)
+        const prev = pinchDistRef.current
+        if (prev && prev > 0 && dist > 0) {
+          // Zoom centered on the midpoint between the two fingers.
+          const midX = (a.x + b.x) / 2
+          const midY = (a.y + b.y) / 2
+          cameraRef.current = zoomByFactor(cameraRef.current, dist / prev, midX, midY)
+        }
+        pinchDistRef.current = dist
+        return
+      }
+
       const drag = dragRef.current
       if (drag.node === null && !drag.panning) {
         hoverRef.current = hitTest(x, y)
@@ -574,6 +616,23 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
 
   const onPointerUp = useCallback(
     (event: React.PointerEvent) => {
+      const wasPinching = pointersRef.current.size === 2
+      pointersRef.current.delete(event.pointerId)
+      if (pointersRef.current.size < 2) {
+        pinchDistRef.current = null
+      }
+      try {
+        ;(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId)
+      } catch {
+        /* pointer already released */
+      }
+      // Lifting one finger out of a two-finger pinch must not be treated as a
+      // click; leave the remaining pointer idle until it moves again.
+      if (wasPinching) {
+        dragRef.current = { node: null, panning: false, startX: 0, startY: 0, moved: true }
+        return
+      }
+
       const drag = dragRef.current
       if (!drag.moved) {
         if (drag.node !== null) {
@@ -594,26 +653,16 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
         }
       }
       dragRef.current = { node: null, panning: false, startX: 0, startY: 0, moved: false }
-      try {
-        ;(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId)
-      } catch {
-        /* pointer already released */
-      }
     },
     [application],
   )
 
-  const onWheel = useCallback((event: React.WheelEvent) => {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-    const px = event.clientX - rect.left
-    const py = event.clientY - rect.top
-    const camera = cameraRef.current
-    const factor = Math.exp(-event.deltaY * 0.0015)
-    const newScale = Math.min(4, Math.max(0.15, camera.scale * factor))
-    // Zoom around the cursor.
-    camera.x = px - (px - camera.x) * (newScale / camera.scale)
-    camera.y = py - (py - camera.y) * (newScale / camera.scale)
-    camera.scale = newScale
+  const onPointerCancel = useCallback((event: React.PointerEvent) => {
+    pointersRef.current.delete(event.pointerId)
+    if (pointersRef.current.size < 2) {
+      pinchDistRef.current = null
+    }
+    dragRef.current = { node: null, panning: false, startX: 0, startY: 0, moved: true }
   }, [])
 
   const recenter = useCallback(() => {
@@ -622,6 +671,37 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     reheat(0.6)
   }, [reheat])
   recenterRef.current = recenter
+
+  // Zoom by a fixed step centered on the viewport, used by the +/- buttons.
+  const zoomStep = useCallback((factor: number) => {
+    const { width, height } = sizeRef.current
+    cameraRef.current = zoomByFactor(cameraRef.current, factor, width / 2, height / 2)
+  }, [])
+
+  // Wheel zoom is wired up as a NON-PASSIVE native listener (below) so we can
+  // preventDefault and stop the page from scrolling while zooming the graph.
+  // React's synthetic onWheel can be passive depending on the bundler, which
+  // would make preventDefault a no-op.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      return
+    }
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const px = event.clientX - rect.left
+      const py = event.clientY - rect.top
+      cameraRef.current = zoomToward(
+        cameraRef.current,
+        cameraRef.current.scale * wheelDeltaToFactor(event.deltaY),
+        px,
+        py,
+      )
+    }
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', handleWheel)
+  }, [])
 
   return (
     <div
@@ -752,11 +832,42 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onPointerLeave={() => {
             hoverRef.current = null
           }}
-          onWheel={onWheel}
         />
+
+        {/* Zoom controls. Bottom-right, unobtrusive; large enough to be tappable
+            on touch devices without overlapping the note card (top-left/center). */}
+        {counts.notes > 0 && (
+          <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-0.5 rounded-md border border-border bg-default/90 p-0.5 shadow-main backdrop-blur-sm">
+            <button
+              className="rounded p-1.5 hover:bg-contrast"
+              onClick={() => zoomStep(1.25)}
+              aria-label="Zoom in"
+              title="Zoom in"
+            >
+              <Icon type="add" size="small" />
+            </button>
+            <button
+              className="rounded p-1.5 hover:bg-contrast"
+              onClick={() => zoomStep(1 / 1.25)}
+              aria-label="Zoom out"
+              title="Zoom out"
+            >
+              <Icon type="subtract" size="small" />
+            </button>
+            <button
+              className="rounded p-1.5 hover:bg-contrast"
+              onClick={recenter}
+              aria-label="Fit graph to view"
+              title="Reset zoom"
+            >
+              <Icon type="restore" size="small" />
+            </button>
+          </div>
+        )}
         {counts.notes === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-neutral">
             {scopeKind === 'current'
