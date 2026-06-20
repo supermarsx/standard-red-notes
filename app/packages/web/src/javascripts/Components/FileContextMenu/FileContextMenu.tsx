@@ -28,7 +28,7 @@ const FileContextMenu: FunctionComponent<Props> = observer(({ filesController, i
         <FileMenuOptions
           selectedFiles={selectedFiles}
           closeMenu={() => setShowFileContextMenu(false)}
-          shouldShowRenameOption={false}
+          shouldShowRenameOption={true}
           shouldShowAttachOption={false}
         />
       </Menu>

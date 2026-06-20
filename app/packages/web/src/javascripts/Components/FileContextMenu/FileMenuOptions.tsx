@@ -1,4 +1,4 @@
-import { FunctionComponent, useCallback, useMemo } from 'react'
+import { FunctionComponent, useCallback, useMemo, useState } from 'react'
 import { FileItemActionType } from '../AttachedFilesPopover/PopoverFileItemAction'
 import Icon from '@/Components/Icon/Icon'
 import { observer } from 'mobx-react-lite'
@@ -9,7 +9,9 @@ import MenuItem from '../Menu/MenuItem'
 import { FileContextMenuBackupOption } from './FileContextMenuBackupOption'
 import MenuSwitchButtonItem from '../Menu/MenuSwitchButtonItem'
 import { FileItem } from '@standardnotes/snjs'
+import { KeyboardKey } from '@standardnotes/ui-services'
 import AddTagOption from '../NotesOptions/AddTagOption'
+import MoveFileToFolderOption from './MoveFileToFolderOption'
 import { MenuItemIconSize } from '@/Constants/TailwindClassNames'
 import AddToVaultMenuOption from '../Vaults/AddToVaultMenuOption'
 import { iconClass } from '../NotesOptions/ClassNames'
@@ -38,6 +40,28 @@ const FileMenuOptions: FunctionComponent<Props> = ({
 
   const { shouldUseStreamingAPI, handleFileAction } = application.filesController
   const { toggleAppPane } = useResponsiveAppPane()
+
+  const [isRenaming, setIsRenaming] = useState(false)
+
+  const fileToRename = selectedFiles.length === 1 ? selectedFiles[0] : undefined
+
+  const submitRename = useCallback(
+    async (newName: string) => {
+      const trimmed = newName.trim()
+      if (fileToRename && trimmed.length > 0 && trimmed !== fileToRename.name) {
+        await application.mutator.renameFile(fileToRename, trimmed)
+        void application.sync.sync()
+      }
+      setIsRenaming(false)
+      renameToggleCallback?.(false)
+    },
+    [application, fileToRename, renameToggleCallback],
+  )
+
+  const beginRename = useCallback(() => {
+    renameToggleCallback?.(true)
+    setIsRenaming(true)
+  }, [renameToggleCallback])
 
   const hasProtectedFiles = useMemo(() => selectedFiles.some((file) => file.protected), [selectedFiles])
   const hasSelectedMultipleFiles = useMemo(() => selectedFiles.length > 1, [selectedFiles.length])
@@ -87,6 +111,32 @@ const FileMenuOptions: FunctionComponent<Props> = ({
     return <div className="text-center">No files selected</div>
   }
 
+  if (isRenaming && fileToRename) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2">
+        <Icon type="pencil" className={`text-neutral ${MenuItemIconSize}`} />
+        <input
+          className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm"
+          defaultValue={fileToRename.name}
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => {
+            if (event.key === KeyboardKey.Enter) {
+              event.preventDefault()
+              void submitRename(event.currentTarget.value)
+            } else if (event.key === KeyboardKey.Escape) {
+              setIsRenaming(false)
+              renameToggleCallback?.(false)
+            }
+          }}
+          onBlur={(event) => {
+            void submitRename(event.currentTarget.value)
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
     <>
       {selectedFiles.length === 1 && (isFileAttachedToNote || shouldShowAttachOption) && (
@@ -119,6 +169,14 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           iconClassName={`text-neutral mr-2 ${MenuItemIconSize}`}
           disabled={areSomeFilesInReadonlySharedVault}
         />
+        {fileToRename && (
+          <MoveFileToFolderOption
+            navigationController={application.navigationController}
+            file={fileToRename}
+            iconClassName={`text-neutral mr-2 ${MenuItemIconSize}`}
+            disabled={areSomeFilesInReadonlySharedVault}
+          />
+        )}
         <MenuSwitchButtonItem
           checked={hasProtectedFiles}
           onChange={(hasProtectedFiles) => {
@@ -160,13 +218,8 @@ const FileMenuOptions: FunctionComponent<Props> = ({
             Download as archive
           </MenuItem>
         )}
-        {shouldShowRenameOption && (
-          <MenuItem
-            onClick={() => {
-              renameToggleCallback?.(true)
-            }}
-            disabled={areSomeFilesInReadonlySharedVault}
-          >
+        {shouldShowRenameOption && fileToRename && (
+          <MenuItem onClick={beginRename} disabled={areSomeFilesInReadonlySharedVault}>
             <Icon type="pencil" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
             Rename
           </MenuItem>

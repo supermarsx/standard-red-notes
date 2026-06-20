@@ -11,7 +11,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { PANEL_NAME_NOTES } from '@/Constants/Constants'
 import { FileItem, Platform, PrefKey, WebAppEvent } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
-import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ContentList from '@/Components/ContentListView/ContentList'
 import NoAccountWarning from '@/Components/NoAccountWarning/NoAccountWarning'
 import { ElementIds } from '@/Constants/ElementIDs'
@@ -35,6 +35,11 @@ import { mergeRefs } from '@/Hooks/mergeRefs'
 import Icon from '../Icon/Icon'
 import MobileMultiSelectionToolbar from './MobileMultiSelectionToolbar'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
+import FilesFolderBar, {
+  FilesFolderFilter,
+  FilesFolderFilterAll,
+  filterItemsByFolder,
+} from './FilesFolderBar'
 
 type Props = {
   application: WebApplication
@@ -149,6 +154,21 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
     const icon = selectedTag?.iconString
 
     const isFilesSmartView = useMemo(() => navigationController.isInFilesView, [navigationController.isInFilesView])
+
+    const [filesFolderFilter, setFilesFolderFilter] = useState<FilesFolderFilter>(FilesFolderFilterAll)
+
+    const filteredItems = useMemo(
+      () => (isFilesSmartView ? (filterItemsByFolder(items, filesFolderFilter, navigationController) as typeof items) : items),
+      [isFilesSmartView, items, filesFolderFilter, navigationController, navigationController.folders],
+    )
+
+    const filteredRenderedItems = useMemo(
+      () =>
+        isFilesSmartView
+          ? (filterItemsByFolder(renderedItems, filesFolderFilter, navigationController) as typeof renderedItems)
+          : renderedItems,
+      [isFilesSmartView, renderedItems, filesFolderFilter, navigationController, navigationController.folders],
+    )
 
     const addNewItem = useCallback(async () => {
       if (isFilesSmartView) {
@@ -340,6 +360,13 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             />
           </div>
         </div>
+        {isFilesSmartView && (
+          <FilesFolderBar
+            navigationController={navigationController}
+            activeFilter={filesFolderFilter}
+            onChange={setFilesFolderFilter}
+          />
+        )}
         {itemListController.isMultipleSelectionMode && (
           <div className="flex items-center border-b border-l-2 border-border border-l-transparent py-2.5 pr-4">
             <div className="px-4">
@@ -376,22 +403,26 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             onSelect={handleDailyListSelection}
           />
         )}
-        {!dailyMode && completedFullSync && !renderedItems.length ? (
+        {!dailyMode && completedFullSync && !filteredRenderedItems.length ? (
           isFilesSmartView ? (
-            <EmptyFilesView addNewItem={addNewItem} />
+            filesFolderFilter === FilesFolderFilterAll ? (
+              <EmptyFilesView addNewItem={addNewItem} />
+            ) : (
+              <p className="empty-items-list opacity-50">No files in this folder.</p>
+            )
           ) : (
             <p className="empty-items-list opacity-50">No items.</p>
           )
         ) : null}
-        {!dailyMode && !completedFullSync && !renderedItems.length ? (
+        {!dailyMode && !completedFullSync && !filteredRenderedItems.length ? (
           <p className="empty-items-list opacity-50">Loading...</p>
         ) : null}
-        {!dailyMode && renderedItems.length ? (
+        {!dailyMode && filteredRenderedItems.length ? (
           shouldUseTableView ? (
-            <ContentTableView items={items} application={application} />
+            <ContentTableView items={filteredItems} application={application} />
           ) : (
             <ContentList
-              items={renderedItems}
+              items={filteredRenderedItems}
               selectedUuids={selectedUuids}
               application={application}
               paginate={paginate}
