@@ -57,6 +57,10 @@ export class CreateDeadManSwitch implements UseCaseInterface<CreateDeadManSwitch
       triggered: false,
       lastCheckInAt: null,
       createdAt: now,
+      sendAttempts: 0,
+      nextAttemptAt: null,
+      lastAttemptAt: null,
+      lastError: null,
     })
     if (switchOrError.isFailed()) {
       return Result.fail(`Could not create dead man switch: ${switchOrError.getError()}`)

@@ -20,6 +20,11 @@ export class DeadManSwitchHttpMapper implements MapperInterface<DeadManSwitch, D
       triggered: domain.props.triggered,
       lastCheckInAt: domain.props.lastCheckInAt,
       createdAt: domain.props.createdAt,
+      // Retry/backoff state so the client can surface "retrying — next attempt at X".
+      // lastError is deliberately omitted: it may contain sensitive SMTP detail.
+      sendAttempts: domain.props.sendAttempts,
+      nextAttemptAt: domain.props.nextAttemptAt,
+      lastAttemptAt: domain.props.lastAttemptAt,
     }
   }
 }

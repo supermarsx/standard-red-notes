@@ -9,6 +9,23 @@ import { TriggerDueDeadManSwitchesDTO } from './TriggerDueDeadManSwitchesDTO'
 
 const EMAIL_SUBJECT = 'A Standard Red Notes message is waiting for you'
 
+// Delay applied AFTER each failed send attempt before the switch is retried.
+// Indexed by (failed attempt number - 1). Once attempts exceed the list we keep
+// retrying at the final interval (~6 months) — we never give up silently.
+const RETRY_BACKOFF_MS = [
+  5 * 60_000, // 5 min   (after attempt 1)
+  30 * 60_000, // 30 min
+  2 * 60 * 60_000, // 2 h
+  6 * 60 * 60_000, // 6 h
+  24 * 60 * 60_000, // 24 h
+  4 * 24 * 60 * 60_000, // 4 days
+  8 * 24 * 60 * 60_000, // 8 days
+  30 * 24 * 60 * 60_000, // ~1 month
+  180 * 24 * 60 * 60_000, // ~6 months
+]
+
+const MAX_ERROR_LENGTH = 255
+
 export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
   constructor(
     private deadManSwitchRepository: DeadManSwitchRepositoryInterface,
@@ -37,11 +54,10 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
 
         const sent = await this.emailSender.sendEmail(deadManSwitch.props.recipientEmail, EMAIL_SUBJECT, body)
         if (!sent) {
-          // Delivery failed (transient SMTP error / not configured). Leave the
-          // switch armed so it retries on the next scan. Do not block the rest.
-          this.logger.error(
-            `Failed to deliver dead man switch ${deadManSwitch.id.toString()} email. Leaving it armed for retry.`,
-          )
+          // Delivery failed (transient SMTP error). Record the failure and
+          // schedule the next retry on the escalating backoff. Do not block the
+          // rest of the batch.
+          await this.recordFailure(deadManSwitch, 'Email sender reported the message was not sent.', now)
 
           continue
         }
@@ -50,6 +66,8 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
           {
             ...deadManSwitch.props,
             triggered: true,
+            lastAttemptAt: now,
+            lastError: null,
           },
           new UniqueEntityId(deadManSwitch.id.toString()),
         )
@@ -65,14 +83,53 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
 
         triggeredCount++
       } catch (error) {
-        // A single failure must never block the rest of the batch.
-        this.logger.error(
-          `Error triggering dead man switch ${deadManSwitch.id.toString()}: ${(error as Error).message}`,
-        )
+        // A single failure must never block the rest of the batch. Record it and
+        // schedule a retry like any other delivery failure.
+        await this.recordFailure(deadManSwitch, (error as Error).message, now)
       }
     }
 
     return Result.ok(triggeredCount)
+  }
+
+  // Persists a failed send: increments the attempt counter, stores the error and
+  // schedules the next retry on the escalating backoff. After the last entry the
+  // switch keeps retrying at the final interval (~6 months) — never giving up.
+  private async recordFailure(deadManSwitch: DeadManSwitch, errorMessage: string, now: number): Promise<void> {
+    try {
+      const sendAttempts = deadManSwitch.props.sendAttempts + 1
+      const backoffIndex = Math.min(sendAttempts - 1, RETRY_BACKOFF_MS.length - 1)
+      const nextAttemptAt = now + RETRY_BACKOFF_MS[backoffIndex]
+
+      this.logger.error(
+        `Failed to deliver dead man switch ${deadManSwitch.id.toString()} email (attempt ${sendAttempts}): ` +
+          `${errorMessage}. Next retry at ${new Date(nextAttemptAt).toISOString()}.`,
+      )
+
+      const updatedOrError = DeadManSwitch.create(
+        {
+          ...deadManSwitch.props,
+          sendAttempts,
+          nextAttemptAt,
+          lastAttemptAt: now,
+          lastError: errorMessage.slice(0, MAX_ERROR_LENGTH),
+        },
+        new UniqueEntityId(deadManSwitch.id.toString()),
+      )
+      if (updatedOrError.isFailed()) {
+        this.logger.error(
+          `Could not record dead man switch ${deadManSwitch.id.toString()} failure: ${updatedOrError.getError()}`,
+        )
+
+        return
+      }
+
+      await this.deadManSwitchRepository.save(updatedOrError.getValue())
+    } catch (error) {
+      this.logger.error(
+        `Error recording dead man switch ${deadManSwitch.id.toString()} failure: ${(error as Error).message}`,
+      )
+    }
   }
 
   private composeBody(deadManSwitch: DeadManSwitch): string {

@@ -63,4 +63,32 @@ export class TypeORMDeadManSwitch {
     type: 'bigint',
   })
   declare createdAt: number
+
+  @Column({
+    name: 'send_attempts',
+    type: 'int',
+    default: 0,
+  })
+  declare sendAttempts: number
+
+  @Column({
+    name: 'next_attempt_at',
+    type: 'bigint',
+    nullable: true,
+  })
+  declare nextAttemptAt: number | null
+
+  @Column({
+    name: 'last_attempt_at',
+    type: 'bigint',
+    nullable: true,
+  })
+  declare lastAttemptAt: number | null
+
+  @Column({
+    name: 'last_error',
+    type: 'text',
+    nullable: true,
+  })
+  declare lastError: string | null
 }

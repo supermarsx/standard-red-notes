@@ -25,6 +25,10 @@ describe('DeleteDeadManSwitch', () => {
         triggered: false,
         lastCheckInAt: null,
         createdAt: Date.now(),
+        sendAttempts: 0,
+        nextAttemptAt: null,
+        lastAttemptAt: null,
+        lastError: null,
       },
       new UniqueEntityId(switchId),
     ).getValue()

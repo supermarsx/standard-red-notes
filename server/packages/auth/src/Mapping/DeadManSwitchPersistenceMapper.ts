@@ -16,6 +16,10 @@ export class DeadManSwitchPersistenceMapper implements MapperInterface<DeadManSw
         triggered: Boolean(projection.triggered),
         lastCheckInAt: projection.lastCheckInAt === null ? null : Number(projection.lastCheckInAt),
         createdAt: Number(projection.createdAt),
+        sendAttempts: projection.sendAttempts === null ? 0 : Number(projection.sendAttempts),
+        nextAttemptAt: projection.nextAttemptAt === null ? null : Number(projection.nextAttemptAt),
+        lastAttemptAt: projection.lastAttemptAt === null ? null : Number(projection.lastAttemptAt),
+        lastError: projection.lastError ?? null,
       },
       new UniqueEntityId(projection.uuid),
     )
@@ -39,6 +43,10 @@ export class DeadManSwitchPersistenceMapper implements MapperInterface<DeadManSw
     typeorm.triggered = domain.props.triggered
     typeorm.lastCheckInAt = domain.props.lastCheckInAt
     typeorm.createdAt = domain.props.createdAt
+    typeorm.sendAttempts = domain.props.sendAttempts
+    typeorm.nextAttemptAt = domain.props.nextAttemptAt
+    typeorm.lastAttemptAt = domain.props.lastAttemptAt
+    typeorm.lastError = domain.props.lastError
 
     return typeorm
   }

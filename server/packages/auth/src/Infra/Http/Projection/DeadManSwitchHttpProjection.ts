@@ -7,4 +7,7 @@ export interface DeadManSwitchHttpProjection {
   triggered: boolean
   lastCheckInAt: number | null
   createdAt: number
+  sendAttempts: number
+  nextAttemptAt: number | null
+  lastAttemptAt: number | null
 }

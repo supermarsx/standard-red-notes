@@ -13,4 +13,13 @@ export interface DeadManSwitchProps {
   triggered: boolean
   lastCheckInAt: number | null
   createdAt: number
+  // Number of FAILED send attempts so far. Drives the escalating retry backoff.
+  sendAttempts: number
+  // Epoch milliseconds. Earliest time the next send may be attempted after a
+  // failure. Null means "as soon as the switch is due".
+  nextAttemptAt: number | null
+  // Epoch milliseconds of the most recent send attempt (success or failure).
+  lastAttemptAt: number | null
+  // Last send error message (truncated). Never exposed over HTTP.
+  lastError: string | null
 }

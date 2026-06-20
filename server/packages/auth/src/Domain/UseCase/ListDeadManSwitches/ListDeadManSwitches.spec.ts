@@ -24,6 +24,10 @@ describe('ListDeadManSwitches', () => {
         triggered: false,
         lastCheckInAt: null,
         createdAt: Date.now(),
+        sendAttempts: 0,
+        nextAttemptAt: null,
+        lastAttemptAt: null,
+        lastError: null,
       },
       new UniqueEntityId('11111111-1111-1111-1111-111111111111'),
     ).getValue()

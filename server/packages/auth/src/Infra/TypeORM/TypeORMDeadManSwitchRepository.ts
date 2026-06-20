@@ -43,6 +43,7 @@ export class TypeORMDeadManSwitchRepository implements DeadManSwitchRepositoryIn
       .createQueryBuilder('dead_man_switch')
       .where('dead_man_switch.triggered = :triggered', { triggered: false })
       .andWhere('dead_man_switch.deadline <= :now', { now })
+      .andWhere('(dead_man_switch.next_attempt_at IS NULL OR dead_man_switch.next_attempt_at <= :now)', { now })
       .getMany()
 
     return typeOrm.map((deadManSwitch) => this.mapper.toDomain(deadManSwitch))

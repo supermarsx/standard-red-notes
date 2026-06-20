@@ -39,6 +39,11 @@ export class CheckInDeadManSwitch implements UseCaseInterface<number> {
         triggered: false,
         lastCheckInAt: now,
         createdAt: deadManSwitch.props.createdAt,
+        // A check-in re-arms the switch and resets any in-progress retry schedule.
+        sendAttempts: 0,
+        nextAttemptAt: null,
+        lastAttemptAt: null,
+        lastError: null,
       },
       new UniqueEntityId(deadManSwitch.id.toString()),
     )
