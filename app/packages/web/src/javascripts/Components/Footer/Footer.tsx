@@ -399,7 +399,7 @@ class Footer extends AbstractComponent<Props, State> {
               </Fragment>
             )}
           </div>
-          <div className="center max-h-full overflow-hidden px-4">
+          <div className="center min-w-0 max-h-full flex-1 overflow-hidden px-4">
             {this.state.arbitraryStatusMessage && (
               <div className="relative z-footer-bar-item max-h-full select-none items-center overflow-hidden text-ellipsis whitespace-nowrap text-xs font-bold text-neutral">
                 {this.state.arbitraryStatusMessage}
@@ -407,14 +407,23 @@ class Footer extends AbstractComponent<Props, State> {
             )}
           </div>
           <div className="right flex h-full flex-shrink-0">
-            <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center sm:flex">
+            {/*
+              The footer itself is hidden below md (768px). To avoid crowding the
+              footer on tablet widths (768–1023px), the verbose note-stats chip is
+              only shown on lg+ where there is room; the connection-status dot stays
+              visible at all footer widths.
+            */}
+            <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
               <NoteStats application={this.application} />
             </div>
             <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
               <ConnectionStatusIndicator application={this.application} />
             </div>
             {this.state.failedSyncError && (
-              <div className="relative z-footer-bar-item flex select-none items-center text-xs font-bold text-neutral">
+              <div
+                title={`Sync error: ${this.state.failedSyncError}`}
+                className="relative z-footer-bar-item flex max-w-[40vw] select-none items-center overflow-hidden text-ellipsis whitespace-nowrap text-xs font-bold text-neutral"
+              >
                 Sync error: {this.state.failedSyncError}
               </div>
             )}

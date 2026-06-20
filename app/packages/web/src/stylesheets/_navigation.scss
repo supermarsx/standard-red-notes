@@ -80,6 +80,12 @@ $content-horizontal-padding: 16px;
         min-height: 29.5px;
       }
 
+      // Comfortable touch target on coarse pointers (phones/tablets), regardless
+      // of width. Desktop (fine pointer) keeps the compact heights above.
+      @media (pointer: coarse) {
+        min-height: 40px;
+      }
+
       .sn-icon {
         display: block;
         margin: 0 auto;

@@ -357,7 +357,9 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
               {isSelected && (
                 <a
                   role="button"
-                  className={'mr-2 cursor-pointer border-0 bg-transparent hover:bg-contrast focus:shadow-inner'}
+                  className={
+                    'mr-2 flex cursor-pointer items-center justify-center rounded border-0 bg-transparent hover:bg-contrast focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem]'
+                  }
                   onClick={toggleContextMenu}
                   onMouseDown={(e) => {
                     e.stopPropagation()
@@ -372,9 +374,9 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
               {hasChildren && (
                 <a
                   role="button"
-                  className={`focus:shadow-inner ${showChildren ? 'cursor-n-resize' : 'cursor-s-resize'} ${
-                    showChildren ? 'opened' : 'closed'
-                  } `}
+                  className={`flex items-center justify-center rounded focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem] ${
+                    showChildren ? 'cursor-n-resize' : 'cursor-s-resize'
+                  } ${showChildren ? 'opened' : 'closed'} `}
                   onClick={toggleChildren}
                 >
                   <Icon

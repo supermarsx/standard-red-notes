@@ -59,12 +59,13 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
 
   const chipClass = (active: boolean) =>
     classNames(
-      'flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm',
+      // Comfortable tap target on touch screens (min-h ~40px); compact on desktop.
+      'flex min-h-[2.25rem] flex-shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]',
       active ? 'border-info bg-info text-info-contrast' : 'border-border bg-default text-text hover:bg-contrast',
     )
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto border-b border-border px-3 py-2">
+    <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain border-b border-border px-3 py-2">
       <button className={chipClass(activeFilter === FilesFolderFilterAll)} onClick={() => onChange(FilesFolderFilterAll)}>
         <Icon type="files" className="h-4 w-4" />
         All files
@@ -91,7 +92,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
       {isCreating ? (
         <input
           ref={inputRef}
-          className="flex-shrink-0 rounded-full border border-info bg-default px-3 py-1 text-sm"
+          className="min-h-[2.25rem] flex-shrink-0 rounded-full border border-info bg-default px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]"
           placeholder="Folder name"
           autoFocus
           onKeyDown={(event) => {
@@ -108,7 +109,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
         />
       ) : (
         <button
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1 text-sm text-neutral hover:bg-contrast"
+          className="flex min-h-[2.25rem] flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1 text-sm text-neutral hover:bg-contrast pointer-coarse:min-h-[2.5rem]"
           onClick={() => setIsCreating(true)}
           title="Create a new folder"
         >
