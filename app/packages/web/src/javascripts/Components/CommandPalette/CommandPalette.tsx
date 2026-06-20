@@ -33,6 +33,8 @@ import { getIconForItem } from '../../Utils/Items/Icons/getIconForItem'
 import { FileItemActionType } from '../AttachedFilesPopover/PopoverFileItemAction'
 import type { CommandService } from './CommandService'
 import { requestCloseAllOpenModalsAndPopovers } from '../../Utils/CloseOpenModalsAndPopovers'
+import { fuzzyMatch } from './fuzzySearch'
+import { registerGlobalCommands } from './GlobalCommands'
 
 type CommandPaletteItem = {
   id: string
@@ -154,6 +156,13 @@ function CommandPalette() {
   }, [keyboardService, isOpen])
 
   useEffect(() => {
+    // Register the always-available global commands (new note, open prefs,
+    // empty trash, lock, etc.) so they are searchable in the palette. These are
+    // owned here because they aren't tied to any single mounted component.
+    return registerGlobalCommands(application)
+  }, [application])
+
+  useEffect(() => {
     return keyboardService.addCommandHandler({
       command: TOGGLE_COMMAND_PALETTE,
       category: 'General',
@@ -262,40 +271,60 @@ function CommandPalette() {
       const hasQuery = searchQuery.length > 0
 
       if (hasQuery) {
+        // Fuzzy-match + rank commands and items independently, then interleave by
+        // score so the strongest matches (regardless of kind) surface first. We
+        // build lightweight scored entries and only materialize the up-to-50
+        // best into CommandPaletteItems.
+        type ScoredEntry = {
+          score: number
+          range?: [number, number]
+          build: () => CommandPaletteItem
+        }
+        const scored: ScoredEntry[] = []
+
         const commands = application.commands.getCommandDescriptions()
         for (let i = 0; i < commands.length; i++) {
           const command = commands[i]
           if (!command) {
             continue
           }
-          if (items.length >= 50) {
-            break
-          }
-          const index = command.description.toLowerCase().indexOf(searchQuery)
-          if (index === -1) {
+          const match = fuzzyMatch(searchQuery, command.description)
+          if (!match.matched) {
             continue
           }
-          const item = createItemForCommand(command)
-          item.resultRange = [index, index + searchQuery.length]
-          items.push(item)
-          itemCounts[item.section]++
+          scored.push({
+            score: match.score,
+            range: match.ranges[0],
+            build: () => createItemForCommand(command),
+          })
         }
 
         const interactableItems = application.items.getInteractableItems()
         for (let i = 0; i < interactableItems.length; i++) {
-          if (items.length >= 50) {
-            break
-          }
           const decryptedItem = interactableItems[i]
           if (!decryptedItem || !decryptedItem.title) {
             continue
           }
-          const index = decryptedItem.title.toLowerCase().indexOf(searchQuery)
-          if (index === -1) {
+          const match = fuzzyMatch(searchQuery, decryptedItem.title)
+          if (!match.matched) {
             continue
           }
-          const item = createItemForInteractableItem(decryptedItem)
-          item.resultRange = [index, index + searchQuery.length]
+          scored.push({
+            score: match.score,
+            range: match.ranges[0],
+            build: () => createItemForInteractableItem(decryptedItem),
+          })
+        }
+
+        scored.sort((a, b) => b.score - a.score)
+
+        for (let i = 0; i < scored.length && items.length < 50; i++) {
+          const entry = scored[i]
+          if (!entry) {
+            continue
+          }
+          const item = entry.build()
+          item.resultRange = entry.range
           items.push(item)
           itemCounts[item.section]++
         }
