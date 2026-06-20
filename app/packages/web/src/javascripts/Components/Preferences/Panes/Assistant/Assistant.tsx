@@ -20,6 +20,11 @@ import {
 import { getTtsAvailability, listWebSpeechVoices } from '@/Assistant/tts'
 import { loadDictationSettings, saveDictationSettings, DictationSettings } from '@/Assistant/dictationSettings'
 import { getSttAvailability, getSpeechRecognitionCtor } from '@/Assistant/transcription'
+import {
+  loadContextualSearchSettings,
+  saveContextualSearchSettings,
+} from '@/Assistant/contextualSearchSettings'
+import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 
 type AssistantConfig = {
   providers: string[]
@@ -65,6 +70,11 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true),
   )
   const [aiSearch, setAiSearch] = useState(() => application.getPreference(PrefKey.AiPoweredSearchEnabled, false))
+
+  // AI-assisted CONTEXTUAL search (provider re-rank of top candidates). Web-local
+  // (localStorage), DEFAULT OFF. Distinct from the local-only "AI-powered search"
+  // toggle above, which never sends anything off-device.
+  const [contextualSearch, setContextualSearch] = useState(() => loadContextualSearchSettings().enabled)
 
   const [searchIndexEnabled, setSearchIndexEnabled] = useState(() =>
     application.getPreference(PrefKey.SearchIndexEnabled, true),
@@ -195,6 +205,15 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     },
     [application],
   )
+
+  const handleContextualSearchToggle = useCallback((value: boolean) => {
+    setContextualSearch(value)
+    saveContextualSearchSettings({ enabled: value })
+  }, [])
+
+  // Whether a provider is configured at all (reuses the assistant's own check).
+  // Used to warn that contextual search will be visible-disabled without one.
+  const providerAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
 
   const handleSearchIndexToggle = useCallback(
     (value: boolean) => {
@@ -619,6 +638,45 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             </div>
             <Switch checked={aiSearch} onChange={handleAiSearchToggle} />
           </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>AI contextual search (provider re-ranking)</Subtitle>
+              <Text>
+                Adds a “Search with AI” action to the search bar. After the normal algorithmic search narrows results,
+                it sends the top candidates to your configured AI provider to re-rank them by semantic relevance to your
+                query. Off by default. Runs only when you click the action (not on every keystroke).
+              </Text>
+            </div>
+            <Switch checked={contextualSearch} onChange={handleContextualSearchToggle} />
+          </div>
+
+          {contextualSearch && (
+            <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+              <Subtitle className="text-warning">AI contextual search sends note content to your AI provider</Subtitle>
+              <Text className="mt-1">
+                When you run “Search with AI”, the titles and short snippets of the top ~20 matching notes, together with
+                your search query, are sent to the AI provider you configure above to be re-ranked. With cloud providers
+                this exposes that content to a third party. Prefer a local model (e.g. LM
+                Studio / Ollama in Direct mode) to keep it on your device. Only the bounded candidate set is sent — never
+                your whole library and never full note bodies.
+              </Text>
+              <Text className="mt-1 text-passive-1">
+                This is provider-dependent re-ranking of a small candidate set, not a semantic index over all your
+                notes.
+              </Text>
+              {!providerAvailability.available && (
+                <Text className="mt-1 text-warning">
+                  {providerAvailability.reason || 'Configure an AI provider above to use this.'} Until then the action
+                  appears disabled.
+                </Text>
+              )}
+            </div>
+          )}
         </PreferencesSegment>
       </PreferencesGroup>
 

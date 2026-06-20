@@ -1,6 +1,11 @@
 import { ListableContentItem } from '@/Components/ContentListView/Types/ListableContentItem'
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
+import {
+  applyAiOrdering,
+  DEFAULT_AI_RERANK_CANDIDATE_LIMIT,
+  RerankCandidate,
+} from '@/Assistant/contextualSearchRanking'
 import { IndexableNote, SearchIndex } from '@/Utils/Items/Search/SearchIndex'
 import { rankNotesByRelevance } from '@/Utils/Items/Search/RelevanceScore'
 import {
@@ -111,6 +116,20 @@ export class ItemListController
    * scorer instead of by the underlying field sort.
    */
   relevanceSortActive = false
+
+  /**
+   * Standard Red Notes: AI-assisted CONTEXTUAL search state (off by default).
+   * When a "Search with AI" re-rank completes, `aiContextualOrder` holds the
+   * provider-returned ordering of candidate uuids (best match first) and
+   * `aiContextualQuery` records the exact free-text query it was computed for.
+   * The ordering is applied at the TOP of the search-ordering precedence, but
+   * ONLY while the current free-text query still matches `aiContextualQuery` — so
+   * it never lingers onto a different search and never changes behavior when the
+   * feature is unused. `aiContextualLoading` drives the action's spinner.
+   */
+  aiContextualOrder: string[] | null = null
+  aiContextualQuery: string | null = null
+  aiContextualLoading = false
 
   /**
    * Standard Red Notes: when true, the free-text portion of the advanced search
@@ -225,10 +244,16 @@ export class ItemListController
       renderedItems: observable,
       showDisplayOptionsMenu: observable,
       relevanceSortActive: observable,
+      aiContextualOrder: observable,
+      aiContextualQuery: observable,
+      aiContextualLoading: observable,
       searchCaseSensitive: observable,
 
       reloadItems: action,
       setRelevanceSortActive: action,
+      setAiContextualOrder: action,
+      clearAiContextualOrder: action,
+      setAiContextualLoading: action,
       setSearchCaseSensitive: action,
       reloadPanelTitle: action,
       reloadDisplayPreferences: action,
@@ -776,6 +801,15 @@ export class ItemListController
    * Falls back to substring order whenever the index can't handle the query.
    */
   private applySearchOrdering(items: ListableContentItem[]): ListableContentItem[] {
+    // First run the existing algorithmic ordering (relevance → index → BM25 →
+    // substring). The AI contextual re-rank is then layered ON TOP of that order,
+    // so it builds on — never replaces — the algorithmic pipeline.
+    const algorithmic = this.applyAlgorithmicOrdering(items)
+    return this.applyContextualAiOrdering(algorithmic)
+  }
+
+  /** The existing (non-AI-provider) ordering precedence. */
+  private applyAlgorithmicOrdering(items: ListableContentItem[]): ListableContentItem[] {
     const relevance = this.applyRelevanceOrdering(items)
     if (relevance) {
       return relevance
@@ -785,6 +819,76 @@ export class ItemListController
       return indexed
     }
     return this.applyAiSearchRanking(items)
+  }
+
+  /**
+   * Standard Red Notes: optional AI-assisted CONTEXTUAL re-ranking, layered on top
+   * of the algorithmic order. A no-op (returns the input unchanged) unless a
+   * "Search with AI" re-rank has completed FOR THE CURRENT free-text query — so
+   * the default-off path, and any query other than the one the user explicitly ran
+   * AI search on, behaves exactly like the algorithmic ordering.
+   *
+   * The stored ordering covers only the bounded top-N candidates that were sent to
+   * the provider; applyAiOrdering places those first (in the model's order) and
+   * keeps every other item in its existing relative position, so nothing the
+   * algorithmic search surfaced disappears.
+   */
+  private applyContextualAiOrdering(items: ListableContentItem[]): ListableContentItem[] {
+    if (!this.aiContextualOrder || this.aiContextualOrder.length === 0) {
+      return items
+    }
+    if (this.aiContextualQuery !== this.searchFreeText) {
+      return items
+    }
+    return applyAiOrdering(items, this.aiContextualOrder)
+  }
+
+  /**
+   * The bounded set of candidates the AI re-rank should operate on: the current
+   * top-N algorithmically-ordered items (titles + plain-text bodies), capped to
+   * keep exposure small. The React "Search with AI" action reads this, sends it to
+   * the provider, and hands the resulting order back via setAiContextualOrder.
+   */
+  getAiRerankCandidates(limit = DEFAULT_AI_RERANK_CANDIDATE_LIMIT): RerankCandidate[] {
+    return this.items.slice(0, limit).map((item) => ({
+      uuid: item.uuid,
+      title: item.title ?? '',
+      text: extractPlaintextFromNoteText(
+        (item as { text?: string }).text ?? '',
+        (item as { noteType?: NoteType }).noteType,
+      ),
+    }))
+  }
+
+  /** The free-text query the AI re-rank should be run for (matches what's applied). */
+  get aiRerankQuery(): string {
+    return this.searchFreeText
+  }
+
+  setAiContextualLoading = (loading: boolean): void => {
+    this.aiContextualLoading = loading
+  }
+
+  /**
+   * Store a completed AI re-rank ordering for a specific query and reorder the
+   * list. Ignored if the user has since changed the query (stale result).
+   */
+  setAiContextualOrder = (query: string, orderedUuids: string[]): void => {
+    if (query !== this.searchFreeText) {
+      return
+    }
+    this.aiContextualQuery = query
+    this.aiContextualOrder = orderedUuids
+    void this.reloadItems(ItemsReloadSource.DisplayOptionsChange)
+  }
+
+  /** Drop any AI ordering (e.g. when the query changes or search is cleared). */
+  clearAiContextualOrder = (): void => {
+    if (this.aiContextualOrder === null && this.aiContextualQuery === null) {
+      return
+    }
+    this.aiContextualOrder = null
+    this.aiContextualQuery = null
   }
 
   /**
@@ -1468,6 +1572,13 @@ export class ItemListController
     const isNowFiltering = text.trim().length > 0
 
     this.noteFilterText = text
+
+    // Standard Red Notes: any AI contextual re-rank was computed for the previous
+    // query text; once the query changes it no longer applies. Drop it so the list
+    // falls back to the algorithmic order until the user runs "Search with AI"
+    // again. (applyContextualAiOrdering also guards on query match, but clearing
+    // here keeps the action's "active" UI state honest.)
+    this.clearAiContextualOrder()
 
     // Standard Red Notes: auto-engage Relevance when a search begins, and revert
     // to the prior field sort when the query is cleared.

@@ -180,4 +180,83 @@ describe('item list controller', () => {
       expect(controller.createNewNoteController).toHaveBeenCalled()
     })
   })
+
+  describe('AI contextual search ordering', () => {
+    type TestItem = { uuid: string; title?: string; text?: string }
+    const items: TestItem[] = [
+      { uuid: 'a', title: 'Alpha' },
+      { uuid: 'b', title: 'Beta' },
+      { uuid: 'c', title: 'Gamma' },
+    ]
+
+    // Reach the private algorithmic+AI ordering composition.
+    const applyOrdering = (): TestItem[] =>
+      (controller as unknown as { applySearchOrdering: (i: TestItem[]) => TestItem[] }).applySearchOrdering(items)
+
+    beforeEach(() => {
+      // Disable the algorithmic relevance / index reorderings so the test isolates
+      // the AI contextual layer (relevance only engages with a query + flag). Turn
+      // the index + local BM25 paths OFF via prefs so they short-circuit to the
+      // unchanged substring order before the AI layer runs on top.
+      ;(controller as unknown as { preferences: { getValue: jest.Mock } }).preferences = {
+        getValue: jest.fn((key: string) => {
+          if (key === 'searchIndexEnabled' || key === 'aiPoweredSearchEnabled') {
+            return false
+          }
+          return undefined
+        }),
+      }
+      runInAction(() => {
+        controller.relevanceSortActive = false
+        controller.noteFilterText = ''
+      })
+    })
+
+    it('default off: ordering is unchanged when no AI order is set', () => {
+      runInAction(() => {
+        controller.noteFilterText = 'alpha'
+      })
+      expect(applyOrdering().map((i) => i.uuid)).toEqual(['a', 'b', 'c'])
+    })
+
+    it('applies the AI ordering when it matches the current query', () => {
+      runInAction(() => {
+        controller.noteFilterText = 'alpha'
+      })
+      controller.setAiContextualOrder('alpha', ['c', 'a'])
+      expect(applyOrdering().map((i) => i.uuid)).toEqual(['c', 'a', 'b'])
+    })
+
+    it('ignores a stored order computed for a different query', () => {
+      runInAction(() => {
+        controller.noteFilterText = 'old'
+      })
+      controller.setAiContextualOrder('old', ['c', 'a'])
+      // User changed the query; the stale order must not apply.
+      runInAction(() => {
+        controller.aiContextualQuery = 'old'
+        controller.noteFilterText = 'new'
+      })
+      expect(applyOrdering().map((i) => i.uuid)).toEqual(['a', 'b', 'c'])
+    })
+
+    it('setAiContextualOrder ignores a result whose query no longer matches', () => {
+      runInAction(() => {
+        controller.noteFilterText = 'current'
+      })
+      // A late-arriving result for a previous query is dropped.
+      controller.setAiContextualOrder('stale', ['c', 'a'])
+      expect(controller.aiContextualOrder).toBeNull()
+    })
+
+    it('clearAiContextualOrder resets the stored ordering', () => {
+      runInAction(() => {
+        controller.noteFilterText = 'alpha'
+      })
+      controller.setAiContextualOrder('alpha', ['c', 'a'])
+      controller.clearAiContextualOrder()
+      expect(controller.aiContextualOrder).toBeNull()
+      expect(controller.aiContextualQuery).toBeNull()
+    })
+  })
 })

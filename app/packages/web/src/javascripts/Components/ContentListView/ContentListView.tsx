@@ -368,6 +368,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             )}
             {(!shouldUseTableView || isMobileScreen) && (
               <SearchBar
+                application={application}
                 itemListController={itemListController}
                 searchOptionsController={searchOptionsController}
                 hideOptions={shouldUseTableView}

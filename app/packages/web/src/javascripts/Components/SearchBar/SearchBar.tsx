@@ -3,7 +3,9 @@ import { KeyboardKey } from '@standardnotes/ui-services'
 import { useCallback, KeyboardEventHandler, useRef } from 'react'
 import SearchOptions from '@/Components/SearchOptions/SearchOptions'
 import AdvancedSearchOptions from '@/Components/SearchOptions/AdvancedSearchOptions'
+import AiContextualSearch from '@/Components/SearchOptions/AiContextualSearch'
 import { SearchOptionsController } from '@/Controllers/SearchOptionsController'
+import { WebApplication } from '@/Application/WebApplication'
 import Icon from '../Icon/Icon'
 import DecoratedInput from '../Input/DecoratedInput'
 import { observer } from 'mobx-react-lite'
@@ -12,12 +14,13 @@ import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/snjs'
 
 type Props = {
+  application: WebApplication
   itemListController: ItemListController
   searchOptionsController: SearchOptionsController
   hideOptions?: boolean
 }
 
-const SearchBar = ({ itemListController, searchOptionsController, hideOptions = false }: Props) => {
+const SearchBar = ({ application, itemListController, searchOptionsController, hideOptions = false }: Props) => {
   const searchBarRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -71,6 +74,9 @@ const SearchBar = ({ itemListController, searchOptionsController, hideOptions = 
       >
         <div className="mt-3 flex items-center px-1">
           <AdvancedSearchOptions itemListController={itemListController} />
+        </div>
+        <div className="px-1">
+          <AiContextualSearch application={application} itemListController={itemListController} />
         </div>
         <SearchOptions searchOptions={searchOptionsController} />
       </div>
