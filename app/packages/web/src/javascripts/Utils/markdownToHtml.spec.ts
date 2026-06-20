@@ -258,6 +258,50 @@ describe('markdownToHtml', () => {
     })
   })
 
+  describe('math (native KaTeX placeholders)', () => {
+    it('emits an inline math placeholder for $...$', () => {
+      const html = markdownToHtml('mass is $E=mc^2$ today')
+      expect(html).toContain('class="md-katex"')
+      expect(html).toContain('data-md-katex-tex="E=mc^2"')
+      expect(html).toContain('data-md-katex-display="0"')
+    })
+
+    it('emits a block (display) math placeholder for $$...$$', () => {
+      const html = markdownToHtml('$$\n\\int_0^1 x dx\n$$')
+      expect(html).toContain('data-md-katex-display="1"')
+      expect(html).toContain('\\int_0^1 x dx')
+    })
+
+    it('emits a single-line block placeholder for $$x$$', () => {
+      const html = markdownToHtml('$$a+b$$')
+      expect(html).toContain('data-md-katex-display="1"')
+      expect(html).toContain('data-md-katex-tex="a+b"')
+    })
+
+    it('does not render math inside an inline code span', () => {
+      const html = markdownToHtml('use `$x$` literally')
+      expect(html).toContain('<code>$x$</code>')
+      expect(html).not.toContain('md-katex')
+    })
+
+    it('does not render math inside a fenced code block', () => {
+      const html = markdownToHtml('```\n$x^2$\n```')
+      expect(html).toBe('<pre><code>$x^2$</code></pre>')
+      expect(html).not.toContain('md-katex')
+    })
+
+    it('does not turn a price into math', () => {
+      const html = markdownToHtml('it costs $5 and $7 total')
+      expect(html).not.toContain('md-katex')
+    })
+
+    it('does not let emphasis mangle latex containing underscores', () => {
+      const html = markdownToHtml('$a_b_c$')
+      expect(html).toContain('data-md-katex-tex="a_b_c"')
+      expect(html).not.toContain('<em>')
+    })
+  })
+
   describe('combined document', () => {
     it('renders a multi-feature document', () => {
       const input = ['# Title', '', 'Some **bold** and `code`.', '', '- item one', '- item two', '', '> quote'].join(
