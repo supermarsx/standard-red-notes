@@ -21,6 +21,7 @@ import { isIOS, TAB_COMMAND } from '@standardnotes/ui-services'
 import {
   ChangeEventHandler,
   forwardRef,
+  KeyboardEventHandler,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -29,6 +30,7 @@ import {
   FocusEvent,
 } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { applyAction, decideBackspace, decideInsertion } from '@/Components/SuperEditor/Utils/AutoPair/autoPair'
 
 type Props = {
   application: WebApplication
@@ -110,15 +112,59 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
       isPendingLocalPropagation,
     ])
 
+    const commitText = useCallback(
+      (text: string) => {
+        setEditorText(text)
+        setIsPendingLocalPropagation(true)
+        void controller.saveAndAwaitLocalPropagation({ text: text, isUserModified: true }).then(() => {
+          setIsPendingLocalPropagation(false)
+        })
+      },
+      [controller],
+    )
+
     const onTextAreaChange: ChangeEventHandler<HTMLTextAreaElement> = ({ currentTarget }) => {
-      const text = currentTarget.value
+      commitText(currentTarget.value)
+    }
 
-      setEditorText(text)
+    /**
+     * Auto-pair brackets/quotes in the plain <textarea>, mirroring the Super
+     * editor. Uses the same pure `autoPair` helper to decide the action, then
+     * mutates the textarea's value + selection directly and routes the change
+     * through `commitText` so the note saves. Returns early (lets the browser
+     * handle the key normally) when the helper decides `none`, so existing
+     * behaviour — including the Tab-to-spaces command handler, which fires on a
+     * different key — is preserved. IME composition is skipped so multi-key
+     * input is never auto-paired.
+     */
+    const onTextAreaKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = (event) => {
+      if (locked || event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) {
+        return
+      }
 
-      setIsPendingLocalPropagation(true)
+      const target = event.currentTarget
+      const ctx = {
+        text: target.value,
+        selection: { start: target.selectionStart ?? 0, end: target.selectionEnd ?? 0 },
+      }
 
-      void controller.saveAndAwaitLocalPropagation({ text: text, isUserModified: true }).then(() => {
-        setIsPendingLocalPropagation(false)
+      const action =
+        event.key === 'Backspace'
+          ? decideBackspace(ctx)
+          : event.key.length === 1
+            ? decideInsertion(event.key, ctx)
+            : { type: 'none' as const }
+
+      if (action.type === 'none') {
+        return
+      }
+
+      event.preventDefault()
+      const result = applyAction(action, ctx)
+      commitText(result.text)
+      // Restore caret/selection after React re-renders the controlled value.
+      requestAnimationFrame(() => {
+        target.setSelectionRange(result.selection.start, result.selection.end)
       })
     }
 
@@ -338,6 +384,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
             dir="auto"
             id={ElementIds.NoteTextEditor}
             onChange={onTextAreaChange}
+            onKeyDown={onTextAreaKeyDown}
             onFocus={onContentFocus}
             onBlur={onContentBlur}
             readOnly={locked}

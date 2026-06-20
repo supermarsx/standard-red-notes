@@ -35,6 +35,7 @@ import PasswordPlugin from './Plugins/PasswordPlugin/PasswordPlugin'
 import { CheckListPlugin } from './Plugins/CheckListPlugin'
 import GoogleDocsPastePlugin from './Plugins/GoogleDocsPastePlugin/GoogleDocsPastePlugin'
 import MultiCursorPlugin from './Plugins/MultiCursorPlugin/MultiCursorPlugin'
+import AutoPairPlugin from './Plugins/AutoPairPlugin/AutoPairPlugin'
 import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
 import { WebApplication } from '@/Application/WebApplication'
 
@@ -150,6 +151,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <AutoLinkPlugin />
       <GoogleDocsPastePlugin />
       <MultiCursorPlugin />
+      <AutoPairPlugin />
       {!readonly && floatingAnchorElem && (
         <>
           <DraggableBlockPlugin anchorElem={floatingAnchorElem} />
