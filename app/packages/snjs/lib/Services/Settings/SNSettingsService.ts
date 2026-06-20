@@ -13,7 +13,8 @@ export class SettingsService extends AbstractService implements SettingsClientIn
     [EmailBackupFrequency.Disabled]: 'No email backups',
     [EmailBackupFrequency.Daily]: 'Daily',
     [EmailBackupFrequency.Weekly]: 'Weekly',
-    [EmailBackupFrequency.Monthly]: 'Monthly',
+    // 'monthly' string used directly until the published @standardnotes/settings adds EmailBackupFrequency.Monthly
+    ['monthly']: 'Monthly',
   }
 
   constructor(
