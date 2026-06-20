@@ -25,6 +25,7 @@ export class StatusService extends AbstractService<StatusServiceEvent, string> i
     'survivor-switch': 0,
     conflicts: 0,
     'recent-notes': 0,
+    achievements: 0,
   }
 
   getPreferencesBubbleCount(preferencePaneId: PreferencePaneId): number {

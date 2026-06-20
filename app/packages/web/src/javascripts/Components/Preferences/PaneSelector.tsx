@@ -18,6 +18,7 @@ import Shares from './Panes/Shares/Shares'
 import SurvivorSwitch from './Panes/SurvivorSwitch/SurvivorSwitch'
 import Conflicts from './Panes/Conflicts/Conflicts'
 import RecentNotes from './Panes/RecentNotes/RecentNotes'
+import Achievements from './Panes/Achievements/Achievements'
 
 const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = ({
   menu,
@@ -42,6 +43,8 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <Conflicts application={application} />
     case 'recent-notes':
       return <RecentNotes application={application} />
+    case 'achievements':
+      return <Achievements application={application} />
     case 'home-server':
       return <HomeServer />
     case 'security':

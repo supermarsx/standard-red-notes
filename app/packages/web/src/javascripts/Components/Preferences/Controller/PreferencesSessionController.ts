@@ -52,6 +52,9 @@ export class PreferencesSessionController {
     // Standard Red Notes: recently-opened notes history pane.
     menuItems.push({ id: 'recent-notes', label: 'Recent Notes', icon: 'history', order: 9 })
 
+    // Standard Red Notes: gamified Achievements pane (badges derived from usage).
+    menuItems.push({ id: 'achievements', label: 'Achievements', icon: 'star', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()
