@@ -11,24 +11,11 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { toEmbedUrl } from './toEmbedUrl'
 
 export type EmbedData = { url: string }
 
 const DEFAULT_EMBED: EmbedData = { url: '' }
-
-// Normalize common share URLs to their embeddable form.
-function toEmbedUrl(raw: string): string {
-  const url = raw.trim()
-  const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/)
-  if (yt) {
-    return `https://www.youtube.com/embed/${yt[1]}`
-  }
-  const vimeo = url.match(/vimeo\.com\/(\d+)/)
-  if (vimeo) {
-    return `https://player.vimeo.com/video/${vimeo[1]}`
-  }
-  return url
-}
 
 function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -79,13 +66,20 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
           />
         </div>
       ) : isHttps ? (
+        /* 16:9 responsive container so the video fills the width instead of
+           rendering as a thin strip; the iframe stretches to fill it. */
         <div className="aspect-video w-full">
+          {/* Safety tradeoff: the YouTube/Vimeo player needs scripts + same-origin
+              (its embed shell) + presentation/popups (fullscreen, "watch on
+              YouTube"). A stricter sandbox (e.g. dropping allow-scripts or
+              allow-same-origin) blocks the player from loading/playing. */}
           <iframe
             title="Embedded content"
             src={embedUrl}
             className="h-full w-full"
-            sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
+            sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
             referrerPolicy="no-referrer"
           />
         </div>
