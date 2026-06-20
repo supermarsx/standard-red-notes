@@ -25,6 +25,8 @@ import { CalendarNode } from './CalendarNode'
 import { DataTableNode } from './DataTableNode'
 import { CalloutNode } from './CalloutNode'
 import { EmbedNode } from './EmbedNode'
+import { MathNode } from './MathNode'
+import { InlineMathNode } from './InlineMathNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -58,6 +60,8 @@ const CommonNodes = [
   DataTableNode,
   CalloutNode,
   EmbedNode,
+  MathNode,
+  InlineMathNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

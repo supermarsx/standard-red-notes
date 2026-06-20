@@ -36,6 +36,8 @@ import { GetCalendarBlockOption } from '../Blocks/Calendar'
 import { GetDataviewBlockOption } from '../Blocks/Dataview'
 import { GetCalloutBlockOption } from '../Blocks/Callout'
 import { GetEmbedBlockOption } from '../Blocks/Embed'
+import { GetMathBlockOption } from '../Blocks/Math'
+import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -77,6 +79,8 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetDataviewBlockOption(editor),
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),
+      GetMathBlockOption(editor),
+      GetInlineMathBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

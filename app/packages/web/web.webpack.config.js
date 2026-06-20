@@ -126,6 +126,16 @@ module.exports = (env) => {
           },
         },
         {
+          // Font files referenced via url() from imported stylesheets (e.g. the
+          // KaTeX math fonts in katex/dist/katex.min.css). Emitting them as
+          // resources keeps math rendering fully offline (no CDN/remote fonts).
+          test: /\.(woff2?|ttf|eot)$/,
+          type: 'asset/resource',
+          generator: {
+            filename: 'assets/fonts/[name][ext]',
+          },
+        },
+        {
           test: /\.(js|tsx?)$/,
           /**
            * Exclude all node_modules, except for those we need to run through our babel rules because

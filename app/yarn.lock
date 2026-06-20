@@ -12145,6 +12145,7 @@ __metadata:
     identity-obj-proxy: ^3.0.0
     jest: ^30.4.2
     jest-environment-jsdom: ^30.4.1
+    katex: ^0.16.47
     lexical: 0.45.0
     lint-staged: ">=17"
     mermaid: ^11.15.0
@@ -25827,7 +25828,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"katex@npm:^0.16.25":
+"katex@npm:^0.16.25, katex@npm:^0.16.47":
   version: 0.16.47
   resolution: "katex@npm:0.16.47"
   dependencies:

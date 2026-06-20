@@ -74,6 +74,8 @@ import { CalendarBlock } from '../Blocks/Calendar'
 import { DataviewBlock } from '../Blocks/Dataview'
 import { CalloutBlock } from '../Blocks/Callout'
 import { EmbedBlock } from '../Blocks/Embed'
+import { MathBlock } from '../Blocks/Math'
+import { InlineMathBlock } from '../Blocks/InlineMath'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -1401,6 +1403,16 @@ const ToolbarPlugin = () => {
             name={EmbedBlock.name}
             iconName={EmbedBlock.iconName}
             onClick={() => EmbedBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={MathBlock.name}
+            iconName={MathBlock.iconName}
+            onClick={() => MathBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={InlineMathBlock.name}
+            iconName={InlineMathBlock.iconName}
+            onClick={() => InlineMathBlock.onSelect(editor)}
           />
         </Menu>
       </Popover>
