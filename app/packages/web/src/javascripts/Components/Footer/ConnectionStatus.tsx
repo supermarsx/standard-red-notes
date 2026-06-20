@@ -1,6 +1,6 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { classNames } from '@standardnotes/snjs'
-import { FunctionComponent } from 'react'
+import { FunctionComponent, memo } from 'react'
 import { useConnectionStatus, ConnectionStatusKind } from '@/Hooks/useConnectionStatus'
 
 type Props = {
@@ -75,4 +75,9 @@ const ConnectionStatusIndicator: FunctionComponent<Props> = ({ application }) =>
   )
 }
 
-export default ConnectionStatusIndicator
+/**
+ * Memoized so the chip only re-renders when the resolved status object actually
+ * changes (the hook already de-dupes by status kind / lastSyncDate), not on
+ * every footer render triggered by unrelated state.
+ */
+export default memo(ConnectionStatusIndicator)
