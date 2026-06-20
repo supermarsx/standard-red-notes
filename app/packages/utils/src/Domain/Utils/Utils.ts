@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { sanitize } from 'dompurify'
+import { addHook, sanitize } from 'dompurify'
 import { escape, find, isArray, mergeWith, remove, uniq, uniqWith } from 'lodash'
 import { AnyRecord } from '@standardnotes/common'
 
@@ -608,8 +608,63 @@ export function convertTimestampToMilliseconds(timestamp: number): number {
   }
 }
 
+/**
+ * Defense-in-depth DOMPurify policy for every `dangerouslySetInnerHTML` sink in
+ * the app (markdown preview, shared-note viewer, note list preview, alert
+ * dialogs). DOMPurify's defaults already strip `<script>`, `on*` handlers,
+ * `javascript:`/`data:` URLs and `<iframe>`; this config makes the intent
+ * explicit and additionally forbids tags that are pure styling/embedding/UI
+ * vectors (`<style>` can exfiltrate via CSS / break layout, `<form>` enables
+ * action hijacking, `<iframe>`/`<object>`/`<embed>` load third-party content).
+ *
+ * `data-*`, `class`, and `target` are intentionally left allowed so the native
+ * KaTeX math placeholders (`<span class="md-katex" data-md-katex-tex="...">`)
+ * and `target="_blank"` links survive sanitization. The math placeholder
+ * carries only inert data; KaTeX hydrates it later with `trust:false` output
+ * (see markdownMath.ts), so no script can ride in on those attributes.
+ */
+// Only allow http(s)/mailto/tel absolute URLs and scheme-less relative URLs,
+// anchors, and query strings. Any other `<scheme>:` value (notably `data:`,
+// `javascript:`, `vbscript:`, `blob:`, `file:`) fails this test and is dropped.
+const ALLOWED_URI_REGEXP = /^(?:(?:https?|mailto|tel):|[#/?]|[^:]*$)/i
+// Belt-and-suspenders scheme blocklist applied by the hook below. DOMPurify
+// special-cases `data:` URIs on media tags (img/audio/video/source), so the
+// ALLOWED_URI_REGEXP alone does not strip a `data:` URI from an `<img src>`.
+const DANGEROUS_URI_SCHEME = /^\s*(?:data|javascript|vbscript|blob|file):/i
+const URI_BEARING_ATTRS = ['src', 'href', 'xlink:href', 'action', 'formaction', 'data', 'poster', 'background']
+
+const SANITIZE_CONFIG = {
+  FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'form', 'base', 'link', 'meta'],
+  FORBID_ATTR: ['srcset'],
+  ADD_ATTR: ['target'],
+  ALLOWED_URI_REGEXP,
+}
+
+let sanitizeHooksInstalled = false
+function ensureSanitizeHooks(): void {
+  if (sanitizeHooksInstalled) {
+    return
+  }
+  sanitizeHooksInstalled = true
+  // Strip any dangerous-scheme URL that slipped past ALLOWED_URI_REGEXP (e.g. a
+  // `data:` URI on a media element). Runs on every element after attribute
+  // sanitization, removing only the offending URL attribute (not the element),
+  // so benign content around it is preserved.
+  addHook('afterSanitizeAttributes', (node: Element) => {
+    if (typeof node.hasAttribute !== 'function') {
+      return
+    }
+    for (const attr of URI_BEARING_ATTRS) {
+      if (node.hasAttribute(attr) && DANGEROUS_URI_SCHEME.test(node.getAttribute(attr) ?? '')) {
+        node.removeAttribute(attr)
+      }
+    }
+  })
+}
+
 export function sanitizeHtmlString(html: string): string {
-  return sanitize(html)
+  ensureSanitizeHooks()
+  return sanitize(html, SANITIZE_CONFIG)
 }
 
 export function escapeHtmlString(html: string): string {

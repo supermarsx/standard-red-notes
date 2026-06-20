@@ -104,7 +104,21 @@ async function renderPlaceholder(el: Element): Promise<void> {
   const displayMode = el.getAttribute(MATH_DISPLAY_ATTR) === '1'
   try {
     const katex = await loadKatex()
-    el.innerHTML = katex.renderToString(tex, { throwOnError: false, displayMode, output: 'html' })
+    // SECURITY: this is the one place that writes innerHTML *after* the markdown
+    // output has already passed through sanitizeHtmlString, so KaTeX's own output
+    // must be safe by construction. We pin `trust: false` and `strict: 'ignore'`
+    // so the HTML/URL extensions (`\href`, `\url`, `\htmlData`, `\htmlClass`,
+    // `\includegraphics`) stay DISABLED — they are the only KaTeX features that
+    // can emit raw href/HTML. With these off, KaTeX HTML-escapes all user text
+    // (e.g. `\text{<img onerror=...>}` becomes inert `&lt;img...`), so no markup
+    // injected via `data-md-katex-tex` can execute. Do NOT set `trust: true`.
+    el.innerHTML = katex.renderToString(tex, {
+      throwOnError: false,
+      displayMode,
+      output: 'html',
+      trust: false,
+      strict: 'ignore',
+    })
   } catch {
     // Leave the escaped `$...$` fallback text in place on unexpected failure.
   }
