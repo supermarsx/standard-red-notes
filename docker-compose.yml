@@ -195,7 +195,7 @@ services:
       - standard-red-notes
 
   cache:
-    image: redis:7.4-alpine
+    image: redis:8-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
