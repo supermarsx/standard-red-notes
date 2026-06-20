@@ -62,7 +62,7 @@ import { IndentBlock, OutdentBlock } from '../Blocks/IndentOutdent'
 import { ParagraphBlock } from '../Blocks/Paragraph'
 import { QuoteBlock } from '../Blocks/Quote'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
-import { PrefKey, classNames } from '@standardnotes/snjs'
+import { LocalPrefKey, PrefKey, classNames } from '@standardnotes/snjs'
 import { SUPER_TOGGLE_SEARCH, SUPER_TOGGLE_TOOLBAR } from '@standardnotes/ui-services'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
@@ -104,6 +104,10 @@ import {
 } from '../CheckListAutoMovePlugin/autoMoveSetting'
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
+import { useLocalPreference } from '@/Hooks/usePreference'
+import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
+import CustomizeToolbarDialog from './CustomizeToolbarDialog'
+import { Fragment } from 'react'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -376,6 +380,10 @@ const ToolbarPlugin = () => {
   }, [editor])
 
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Standard Red Notes: user-customizable toolbar layout (which buttons are
+  // shown + group order). Stored web-locally; default == full default toolbar.
+  const [toolbarConfig, setToolbarConfig] = useLocalPreference(LocalPrefKey.SuperToolbarConfig)
 
   const alwaysShowToolbar = usePreference(PrefKey.AlwaysShowSuperToolbar)
 
@@ -907,6 +915,284 @@ const ToolbarPlugin = () => {
   const popoverDocumentElement =
     document.getElementById(ElementIds.SuperEditor) ?? editor.getRootElement()?.parentElement ?? document.body
 
+  const openCustomizeDialog = useCallback(() => {
+    showModal('Customize toolbar', (onClose) => (
+      <CustomizeToolbarDialog
+        config={toolbarConfig}
+        onChange={(next) => setToolbarConfig(next)}
+        onClose={onClose}
+      />
+    ))
+  }, [showModal, toolbarConfig, setToolbarConfig])
+
+  // Declarative render map keyed by stable button id. The toolbar is rendered by
+  // iterating the config-resolved group/button order over this map, so adding,
+  // hiding, or reordering is driven entirely by the saved config. Buttons that
+  // were previously gated behind `canShowAllItems` (floating selection toolbar)
+  // render `null` there, preserving the exact prior behavior.
+  const buttonRenderers: Partial<Record<ToolbarButtonId, ReactNode>> = {
+    [ToolbarButtonId.Cut]: (
+      <ToolbarButton
+        name="Cut"
+        iconName="scissors"
+        disabled={!hasNonCollapsedSelection}
+        onSelect={handleClipboardCut}
+      />
+    ),
+    [ToolbarButtonId.Copy]: (
+      <ToolbarButton
+        name="Copy"
+        iconName="copy"
+        disabled={!hasNonCollapsedSelection}
+        onSelect={handleClipboardCopy}
+      />
+    ),
+    [ToolbarButtonId.Paste]: (
+      <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
+    ),
+    [ToolbarButtonId.TableOfContents]: canShowAllItems ? (
+      <ToolbarButton
+        name="Table of Contents"
+        iconName="toc"
+        active={isTOCOpen}
+        onSelect={() => setIsTOCOpen(!isTOCOpen)}
+        ref={tocAnchorRef}
+      />
+    ) : null,
+    [ToolbarButtonId.Search]: canShowAllItems ? (
+      <ToolbarButton
+        name="Search"
+        iconName="search"
+        onSelect={() => application.keyboardService.triggerCommand(SUPER_TOGGLE_SEARCH)}
+      />
+    ) : null,
+    [ToolbarButtonId.Undo]: canShowAllItems ? (
+      <ToolbarButton
+        name="Undo"
+        iconName="undo"
+        disabled={!canUndo}
+        onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
+      />
+    ) : null,
+    [ToolbarButtonId.Redo]: canShowAllItems ? (
+      <ToolbarButton
+        name="Redo"
+        iconName="redo"
+        disabled={!canRedo}
+        onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
+      />
+    ) : null,
+    [ToolbarButtonId.BlockStyle]: (
+      <ToolbarButton
+        name="Formatting options"
+        onSelect={() => {
+          setIsTextStyleMenuOpen(!isTextStyleMenuOpen)
+        }}
+        ref={textStyleAnchorRef}
+        className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.Bold]: (
+      <ToolbarButton
+        name="Bold"
+        iconName="bold"
+        active={isBold}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}
+      />
+    ),
+    [ToolbarButtonId.Italic]: (
+      <ToolbarButton
+        name="Italic"
+        iconName="italic"
+        active={isItalic}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic')}
+      />
+    ),
+    [ToolbarButtonId.Underline]: (
+      <ToolbarButton
+        name="Underline"
+        iconName="underline"
+        active={isUnderline}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
+      />
+    ),
+    [ToolbarButtonId.InlineCode]: (
+      <ToolbarButton
+        name="Inline Code"
+        iconName="code-tags"
+        active={isCode}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
+      />
+    ),
+    [ToolbarButtonId.Link]: (
+      <ToolbarButton
+        name="Link"
+        iconName="link"
+        active={!!linkNode}
+        onSelect={() => {
+          editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')
+        }}
+      />
+    ),
+    [ToolbarButtonId.TextStyleMenu]: (
+      <ToolbarButton
+        name="Text style"
+        onSelect={() => {
+          setIsTextFormatMenuOpen(!isTextFormatMenuOpen)
+        }}
+        ref={textFormatAnchorRef}
+        className={isTextFormatMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.TextColor]: (
+      <ToolbarButton
+        name="Text color"
+        onSelect={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
+        ref={textColorAnchorRef}
+        className={isTextColorMenuOpen ? 'md:bg-default' : ''}
+      >
+        <span className="flex flex-col items-center justify-center leading-none">
+          <span className="text-sm font-semibold">A</span>
+          <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
+        </span>
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.HighlightColor]: (
+      <ToolbarButton
+        name="Highlight color"
+        onSelect={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
+        ref={bgColorAnchorRef}
+        className={isBgColorMenuOpen ? 'md:bg-default' : ''}
+      >
+        <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-4 md:w-4">
+          H
+        </span>
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.DecreaseFontSize]: (
+      <ToolbarButton name="Decrease font size" onSelect={() => stepFontSize(-1)}>
+        <span className="text-xs font-semibold leading-none">A&minus;</span>
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.IncreaseFontSize]: (
+      <ToolbarButton name="Increase font size" onSelect={() => stepFontSize(1)}>
+        <span className="text-sm font-semibold leading-none">A+</span>
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.FontFamily]: (
+      <ToolbarButton
+        name="Font family"
+        onSelect={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
+        ref={fontFamilyAnchorRef}
+        className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.BulletedList]: (
+      <ToolbarButton
+        name="Bulleted List"
+        iconName="list-bulleted"
+        active={blockType === 'bullet'}
+        onSelect={() => toggleList('bullet')}
+      />
+    ),
+    [ToolbarButtonId.NumberedList]: (
+      <ToolbarButton
+        name="Numbered List"
+        iconName="list-numbered"
+        active={blockType === 'number'}
+        onSelect={() => toggleList('number')}
+      />
+    ),
+    [ToolbarButtonId.CodeBlock]: (
+      <ToolbarButton name="Code Block" iconName="code" active={blockType === 'code'} onSelect={insertCodeBlock} />
+    ),
+    [ToolbarButtonId.ChangeCase]: (
+      <ToolbarButton
+        name="Change case"
+        onSelect={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
+        ref={caseAnchorRef}
+        className={isCaseMenuOpen ? 'md:bg-default' : ''}
+      >
+        <span className="text-xs font-semibold leading-none">aA</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.Alignment]: (
+      <ToolbarButton
+        name="Alignment"
+        onSelect={() => {
+          setIsAlignmentMenuOpen(!isAlignmentMenuOpen)
+        }}
+        ref={alignmentAnchorRef}
+        className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="align-left" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.Indent]: (
+      <ToolbarButton
+        name={IndentBlock.name}
+        iconName={IndentBlock.iconName}
+        onSelect={() => IndentBlock.onSelect(editor)}
+      />
+    ),
+    [ToolbarButtonId.Outdent]: (
+      <ToolbarButton
+        name={OutdentBlock.name}
+        iconName={OutdentBlock.iconName}
+        onSelect={() => OutdentBlock.onSelect(editor)}
+      />
+    ),
+    [ToolbarButtonId.InsertMenu]: canShowAllItems ? (
+      <ToolbarButton
+        name="Insert"
+        onSelect={() => {
+          setIsInsertMenuOpen(!isInsertMenuOpen)
+        }}
+        ref={insertAnchorRef}
+        className={isInsertMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="add" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ) : null,
+    [ToolbarButtonId.NoteFromSelection]: (
+      <ToolbarButton
+        name={
+          <>
+            <div className="mb-1 font-semibold">Create new note from selection</div>
+            <div className="max-w-[35ch] text-xs">
+              Creates a new note containing the current selection and replaces the selection with a link to the new
+              note.
+            </div>
+          </>
+        }
+        iconName="notes"
+        onSelect={() => {
+          editor.dispatchCommand(CREATE_NOTE_FROM_SELECTION_COMMAND, undefined)
+        }}
+        disabled={!hasNonCollapsedSelection}
+      />
+    ),
+    [ToolbarButtonId.AI]: <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />,
+  }
+
+  // Resolve the config into the ordered, filtered groups to render, then emit
+  // each group's buttons with a separator between non-empty groups.
+  const resolvedGroups = applyToolbarConfig(toolbarConfig).filter((group) =>
+    group.buttons.some((button) => buttonRenderers[button.id] != null),
+  )
+
   return (
     <>
       {modal}
@@ -949,230 +1235,14 @@ const ToolbarPlugin = () => {
             ref={toolbarRef}
             store={toolbarStore}
           >
-            {/* Clipboard group */}
-            <ToolbarButton
-              name="Cut"
-              iconName="scissors"
-              disabled={!hasNonCollapsedSelection}
-              onSelect={handleClipboardCut}
-            />
-            <ToolbarButton
-              name="Copy"
-              iconName="copy"
-              disabled={!hasNonCollapsedSelection}
-              onSelect={handleClipboardCopy}
-            />
-            <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
-            <ToolbarSeparator />
-            {canShowAllItems && (
-              <>
-                {/* History / navigation group */}
-                <ToolbarButton
-                  name="Table of Contents"
-                  iconName="toc"
-                  active={isTOCOpen}
-                  onSelect={() => setIsTOCOpen(!isTOCOpen)}
-                  ref={tocAnchorRef}
-                />
-                <ToolbarButton
-                  name="Search"
-                  iconName="search"
-                  onSelect={() => application.keyboardService.triggerCommand(SUPER_TOGGLE_SEARCH)}
-                />
-                <ToolbarButton
-                  name="Undo"
-                  iconName="undo"
-                  disabled={!canUndo}
-                  onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
-                />
-                <ToolbarButton
-                  name="Redo"
-                  iconName="redo"
-                  disabled={!canRedo}
-                  onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
-                />
-                <ToolbarSeparator />
-              </>
-            )}
-            {/* Block style group */}
-            <ToolbarButton
-              name="Formatting options"
-              onSelect={() => {
-                setIsTextStyleMenuOpen(!isTextStyleMenuOpen)
-              }}
-              ref={textStyleAnchorRef}
-              className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
-            >
-              <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-              <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
-            </ToolbarButton>
-            <ToolbarSeparator />
-            {/* Text style group */}
-            <ToolbarButton
-              name="Bold"
-              iconName="bold"
-              active={isBold}
-              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}
-            />
-            <ToolbarButton
-              name="Italic"
-              iconName="italic"
-              active={isItalic}
-              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic')}
-            />
-            <ToolbarButton
-              name="Underline"
-              iconName="underline"
-              active={isUnderline}
-              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
-            />
-            <ToolbarButton
-              name="Inline Code"
-              iconName="code-tags"
-              active={isCode}
-              onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
-            />
-            <ToolbarButton
-              name="Link"
-              iconName="link"
-              active={!!linkNode}
-              onSelect={() => {
-                editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')
-              }}
-            />
-            <ToolbarButton
-              name="Text style"
-              onSelect={() => {
-                setIsTextFormatMenuOpen(!isTextFormatMenuOpen)
-              }}
-              ref={textFormatAnchorRef}
-              className={isTextFormatMenuOpen ? 'md:bg-default' : ''}
-            >
-              <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-              <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
-            </ToolbarButton>
-            <ToolbarSeparator />
-            {/* Color / font group */}
-            <ToolbarButton
-              name="Text color"
-              onSelect={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
-              ref={textColorAnchorRef}
-              className={isTextColorMenuOpen ? 'md:bg-default' : ''}
-            >
-              <span className="flex flex-col items-center justify-center leading-none">
-                <span className="text-sm font-semibold">A</span>
-                <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
-              </span>
-            </ToolbarButton>
-            <ToolbarButton
-              name="Highlight color"
-              onSelect={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
-              ref={bgColorAnchorRef}
-              className={isBgColorMenuOpen ? 'md:bg-default' : ''}
-            >
-              <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-4 md:w-4">
-                H
-              </span>
-            </ToolbarButton>
-            <ToolbarButton name="Decrease font size" onSelect={() => stepFontSize(-1)}>
-              <span className="text-xs font-semibold leading-none">A&minus;</span>
-            </ToolbarButton>
-            <ToolbarButton name="Increase font size" onSelect={() => stepFontSize(1)}>
-              <span className="text-sm font-semibold leading-none">A+</span>
-            </ToolbarButton>
-            <ToolbarButton
-              name="Font family"
-              onSelect={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
-              ref={fontFamilyAnchorRef}
-              className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
-            >
-              <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-              <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
-            </ToolbarButton>
-            <ToolbarSeparator />
-            {/* Paragraph / list group */}
-            <ToolbarButton
-              name="Bulleted List"
-              iconName="list-bulleted"
-              active={blockType === 'bullet'}
-              onSelect={() => toggleList('bullet')}
-            />
-            <ToolbarButton
-              name="Numbered List"
-              iconName="list-numbered"
-              active={blockType === 'number'}
-              onSelect={() => toggleList('number')}
-            />
-            <ToolbarButton
-              name="Code Block"
-              iconName="code"
-              active={blockType === 'code'}
-              onSelect={insertCodeBlock}
-            />
-            <ToolbarButton
-              name="Change case"
-              onSelect={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
-              ref={caseAnchorRef}
-              className={isCaseMenuOpen ? 'md:bg-default' : ''}
-            >
-              <span className="text-xs font-semibold leading-none">aA</span>
-              <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton
-              name="Alignment"
-              onSelect={() => {
-                setIsAlignmentMenuOpen(!isAlignmentMenuOpen)
-              }}
-              ref={alignmentAnchorRef}
-              className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
-            >
-              <Icon type="align-left" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-              <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton
-              name={IndentBlock.name}
-              iconName={IndentBlock.iconName}
-              onSelect={() => IndentBlock.onSelect(editor)}
-            />
-            <ToolbarButton
-              name={OutdentBlock.name}
-              iconName={OutdentBlock.iconName}
-              onSelect={() => OutdentBlock.onSelect(editor)}
-            />
-            <ToolbarSeparator />
-            {/* Insert group */}
-            {canShowAllItems && (
-              <ToolbarButton
-                name="Insert"
-                onSelect={() => {
-                  setIsInsertMenuOpen(!isInsertMenuOpen)
-                }}
-                ref={insertAnchorRef}
-                className={isInsertMenuOpen ? 'md:bg-default' : ''}
-              >
-                <Icon type="add" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-                <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
-              </ToolbarButton>
-            )}
-            <ToolbarButton
-              name={
-                <>
-                  <div className="mb-1 font-semibold">Create new note from selection</div>
-                  <div className="max-w-[35ch] text-xs">
-                    Creates a new note containing the current selection and replaces the selection with a link to the
-                    new note.
-                  </div>
-                </>
-              }
-              iconName="notes"
-              onSelect={() => {
-                editor.dispatchCommand(CREATE_NOTE_FROM_SELECTION_COMMAND, undefined)
-              }}
-              disabled={!hasNonCollapsedSelection}
-            />
-            <ToolbarSeparator />
-            {/* AI group */}
-            <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />
+            {resolvedGroups.map((group, groupIndex) => (
+              <Fragment key={group.id}>
+                {groupIndex > 0 && <ToolbarSeparator />}
+                {group.buttons.map((button) => (
+                  <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                ))}
+              </Fragment>
+            ))}
           </Toolbar>
           {isMobile && (
             <button
@@ -1512,6 +1582,8 @@ const ToolbarPlugin = () => {
             iconName={FootnoteBlock.iconName}
             onClick={() => FootnoteBlock.onSelect(editor)}
           />
+          <MenuItemSeparator />
+          <ToolbarMenuItem name="Customize toolbar" iconName="settings" onClick={openCustomizeDialog} />
         </Menu>
       </Popover>
       <Popover

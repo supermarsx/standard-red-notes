@@ -11,6 +11,20 @@ import { NativeFeatureIdentifier } from '@standardnotes/features'
  */
 export type ColorSchemeMode = 'auto' | 'light' | 'dark'
 
+/**
+ * Standard Red Notes: persisted shape for the user-customizable Super editor
+ * toolbar. `groupOrder` is a list of stable group ids (any not listed fall back
+ * to their default position); `hiddenButtonIds` lists buttons the user turned
+ * off. Both empty == the full default toolbar (a no-op). The id strings and the
+ * filter/order logic live web-side in the ToolbarPlugin's ToolbarConfig module;
+ * we keep the type structural here so this published-models-free local pref can
+ * be declared without a services -> web dependency.
+ */
+export type SuperToolbarConfig = {
+  groupOrder: string[]
+  hiddenButtonIds: string[]
+}
+
 export enum LocalPrefKey {
   ListPaneCollapsed = 'listPaneCollapsed',
   NavigationPaneCollapsed = 'navigationPaneCollapsed',
@@ -31,6 +45,10 @@ export enum LocalPrefKey {
   // coding ligatures for monospace) across the editors. Web-only, stored
   // locally to avoid touching the published @standardnotes/models package.
   EditorLigaturesEnabled = 'editorLigaturesEnabled',
+  // Standard Red Notes: user customization of the Super editor toolbar (which
+  // buttons are shown + group order). JSON object, web-only, stored locally to
+  // avoid touching the published @standardnotes/models package.
+  SuperToolbarConfig = 'superToolbarConfig',
 }
 
 export type LocalPrefValue = {
@@ -48,6 +66,7 @@ export type LocalPrefValue = {
   [LocalPrefKey.EditorLineWidth]: EditorLineWidth
   [LocalPrefKey.EditorFontSize]: EditorFontSize
   [LocalPrefKey.EditorLigaturesEnabled]: boolean
+  [LocalPrefKey.SuperToolbarConfig]: SuperToolbarConfig
 }
 
 export const LocalPrefDefaults = {
@@ -68,6 +87,9 @@ export const LocalPrefDefaults = {
   [LocalPrefKey.EditorFontSize]: EditorFontSize.Normal,
   // Default OFF: ligatures change text rendering, so they're opt-in.
   [LocalPrefKey.EditorLigaturesEnabled]: false,
+  // Default = empty arrays == the full default toolbar, so out of the box there
+  // is no visible change vs. the hardcoded toolbar.
+  [LocalPrefKey.SuperToolbarConfig]: { groupOrder: [], hiddenButtonIds: [] },
 } satisfies {
   [key in LocalPrefKey]: LocalPrefValue[key]
 }
