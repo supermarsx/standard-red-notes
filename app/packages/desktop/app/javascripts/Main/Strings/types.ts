@@ -26,6 +26,7 @@ interface AppMenuStrings {
   openDataDirectory: string
   clearCacheAndReload: string
   speech: string
+  newWindow: string
   close: string
   minimize: string
   zoom: string

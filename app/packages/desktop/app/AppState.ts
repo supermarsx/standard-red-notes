@@ -10,6 +10,13 @@ export class AppState {
   readonly startUrl = Urls.indexHtml
   readonly isPrimaryInstance: boolean
   public willQuitApp = false
+  /**
+   * All currently open app windows. Multi-window support means there can be
+   * more than one. The most-recently-focused window is tracked separately via
+   * `windowState` for operations that target a single "active" window (deep
+   * links, dev tools, etc.).
+   */
+  public readonly windows = new Set<WindowState>()
   public windowState?: WindowState
   public deepLinkUrl?: string
   public readonly updates: UpdateState

@@ -124,24 +124,34 @@ export class RemoteBridge implements CrossProcessBridge {
     return Store.get(StoreKeys.UseSystemMenuBar)
   }
 
+  /**
+   * Resolves the BrowserWindow a window-control call should target. Because the
+   * RemoteBridge is a single global shared by every window's preload, calls must
+   * act on the window the user is currently interacting with rather than the
+   * window this bridge was constructed for. Falls back to the constructor window.
+   */
+  private get activeWindow(): BrowserWindow {
+    return BrowserWindow.getFocusedWindow() ?? this.window
+  }
+
   closeWindow() {
-    this.window.close()
+    this.activeWindow.close()
   }
 
   minimizeWindow() {
-    this.window.minimize()
+    this.activeWindow.minimize()
   }
 
   maximizeWindow() {
-    this.window.maximize()
+    this.activeWindow.maximize()
   }
 
   unmaximizeWindow() {
-    this.window.unmaximize()
+    this.activeWindow.unmaximize()
   }
 
   isWindowMaximized() {
-    return this.window.isMaximized()
+    return this.activeWindow.isMaximized()
   }
 
   async getKeychainValue() {

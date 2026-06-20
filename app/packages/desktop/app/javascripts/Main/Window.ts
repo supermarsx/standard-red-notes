@@ -50,17 +50,29 @@ export async function createWindowState({
   appState,
   appLocale,
   teardown,
+  onNewWindow,
 }: {
   shell: Shell
   appLocale: string
   appState: AppState
   teardown: () => void
+  /** Invoked when the user requests a new window (e.g. from the menu). */
+  onNewWindow?: () => void
 }): Promise<WindowState> {
   const window = await createWindow(appState.store)
 
-  const services = await createWindowServices(window, appState, appLocale)
+  const services = await createWindowServices(window, appState, appLocale, onNewWindow)
 
   require('@electron/remote/main').enable(window.webContents)
+  /**
+   * The RemoteBridge is exposed to renderers as a single `global.RemoteBridge`
+   * that every window's preload reads via `getGlobal('RemoteBridge')`. With
+   * multiple windows we therefore cannot hardcode the bridge to a single
+   * BrowserWindow: window-control calls (close/minimize/maximize) must act on
+   * the window the call came from. The bridge resolves that window at call time
+   * via `BrowserWindow.getFocusedWindow()` (the window the user is interacting
+   * with), falling back to the most-recently-created window passed here.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(global as any).RemoteBridge = new RemoteBridge(
     window,
@@ -83,7 +95,22 @@ export async function createWindowState({
 
   const shouldOpenUrl = (url: string) => url.startsWith('http') || url.startsWith('mailto')
 
-  window.on('closed', teardown)
+  const windowState: WindowState = {
+    window,
+    ...services,
+  }
+
+  appState.windows.add(windowState)
+  appState.windowState = windowState
+
+  window.on('closed', () => {
+    appState.windows.delete(windowState)
+    if (appState.windowState === windowState) {
+      /** Hand "active window" off to any remaining window. */
+      appState.windowState = appState.windows.values().next().value
+    }
+    teardown()
+  })
 
   window.on('show', () => {
     void checkForUpdate(appState, appState.updates, false)
@@ -91,7 +118,19 @@ export async function createWindowState({
   })
 
   window.on('focus', () => {
+    /** Track the most-recently-focused window as the "active" one. */
+    appState.windowState = windowState
     window.webContents.send(MessageToWebApp.WindowFocused, null)
+    /**
+     * Cross-window live sync (sync-mediated, not shared memory): notify every
+     * OTHER open window that focus moved so they pull the latest state from the
+     * server. The renderer maps WindowFocused -> windowGainedFocus() ->
+     * WebAppEvent.WindowDidFocus, which the web app already handles by running
+     * application.sync.sync(). This means an edit made in window A is persisted
+     * + synced to the server, and switching to window B nudges B to sync and
+     * pick up A's change. See the storage-sharing note below.
+     */
+    notifyOtherWindowsOfChange(appState, window)
   })
 
   window.on('blur', () => {
@@ -149,9 +188,32 @@ export async function createWindowState({
     buildContextMenu(window.webContents, params).popup()
   })
 
-  return {
-    window,
-    ...services,
+  return windowState
+}
+
+/**
+ * Broadcasts a "data may have changed elsewhere" nudge to every open window
+ * except `source`. Each receiving renderer reacts by running a server sync, so
+ * the change becomes visible across windows.
+ *
+ * STORAGE / CORRECTNESS NOTE: all app windows share the same Electron session
+ * (same `userData`, same IndexedDB + localStorage). Each window still runs its
+ * own independent snjs application instance against that shared local database.
+ * We therefore deliberately do NOT attempt shared-memory "live" co-editing of
+ * the local DB across windows -- two instances mutating the same IndexedDB
+ * concurrently would race and risk corruption. Instead, cross-window sync is
+ * SYNC-MEDIATED: the server (and the existing websocket gateway) is the source
+ * of truth. A window persists + syncs its change, and the other windows are
+ * nudged to sync and pull it down. Latency is therefore "as fast as a sync
+ * round-trip" (near-real-time on focus / on demand), not instantaneous shared
+ * state.
+ */
+export function notifyOtherWindowsOfChange(appState: AppState, source: Electron.BrowserWindow): void {
+  for (const other of appState.windows) {
+    if (other.window === source || other.window.isDestroyed()) {
+      continue
+    }
+    other.window.webContents.send(MessageToWebApp.WindowFocused, null)
   }
 }
 
@@ -184,12 +246,23 @@ async function createWindow(store: Store): Promise<Electron.BrowserWindow> {
   persistWindowPosition(window)
 
   if (isTesting()) {
-    handleTestMessage(MessageType.SpellCheckerLanguages, () => window.webContents.session.getSpellCheckerLanguages())
-    handleTestMessage(MessageType.SetLocalStorageValue, async (key, value) => {
-      await window.webContents.executeJavaScript(`localStorage.setItem("${key}", "${value}")`)
-      window.webContents.session.flushStorageData()
-    })
-    handleTestMessage(MessageType.SignOut, () => window.webContents.executeJavaScript('window.device.onSignOut(false)'))
+    /**
+     * These register global (per-message-type) IPC handlers, so they must only
+     * be registered once even though createWindow can now run multiple times.
+     * Tests only ever drive a single window, so binding them to the first
+     * window created is correct.
+     */
+    if (!testMessageHandlersRegistered) {
+      testMessageHandlersRegistered = true
+      handleTestMessage(MessageType.SpellCheckerLanguages, () => window.webContents.session.getSpellCheckerLanguages())
+      handleTestMessage(MessageType.SetLocalStorageValue, async (key, value) => {
+        await window.webContents.executeJavaScript(`localStorage.setItem("${key}", "${value}")`)
+        window.webContents.session.flushStorageData()
+      })
+      handleTestMessage(MessageType.SignOut, () =>
+        window.webContents.executeJavaScript('window.device.onSignOut(false)'),
+      )
+    }
     window.webContents.once('did-finish-load', () => {
       send(AppMessageType.WindowLoaded)
     })
@@ -198,7 +271,14 @@ async function createWindow(store: Store): Promise<Electron.BrowserWindow> {
   return window
 }
 
-async function createWindowServices(window: Electron.BrowserWindow, appState: AppState, appLocale: string) {
+let testMessageHandlersRegistered = false
+
+async function createWindowServices(
+  window: Electron.BrowserWindow,
+  appState: AppState,
+  appLocale: string,
+  onNewWindow?: () => void,
+) {
   const packageManager = await initializePackageManager(window.webContents)
   const searchManager = initializeSearchManager(window.webContents)
   initializeZoomManager(window, appState.store)
@@ -223,6 +303,7 @@ async function createWindowServices(window: Electron.BrowserWindow, appState: Ap
     trayManager,
     store: appState.store,
     spellcheckerManager,
+    onNewWindow,
   })
 
   const fileBackupsManager = new FilesBackupManager(appState, window.webContents, filesManager)

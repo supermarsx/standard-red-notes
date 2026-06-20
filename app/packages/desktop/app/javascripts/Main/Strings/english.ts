@@ -22,6 +22,7 @@ export function createEnglishStrings(): Strings {
       openDataDirectory: 'Open Data Directory',
       clearCacheAndReload: 'Clear Cache and Reload',
       speech: 'Speech',
+      newWindow: 'New Window',
       close: 'Close',
       minimize: 'Minimize',
       zoom: 'Zoom',

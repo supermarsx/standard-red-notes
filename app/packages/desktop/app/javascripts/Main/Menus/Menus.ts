@@ -112,12 +112,14 @@ export function createMenuManager({
   trayManager,
   store,
   spellcheckerManager,
+  onNewWindow,
 }: {
   window: Electron.BrowserWindow
   appState: AppState
   trayManager: TrayManager
   store: Store
   spellcheckerManager?: SpellcheckerManager
+  onNewWindow?: () => void
 }): MenuManagerInterface {
   let menu: Menu
 
@@ -126,7 +128,7 @@ export function createMenuManager({
       ...(isMac() ? [macAppMenu(app.name)] : []),
       editMenu(spellcheckerManager, reload),
       viewMenu(window, store, reload),
-      windowMenu(store, trayManager, reload),
+      windowMenu(store, trayManager, reload, onNewWindow),
       updateMenu(window, appState),
       ...(isLinux() ? [keyringMenu(window, store)] : []),
       helpMenu(window, shell),
@@ -185,6 +187,7 @@ const enum Roles {
 const KeyCombinations = {
   CmdOrCtrlW: 'CmdOrCtrl + W',
   CmdOrCtrlM: 'CmdOrCtrl + M',
+  CmdOrCtrlShiftN: 'CmdOrCtrl + Shift + N',
   AltM: 'Alt + m',
 }
 
@@ -372,10 +375,27 @@ function menuBarOptions(window: Electron.BrowserWindow, store: Store, reload: ()
   ]
 }
 
-function windowMenu(store: Store, trayManager: TrayManager, reload: () => void): MenuItemConstructorOptions {
+function windowMenu(
+  store: Store,
+  trayManager: TrayManager,
+  reload: () => void,
+  onNewWindow?: () => void,
+): MenuItemConstructorOptions {
   return {
     role: Roles.Window,
     submenu: [
+      ...(onNewWindow
+        ? [
+            {
+              label: str().newWindow,
+              accelerator: KeyCombinations.CmdOrCtrlShiftN,
+              click() {
+                onNewWindow()
+              },
+            } as MenuItemConstructorOptions,
+            Separator,
+          ]
+        : []),
       {
         role: Roles.Minimize,
       },
