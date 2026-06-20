@@ -25,6 +25,7 @@ import { CalendarNode } from './CalendarNode'
 import { DataTableNode } from './DataTableNode'
 import { CalloutNode } from './CalloutNode'
 import { EmbedNode } from './EmbedNode'
+import { WebEmbedNode } from './WebEmbedNode'
 import { MathNode } from './MathNode'
 import { InlineMathNode } from './InlineMathNode'
 
@@ -60,6 +61,7 @@ const CommonNodes = [
   DataTableNode,
   CalloutNode,
   EmbedNode,
+  WebEmbedNode,
   MathNode,
   InlineMathNode,
 ]

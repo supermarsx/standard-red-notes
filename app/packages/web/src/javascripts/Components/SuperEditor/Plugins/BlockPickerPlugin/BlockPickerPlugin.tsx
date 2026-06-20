@@ -36,6 +36,7 @@ import { GetCalendarBlockOption } from '../Blocks/Calendar'
 import { GetDataviewBlockOption } from '../Blocks/Dataview'
 import { GetCalloutBlockOption } from '../Blocks/Callout'
 import { GetEmbedBlockOption } from '../Blocks/Embed'
+import { GetWebEmbedBlockOption } from '../Blocks/WebEmbed'
 import { GetMathBlockOption } from '../Blocks/Math'
 import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
 
@@ -79,6 +80,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetDataviewBlockOption(editor),
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),
+      GetWebEmbedBlockOption(editor),
       GetMathBlockOption(editor),
       GetInlineMathBlockOption(editor),
       GetDividerBlockOption(editor),

@@ -74,6 +74,7 @@ import { CalendarBlock } from '../Blocks/Calendar'
 import { DataviewBlock } from '../Blocks/Dataview'
 import { CalloutBlock } from '../Blocks/Callout'
 import { EmbedBlock } from '../Blocks/Embed'
+import { WebEmbedBlock } from '../Blocks/WebEmbed'
 import { MathBlock } from '../Blocks/Math'
 import { InlineMathBlock } from '../Blocks/InlineMath'
 import { URL_REGEX } from '@/Constants/Constants'
@@ -1403,6 +1404,11 @@ const ToolbarPlugin = () => {
             name={EmbedBlock.name}
             iconName={EmbedBlock.iconName}
             onClick={() => EmbedBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={WebEmbedBlock.name}
+            iconName={WebEmbedBlock.iconName}
+            onClick={() => WebEmbedBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
             name={MathBlock.name}
