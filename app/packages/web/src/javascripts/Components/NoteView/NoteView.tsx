@@ -63,6 +63,7 @@ import { TimelineEditor, TimelineEditorIdentifier } from './TimelineEditor/Timel
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
+import PresenceBadge from './PresenceBadge'
 import Button from '../Button/Button'
 import ModalOverlay from '../Modal/ModalOverlay'
 import NoteConflictResolutionModal from './NoteConflictResolutionModal/NoteConflictResolutionModal'
@@ -977,6 +978,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                   syncTakingTooLong={this.state.syncTakingTooLong}
                   updateSavingIndicator={this.state.updateSavingIndicator}
                 />
+                <PresenceBadge item={this.note} />
               </div>
               {shouldShowConflictsButton && (
                 <Button

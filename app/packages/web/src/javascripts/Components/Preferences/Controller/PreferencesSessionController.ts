@@ -27,6 +27,11 @@ export class PreferencesSessionController {
 
     if (application.featuresController.isVaultsEnabled()) {
       menuItems.push({ id: 'vaults', label: 'Vaults', icon: 'safe-square', order: 5 })
+
+      // Standard Red Notes: Sharing overview pane — surfaces what's shared,
+      // collaborators, live presence, and pending invites. Complements (does not
+      // replace) the Vaults pane's full contact/invite management.
+      menuItems.push({ id: 'sharing', label: 'Sharing', icon: 'user-switch', order: 5 })
     }
 
     // Standard Red Notes: the Admin pane is only added to the menu for users who
