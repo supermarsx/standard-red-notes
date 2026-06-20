@@ -6,6 +6,7 @@ export enum StoreKeys {
   MenuBarVisible = 'isMenuBarVisible',
   MinimizeToTray = 'minimizeToTray',
   EnableAutoUpdate = 'enableAutoUpdates',
+  NotifyUpdates = 'notifyUpdates',
   ZoomFactor = 'zoomFactor',
   SelectedSpellCheckerLanguageCodes = 'selectedSpellCheckerLanguageCodes',
   UseNativeKeychain = 'useNativeKeychain',
@@ -26,6 +27,7 @@ export interface StoreData {
   [StoreKeys.MenuBarVisible]: boolean
   [StoreKeys.MinimizeToTray]: boolean
   [StoreKeys.EnableAutoUpdate]: boolean
+  [StoreKeys.NotifyUpdates]: boolean
   [StoreKeys.UseNativeKeychain]: boolean | null
   [StoreKeys.ZoomFactor]: number
   [StoreKeys.SelectedSpellCheckerLanguageCodes]: Set<Language> | null

@@ -11,7 +11,12 @@ export function createSanitizedStoreData(data: any = {}): StoreData {
     [StoreKeys.MenuBarVisible]: ensureIsBoolean(data[StoreKeys.MenuBarVisible], true),
     [StoreKeys.UseSystemMenuBar]: ensureIsBoolean(data[StoreKeys.UseSystemMenuBar], false),
     [StoreKeys.MinimizeToTray]: ensureIsBoolean(data[StoreKeys.MinimizeToTray], false),
-    [StoreKeys.EnableAutoUpdate]: ensureIsBoolean(data[StoreKeys.EnableAutoUpdate], true),
+    // Auto-update (download + install on quit) is OFF by default. The user must
+    // explicitly opt in before the app will download or install updates.
+    [StoreKeys.EnableAutoUpdate]: ensureIsBoolean(data[StoreKeys.EnableAutoUpdate], false),
+    // Update *notifications* are independent of auto-install and default ON so
+    // users are informed about new versions without anything being installed.
+    [StoreKeys.NotifyUpdates]: ensureIsBoolean(data[StoreKeys.NotifyUpdates], true),
     [StoreKeys.UseNativeKeychain]: isBoolean(data[StoreKeys.UseNativeKeychain])
       ? data[StoreKeys.UseNativeKeychain]
       : null,

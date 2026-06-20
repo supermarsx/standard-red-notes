@@ -90,6 +90,13 @@
     "appId": "org.standardrednotes.app",
     "artifactName": "standard-red-notes-${version}-${os}-${arch}.${ext}",
     "afterSign": "scripts/notarizeMac.js",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "supermarsx",
+        "repo": "standard-red-notes"
+      }
+    ],
     "files": [
       "compiled/**/*",
       "dist/**/*",

@@ -14,6 +14,7 @@ interface AppMenuStrings {
   minimizeToTrayOnClose: string
   backups: string
   enableAutomaticUpdates: string
+  notifyAboutUpdates: string
   automaticUpdatesDisabled: string
   disableAutomaticBackups: string
   enableAutomaticBackups: string
@@ -98,6 +99,10 @@ interface UpdateStrings {
   errorDownloading: {
     title: string
     message: string
+  }
+  updateNotification: {
+    title: string
+    body(newVersion: string): string
   }
   unknownVersionName: string
 }

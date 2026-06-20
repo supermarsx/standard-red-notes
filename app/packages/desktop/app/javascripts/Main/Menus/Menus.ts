@@ -14,7 +14,7 @@ import { Store } from '../Store/Store'
 import { StoreKeys } from '../Store/StoreKeys'
 import { appMenu as str, contextMenu } from '../Strings'
 import { TrayManager } from '../TrayManager'
-import { autoUpdatingAvailable } from '../Types/Constants'
+import { autoUpdatingAvailable, UpdateRepo, UpdateRepoReleasesUrl } from '../Types/Constants'
 import { isLinux, isMac } from '../Types/Platforms'
 import { checkForUpdate, openChangelog, showUpdateInstallationDialog } from '../UpdateManager'
 import { isDev } from '../Utils/Utils'
@@ -199,10 +199,10 @@ const enum MenuItemTypes {
 const Urls = {
   Support: 'mailto:help@standardnotes.com',
   Website: 'https://standardnotes.com',
-  GitHub: 'https://github.com/standardnotes',
+  GitHub: `https://github.com/${UpdateRepo.owner}/${UpdateRepo.repo}`,
   Discord: 'https://standardnotes.com/discord',
   Twitter: 'https://twitter.com/StandardNotes',
-  GitHubReleases: 'https://github.com/standardnotes/app/releases',
+  GitHubReleases: UpdateRepoReleasesUrl,
 }
 
 function macAppMenu(appName: string): MenuItemConstructorOptions {
@@ -479,6 +479,15 @@ function updateMenu(window: BrowserWindow, appState: AppState) {
       label: str().enableAutomaticUpdates,
       click() {
         updateState.toggleAutoUpdate()
+      },
+    })
+
+    submenu.push({
+      type: 'checkbox',
+      checked: updateState.notifyUpdates,
+      label: str().notifyAboutUpdates,
+      click() {
+        updateState.toggleNotifyUpdates()
       },
     })
 

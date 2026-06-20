@@ -10,6 +10,7 @@ export function createEnglishStrings(): Strings {
       minimizeToTrayOnClose: 'Minimize To Tray On Close',
       backups: 'Backups',
       enableAutomaticUpdates: 'Enable Automatic Updates',
+      notifyAboutUpdates: 'Notify Me About Updates',
       automaticUpdatesDisabled: 'Automatic Updates Disabled',
       disableAutomaticBackups: 'Disable Automatic Backups',
       enableAutomaticBackups: 'Enable Automatic Backups',
@@ -142,6 +143,12 @@ export function createEnglishStrings(): Strings {
       errorDownloading: {
         title: 'Error Downloading',
         message: 'An error occurred while trying to download your ' + 'update file. Please try again.',
+      },
+      updateNotification: {
+        title: 'Update Available',
+        body(newVersion: string) {
+          return `A new version (${newVersion}) is available. Click to view the release.`
+        },
       },
       unknownVersionName: 'Unknown',
     },
