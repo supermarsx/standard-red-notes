@@ -1,5 +1,5 @@
 import RoundIconButton from '@/Components/Button/RoundIconButton'
-import { FunctionComponent, useEffect, useMemo } from 'react'
+import { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { PreferencesSessionController } from './Controller/PreferencesSessionController'
 import PreferencesCanvas from './PreferencesCanvas'
@@ -23,10 +23,31 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
 
   const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
+  // Phone-only single-column flow: false shows the menu list, true shows the
+  // selected pane's content. The desktop two-column layout ignores this entirely.
+  const [mobileShowContent, setMobileShowContent] = useState(false)
+
+  // Returning to the menu list resets the drill-in state. When not on a phone
+  // this is effectively a no-op since both columns are always visible.
+  useEffect(() => {
+    if (!isMobileScreen) {
+      setMobileShowContent(false)
+    }
+  }, [isMobileScreen])
+
+  const showContent = useCallback(() => setMobileShowContent(true), [])
+  const showMenu = useCallback(() => setMobileShowContent(false), [])
+
   const addAndroidBackHandler = useAndroidBackHandler()
 
   useEffect(() => {
     const removeListener = addAndroidBackHandler(() => {
+      // On a phone, the hardware back button first returns from a pane's content
+      // to the menu list before closing the whole preferences view.
+      if (isMobileScreen && mobileShowContent) {
+        setMobileShowContent(false)
+        return true
+      }
       closePreferences()
       return true
     })
@@ -35,9 +56,14 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
         removeListener()
       }
     }
-  }, [addAndroidBackHandler, closePreferences])
+  }, [addAndroidBackHandler, closePreferences, isMobileScreen, mobileShowContent])
 
   const { hasTopInset } = useAvailableSafeAreaPadding()
+
+  // On mobile the modal header's left action doubles as a "back" control: from a
+  // pane it returns to the menu list; from the menu it closes preferences.
+  const mobileBackAction = mobileShowContent ? showMenu : closePreferences
+  const mobileTitle = mobileShowContent ? menu.selectedMenuItem?.label ?? 'Preferences' : 'Preferences'
 
   const modalActions = useMemo(
     (): ModalAction[] => [
@@ -45,21 +71,21 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
         label: (
           <span className="flex items-center">
             <Icon type="chevron-left" size="large" />
-            Back
+            {mobileShowContent ? 'Menu' : 'Back'}
           </span>
         ),
         type: 'primary',
         mobileSlot: 'left',
-        onClick: closePreferences,
+        onClick: mobileBackAction,
       },
     ],
-    [closePreferences],
+    [mobileBackAction, mobileShowContent],
   )
 
   return (
     <Modal
       close={closePreferences}
-      title="Preferences"
+      title={mobileTitle}
       className="flex flex-col"
       customHeader={
         <div
@@ -84,7 +110,13 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
       actions={modalActions}
       customFooter={<></>}
     >
-      <PreferencesCanvas menu={menu} application={application} closePreferences={closePreferences} />
+      <PreferencesCanvas
+        menu={menu}
+        application={application}
+        closePreferences={closePreferences}
+        mobileShowContent={mobileShowContent}
+        onSelectPane={showContent}
+      />
     </Modal>
   )
 }

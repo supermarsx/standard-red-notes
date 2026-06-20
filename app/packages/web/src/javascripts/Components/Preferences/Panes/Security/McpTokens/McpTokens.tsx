@@ -283,21 +283,21 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
           mcpTokens.map((mcpToken) => (
             <div
               key={mcpToken.uuid}
-              className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-              <div className="flex flex-col">
-                <span className="text-base font-medium lg:text-sm">{mcpToken.label}</span>
-                <span className="text-sm text-passive-0 lg:text-xs">
+              <div className="flex min-w-0 flex-col">
+                <span className="break-words text-base font-medium lg:text-sm">{mcpToken.label}</span>
+                <span className="break-words text-sm text-passive-0 lg:text-xs">
                   {mcpToken.scope} ·{' '}
                   {mcpToken.scopeTagUuids && mcpToken.scopeTagUuids.length > 0
                     ? `${mcpToken.scopeTagUuids.length} tag(s)`
                     : 'all notes'}
                 </span>
-                <span className="text-sm text-passive-0 lg:text-xs">
+                <span className="break-words text-sm text-passive-0 lg:text-xs">
                   Created {formatDate(mcpToken.createdAt)} · Last used {formatDate(mcpToken.lastUsedAt)}
                 </span>
               </div>
-              <Button label="Revoke" onClick={() => handleDelete(mcpToken.uuid)} />
+              <Button className="flex-shrink-0" label="Revoke" onClick={() => handleDelete(mcpToken.uuid)} />
             </div>
           ))}
       </PreferencesSegment>

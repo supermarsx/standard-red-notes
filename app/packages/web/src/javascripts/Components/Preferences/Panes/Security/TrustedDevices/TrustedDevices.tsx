@@ -171,16 +171,16 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
           trustedDevices.map((device) => (
             <div
               key={device.uuid}
-              className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-              <div className="flex flex-col">
-                <span className="text-base font-medium lg:text-sm">{device.label}</span>
-                <span className="text-sm text-passive-0 lg:text-xs">
+              <div className="flex min-w-0 flex-col">
+                <span className="break-words text-base font-medium lg:text-sm">{device.label}</span>
+                <span className="break-words text-sm text-passive-0 lg:text-xs">
                   Trusted {formatDate(device.createdAt)} · Last used {formatDate(device.lastUsedAt)} · Expires{' '}
                   {formatDate(device.expiresAt)}
                 </span>
               </div>
-              <Button label="Revoke" onClick={() => handleRevoke(device.uuid)} />
+              <Button className="flex-shrink-0" label="Revoke" onClick={() => handleRevoke(device.uuid)} />
             </div>
           ))}
       </PreferencesSegment>

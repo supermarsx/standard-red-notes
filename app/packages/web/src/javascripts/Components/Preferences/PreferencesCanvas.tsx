@@ -5,12 +5,29 @@ import PreferencesMenuView from './PreferencesMenuView'
 import PaneSelector from './PaneSelector'
 import { PreferencesProps } from './PreferencesProps'
 import { FOCUSABLE_BUT_NOT_TABBABLE } from '@/Constants/Constants'
+import { classNames } from '@standardnotes/snjs'
 
-const PreferencesCanvas: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = (props) => (
+type Props = PreferencesProps & {
+  menu: PreferencesSessionController
+  /**
+   * Phone-only flag. When false the single-column menu list is shown; when true
+   * the selected pane's content is shown (with a back affordance in the header).
+   * Ignored from md up, where both columns are always visible side-by-side.
+   */
+  mobileShowContent: boolean
+  onSelectPane: () => void
+}
+
+const PreferencesCanvas: FunctionComponent<Props> = (props) => (
   <div className="flex min-h-0 flex-grow flex-col md:flex-row md:justify-between">
-    <PreferencesMenuView menu={props.menu} />
+    <div className={classNames('min-h-0 flex-grow md:flex md:flex-grow-0', props.mobileShowContent ? 'hidden' : 'flex')}>
+      <PreferencesMenuView menu={props.menu} onSelectPane={props.onSelectPane} />
+    </div>
     <div
-      className="min-h-0 flex-grow overflow-auto bg-[--preferences-background-color]"
+      className={classNames(
+        'min-h-0 flex-grow overflow-auto bg-[--preferences-background-color] md:block',
+        props.mobileShowContent ? 'block' : 'hidden',
+      )}
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
     >
       <PaneSelector {...props} />

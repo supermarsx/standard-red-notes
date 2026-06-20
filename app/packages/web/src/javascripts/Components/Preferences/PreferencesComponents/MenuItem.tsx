@@ -22,9 +22,13 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
   hasErrorIndicator,
 }) => (
   <div
-    className={`preferences-menu-item box-border flex h-auto w-auto min-w-42 cursor-pointer select-none flex-row items-center justify-start rounded border border-solid px-4 py-2 text-sm hover:border-border hover:bg-default ${
-      selected ? 'selected border-info font-bold text-info' : 'border-transparent'
-    }`}
+    className={classNames(
+      'preferences-menu-item box-border flex h-auto w-auto min-w-42 cursor-pointer select-none flex-row items-center justify-start rounded border border-solid text-sm hover:border-border hover:bg-default',
+      // Larger, comfortably tappable rows on mobile; revert to the compact
+      // desktop padding from md up so the sidebar appearance is unchanged.
+      'px-3 py-3 md:px-4 md:py-2',
+      selected ? 'selected border-info font-bold text-info' : 'border-transparent',
+    )}
     onClick={(e) => {
       e.preventDefault()
       onClick()
@@ -35,12 +39,14 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
       <CountBubble position="left" count={bubbleCount} />
     </div>
     <div className="min-w-1" />
-    {label}
+    <span className="flex-grow">{label}</span>
     {hasErrorIndicator && (
       <span className="ml-2">
         <ErrorCircle />
       </span>
     )}
+    {/* Chevron hints the tap-to-drill-in interaction on mobile only. */}
+    <Icon type="chevron-right" className="ml-1 flex-shrink-0 text-neutral md:hidden" />
   </div>
 )
 

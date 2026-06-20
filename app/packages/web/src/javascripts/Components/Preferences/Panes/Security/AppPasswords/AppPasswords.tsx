@@ -141,14 +141,15 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
 
       <PreferencesSegment>
         <Subtitle>Create a new app password</Subtitle>
-        <div className="mt-2 flex flex-row items-center gap-2">
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
           <DecoratedInput
+            className={{ container: 'min-w-0 flex-grow' }}
             placeholder="Label (e.g. MCP Bridge)"
             value={label}
             onChange={(value) => setLabel(value)}
             disabled={creating}
           />
-          <Button label="Create" primary disabled={creating} onClick={handleCreate} />
+          <Button className="flex-shrink-0" label="Create" primary disabled={creating} onClick={handleCreate} />
         </div>
 
         {createdSecret && (
@@ -174,15 +175,15 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
           appPasswords.map((appPassword) => (
             <div
               key={appPassword.uuid}
-              className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-              <div className="flex flex-col">
-                <span className="text-base font-medium lg:text-sm">{appPassword.label}</span>
-                <span className="text-sm text-passive-0 lg:text-xs">
+              <div className="flex min-w-0 flex-col">
+                <span className="break-words text-base font-medium lg:text-sm">{appPassword.label}</span>
+                <span className="break-words text-sm text-passive-0 lg:text-xs">
                   Created {formatDate(appPassword.createdAt)} · Last used {formatDate(appPassword.lastUsedAt)}
                 </span>
               </div>
-              <Button label="Revoke" onClick={() => handleDelete(appPassword.uuid)} />
+              <Button className="flex-shrink-0" label="Revoke" onClick={() => handleDelete(appPassword.uuid)} />
             </div>
           ))}
       </PreferencesSegment>

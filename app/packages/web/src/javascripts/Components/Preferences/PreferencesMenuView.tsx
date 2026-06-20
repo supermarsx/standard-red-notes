@@ -1,31 +1,28 @@
 import { observer } from 'mobx-react-lite'
-import { FunctionComponent, useMemo } from 'react'
-import Dropdown from '../Dropdown/Dropdown'
-import { DropdownItem } from '../Dropdown/DropdownItem'
+import { FunctionComponent } from 'react'
 import PreferencesMenuItem from './PreferencesComponents/MenuItem'
 import { PreferencesSessionController } from './Controller/PreferencesSessionController'
-import { PreferencePaneId } from '@standardnotes/services'
 
 type Props = {
   menu: PreferencesSessionController
+  /**
+   * Invoked after a menu item is selected. On phone widths the parent uses this
+   * to slide from the single-column menu list to the selected pane's content.
+   */
+  onSelectPane?: () => void
 }
 
-const PreferencesMenuView: FunctionComponent<Props> = ({ menu }) => {
-  const { selectedPaneId, selectPane, menuItems } = menu
-
-  const dropdownMenuItems: DropdownItem[] = useMemo(
-    () =>
-      menuItems.map((menuItem) => ({
-        icon: menuItem.icon,
-        label: menuItem.label,
-        value: menuItem.id,
-      })),
-    [menuItems],
-  )
+const PreferencesMenuView: FunctionComponent<Props> = ({ menu, onSelectPane }) => {
+  const { selectPane, menuItems } = menu
 
   return (
-    <div className="border-b border-border bg-default px-5 py-2 md:border-0 md:bg-[--preferences-background-color] md:px-0 md:py-0">
-      <div className="hidden min-w-55 flex-col overflow-y-auto px-3 py-6 md:flex">
+    <div className="border-border bg-default md:border-0 md:bg-[--preferences-background-color]">
+      {/*
+        Desktop (>= md): narrow fixed sidebar shown alongside the content column.
+        Mobile (< md): full-width tappable menu list; selecting an item tells the
+        parent to switch to the content view (single-column flow).
+      */}
+      <div className="flex min-w-55 flex-col overflow-y-auto px-3 py-3 md:py-6">
         {menuItems.map((pref) => (
           <PreferencesMenuItem
             key={pref.id}
@@ -36,24 +33,10 @@ const PreferencesMenuView: FunctionComponent<Props> = ({ menu }) => {
             hasErrorIndicator={pref.hasErrorIndicator}
             onClick={() => {
               selectPane(pref.id)
+              onSelectPane?.()
             }}
           />
         ))}
-      </div>
-      <div className="md:hidden">
-        <Dropdown
-          items={dropdownMenuItems}
-          label="Preferences Menu"
-          value={selectedPaneId}
-          onChange={(paneId) => {
-            selectPane(paneId as PreferencePaneId)
-          }}
-          classNameOverride={{
-            wrapper: 'relative',
-            button: 'focus:outline-none focus:shadow-none focus:ring-none',
-          }}
-          popoverPlacement="bottom"
-        />
       </div>
     </div>
   )
