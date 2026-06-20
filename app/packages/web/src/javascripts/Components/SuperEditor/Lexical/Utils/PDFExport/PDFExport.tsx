@@ -603,17 +603,38 @@ const collectPDFImageSources = (nodes: PDFDataNode[]): string[] => {
 const loadPDFImageDimensions = (src: string): Promise<PDFImageNaturalDimensions | null> => {
   return new Promise((resolve) => {
     const image = new window.Image()
-    image.onload = () => {
+
+    const resolveFromImage = () => {
       if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
         resolve(null)
         return
       }
       resolve({ width: image.naturalWidth, height: image.naturalHeight })
     }
+
+    image.onload = () => {
+      // Ensure the image is fully decoded before reading its natural size; otherwise
+      // the PDF snapshot can be taken while dimensions are still 0 and the image
+      // collapses to a tiny thumbnail.
+      if (typeof image.decode === 'function') {
+        image.decode().then(resolveFromImage, resolveFromImage)
+      } else {
+        resolveFromImage()
+      }
+    }
     image.onerror = () => resolve(null)
     image.src = src
   })
 }
+
+/**
+ * @react-pdf/renderer measures numeric width/height style values in PostScript points
+ * (72 per inch), whereas the browser reports an image's natural size in CSS pixels
+ * (96 per inch). Convert so the PDF honors the image's real size instead of mixing units.
+ */
+const CSS_PX_PER_INCH = 96
+const PDF_POINTS_PER_INCH = 72
+const cssPixelsToPDFPoints = (pixels: number): number => (pixels * PDF_POINTS_PER_INCH) / CSS_PX_PER_INCH
 
 const loadPDFImageDimensionsMap = async (sources: string[]): Promise<Map<string, PDFImageNaturalDimensions>> => {
   const entries = await Promise.all(sources.map(async (src) => [src, await loadPDFImageDimensions(src)] as const))
@@ -636,9 +657,17 @@ const patchPDFImageStyles = (
     if (node.type === 'Image' && typeof node.src === 'string') {
       const natural = imageDimensions.get(node.src)
       if (natural && natural.width > 0 && natural.height > 0) {
-        const displayWidth = Math.min(natural.width, contentWidth)
+        // Convert the natural (pixel) size to points so it is comparable to the
+        // page content width, then clamp to the page so wide images don't overflow.
+        const intrinsicWidth = cssPixelsToPDFPoints(natural.width)
+        const displayWidth = Math.min(intrinsicWidth, contentWidth)
+        // Always set an explicit height alongside the width. An image with only a
+        // width (or no dimensions) inside a flex column can collapse to a tiny
+        // thumbnail in @react-pdf/renderer, so we lock in the aspect ratio.
         node.style = { width: displayWidth, height: displayWidth * (natural.height / natural.width) }
       } else {
+        // Dimensions could not be determined; fall back to full content width and
+        // let the renderer derive the height from the decoded image's aspect ratio.
         node.style = { width: contentWidth }
       }
     }
