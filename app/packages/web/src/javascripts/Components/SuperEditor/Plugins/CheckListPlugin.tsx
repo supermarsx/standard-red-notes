@@ -12,6 +12,8 @@ import {
 import { useEffect } from 'react'
 import { useApplication } from '../../ApplicationProvider'
 import { getPrimaryModifier } from '@standardnotes/ui-services'
+import { $reorderCheckListForItem } from './CheckListAutoMovePlugin/reorderCheckList'
+import { getChecklistAutoMoveEnabled } from './CheckListAutoMovePlugin/autoMoveSetting'
 
 export function CheckListPlugin(): null {
   const application = useApplication()
@@ -108,6 +110,15 @@ export function CheckListPlugin(): null {
                 }
 
                 node.toggleChecked()
+
+                // Issue 3928: optionally relocate the just-toggled item so
+                // completed tasks sink to the bottom and active ones bubble up.
+                // Opt-in (default off) so existing behavior is unchanged. Done
+                // here (on the toggle) rather than on every change so we never
+                // fight the caret while the user types.
+                if (getChecklistAutoMoveEnabled()) {
+                  $reorderCheckListForItem(node)
+                }
               },
               {
                 // without this lexical will reconcile the new selection to the dom and focus the editor causing the keyboard to show up
@@ -151,6 +162,9 @@ export function CheckListPlugin(): null {
             return false
           }
           node.toggleChecked()
+          if (getChecklistAutoMoveEnabled()) {
+            $reorderCheckListForItem(node)
+          }
           return true
         },
         COMMAND_PRIORITY_LOW,

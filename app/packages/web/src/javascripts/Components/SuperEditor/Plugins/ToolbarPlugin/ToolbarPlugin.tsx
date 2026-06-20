@@ -92,6 +92,13 @@ import LinkViewer from './LinkViewer'
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
 import { CREATE_NOTE_FROM_SELECTION_COMMAND } from '../NoteFromSelectionPlugin'
 import SelectionTools from './SelectionTools'
+import {
+  getChecklistAutoMoveEnabled,
+  setChecklistAutoMoveEnabled,
+  subscribeChecklistAutoMove,
+} from '../CheckListAutoMovePlugin/autoMoveSetting'
+import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
+import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -316,6 +323,48 @@ const ToolbarPlugin = () => {
 
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+
+  // Issue 3928: "completed tasks move out of the way" opt-in toggle. Persisted
+  // web-locally (localStorage) since synced PrefKeys live in off-limits models.
+  const [autoMoveCompleted, setAutoMoveCompleted] = useState(() => getChecklistAutoMoveEnabled())
+  useEffect(() => subscribeChecklistAutoMove(() => setAutoMoveCompleted(getChecklistAutoMoveEnabled())), [])
+
+  const toggleAutoMoveCompleted = useCallback(() => {
+    const next = !getChecklistAutoMoveEnabled()
+    setChecklistAutoMoveEnabled(next)
+    setAutoMoveCompleted(next)
+    // When turning it ON, immediately tidy the checklist the caret is in so the
+    // user sees the effect right away instead of only on the next toggle.
+    if (next) {
+      editor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection)) {
+          return
+        }
+        const list = $getOwningCheckList(selection.anchor.getNode().getParent())
+        if (list) {
+          $reorderCheckList(list)
+        }
+      })
+    }
+  }, [editor])
+
+  const restoreCompletedTasks = useCallback(() => {
+    editor.update(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection)) {
+        return
+      }
+      const list = $getOwningCheckList(selection.anchor.getNode().getParent())
+      if (list) {
+        $uncheckAllInList(list)
+        // Re-tidy so restored items rejoin the active group in a sane order.
+        if (getChecklistAutoMoveEnabled()) {
+          $reorderCheckList(list)
+        }
+      }
+    })
+  }, [editor])
 
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -1216,6 +1265,13 @@ const ToolbarPlugin = () => {
             active={blockType === 'check'}
             onClick={() => ChecklistBlock.onSelect(editor)}
           />
+          <ToolbarMenuItem
+            name="Auto-move completed to bottom"
+            iconName="list-check"
+            active={autoMoveCompleted}
+            onClick={toggleAutoMoveCompleted}
+          />
+          <ToolbarMenuItem name="Restore completed tasks" iconName="arrow-left" onClick={restoreCompletedTasks} />
           <MenuItemSeparator />
           <ToolbarMenuItem
             name="Quote"
