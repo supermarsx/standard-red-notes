@@ -105,6 +105,20 @@ const INVALID_SESSION_RESPONSE_STATUS = 401
 const TOO_MANY_REQUESTS_RESPONSE_STATUS = 429
 const DEFAULT_AUTO_SYNC_INTERVAL = 30_000
 
+/**
+ * Exponential backoff parameters for auto-retrying after consecutive sync failures.
+ * The delay grows as base * (multiplier ^ failures), capped, plus jitter to avoid
+ * thundering-herd reconnect storms. This only governs the AUTO-RETRY-AFTER-FAILURE
+ * cadence — user-driven and normal syncs are unaffected.
+ */
+const FAILURE_BACKOFF_BASE_MS = 1_000
+const FAILURE_BACKOFF_MULTIPLIER = 2
+const FAILURE_BACKOFF_CAP_MS = 5 * 60_000
+const FAILURE_BACKOFF_JITTER_RATIO = 0.25
+
+/** Minimum gap between focus/visibility-triggered "sync ASAP" requests, to avoid focus-spam. */
+const FOCUS_SYNC_THROTTLE_MS = 5_000
+
 /** Content types appearing first are always mapped first */
 const ContentTypeLocalLoadPriorty = [
   ContentType.TYPES.ItemsKey,
@@ -158,6 +172,15 @@ export class SyncService
   private autoSyncInterval?: NodeJS.Timeout
   private wasNotifiedOfItemsChangeOnServer = false
 
+  /** Number of consecutive failed sync attempts. Reset on any successful sync or network return. */
+  private consecutiveFailureCount = 0
+  /** Pending exponential-backoff auto-retry timer (only set while in a failure-retry loop). */
+  private failureBackoffTimeout?: NodeJS.Timeout
+  /** Timestamp of the last focus/visibility-triggered sync, for throttling. */
+  private lastFocusSyncAt = 0
+  /** Bound window listeners, retained so they can be removed on deinit. */
+  private removeWindowListeners?: () => void
+
   constructor(
     private itemManager: ItemManager,
     private sessionManager: SessionManager,
@@ -177,6 +200,112 @@ export class SyncService
   ) {
     super(internalEventBus)
     this.opStatus = this.initializeStatus()
+    this.registerNetworkAvailabilityListeners()
+  }
+
+  /**
+   * Sync ASAP when the environment becomes available again: when the browser comes back
+   * online, and when the tab regains focus/visibility (pull latest after the user returns).
+   * Guarded for headless (node/mcp) environments where `window` is undefined.
+   */
+  private registerNetworkAvailabilityListeners(): void {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+      return
+    }
+
+    const onOnline = () => {
+      this.logger.debug('Network came back online, syncing ASAP and resetting backoff')
+      this.cancelFailureBackoff()
+      this.consecutiveFailureCount = 0
+      void this.sync({ source: SyncSource.NetworkReturned, sourceDescription: 'Browser online event' })
+    }
+
+    const onFocusOrVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
+
+      const now = Date.now()
+      if (now - this.lastFocusSyncAt < FOCUS_SYNC_THROTTLE_MS) {
+        return
+      }
+      this.lastFocusSyncAt = now
+
+      this.logger.debug('App regained focus/visibility, syncing to pull latest')
+      this.cancelFailureBackoff()
+      void this.sync({ source: SyncSource.NetworkReturned, sourceDescription: 'App focus/visibility' })
+    }
+
+    window.addEventListener('online', onOnline)
+    window.addEventListener('focus', onFocusOrVisible)
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onFocusOrVisible)
+    }
+
+    this.removeWindowListeners = () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('focus', onFocusOrVisible)
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onFocusOrVisible)
+      }
+    }
+  }
+
+  /** Cancel any pending failure-backoff auto-retry so it doesn't delay a fresher sync. */
+  private cancelFailureBackoff(): void {
+    if (this.failureBackoffTimeout) {
+      clearTimeout(this.failureBackoffTimeout)
+      this.failureBackoffTimeout = undefined
+    }
+  }
+
+  /**
+   * Schedule the next auto-retry after a failed sync using exponential backoff with jitter,
+   * capped. Only one retry may be pending at a time; a successful/user-driven sync clears it.
+   */
+  private scheduleFailureBackoffRetry(): void {
+    this.cancelFailureBackoff()
+
+    if (this.dealloced) {
+      return
+    }
+
+    const exponent = Math.max(0, this.consecutiveFailureCount - 1)
+    const rawDelay = FAILURE_BACKOFF_BASE_MS * Math.pow(FAILURE_BACKOFF_MULTIPLIER, exponent)
+    const cappedDelay = Math.min(rawDelay, FAILURE_BACKOFF_CAP_MS)
+    const jitter = cappedDelay * FAILURE_BACKOFF_JITTER_RATIO * Math.random()
+    const delay = Math.round(cappedDelay + jitter)
+
+    this.logger.debug(
+      `Scheduling sync backoff retry #${this.consecutiveFailureCount} in ${delay}ms`,
+    )
+
+    this.failureBackoffTimeout = setTimeout(() => {
+      this.failureBackoffTimeout = undefined
+      if (this.dealloced) {
+        return
+      }
+      void this.sync({ source: SyncSource.BackoffRetry, sourceDescription: 'Failure backoff retry' })
+    }, delay)
+  }
+
+  /**
+   * A network sync attempt failed. Increment the consecutive-failure counter and schedule a
+   * single exponential-backoff auto-retry. This deliberately does NOT immediately re-fire a
+   * sync, avoiding a tight failure loop.
+   */
+  private handleOnlineSyncFailure(): void {
+    this.consecutiveFailureCount += 1
+    this.scheduleFailureBackoffRetry()
+  }
+
+  /** A network sync succeeded. Reset the failure counter and cancel any pending backoff retry. */
+  private handleOnlineSyncSuccess(): void {
+    if (this.consecutiveFailureCount > 0) {
+      this.logger.debug('Sync recovered, resetting failure backoff')
+    }
+    this.consecutiveFailureCount = 0
+    this.cancelFailureBackoff()
   }
 
   /**
@@ -201,6 +330,11 @@ export class SyncService
     this.dealloced = true
     if (this.autoSyncInterval) {
       clearInterval(this.autoSyncInterval)
+    }
+    this.cancelFailureBackoff()
+    if (this.removeWindowListeners) {
+      this.removeWindowListeners()
+      this.removeWindowListeners = undefined
     }
     ;(this.autoSyncInterval as unknown) = undefined
     ;(this.sessionManager as unknown) = undefined
@@ -599,6 +733,15 @@ export class SyncService
       ...options,
     }
 
+    /**
+     * Any fresh sync request other than the backoff retry itself should bypass/cancel a
+     * pending backoff timer, so a real (e.g. user-driven) sync isn't delayed by it. The
+     * retry's own scheduled invocation keeps its timer logic intact.
+     */
+    if (fullyResolvedOptions.source !== SyncSource.BackoffRetry) {
+      this.cancelFailureBackoff()
+    }
+
     this.lastSyncInvokationPromise = this.performSync(fullyResolvedOptions)
     return this.lastSyncInvokationPromise
   }
@@ -958,7 +1101,14 @@ export class SyncService
 
     const { hasError } = await this.handleSyncOperationFinish(operation, options, neverSyncedDeleted, syncMode)
     if (hasError) {
+      if (online) {
+        this.handleOnlineSyncFailure()
+      }
       return
+    }
+
+    if (online) {
+      this.handleOnlineSyncSuccess()
     }
 
     const didSyncAgain = await this.potentiallySyncAgainAfterSyncCompletion(
