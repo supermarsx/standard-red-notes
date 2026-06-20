@@ -24,6 +24,8 @@ export interface UserServiceInterface extends AbstractService<AccountEvent, Acco
     hvmToken: string,
     ephemeral: boolean,
     mergeLocal: boolean,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
   ): Promise<UserRegistrationResponseBody>
   signIn(
     email: string,
@@ -33,6 +35,8 @@ export interface UserServiceInterface extends AbstractService<AccountEvent, Acco
     mergeLocal: boolean,
     awaitSync: boolean,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>>
   deleteAccount(): Promise<{
     error: boolean

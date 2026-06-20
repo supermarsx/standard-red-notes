@@ -24,9 +24,22 @@ type Props = {
   setEmail: React.Dispatch<React.SetStateAction<string>>
   password: string
   setPassword: React.Dispatch<React.SetStateAction<string>>
+  // Standard Red Notes: optional workspace name for "multiple accounts per
+  // email" (server flag WORKSPACES_PER_EMAIL_ENABLED). Always shown as optional;
+  // ignored server-side when the flag is off.
+  workspaceIdentifier: string
+  setWorkspaceIdentifier: React.Dispatch<React.SetStateAction<string>>
 }
 
-const CreateAccount: FunctionComponent<Props> = ({ setMenuPane, email, setEmail, password, setPassword }) => {
+const CreateAccount: FunctionComponent<Props> = ({
+  setMenuPane,
+  email,
+  setEmail,
+  password,
+  setPassword,
+  workspaceIdentifier,
+  setWorkspaceIdentifier,
+}) => {
   const emailInputRef = useRef<HTMLInputElement>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const [isPrivateUsername, setIsPrivateUsername] = useState(false)
@@ -49,6 +62,14 @@ const CreateAccount: FunctionComponent<Props> = ({ setMenuPane, email, setEmail,
       setPassword(text)
     },
     [setPassword],
+  )
+
+  // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+  const handleWorkspaceIdentifierChange = useCallback(
+    (text: string) => {
+      setWorkspaceIdentifier(text)
+    },
+    [setWorkspaceIdentifier],
   )
 
   const handleRegisterFormSubmit: FormEventHandler = useCallback(
@@ -130,6 +151,22 @@ const CreateAccount: FunctionComponent<Props> = ({ setMenuPane, email, setEmail,
           placeholder={c('Label').t`Password`}
           ref={passwordInputRef}
           value={password}
+        />
+        {/*
+          Standard Red Notes: optional workspace name. Lets a server with
+          WORKSPACES_PER_EMAIL_ENABLED register multiple independent accounts
+          ("workspaces") under one email. Leave blank for the default workspace.
+          On a server with the feature off, this field is ignored.
+        */}
+        <DecoratedInput
+          className={{ container: 'mb-2' }}
+          left={[<Icon type="user" className="text-neutral" />]}
+          onChange={handleWorkspaceIdentifierChange}
+          onKeyDown={handleKeyDown}
+          placeholder={c('Label').t`Workspace name (optional)`}
+          type="text"
+          value={workspaceIdentifier}
+          spellcheck={false}
         />
         <Button
           className="mt-1"

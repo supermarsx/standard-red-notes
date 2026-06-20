@@ -27,6 +27,12 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
   const { notesAndTagsCount } = application.accountMenuController
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  // Standard Red Notes: optional workspace name for "multiple accounts per
+  // email" (server flag WORKSPACES_PER_EMAIL_ENABLED). Always shown as optional;
+  // leave blank for the default workspace. Ignored server-side when the flag is
+  // off. NOTE: only the normal sign-in path carries this; recovery-code sign-in
+  // resolves accounts differently and does not support workspace disambiguation.
+  const [workspaceIdentifier, setWorkspaceIdentifier] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState('')
   const [error, setError] = useState('')
   const [isEphemeral, setIsEphemeral] = useState(false)
@@ -81,6 +87,11 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
     [setPassword, error],
   )
 
+  // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+  const handleWorkspaceIdentifierChange = useCallback((text: string) => {
+    setWorkspaceIdentifier(text)
+  }, [])
+
   const handleEphemeralChange = useCallback(() => {
     setIsEphemeral(!isEphemeral)
   }, [isEphemeral])
@@ -109,7 +120,19 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
     passwordInputRef?.current?.blur()
 
     application
-      .signIn(email, password, isStrictSignin, isEphemeral, shouldMergeLocal, false, hvmToken)
+      // Standard Red Notes: pass the optional workspace name through to sign-in.
+      // Empty string means the default workspace; ignored server-side unless
+      // WORKSPACES_PER_EMAIL_ENABLED is on.
+      .signIn(
+        email,
+        password,
+        isStrictSignin,
+        isEphemeral,
+        shouldMergeLocal,
+        false,
+        hvmToken,
+        workspaceIdentifier || undefined,
+      )
       .then((response) => {
         const captchaURL = getCaptchaHeader(response)
         if (captchaURL) {
@@ -130,7 +153,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
       .finally(() => {
         setIsSigningIn(false)
       })
-  }, [application, email, hvmToken, isEphemeral, isStrictSignin, password, shouldMergeLocal])
+  }, [application, email, hvmToken, isEphemeral, isStrictSignin, password, shouldMergeLocal, workspaceIdentifier])
 
   const recoverySignIn = useCallback(() => {
     setIsSigningIn(true)
@@ -272,6 +295,24 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           placeholder={c('Label').t`Password`}
           ref={passwordInputRef}
           value={password}
+        />
+        {/*
+          Standard Red Notes: optional workspace name. On a server with
+          WORKSPACES_PER_EMAIL_ENABLED, this selects which account ("workspace")
+          under this email to sign into. Leave blank for the default workspace.
+          Ignored on servers with the feature off.
+        */}
+        <DecoratedInput
+          className={{ container: 'mb-2' }}
+          left={[<Icon type="user" className="text-neutral" />]}
+          type="text"
+          placeholder={c('Label').t`Workspace name (optional)`}
+          value={workspaceIdentifier}
+          onChange={handleWorkspaceIdentifierChange}
+          onFocus={resetInvalid}
+          onKeyDown={handleKeyDown}
+          disabled={isSigningIn}
+          spellcheck={false}
         />
         {error ? <div className="my-2 text-danger">{error}</div> : null}
         <Button

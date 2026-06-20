@@ -344,6 +344,8 @@ const TYPES = {
   Auth_EMAIL_REMINDERS_ENABLED: Symbol.for('Auth_EMAIL_REMINDERS_ENABLED'),
   Auth_EMAIL_REMINDER_NO_RECORDS: Symbol.for('Auth_EMAIL_REMINDER_NO_RECORDS'),
   Auth_EmailReminderSender: Symbol.for('Auth_EmailReminderSender'),
+  // Standard Red Notes: "multiple accounts per email" (workspaces) feature flag. Default OFF.
+  Auth_WORKSPACES_PER_EMAIL_ENABLED: Symbol.for('Auth_WORKSPACES_PER_EMAIL_ENABLED'),
   Auth_BaseSubscriptionInvitesController: Symbol.for('Auth_BaseSubscriptionInvitesController'),
   Auth_BaseUserRequestsController: Symbol.for('Auth_BaseUserRequestsController'),
   Auth_BaseWebSocketsController: Symbol.for('Auth_BaseWebSocketsController'),

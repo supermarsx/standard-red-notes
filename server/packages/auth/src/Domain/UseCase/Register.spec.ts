@@ -38,6 +38,7 @@ describe('Register', () => {
       return user
     })
     userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(null)
+    userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
 
     roleRepository = {} as jest.Mocked<RoleRepositoryInterface>
     roleRepository.findOneByName = jest.fn().mockReturnValue(null)
@@ -356,5 +357,125 @@ describe('Register', () => {
     })
 
     expect(userRepository.save).not.toHaveBeenCalled()
+  })
+
+  describe('Standard Red Notes: workspaces per email (WORKSPACES_PER_EMAIL_ENABLED)', () => {
+    const workspacesPerEmailEnabled = true
+
+    const createUseCaseWithWorkspaces = () =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        workspacesPerEmailEnabled,
+      )
+
+    it('flag OFF: does NOT set workspaceIdentifier on the saved entity and uses the email-only duplicate check', async () => {
+      await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'asdzxc',
+        updatedWithUserAgent: 'Mozilla',
+        apiVersion: '20200115',
+        ephemeralSession: false,
+        version: '004',
+        workspaceIdentifier: 'ignored-when-off',
+      })
+
+      expect(userRepository.findOneByUsernameOrEmail).toHaveBeenCalled()
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).not.toHaveBeenCalled()
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0]
+      // No-op guarantee: the workspace property is never stamped when OFF.
+      expect(savedUser.workspaceIdentifier).toBeUndefined()
+    })
+
+    it('flag ON: allows the same email under a different workspace and stamps the workspace identifier', async () => {
+      // No account exists for (email, 'team-a').
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'asdzxc',
+        updatedWithUserAgent: 'Mozilla',
+        apiVersion: '20200115',
+        ephemeralSession: false,
+        version: '004',
+        workspaceIdentifier: 'team-a',
+      })
+
+      expect(result.success).toBe(true)
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'team-a',
+      )
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0]
+      expect(savedUser.workspaceIdentifier).toBe('team-a')
+    })
+
+    it('flag ON: rejects a duplicate (email, workspace) pair', async () => {
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(user)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'asdzxc',
+        updatedWithUserAgent: 'Mozilla',
+        apiVersion: '20200115',
+        ephemeralSession: false,
+        version: '004',
+        workspaceIdentifier: 'team-a',
+      })
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'This email is already registered for this workspace.',
+      })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it("flag ON: an absent workspace name resolves to the 'default' workspace", async () => {
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'asdzxc',
+        updatedWithUserAgent: 'Mozilla',
+        apiVersion: '20200115',
+        ephemeralSession: false,
+        version: '004',
+      })
+
+      expect(result.success).toBe(true)
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'default',
+      )
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0]
+      expect(savedUser.workspaceIdentifier).toBe('default')
+    })
+
+    it("flag ON: rejecting a duplicate default workspace keeps the legacy error message", async () => {
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(user)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'asdzxc',
+        updatedWithUserAgent: 'Mozilla',
+        apiVersion: '20200115',
+        ephemeralSession: false,
+        version: '004',
+      })
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'This email is already registered.',
+      })
+    })
   })
 })

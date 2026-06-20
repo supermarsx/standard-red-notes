@@ -25,6 +25,28 @@ export class User {
   @Index('index_users_on_email')
   declare email: string
 
+  /**
+   * Standard Red Notes: workspace identifier for the "multiple accounts per
+   * email" feature (env flag WORKSPACES_PER_EMAIL_ENABLED, default OFF).
+   *
+   * A workspace is an independent encrypted account that shares an email with
+   * other workspaces. Account uniqueness becomes the composite
+   * (email, workspace_identifier) instead of email alone.
+   *
+   * The column defaults to 'default' at the database level so that with the
+   * flag OFF every account (and every legacy row) carries 'default' and the
+   * composite unique index is exactly equivalent to the historical
+   * one-account-per-email guarantee. When the flag is OFF this property is left
+   * unset on freshly-built entities so the in-memory shape (and the persisted
+   * row, via the DB default) is byte-for-byte identical to before.
+   */
+  @Column({
+    name: 'workspace_identifier',
+    length: 255,
+    default: 'default',
+  })
+  declare workspaceIdentifier: string
+
   @Column({
     name: 'pw_nonce',
     length: 255,

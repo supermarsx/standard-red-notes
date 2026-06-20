@@ -9,4 +9,11 @@ export type SignInDTO = {
   snjs?: string
   application?: string
   ipAddress?: string | null
+  /**
+   * Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+   * Ignored when the flag is OFF. When ON, disambiguates which workspace under
+   * the given email to sign into; an absent/empty value targets the 'default'
+   * workspace.
+   */
+  workspaceIdentifier?: string
 }

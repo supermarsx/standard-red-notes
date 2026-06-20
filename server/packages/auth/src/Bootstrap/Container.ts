@@ -903,6 +903,13 @@ export class ContainerConfigLoader {
     container
       .bind(TYPES.Auth_DISABLE_USER_REGISTRATION)
       .toConstantValue(env.get('DISABLE_USER_REGISTRATION', true) === 'true')
+    // Standard Red Notes: operator switch for "multiple accounts per email"
+    // (workspaces). Default OFF. When OFF the workspace concept is invisible and
+    // behavior is identical to before; the users.workspace_identifier column
+    // simply defaults to 'default' at the DB level.
+    container
+      .bind<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED)
+      .toConstantValue(env.get('WORKSPACES_PER_EMAIL_ENABLED', true) === 'true')
     container.bind(TYPES.Auth_SNS_AWS_REGION).toConstantValue(env.get('SNS_AWS_REGION', true))
     container.bind(TYPES.Auth_SQS_QUEUE_URL).toConstantValue(env.get('SQS_QUEUE_URL', true))
     container.bind(TYPES.Auth_VERSION).toConstantValue(env.get('VERSION', true) ?? 'development')
@@ -1217,6 +1224,7 @@ export class ContainerConfigLoader {
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
           container.get<PKCERepositoryInterface>(TYPES.Auth_PKCERepository),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
         ),
       )
 
@@ -1633,6 +1641,7 @@ export class ContainerConfigLoader {
           container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
           container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
           container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
+          container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
         ),
       )
     container
@@ -1724,6 +1733,7 @@ export class ContainerConfigLoader {
           env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
             ? +env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
             : -1,
+          container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)

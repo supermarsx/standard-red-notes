@@ -149,6 +149,10 @@ export class UserService
     hvmToken: string,
     ephemeral = false,
     mergeLocal = true,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
+    // callers are unaffected; ignored by the server unless the flag is on.
+    workspaceIdentifier?: string,
   ): Promise<UserRegistrationResponseBody> {
     if (this.encryption.hasAccount()) {
       throw Error('Tried to register when an account already exists.')
@@ -162,7 +166,7 @@ export class UserService
 
     try {
       this.lockSyncing()
-      const response = await this.sessions.register(email, password, hvmToken, ephemeral)
+      const response = await this.sessions.register(email, password, hvmToken, ephemeral, workspaceIdentifier)
 
       await this.notifyEventSync(AccountEvent.SignedInOrRegistered, {
         payload: {
@@ -196,6 +200,10 @@ export class UserService
     mergeLocal = true,
     awaitSync = false,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
+    // callers are unaffected; ignored by the server unless the flag is on.
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>> {
     if (this.encryption.hasAccount()) {
       throw Error('Tried to sign in when an account already exists.')
@@ -211,7 +219,15 @@ export class UserService
       /** Prevent a timed sync from occuring while signing in. */
       this.lockSyncing()
 
-      const { response } = await this.sessions.signIn(email, password, strict, ephemeral, undefined, hvmToken)
+      const { response } = await this.sessions.signIn(
+        email,
+        password,
+        strict,
+        ephemeral,
+        undefined,
+        hvmToken,
+        workspaceIdentifier,
+      )
 
       if (!isErrorResponse(response)) {
         const notifyingFunction = awaitSync ? this.notifyEventSync.bind(this) : this.notifyEvent.bind(this)

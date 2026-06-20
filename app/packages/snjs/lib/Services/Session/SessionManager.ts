@@ -436,6 +436,10 @@ export class SessionManager
     password: string,
     hvmToken: string,
     ephemeral: boolean,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
+    // callers are unaffected; ignored by the server unless the flag is on.
+    workspaceIdentifier?: string,
   ): Promise<UserRegistrationResponseBody> {
     if (password.length < MINIMUM_PASSWORD_LENGTH) {
       throw new ApiCallError(
@@ -464,6 +468,7 @@ export class SessionManager
       hvmToken,
       keyParams,
       ephemeral,
+      workspaceIdentifier,
     })
 
     if (isErrorResponse(registerResponse)) {
@@ -484,6 +489,8 @@ export class SessionManager
     email: string
     mfaCode?: string
     authenticatorResponse?: Record<string, unknown>
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string
   }): Promise<{
     keyParams?: SNRootKeyParams
     response: HttpResponse<KeyParamsResponse>
@@ -525,6 +532,7 @@ export class SessionManager
           email: dto.email,
           mfaCode: isU2FRequired ? undefined : (result as string),
           authenticatorResponse: isU2FRequired ? (result as Record<string, unknown>) : undefined,
+          workspaceIdentifier: dto.workspaceIdentifier,
         })
       } else {
         return { response }
@@ -547,8 +555,21 @@ export class SessionManager
     ephemeral = false,
     minAllowedVersion?: Common.ProtocolVersion,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so all
+    // existing call sites are unaffected. Threaded down to key-params lookup and
+    // the sign-in request; ignored by the server unless the feature flag is on.
+    workspaceIdentifier?: string,
   ): Promise<SessionManagerResponse> {
-    const result = await this.performSignIn(email, password, strict, ephemeral, minAllowedVersion, hvmToken)
+    const result = await this.performSignIn(
+      email,
+      password,
+      strict,
+      ephemeral,
+      minAllowedVersion,
+      hvmToken,
+      workspaceIdentifier,
+    )
     if (
       isErrorResponse(result.response) &&
       getErrorFromErrorResponse(result.response).tag !== ErrorTag.ClientValidationError &&
@@ -559,7 +580,15 @@ export class SessionManager
         /**
          * Try signing in with trimmed + lowercase version of email
          */
-        return this.performSignIn(cleanedEmail, password, strict, ephemeral, minAllowedVersion, hvmToken)
+        return this.performSignIn(
+          cleanedEmail,
+          password,
+          strict,
+          ephemeral,
+          minAllowedVersion,
+          hvmToken,
+          workspaceIdentifier,
+        )
       } else {
         return result
       }
@@ -575,9 +604,11 @@ export class SessionManager
     ephemeral = false,
     minAllowedVersion?: Common.ProtocolVersion,
     hvmToken?: string,
+    workspaceIdentifier?: string,
   ): Promise<SessionManagerResponse> {
     const paramsResult = await this.retrieveKeyParams({
       email,
+      workspaceIdentifier,
     })
     if (isErrorResponse(paramsResult.response)) {
       return {
@@ -638,7 +669,13 @@ export class SessionManager
       }
     }
     const rootKey = await this.encryptionService.computeRootKey(password, keyParams)
-    const signInResponse = await this.bypassChecksAndSignInWithRootKey(email, rootKey, ephemeral, hvmToken)
+    const signInResponse = await this.bypassChecksAndSignInWithRootKey(
+      email,
+      rootKey,
+      ephemeral,
+      hvmToken,
+      workspaceIdentifier,
+    )
 
     return {
       response: signInResponse,
@@ -650,6 +687,8 @@ export class SessionManager
     rootKey: SNRootKey,
     ephemeral = false,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>> {
     const { wrappingKey, canceled } = await this.challengeService.getWrappingKeyIfApplicable()
 
@@ -666,6 +705,7 @@ export class SessionManager
       serverPassword: rootKey.serverPassword as string,
       ephemeral,
       hvmToken,
+      workspaceIdentifier,
     })
 
     if (!signInResponse.data || isErrorResponse(signInResponse)) {

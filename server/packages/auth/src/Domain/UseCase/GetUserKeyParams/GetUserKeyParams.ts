@@ -17,6 +17,9 @@ export class GetUserKeyParams implements UseCaseInterface {
     private userRepository: UserRepositoryInterface,
     private pkceRepository: PKCERepositoryInterface,
     private logger: Logger,
+    // Standard Red Notes: "multiple accounts per email" flag. Default OFF
+    // (trailing optional param so existing call sites/specs are unchanged).
+    private workspacesPerEmailEnabled = false,
   ) {}
 
   async execute(dto: GetUserKeyParamsDTO): Promise<GetUserKeyParamsResponse> {
@@ -28,7 +31,18 @@ export class GetUserKeyParams implements UseCaseInterface {
       }
       const username = usernameOrError.getValue()
 
-      user = await this.userRepository.findOneByUsernameOrEmail(username)
+      // Standard Red Notes: with the feature ON, the key-params lookup is keyed
+      // by the composite (email, workspaceIdentifier). A non-matching pair falls
+      // through to the same pseudo-params path as an unknown email below, so the
+      // endpoint never reveals which (email, workspace) pairs exist beyond
+      // today's email-existence behavior (enumeration parity). With the flag
+      // OFF, the historical email-only lookup is used unchanged.
+      if (this.workspacesPerEmailEnabled) {
+        const workspaceIdentifier = this.normalizeWorkspaceIdentifier(dto.workspaceIdentifier)
+        user = await this.userRepository.findOneByEmailAndWorkspaceIdentifier(username, workspaceIdentifier)
+      } else {
+        user = await this.userRepository.findOneByUsernameOrEmail(username)
+      }
       if (!user) {
         this.logger.debug(`No user with email ${dto.email}. Creating pseudo key params.`)
 
@@ -71,5 +85,16 @@ export class GetUserKeyParams implements UseCaseInterface {
 
   private isCodeChallengedVersion(dto: GetUserKeyParamsDTO): dto is GetUserKeyParamsDTOV2Challenged {
     return (dto as GetUserKeyParamsDTOV2Challenged).codeChallenge !== undefined
+  }
+
+  /**
+   * Standard Red Notes: collapses an absent/empty workspace name to the
+   * reserved 'default' workspace (matches the DB column default and the Register
+   * use case).
+   */
+  private normalizeWorkspaceIdentifier(requested?: string): string {
+    const trimmed = (requested ?? '').trim()
+
+    return trimmed.length === 0 ? 'default' : trimmed
   }
 }

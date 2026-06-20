@@ -198,6 +198,10 @@ export class BaseAuthController extends BaseHttpController {
       email: request.body.email as string,
       authenticated: false,
       codeChallenge: request.body.code_challenge as string,
+      // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+      // Undefined/absent when the feature is off — the use case ignores it
+      // entirely unless the server flag is on.
+      workspaceIdentifier: request.body.workspace_identifier as string | undefined,
     })
 
     return this.json(result.keyParams)
@@ -229,6 +233,9 @@ export class BaseAuthController extends BaseHttpController {
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,
       ipAddress: (request.headers['x-origin-ip'] as string) ?? null,
+      // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+      // Ignored by the use case unless the server flag is on.
+      workspaceIdentifier: request.body.workspace_identifier as string | undefined,
     })
 
     if (!signInResult.success) {
@@ -472,6 +479,9 @@ export class BaseAuthController extends BaseHttpController {
       snjs: request.headers['x-snjs-version'] as string,
       application: request.headers['x-application-version'] as string,
       ipAddress: (request.headers['x-origin-ip'] as string) ?? null,
+      // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+      // Ignored by the use case unless the server flag is on.
+      workspaceIdentifier: request.body.workspace_identifier as string | undefined,
     })
 
     if (!registerResult.success) {

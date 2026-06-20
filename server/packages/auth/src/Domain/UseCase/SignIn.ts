@@ -32,6 +32,9 @@ export class SignIn implements UseCaseInterface {
     private maxNonCaptchaAttempts: number,
     private lockRepository: LockRepositoryInterface,
     private verifyHumanInteractionUseCase: VerifyHumanInteraction,
+    // Standard Red Notes: "multiple accounts per email" flag. Default OFF
+    // (trailing optional param so existing call sites/specs are unchanged).
+    private workspacesPerEmailEnabled = false,
   ) {}
 
   async execute(dto: SignInDTO): Promise<SignInResponse> {
@@ -72,7 +75,18 @@ export class SignIn implements UseCaseInterface {
     }
     const username = usernameOrError.getValue()
 
-    const user = await this.userRepository.findOneByUsernameOrEmail(username)
+    // Standard Red Notes: with the feature ON, resolve the specific workspace by
+    // the composite (email, workspaceIdentifier); an absent/empty value targets
+    // the 'default' workspace. A non-matching pair yields no user and falls
+    // through to the standard "Invalid email or password" path below, so no
+    // additional information about which workspaces exist is leaked. With the
+    // flag OFF, the historical email-only lookup is preserved exactly.
+    const user = this.workspacesPerEmailEnabled
+      ? await this.userRepository.findOneByEmailAndWorkspaceIdentifier(
+          username,
+          this.normalizeWorkspaceIdentifier(dto.workspaceIdentifier),
+        )
+      : await this.userRepository.findOneByUsernameOrEmail(username)
     const userIdentifier = user?.uuid ?? dto.email
 
     const humanVerificationBeforeCheckingUsernameAndPasswordResult = await this.checkHumanVerificationIfNeeded(
@@ -147,6 +161,17 @@ export class SignIn implements UseCaseInterface {
     const matchingCodeChallengeWasPresentAndRemoved = await this.pkceRepository.removeCodeChallenge(codeChallenge)
 
     return matchingCodeChallengeWasPresentAndRemoved
+  }
+
+  /**
+   * Standard Red Notes: collapses an absent/empty workspace name to the
+   * reserved 'default' workspace (matches the DB column default and the Register
+   * / GetUserKeyParams use cases).
+   */
+  private normalizeWorkspaceIdentifier(requested?: string): string {
+    const trimmed = (requested ?? '').trim()
+
+    return trimmed.length === 0 ? 'default' : trimmed
   }
 
   private async sendSignInEmailNotification(user: User, userAgent: string): Promise<void> {

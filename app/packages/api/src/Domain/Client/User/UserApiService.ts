@@ -75,6 +75,8 @@ export class UserApiService implements UserApiServiceInterface {
     hvmToken?: string
     keyParams: RootKeyParamsInterface
     ephemeral: boolean
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string
   }): Promise<HttpResponse<UserRegistrationResponseBody>> {
     this.lockOperation(UserApiOperations.Registering)
 
@@ -85,6 +87,10 @@ export class UserApiService implements UserApiServiceInterface {
         email: registerDTO.email,
         hvm_token: registerDTO.hvmToken,
         ephemeral: registerDTO.ephemeral,
+        // Standard Red Notes: only include the field when a non-empty workspace
+        // was provided, so the request body is byte-for-byte identical to today
+        // when the feature is unused.
+        ...(registerDTO.workspaceIdentifier ? { workspace_identifier: registerDTO.workspaceIdentifier } : {}),
         ...registerDTO.keyParams.getPortableValue(),
       })
 

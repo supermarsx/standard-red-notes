@@ -28,6 +28,11 @@ export class Register implements UseCaseInterface {
     private activatePremiumFeatures?: ActivatePremiumFeatures,
     private standardRedFullFeatureDurationDays = 36500,
     private standardRedFullFeatureFileUploadBytesLimit = -1,
+    // Standard Red Notes: "multiple accounts per email" feature flag. Default
+    // OFF (added as a trailing optional param so existing call sites and specs
+    // keep their exact behavior). When OFF, the workspace concept is invisible:
+    // the duplicate check stays email-only and no workspace property is set.
+    private workspacesPerEmailEnabled = false,
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
@@ -43,7 +48,18 @@ export class Register implements UseCaseInterface {
       }
     }
 
-    const { email, password, apiVersion, ephemeralSession, ...registrationFields } = dto
+    // Standard Red Notes: pull workspaceIdentifier out of the spread so it is
+    // NEVER Object.assign'd onto the entity implicitly. With the flag OFF we
+    // ignore it completely; with the flag ON we set it explicitly below. This
+    // keeps the persisted entity byte-for-byte identical when the flag is OFF.
+    const {
+      email,
+      password,
+      apiVersion,
+      ephemeralSession,
+      workspaceIdentifier: requestedWorkspaceIdentifier,
+      ...registrationFields
+    } = dto
 
     const apiVersionOrError = ApiVersion.create(apiVersion)
     if (apiVersionOrError.isFailed()) {
@@ -70,17 +86,45 @@ export class Register implements UseCaseInterface {
     }
     const username = usernameOrError.getValue()
 
-    const existingUser = await this.userRepository.findOneByUsernameOrEmail(username)
-    if (existingUser) {
-      return {
-        success: false,
-        errorMessage: 'This email is already registered.',
+    // Standard Red Notes: when the workspaces-per-email feature is ON, the
+    // account is keyed by the composite (email, workspaceIdentifier). An
+    // absent/empty workspace name resolves to the 'default' workspace so the
+    // same email may register multiple independent workspaces, while still
+    // rejecting a duplicate (email, workspace) pair. When OFF, the historical
+    // email-only duplicate check is preserved exactly.
+    if (this.workspacesPerEmailEnabled) {
+      const workspaceIdentifier = this.normalizeWorkspaceIdentifier(requestedWorkspaceIdentifier)
+
+      const existingUser = await this.userRepository.findOneByEmailAndWorkspaceIdentifier(username, workspaceIdentifier)
+      if (existingUser) {
+        return {
+          success: false,
+          errorMessage:
+            workspaceIdentifier === 'default'
+              ? 'This email is already registered.'
+              : 'This email is already registered for this workspace.',
+        }
+      }
+    } else {
+      const existingUser = await this.userRepository.findOneByUsernameOrEmail(username)
+      if (existingUser) {
+        return {
+          success: false,
+          errorMessage: 'This email is already registered.',
+        }
       }
     }
 
     let user = new User()
     user.uuid = uuidv4()
     user.email = username.value
+    // Standard Red Notes: only stamp the workspace identifier on the entity when
+    // the feature is ON. When OFF we leave it unset so the database column
+    // default ('default') applies and the saved row/in-memory entity is
+    // unchanged from the pre-feature shape.
+    if (this.workspacesPerEmailEnabled) {
+      user.workspaceIdentifier = this.normalizeWorkspaceIdentifier(requestedWorkspaceIdentifier)
+    }
     user.createdAt = this.timer.getUTCDate()
     user.updatedAt = this.timer.getUTCDate()
     user.encryptedPassword = await bcrypt.hash(password, User.PASSWORD_HASH_COST)
@@ -142,6 +186,18 @@ export class Register implements UseCaseInterface {
       success: true,
       result,
     }
+  }
+
+  /**
+   * Standard Red Notes: normalizes a requested workspace name. An absent, empty
+   * or whitespace-only value collapses to the reserved 'default' workspace,
+   * matching the database column default and preserving the legacy
+   * one-account-per-email semantics for the default workspace.
+   */
+  private normalizeWorkspaceIdentifier(requested?: string): string {
+    const trimmed = (requested ?? '').trim()
+
+    return trimmed.length === 0 ? 'default' : trimmed
   }
 
   private shouldActivateStandardRedFullFeatures(): boolean {

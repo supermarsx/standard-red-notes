@@ -17,6 +17,12 @@ type Props = {
 const MenuPaneSelector: FunctionComponent<Props> = ({ menuPane, setMenuPane, closeMenu, mainApplicationGroup }) => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  // Standard Red Notes: optional workspace name for the "multiple accounts per
+  // email" feature (server flag WORKSPACES_PER_EMAIL_ENABLED). Threaded from the
+  // CreateAccount pane through to the register call in ConfirmPassword. When the
+  // server flag is off, any value here is ignored server-side (no-op), so the
+  // field is shown as always-optional.
+  const [workspaceIdentifier, setWorkspaceIdentifier] = useState('')
 
   switch (menuPane) {
     case AccountMenuPane.GeneralMenu:
@@ -37,10 +43,19 @@ const MenuPaneSelector: FunctionComponent<Props> = ({ menuPane, setMenuPane, clo
           setEmail={setEmail}
           password={password}
           setPassword={setPassword}
+          workspaceIdentifier={workspaceIdentifier}
+          setWorkspaceIdentifier={setWorkspaceIdentifier}
         />
       )
     case AccountMenuPane.ConfirmPassword:
-      return <ConfirmPassword setMenuPane={setMenuPane} email={email} password={password} />
+      return (
+        <ConfirmPassword
+          setMenuPane={setMenuPane}
+          email={email}
+          password={password}
+          workspaceIdentifier={workspaceIdentifier}
+        />
+      )
   }
 }
 

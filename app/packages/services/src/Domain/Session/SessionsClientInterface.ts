@@ -30,7 +30,14 @@ export interface SessionsClientInterface {
   revokeAllOtherSessions(): Promise<void>
 
   isCurrentSessionReadOnly(): boolean | undefined
-  register(email: string, password: string, hvmToken: string, ephemeral: boolean): Promise<UserRegistrationResponseBody>
+  register(
+    email: string,
+    password: string,
+    hvmToken: string,
+    ephemeral: boolean,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
+  ): Promise<UserRegistrationResponseBody>
   signIn(
     email: string,
     password: string,
@@ -38,11 +45,16 @@ export interface SessionsClientInterface {
     ephemeral: boolean,
     minAllowedVersion?: ProtocolVersion,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
   ): Promise<SessionManagerResponse>
   bypassChecksAndSignInWithRootKey(
     email: string,
     rootKey: RootKeyInterface,
     ephemeral: boolean,
+    hvmToken?: string,
+    // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>>
   signOut(): Promise<void>
   changeCredentials(parameters: {

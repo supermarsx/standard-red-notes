@@ -777,8 +777,12 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     hvmToken: string,
     ephemeral = false,
     mergeLocal = true,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
+    // callers are unaffected; ignored by the server unless the flag is on.
+    workspaceIdentifier?: string,
   ): Promise<UserRegistrationResponseBody> {
-    return this.user.register(email, password, hvmToken, ephemeral, mergeLocal)
+    return this.user.register(email, password, hvmToken, ephemeral, mergeLocal, workspaceIdentifier)
   }
 
   /**
@@ -793,8 +797,12 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     mergeLocal = true,
     awaitSync = false,
     hvmToken?: string,
+    // Standard Red Notes: optional workspace name for "multiple accounts per
+    // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
+    // callers are unaffected; ignored by the server unless the flag is on.
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>> {
-    return this.user.signIn(email, password, strict, ephemeral, mergeLocal, awaitSync, hvmToken)
+    return this.user.signIn(email, password, strict, ephemeral, mergeLocal, awaitSync, hvmToken, workspaceIdentifier)
   }
 
   public async getCaptchaUrl(): Promise<HttpResponse<MetaEndpointResponse>> {

@@ -25,6 +25,7 @@ describe('GetUserKeyParams', () => {
 
     userRepository = {} as jest.Mocked<UserRepositoryInterface>
     userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+    userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(user)
     userRepository.findOneByUuid = jest.fn().mockReturnValue(user)
 
     logger = {} as jest.Mocked<Logger>
@@ -147,5 +148,53 @@ describe('GetUserKeyParams', () => {
     }
 
     expect(error).not.toBeNull()
+  })
+
+  describe('Standard Red Notes: workspaces per email (WORKSPACES_PER_EMAIL_ENABLED)', () => {
+    const createUseCaseWithWorkspaces = () =>
+      new GetUserKeyParams(keyParamsFactory, userRepository, pkceRepository, logger, true)
+
+    it('flag OFF: resolves by email only (composite lookup is not used)', async () => {
+      await createUseCase().execute({ email: 'test@test.te', authenticated: false, workspaceIdentifier: 'team-a' })
+
+      expect(userRepository.findOneByUsernameOrEmail).toHaveBeenCalled()
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).not.toHaveBeenCalled()
+    })
+
+    it('flag ON: resolves the account by the composite (email, workspace)', async () => {
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        authenticated: false,
+        workspaceIdentifier: 'team-a',
+      })
+
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'team-a',
+      )
+      expect(result).toEqual({ keyParams: { foo: 'bar' } })
+    })
+
+    it("flag ON: an absent workspace name resolves to the 'default' workspace", async () => {
+      await createUseCaseWithWorkspaces().execute({ email: 'test@test.te', authenticated: false })
+
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'default',
+      )
+    })
+
+    it('flag ON: a non-matching (email, workspace) pair returns pseudo key params (enumeration parity)', async () => {
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        authenticated: false,
+        workspaceIdentifier: 'does-not-exist',
+      })
+
+      expect(result).toEqual({ keyParams: { bar: 'baz' } })
+      expect(keyParamsFactory.createPseudoParams).toHaveBeenCalledWith('test@test.te')
+    })
   })
 })

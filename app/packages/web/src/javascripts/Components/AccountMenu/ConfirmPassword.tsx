@@ -26,9 +26,13 @@ type Props = {
   setMenuPane: (pane: AccountMenuPane) => void
   email: string
   password: string
+  // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
+  // Empty string means the default workspace; ignored server-side when the flag
+  // is off.
+  workspaceIdentifier?: string
 }
 
-const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, password }) => {
+const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, password, workspaceIdentifier }) => {
   const application = useApplication()
 
   const { notesAndTagsCount } = application.accountMenuController
@@ -45,7 +49,10 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
   const register = useCallback(() => {
     setIsRegistering(true)
     application
-      .register(email, password, hvmToken, isEphemeral, shouldMergeLocal)
+      // Standard Red Notes: pass the optional workspace name through to register.
+      // An empty string is treated as the default workspace; the server ignores
+      // it entirely unless WORKSPACES_PER_EMAIL_ENABLED is on.
+      .register(email, password, hvmToken, isEphemeral, shouldMergeLocal, workspaceIdentifier || undefined)
       .then(() => {
         application.accountMenuController.closeAccountMenu()
         application.accountMenuController.setCurrentPane(AccountMenuPane.GeneralMenu)
@@ -57,7 +64,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
       .finally(() => {
         setIsRegistering(false)
       })
-  }, [application, email, hvmToken, isEphemeral, password, shouldMergeLocal])
+  }, [application, email, hvmToken, isEphemeral, password, shouldMergeLocal, workspaceIdentifier])
 
   const captchaIframe = useCaptcha(captchaURL, (token) => {
     setHVMToken(token)

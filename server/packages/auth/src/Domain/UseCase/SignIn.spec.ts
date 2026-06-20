@@ -60,6 +60,7 @@ describe('SignIn', () => {
 
     userRepository = {} as jest.Mocked<UserRepositoryInterface>
     userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+    userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(user)
 
     session = {} as jest.Mocked<Session>
     authResponseFactory = {} as jest.Mocked<AuthResponseFactoryInterface>
@@ -392,6 +393,92 @@ describe('SignIn', () => {
     ).toEqual({
       success: false,
       errorMessage: 'Human verification step failed.',
+    })
+  })
+
+  describe('Standard Red Notes: workspaces per email (WORKSPACES_PER_EMAIL_ENABLED)', () => {
+    const createUseCaseWithWorkspaces = () =>
+      new SignIn(
+        userRepository,
+        authResponseFactoryResolver,
+        domainEventPublisher,
+        domainEventFactory,
+        sessionService,
+        pkceRepository,
+        crypter,
+        logger,
+        maxNonCaptchaAttempts,
+        lockRepository,
+        verifyHumanInteractionUseCase,
+        true,
+      )
+
+    it('flag OFF: resolves by email only (composite lookup is not used)', async () => {
+      await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+        workspaceIdentifier: 'team-a',
+      })
+
+      expect(userRepository.findOneByUsernameOrEmail).toHaveBeenCalled()
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).not.toHaveBeenCalled()
+    })
+
+    it('flag ON: resolves the account by the composite (email, workspace) before verifying the password', async () => {
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+        workspaceIdentifier: 'team-a',
+      })
+
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'team-a',
+      )
+      expect(result.success).toBe(true)
+    })
+
+    it("flag ON: an absent workspace name targets the 'default' workspace", async () => {
+      await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      })
+
+      expect(userRepository.findOneByEmailAndWorkspaceIdentifier).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 'test@test.te' }),
+        'default',
+      )
+    })
+
+    it('flag ON: a non-matching (email, workspace) pair fails with the generic invalid-credentials message', async () => {
+      userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
+
+      const result = await createUseCaseWithWorkspaces().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+        workspaceIdentifier: 'does-not-exist',
+      })
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'Invalid email or password',
+      })
     })
   })
 })

@@ -78,4 +78,17 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
       .where('user.email = :email', { email: usernameOrEmail.value })
       .getMany()
   }
+
+  async findOneByEmailAndWorkspaceIdentifier(
+    usernameOrEmail: Email | Username,
+    workspaceIdentifier: string,
+  ): Promise<User | null> {
+    return this.ormRepository
+      .createQueryBuilder('user')
+      .where('user.email = :email AND user.workspace_identifier = :workspaceIdentifier', {
+        email: usernameOrEmail.value,
+        workspaceIdentifier,
+      })
+      .getOne()
+  }
 }

@@ -270,6 +270,13 @@ export class LegacyApiService
      * this browser (if any) is used automatically.
      */
     trustedDeviceToken?: string
+    /**
+     * Standard Red Notes: optional workspace name for "multiple accounts per
+     * email" (WORKSPACES_PER_EMAIL_ENABLED). Sent as workspace_identifier so the
+     * server can resolve the specific workspace's key params. Omitted entirely
+     * when unset, keeping the request identical to today.
+     */
+    workspaceIdentifier?: string
   }): Promise<HttpResponse<KeyParamsResponse>> {
     const codeVerifier = this.crypto.generateRandomKey(256)
     this.inMemoryStore.setValue(StorageKey.CodeVerifier, codeVerifier)
@@ -280,6 +287,10 @@ export class LegacyApiService
       email: dto.email,
       code_challenge: codeChallenge,
     }) as Record<string, unknown>
+
+    if (dto.workspaceIdentifier !== undefined && dto.workspaceIdentifier.length > 0) {
+      params['workspace_identifier'] = dto.workspaceIdentifier
+    }
 
     if (dto.mfaCode !== undefined) {
       params['mfa_code'] = dto.mfaCode
@@ -335,6 +346,12 @@ export class LegacyApiService
     serverPassword: string
     ephemeral: boolean
     hvmToken?: string
+    /**
+     * Standard Red Notes: optional workspace name for "multiple accounts per
+     * email" (WORKSPACES_PER_EMAIL_ENABLED). Sent as workspace_identifier so the
+     * server resolves the specific workspace before verifying the password.
+     */
+    workspaceIdentifier?: string
   }): Promise<HttpResponse<SignInResponse>> {
     if (this.authenticating) {
       return this.createErrorResponse(API_MESSAGE_LOGIN_IN_PROGRESS, HttpStatusCode.BadRequest)
@@ -347,6 +364,9 @@ export class LegacyApiService
       ephemeral: dto.ephemeral,
       code_verifier: this.inMemoryStore.getValue(StorageKey.CodeVerifier) as string,
       hvm_token: dto.hvmToken,
+      ...(dto.workspaceIdentifier && dto.workspaceIdentifier.length > 0
+        ? { workspace_identifier: dto.workspaceIdentifier }
+        : {}),
     })
 
     const response = await this.request<SignInResponse>({
