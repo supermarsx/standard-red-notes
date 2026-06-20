@@ -1,0 +1,79 @@
+/**
+ * Styles for heading / list-item folding (FoldablePlugin).
+ *
+ * - `.Lexical__foldable` marks a heading or list item that can be folded; it
+ *   gets a disclosure chevron in the left gutter.
+ * - `.Lexical__foldCollapsed` is set on a foldable element whose fold is active.
+ * - `.Lexical__folded` hides an element (the content under a collapsed heading,
+ *   or the nested list under a collapsed list item).
+ * - `.Lexical__foldToggle` is the injected, click-only chevron target.
+ */
+
+.Lexical__folded {
+  display: none !important;
+  user-select: none;
+}
+
+.Lexical__foldable {
+  position: relative;
+}
+
+.Lexical__foldToggle {
+  position: absolute;
+  left: -1.15em;
+  top: 0;
+  width: 1em;
+  height: 1.4em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.1s ease-in-out;
+  color: var(--sn-stylekit-passive-color-1);
+
+  // Chevron drawn with a CSS triangle. Points down when expanded.
+  &::before {
+    content: '';
+    border-style: solid;
+    border-width: 5px 4px 0 4px;
+    border-color: currentColor transparent transparent transparent;
+    transition: transform 0.1s ease-in-out;
+  }
+}
+
+// Show the chevron on hover of the foldable element, or always when collapsed.
+.Lexical__foldable:hover > .Lexical__foldToggle,
+.Lexical__foldCollapsed > .Lexical__foldToggle {
+  opacity: 1;
+}
+
+// Collapsed: rotate the chevron to point right.
+.Lexical__foldCollapsed > .Lexical__foldToggle::before {
+  transform: rotate(-90deg);
+}
+
+// Always show a subtle indicator that a collapsed heading has hidden content.
+.Lexical__foldCollapsed.Lexical__foldable::after {
+  content: '…';
+  margin-left: 0.4em;
+  color: var(--sn-stylekit-passive-color-1);
+  font-weight: normal;
+  cursor: pointer;
+}
+
+// On touch / coarse pointers the chevron is always visible and larger so it is
+// reliably tappable, consistent with recent mobile work.
+@media (pointer: coarse) {
+  .Lexical__foldToggle {
+    opacity: 1;
+    left: -1.4em;
+    width: 1.4em;
+    height: 1.6em;
+
+    &::before {
+      border-width: 7px 5px 0 5px;
+    }
+  }
+}
