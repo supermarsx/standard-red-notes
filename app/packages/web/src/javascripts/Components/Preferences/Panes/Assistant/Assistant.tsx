@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { isErrorResponse, PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
@@ -10,6 +10,14 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import Button from '@/Components/Button/Button'
 import { getSelectionActions, SelectionActionId } from '@/Assistant/selectionActions'
+import { NARRATION_STYLES } from '@/Assistant/narration'
+import {
+  clampRate,
+  loadNarrationSettings,
+  NarrationStyleSetting,
+  saveNarrationSettings,
+} from '@/Assistant/narrationSettings'
+import { getTtsAvailability, listWebSpeechVoices } from '@/Assistant/tts'
 
 type AssistantConfig = {
   providers: string[]
@@ -259,6 +267,30 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   }, [application, provider])
 
   const providers = config?.providers ?? []
+
+  // Narration / TTS settings (device-local; persisted in localStorage — not a synced
+  // PrefKey, which would require touching @standardnotes/models).
+  const [narration, setNarration] = useState(() => loadNarrationSettings())
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() => listWebSpeechVoices())
+  const ttsAvailability = useMemo(() => getTtsAvailability(application), [application])
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return
+    }
+    const update = () => setVoices(listWebSpeechVoices())
+    update()
+    window.speechSynthesis.onvoiceschanged = update
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null
+    }
+  }, [])
+  const updateNarration = useCallback((patch: Partial<ReturnType<typeof loadNarrationSettings>>) => {
+    setNarration((prev) => {
+      const next = { ...prev, ...patch }
+      saveNarrationSettings(next)
+      return next
+    })
+  }, [])
 
   const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
   const updateSelectionAction = useCallback(
@@ -541,6 +573,88 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               />
             </>
           )}
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Narration &amp; text-to-speech</Title>
+          <Text>
+            Narrate a note from its options menu: the AI rewrites it into clean, listenable text and a player reads it
+            aloud. Generating narration sends the note&rsquo;s content to your configured AI provider.
+          </Text>
+          <Text className="mt-2 text-passive-1">
+            {ttsAvailability.modelAvailable
+              ? 'Playback prefers model voices via your Direct endpoint’s /audio/speech route (sending the narration text there), and falls back to your device’s built-in voices.'
+              : 'Playback uses your device’s built-in voices (browser text-to-speech) — no network and no key required. Model voices need Direct mode with a base URL.'}
+          </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Default narration style</Subtitle>
+          <Text>Used when you narrate a note. Choose “Ask each time” to pick a style on every narration.</Text>
+          <select
+            className="mt-2 rounded border border-border bg-default px-2 py-1.5 text-sm"
+            value={narration.defaultStyle}
+            onChange={(event) => updateNarration({ defaultStyle: event.target.value as NarrationStyleSetting })}
+          >
+            <option value="ask">Ask each time</option>
+            {NARRATION_STYLES.map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.label}
+              </option>
+            ))}
+          </select>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Device voice</Subtitle>
+          <Text>Voice used for browser text-to-speech. Available voices depend on your OS and browser.</Text>
+          {voices.length > 0 ? (
+            <select
+              className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+              value={narration.voiceURI}
+              onChange={(event) => updateNarration({ voiceURI: event.target.value })}
+            >
+              <option value="">Browser default</option>
+              {voices.map((voice) => (
+                <option key={voice.voiceURI} value={voice.voiceURI}>
+                  {voice.name} ({voice.lang})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <Text className="mt-2 text-passive-1">No device voices detected yet.</Text>
+          )}
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Model voice</Subtitle>
+          <Text>
+            Voice name sent to a model speech endpoint when one is configured (e.g. OpenAI&rsquo;s alloy, echo, fable,
+            onyx, nova, shimmer). Ignored when using device voices.
+          </Text>
+          <input
+            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="text"
+            value={narration.modelVoice}
+            placeholder="alloy"
+            onChange={(event) => updateNarration({ modelVoice: event.target.value })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Speaking speed: {narration.rate.toFixed(1)}×</Subtitle>
+          <Text>Playback rate for device-voice narration. 1× is normal.</Text>
+          <input
+            className="mt-2 w-full"
+            type="range"
+            min={0.5}
+            max={2}
+            step={0.1}
+            value={narration.rate}
+            onChange={(event) => updateNarration({ rate: clampRate(Number(event.target.value)) })}
+          />
         </PreferencesSegment>
       </PreferencesGroup>
 

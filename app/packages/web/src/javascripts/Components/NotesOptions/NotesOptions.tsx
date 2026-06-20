@@ -35,6 +35,7 @@ import { shareBlobOnMobile } from '@/NativeMobileWeb/ShareBlobOnMobile'
 import { isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { encryptShare } from '../SharedView/shareCrypto'
+import NarrationModal from './NarrationModal'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -46,6 +47,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const notesController = application.notesController
 
   const [altKeyDown, setAltKeyDown] = useState(false)
+  const [narrationOpen, setNarrationOpen] = useState(false)
   const { toggleAppPane } = useResponsiveAppPane()
 
   const { trashed, notTrashed, pinned, unpinned, starred, archived, unarchived, locked, protect, hidePreviews } =
@@ -202,6 +204,14 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   return (
     <>
       {notes.length === 1 && (
+        <NarrationModal
+          application={application}
+          note={notes[0]}
+          isOpen={narrationOpen}
+          close={() => setNarrationOpen(false)}
+        />
+      )}
+      {notes.length === 1 && (
         <>
           <MenuSection>
             <MenuItem onClick={openRevisionHistoryModal}>
@@ -331,6 +341,16 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <MenuItem onClick={createShareLink}>
             <Icon type="link" className={iconClass} />
             Create share link
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setNarrationOpen(true)
+            }}
+          >
+            <Icon type="file-music" className={iconClass} />
+            Narrate / Listen
           </MenuItem>
         )}
         {application.platform === Platform.Android && (

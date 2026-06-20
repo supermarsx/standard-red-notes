@@ -109,20 +109,21 @@ function buildProvider(application: WebApplication, signal?: AbortSignal): Provi
 }
 
 /**
- * Run a single (non-agentic) completion over the selected text and return the
- * result, streaming partials through onDelta if provided.
+ * Issue a single (non-agentic) completion with an explicit system prompt and user
+ * message, streaming partials through onDelta if provided. This is the shared
+ * one-shot primitive that powers selection actions and narration; callers that just
+ * transform selected text should use {@link runSelectionAction} instead.
  */
-export async function runSelectionAction(
+export async function runOneShotCompletion(
   application: WebApplication,
-  instruction: string,
-  selectedText: string,
+  system: string,
+  user: string,
   options: { signal?: AbortSignal; onDelta?: (full: string) => void } = {},
 ): Promise<string> {
   const provider = buildProvider(application, options.signal)
-  const user = `${instruction.trim()}\n\n---\n${selectedText}`
   let text = ''
   for await (const event of provider.send({
-    system: SYSTEM_PROMPT,
+    system,
     messages: [{ role: 'user', content: user }],
     tools: [],
   })) {
@@ -136,4 +137,18 @@ export async function runSelectionAction(
     }
   }
   return text.trim()
+}
+
+/**
+ * Run a single (non-agentic) completion over the selected text and return the
+ * result, streaming partials through onDelta if provided.
+ */
+export async function runSelectionAction(
+  application: WebApplication,
+  instruction: string,
+  selectedText: string,
+  options: { signal?: AbortSignal; onDelta?: (full: string) => void } = {},
+): Promise<string> {
+  const user = `${instruction.trim()}\n\n---\n${selectedText}`
+  return runOneShotCompletion(application, SYSTEM_PROMPT, user, options)
 }
