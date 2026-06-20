@@ -1048,7 +1048,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'The assistant operates within your account and acts on your decrypted notes locally in the browser session.',
           },
         ],
-        related: ['assistant/providers', 'assistant/privacy'],
+        related: ['assistant/providers', 'assistant/connection', 'assistant/capabilities', 'assistant/retrieval-search', 'assistant/privacy'],
       },
       {
         id: 'assistant/providers',
@@ -1065,11 +1065,108 @@ export const DOC_CATEGORIES: DocCategory[] = [
               'Pick a provider/connection.',
               'Set the base URL (for a local server this points at your machine).',
               'Add an API key if the provider needs one (local servers usually do not).',
-              'Select the model to use.',
+              'Use “Fetch models” to load the endpoint’s available models, then select one.',
+            ],
+          },
+          {
+            type: 'callout',
+            variant: 'tip',
+            text: 'There are two ways to connect: talk to an endpoint directly from the app, or relay through the Standard Red Notes server. See “Connection modes” for the trade-offs.',
+          },
+        ],
+        related: ['assistant/connection', 'assistant/overview', 'assistant/privacy'],
+      },
+      {
+        id: 'assistant/connection',
+        title: 'Connection modes: Direct vs Server proxy',
+        summary: 'Talk to an endpoint directly, or relay through the server with a server-held key.',
+        blocks: [
+          {
+            type: 'paragraph',
+            text: 'The assistant can reach a model in two ways. In Direct mode your browser talks straight to an OpenAI-compatible endpoint. In Server proxy mode the Standard Red Notes server relays the conversation using a key it holds, so your devices never store the key.',
+          },
+          {
+            type: 'heading',
+            text: 'Direct mode',
+          },
+          {
+            type: 'paragraph',
+            text: 'The app connects directly to an OpenAI-compatible endpoint — for example LM Studio (http://localhost:1234/v1), Ollama (http://localhost:11434/v1), OpenRouter, OpenAI, or any custom base URL. If the endpoint needs an API key, it is stored in your encrypted, synced preferences and sent only to that endpoint. Use the “Fetch models” button to query the endpoint’s /models list and pick a model.',
+          },
+          {
+            type: 'heading',
+            text: 'Server proxy mode',
+          },
+          {
+            type: 'paragraph',
+            text: 'In Server proxy mode the Standard Red Notes server relays one model turn at a time using a server-held API key, so client devices never hold the key. An administrator enables providers on the server through environment configuration (anthropic, openai-compatible, or ollama). The app then probes the server: it loads the list of providers the server has configured, you pick one, and you fetch the list of models that provider offers — the server queries the provider’s model list with its own key.',
+          },
+          {
+            type: 'paragraph',
+            text: 'In proxy mode the server can enforce a per-user daily request limit, and your current usage against that limit is shown in the app.',
+          },
+          {
+            type: 'table',
+            rows: [
+              ['Mode', 'Where the key lives / Who pays & limits'],
+              ['Direct', 'Key (if any) is in your encrypted synced preferences and sent only to the endpoint; you connect to and pay the provider directly, with no app-enforced limits.'],
+              ['Server proxy', 'Key is held by the server, never on client devices; the server account pays the provider and can enforce per-user daily request limits, with usage shown in the app.'],
             ],
           },
         ],
-        related: ['assistant/overview', 'assistant/privacy'],
+        related: ['assistant/providers', 'assistant/overview', 'assistant/privacy'],
+      },
+      {
+        id: 'assistant/capabilities',
+        title: 'Steering, queueing, delegating, and planning',
+        summary: 'Guide the assistant mid-task, line up messages, and watch it plan multi-step work.',
+        blocks: [
+          {
+            type: 'paragraph',
+            text: 'While the assistant works on a task you stay in control. You can nudge it, stop it, line up follow-ups, and watch how it breaks larger work into steps.',
+          },
+          {
+            type: 'list',
+            items: [
+              'Steer: while the assistant is working, type a message and press Steer (or Enter) to inject guidance mid-task. It adjusts on its next step without restarting, and your steered message appears with a “↳ Steer” marker.',
+              'Interrupt: the Stop button aborts the current run and clears any pending steers and queued messages.',
+              'Queue: messages you enter while a run is active are lined up and run automatically, in order, when the current run finishes. Queued items are listed and can be removed.',
+              'Delegate: for a large task the assistant can hand a focused subtask to a sub-agent that has the same tools, then continue using the sub-agent’s summary. Sub-agents cannot delegate further.',
+              'Plan / todos: for multi-step tasks the assistant writes a short todo list, shown as a live “Plan” checklist (○ pending, ◐ in-progress, ✓ done), and updates it as it works.',
+            ],
+          },
+          {
+            type: 'callout',
+            variant: 'tip',
+            text: 'You do not have to wait for the assistant to finish. Steer it to correct course right away, or queue your next request so it runs automatically.',
+          },
+        ],
+        related: ['assistant/overview', 'assistant/retrieval-search', 'assistant/connection'],
+      },
+      {
+        id: 'assistant/retrieval-search',
+        title: 'Finding notes: assistant retrieval and AI-powered search',
+        summary: 'Local relevance ranking helps the assistant answer questions and can reorder list search.',
+        blocks: [
+          {
+            type: 'paragraph',
+            text: 'The assistant has a relevance retrieval tool that ranks passages across all of your notes and uses it to answer questions without reading every note. The ranking (BM25) runs fully locally in the browser, so nothing is sent to any server for retrieval and your end-to-end encryption is preserved.',
+          },
+          {
+            type: 'heading',
+            text: 'AI-powered list search',
+          },
+          {
+            type: 'paragraph',
+            text: 'Preferences → Assistant includes an off-by-default “AI-powered search” toggle. When you enable it, the note-list search reorders results using the same local relevance ranking instead of plain substring order. It is local and private; it is off by default so that search stays exact-match unless you opt in.',
+          },
+          {
+            type: 'callout',
+            variant: 'info',
+            text: 'Both retrieval and AI-powered search run entirely on your device. No note content is sent anywhere for ranking, so end-to-end encryption is preserved.',
+          },
+        ],
+        related: ['assistant/overview', 'assistant/capabilities', 'assistant/privacy'],
       },
       {
         id: 'assistant/privacy',
@@ -1086,7 +1183,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'If privacy is the priority, use a local model. Be deliberate about which notes you share with a hosted provider.',
           },
         ],
-        related: ['assistant/providers', 'encryption/how-it-works'],
+        related: ['assistant/providers', 'assistant/connection', 'assistant/retrieval-search', 'encryption/how-it-works'],
       },
     ],
   },

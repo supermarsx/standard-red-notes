@@ -51,6 +51,7 @@ export enum PrefKey {
   AssistantApiKey = 'assistantApiKey',
   AssistantSelectionActions = 'assistantSelectionActions',
   AssistantPanelWidth = 'assistantPanelWidth',
+  AiPoweredSearchEnabled = 'aiPoweredSearchEnabled',
   ConstellationPosition = 'constellationPosition',
   AddImportsToTag = 'addImportsToTag',
   AlwaysCreateNewTagForImports = 'alwaysCreateNewTagForImports',
@@ -118,6 +119,7 @@ export type PrefValue = {
   [PrefKey.AssistantBaseUrl]: string
   [PrefKey.AssistantApiKey]: string
   [PrefKey.AssistantSelectionActions]: string
+  [PrefKey.AiPoweredSearchEnabled]: boolean
   [PrefKey.AddImportsToTag]: boolean
   [PrefKey.AlwaysCreateNewTagForImports]: boolean
   [PrefKey.ExistingTagForImports]: string | undefined

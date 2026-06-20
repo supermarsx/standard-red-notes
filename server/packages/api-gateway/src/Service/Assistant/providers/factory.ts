@@ -57,6 +57,65 @@ export function configuredProviders(config: AssistantProviderConfig): string[] {
 }
 
 /**
+ * Lists the model identifiers a configured provider offers, queried with the
+ * server-held credentials. Returns an empty array if the provider is not
+ * configured or the upstream query fails — model discovery is best-effort and
+ * never throws, so the client can still fall back to a free-text model field.
+ * API keys are used only to authenticate the upstream call and are never
+ * returned.
+ */
+export async function listProviderModels(provider: string, config: AssistantProviderConfig): Promise<string[]> {
+  try {
+    switch (provider) {
+      case 'anthropic': {
+        if (!config.anthropicApiKey) {
+          return []
+        }
+        const res = await fetch('https://api.anthropic.com/v1/models?limit=1000', {
+          headers: { 'x-api-key': config.anthropicApiKey, 'anthropic-version': '2023-06-01' },
+        })
+        if (!res.ok) {
+          return []
+        }
+        const json = (await res.json()) as { data?: Array<{ id?: string }> }
+        return (json.data ?? []).map((entry) => entry.id).filter((id): id is string => Boolean(id))
+      }
+      case 'openai':
+      case 'openai-compatible': {
+        if (!openAiCompatibleConfigured(config)) {
+          return []
+        }
+        const baseURL = config.openaiBaseURL || DEFAULT_OPENAI_BASE_URL
+        const apiKey = config.openaiApiKey || 'not-required'
+        const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        })
+        if (!res.ok) {
+          return []
+        }
+        const json = (await res.json()) as { data?: Array<{ id?: string }> }
+        return (json.data ?? []).map((entry) => entry.id).filter((id): id is string => Boolean(id))
+      }
+      case 'ollama': {
+        if (!config.ollamaUrl) {
+          return []
+        }
+        const res = await fetch(`${config.ollamaUrl.replace(/\/$/, '')}/api/tags`)
+        if (!res.ok) {
+          return []
+        }
+        const json = (await res.json()) as { models?: Array<{ name?: string }> }
+        return (json.models ?? []).map((entry) => entry.name).filter((name): name is string => Boolean(name))
+      }
+      default:
+        return []
+    }
+  } catch {
+    return []
+  }
+}
+
+/**
  * Resolves a concrete provider for a given request using the server-held
  * credentials. Throws if the requested provider is not configured.
  */

@@ -1,5 +1,6 @@
 import { ListableContentItem } from '@/Components/ContentListView/Types/ListableContentItem'
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
+import { retrieve } from '@/Assistant/retrieval'
 import {
   ApplicationEvent,
   CollectionSort,
@@ -444,7 +445,7 @@ export class ItemListController
 
     const notes = this.itemManager.getDisplayableNotes()
 
-    const items = this.itemManager.getDisplayableNotesAndFiles()
+    const items = this.applyAiSearchRanking(this.itemManager.getDisplayableNotesAndFiles())
 
     const renderedItems = items.slice(0, this.notesToDisplay)
 
@@ -457,6 +458,47 @@ export class ItemListController
     await this.recomputeSelectionAfterItemsReload(source)
 
     this.reloadPanelTitle()
+  }
+
+  /**
+   * Optional AI-powered search ranking (off by default). When enabled and a
+   * search query is active, reorder the already substring-filtered items by
+   * local BM25 relevance so the most pertinent notes surface first. Runs entirely
+   * client-side over decrypted items, so end-to-end encryption is preserved.
+   */
+  private applyAiSearchRanking(items: ListableContentItem[]): ListableContentItem[] {
+    const query = this.noteFilterText
+    if (!query || query.length === 0 || items.length === 0) {
+      return items
+    }
+    const enabled = this.preferences.getValue(
+      PrefKey.AiPoweredSearchEnabled,
+      PrefDefaults[PrefKey.AiPoweredSearchEnabled],
+    )
+    if (!enabled) {
+      return items
+    }
+
+    const docs = items.map((item) => ({
+      uuid: item.uuid,
+      title: item.title ?? '',
+      text: (item as { text?: string }).text ?? '',
+    }))
+    const hits = retrieve(docs, query, { perNote: true, limit: docs.length })
+    if (hits.length === 0) {
+      return items
+    }
+
+    const rankByUuid = new Map<string, number>()
+    hits.forEach((hit, index) => rankByUuid.set(hit.noteUuid, index))
+
+    // Stable sort: ranked items in relevance order; everything else keeps its
+    // existing relative order after them.
+    return [...items].sort((a, b) => {
+      const rankA = rankByUuid.has(a.uuid) ? (rankByUuid.get(a.uuid) as number) : Number.MAX_SAFE_INTEGER
+      const rankB = rankByUuid.has(b.uuid) ? (rankByUuid.get(b.uuid) as number) : Number.MAX_SAFE_INTEGER
+      return rankA - rankB
+    })
   }
 
   private shouldLeaveSelectionUnchanged = (activeController: NoteViewController | FileViewController | undefined) => {

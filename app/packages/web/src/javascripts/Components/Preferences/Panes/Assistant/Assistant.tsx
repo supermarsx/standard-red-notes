@@ -40,6 +40,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [confirmBeforeWrite, setConfirmBeforeWrite] = useState(() =>
     application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true),
   )
+  const [aiSearch, setAiSearch] = useState(() => application.getPreference(PrefKey.AiPoweredSearchEnabled, false))
 
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelsError, setModelsError] = useState<string | null>(null)
@@ -89,6 +90,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     (value: string) => {
       setProvider(value)
       void application.setPreference(PrefKey.AssistantProvider, value)
+      // The model list is provider-specific; clear it until re-fetched.
+      setAvailableModels([])
+      setModelsError(null)
     },
     [application],
   )
@@ -125,6 +129,14 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     [application],
   )
 
+  const handleAiSearchToggle = useCallback(
+    (value: boolean) => {
+      setAiSearch(value)
+      void application.setPreference(PrefKey.AiPoweredSearchEnabled, value)
+    },
+    [application],
+  )
+
   const handleFetchModels = useCallback(async () => {
     setModelsError(null)
     setFetchingModels(true)
@@ -150,6 +162,29 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       setFetchingModels(false)
     }
   }, [baseURL, apiKey])
+
+  const handleFetchServerModels = useCallback(async () => {
+    if (!provider) {
+      setModelsError('Select a provider first.')
+      return
+    }
+    setModelsError(null)
+    setFetchingModels(true)
+    try {
+      const result = await application.assistantConfigRequest<{ provider: string; models: string[] }>(
+        `/v1/assistant/models?provider=${encodeURIComponent(provider)}`,
+      )
+      const ids = Array.isArray(result?.models) ? result.models : []
+      setAvailableModels(ids)
+      if (ids.length === 0) {
+        setModelsError('The server returned no models for this provider.')
+      }
+    } catch (error) {
+      setModelsError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setFetchingModels(false)
+    }
+  }, [application, provider])
 
   const providers = config?.providers ?? []
 
@@ -299,14 +334,41 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             <HorizontalSeparator classes="my-4" />
 
             <Subtitle>Model</Subtitle>
-            <Text>Identifier of the model to use (e.g. claude-3-5-sonnet-latest, gpt-4o, llama3.1).</Text>
-            <input
-              className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
-              type="text"
-              value={model}
-              placeholder={config?.defaultModel || 'model identifier'}
-              onChange={(event) => handleModelChange(event.target.value)}
-            />
+            <Text>
+              Identifier of the model to use, or fetch the list the server’s provider offers (queried with the
+              server-held key).
+            </Text>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                className="w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+                type="text"
+                value={model}
+                placeholder={config?.defaultModel || 'model identifier'}
+                onChange={(event) => handleModelChange(event.target.value)}
+              />
+              <Button
+                label={fetchingModels ? 'Loading…' : 'Fetch models'}
+                onClick={() => void handleFetchServerModels()}
+                disabled={!provider || fetchingModels}
+              />
+            </div>
+            {modelsError && <Text className="mt-2 text-danger">Could not fetch models: {modelsError}</Text>}
+            {availableModels.length > 0 && (
+              <select
+                className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+                value={availableModels.includes(model) ? model : ''}
+                onChange={(event) => handleModelChange(event.target.value)}
+              >
+                <option value="" disabled>
+                  Select a model
+                </option>
+                {availableModels.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            )}
           </PreferencesSegment>
         </PreferencesGroup>
       )}
@@ -321,6 +383,21 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               </Text>
             </div>
             <Switch checked={confirmBeforeWrite} onChange={handleConfirmToggle} />
+          </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>AI-powered search</Subtitle>
+              <Text>
+                Rank note-list search results by local relevance (BM25) instead of plain text order. Runs entirely in
+                your browser over decrypted notes — nothing is sent anywhere. Off by default.
+              </Text>
+            </div>
+            <Switch checked={aiSearch} onChange={handleAiSearchToggle} />
           </div>
         </PreferencesSegment>
       </PreferencesGroup>

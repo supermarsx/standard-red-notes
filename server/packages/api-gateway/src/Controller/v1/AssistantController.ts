@@ -8,6 +8,7 @@ import { TYPES } from '../../Bootstrap/Types'
 import {
   AssistantProviderConfig,
   configuredProviders,
+  listProviderModels,
   resolveProvider,
 } from '../../Service/Assistant/providers/factory'
 import { ChatMessage, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
@@ -65,6 +66,25 @@ export class AssistantController extends BaseHttpController {
       defaultProvider: providers.includes(this.defaultProvider) ? this.defaultProvider : (providers[0] ?? ''),
       defaultModel: this.defaultModel,
     })
+  }
+
+  // Authenticated: it queries the provider's model list using the server-held
+  // API key, so it must not be reachable without a session.
+  @httpGet('/models', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async models(request: Request, response: Response): Promise<void> {
+    const requested = typeof request.query.provider === 'string' ? request.query.provider : ''
+    const providers = configuredProviders(this.providerConfig)
+    const provider = requested || (providers.includes(this.defaultProvider) ? this.defaultProvider : providers[0] || '')
+
+    if (!provider || !providers.includes(provider)) {
+      response.status(400).json({
+        error: { message: 'Requested provider is not configured on this server.' },
+      })
+      return
+    }
+
+    const models = await listProviderModels(provider, this.providerConfig)
+    response.json({ provider, models })
   }
 
   @httpGet('/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)

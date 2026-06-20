@@ -60,6 +60,7 @@ export const PrefDefaults = {
   [PrefKey.AssistantBaseUrl]: 'http://localhost:1234/v1',
   [PrefKey.AssistantApiKey]: '',
   [PrefKey.AssistantSelectionActions]: '',
+  [PrefKey.AiPoweredSearchEnabled]: false,
   [PrefKey.AddImportsToTag]: true,
   [PrefKey.AlwaysCreateNewTagForImports]: true,
   [PrefKey.ExistingTagForImports]: undefined,
