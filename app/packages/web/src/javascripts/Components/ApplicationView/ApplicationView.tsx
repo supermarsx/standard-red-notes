@@ -45,6 +45,7 @@ import KeyboardShortcutsModal from '../KeyboardShortcutsHelpModal/KeyboardShortc
 import CommandPalette from '../CommandPalette/CommandPalette'
 import SuperExportModal from '../NotesOptions/SuperExportModal'
 import { useConflictWarnings } from '@/Hooks/useConflictWarnings'
+import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
 
 type Props = {
   application: WebApplication
@@ -67,6 +68,10 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   // App-wide watcher: warn the user in real time when a new sync conflict
   // (conflicted copy) appears, deep-linking them to Preferences → Conflicts.
   useConflictWarnings(application)
+
+  // App-wide watcher: show a single debounced "Settings saved and synced" toast
+  // when the user changes a preference and that change reaches the server.
+  usePreferenceSyncToast(application)
 
   useEffect(() => {
     const desktopService = application.desktopManager
