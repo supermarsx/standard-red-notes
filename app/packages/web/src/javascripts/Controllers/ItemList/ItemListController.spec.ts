@@ -1,4 +1,4 @@
-import { ContentType, Result, SNTag } from '@standardnotes/snjs'
+import { ContentType, Result, SNTag, SystemViewId } from '@standardnotes/snjs'
 import { InternalEventBus, ItemManagerInterface } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
 import { NavigationController } from '../Navigation/NavigationController'
@@ -117,6 +117,67 @@ describe('item list controller', () => {
 
     it('should return true if there are no selected items, even if not user triggered', () => {
       expect(controller.shouldSelectFirstItem(ItemsReloadSource.ItemStream)).toBe(true)
+    })
+  })
+
+  describe('createNewNote', () => {
+    let selectHomeNavigationView: jest.Mock
+
+    beforeEach(() => {
+      selectHomeNavigationView = jest.fn().mockResolvedValue(undefined)
+
+      ;(controller as unknown as { publishCrossControllerEventSync: jest.Mock }).publishCrossControllerEventSync =
+        jest.fn().mockResolvedValue(undefined)
+      controller.titleForNewNote = jest.fn().mockReturnValue('title')
+      controller.scrollToItem = jest.fn()
+      controller.createNewNoteController = jest.fn().mockResolvedValue({ item: { uuid: 'new-note' } })
+
+      Object.assign(application.navigationController, {
+        selectHomeNavigationView,
+        isInSmartView: jest.fn().mockReturnValue(true),
+        isInHomeView: jest.fn().mockReturnValue(false),
+        isInSystemView: jest.fn().mockReturnValue(false),
+      })
+    })
+
+    it('should keep the Untagged smart view active when creating a note', async () => {
+      application.navigationController.isInSystemView = jest
+        .fn()
+        .mockImplementation((id: SystemViewId) => id === SystemViewId.UntaggedNotes)
+
+      await controller.createNewNote()
+
+      expect(selectHomeNavigationView).not.toHaveBeenCalled()
+      expect(controller.createNewNoteController).toHaveBeenCalled()
+    })
+
+    it('should switch to home view when creating a note from a non-owning smart view (e.g. Archived)', async () => {
+      application.navigationController.isInSystemView = jest
+        .fn()
+        .mockImplementation((id: SystemViewId) => id === SystemViewId.ArchivedNotes)
+
+      await controller.createNewNote()
+
+      expect(selectHomeNavigationView).toHaveBeenCalled()
+      expect(controller.createNewNoteController).toHaveBeenCalled()
+    })
+
+    it('should not switch views when already in the home (All Notes) view', async () => {
+      application.navigationController.isInHomeView = jest.fn().mockReturnValue(true)
+
+      await controller.createNewNote()
+
+      expect(selectHomeNavigationView).not.toHaveBeenCalled()
+      expect(controller.createNewNoteController).toHaveBeenCalled()
+    })
+
+    it('should not switch views when a regular tag is selected', async () => {
+      application.navigationController.isInSmartView = jest.fn().mockReturnValue(false)
+
+      await controller.createNewNote()
+
+      expect(selectHomeNavigationView).not.toHaveBeenCalled()
+      expect(controller.createNewNoteController).toHaveBeenCalled()
     })
   })
 })

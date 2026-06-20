@@ -1070,7 +1070,11 @@ export class ItemListController
   createNewNote = async (title?: string, createdAt?: Date, autofocusBehavior?: TemplateNoteViewAutofocusBehavior) => {
     void this.publishCrossControllerEventSync(CrossControllerEvent.UnselectAllNotes)
 
-    if (this.navigationController.isInSmartView() && !this.navigationController.isInHomeView()) {
+    if (
+      this.navigationController.isInSmartView() &&
+      !this.navigationController.isInHomeView() &&
+      !this.navigationController.isInSystemView(SystemViewId.UntaggedNotes)
+    ) {
       await this.navigationController.selectHomeNavigationView()
     }
 
