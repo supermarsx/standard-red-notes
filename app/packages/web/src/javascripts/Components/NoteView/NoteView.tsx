@@ -47,6 +47,7 @@ import {
 import { SuperEditorContentId } from '../SuperEditor/Constants'
 import { NoteViewController } from './Controller/NoteViewController'
 import { PlainEditor, PlainEditorInterface } from './PlainEditor/PlainEditor'
+import { CanvasEditor, CanvasEditorIdentifier } from './CanvasEditor/CanvasEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -534,6 +535,14 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       return
     }
 
+    /** Canvas is a web-only editor selected via editorIdentifier; it is not an
+     * iframe/native component, so skip component-viewer resolution entirely. */
+    if (this.note.editorIdentifier === CanvasEditorIdentifier) {
+      this.destroyCurrentEditorComponent()
+      this.setState({ editorStateDidLoad: true })
+      return
+    }
+
     const newUIFeature = this.application.componentManager.editorForNote(this.note)
 
     /** Component editors cannot interact with template notes so the note must be inserted */
@@ -851,13 +860,15 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     const renderHeaderOptions = isMobileScreen() ? !this.state.editorFocused : true
 
     const editorMode =
-      this.note.noteType === NoteType.Super
-        ? 'super'
-        : this.state.editorStateDidLoad && !this.state.editorComponentViewer
-          ? 'plain'
-          : this.state.editorComponentViewer
-            ? 'component'
-            : 'plain'
+      this.note.editorIdentifier === CanvasEditorIdentifier
+        ? 'canvas'
+        : this.note.noteType === NoteType.Super
+          ? 'super'
+          : this.state.editorStateDidLoad && !this.state.editorComponentViewer
+            ? 'plain'
+            : this.state.editorComponentViewer
+              ? 'component'
+              : 'plain'
 
     const shouldShowConflictsButton = this.state.conflictedNotes.length > 0 && !this.state.readonly
 
@@ -1012,6 +1023,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               locked={this.state.noteLocked || !!this.state.readonly}
               onFocus={this.onEditorFocus}
               onBlur={this.onEditorBlur}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'canvas' && (
+            <CanvasEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
               customBackgroundColor={this.state.customBackgroundColor}
               customTextColor={this.state.customTextColor}
             />

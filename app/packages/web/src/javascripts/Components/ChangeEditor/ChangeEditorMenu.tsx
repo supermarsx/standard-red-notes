@@ -27,6 +27,8 @@ import { Pill } from '../Preferences/PreferencesComponents/Content'
 import ModalOverlay from '../Modal/ModalOverlay'
 import SuperNoteConverter from '../SuperEditor/SuperNoteConverter'
 import MenuSection from '../Menu/MenuSection'
+import { CanvasEditorIdentifier } from '../NoteView/CanvasEditor/CanvasEditor'
+import { parseCanvasDocument, serializeCanvasDocument, createEmptyCanvasDocument } from '../NoteView/CanvasEditor/CanvasDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -99,6 +101,12 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
 
   const isSelected = useCallback(
     (item: EditorMenuItem) => {
+      // Canvas is selected via editorIdentifier and is not part of the native
+      // feature groups; when active, no native/group item should appear chosen.
+      if (note?.editorIdentifier === CanvasEditorIdentifier) {
+        return false
+      }
+
       if (currentFeature) {
         return item.uiFeature.featureIdentifier === currentFeature.featureIdentifier
       }
@@ -140,6 +148,48 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     },
     [application],
   )
+
+  const isCanvasSelected = note?.editorIdentifier === CanvasEditorIdentifier
+
+  const selectCanvas = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-canvas content: only overwrite note.text with an empty
+    // canvas when the existing text isn't already a recoverable canvas doc.
+    const { recovered } = parseCanvasDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to Canvas will replace its current content with an empty board. This cannot be undone.',
+        'Switch to Canvas?',
+        'Switch to Canvas',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = CanvasEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeCanvasDocument(createEmptyCanvasDocument())
+      } else {
+        noteMutator.text = serializeCanvasDocument(parseCanvasDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
 
   const handleConversionCompletion = useCallback(
     (item?: EditorMenuItem) => {
@@ -317,6 +367,27 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               </MenuSection>
             )
           })}
+
+        <MenuSection>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectCanvas().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isCanvasSelected}
+            info={'An infinite board for arranging cards and connecting them with edges.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="editor" className="mr-2 text-neutral" />
+                Canvas
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+        </MenuSection>
       </Menu>
       <ModalOverlay isOpen={showSuperNoteImporter} close={closeSuperNoteImporter}>
         {note && (
