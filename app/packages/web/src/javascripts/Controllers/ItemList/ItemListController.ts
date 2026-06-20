@@ -1,6 +1,7 @@
 import { ListableContentItem } from '@/Components/ContentListView/Types/ListableContentItem'
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
+import { IndexableNote, SearchIndex } from '@/Utils/Items/Search/SearchIndex'
 import {
   ApplicationEvent,
   CollectionSort,
@@ -101,6 +102,33 @@ export class ItemListController
   isTableViewEnabled = false
   private reloadItemsPromise?: Promise<unknown>
 
+  /**
+   * Client-side full-text search index over decrypted notes. Built lazily the
+   * first time the index path is used while enabled, then kept fresh
+   * incrementally from the note item-stream. A no-op (search returns null →
+   * substring fallback) when the SearchIndexEnabled pref is off.
+   */
+  private searchIndex = new SearchIndex()
+  private searchIndexCacheSize = 50
+  /** Coalesced buffer of pending incremental index updates from the item stream. */
+  private pendingIndexChanges: Map<string, IndexableNote> = new Map()
+  private pendingIndexRemovals: Set<string> = new Set()
+  private flushIndexUpdates = debounce(() => {
+    if (!this.searchIndex.isBuilt) {
+      this.pendingIndexChanges.clear()
+      this.pendingIndexRemovals.clear()
+      return
+    }
+    if (this.pendingIndexChanges.size === 0 && this.pendingIndexRemovals.size === 0) {
+      return
+    }
+    const changed = [...this.pendingIndexChanges.values()]
+    const removed = [...this.pendingIndexRemovals]
+    this.pendingIndexChanges.clear()
+    this.pendingIndexRemovals.clear()
+    this.searchIndex.updateMany(changed, removed)
+  }, 250)
+
   lastSelectedItem: ListableContentItem | undefined
   selectedUuids: Set<UuidString> = observable(new Set<UuidString>())
   selectedItems: Record<UuidString, ListableContentItem> = {}
@@ -189,9 +217,13 @@ export class ItemListController
     this.resetPagination()
 
     this.disposers.push(
-      itemManager.streamItems<SNNote>([ContentType.TYPES.Note, ContentType.TYPES.File], () => {
-        void this.reloadItems(ItemsReloadSource.ItemStream)
-      }),
+      itemManager.streamItems<SNNote>(
+        [ContentType.TYPES.Note, ContentType.TYPES.File],
+        ({ changed, inserted, removed }) => {
+          this.collectIndexUpdates(changed, inserted, removed)
+          void this.reloadItems(ItemsReloadSource.ItemStream)
+        },
+      ),
     )
 
     this.disposers.push(
@@ -486,7 +518,7 @@ export class ItemListController
 
     const notes = this.itemManager.getDisplayableNotes()
 
-    const items = this.applyAiSearchRanking(this.itemManager.getDisplayableNotesAndFiles())
+    const items = this.applySearchOrdering(this.itemManager.getDisplayableNotesAndFiles())
 
     const renderedItems = items.slice(0, this.notesToDisplay)
 
@@ -535,6 +567,118 @@ export class ItemListController
 
     // Stable sort: ranked items in relevance order; everything else keeps its
     // existing relative order after them.
+    return [...items].sort((a, b) => {
+      const rankA = rankByUuid.has(a.uuid) ? (rankByUuid.get(a.uuid) as number) : Number.MAX_SAFE_INTEGER
+      const rankB = rankByUuid.has(b.uuid) ? (rankByUuid.get(b.uuid) as number) : Number.MAX_SAFE_INTEGER
+      return rankA - rankB
+    })
+  }
+
+  /**
+   * Map a note/file item to the shape the search index consumes. Files have no
+   * text body; only their title is indexable.
+   */
+  private toIndexableNote(item: { uuid: string; title?: string; text?: string }): IndexableNote {
+    return { uuid: item.uuid, title: item.title ?? '', text: item.text ?? '' }
+  }
+
+  /** Buffer item-stream changes for a debounced, coalesced incremental index update. */
+  private collectIndexUpdates(
+    changed: { uuid: string; title?: string; text?: string }[],
+    inserted: { uuid: string; title?: string; text?: string }[],
+    removed: { uuid: string }[],
+  ): void {
+    if (!this.searchIndex.isBuilt) {
+      return
+    }
+    for (const item of removed) {
+      this.pendingIndexChanges.delete(item.uuid)
+      this.pendingIndexRemovals.add(item.uuid)
+    }
+    for (const item of [...changed, ...inserted]) {
+      this.pendingIndexRemovals.delete(item.uuid)
+      this.pendingIndexChanges.set(item.uuid, this.toIndexableNote(item))
+    }
+    this.flushIndexUpdates()
+  }
+
+  /** Whether the configurable client-side search index path is enabled. */
+  private get isSearchIndexEnabled(): boolean {
+    return this.preferences.getValue(PrefKey.SearchIndexEnabled, PrefDefaults[PrefKey.SearchIndexEnabled])
+  }
+
+  /**
+   * Decide how the already substring-filtered items are ordered for the current
+   * query. Precedence:
+   *  1. Fast inverted-index path (SearchIndexEnabled) — reorders by indexed
+   *     relevance, with the AI/BM25 ranking applied when AiPoweredSearchEnabled.
+   *  2. AI-powered BM25 ranking alone (AiPoweredSearchEnabled).
+   *  3. Plain substring order (the existing default).
+   * Falls back to substring order whenever the index can't handle the query.
+   */
+  private applySearchOrdering(items: ListableContentItem[]): ListableContentItem[] {
+    const indexed = this.applySearchIndexOrdering(items)
+    if (indexed) {
+      return indexed
+    }
+    return this.applyAiSearchRanking(items)
+  }
+
+  /**
+   * Fast path: use the client-side inverted index to order/limit results.
+   * Returns null (so the caller falls back to substring/BM25 behavior) when the
+   * feature is off, there is no query, the query is too short, or the index has
+   * nothing to say for this query.
+   *
+   * The index is built lazily here over the currently displayable notes the
+   * first time it is needed, then kept fresh incrementally from the item stream.
+   */
+  private applySearchIndexOrdering(items: ListableContentItem[]): ListableContentItem[] | null {
+    const query = this.noteFilterText
+    if (!query || items.length === 0 || !this.isSearchIndexEnabled) {
+      return null
+    }
+
+    const minLength = this.preferences.getValue(
+      PrefKey.SearchMinQueryLength,
+      PrefDefaults[PrefKey.SearchMinQueryLength],
+    )
+    if (query.trim().length < minLength) {
+      return null
+    }
+
+    // Honor the configured query-cache size; recreate the index if it changed so
+    // the LRU cap stays in sync with the user's preference.
+    const cacheSize = this.preferences.getValue(
+      PrefKey.SearchQueryCacheSize,
+      PrefDefaults[PrefKey.SearchQueryCacheSize],
+    )
+    if (cacheSize !== this.searchIndexCacheSize) {
+      this.searchIndexCacheSize = cacheSize
+      this.searchIndex = new SearchIndex({ queryCacheSize: cacheSize })
+    }
+
+    this.searchIndex.ensureBuilt(() =>
+      this.itemManager.getDisplayableNotes().map((note) => this.toIndexableNote(note)),
+    )
+
+    const rank = this.preferences.getValue(
+      PrefKey.AiPoweredSearchEnabled,
+      PrefDefaults[PrefKey.AiPoweredSearchEnabled],
+    )
+    const matchedUuids = this.searchIndex.search(query, { rank })
+    if (matchedUuids === null) {
+      // Index can't handle this query (e.g. only special chars); fall back.
+      return null
+    }
+
+    // Intersect index results with the substring-filtered `items` so we never
+    // surface notes the existing display-options filter excluded (tags, archived,
+    // trashed, protected, vaults). This keeps correctness identical to substring
+    // search while letting the index decide ordering/relevance.
+    const rankByUuid = new Map<string, number>()
+    matchedUuids.forEach((uuid, index) => rankByUuid.set(uuid, index))
+
     return [...items].sort((a, b) => {
       const rankA = rankByUuid.has(a.uuid) ? (rankByUuid.get(a.uuid) as number) : Number.MAX_SAFE_INTEGER
       const rankB = rankByUuid.has(b.uuid) ? (rankByUuid.get(b.uuid) as number) : Number.MAX_SAFE_INTEGER

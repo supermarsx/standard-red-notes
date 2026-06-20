@@ -40,6 +40,12 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // the standard getSetting endpoint and uses it only as a fallback default;
     // the per-user client preference always takes precedence when set.
     ConflictResolutionStrategy: 'CONFLICT_RESOLUTION_STRATEGY',
+    // Standard Red Notes: server-provided DEFAULT for whether the client-side
+    // full-text search index is enabled. The client reads this via the standard
+    // getSetting endpoint and uses it only as a fallback default; the per-user
+    // client preference (SearchIndexEnabled) always takes precedence when set.
+    // Value is the string 'true' or 'false'.
+    SearchIndexEnabled: 'SEARCH_INDEX_ENABLED',
   }
 
   get value(): string {

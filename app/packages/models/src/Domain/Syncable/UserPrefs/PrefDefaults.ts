@@ -69,6 +69,12 @@ export const PrefDefaults = {
   // CONFLICT_RESOLUTION_STRATEGY setting; the client pref always wins when set.
   [PrefKey.ConflictResolutionStrategy]: 'ask',
   [PrefKey.ConflictResolutionAutoResolve]: false,
+  // Standard Red Notes: the client-side search index is on by default and falls
+  // back to substring search for queries shorter than SearchMinQueryLength. The
+  // query-result LRU is capped at SearchQueryCacheSize entries.
+  [PrefKey.SearchIndexEnabled]: true,
+  [PrefKey.SearchQueryCacheSize]: 50,
+  [PrefKey.SearchMinQueryLength]: 2,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

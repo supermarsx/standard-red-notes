@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { PrefKey } from '@standardnotes/snjs'
+import { isErrorResponse, PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
@@ -18,6 +18,13 @@ type AssistantConfig = {
 }
 
 type ConnectionMode = 'direct' | 'proxy'
+
+// Raw server-setting name for the search-index default. A string literal (not
+// SettingName.NAMES) because the published @standardnotes/domain-core bundle the
+// web client consumes does not carry Standard Red Notes' added setting names; it
+// must match the server's SettingName.NAMES value exactly. Same pattern as the
+// Conflicts pane / Admin.tsx.
+const SEARCH_INDEX_ENABLED_SETTING = 'SEARCH_INDEX_ENABLED'
 
 const PRESETS: { label: string; baseURL: string }[] = [
   { label: 'LM Studio', baseURL: 'http://localhost:1234/v1' },
@@ -41,6 +48,17 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true),
   )
   const [aiSearch, setAiSearch] = useState(() => application.getPreference(PrefKey.AiPoweredSearchEnabled, false))
+
+  const [searchIndexEnabled, setSearchIndexEnabled] = useState(() =>
+    application.getPreference(PrefKey.SearchIndexEnabled, true),
+  )
+  const [searchCacheSize, setSearchCacheSize] = useState(() =>
+    application.getPreference(PrefKey.SearchQueryCacheSize, 50),
+  )
+  const [searchMinQueryLength, setSearchMinQueryLength] = useState(() =>
+    application.getPreference(PrefKey.SearchMinQueryLength, 2),
+  )
+  const [serverSearchIndexDefault, setServerSearchIndexDefault] = useState<boolean | undefined>(undefined)
 
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelsError, setModelsError] = useState<string | null>(null)
@@ -136,6 +154,60 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     },
     [application],
   )
+
+  const handleSearchIndexToggle = useCallback(
+    (value: boolean) => {
+      setSearchIndexEnabled(value)
+      void application.setPreference(PrefKey.SearchIndexEnabled, value)
+    },
+    [application],
+  )
+
+  const handleSearchCacheSizeChange = useCallback(
+    (value: number) => {
+      const clamped = Number.isFinite(value) && value > 0 ? Math.floor(value) : 50
+      setSearchCacheSize(clamped)
+      void application.setPreference(PrefKey.SearchQueryCacheSize, clamped)
+    },
+    [application],
+  )
+
+  const handleSearchMinQueryLengthChange = useCallback(
+    (value: number) => {
+      const clamped = Number.isFinite(value) && value > 0 ? Math.floor(value) : 2
+      setSearchMinQueryLength(clamped)
+      void application.setPreference(PrefKey.SearchMinQueryLength, clamped)
+    },
+    [application],
+  )
+
+  // Read the server-provided SEARCH_INDEX_ENABLED default once (for display). The
+  // client pref always wins; this is shown only to explain effective behavior.
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const user = application.sessions.getUser()
+        if (!user) {
+          return
+        }
+        const response = await application.legacyApi.getSetting(user.uuid, SEARCH_INDEX_ENABLED_SETTING)
+        if (isErrorResponse(response)) {
+          return
+        }
+        const value = (response as { data?: { setting?: { value?: string | null } } }).data?.setting?.value
+        if (!cancelled && (value === 'true' || value === 'false')) {
+          setServerSearchIndexDefault(value === 'true')
+        }
+      } catch {
+        /* server default is optional; ignore */
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [application])
 
   const handleFetchModels = useCallback(async () => {
     setModelsError(null)
@@ -399,6 +471,61 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             </div>
             <Switch checked={aiSearch} onChange={handleAiSearchToggle} />
           </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Search</Title>
+          <Text>
+            A client-side full-text search index speeds up note-list search on large accounts. It builds an inverted
+            index over your decrypted notes in the browser — nothing is sent anywhere. When off, search uses the plain
+            substring matcher.
+          </Text>
+          {serverSearchIndexDefault !== undefined && (
+            <Text className="mt-2 text-passive-1">
+              Server default: search index {serverSearchIndexDefault ? 'enabled' : 'disabled'}. Your setting below takes
+              precedence.
+            </Text>
+          )}
+
+          <HorizontalSeparator classes="my-4" />
+
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>Use search index</Subtitle>
+              <Text>Enable the fast inverted-index search path with substring fallback. On by default.</Text>
+            </div>
+            <Switch checked={searchIndexEnabled} onChange={handleSearchIndexToggle} />
+          </div>
+
+          {searchIndexEnabled && (
+            <>
+              <HorizontalSeparator classes="my-4" />
+
+              <Subtitle>Minimum query length</Subtitle>
+              <Text>Queries shorter than this fall back to substring search. Default 2.</Text>
+              <input
+                className="mt-2 w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                type="number"
+                min={1}
+                value={searchMinQueryLength}
+                onChange={(event) => handleSearchMinQueryLengthChange(Number(event.target.value))}
+              />
+
+              <HorizontalSeparator classes="my-4" />
+
+              <Subtitle>Query cache size</Subtitle>
+              <Text>How many recent search results to cache (LRU). Default 50.</Text>
+              <input
+                className="mt-2 w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                type="number"
+                min={1}
+                value={searchCacheSize}
+                onChange={(event) => handleSearchCacheSizeChange(Number(event.target.value))}
+              />
+            </>
+          )}
         </PreferencesSegment>
       </PreferencesGroup>
 

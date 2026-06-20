@@ -62,6 +62,15 @@ export enum PrefKey {
   // the server-provided CONFLICT_RESOLUTION_STRATEGY default.
   ConflictResolutionStrategy = 'conflictResolutionStrategy',
   ConflictResolutionAutoResolve = 'conflictResolutionAutoResolve',
+  // Standard Red Notes: client-side full-text search index configuration.
+  // SearchIndexEnabled toggles the fast inverted-index search path (with substring
+  // fallback when off). SearchQueryCacheSize bounds the LRU of recent query
+  // results. SearchMinQueryLength is the minimum query length before the index is
+  // consulted (shorter queries fall back to substring search). The client prefs
+  // take precedence over the server-provided SEARCH_INDEX_ENABLED default.
+  SearchIndexEnabled = 'searchIndexEnabled',
+  SearchQueryCacheSize = 'searchQueryCacheSize',
+  SearchMinQueryLength = 'searchMinQueryLength',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -138,6 +147,9 @@ export type PrefValue = {
   [PrefKey.ExistingTagForImports]: string | undefined
   [PrefKey.ConflictResolutionStrategy]: ConflictResolutionStrategyValue
   [PrefKey.ConflictResolutionAutoResolve]: boolean
+  [PrefKey.SearchIndexEnabled]: boolean
+  [PrefKey.SearchQueryCacheSize]: number
+  [PrefKey.SearchMinQueryLength]: number
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.
