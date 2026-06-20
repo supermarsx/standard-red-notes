@@ -41,6 +41,24 @@ import {
   createJsSandboxStarter,
   createWebSandboxStarter,
 } from '../NoteView/SandboxEditor/SandboxDocument'
+import { CalendarEditorIdentifier } from '../NoteView/CalendarEditor/CalendarEditor'
+import {
+  parseCalendarDocument,
+  serializeCalendarDocument,
+  createEmptyCalendarDocument,
+} from '../NoteView/CalendarEditor/CalendarDocument'
+import { KanbanEditorIdentifier } from '../NoteView/KanbanEditor/KanbanEditor'
+import {
+  parseKanbanDocument,
+  serializeKanbanDocument,
+  createKanbanStarter,
+} from '../NoteView/KanbanEditor/KanbanDocument'
+import { TimelineEditorIdentifier } from '../NoteView/TimelineEditor/TimelineEditor'
+import {
+  parseTimelineDocument,
+  serializeTimelineDocument,
+  createEmptyTimelineDocument,
+} from '../NoteView/TimelineEditor/TimelineDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -113,14 +131,17 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
 
   const isSelected = useCallback(
     (item: EditorMenuItem) => {
-      // Canvas, Base, and the Sandbox editors are selected via editorIdentifier
-      // and are not part of the native feature groups; when active, no
-      // native/group item should appear chosen.
+      // Canvas, Base, Sandbox, Calendar, Kanban, and Timeline editors are
+      // selected via editorIdentifier and are not part of the native feature
+      // groups; when active, no native/group item should appear chosen.
       if (
         note?.editorIdentifier === CanvasEditorIdentifier ||
         note?.editorIdentifier === BaseEditorIdentifier ||
         note?.editorIdentifier === JsSandboxEditorIdentifier ||
-        note?.editorIdentifier === WebSandboxEditorIdentifier
+        note?.editorIdentifier === WebSandboxEditorIdentifier ||
+        note?.editorIdentifier === CalendarEditorIdentifier ||
+        note?.editorIdentifier === KanbanEditorIdentifier ||
+        note?.editorIdentifier === TimelineEditorIdentifier
       ) {
         return false
       }
@@ -300,6 +321,132 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
     },
     [application, note, closeMenu],
   )
+
+  const isCalendarSelected = note?.editorIdentifier === CalendarEditorIdentifier
+
+  const selectCalendar = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-calendar content: only overwrite note.text with an empty
+    // calendar when the existing text isn't already a recoverable calendar doc.
+    const { recovered } = parseCalendarDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to a Calendar will replace its current content with an empty calendar. This cannot be undone.',
+        'Switch to Calendar?',
+        'Switch to Calendar',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = CalendarEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeCalendarDocument(createEmptyCalendarDocument())
+      } else {
+        noteMutator.text = serializeCalendarDocument(parseCalendarDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
+
+  const isKanbanSelected = note?.editorIdentifier === KanbanEditorIdentifier
+
+  const selectKanban = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-kanban content: only overwrite note.text with a starter
+    // board when the existing text isn't already a recoverable kanban doc.
+    const { recovered } = parseKanbanDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to a Kanban board will replace its current content with an empty board. This cannot be undone.',
+        'Switch to Kanban?',
+        'Switch to Kanban',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = KanbanEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeKanbanDocument(createKanbanStarter())
+      } else {
+        noteMutator.text = serializeKanbanDocument(parseKanbanDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
+
+  const isTimelineSelected = note?.editorIdentifier === TimelineEditorIdentifier
+
+  const selectTimeline = useCallback(async () => {
+    if (!note) {
+      return
+    }
+    if (note.locked) {
+      application.alerts.alert(STRING_EDIT_LOCKED_ATTEMPT).catch(console.error)
+      return
+    }
+
+    // Preserve any non-timeline content: only overwrite note.text with an empty
+    // timeline when the existing text isn't already a recoverable timeline doc.
+    const { recovered } = parseTimelineDocument(note.text)
+    if (!recovered && note.text.length > 0) {
+      const proceed = await application.alerts.confirm(
+        'Switching this note to a Timeline will replace its current content with an empty timeline. This cannot be undone.',
+        'Switch to Timeline?',
+        'Switch to Timeline',
+      )
+      if (!proceed) {
+        return
+      }
+    }
+
+    await application.itemListController.insertCurrentIfTemplate()
+
+    await application.changeAndSaveItem.execute(note, (mutator) => {
+      const noteMutator = mutator as NoteMutator
+      noteMutator.noteType = NoteType.Unknown
+      noteMutator.editorIdentifier = TimelineEditorIdentifier
+      if (!recovered || note.text.length === 0) {
+        noteMutator.text = serializeTimelineDocument(createEmptyTimelineDocument())
+      } else {
+        noteMutator.text = serializeTimelineDocument(parseTimelineDocument(note.text).document)
+      }
+    })
+
+    setCurrentFeature(undefined)
+    closeMenu()
+  }, [application, note, closeMenu])
 
   const handleConversionCompletion = useCallback(
     (item?: EditorMenuItem) => {
@@ -545,6 +692,60 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
               <div className="flex items-center">
                 <Icon type="code" className="mr-2 text-neutral" />
                 Web App Sandbox
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectCalendar().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isCalendarSelected}
+            info={'A month calendar for scheduling and tracking dated events.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="clock" className="mr-2 text-neutral" />
+                Calendar
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectKanban().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isKanbanSelected}
+            info={'A board of columns and cards for tracking work, with drag and move-between-columns.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="dashboard" className="mr-2 text-neutral" />
+                Kanban Board
+                <Pill className="px-1.5 py-0.5" style="success">
+                  Labs
+                </Pill>
+              </div>
+            </div>
+          </MenuRadioButtonItem>
+          <MenuRadioButtonItem
+            onClick={() => {
+              selectTimeline().catch(console.error)
+            }}
+            className={'flex-row-reversed py-2'}
+            checked={isTimelineSelected}
+            info={'A Gantt-like waterfall of items plotted by their start and end dates.'}
+          >
+            <div className="flex flex-grow items-center justify-between">
+              <div className="flex items-center">
+                <Icon type="history" className="mr-2 text-neutral" />
+                Timeline
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
                 </Pill>

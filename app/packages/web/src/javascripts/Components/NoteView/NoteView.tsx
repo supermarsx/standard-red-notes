@@ -55,6 +55,9 @@ import {
   WebSandboxEditorIdentifier,
   sandboxModeForIdentifier,
 } from './SandboxEditor/SandboxEditor'
+import { CalendarEditor, CalendarEditorIdentifier } from './CalendarEditor/CalendarEditor'
+import { KanbanEditor, KanbanEditorIdentifier } from './KanbanEditor/KanbanEditor'
+import { TimelineEditor, TimelineEditorIdentifier } from './TimelineEditor/TimelineEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
@@ -542,14 +545,17 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       return
     }
 
-    /** Canvas, Base, and the Sandbox editors are web-only editors selected via
-     * editorIdentifier; they are not iframe/native components, so skip
-     * component-viewer resolution. */
+    /** Canvas, Base, Sandbox, Calendar, Kanban, and Timeline editors are
+     * web-only editors selected via editorIdentifier; they are not iframe/native
+     * components, so skip component-viewer resolution. */
     if (
       this.note.editorIdentifier === CanvasEditorIdentifier ||
       this.note.editorIdentifier === BaseEditorIdentifier ||
       this.note.editorIdentifier === JsSandboxEditorIdentifier ||
-      this.note.editorIdentifier === WebSandboxEditorIdentifier
+      this.note.editorIdentifier === WebSandboxEditorIdentifier ||
+      this.note.editorIdentifier === CalendarEditorIdentifier ||
+      this.note.editorIdentifier === KanbanEditorIdentifier ||
+      this.note.editorIdentifier === TimelineEditorIdentifier
     ) {
       this.destroyCurrentEditorComponent()
       this.setState({ editorStateDidLoad: true })
@@ -880,6 +886,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         : this.note.editorIdentifier === JsSandboxEditorIdentifier ||
           this.note.editorIdentifier === WebSandboxEditorIdentifier
         ? 'sandbox'
+        : this.note.editorIdentifier === CalendarEditorIdentifier
+        ? 'calendar'
+        : this.note.editorIdentifier === KanbanEditorIdentifier
+        ? 'kanban'
+        : this.note.editorIdentifier === TimelineEditorIdentifier
+        ? 'timeline'
         : this.note.noteType === NoteType.Super
           ? 'super'
           : this.state.editorStateDidLoad && !this.state.editorComponentViewer
@@ -1074,6 +1086,39 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               application={this.application}
               controller={this.controller}
               mode={sandboxModeForIdentifier(this.note.editorIdentifier)}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'calendar' && (
+            <CalendarEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'kanban' && (
+            <KanbanEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
+              readonly={this.state.readonly}
+              customBackgroundColor={this.state.customBackgroundColor}
+              customTextColor={this.state.customTextColor}
+            />
+          )}
+
+          {editorMode === 'timeline' && (
+            <TimelineEditor
+              key={this.note.uuid}
+              application={this.application}
+              controller={this.controller}
               readonly={this.state.readonly}
               customBackgroundColor={this.state.customBackgroundColor}
               customTextColor={this.state.customTextColor}
