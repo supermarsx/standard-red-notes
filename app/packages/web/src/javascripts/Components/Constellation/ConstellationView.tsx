@@ -1,12 +1,19 @@
-import React, { forwardRef, ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import React, { forwardRef, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { ContentType, PrefKey, SNNote } from '@standardnotes/snjs'
+import { ContentType, PrefKey, SNNote, SNTag, SNFolder, DecryptedItemInterface } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { openOrFocusConstellationWindow } from './constellationWindow'
+import {
+  ConstellationScope,
+  ConstellationScopeKind,
+  selectConstellationNoteUuids,
+} from './selectConstellationNotes'
+
+const FolderContentType = 'Folder'
 
 type ConstellationPosition = 'right' | 'left' | 'bottom'
 
@@ -41,10 +48,61 @@ type Props = {
   standalone?: boolean
 }
 
-function buildGraph(application: WebApplication): Graph {
+/**
+ * Build the undirected note-to-note adjacency for a single note: its outgoing
+ * links plus its backlinks. Used by the 'current' scope to expand a bounded
+ * neighborhood around the active note.
+ */
+function noteAdjacency(application: WebApplication, uuid: string): string[] {
+  const note = application.items.findItem<SNNote>(uuid)
+  if (!note) {
+    return []
+  }
+  const neighbors = new Set<string>()
+  for (const linked of application.items.referencesForItem<SNNote>(note, ContentType.TYPES.Note)) {
+    neighbors.add(linked.uuid)
+  }
+  for (const backlink of application.items.itemsReferencingItem<SNNote>(note, ContentType.TYPES.Note)) {
+    neighbors.add(backlink.uuid)
+  }
+  return [...neighbors]
+}
+
+/** Resolve the note uuids belonging to a tag/folder collection. */
+function collectionNoteUuids(application: WebApplication, collection: DecryptedItemInterface): string[] {
+  return application.items
+    .referencesForItem<SNNote>(collection, ContentType.TYPES.Note)
+    .map((note) => note.uuid)
+}
+
+function buildGraph(application: WebApplication, scope: ConstellationScope): Graph {
   const allNotes = application.items.getDisplayableNotes()
-  const truncated = Math.max(0, allNotes.length - MAX_NODES)
-  const notes = allNotes.slice(0, MAX_NODES)
+
+  // Decide which notes are in-scope. Global keeps the legacy all-notes behaviour;
+  // the other scopes restrict to a (usually small) subset.
+  let scopedNotes = allNotes
+  if (scope.kind !== 'global') {
+    const activeNoteUuid =
+      scope.kind === 'current' ? application.itemListController.activeControllerItem?.uuid : undefined
+
+    let collection: string[] | undefined
+    if ((scope.kind === 'tag' || scope.kind === 'folder') && scope.collectionUuid) {
+      const item = application.items.findItem(scope.collectionUuid)
+      collection = item ? collectionNoteUuids(application, item) : []
+    }
+
+    const selected = selectConstellationNoteUuids({
+      scope,
+      allNotes,
+      activeNoteUuid,
+      adjacency: (uuid) => noteAdjacency(application, uuid),
+      collectionNoteUuids: collection,
+    })
+    scopedNotes = allNotes.filter((note) => selected.has(note.uuid))
+  }
+
+  const truncated = Math.max(0, scopedNotes.length - MAX_NODES)
+  const notes = scopedNotes.slice(0, MAX_NODES)
 
   const indexByUuid = new Map<string, number>()
   const nodes: GraphNode[] = notes.map((note, i) => {
@@ -111,6 +169,30 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     application.getPreference(PrefKey.ConstellationPosition, 'right'),
   )
 
+  // --- scope (tab / filter) ----------------------------------------------
+  const [scopeKind, setScopeKind] = useState<ConstellationScopeKind>('global')
+  const [collectionUuid, setCollectionUuid] = useState<string | undefined>(undefined)
+
+  // Observe the active note so the 'current' scope follows note switches and the
+  // empty-state can react. `activeControllerItem` is a mobx computed; reading it
+  // inside this observer component subscribes us to changes.
+  const activeNote = application.itemListController.activeControllerItem
+  const activeNoteUuid = activeNote && activeNote.content_type === ContentType.TYPES.Note ? activeNote.uuid : undefined
+
+  // Available tags / folders for the selector dropdowns.
+  const tags = useMemo(() => application.items.getDisplayableTags(), [application, scopeKind])
+  const folders = useMemo(
+    () => application.items.getItems<SNFolder>(FolderContentType),
+    [application, scopeKind],
+  )
+
+  const scope: ConstellationScope = useMemo(
+    () => ({ kind: scopeKind, collectionUuid }),
+    [scopeKind, collectionUuid],
+  )
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
+
   const changePosition = useCallback(
     (next: ConstellationPosition) => {
       setPosition(next)
@@ -118,6 +200,14 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     },
     [application],
   )
+
+  const changeScopeKind = useCallback((next: ConstellationScopeKind) => {
+    setScopeKind(next)
+    // Reset the collection selection so the default-pick effect runs for the new
+    // scope (e.g. switching tag -> folder shouldn't reuse a tag uuid).
+    setCollectionUuid(undefined)
+    setSelected(null)
+  }, [])
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -136,6 +226,9 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     moved: false,
   })
   const rafRef = useRef<number | null>(null)
+  // Forward reference to the recenter callback (defined later) so scope-change
+  // effects can re-center the camera without a declaration-order problem.
+  const recenterRef = useRef<() => void>(() => {})
 
   const [counts, setCounts] = useState({ notes: 0, links: 0, truncated: 0 })
 
@@ -144,7 +237,7 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
   }, [])
 
   const rebuild = useCallback(() => {
-    const graph = buildGraph(application)
+    const graph = buildGraph(application, scopeRef.current)
     // Preserve positions for nodes that still exist, so live updates don't jump.
     const previous = new Map(graphRef.current.nodes.map((n) => [n.uuid, n]))
     for (const node of graph.nodes) {
@@ -384,6 +477,40 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     }
   }, [application, rebuild])
 
+  // When switching to a tag/folder scope with nothing selected, default to the
+  // active note's first tag/folder if it has one, else the first available.
+  useEffect(() => {
+    if (scopeKind !== 'tag' && scopeKind !== 'folder') {
+      return
+    }
+    if (collectionUuid) {
+      return
+    }
+    const list: DecryptedItemInterface[] = scopeKind === 'tag' ? tags : folders
+    if (list.length === 0) {
+      return
+    }
+    let preferred: string | undefined
+    if (activeNoteUuid) {
+      const containing = list.find((collection) =>
+        application.items
+          .referencesForItem(collection, ContentType.TYPES.Note)
+          .some((note) => note.uuid === activeNoteUuid),
+      )
+      preferred = containing?.uuid
+    }
+    setCollectionUuid(preferred ?? list[0].uuid)
+  }, [scopeKind, collectionUuid, tags, folders, activeNoteUuid, application])
+
+  // Rebuild whenever the scope, the selected collection, or (for the 'current'
+  // scope) the active note changes. Computing on demand here — not continuously —
+  // keeps the scoped sets cheap.
+  useEffect(() => {
+    rebuild()
+    recenterRef.current()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKind, collectionUuid, scopeKind === 'current' ? activeNoteUuid : undefined])
+
   // --- pointer interaction -----------------------------------------------
   const localPoint = (event: React.PointerEvent) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
@@ -494,6 +621,7 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
     cameraRef.current = { x: width / 2, y: height / 2, scale: 1 }
     reheat(0.6)
   }, [reheat])
+  recenterRef.current = recenter
 
   return (
     <div
@@ -573,6 +701,50 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
         </div>
       </div>
 
+      {/* Scope tabs + collection selector. Wraps on small screens so it never
+          overflows; the dropdown only appears for tag/folder scopes. */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+        <div role="tablist" aria-label="Constellation scope" className="flex flex-wrap gap-0.5 rounded bg-default p-0.5">
+          {(
+            [
+              { kind: 'current', label: 'Current note' },
+              { kind: 'global', label: 'Global' },
+              { kind: 'tag', label: 'Tag' },
+              { kind: 'folder', label: 'Folder' },
+            ] as { kind: ConstellationScopeKind; label: string }[]
+          ).map((tab) => (
+            <button
+              key={tab.kind}
+              role="tab"
+              aria-selected={scopeKind === tab.kind}
+              className={classNames(
+                'rounded px-2.5 py-1 text-xs font-semibold transition-colors',
+                scopeKind === tab.kind ? 'bg-info text-info-contrast' : 'text-text hover:bg-contrast',
+              )}
+              onClick={() => changeScopeKind(tab.kind)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {(scopeKind === 'tag' || scopeKind === 'folder') && (
+          <select
+            className="min-w-0 max-w-[12rem] flex-grow truncate rounded border border-border bg-default px-2 py-1 text-xs text-text sm:flex-grow-0"
+            value={collectionUuid ?? ''}
+            onChange={(event) => setCollectionUuid(event.target.value || undefined)}
+            aria-label={scopeKind === 'tag' ? 'Select tag' : 'Select folder'}
+          >
+            <option value="">{scopeKind === 'tag' ? 'Select a tag…' : 'Select a folder…'}</option>
+            {(scopeKind === 'tag' ? tags : folders).map((collection) => (
+              <option key={collection.uuid} value={collection.uuid}>
+                {(collection as SNTag | SNFolder).title || 'Untitled'}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
       <div ref={containerRef} className="relative flex-grow overflow-hidden">
         <canvas
           ref={canvasRef}
@@ -587,7 +759,23 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
         />
         {counts.notes === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-neutral">
-            No notes yet. Create notes and link them together to see your constellation.
+            {scopeKind === 'current'
+              ? activeNoteUuid
+                ? 'This note has no links yet. Link it to other notes to grow its neighborhood.'
+                : 'Open a note to see its local constellation.'
+              : scopeKind === 'tag'
+              ? collectionUuid
+                ? 'This tag has no notes yet.'
+                : tags.length === 0
+                ? 'No tags yet. Create a tag to filter the constellation.'
+                : 'Select a tag to filter the constellation.'
+              : scopeKind === 'folder'
+              ? collectionUuid
+                ? 'This folder has no notes yet.'
+                : folders.length === 0
+                ? 'No folders yet. Create a folder to filter the constellation.'
+                : 'Select a folder to filter the constellation.'
+              : 'No notes yet. Create notes and link them together to see your constellation.'}
           </div>
         )}
         {counts.notes > 0 && counts.links === 0 && (
