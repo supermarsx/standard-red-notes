@@ -14,6 +14,8 @@ import {
   serializeCalendarDocument,
   todayIso,
 } from './CalendarDocument'
+import { downloadICS } from '@/Utils/ICS/downloadICS'
+import { calendarEventToICS } from '@/Utils/ICS/icsAdapters'
 
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Calendar note. */
 export const CalendarEditorIdentifier = 'org.standardnotes.calendar'
@@ -206,6 +208,15 @@ export const CalendarEditor: FunctionComponent<Props> = ({
 
   const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) ?? [] : []
 
+  const exportICS = useCallback(() => {
+    if (document.events.length === 0) {
+      return
+    }
+    const noteTitle = note.current.title
+    const noteUuid = note.current.uuid
+    downloadICS(document.events.map((event) => calendarEventToICS(event, noteUuid, noteTitle)))
+  }, [document.events])
+
   return (
     <div
       className="flex h-full w-full flex-grow flex-col overflow-hidden"
@@ -242,6 +253,15 @@ export const CalendarEditor: FunctionComponent<Props> = ({
             aria-label="Next month"
           >
             <Icon type="chevron-right" size="small" />
+          </button>
+          <button
+            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            onClick={exportICS}
+            disabled={document.events.length === 0}
+            title="Export this calendar's events to .ics"
+            aria-label="Export to .ics"
+          >
+            <Icon type="download" size="small" />
           </button>
         </div>
       </div>

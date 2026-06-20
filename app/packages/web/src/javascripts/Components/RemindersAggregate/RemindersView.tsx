@@ -15,6 +15,8 @@ import {
   collectAllReminders,
   groupReminders,
 } from '@/Reminders/allReminders'
+import { downloadICS } from '@/Utils/ICS/downloadICS'
+import { reminderToICS } from '@/Utils/ICS/icsAdapters'
 
 type Props = {
   application: WebApplication
@@ -138,6 +140,13 @@ const RemindersView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     [application],
   )
 
+  const exportICS = useCallback(() => {
+    if (reminders.length === 0) {
+      return
+    }
+    downloadICS(reminders.map(({ reminder, note }) => reminderToICS(reminder, note.uuid, note.title)))
+  }, [reminders])
+
   return (
     <div
       id={id}
@@ -159,6 +168,15 @@ const RemindersView = forwardRef<HTMLDivElement, Props>(({ application, classNam
             title="Toggle a single combined read-only page of all reminders"
           >
             {showCombined ? 'List view' : 'Combined page'}
+          </button>
+          <button
+            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            onClick={exportICS}
+            disabled={reminders.length === 0}
+            aria-label="Export reminders to .ics"
+            title="Export all reminders to .ics"
+          >
+            <Icon type="download" size="small" />
           </button>
           <button
             className="rounded p-1 hover:bg-default"

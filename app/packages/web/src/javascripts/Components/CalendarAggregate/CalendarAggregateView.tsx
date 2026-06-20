@@ -12,6 +12,8 @@ import {
   collectAllCalendarEvents,
   indexCalendarEventsByDate,
 } from './allCalendarEvents'
+import { downloadICS } from '@/Utils/ICS/downloadICS'
+import { calendarEventToICS } from '@/Utils/ICS/icsAdapters'
 
 type Props = {
   application: WebApplication
@@ -127,6 +129,13 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
 
   const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) ?? [] : []
 
+  const exportICS = useCallback(() => {
+    if (events.length === 0) {
+      return
+    }
+    downloadICS(events.map(({ event, note }) => calendarEventToICS(event, note.uuid, note.title)))
+  }, [events])
+
   return (
     <div
       id={id}
@@ -151,6 +160,15 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
           </button>
           <button className="rounded px-2 py-1 text-sm hover:bg-default" onClick={goToToday} title="Go to today">
             Today
+          </button>
+          <button
+            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            onClick={exportICS}
+            disabled={events.length === 0}
+            title="Export all calendar events to .ics"
+            aria-label="Export to .ics"
+          >
+            <Icon type="download" size="small" />
           </button>
           <button
             className="rounded p-1 hover:bg-default"
