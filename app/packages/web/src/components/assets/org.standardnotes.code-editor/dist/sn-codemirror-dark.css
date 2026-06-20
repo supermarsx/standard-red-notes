@@ -1,0 +1,46 @@
+/*
+ * Standard Red Notes — Code Editor CodeMirror legibility supplement.
+ *
+ * The bundled CodeMirror base stylesheet (codemirror.css) hardcodes a handful of
+ * light-only values (active-line highlight, gutter markers, default cursor) that
+ * are not driven by the stylekit variables. These rules re-point them at the
+ * active stylekit variables so they read correctly on the dark (Standard Red)
+ * base and remain correct under the light theme.
+ *
+ * main.css already drives .CodeMirror background/foreground from the stylekit
+ * variables (with !important), so the editing surface itself follows the theme;
+ * this file only patches the residual hardcoded accents.
+ */
+
+.CodeMirror-activeline-background {
+  background: var(--sn-stylekit-contrast-background-color) !important;
+}
+
+.CodeMirror-guttermarker {
+  color: var(--sn-stylekit-foreground-color);
+}
+
+.CodeMirror-guttermarker-subtle {
+  color: var(--sn-stylekit-neutral-color);
+}
+
+.CodeMirror-cursor {
+  border-left-color: var(--sn-stylekit-foreground-color);
+}
+
+.CodeMirror-gutters {
+  background-color: var(--sn-stylekit-editor-background-color) !important;
+  border-right-color: var(--sn-stylekit-border-color);
+}
+
+/* Search dialog injected by the search addon */
+.CodeMirror-dialog {
+  background-color: var(--sn-stylekit-contrast-background-color);
+  color: var(--sn-stylekit-foreground-color);
+}
+
+.CodeMirror-dialog input {
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-foreground-color);
+  border-color: var(--sn-stylekit-input-border-color);
+}

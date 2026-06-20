@@ -1,0 +1,48 @@
+/*
+ * Standard Red Notes — Advanced Checklist dark legibility supplement.
+ *
+ * The checklist bundles its own light :root stylekit scale (white/black/grey-N).
+ * The theme bridge re-points the core foreground/background variables to the
+ * dark base, which already fixes the task text (it reads from
+ * --sn-stylekit-editor-foreground-color). This file additionally darkens the
+ * auxiliary grey/black/white scale and a few hardcoded chrome surfaces so the
+ * panels, headers and "color-black"/"color-grey-*" utilities stay readable on
+ * the dark base. Values are derived from the Standard Red palette.
+ *
+ * These rules use stylekit variables where possible so they remain correct under
+ * the light (Standard Blue) theme too; the fixed scale values below only matter
+ * when no light theme is posted (i.e. the dark base is active).
+ */
+
+:root {
+  --sn-stylekit-white: #ece8e9;
+  --sn-stylekit-black: #120e11;
+  --sn-stylekit-grey-0: #c8c0c2;
+  --sn-stylekit-grey-1: #9b8b90;
+  --sn-stylekit-grey-2: #6a545b;
+  --sn-stylekit-grey-3: #43323a;
+  --sn-stylekit-grey-4: #251c21;
+  --sn-stylekit-grey-4-opacity-variant: #6a545b3d;
+}
+
+/* Task text + inputs: ensure the editable surface uses the theme foreground. */
+.sn-component [contenteditable],
+.sn-component input,
+.sn-component textarea {
+  color: var(--sn-stylekit-editor-foreground-color);
+  caret-color: var(--sn-stylekit-editor-foreground-color);
+}
+
+/* Panels / headers that hardcode a dark text color. */
+.sn-component .sk-panel,
+.sn-component .sk-panel .sk-panel-header,
+.sn-component .sk-menu-panel,
+.sn-component .sk-menu-panel .sk-menu-panel-header {
+  color: var(--sn-stylekit-foreground-color);
+}
+
+/* "color-black" utility used for primary text should follow the foreground. */
+.sn-component .color-black,
+.sn-component .color-foreground {
+  color: var(--sn-stylekit-foreground-color);
+}

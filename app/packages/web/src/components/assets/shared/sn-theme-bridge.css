@@ -1,0 +1,104 @@
+/*
+ * Standard Red Notes — component editor theme bridge.
+ *
+ * Legacy component editors run inside sandboxed iframes. The host app delivers
+ * the ACTIVE theme's CSS by appending a <link> to this document's <head> at
+ * runtime (ComponentManager -> ActivateThemes -> the relay injects the link).
+ *
+ * Problem this file solves:
+ *   The fork's default DARK look ("Standard Red") is the app's *base* stylekit,
+ *   which is NOT a toggled theme. When it is active, the host posts NO theme
+ *   <link> to the iframe, so editors fall back to their own bundled :root
+ *   defaults — which are LIGHT (black text on white/transparent). On the dark
+ *   app background this makes text invisible / illegible (the checklist bug).
+ *
+ * Fix:
+ *   This stylesheet seeds the Standard Red dark stylekit variables as the iframe
+ *   BASE. It must be loaded AFTER the editor's own stylesheet(s) so its :root
+ *   variables win over the editors' hardcoded light defaults, but BEFORE any
+ *   theme <link> the host appends at runtime (those are appended to the end of
+ *   <head>, so a real Light/Standard-Blue theme still overrides this base).
+ *
+ *   Net effect:
+ *     - Dark / Standard Red active (no theme link posted)  -> these dark vars apply.
+ *     - Light / Standard Blue active (theme link posted)    -> link overrides, light applies.
+ *     - Any other explicit theme                            -> that theme overrides.
+ */
+
+:root {
+  --sn-stylekit-neutral-color: #9b8b90;
+  --sn-stylekit-neutral-contrast-color: #ffffff;
+
+  --sn-stylekit-info-color: #b3242e;
+  --sn-stylekit-info-color-darkened: #931d26;
+  --sn-stylekit-info-contrast-color: #ffffff;
+  --sn-stylekit-info-backdrop-color: #b3242e1f;
+
+  --sn-stylekit-success-color: #2fa37e;
+  --sn-stylekit-success-contrast-color: #ffffff;
+
+  --sn-stylekit-warning-color: #e0a526;
+  --sn-stylekit-warning-contrast-color: #120e11;
+
+  --sn-stylekit-danger-color: #ee5a55;
+  --sn-stylekit-danger-contrast-color: #ffffff;
+  --sn-stylekit-danger-light-color: #341a1d;
+
+  --sn-stylekit-shadow-color: #000000;
+  --sn-stylekit-background-color: #120e11;
+  --sn-stylekit-border-color: #403036;
+  --sn-stylekit-foreground-color: #ece8e9;
+
+  --sn-stylekit-contrast-background-color: #1d1519;
+  --sn-stylekit-contrast-foreground-color: #f0ecec;
+  --sn-stylekit-contrast-border-color: #43323a;
+
+  --sn-stylekit-secondary-background-color: #181216;
+  --sn-stylekit-secondary-foreground-color: #ece8e9;
+  --sn-stylekit-secondary-border-color: #43323a;
+
+  --sn-stylekit-secondary-contrast-background-color: #251c21;
+  --sn-stylekit-secondary-contrast-foreground-color: #f0ecec;
+  --sn-stylekit-secondary-contrast-border-color: #5f4a52;
+
+  --sn-stylekit-editor-background-color: var(--sn-stylekit-background-color);
+  --sn-stylekit-editor-foreground-color: var(--sn-stylekit-foreground-color);
+
+  --sn-stylekit-paragraph-text-color: #d8d2d3;
+
+  --sn-stylekit-input-placeholder-color: #82767b;
+  --sn-stylekit-input-border-color: #43323a;
+
+  --sn-stylekit-scrollbar-thumb-color: #46363c;
+  --sn-stylekit-scrollbar-track-border-color: #221a1e;
+
+  --sn-stylekit-theme-type: dark;
+  --sn-stylekit-theme-name: sn-standard-red;
+
+  --sn-stylekit-passive-color-0: #e6e1e2;
+  --sn-stylekit-passive-color-1: #9b8b90;
+  --sn-stylekit-passive-color-2: #6a545b;
+  --sn-stylekit-passive-color-3: #403036;
+  --sn-stylekit-passive-color-4: #211a1e;
+  --sn-stylekit-passive-color-4-opacity-variant: #6a545b3d;
+  --sn-stylekit-passive-color-5: #181216;
+  --sn-stylekit-passive-color-6: #241c21;
+  --sn-stylekit-passive-color-super-light: #100c0e;
+
+  --sn-stylekit-accessory-tint-color-1: #e0524d;
+  --sn-stylekit-accessory-tint-color-2: #ea6595;
+  --sn-stylekit-accessory-tint-color-3: #ebad00;
+  --sn-stylekit-accessory-tint-color-4: #9a7be0;
+  --sn-stylekit-accessory-tint-color-5: #28b58e;
+  --sn-stylekit-accessory-tint-color-6: #f28c52;
+}
+
+/*
+ * Readability safety net: any editor that paints text/background directly from
+ * the stylekit foreground/background variables now becomes legible in the dark
+ * base. We intentionally avoid forcing colors on elements that set their own.
+ */
+html,
+body {
+  color: var(--sn-stylekit-foreground-color);
+}
