@@ -21,6 +21,14 @@ import { sanitizeFileName } from '@standardnotes/utils'
 
 const TextBackupFileExtension = '.txt'
 
+const formatPlaintextBackupTimestamp = (date: Date): string => {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}.${pad(date.getMinutes())}.${pad(date.getSeconds())}`
+  )
+}
+
 export const FileBackupsConstantsV1 = {
   Version: '1.0.0',
   MetadataFileName: 'metadata.sn.json',
@@ -335,11 +343,14 @@ export class FilesBackupManager implements FileBackupsDevice {
 
     const uuidPart = uuid.split('-')[0]
     const condensedUuidPart = uuidPart.substring(0, 4)
+    const trimmedName = name.trim()
+    const baseName = trimmedName.length > 0 ? trimmedName : formatPlaintextBackupTimestamp(new Date())
+    const backupFilename = `${baseName}-${condensedUuidPart}.txt`
     if (tags.length === 0) {
-      await writeFileToPath(location, `${name}-${condensedUuidPart}.txt`, data)
+      await writeFileToPath(location, backupFilename, data)
     } else {
       for (const tag of tags) {
-        await writeFileToPath(location, `${name}-${condensedUuidPart}.txt`, data, tag)
+        await writeFileToPath(location, backupFilename, data, tag)
       }
     }
   }
