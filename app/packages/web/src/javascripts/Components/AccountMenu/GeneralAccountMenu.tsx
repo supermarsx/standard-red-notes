@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import Icon from '@/Components/Icon/Icon'
+import Avatar from '@/Avatar/Avatar'
 import { SyncQueueStrategy } from '@standardnotes/snjs'
 import { STRING_GENERIC_SYNC_ERROR } from '@/Constants/Strings'
 import { useCallback, useMemo, useState, FunctionComponent } from 'react'
@@ -100,10 +101,13 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
       </div>
       {user ? (
         <>
-          <div className="mb-3 px-4 text-lg text-foreground md:px-3 lg:text-sm">
-            <div>{c('Info').t`You're signed in as:`}</div>
-            <div className="wrap my-0.5 font-bold">{user.email}</div>
-            <span className="text-neutral">{application.getHost.execute().getValue()}</span>
+          <div className="mb-3 flex items-center gap-3 px-4 text-lg text-foreground md:px-3 lg:text-sm">
+            <Avatar email={user.email} size={40} />
+            <div className="min-w-0">
+              <div>{c('Info').t`You're signed in as:`}</div>
+              <div className="wrap my-0.5 font-bold">{user.email}</div>
+              <span className="text-neutral">{application.getHost.execute().getValue()}</span>
+            </div>
           </div>
           <div className="mb-2 flex items-start justify-between px-4 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
             {isSyncingInProgress ? (

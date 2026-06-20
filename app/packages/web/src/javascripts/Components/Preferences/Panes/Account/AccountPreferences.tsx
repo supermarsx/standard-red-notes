@@ -8,6 +8,7 @@ import SignOutWrapper from './SignOutView'
 import FilesSection from './Files'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import Email from './Email/Email'
+import ProfilePicture from './ProfilePicture'
 import DeleteAccount from '@/Components/Preferences/Panes/Account/DeleteAccount'
 
 type Props = {
@@ -23,6 +24,7 @@ const AccountPreferences = ({ application }: Props) => {
         <Authentication application={application} />
       ) : (
         <>
+          <ProfilePicture application={application} />
           <Credentials application={application} />
           <Sync application={application} />
         </>
