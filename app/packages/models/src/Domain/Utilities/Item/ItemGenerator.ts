@@ -9,6 +9,7 @@ import { DecryptedItem } from '../../Abstract/Item/Implementations/DecryptedItem
 import { SNNote } from '../../Syncable/Note/Note'
 import { SmartView } from '../../Syncable/SmartView/SmartView'
 import { SNTag } from '../../Syncable/Tag/Tag'
+import { SNFolder } from '../../Syncable/Folder/SNFolder'
 import { SNUserPrefs } from '../../Syncable/UserPrefs/UserPrefs'
 import { FileMutator } from '../../Syncable/File/FileMutator'
 import { MutationType } from '../../Abstract/Item/Types/MutationType'
@@ -16,6 +17,7 @@ import { UserPrefsMutator } from '../../Syncable/UserPrefs/UserPrefsMutator'
 import { ActionsExtensionMutator } from '../../Syncable/ActionsExtension/ActionsExtensionMutator'
 import { ComponentMutator } from '../../Syncable/Component/ComponentMutator'
 import { TagMutator } from '../../Syncable/Tag/TagMutator'
+import { FolderMutator } from '../../Syncable/Folder/FolderMutator'
 import { NoteMutator } from '../../Syncable/Note/NoteMutator'
 import { DecryptedItemInterface } from '../../Abstract/Item/Interfaces/DecryptedItem'
 import { ItemContent } from '../../Abstract/Content/ItemContent'
@@ -66,6 +68,7 @@ const ContentTypeClassMapping: Partial<Record<string, MappingEntry>> = {
   [ContentType.TYPES.Note]: { itemClass: SNNote, mutatorClass: NoteMutator },
   [ContentType.TYPES.SmartView]: { itemClass: SmartView, mutatorClass: SmartViewMutator },
   [ContentType.TYPES.Tag]: { itemClass: SNTag, mutatorClass: TagMutator },
+  ['Folder']: { itemClass: SNFolder, mutatorClass: FolderMutator },
   [ContentType.TYPES.Theme]: { itemClass: ComponentItem, mutatorClass: ComponentMutator },
   [ContentType.TYPES.UserPrefs]: { itemClass: SNUserPrefs, mutatorClass: UserPrefsMutator },
 } as unknown as Partial<Record<string, MappingEntry>>

@@ -1,5 +1,6 @@
 import { SmartView } from '../../Syncable/SmartView'
 import { SNTag } from '../../Syncable/Tag'
+import { SNFolder } from '../../Syncable/Folder'
 import { CollectionSortDirection, CollectionSortProperty } from '../Collection/CollectionSort'
 import { SearchQuery } from './Search/Types'
 import { DisplayControllerCustomFilter } from './Types'
@@ -13,6 +14,7 @@ export interface GenericDisplayOptions {
 
 export interface NotesAndFilesDisplayOptions extends GenericDisplayOptions {
   tags?: SNTag[]
+  folders?: SNFolder[]
   views?: SmartView[]
   searchQuery?: SearchQuery
   hiddenContentTypes?: string[]

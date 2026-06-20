@@ -7,6 +7,7 @@ import { LegacyAnonymousReference } from './LegacyAnonymousReference'
 import { LegacyTagToNoteReference } from './LegacyTagToNoteReference'
 import { Reference } from './Reference'
 import { TagToParentTagReference } from './TagToParentTagReference'
+import { FolderToParentFolderReference } from './FolderToParentFolderReference'
 import { AnonymousReference } from './AnonymousReference'
 
 export const isLegacyAnonymousReference = (x: ContentReference): x is LegacyAnonymousReference => {
@@ -28,4 +29,8 @@ export const isLegacyTagToNoteReference = (
 
 export const isTagToParentTagReference = (x: ContentReference): x is TagToParentTagReference => {
   return isReference(x) && x.reference_type === ContentReferenceType.TagToParentTag
+}
+
+export const isFolderToParentFolderReference = (x: ContentReference): x is FolderToParentFolderReference => {
+  return isReference(x) && x.reference_type === ContentReferenceType.FolderToParentFolder
 }

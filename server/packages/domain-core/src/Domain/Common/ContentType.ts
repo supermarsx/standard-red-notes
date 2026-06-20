@@ -16,6 +16,7 @@ export class ContentType extends ValueObject<ContentTypeProps> {
     EncryptedStorage: 'SN|EncryptedStorage',
     Note: 'Note',
     Tag: 'Tag',
+    Folder: 'Folder',
     SmartView: 'SN|SmartTag',
     Component: 'SN|Component',
     Editor: 'SN|Editor',
@@ -42,6 +43,7 @@ export class ContentType extends ValueObject<ContentTypeProps> {
     [ContentType.TYPES.Note]: 'note',
     [ContentType.TYPES.SmartView]: 'smart view',
     [ContentType.TYPES.Tag]: 'tag',
+    [ContentType.TYPES.Folder]: 'folder',
     [ContentType.TYPES.Theme]: 'theme',
     [ContentType.TYPES.UserPrefs]: 'user preferences',
   }

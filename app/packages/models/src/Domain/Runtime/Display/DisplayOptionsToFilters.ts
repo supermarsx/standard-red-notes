@@ -71,6 +71,12 @@ export function computeFiltersForDisplayOptions(
     }
   }
 
+  if (options.folders && options.folders.length > 0) {
+    for (const folder of options.folders) {
+      filters.push((item) => folder.isReferencingItem(item))
+    }
+  }
+
   if (options.includePinned === false && !viewsPredicate?.keypathIncludesString('pinned')) {
     filters.push((item) => !item.pinned)
   }
