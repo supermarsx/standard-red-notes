@@ -1,0 +1,19 @@
+{
+  "name": "@standard-red-notes/srn-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Operational CLI for a self-hosted Standard Red Notes server/Docker stack (health, status, logs, compose up/down, config).",
+  "bin": {
+    "srn-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@standard-red-notes/srn-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI to manage a Standard Red Notes account against a self-hosted server: sign in and do real end-to-end-encrypted note CRUD via an embedded headless snjs client.",
+  "bin": {
+    "srn-client": "dist/index.cjs"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "start": "node dist/index.cjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@standardnotes/sncrypto-web": "1.14.11",
+    "@standardnotes/snjs": "2.211.6",
+    "libsodium-wrappers-sumo": "0.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
