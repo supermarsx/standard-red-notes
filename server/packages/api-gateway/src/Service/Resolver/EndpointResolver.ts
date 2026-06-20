@@ -35,6 +35,11 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:shares/', 'auth.shares.list'],
     ['[DELETE]:shares/:shareId', 'auth.shares.revoke'],
     ['[GET]:shares/:shareId', 'auth.shares.get'],
+    // Dead Man Switches Controller (Standard Red Notes)
+    ['[POST]:dead-man-switches/', 'auth.deadManSwitches.create'],
+    ['[GET]:dead-man-switches/', 'auth.deadManSwitches.list'],
+    ['[POST]:dead-man-switches/:switchId/check-in', 'auth.deadManSwitches.checkIn'],
+    ['[DELETE]:dead-man-switches/:switchId', 'auth.deadManSwitches.delete'],
     // Magic Link Controller
     ['[POST]:mfa/magic-link/request', 'auth.magicLink.request'],
     ['[POST]:mfa/magic-link/status', 'auth.magicLink.setStatus'],

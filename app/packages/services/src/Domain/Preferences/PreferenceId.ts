@@ -14,6 +14,7 @@ const PREFERENCE_PANE_IDS = [
   'whats-new',
   'admin',
   'shares',
+  'survivor-switch',
 ] as const
 
 export type PreferencePaneId = (typeof PREFERENCE_PANE_IDS)[number]

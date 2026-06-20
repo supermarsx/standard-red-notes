@@ -15,6 +15,7 @@ import PluginsPane from './Panes/Plugins/PluginsPane'
 import Assistant from './Panes/Assistant/Assistant'
 import Admin from './Panes/Admin/Admin'
 import Shares from './Panes/Shares/Shares'
+import SurvivorSwitch from './Panes/SurvivorSwitch/SurvivorSwitch'
 
 const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = ({
   menu,
@@ -33,6 +34,8 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <Admin application={application} />
     case 'shares':
       return <Shares application={application} />
+    case 'survivor-switch':
+      return <SurvivorSwitch application={application} />
     case 'home-server':
       return <HomeServer />
     case 'security':

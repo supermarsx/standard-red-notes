@@ -43,6 +43,9 @@ export class PreferencesSessionController {
     // Standard Red Notes: public read-only share links management pane.
     menuItems.push({ id: 'shares', label: 'Share Links', icon: 'link', order: 9 })
 
+    // Standard Red Notes: survivor switch (dead man's switch) management pane.
+    menuItems.push({ id: 'survivor-switch', label: 'Survivor Switch', icon: 'pencil-off', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()

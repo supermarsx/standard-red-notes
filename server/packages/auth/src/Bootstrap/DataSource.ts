@@ -12,6 +12,7 @@ import { TypeORMAuthenticator } from '../Infra/TypeORM/TypeORMAuthenticator'
 import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
 import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
 import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
+import { TypeORMDeadManSwitch } from '../Infra/TypeORM/TypeORMDeadManSwitch'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
 import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
@@ -74,6 +75,7 @@ export class AppDataSource {
         TypeORMAppPassword,
         TypeORMMcpToken,
         TypeORMShare,
+        TypeORMDeadManSwitch,
         TypeORMAuthenticatorChallenge,
         TypeORMMagicLinkToken,
         TypeORMEmergencyAccessInvitation,

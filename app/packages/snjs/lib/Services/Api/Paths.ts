@@ -82,6 +82,16 @@ const SharePaths = {
   share: (shareId: string) => `/v1/shares/${shareId}`,
 }
 
+// Standard Red Notes: dead man's switch / survivor switch. The authed routes let
+// a signed-in user create, list, check in on, and delete switches. The server
+// stores the full share URL (link + decryption key) so it can email it to the
+// recipient if the user stops checking in by the deadline.
+const DeadManSwitchPaths = {
+  deadManSwitches: '/v1/dead-man-switches',
+  deadManSwitch: (id: string) => `/v1/dead-man-switches/${id}`,
+  deadManSwitchCheckIn: (id: string) => `/v1/dead-man-switches/${id}/check-in`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -106,6 +116,7 @@ export const Paths = {
     ...AppPasswordPaths,
     ...McpTokenPaths,
     ...SharePaths,
+    ...DeadManSwitchPaths,
     meta: '/v1/meta',
   },
   v2: {

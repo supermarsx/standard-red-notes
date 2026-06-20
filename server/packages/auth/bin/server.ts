@@ -5,6 +5,7 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedAuthenticatorsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedAppPasswordsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMcpTokensController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharesController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedDeadManSwitchesController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMagicLinkController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSessionsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSubscriptionInvitesController'
@@ -41,6 +42,9 @@ import { CreateCrossServiceToken } from '../src/Domain/UseCase/CreateCrossServic
 import { TokenDecoderInterface, WebSocketConnectionTokenData } from '@standardnotes/security'
 import { ResponseLocals } from '../src/Infra/InversifyExpressUtils/ResponseLocals'
 import { HeapProfiler } from '../src/Domain/Profiler/HeapProfiler'
+import { TriggerDueDeadManSwitches } from '../src/Domain/UseCase/TriggerDueDeadManSwitches/TriggerDueDeadManSwitches'
+
+const DEAD_MAN_SWITCH_SCAN_INTERVAL_MS = 5 * 60 * 1000
 
 const container = new ContainerConfigLoader()
 void container.load().then(async (container) => {
@@ -147,8 +151,42 @@ void container.load().then(async (container) => {
     }
   }
 
+  // Dead man's switch scanner. Runs in-process on the auth server (which has DB
+  // and SMTP access). Every interval it triggers any switch whose deadline has
+  // elapsed without a check-in, emailing the recipient the share link. The
+  // `isRunning` guard prevents overlapping scans; `unref()` keeps the timer from
+  // holding the process open during shutdown.
+  const triggerDueDeadManSwitches = container.get<TriggerDueDeadManSwitches>(TYPES.Auth_TriggerDueDeadManSwitches)
+  let deadManSwitchScanRunning = false
+  const scanDeadManSwitches = async (): Promise<void> => {
+    if (deadManSwitchScanRunning) {
+      return
+    }
+    deadManSwitchScanRunning = true
+    try {
+      const result = await triggerDueDeadManSwitches.execute({})
+      if (!result.isFailed()) {
+        const triggered = result.getValue()
+        if (triggered > 0) {
+          logger.info(`Dead man switch scan triggered ${triggered} switch(es).`)
+        }
+      } else {
+        logger.error(`Dead man switch scan failed: ${result.getError()}`)
+      }
+    } catch (error) {
+      logger.error(`Dead man switch scan threw: ${(error as Error).message}`)
+    } finally {
+      deadManSwitchScanRunning = false
+    }
+  }
+  const deadManSwitchInterval = setInterval(() => {
+    void scanDeadManSwitches()
+  }, DEAD_MAN_SWITCH_SCAN_INTERVAL_MS)
+  deadManSwitchInterval.unref()
+
   process.on('SIGTERM', () => {
     logger.info('SIGTERM signal received: closing HTTP server')
+    clearInterval(deadManSwitchInterval)
 
     if (env.get('PROFILER_ENABLED', true) === 'true') {
       try {

@@ -832,6 +832,54 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: dead man's switch / survivor switch. These authed routes
+   * let a signed-in user create, list, check in on, and delete switches. Unlike a
+   * plain share link, the server stores the FULL share URL (link + decryption key)
+   * so it can email it to the recipient if the user stops checking in.
+   */
+  async createDeadManSwitch(body: {
+    recipientEmail: string
+    shareUrl: string
+    message?: string
+    intervalDays: number
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.deadManSwitches),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create survivor switch.',
+      params: body,
+    })
+  }
+
+  async listDeadManSwitches(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.deadManSwitches),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list survivor switches.',
+    })
+  }
+
+  async checkInDeadManSwitch(id: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.deadManSwitchCheckIn(id)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to check in to survivor switch.',
+    })
+  }
+
+  async deleteDeadManSwitch(id: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.deadManSwitch(id)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete survivor switch.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

@@ -248,6 +248,20 @@ import { RevokeShare } from '../Domain/UseCase/RevokeShare/RevokeShare'
 import { GetShare } from '../Domain/UseCase/GetShare/GetShare'
 import { SharesController } from '../Controller/SharesController'
 import { BaseSharesController } from '../Infra/InversifyExpressUtils/Base/BaseSharesController'
+import { DeadManSwitch } from '../Domain/DeadManSwitch/DeadManSwitch'
+import { DeadManSwitchRepositoryInterface } from '../Domain/DeadManSwitch/DeadManSwitchRepositoryInterface'
+import { DeadManSwitchPersistenceMapper } from '../Mapping/DeadManSwitchPersistenceMapper'
+import { DeadManSwitchHttpProjection } from '../Infra/Http/Projection/DeadManSwitchHttpProjection'
+import { DeadManSwitchHttpMapper } from '../Mapping/DeadManSwitchHttpMapper'
+import { TypeORMDeadManSwitch } from '../Infra/TypeORM/TypeORMDeadManSwitch'
+import { TypeORMDeadManSwitchRepository } from '../Infra/TypeORM/TypeORMDeadManSwitchRepository'
+import { CreateDeadManSwitch } from '../Domain/UseCase/CreateDeadManSwitch/CreateDeadManSwitch'
+import { ListDeadManSwitches } from '../Domain/UseCase/ListDeadManSwitches/ListDeadManSwitches'
+import { CheckInDeadManSwitch } from '../Domain/UseCase/CheckInDeadManSwitch/CheckInDeadManSwitch'
+import { DeleteDeadManSwitch } from '../Domain/UseCase/DeleteDeadManSwitch/DeleteDeadManSwitch'
+import { TriggerDueDeadManSwitches } from '../Domain/UseCase/TriggerDueDeadManSwitches/TriggerDueDeadManSwitches'
+import { DeadManSwitchesController } from '../Controller/DeadManSwitchesController'
+import { BaseDeadManSwitchesController } from '../Infra/InversifyExpressUtils/Base/BaseDeadManSwitchesController'
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { SignInWithRecoveryCodes } from '../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -520,6 +534,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Share, ShareHttpProjection>>(TYPES.Auth_ShareHttpMapper)
       .toConstantValue(new ShareHttpMapper())
     container
+      .bind<MapperInterface<DeadManSwitch, TypeORMDeadManSwitch>>(TYPES.Auth_DeadManSwitchPersistenceMapper)
+      .toConstantValue(new DeadManSwitchPersistenceMapper())
+    container
+      .bind<MapperInterface<DeadManSwitch, DeadManSwitchHttpProjection>>(TYPES.Auth_DeadManSwitchHttpMapper)
+      .toConstantValue(new DeadManSwitchHttpMapper())
+    container
       .bind<
         MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
       >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
@@ -592,6 +612,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMShare>>(TYPES.Auth_ORMShareRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMShare))
+    container
+      .bind<Repository<TypeORMDeadManSwitch>>(TYPES.Auth_ORMDeadManSwitchRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMDeadManSwitch))
     container
       .bind<Repository<TypeORMAuthenticatorChallenge>>(TYPES.Auth_ORMAuthenticatorChallengeRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMAuthenticatorChallenge))
@@ -681,6 +704,14 @@ export class ContainerConfigLoader {
         new TypeORMShareRepository(
           container.get(TYPES.Auth_ORMShareRepository),
           container.get(TYPES.Auth_SharePersistenceMapper),
+        ),
+      )
+    container
+      .bind<DeadManSwitchRepositoryInterface>(TYPES.Auth_DeadManSwitchRepository)
+      .toConstantValue(
+        new TypeORMDeadManSwitchRepository(
+          container.get(TYPES.Auth_ORMDeadManSwitchRepository),
+          container.get(TYPES.Auth_DeadManSwitchPersistenceMapper),
         ),
       )
     container
@@ -1257,6 +1288,32 @@ export class ContainerConfigLoader {
     container
       .bind<GetShare>(TYPES.Auth_GetShare)
       .toConstantValue(new GetShare(container.get(TYPES.Auth_ShareRepository)))
+    container
+      .bind<CreateDeadManSwitch>(TYPES.Auth_CreateDeadManSwitch)
+      .toConstantValue(
+        new CreateDeadManSwitch(
+          container.get(TYPES.Auth_DeadManSwitchRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<ListDeadManSwitches>(TYPES.Auth_ListDeadManSwitches)
+      .toConstantValue(new ListDeadManSwitches(container.get(TYPES.Auth_DeadManSwitchRepository)))
+    container
+      .bind<CheckInDeadManSwitch>(TYPES.Auth_CheckInDeadManSwitch)
+      .toConstantValue(new CheckInDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
+    container
+      .bind<DeleteDeadManSwitch>(TYPES.Auth_DeleteDeadManSwitch)
+      .toConstantValue(new DeleteDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
+    container
+      .bind<TriggerDueDeadManSwitches>(TYPES.Auth_TriggerDueDeadManSwitches)
+      .toConstantValue(
+        new TriggerDueDeadManSwitches(
+          container.get(TYPES.Auth_DeadManSwitchRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
     container
       .bind<SetSettingValue>(TYPES.Auth_SetSettingValue)
       .toConstantValue(
@@ -1837,6 +1894,17 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<DeadManSwitchesController>(TYPES.Auth_DeadManSwitchesController)
+      .toConstantValue(
+        new DeadManSwitchesController(
+          container.get(TYPES.Auth_CreateDeadManSwitch),
+          container.get(TYPES.Auth_ListDeadManSwitches),
+          container.get(TYPES.Auth_CheckInDeadManSwitch),
+          container.get(TYPES.Auth_DeleteDeadManSwitch),
+          container.get(TYPES.Auth_DeadManSwitchHttpMapper),
+        ),
+      )
+    container
       .bind<MagicLinkController>(TYPES.Auth_MagicLinkController)
       .toConstantValue(
         new MagicLinkController(
@@ -2179,6 +2247,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseSharesController(
             container.get(TYPES.Auth_SharesController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseDeadManSwitchesController>(TYPES.Auth_BaseDeadManSwitchesController)
+        .toConstantValue(
+          new BaseDeadManSwitchesController(
+            container.get(TYPES.Auth_DeadManSwitchesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )
