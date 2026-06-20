@@ -22,6 +22,13 @@ export class DeltaRemoteDataConflicts implements SyncDeltaInterface {
     }
 
     for (const conflict of this.conflicts) {
+      if (conflict.server_item == undefined) {
+        // Defensive: a conflicting_data conflict must carry a server_item. If the server
+        // sent one that failed payload filtering it is handled as an InvalidServerItem
+        // elsewhere; skip here rather than dereferencing undefined and aborting the sync.
+        continue
+      }
+
       const base = this.baseCollection.find(conflict.server_item.uuid)
 
       const isBaseDeleted = base == undefined

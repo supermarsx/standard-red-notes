@@ -117,6 +117,17 @@ export class ServerSyncResponse {
         }
       }
 
+      const serverItemDisallowed = conflict.server_item != undefined && serverItem == undefined
+      const unsavedItemDisallowed = conflict.unsaved_item != undefined && unsavedItem == undefined
+      if (serverItemDisallowed || unsavedItemDisallowed) {
+        // The disallowed payload was already routed to InvalidServerItem above. Do not
+        // also enqueue the half-formed typed conflict: a ConflictingData entry with an
+        // undefined server_item throws in DeltaRemoteDataConflicts, which aborts the entire
+        // sync resolution before the rejected-payload handler runs — leaving the item dirty
+        // and re-syncing forever (the conflict-error flood, and duplicated items on create).
+        continue
+      }
+
       if (!trustedConflicts[conflict.type]) {
         trustedConflicts[conflict.type] = []
       }
