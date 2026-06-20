@@ -13,6 +13,7 @@ import { PreferencePaneId } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
 import { openOrFocusConstellationWindow } from '../Constellation/constellationWindow'
 import { openOrCreateDiaryEntry } from '@/Diary/diaryService'
+import { AppPaneId } from '../Panes/AppPaneMetadata'
 
 /**
  * A single command exposed in the command palette that is available globally
@@ -45,6 +46,26 @@ function openPreferencesPane(pane: PreferencePaneId): (application: WebApplicati
   return (application) => application.openPreferences(pane)
 }
 
+/**
+ * Present one of the aggregate/dashboard VIEWS as the main content column,
+ * mirroring the sidebar buttons (see AggregateViewSectionButtons /
+ * DashboardSectionButton): if the view is already open it's a no-op; otherwise
+ * any open Editor pane is popped first so panes don't accumulate, then the view
+ * is presented.
+ */
+function presentAppPane(pane: AppPaneId): (application: WebApplication) => void {
+  return (application) => {
+    const paneController = application.paneController
+    if (paneController.panes.includes(pane)) {
+      return
+    }
+    if (paneController.panes.includes(AppPaneId.Editor)) {
+      paneController.removePane(AppPaneId.Editor)
+    }
+    paneController.presentPane(pane)
+  }
+}
+
 export const GLOBAL_COMMANDS: GlobalCommand[] = [
   // --- Creation -----------------------------------------------------------
   {
@@ -64,6 +85,15 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     run: (application) => application.keyboardService.triggerCommand(CREATE_NEW_TAG_COMMAND),
   },
   {
+    id: 'global-create-note-current-tag',
+    title: 'New note in current tag',
+    keywords: ['create', 'add', 'tag', 'folder', 'here'],
+    icon: 'add-text',
+    // createNewNote files the note under the currently selected regular tag (and
+    // falls back to All Notes for smart views), so this is "new note here".
+    run: (application) => void application.itemListController.createNewNote(undefined, undefined, 'editor', true),
+  },
+  {
     id: 'global-open-diary-entry',
     title: "Open today's diary entry",
     keywords: ['diary', 'journal', 'today', 'daily'],
@@ -79,6 +109,13 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     icon: 'search',
     shortcut: SEARCH_KEYBOARD_COMMAND,
     run: (application) => application.keyboardService.triggerCommand(SEARCH_KEYBOARD_COMMAND),
+  },
+  {
+    id: 'global-clear-search',
+    title: 'Clear search filter',
+    keywords: ['reset', 'cancel', 'find', 'filter'],
+    icon: 'clear-circle-filled',
+    run: (application) => application.itemListController.clearFilterText(),
   },
   {
     id: 'global-go-home',
@@ -100,6 +137,36 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     keywords: ['graph', 'stars', 'links', 'visualize'],
     icon: 'asterisk',
     run: () => openOrFocusConstellationWindow(),
+  },
+
+  // --- Views (aggregate / dashboard panes) --------------------------------
+  {
+    id: 'global-open-dashboard',
+    title: 'Open Dashboard',
+    keywords: ['view', 'overview', 'summary', 'home'],
+    icon: 'dashboard',
+    run: presentAppPane(AppPaneId.Dashboard),
+  },
+  {
+    id: 'global-open-reminders',
+    title: 'Open Reminders',
+    keywords: ['view', 'alerts', 'due', 'notifications'],
+    icon: 'clock',
+    run: presentAppPane(AppPaneId.Reminders),
+  },
+  {
+    id: 'global-open-calendar',
+    title: 'Open Calendar',
+    keywords: ['view', 'dates', 'schedule', 'agenda'],
+    icon: 'history',
+    run: presentAppPane(AppPaneId.Calendar),
+  },
+  {
+    id: 'global-open-todos',
+    title: 'Open Todos',
+    keywords: ['view', 'tasks', 'checklist', 'to-do'],
+    icon: 'tasks',
+    run: presentAppPane(AppPaneId.Todos),
   },
 
   // --- Editor -------------------------------------------------------------
@@ -139,6 +206,20 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     run: (application) => application.openPreferences(),
   },
   {
+    id: 'global-open-pref-general',
+    title: 'Open General preferences',
+    keywords: ['settings', 'account', 'defaults', 'language'],
+    icon: 'settings',
+    run: openPreferencesPane('general'),
+  },
+  {
+    id: 'global-open-pref-account',
+    title: 'Open Account preferences',
+    keywords: ['settings', 'subscription', 'email', 'profile', 'sign'],
+    icon: 'account-circle',
+    run: openPreferencesPane('account'),
+  },
+  {
     id: 'global-open-pref-security',
     title: 'Open Security preferences',
     keywords: ['settings', 'passcode', 'encryption', 'protections'],
@@ -172,6 +253,36 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     keywords: ['settings', 'sync', 'duplicate', 'resolve'],
     icon: 'sync',
     run: openPreferencesPane('conflicts'),
+  },
+  {
+    id: 'global-open-pref-achievements',
+    title: 'Open Achievements',
+    keywords: ['settings', 'badges', 'progress', 'stats', 'gamification'],
+    icon: 'star',
+    run: openPreferencesPane('achievements'),
+  },
+  {
+    id: 'global-open-pref-shortcuts',
+    title: 'Open Keyboard Shortcuts preferences',
+    keywords: ['settings', 'keys', 'hotkeys', 'bindings'],
+    icon: 'keyboard',
+    run: openPreferencesPane('shortcuts'),
+  },
+
+  // --- Import / Export ----------------------------------------------------
+  {
+    id: 'global-open-import',
+    title: 'Import data…',
+    keywords: ['upload', 'csv', 'evernote', 'google keep', 'backup', 'restore'],
+    icon: 'upload',
+    run: (application) => application.importModalController.setIsVisible(true),
+  },
+  {
+    id: 'global-open-export',
+    title: 'Export data…',
+    keywords: ['download', 'backup', 'save', 'decrypted', 'encrypted'],
+    icon: 'download',
+    run: (application) => application.exportModalController.setIsVisible(true),
   },
 
   // --- Maintenance / security --------------------------------------------
