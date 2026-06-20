@@ -952,7 +952,7 @@ const ToolbarPlugin = () => {
             {/* Clipboard group */}
             <ToolbarButton
               name="Cut"
-              iconName="backspace"
+              iconName="scissors"
               disabled={!hasNonCollapsedSelection}
               onSelect={handleClipboardCut}
             />
@@ -962,7 +962,7 @@ const ToolbarPlugin = () => {
               disabled={!hasNonCollapsedSelection}
               onSelect={handleClipboardCopy}
             />
-            <ToolbarButton name="Paste" iconName="download" onSelect={() => void handleClipboardPaste()} />
+            <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
             <ToolbarSeparator />
             {canShowAllItems && (
               <>

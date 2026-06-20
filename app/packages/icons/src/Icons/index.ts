@@ -43,6 +43,7 @@ import ChevronUpIcon from './ic-chevron-up.svg'
 import CircleIcon from './circle-55.svg'
 import ClearCircleFilledIcon from './ic-clear-circle-filled.svg'
 import CloseCircleFilledIcon from './ic-close-circle-filled.svg'
+import ClipboardIcon from './ic-clipboard.svg'
 import ClockIcon from './ic-clock.svg'
 import CloseIcon from './ic-close.svg'
 import CloudOffIcon from './ic-cloud-off.svg'
@@ -164,6 +165,7 @@ import SafeIcon from './ic-safe.svg'
 import SafeSquareFilledIcon from './ic-safe-square-filled.svg'
 import SafeSquareIcon from './ic-safe-square.svg'
 import SaveIcon from './ic-save.svg'
+import ScissorsIcon from './ic-scissors.svg'
 import SearchIcon from './ic-search.svg'
 import SearchIosIcon from './ic-search-ios.svg'
 import SecurityIcon from './ic-security.svg'
@@ -264,6 +266,7 @@ export {
   CircleIcon,
   ClearCircleFilledIcon,
   CloseCircleFilledIcon,
+  ClipboardIcon,
   ClockIcon,
   CloseIcon,
   CloudOffIcon,
@@ -386,6 +389,7 @@ export {
   SafeSquareFilledIcon,
   SafeSquareIcon,
   SaveIcon,
+  ScissorsIcon,
   SearchIcon,
   SearchIosIcon,
   SecurityIcon,
