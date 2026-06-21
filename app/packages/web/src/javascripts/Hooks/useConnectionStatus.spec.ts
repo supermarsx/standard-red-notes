@@ -24,8 +24,10 @@ describe('resolveConnectionStatus', () => {
     ).toBe('offline')
   })
 
-  it('reports offline when the websocket is closed', () => {
-    expect(resolveConnectionStatus({ ...baseSignals, socketOpen: false })).toBe('offline')
+  it('stays online when only the realtime websocket is closed (HTTP sync is the source of truth)', () => {
+    // A down live-push socket is a silent degradation, not connectivity loss:
+    // HTTP sync/polling continues, so the app must not flip to "offline".
+    expect(resolveConnectionStatus({ ...baseSignals, socketOpen: false })).toBe('online')
   })
 
   it('ignores the websocket signal when it is not in use (undefined)', () => {
@@ -40,7 +42,7 @@ describe('resolveConnectionStatus', () => {
     expect(resolveConnectionStatus({ ...baseSignals, syncFailing: true })).toBe('reconnecting')
   })
 
-  it('prioritizes genuine connectivity loss (offline) over a degraded sync state', () => {
+  it('reports reconnecting (not offline) for a degraded sync state even if the socket is closed', () => {
     expect(
       resolveConnectionStatus({
         browserOnline: true,
@@ -48,7 +50,7 @@ describe('resolveConnectionStatus', () => {
         outOfSync: true,
         syncFailing: true,
       }),
-    ).toBe('offline')
+    ).toBe('reconnecting')
   })
 
   describe('flapping suppression (no transient state changes from routine sync activity)', () => {

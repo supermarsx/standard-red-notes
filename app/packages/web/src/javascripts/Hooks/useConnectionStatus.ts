@@ -53,20 +53,25 @@ export const CONNECTION_HEARTBEAT_MS = 30_000
 /**
  * Pure resolver: maps the current raw signals to a displayable status kind.
  *
- *  - `offline`      — the browser reports offline, or the websocket (when in
- *                     use) is closed. This is genuine connectivity loss.
+ *  - `offline`      — the browser reports it is offline. This is genuine
+ *                     connectivity loss.
  *  - `reconnecting` — online at the browser level but the sync system is out of
  *                     sync or persistently failing (a degraded, recovering state).
  *  - `online`       — reachable and healthy.
  *
- * A sync merely being *in progress* is intentionally NOT an input here: routine
- * sync activity must never read as a connection problem.
+ * The realtime websocket state is intentionally NOT an input. The websocket is a
+ * live-push optimization layered on top of HTTP sync, which remains the source
+ * of truth for connectivity and catch-up. Treating a closed/closing socket as
+ * "offline" made the app flip to offline whenever the realtime connection wasn't
+ * established (e.g. behind a proxy, or while it backs off and reconnects) even
+ * though HTTP sync was perfectly healthy — and flicker as the socket retried.
+ * A down socket now degrades silently (HTTP polling continues).
+ *
+ * A sync merely being *in progress* is also NOT an input here: routine sync
+ * activity must never read as a connection problem.
  */
 export function resolveConnectionStatus(signals: ConnectionSignals): ConnectionStatusKind {
   if (!signals.browserOnline) {
-    return 'offline'
-  }
-  if (signals.socketOpen === false) {
     return 'offline'
   }
   if (signals.outOfSync || signals.syncFailing) {
