@@ -68,7 +68,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
     <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain border-b border-border px-3 py-2">
       <button className={chipClass(activeFilter === FilesFolderFilterAll)} onClick={() => onChange(FilesFolderFilterAll)}>
         <Icon type="files" className="h-4 w-4" />
-        All files
+        All Files
       </button>
       <button
         className={chipClass(activeFilter === FilesFolderFilterNone)}
