@@ -32,6 +32,7 @@ import PreferencesButton from './PreferencesButton'
 import VaultSelectionButton from './VaultSelectionButton'
 import ConnectionStatusIndicator from './ConnectionStatus'
 import NoteStats from './NoteStats'
+import NotesFolderCounter from './NotesFolderCounter'
 import AssistantUsage from './AssistantUsage'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { getManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
@@ -441,6 +442,14 @@ class Footer extends AbstractComponent<Props, State> {
             )}
           </div>
           <div className="right flex h-full flex-shrink-0">
+            {/*
+              Standard Red Notes: total notes/folders counter. Shown from md+
+              (whenever the footer is visible); it's compact enough not to crowd
+              tablet widths the way the verbose note-stats chip would.
+            */}
+            <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+              <NotesFolderCounter application={this.application} />
+            </div>
             {/*
               The footer itself is hidden below md (768px). To avoid crowding the
               footer on tablet widths (768–1023px), the verbose note-stats chip is
