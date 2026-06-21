@@ -43,8 +43,15 @@
          if the block below changes and a CSP that pins it is enforced.
          sha256-PjWNPpfp7Mntj53voHaSJi0riWL1HwoLgebWF4pVxFM= -->
     <script>
-      window.defaultSyncServer = 'http://localhost:3000'
-      window.defaultFilesHost = 'http://localhost:3000'
+      // Standard Red Notes: default to SAME-ORIGIN so the browser never makes a
+      // cross-origin request to the API. nginx (app/docker/nginx.conf) proxies
+      // /v1, /v2, /auth, /subscription and /sockets to the backend on this same
+      // origin. Cross-origin (app on :3001, API on :3000) is blocked by CORS +
+      // browser "Local Network Access" gating and silently breaks sync.
+      // Operators fronting the API on a different host can still override these
+      // by editing this block (or via a reverse proxy that routes by path).
+      window.defaultSyncServer = window.location.origin
+      window.defaultFilesHost = window.location.origin
       window.enabledUnfinishedFeatures = false
       // Client-side PDF OCR (tesseract.js). Files are end-to-end encrypted, so OCR
       // runs in the browser, not on the server — these globals only gate whether
@@ -53,7 +60,10 @@
       // (see the app Docker entrypoint, which templates this file at startup).
       window.ocrEnabled = false
       window.ocrDefaultLanguage = 'eng'
-      window.websocketUrl = 'ws://localhost:3106'
+      // Same-origin websocket (proxied by nginx to the websocket-gateway). Uses
+      // wss:// when the page is served over https. See the /sockets proxy block.
+      window.websocketUrl =
+        (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/sockets'
       // Serve Excalidraw fonts from our own origin (no CDN) — see webpack copy.
       window.EXCALIDRAW_ASSET_PATH = '/excalidraw/'
       window.purchaseUrl = 'about:blank'
