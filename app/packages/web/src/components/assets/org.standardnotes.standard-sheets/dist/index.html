@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="dist.css">
+    <link href="./vendor/styles/examples-offline.css" rel="stylesheet">
+
+    <!-- Default theme -->
+    <link href="./vendor/styles/kendo.common-fiori.min.css" rel="stylesheet">
+    <link href="./vendor/styles/kendo.fiori.min.css" rel="stylesheet">
+    <link href="./vendor/styles/kendo.fiori.mobile.min.css" rel="stylesheet">
+
+    <link href="./vendor/styles/kendo.rtl.min.css" rel="stylesheet">
+
+    <link href="../../shared/sn-theme-bridge.css" rel="stylesheet">
+    <link href="sn-sheets-dark.css" rel="stylesheet">
+
+    <script src="./vendor/js/jquery.min.js"></script>
+    <script src="./vendor/js/jszip.min.js"></script>
+    <script src="./vendor/js/kendo.spreadsheet.min.js"></script>
+
+    <!--
+      Region-aware date defaults.
+
+      Kendo Spreadsheet (this bundle is Kendo UI v2021.3.914) is culture-aware:
+      loading a culture file and calling kendo.culture("<locale>") BEFORE the
+      spreadsheet initializes changes the DEFAULT date display + date PARSING
+      (e.g. German -> dd.MM.yyyy, UK -> dd/MM/yyyy) instead of the en-US default.
+
+      ISO (yyyy-mm-dd), European (dd/mm/yyyy), US (mm/dd/yyyy) and other Excel-like
+      formats are ALWAYS available per-cell today via the Format menu / custom
+      number format strings regardless of culture; this snippet only changes the
+      region DEFAULT used when no explicit format is applied.
+
+      Culture files are NOT vendored here (they contain version-specific CLDR locale
+      data). To enable region defaults, an operator/build must drop the matching
+      Kendo 2021.3.914 culture files into ./vendor/js/cultures/ named
+      kendo.culture.<locale>.min.js (the standard Kendo distribution layout under
+      js/cultures/). See README.md next to this file for the exact list. If a file
+      is absent this snippet silently no-ops and the spreadsheet falls back to the
+      built-in en-US default with no error.
+
+      This runs synchronously (document.write) so the culture is registered and
+      activated before dist.js boots the spreadsheet below.
+    -->
+    <script>
+      (function () {
+        try {
+          if (typeof kendo === 'undefined' || !kendo.culture) {
+            return
+          }
+          var requested = (navigator.language || navigator.userLanguage || 'en-US').trim()
+          if (!requested) {
+            return
+          }
+          // Build candidate locales most-specific first, e.g. "de-DE" -> ["de-DE","de"].
+          var candidates = []
+          candidates.push(requested)
+          var dash = requested.indexOf('-')
+          if (dash > 0) {
+            candidates.push(requested.slice(0, dash))
+          }
+          // en-US is already built into the bundle; no extra file needed for it.
+          for (var i = 0; i < candidates.length; i++) {
+            var locale = candidates[i]
+            if (locale === 'en-US' || locale === 'en') {
+              break
+            }
+            var src = './vendor/js/cultures/kendo.culture.' + locale + '.min.js'
+            // Synchronous, blocking inject so the culture registers before dist.js.
+            document.write('<script src="' + src + '" onerror="window.__snSheetsCultureError=true"><\/script>')
+            // Mark which locale we attempted; activation happens in the next block
+            // once the (optional) file has executed.
+            window.__snSheetsCulture = locale
+            break
+          }
+        } catch (e) {
+          // Never let locale detection break the editor.
+        }
+      })()
+    </script>
+    <script>
+      (function () {
+        try {
+          var locale = window.__snSheetsCulture
+          if (!locale || window.__snSheetsCultureError) {
+            return
+          }
+          if (typeof kendo === 'undefined' || !kendo.culture || !kendo.cultures) {
+            return
+          }
+          // Only activate if the culture file actually loaded and registered.
+          if (kendo.cultures[locale]) {
+            kendo.culture(locale)
+          }
+        } catch (e) {
+          // Fall back to the default en-US culture.
+        }
+      })()
+    </script>
+    <title>Standard Sheets</title>
+  </head>
+  <body>
+    <script type="text/javascript" src="dist.js"></script>
+    <div id="spreadsheet"></div>
+  </body>
+</html>
