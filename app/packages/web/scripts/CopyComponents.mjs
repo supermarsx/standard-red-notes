@@ -54,3 +54,36 @@ for (const packageName of Object.keys(components)) {
 
   await copyComponentAssets(packagePath, assetsPath, '**/package.json')
 }
+
+// Standard Red Notes: re-apply the region-aware date patch to the freshly-extracted
+// standard-sheets (Kendo) spreadsheet. copyComponentAssets empties the dir on every build,
+// so the locale snippet + Kendo culture files (kept tracked under scripts/standard-sheets-patch,
+// which is never wiped) must be injected HERE, after extraction, to survive each build.
+const patchStandardSheets = () => {
+  const sheetsDist = 'src/components/assets/org.standardnotes.standard-sheets/dist'
+  const indexPath = path.join(sheetsDist, 'index.html')
+  const patchDir = path.join(__dirname, 'standard-sheets-patch')
+  if (!fs.existsSync(indexPath) || !fs.existsSync(patchDir)) {
+    return
+  }
+
+  let html = fs.readFileSync(indexPath, 'utf8')
+  if (!html.includes('__snSheetsCulture')) {
+    const snippet = fs.readFileSync(path.join(patchDir, 'locale-snippet.html'), 'utf8')
+    const marker = '<script src="./vendor/js/kendo.spreadsheet.min.js"></script>'
+    if (html.includes(marker)) {
+      fs.writeFileSync(indexPath, html.replace(marker, `${marker}\n${snippet}`))
+    }
+  }
+
+  const culturesSrc = path.join(patchDir, 'cultures')
+  if (fs.existsSync(culturesSrc)) {
+    const culturesDest = path.join(sheetsDist, 'vendor/js/cultures')
+    ensureDirExists(culturesDest)
+    for (const file of fs.readdirSync(culturesSrc)) {
+      fs.copyFileSync(path.join(culturesSrc, file), path.join(culturesDest, file))
+    }
+  }
+}
+
+patchStandardSheets()
