@@ -43,6 +43,7 @@ import AutoOrganizeModal from './AutoOrganizeModal'
 import PublishToGitHubModal from './PublishToGitHubModal'
 import SetReminderModal from '@/Reminders/SetReminderModal'
 import { noteHasReminder } from '@/Reminders/reminders'
+import { BOOKMARK_SPOT_COMMAND } from '@/Bookmarks/bookmarkCommand'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
@@ -490,6 +491,19 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           >
             <Icon type="clock" className={iconClass} />
             {noteHasReminder(notes[0]) ? 'Edit reminder…' : 'Set reminder…'}
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              // Standard Red Notes: route through the shared bookmark command so
+              // this menu item uses the SAME spot-capture flow as Ctrl/Cmd+M.
+              application.keyboardService.triggerCommand(BOOKMARK_SPOT_COMMAND)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="pin" className={iconClass} />
+            Bookmark this spot
           </MenuItem>
         )}
         {notes.length === 1 && (

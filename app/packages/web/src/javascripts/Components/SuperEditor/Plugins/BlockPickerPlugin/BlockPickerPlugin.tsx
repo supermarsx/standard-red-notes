@@ -40,6 +40,7 @@ import { GetWebEmbedBlockOption } from '../Blocks/WebEmbed'
 import { GetMathBlockOption } from '../Blocks/Math'
 import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
 import { GetFootnoteBlockOption } from '../Blocks/Footnote'
+import { GetBookmarkBlockOption } from '../Blocks/Bookmark'
 import { GetTimelineBlockOption } from '../Blocks/Timeline'
 import { GetQrCodeBlockOption } from '../Blocks/QrCode'
 import { GetTradingViewBlockOption } from '../Blocks/TradingView'
@@ -103,6 +104,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetMathBlockOption(editor),
       GetInlineMathBlockOption(editor),
       GetFootnoteBlockOption(editor),
+      GetBookmarkBlockOption(editor),
       GetDividerBlockOption(editor),
       ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),

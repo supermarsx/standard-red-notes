@@ -39,6 +39,7 @@ import { GanttChartNode } from './GanttChartNode'
 import { TimingDiagramNode } from './TimingDiagramNode'
 import { MusicStaffNode } from './MusicStaffNode'
 import { ClockNode } from './ClockNode'
+import { BookmarkAnchorNode } from './BookmarkAnchorNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -86,6 +87,7 @@ const CommonNodes = [
   TimingDiagramNode,
   MusicStaffNode,
   ClockNode,
+  BookmarkAnchorNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

@@ -24,6 +24,7 @@ import DashboardSectionButton from '../Dashboard/DashboardSectionButton'
 import HomeSectionButton from '../Home/HomeSectionButton'
 import AggregateViewSectionButtons from '../AggregateViews/AggregateViewSectionButtons'
 import ResearchSectionButton from '../Research/ResearchSectionButton'
+import BookmarksSectionButton from '../Bookmarks/BookmarksSectionButton'
 
 type Props = {
   application: WebApplication
@@ -104,6 +105,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           navigationController={application.navigationController}
         />
         <TagsSection />
+        <BookmarksSectionButton application={application} />
       </div>
       <div
         className={classNames(

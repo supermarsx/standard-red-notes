@@ -14,6 +14,7 @@ import { EditorState, LexicalEditor } from 'lexical'
 import HorizontalRulePlugin from './Plugins/HorizontalRulePlugin'
 import CollapsiblePlugin from './Plugins/CollapsiblePlugin'
 import FootnotePlugin from './Plugins/FootnotePlugin/FootnotePlugin'
+import BookmarkPlugin from './Plugins/BookmarkPlugin/BookmarkPlugin'
 import FoldablePlugin from './Plugins/FoldablePlugin/FoldablePlugin'
 import DraggableBlockPlugin from './Plugins/DraggableBlockPlugin'
 import CodeHighlightPlugin from './Plugins/CodeHighlightPlugin'
@@ -140,6 +141,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <HashtagPlugin />
       <CollapsiblePlugin />
       <FootnotePlugin />
+      <BookmarkPlugin />
       <FoldablePlugin />
       <TabIndentationPlugin />
       <RemoveBrokenTablesPlugin />

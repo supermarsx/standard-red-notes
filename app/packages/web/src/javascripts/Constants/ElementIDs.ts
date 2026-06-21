@@ -9,6 +9,7 @@ export const ElementIds = {
   CalendarColumn: 'calendar-aggregate-column',
   TodosColumn: 'todos-column',
   ResearchColumn: 'research-column',
+  BookmarksColumn: 'bookmarks-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

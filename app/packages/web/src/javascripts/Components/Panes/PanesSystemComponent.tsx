@@ -28,6 +28,7 @@ import RemindersView from '../RemindersAggregate/RemindersView'
 import CalendarAggregateView from '../CalendarAggregate/CalendarAggregateView'
 import TodoView from '../TodoAggregate/TodoView'
 import ResearchView from '../Research/ResearchView'
+import BookmarksView from '../Bookmarks/BookmarksView'
 import usePreference from '@/Hooks/usePreference'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
@@ -243,7 +244,8 @@ const PanesSystemComponent = () => {
       panes.includes(AppPaneId.Reminders) ||
       panes.includes(AppPaneId.Calendar) ||
       panes.includes(AppPaneId.Todos) ||
-      panes.includes(AppPaneId.Research)
+      panes.includes(AppPaneId.Research) ||
+      panes.includes(AppPaneId.Bookmarks)
 
     if (isMobile) {
       return {}
@@ -485,6 +487,12 @@ const PanesSystemComponent = () => {
           return (
             <ErrorBoundary key="research-pane">
               <ResearchView id={ElementIds.ResearchColumn} className={className} application={application} />
+            </ErrorBoundary>
+          )
+        } else if (pane === AppPaneId.Bookmarks) {
+          return (
+            <ErrorBoundary key="bookmarks-pane">
+              <BookmarksView id={ElementIds.BookmarksColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         }

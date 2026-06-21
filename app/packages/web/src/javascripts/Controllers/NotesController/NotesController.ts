@@ -53,6 +53,14 @@ import {
   advanceRecurringReminder,
   isRecurring,
 } from '../../Reminders/reminders'
+import {
+  NoteBookmarksKey,
+  Bookmark,
+  getNoteBookmarks,
+  upsertBookmark as upsertBookmarkInList,
+  removeBookmark as removeBookmarkFromList,
+  updateBookmark as updateBookmarkInList,
+} from '../../Bookmarks/bookmarks'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
 
@@ -599,6 +607,54 @@ export class NotesController
   /** Clear all reminders from a note. */
   async clearNoteReminders(note: SNNote) {
     await this.writeNoteReminders(note, [])
+  }
+
+  /**
+   * Standard Red Notes: per-note in-note bookmarks / markers (forum #3733).
+   *
+   * Persisted in the note's encrypted appData under the `bookmarks` key — the
+   * EXACT mechanism used for `writeNoteReminders` above (and the hero header /
+   * appearance helpers): `mutator.setAppDataItem` + `sync`. No models/server
+   * change. Writing an empty list clears the key (mirrors writeNoteReminders).
+   * Never bypasses a locked note.
+   */
+  private async writeNoteBookmarks(note: SNNote, bookmarks: Bookmark[]) {
+    if (note.locked) {
+      return
+    }
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        mutator.setAppDataItem(NoteBookmarksKey, bookmarks.length > 0 ? bookmarks : undefined)
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  /** Add or replace a bookmark on a note (matched by id). */
+  async upsertNoteBookmark(note: SNNote, bookmark: Bookmark) {
+    const next = upsertBookmarkInList(getNoteBookmarks(note), bookmark)
+    await this.writeNoteBookmarks(note, next)
+  }
+
+  /** Remove a single bookmark (by id) from a note. */
+  async removeNoteBookmark(note: SNNote, bookmarkId: string) {
+    const next = removeBookmarkFromList(getNoteBookmarks(note), bookmarkId)
+    await this.writeNoteBookmarks(note, next)
+  }
+
+  /**
+   * Patch a bookmark's editable fields (nickname/label, color, icon) by id — like
+   * editing a tag. Passing `null` for color/icon clears it; `undefined` leaves it.
+   */
+  async updateNoteBookmark(
+    note: SNNote,
+    bookmarkId: string,
+    patch: { label?: string; color?: string | null; icon?: string | null },
+  ) {
+    const next = updateBookmarkInList(getNoteBookmarks(note), bookmarkId, patch)
+    await this.writeNoteBookmarks(note, next)
   }
 
   /** Mark a reminder (by id) as notified so the checker won't re-fire it. */

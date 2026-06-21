@@ -31,7 +31,13 @@ import {
   LocalPrefKey,
   LocalPrefDefaults,
 } from '@standardnotes/snjs'
-import { confirmDialog, DELETE_NOTE_KEYBOARD_COMMAND, KeyboardKey } from '@standardnotes/ui-services'
+import {
+  confirmDialog,
+  DELETE_NOTE_KEYBOARD_COMMAND,
+  KeyboardKey,
+  KeyboardModifier,
+  getPrimaryModifier,
+} from '@standardnotes/ui-services'
 import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, RefObject } from 'react'
 import { SuperEditor } from '../SuperEditor/SuperEditor'
 import IndicatorCircle from '../IndicatorCircle/IndicatorCircle'
@@ -75,6 +81,15 @@ import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/No
 import HeroHeaderBanner from '../../HeroHeader/HeroHeaderBanner'
 import { getNoteHeroHeader, HeroHeader } from '../../HeroHeader/heroHeader'
 import { addToast, ToastType } from '@standardnotes/toast'
+import {
+  Bookmark,
+  BookmarkAnchor,
+  DEFAULT_BOOKMARK_ICON,
+  capturePlainAnchor,
+  generateBookmarkId,
+} from '../../Bookmarks/bookmarks'
+import { BOOKMARK_INSERT_DOM_EVENT } from '../SuperEditor/Plugins/BookmarkPlugin/BookmarkPlugin'
+import { BOOKMARK_SPOT_COMMAND } from '../../Bookmarks/bookmarkCommand'
 
 function sortAlphabetically(array: ComponentInterface[]): ComponentInterface[] {
   return array.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
@@ -870,6 +885,88 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         onKeyDown: moveNoteToTrash,
       }),
     )
+
+    // Standard Red Notes: Ctrl/Cmd+M bookmarks the current spot. We register the
+    // binding ourselves (primary modifier + 'm'), preventDefault so the browser's
+    // default Ctrl+M does not fire, and add a handler. Works while focused in the
+    // editor (we do NOT exclude INPUT/TEXTAREA so plaintext capture can read the
+    // textarea selection).
+    this.application.keyboardService.registerShortcut({
+      command: BOOKMARK_SPOT_COMMAND,
+      key: 'm',
+      modifiers: [getPrimaryModifier(this.application.platform) as KeyboardModifier],
+      preventDefault: true,
+    })
+    this.#observers.push(
+      this.application.keyboardService.addCommandHandler({
+        command: BOOKMARK_SPOT_COMMAND,
+        onKeyDown: (event) => {
+          event.preventDefault?.()
+          this.bookmarkCurrentSpot().catch(console.error)
+          return true
+        },
+      }),
+    )
+  }
+
+  /**
+   * Standard Red Notes: capture the current spot in the active note as a bookmark
+   * and persist it to the note's appData (via NotesController). Reachable from the
+   * Ctrl/Cmd+M shortcut, the note-options menu, and (for Super) the Insert "/" menu.
+   *
+   *  - Super note: pre-generate a bookmark id, dispatch a DOM event the Super
+   *    BookmarkPlugin listens for to insert an inline anchor node carrying that id.
+   *    The anchor is part of the document and moves with edits (robust).
+   *  - Plain note: read the textarea caret offset + a surrounding snippet so the
+   *    spot can be re-located if the offset drifts (best-effort; plaintext offsets
+   *    can drift on edits — the snippet mitigates this).
+   *  - Both store a coarse scrollTop fallback.
+   */
+  bookmarkCurrentSpot = async (): Promise<void> => {
+    if (!this.note || this.note.locked) {
+      return
+    }
+
+    const bookmarkId = generateBookmarkId()
+    const defaultLabel = (this.note.title?.trim() || 'Untitled') + ' — bookmark'
+    let anchor: BookmarkAnchor | undefined
+
+    if (this.note.noteType === NoteType.Super) {
+      const superEl = document.getElementById(ElementIds.SuperEditor)
+      const contentEl = document.getElementById(SuperEditorContentId)
+      anchor = {
+        kind: 'super',
+        bookmarkId,
+        scrollTop: contentEl?.scrollTop,
+      }
+      // Drive the inline-anchor insertion through the Super plugin.
+      superEl?.dispatchEvent(
+        new CustomEvent(BOOKMARK_INSERT_DOM_EVENT, { detail: { bookmarkId }, bubbles: false }),
+      )
+    } else {
+      const textarea = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement | null
+      const text = this.note.text ?? ''
+      const offset = textarea?.selectionStart ?? 0
+      anchor = capturePlainAnchor(text, offset, textarea?.scrollTop)
+    }
+
+    if (!anchor) {
+      return
+    }
+
+    const bookmark: Bookmark = {
+      id: bookmarkId,
+      label: defaultLabel,
+      icon: DEFAULT_BOOKMARK_ICON,
+      anchor,
+      createdAt: new Date().toISOString(),
+    }
+
+    await this.application.notesController.upsertNoteBookmark(this.note, bookmark)
+    addToast({
+      type: ToastType.Success,
+      message: 'Bookmarked this spot — find it in the Bookmarks sidebar section.',
+    })
   }
 
   ensureNoteIsInsertedBeforeUIAction = async () => {
