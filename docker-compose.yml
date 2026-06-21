@@ -291,7 +291,10 @@ services:
       - standard-red-notes
 
   localstack:
-    image: localstack/localstack:latest
+    # Pinned to 4.4.0: the last release before LocalStack (2026.3.0+) merged
+    # community+pro into one image that requires a LOCALSTACK_AUTH_TOKEN even for
+    # SNS/SQS. 4.4.0 runs the SNS/SQS the stack needs with no account/token.
+    image: localstack/localstack:4.4.0
     restart: unless-stopped
     environment:
       SERVICES: sns,sqs
