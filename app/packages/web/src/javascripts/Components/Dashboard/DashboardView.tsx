@@ -58,13 +58,13 @@ type StatCardProps = {
 }
 
 const StatCard = ({ icon, label, value, hint }: StatCardProps) => (
-  <div className="flex flex-col rounded-md border border-border bg-default p-4 shadow-sm">
-    <div className="flex items-center gap-2 text-neutral">
-      <Icon type={icon} className="flex-shrink-0 text-info" size="medium" />
+  <div className="flex flex-col rounded-md border border-border bg-default p-2.5 shadow-sm">
+    <div className="flex items-center gap-1.5 text-neutral">
+      <Icon type={icon} className="flex-shrink-0 text-info" size="small" />
       <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
     </div>
-    <div className="mt-2 break-words text-2xl font-bold text-text">{value}</div>
-    {hint && <div className="mt-1 text-xs text-passive-1">{hint}</div>}
+    <div className="mt-1 break-words text-lg font-bold text-text">{value}</div>
+    {hint && <div className="mt-0.5 text-xs text-passive-1">{hint}</div>}
   </div>
 )
 
