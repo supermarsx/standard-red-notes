@@ -298,6 +298,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     if (this.controller.isTemplateNote) {
       setTimeout(() => {
+        if (!this.controller || this.controller.dealloced) {
+          return
+        }
         if (this.controller.templateNoteOptions?.autofocusBehavior === 'title') {
           this.focusTitle()
         }
@@ -403,6 +406,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
   override async onAppLaunch() {
     await super.onAppLaunch()
+    // This can resolve after the view was torn down (e.g. a transient template
+    // note on a smart view, or rapid tab switching), at which point deinit has
+    // nulled the controller/application — bail out so we don't touch them.
+    if (!this.controller || this.controller.dealloced) {
+      return
+    }
     this.streamItems()
   }
 
@@ -503,6 +512,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   streamItems() {
+    if (!this.controller || this.controller.dealloced) {
+      return
+    }
     this.#observers.push(
       this.application.items.streamItems<SNNote>(ContentType.TYPES.Note, async () => {
         if (!this.note) {
@@ -727,6 +739,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   reloadLineWidth() {
+    if (!this.controller || this.controller.dealloced) {
+      return
+    }
     const editorLineWidth = this.application.notesController.getEditorWidthForNote(this.note)
 
     this.setState({
@@ -769,6 +784,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   async reloadPreferences() {
+    if (!this.controller || this.controller.dealloced) {
+      return
+    }
     log(LoggingDomain.NoteView, 'Reload preferences')
     const monospaceFont = this.application.preferences.getLocalValue(
       LocalPrefKey.EditorMonospaceEnabled,
