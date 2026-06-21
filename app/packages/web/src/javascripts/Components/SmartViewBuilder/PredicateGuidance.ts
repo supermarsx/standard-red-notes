@@ -17,8 +17,8 @@ export type PredicatePreset = {
  */
 export const getPredicatePresets = (exampleTagTitle = 'todo'): PredicatePreset[] => [
   {
-    label: 'Notes with no tags',
-    description: 'Matches notes that have not been assigned any tags.',
+    label: 'Notes with no topics',
+    description: 'Matches notes that have not been assigned any topics.',
     predicate: {
       keypath: 'tags',
       operator: 'includes',
@@ -57,8 +57,8 @@ export const getPredicatePresets = (exampleTagTitle = 'todo'): PredicatePreset[]
     },
   },
   {
-    label: `Notes tagged "${exampleTagTitle}"`,
-    description: 'Matches notes that have the given tag. Replace the value with your own tag name.',
+    label: `Notes with topic "${exampleTagTitle}"`,
+    description: 'Matches notes that have the given topic. Replace the value with your own topic name.',
     predicate: {
       keypath: 'tags',
       operator: 'includes',

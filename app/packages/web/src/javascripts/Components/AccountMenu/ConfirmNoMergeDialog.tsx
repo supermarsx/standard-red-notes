@@ -22,7 +22,7 @@ const ConfirmNoMergeDialog: FunctionComponent<Props> = ({ onClose, onConfirm }) 
         <div>
           <p className="text-base text-foreground lg:text-sm">
             {c('Info')
-              .t`You have chosen not to merge your local data. If you proceed, your local notes and tags will be permanently deleted and replaced with data from your account. This action cannot be undone.`}
+              .t`You have chosen not to merge your local data. If you proceed, your local notes and topics will be permanently deleted and replaced with data from your account. This action cannot be undone.`}
           </p>
           <p className="mt-2 text-base font-semibold text-danger lg:text-sm">
             {c('Info').t`Are you sure you want to continue without merging?`}

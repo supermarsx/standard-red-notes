@@ -511,7 +511,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
             disabled={areSomeNotesInReadonlySharedVault || !aiAvailability.available}
           >
             <Icon type="hashtag" className={iconClass} />
-            Suggest tags (AI)
+            Suggest topics (AI)
           </MenuItem>
         )}
         {notes.length === 1 && (

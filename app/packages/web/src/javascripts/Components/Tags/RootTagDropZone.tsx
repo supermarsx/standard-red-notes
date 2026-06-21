@@ -47,7 +47,7 @@ const RootTagDropZone: FunctionComponent<Props> = ({ tagsState }) => {
     >
       <Icon className="text-neutral" type="link-off" />
       <p className="content">
-        Move the tag here to <br />
+        Move the topic here to <br />
         remove it from its folder.
       </p>
     </div>

@@ -111,7 +111,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
         {files.length > 0 && (
           <div className="flex flex-col gap-3 border-t border-border px-4 py-4 md:gap-2 md:py-3">
             <Switch className="flex items-center gap-2" checked={addImportsToTag} onChange={setAddImportsToTag}>
-              <span className="text-sm">{c('Label').t`Add all imported notes to tag`}</span>
+              <span className="text-sm">{c('Label').t`Add all imported notes to topic`}</span>
             </Switch>
             {addImportsToTag && (
               <>
@@ -125,7 +125,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
                       setShouldCreateTag(true)
                     }}
                   />
-                  {c('Label').t`Create new tag`}
+                  {c('Label').t`Create new topic`}
                 </label>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
@@ -139,7 +139,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
                           setShouldCreateTag(false)
                         }}
                       />
-                      {c('Label').t`Add to existing tag`}
+                      {c('Label').t`Add to existing topic`}
                     </label>
                     {existingTagForImports && (
                       <LinkedItemBubble
@@ -157,7 +157,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
                     <div className="ml-8 md:ml-6">
                       <ItemSelectionDropdown
                         onSelection={(tag) => setExistingTagForImports(tag as SNTag)}
-                        placeholder={c('Placeholder').t`Select tag to add imported notes to...`}
+                        placeholder={c('Placeholder').t`Select topic to add imported notes to...`}
                         contentTypes={[ContentType.TYPES.Tag]}
                       />
                     </div>

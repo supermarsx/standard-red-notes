@@ -50,7 +50,7 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
       return
     }
     if (!plaintext.trim() && !title.trim()) {
-      addToast({ type: ToastType.Regular, message: 'This note is empty — nothing to suggest tags from.' })
+      addToast({ type: ToastType.Regular, message: 'This note is empty — nothing to suggest topics from.' })
       return
     }
     setGenerating(true)
@@ -101,13 +101,13 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
       await application.sync.sync()
       addToast({
         type: ToastType.Success,
-        message: `Added ${chosen.length} ${chosen.length === 1 ? 'tag' : 'tags'} to this note.`,
+        message: `Added ${chosen.length} ${chosen.length === 1 ? 'topic' : 'topics'} to this note.`,
       })
       close()
     } catch (err) {
       addToast({
         type: ToastType.Error,
-        message: err instanceof Error ? `Could not add tags: ${err.message}` : 'Could not add tags.',
+        message: err instanceof Error ? `Could not add topics: ${err.message}` : 'Could not add topics.',
       })
     } finally {
       setApplying(false)
@@ -118,7 +118,7 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
 
   return (
     <Modal
-      title="Suggest tags"
+      title="Suggest topics"
       className="p-4"
       close={close}
       actions={[
@@ -129,7 +129,7 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
           mobileSlot: 'left',
         },
         {
-          label: applying ? 'Adding…' : `Add ${chosen.length} ${chosen.length === 1 ? 'tag' : 'tags'}`,
+          label: applying ? 'Adding…' : `Add ${chosen.length} ${chosen.length === 1 ? 'topic' : 'topics'}`,
           type: 'primary',
           onClick: () => void applyTags(),
           disabled: chosen.length === 0 || applying || generating,
@@ -140,10 +140,10 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
       <div className="flex flex-col gap-4">
         {/* Data-exposure notice — same pattern as Narrate and the Assistant preferences pane. */}
         <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">Suggesting tags sends note content to an AI</div>
+          <div className="font-semibold text-warning">Suggesting topics sends note content to an AI</div>
           <p className="mt-1">
-            Generating tag suggestions sends this note&rsquo;s title and text to the AI provider you configured. No
-            tags are added until you confirm below.
+            Generating topic suggestions sends this note&rsquo;s title and text to the AI provider you configured. No
+            topics are added until you confirm below.
           </p>
         </div>
 
@@ -154,12 +154,12 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
             disabled={!aiAvailability.available || generating || applying}
           >
             <Icon type="dashboard" size="small" />
-            {generating ? 'Suggesting…' : ranOnce ? 'Suggest again' : 'Suggest tags'}
+            {generating ? 'Suggesting…' : ranOnce ? 'Suggest again' : 'Suggest topics'}
           </button>
         </div>
 
         {!aiAvailability.available && <p className="text-xs text-passive-0">{aiAvailability.reason}</p>}
-        {error && <p className="text-sm text-danger">Could not suggest tags: {error}</p>}
+        {error && <p className="text-sm text-danger">Could not suggest topics: {error}</p>}
         {noSuggestions && (
           <p className="text-sm text-passive-0">
             No good tag suggestions for this note. Try editing the note and suggesting again.

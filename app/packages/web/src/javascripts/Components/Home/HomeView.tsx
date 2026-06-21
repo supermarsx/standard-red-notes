@@ -50,7 +50,7 @@ const HomeCardTile = observer(
       >
         <Icon type={icon} className="flex-shrink-0 text-info" size="medium" />
         <span className="truncate text-sm font-semibold text-text">{label}</span>
-        <span className="text-xs text-passive-1">{card.kind === 'note' ? 'Note' : 'Tag / view'}</span>
+        <span className="text-xs text-passive-1">{card.kind === 'note' ? 'Note' : 'Topic / view'}</span>
       </button>
     )
   },

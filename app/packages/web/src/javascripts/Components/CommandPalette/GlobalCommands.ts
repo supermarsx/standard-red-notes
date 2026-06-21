@@ -78,7 +78,7 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
   },
   {
     id: 'global-create-tag',
-    title: 'New tag or folder',
+    title: 'New topic or folder',
     keywords: ['create', 'add', 'folder'],
     icon: 'folder',
     shortcut: CREATE_NEW_TAG_COMMAND,
@@ -86,8 +86,8 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
   },
   {
     id: 'global-create-note-current-tag',
-    title: 'New note in current tag',
-    keywords: ['create', 'add', 'tag', 'folder', 'here'],
+    title: 'New note in current topic',
+    keywords: ['create', 'add', 'tag', 'topic', 'folder', 'here'],
     icon: 'add-text',
     // createNewNote files the note under the currently selected regular tag (and
     // falls back to All Notes for smart views), so this is "new note here".

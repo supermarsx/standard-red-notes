@@ -37,6 +37,19 @@ describe('parseSearchQuery', () => {
     expect(parsed.freeText).toBe('meeting')
   })
 
+  it('parses topic: as an alias of tag:', () => {
+    expect(parseSearchQuery('topic:work').operators[0]).toEqual({ kind: 'tag', value: 'work', negated: false })
+    expect(parseSearchQuery('-topic:work').operators[0]).toEqual({ kind: 'tag', value: 'work', negated: true })
+    // tag: must keep working identically.
+    expect(parseSearchQuery('tag:work').operators[0]).toEqual(parseSearchQuery('topic:work').operators[0])
+  })
+
+  it('filters by topic: identically to tag:', () => {
+    const predicate = buildSearchPredicate(parseSearchQuery('topic:work'))
+    expect(predicate(baseNote({ tagTitles: ['Work'] }))).toBe(true)
+    expect(predicate(baseNote({ tagTitles: ['Home'] }))).toBe(false)
+  })
+
   it('parses type and editor as the same operator kind', () => {
     expect(parseSearchQuery('type:super').operators[0]).toEqual({ kind: 'type', value: 'super', negated: false })
     expect(parseSearchQuery('editor:code').operators[0]).toEqual({ kind: 'type', value: 'code', negated: false })

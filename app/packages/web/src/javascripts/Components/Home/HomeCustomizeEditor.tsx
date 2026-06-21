@@ -28,7 +28,7 @@ const MODE_LABELS: Record<HomeMode, string> = {
 
 const KIND_LABELS: Record<HomeCardKind, string> = {
   note: 'Opens a specific note',
-  tag: 'Goes to a tag / folder / view',
+  tag: 'Goes to a topic / folder / view',
 }
 
 const ICON_CHOICES: VectorIconNameOrEmoji[] = ['notes', 'hashtag', 'star', 'pencil', 'archive', 'link', 'pin', 'info']
@@ -215,7 +215,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
             </label>
 
             <label className="flex flex-col gap-1 text-xs text-passive-0">
-              {draftKind === 'note' ? 'Note' : 'Tag / folder / view'}
+              {draftKind === 'note' ? 'Note' : 'Topic / folder / view'}
               <select
                 className={selectClassName}
                 value={draftTarget}

@@ -174,7 +174,7 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   const countCards: StatCardProps[] = useMemo(
     () => [
       { icon: 'notes', label: 'Notes', value: stats.noteCount },
-      { icon: 'hashtag', label: 'Tags', value: stats.tagCount },
+      { icon: 'hashtag', label: 'Topics', value: stats.tagCount },
       { icon: 'file', label: 'Files', value: stats.fileCount },
       { icon: 'pin', label: 'Pinned', value: stats.pinnedCount },
       { icon: 'archive', label: 'Archived', value: stats.archivedCount },

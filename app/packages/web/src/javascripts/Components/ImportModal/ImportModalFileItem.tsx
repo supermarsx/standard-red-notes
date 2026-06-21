@@ -94,7 +94,7 @@ const ImportFinishedStatus = ({ file }: { file: ImportModalFile }) => {
   const { notes, tags, files } = countSuccessfulItemsByGroup(file.successful)
 
   const notesStatus = notes > 0 ? ngettext(msgid`${notes} note`, `${notes} notes`, notes) : ''
-  const tagsStatus = tags > 0 ? ngettext(msgid`${tags} tag`, `${tags} tags`, tags) : ''
+  const tagsStatus = tags > 0 ? ngettext(msgid`${tags} topic`, `${tags} topics`, tags) : ''
   const filesStatus = files > 0 ? ngettext(msgid`${files} file`, `${files} files`, files) : ''
   const status = [notesStatus, tagsStatus, filesStatus].filter(Boolean).join(', ')
 

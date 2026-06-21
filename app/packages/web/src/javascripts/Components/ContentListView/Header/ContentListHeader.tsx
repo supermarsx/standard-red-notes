@@ -210,7 +210,7 @@ const ContentListHeader = ({
         {isNavigationPaneCollapsed && (
           <PaneCollapseButton
             onClick={toggleNavigationPane}
-            label="Expand tags panel"
+            label="Expand topics panel"
             icon="menu-variant"
             expanded={false}
             className="mr-2 mt-1 lg:mt-0"

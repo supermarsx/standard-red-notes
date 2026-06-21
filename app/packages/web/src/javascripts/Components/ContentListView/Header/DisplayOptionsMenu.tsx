@@ -341,11 +341,11 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         <NoSubscriptionBanner
           className="m-2 mb-3 mt-2"
           application={application}
-          title="Upgrade for per-tag preferences"
+          title="Upgrade for per-topic preferences"
           message={
             DailyEntryModeEnabled
-              ? 'Create powerful workflows and organizational layouts with per-tag display preferences and the all-new Daily Notebook calendar layout.'
-              : 'Create powerful workflows and organizational layouts with per-tag display preferences.'
+              ? 'Create powerful workflows and organizational layouts with per-topic display preferences and the all-new Daily Notebook calendar layout.'
+              : 'Create powerful workflows and organizational layouts with per-topic display preferences.'
           }
         />
       )}

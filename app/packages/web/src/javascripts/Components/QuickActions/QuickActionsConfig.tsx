@@ -20,7 +20,7 @@ const TYPE_LABELS: Record<QuickActionType, string> = {
   'new-note-in': 'Create a new note in…',
   'recent-in': 'Open most recent note in…',
   'open-note': 'Open a specific note',
-  'go-to': 'Go to a tag/folder/view',
+  'go-to': 'Go to a topic/folder/view',
 }
 
 const ICON_CHOICES: VectorIconNameOrEmoji[] = [
@@ -168,7 +168,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
         </label>
 
         <label className="flex flex-col gap-1 text-xs text-passive-0">
-          {targetsNote(draftType) ? 'Note' : 'Tag / folder / view'}
+          {targetsNote(draftType) ? 'Note' : 'Topic / folder / view'}
           <select
             className={selectClassName}
             value={draftTarget}

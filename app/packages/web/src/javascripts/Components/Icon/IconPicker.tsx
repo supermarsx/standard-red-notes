@@ -154,7 +154,7 @@ const IconPicker = ({
           ) : (
             <Dropdown
               fullWidth={true}
-              label="Change the icon for a tag"
+              label="Change the icon for a topic"
               items={iconOptions}
               value={selectedValue as string}
               onChange={handleIconChange}

@@ -24,7 +24,7 @@ export const LinkedItemSearchResultsAddTagOption = forwardRef(
         ref={ref}
         {...props}
       >
-        <span className="flex-shrink-0 align-middle text-sm lg:text-xs">Create &amp; add tag</span>{' '}
+        <span className="flex-shrink-0 align-middle text-sm lg:text-xs">Create &amp; add topic</span>{' '}
         <span
           className={classNames(
             'inline-flex min-w-0 items-center gap-1 rounded py-1 pl-1 pr-2 align-middle text-xs',

@@ -90,7 +90,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
 
   return (
     <Popover
-      title="Tag options"
+      title="Topic options"
       open={contextMenuOpen}
       anchorPoint={contextMenuClickLocation}
       togglePopover={() => navigationController.setContextMenuOpen(!contextMenuOpen)}
@@ -115,7 +115,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
             }}
           />
           <button
-            aria-label="Save tag name"
+            aria-label="Save topic name"
             className="rounded border border-border bg-transparent px-1.5 active:bg-default translucent-ui:border-[--popover-border-color] md:hidden"
             onClick={() => saveTitle(true)}
           >
@@ -124,7 +124,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
         </div>
       </div>
       <HorizontalSeparator classes="my-2" />
-      <Menu a11yLabel="Tag context menu">
+      <Menu a11yLabel="Topic context menu">
         <IconPicker
           key={selectedTag.uuid}
           onIconChange={handleIconChange}
@@ -151,13 +151,15 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubtag}>
             <div className="flex items-center">
               <Icon type="add" className="mr-2 text-neutral" />
-              Add subtag
+              Add subtopic
             </div>
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
             <Icon type="cloud-off" className="mr-2 text-neutral" />
             <div className="flex flex-col">
-              <div>{tagHasLocalOnlyNotes ? "Re-enable sync for this tag's notes" : "Keep this tag's notes local only"}</div>
+              <div>
+                {tagHasLocalOnlyNotes ? "Re-enable sync for this topic's notes" : "Keep this topic's notes local only"}
+              </div>
               <div className="mt-0.5 text-xs text-passive-0">
                 {tagHasLocalOnlyNotes
                   ? 'Notes will sync to the server again.'
@@ -180,7 +182,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           <span className="font-semibold">Created:</span> {tagCreatedAt}
         </div>
         <div>
-          <span className="font-semibold">Tag ID:</span> {selectedTag.uuid}
+          <span className="font-semibold">Topic ID:</span> {selectedTag.uuid}
         </div>
       </div>
     </Popover>

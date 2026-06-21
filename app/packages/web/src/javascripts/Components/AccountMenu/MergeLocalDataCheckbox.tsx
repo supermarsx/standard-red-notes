@@ -22,10 +22,10 @@ const MergeLocalDataCheckbox: FunctionComponent<Props> = ({ checked, onChange, d
         onChange={onChange}
         disabled={disabled}
       />
-      <span className="text-danger">{c('Option').t`Merge local data (${notesAndTagsCount} notes and tags)`}</span>
+      <span className="text-danger">{c('Option').t`Merge local data (${notesAndTagsCount} notes and topics)`}</span>
       <StyledTooltip
         label={c('Info')
-          .t`If unchecked, your local notes and tags will be permanently deleted and replaced with data from your account.`}
+          .t`If unchecked, your local notes and topics will be permanently deleted and replaced with data from your account.`}
         showOnMobile
         className="!z-modal !max-w-[30ch] whitespace-normal"
       >

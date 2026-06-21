@@ -93,7 +93,7 @@ export const BUILTIN_PROPERTIES: { id: BuiltinPropertyId; label: string; type: '
   { id: 'title', label: 'Title', type: 'text' },
   { id: 'createdAt', label: 'Created', type: 'date' },
   { id: 'updatedAt', label: 'Modified', type: 'date' },
-  { id: 'tags', label: 'Tags', type: 'list' },
+  { id: 'tags', label: 'Topics', type: 'list' },
   { id: 'folder', label: 'Folder', type: 'text' },
   { id: 'wordCount', label: 'Word count', type: 'number' },
   { id: 'pinned', label: 'Pinned', type: 'boolean' },

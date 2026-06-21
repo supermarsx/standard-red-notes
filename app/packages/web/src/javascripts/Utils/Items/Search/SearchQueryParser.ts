@@ -7,7 +7,8 @@
 //
 // Supported grammar (operators may appear anywhere, interleaved with free text):
 //
-//   tag:work            note is linked to a tag whose title matches "work"
+//   tag:work            note is linked to a topic (tag) whose title matches "work"
+//   topic:work          alias of tag: (topics and tags are the same concept)
 //   type:super          note's editor type (NoteType) is "super"
 //   editor:code         alias of type:
 //   in:title            restrict the free-text match to the note title
@@ -191,7 +192,10 @@ export function parseSearchQuery(input: string): ParsedSearchQuery {
 
 function buildOperator(key: string, operand: string, negated: boolean): SearchOperator | null {
   switch (key) {
-    case 'tag': {
+    case 'tag':
+    case 'topic': {
+      // `topic:` is a user-facing alias of `tag:`; both produce a 'tag' operator
+      // so the underlying behavior is identical and `tag:` keeps working.
       const value = operand.trim()
       return value.length > 0 ? { kind: 'tag', value, negated } : null
     }

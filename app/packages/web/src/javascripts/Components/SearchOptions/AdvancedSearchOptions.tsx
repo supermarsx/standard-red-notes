@@ -98,7 +98,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
         <div className="flex w-80 max-w-full flex-col gap-3 p-3">
           <div>
             <label className={fieldLabel} htmlFor="adv-search-tags">
-              Tags (comma separated)
+              Topics (comma separated)
             </label>
             <input
               id="adv-search-tags"

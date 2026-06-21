@@ -231,7 +231,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
 
       if (target) {
         addDragTarget(target, {
-          tooltipText: `Drop your files to upload and link them to tag "${tag.title}"`,
+          tooltipText: `Drop your files to upload and link them to topic "${tag.title}"`,
           async callback(file) {
             await linkingController.linkItems(file, tag)
           },

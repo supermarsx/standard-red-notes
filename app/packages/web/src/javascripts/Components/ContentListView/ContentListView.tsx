@@ -135,7 +135,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
 
       if (target && shouldAddDropTarget && currentTag) {
         addDragTarget(target, {
-          tooltipText: `Drop your files to upload and link them to tag "${currentTag.title}"`,
+          tooltipText: `Drop your files to upload and link them to topic "${currentTag.title}"`,
           callback: fileDropCallback,
         })
       }
@@ -295,7 +295,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       if (shortcut) {
         shortcut = '(' + shortcut + ')'
       }
-      return isFilesSmartView ? `Upload file ${shortcut}` : `Create a new note in the selected tag ${shortcut}`
+      return isFilesSmartView ? `Upload file ${shortcut}` : `Create a new note in the selected topic ${shortcut}`
     }, [isFilesSmartView, shortcutForCreate])
 
     useEffect(

@@ -227,7 +227,7 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
         type: ToastType.Success,
         message: `Organized ${preview.assignments.length} ${
           preview.assignments.length === 1 ? 'note' : 'notes'
-        }: ${foldersAssigned} folder assignment${foldersAssigned === 1 ? '' : 's'}, ${tagsAdded} tag${
+        }: ${foldersAssigned} folder assignment${foldersAssigned === 1 ? '' : 's'}, ${tagsAdded} topic${
           tagsAdded === 1 ? '' : 's'
         } added.`,
       })
@@ -276,7 +276,7 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
             {mode === 'current-note'
               ? 'Generating a plan sends this note’s title and text to the AI provider you configured.'
               : `Generating a plan sends a digest of your note titles and short snippets (up to ${DEFAULT_MAX_NOTES} notes) to the AI provider you configured.`}{' '}
-            Nothing is changed until you review the plan and confirm below. Creating folders and tags is additive — no
+            Nothing is changed until you review the plan and confirm below. Creating folders and topics is additive — no
             notes are moved to trash or deleted.
           </p>
         </div>

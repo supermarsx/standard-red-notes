@@ -22,7 +22,7 @@ const EditorPaneExpandControls = () => {
       {isNavigationPaneCollapsed && (
         <PaneCollapseButton
           onClick={toggleNavigationPane}
-          label="Expand tags panel"
+          label="Expand topics panel"
           icon="menu-variant"
           expanded={false}
         />

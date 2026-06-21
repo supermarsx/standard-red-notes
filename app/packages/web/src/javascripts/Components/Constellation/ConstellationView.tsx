@@ -789,7 +789,7 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
             [
               { kind: 'current', label: 'Current note' },
               { kind: 'global', label: 'Global' },
-              { kind: 'tag', label: 'Tag' },
+              { kind: 'tag', label: 'Topic' },
               { kind: 'folder', label: 'Folder' },
             ] as { kind: ConstellationScopeKind; label: string }[]
           ).map((tab) => (
@@ -813,9 +813,9 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
             className="min-w-0 max-w-[12rem] flex-grow truncate rounded border border-border bg-default px-2 py-1 text-xs text-text sm:flex-grow-0"
             value={collectionUuid ?? ''}
             onChange={(event) => setCollectionUuid(event.target.value || undefined)}
-            aria-label={scopeKind === 'tag' ? 'Select tag' : 'Select folder'}
+            aria-label={scopeKind === 'tag' ? 'Select topic' : 'Select folder'}
           >
-            <option value="">{scopeKind === 'tag' ? 'Select a tag…' : 'Select a folder…'}</option>
+            <option value="">{scopeKind === 'tag' ? 'Select a topic…' : 'Select a folder…'}</option>
             {(scopeKind === 'tag' ? tags : folders).map((collection) => (
               <option key={collection.uuid} value={collection.uuid}>
                 {(collection as SNTag | SNFolder).title || 'Untitled'}
@@ -876,10 +876,10 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
                 : 'Open a note to see its local constellation.'
               : scopeKind === 'tag'
               ? collectionUuid
-                ? 'This tag has no notes yet.'
+                ? 'This topic has no notes yet.'
                 : tags.length === 0
-                ? 'No tags yet. Create a tag to filter the constellation.'
-                : 'Select a tag to filter the constellation.'
+                ? 'No topics yet. Create a topic to filter the constellation.'
+                : 'Select a topic to filter the constellation.'
               : scopeKind === 'folder'
               ? collectionUuid
                 ? 'This folder has no notes yet.'

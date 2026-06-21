@@ -365,7 +365,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
     }
     const collection = document.source.uuid ? application.items.findItem(document.source.uuid) : undefined
     const title = (collection as SNTag | SNFolder | undefined)?.title
-    return document.source.kind === 'tag' ? `Tag: ${title ?? '—'}` : `Folder: ${title ?? '—'}`
+    return document.source.kind === 'tag' ? `Topic: ${title ?? '—'}` : `Folder: ${title ?? '—'}`
   }, [application, document.source])
 
   return (
@@ -581,7 +581,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
             }}
           >
             <option value="all">All notes</option>
-            <option value="tag">Notes with tag</option>
+            <option value="tag">Notes with topic</option>
             <option value="folder">Notes in folder</option>
           </select>
           {document.source.kind === 'tag' && (
