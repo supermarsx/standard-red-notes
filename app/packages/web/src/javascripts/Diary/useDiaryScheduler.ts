@@ -47,6 +47,13 @@ export const useDiaryScheduler = (application: WebApplication): void => {
     let firedForDateThisSession: string | null = null
 
     const runCheck = () => {
+      // Don't touch app storage until local data has loaded: application.getValue
+      // throws "before loading local storage" if called during the launch sequence
+      // (this hook mounts in ApplicationView, which can render before launch finishes).
+      if (!application.isLaunched()) {
+        return
+      }
+
       const settings = getDiarySettings(application)
       if (!settings.enabled) {
         return
