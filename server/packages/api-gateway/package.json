@@ -55,6 +55,7 @@
     "openai": "^6.41.0",
     "prettyjson": "^1.2.5",
     "reflect-metadata": "^0.2.2",
+    "tesseract.js": "^7.0.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {

@@ -69,6 +69,19 @@ x-server-env: &server-env
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
   # Global per-user daily AI request ceiling enforced by the api-gateway. 0 = unlimited.
   ASSISTANT_DAILY_REQUEST_LIMIT: ${ASSISTANT_DAILY_REQUEST_LIMIT:-0}
+  # OPT-IN server-side PDF OCR (tesseract-in-Node, /v1/ocr). PRIVACY: when enabled,
+  # the client may upload DECRYPTED PDF page images here for recognition — that
+  # content LEAVES end-to-end encryption (the server can read it), exactly like the
+  # AI proxy. The DEFAULT OCR path stays in the browser (OCR_ENABLED, above), where
+  # nothing leaves the device. Two gates apply: this operator master switch AND a
+  # per-user, admin-managed OCR_SERVER_ALLOWED setting (default off) — so even with
+  # this on, server OCR is offered only to users an admin has explicitly allowed.
+  OCR_SERVER_ENABLED: ${OCR_SERVER_ENABLED:-false}
+  OCR_SERVER_DEFAULT_LANGUAGE: ${OCR_SERVER_DEFAULT_LANGUAGE:-eng}
+  # Per-request bounds so an OCR call cannot pin the box (CPU-heavy; one large page
+  # can take seconds). Defaults: 50 pages, 12 MB per page image.
+  OCR_SERVER_MAX_PAGES: ${OCR_SERVER_MAX_PAGES:-50}
+  OCR_SERVER_MAX_IMAGE_BYTES: ${OCR_SERVER_MAX_IMAGE_BYTES:-12582912}
   # Optional server-wide shared access key ("obfuscation gate"). OFF by default
   # (empty key => zero behavior change). This is OBFUSCATION / access-gating for a
   # self-hosted instance, NOT end-to-end security (that is the client-side E2E

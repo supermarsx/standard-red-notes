@@ -30,6 +30,12 @@ export const TYPES = {
   ApiGateway_ASSISTANT_DEFAULT_PROVIDER: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_PROVIDER'),
   ApiGateway_ASSISTANT_DEFAULT_MODEL: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_MODEL'),
   ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT: Symbol.for('ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT'),
+  // Standard Red Notes: opt-in server-side PDF OCR (tesseract-in-Node).
+  ApiGateway_OCR_SERVER_ENABLED: Symbol.for('ApiGateway_OCR_SERVER_ENABLED'),
+  ApiGateway_OCR_DEFAULT_LANGUAGE: Symbol.for('ApiGateway_OCR_DEFAULT_LANGUAGE'),
+  ApiGateway_OCR_MAX_PAGES: Symbol.for('ApiGateway_OCR_MAX_PAGES'),
+  ApiGateway_OCR_MAX_IMAGE_BYTES: Symbol.for('ApiGateway_OCR_MAX_IMAGE_BYTES'),
+  ApiGateway_OcrService: Symbol.for('ApiGateway_OcrService'),
   // Middleware
   ApiGateway_RequiredCrossServiceTokenMiddleware: Symbol.for('ApiGateway_RequiredCrossServiceTokenMiddleware'),
   ApiGateway_OptionalCrossServiceTokenMiddleware: Symbol.for('ApiGateway_OptionalCrossServiceTokenMiddleware'),

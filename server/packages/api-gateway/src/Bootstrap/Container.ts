@@ -36,6 +36,7 @@ import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterfac
 import { DomainEventFactory } from '../Event/DomainEventFactory'
 import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
+import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 
 export class ContainerConfigLoader {
   async load(configuration?: {
@@ -179,6 +180,35 @@ export class ContainerConfigLoader {
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
       .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
+
+    // Standard Red Notes: OPT-IN server-side PDF OCR (tesseract-in-Node).
+    //
+    // E2E DOWNGRADE: when enabled (and a user is admin-allowed via the per-user
+    // OCR_SERVER_ALLOWED setting), the client uploads DECRYPTED PDF page images
+    // here for recognition — that content leaves end-to-end encryption, exactly
+    // like the AI proxy. OFF by default; the browser OCR path stays the default.
+    const ocrServerEnabled = ['true', '1', 'yes', 'on'].includes(
+      (env.get('OCR_SERVER_ENABLED', true) || '').toLowerCase(),
+    )
+    container.bind<boolean>(TYPES.ApiGateway_OCR_SERVER_ENABLED).toConstantValue(ocrServerEnabled)
+    container
+      .bind<string>(TYPES.ApiGateway_OCR_DEFAULT_LANGUAGE)
+      .toConstantValue(env.get('OCR_SERVER_DEFAULT_LANGUAGE', true) || 'eng')
+    // Bound a single request: page count and per-image byte size, so an OCR call
+    // cannot pin the box. Defaults: 50 pages, 12 MB per page image.
+    const ocrMaxPages = env.get('OCR_SERVER_MAX_PAGES', true) ? +env.get('OCR_SERVER_MAX_PAGES', true) : 50
+    const ocrMaxImageBytes = env.get('OCR_SERVER_MAX_IMAGE_BYTES', true)
+      ? +env.get('OCR_SERVER_MAX_IMAGE_BYTES', true)
+      : 12 * 1024 * 1024
+    container.bind<number>(TYPES.ApiGateway_OCR_MAX_PAGES).toConstantValue(ocrMaxPages)
+    container.bind<number>(TYPES.ApiGateway_OCR_MAX_IMAGE_BYTES).toConstantValue(ocrMaxImageBytes)
+    container.bind<OcrService>(TYPES.ApiGateway_OcrService).toConstantValue(
+      new OcrService(createTesseractRecognizer(), {
+        defaultLanguage: env.get('OCR_SERVER_DEFAULT_LANGUAGE', true) || 'eng',
+        maxPages: ocrMaxPages,
+        maxImageBytes: ocrMaxImageBytes,
+      }),
+    )
 
     // Standard Red Notes: optional server-mediated "Publish note to GitHub".
     // Uses the runtime's global fetch for the outbound GitHub Contents API call.

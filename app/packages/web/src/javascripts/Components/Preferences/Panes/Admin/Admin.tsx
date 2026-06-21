@@ -31,6 +31,9 @@ const AI_ENABLED = 'AI_ENABLED'
 const AI_REQUEST_LIMIT = 'AI_REQUEST_LIMIT'
 const COLLABORATION_ENABLED = 'COLLABORATION_ENABLED'
 const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
+// OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
+// decrypted PDF page images to the server, which leaves end-to-end encryption).
+const OCR_SERVER_ALLOWED = 'OCR_SERVER_ALLOWED'
 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
@@ -45,6 +48,8 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   // the per-user setting is explicitly 'false'.
   const [collaborationEnabled, setCollaborationEnabled] = useState(true)
   const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
+  // Server OCR is OFF by default (opt-in E2E downgrade); only 'true' enables it.
+  const [ocrServerAllowed, setOcrServerAllowed] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
   const [savingLimit, setSavingLimit] = useState(false)
 
@@ -91,6 +96,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
         setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
         setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
+        setOcrServerAllowed(flags[OCR_SERVER_ALLOWED] === 'true')
       } catch (error) {
         console.error(error)
       } finally {
@@ -408,6 +414,32 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                           setLiveSyncEnabled,
                           liveSyncEnabled,
                           'Failed to update live sync access.',
+                        )
+                      }
+                    />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Server-side OCR</Subtitle>
+                      <Text>
+                        Allow this user to run PDF OCR on the server. WARNING: server OCR uploads decrypted PDF page
+                        images to the server, which <strong>leaves end-to-end encryption</strong> (the server can read
+                        that content), like the AI assistant. Browser OCR stays on the user's device and is unaffected.
+                        Requires the OCR_SERVER_ENABLED operator switch. Off by default.
+                      </Text>
+                    </div>
+                    <Switch
+                      checked={ocrServerAllowed}
+                      onChange={(checked) =>
+                        void toggleUserFlag(
+                          OCR_SERVER_ALLOWED,
+                          checked,
+                          setOcrServerAllowed,
+                          ocrServerAllowed,
+                          'Failed to update server OCR access.',
                         )
                       }
                     />

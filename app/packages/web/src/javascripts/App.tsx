@@ -9,10 +9,15 @@ declare global {
     devAccountServer?: string
     enabledUnfinishedFeatures: boolean
     /**
-     * Server-exposed enable flag for the client-side PDF OCR action. Files are
-     * end-to-end encrypted so OCR cannot run on the server; this global only
-     * gates whether the client OFFERS OCR. Injected from the operator's
+     * Server-exposed enable flag for the BROWSER PDF OCR action. Files are
+     * end-to-end encrypted so this (default) OCR path runs in the browser; this
+     * global only gates whether the client OFFERS it. Injected from the operator's
      * OCR_ENABLED env (see app Docker entrypoint / docker-compose).
+     *
+     * NOTE: the OPT-IN SERVER OCR path (which uploads decrypted page images and
+     * thus leaves end-to-end encryption) is NOT a window flag — its availability
+     * is per-user (admin-managed) and is fetched at runtime from the authenticated
+     * /v1/ocr/config endpoint. See pdfOcr.ts / PdfPreview.tsx.
      */
     ocrEnabled?: boolean
     /** Default tesseract language (e.g. "eng"). From OCR_DEFAULT_LANGUAGE env. */

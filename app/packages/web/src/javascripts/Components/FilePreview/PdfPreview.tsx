@@ -12,12 +12,18 @@ import {
   joinPageTexts,
   mergeOcrWithEmbedded,
   OcrPageText,
+  parseServerOcrConfig,
   readOcrCache,
+  ServerOcrConfig,
+  ServerOcrConfigResponse,
   writeOcrCache,
 } from './pdfOcr'
 import type { OcrProgress } from './runPdfOcr'
+import type { WebApplication } from '@/Application/WebApplication'
 
 type Props = {
+  /** Used for the authenticated server-OCR config + recognize requests. */
+  application?: WebApplication
   bytes: Uint8Array
   /** FileItem uuid, used to build a shareable deep link. */
   fileUuid?: string
@@ -29,6 +35,9 @@ type Props = {
 
 /** Phases of the client-side OCR action. */
 type OcrStatus = 'idle' | 'running' | 'done' | 'error'
+
+/** Where OCR ran: in the browser (E2E-safe) or on the server (E2E downgrade). */
+type OcrMode = 'browser' | 'server'
 
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
@@ -216,7 +225,7 @@ const PdfPage: FunctionComponent<{
   )
 }
 
-const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdentifier, target }) => {
+const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fileRemoteIdentifier, target }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [pdfjs, setPdfjs] = useState<any>()
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
@@ -244,7 +253,17 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdent
   const [extractedPages, setExtractedPages] = useState<OcrPageText[] | undefined>()
   /** True when `extractedPages` came straight from cache (no OCR run needed). */
   const [ocrFromCache, setOcrFromCache] = useState(false)
+  /** Which path the in-flight / last OCR used (for progress + warning copy). */
+  const [ocrMode, setOcrMode] = useState<OcrMode>('browser')
   const ocrAbortRef = useRef<AbortController | undefined>(undefined)
+
+  // --- SERVER-side OCR availability (OPT-IN, E2E downgrade) -----------------
+  // Browser OCR (above) keeps everything on-device. Server OCR uploads decrypted
+  // page images to the server (leaves end-to-end encryption, like the AI proxy),
+  // so it is offered ONLY when the authenticated /v1/ocr/config endpoint reports
+  // it available for this user (operator env master switch AND the admin-managed
+  // per-user allow flag). Fetched at runtime because availability is per-user.
+  const [serverOcr, setServerOcr] = useState<ServerOcrConfig | undefined>()
 
   const ocrCacheKey = useMemo(
     () => (fileUuid ? buildOcrFileKey(fileUuid, fileRemoteIdentifier) : undefined),
@@ -453,47 +472,104 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdent
     }
   }, [])
 
-  const runOcr = useCallback(async () => {
-    if (pages.length === 0 || ocrStatus === 'running') {
+  // Ask the server whether server-side OCR is available for THIS user. Only when
+  // the browser-OCR action is enabled (the env flag) is there any point offering
+  // an alternative path. Availability is per-user (admin allow flag), so it is
+  // resolved at runtime via the authenticated config endpoint. Fails closed.
+  useEffect(() => {
+    if (!ocrConfig.enabled || !application) {
       return
     }
-    setOcrStatus('running')
-    setOcrError(undefined)
-    setOcrProgress({ totalPages: 0, completedPages: 0, pageProgress: 0 })
-
-    const controller = new AbortController()
-    ocrAbortRef.current = controller
-
-    try {
-      // Lazy-load the heavy OCR runner (tesseract.js) so it is code-split out of
-      // the main bundle and only fetched when the user actually requests OCR.
-      const { runPdfOcr } = await import('./runPdfOcr')
-      const { embedded, ocr } = await runPdfOcr({
-        pages,
-        language: ocrConfig.defaultLanguage,
-        onProgress: setOcrProgress,
-        signal: controller.signal,
-      })
-      const merged = mergeOcrWithEmbedded(embedded, ocr)
-      setExtractedPages(merged)
-      setOcrFromCache(false)
-      setOcrStatus('done')
-      if (ocrCacheKey) {
-        writeOcrCache(ocrCacheKey, merged)
+    let cancelled = false
+    const fetchConfig = async () => {
+      try {
+        const response = await application.ocrConfigRequest<ServerOcrConfigResponse>('/v1/ocr/config')
+        if (!cancelled) {
+          setServerOcr(parseServerOcrConfig(response))
+        }
+      } catch {
+        if (!cancelled) {
+          setServerOcr({ available: false, defaultLanguage: ocrConfig.defaultLanguage })
+        }
       }
-    } catch (error) {
-      if ((error as DOMException)?.name === 'AbortError') {
-        setOcrStatus('idle')
+    }
+    void fetchConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [ocrConfig.enabled, ocrConfig.defaultLanguage, application])
+
+  const runOcr = useCallback(
+    async (mode: OcrMode = 'browser') => {
+      if (pages.length === 0 || ocrStatus === 'running') {
         return
       }
-      // eslint-disable-next-line no-console
-      console.error('PDF OCR failed', error)
-      setOcrError('OCR failed. The language data may have failed to download.')
-      setOcrStatus('error')
-    } finally {
-      ocrAbortRef.current = undefined
-    }
-  }, [pages, ocrStatus, ocrConfig.defaultLanguage, ocrCacheKey])
+      // Guard: only run server OCR when the server reports it available.
+      if (mode === 'server' && (!serverOcr?.available || !application)) {
+        return
+      }
+
+      setOcrStatus('running')
+      setOcrMode(mode)
+      setOcrError(undefined)
+      setOcrProgress({ totalPages: 0, completedPages: 0, pageProgress: 0 })
+
+      const controller = new AbortController()
+      ocrAbortRef.current = controller
+
+      try {
+        let embedded: OcrPageText[]
+        let ocr: OcrPageText[]
+        if (mode === 'server') {
+          // E2E DOWNGRADE: uploads decrypted page images to the server.
+          const { runServerPdfOcr } = await import('./runServerPdfOcr')
+          ;({ embedded, ocr } = await runServerPdfOcr({
+            pages,
+            language: serverOcr?.defaultLanguage ?? ocrConfig.defaultLanguage,
+            onProgress: setOcrProgress,
+            signal: controller.signal,
+            post: (body, signal) =>
+              application!.ocrRecognizeRequest('/v1/ocr/recognize', body, signal) as ReturnType<
+                Parameters<typeof runServerPdfOcr>[0]['post']
+              >,
+          }))
+        } else {
+          // Lazy-load the heavy OCR runner (tesseract.js) so it is code-split out
+          // of the main bundle and only fetched when the user requests OCR.
+          const { runPdfOcr } = await import('./runPdfOcr')
+          ;({ embedded, ocr } = await runPdfOcr({
+            pages,
+            language: ocrConfig.defaultLanguage,
+            onProgress: setOcrProgress,
+            signal: controller.signal,
+          }))
+        }
+        const merged = mergeOcrWithEmbedded(embedded, ocr)
+        setExtractedPages(merged)
+        setOcrFromCache(false)
+        setOcrStatus('done')
+        if (ocrCacheKey) {
+          writeOcrCache(ocrCacheKey, merged)
+        }
+      } catch (error) {
+        if ((error as DOMException)?.name === 'AbortError') {
+          setOcrStatus('idle')
+          return
+        }
+        // eslint-disable-next-line no-console
+        console.error('PDF OCR failed', error)
+        setOcrError(
+          mode === 'server'
+            ? `Server OCR failed: ${(error as Error)?.message ?? 'unknown error'}`
+            : 'OCR failed. The language data may have failed to download.',
+        )
+        setOcrStatus('error')
+      } finally {
+        ocrAbortRef.current = undefined
+      }
+    },
+    [pages, ocrStatus, ocrConfig.defaultLanguage, ocrCacheKey, serverOcr, application],
+  )
 
   const cancelOcr = useCallback(() => {
     ocrAbortRef.current?.abort()
@@ -773,27 +849,48 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdent
                   </button>
                 </div>
               ) : (
-                <StyledTooltip
-                  label={
-                    ocrStatus === 'done'
-                      ? ocrFromCache
-                        ? 'Text already extracted (cached). Re-run OCR.'
-                        : 'Text extracted. Re-run OCR.'
-                      : 'Extract text from scanned pages with OCR. Runs in your browser (slow; downloads language data).'
-                  }
-                  className="!z-modal"
-                >
-                  <button
-                    className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-neutral hover:bg-contrast"
-                    onClick={runOcr}
-                    aria-label="Extract text with OCR"
+                <>
+                  <StyledTooltip
+                    label={
+                      ocrStatus === 'done'
+                        ? ocrFromCache
+                          ? 'Text already extracted (cached). Re-run OCR in your browser (stays on your device).'
+                          : 'Text extracted. Re-run OCR in your browser (stays on your device).'
+                        : 'Extract text from scanned pages with OCR. Runs in your browser; nothing leaves your device (slow; downloads language data).'
+                    }
+                    className="!z-modal"
                   >
-                    <Icon type="plain-text" className="text-neutral" />
-                    <span className="whitespace-nowrap">
-                      {ocrStatus === 'done' ? 'Re-run OCR' : 'Extract text (OCR)'}
-                    </span>
-                  </button>
-                </StyledTooltip>
+                    <button
+                      className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-neutral hover:bg-contrast"
+                      onClick={() => runOcr('browser')}
+                      aria-label="Extract text with OCR in your browser"
+                    >
+                      <Icon type="plain-text" className="text-neutral" />
+                      <span className="whitespace-nowrap">
+                        {ocrStatus === 'done' ? 'Re-run OCR (browser)' : 'Extract text (OCR)'}
+                      </span>
+                    </button>
+                  </StyledTooltip>
+                  {/* OPT-IN server OCR. Offered only when the server reports it
+                      available for this user. It uploads decrypted page images to
+                      the server — an E2E downgrade — so it carries a warning icon
+                      and is NEVER the default. */}
+                  {serverOcr?.available && (
+                    <StyledTooltip
+                      label="Run OCR on the SERVER. This sends this PDF's page images to the server and LEAVES end-to-end encryption — the server can read that content. Browser OCR keeps everything on your device."
+                      className="!z-modal"
+                    >
+                      <button
+                        className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-warning hover:bg-contrast"
+                        onClick={() => runOcr('server')}
+                        aria-label="Run OCR on the server (sends page images to the server; leaves end-to-end encryption)"
+                      >
+                        <Icon type="warning" className="text-warning" />
+                        <span className="whitespace-nowrap">Run OCR on server</span>
+                      </button>
+                    </StyledTooltip>
+                  )}
+                </>
               )}
               {ocrStatus === 'done' && extractedPages && (
                 <StyledTooltip label="Copy all extracted text" className="!z-modal">
@@ -879,12 +976,28 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdent
         )}
       </div>
 
-      {/* Honest OCR caveat banner: client-side, slow, downloads data, varies. */}
+      {/* Persistent privacy disclosure whenever SERVER OCR is even offered: it is
+          an end-to-end-encryption downgrade, so the tradeoff must be visible
+          before the user clicks, not only while running. */}
+      {ocrConfig.enabled && serverOcr?.available && ocrStatus === 'idle' && (
+        <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
+          Server OCR is available for your account. It sends this PDF&apos;s page images to the server and{' '}
+          <strong>leaves end-to-end encryption</strong> — the server (and anyone who controls it) can read that content.
+          Browser OCR keeps everything on your device. Default is browser OCR.
+        </div>
+      )}
+
+      {/* Honest OCR caveat banner: distinguishes the E2E-safe browser path from
+          the server path (which leaves end-to-end encryption). */}
       {ocrConfig.enabled && (ocrStatus === 'running' || (ocrStatus === 'done' && !ocrFromCache)) && (
         <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
           {ocrStatus === 'running'
-            ? 'OCR runs in your browser on this device (your files stay end-to-end encrypted). It is slow and downloads language data on first use.'
-            : 'OCR finished. Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'}
+            ? ocrMode === 'server'
+              ? 'Server OCR: this PDF’s page images are being uploaded to the server, which LEAVES end-to-end encryption — the server can read that content. (Browser OCR keeps everything on your device.)'
+              : 'OCR runs in your browser on this device (your files stay end-to-end encrypted). It is slow and downloads language data on first use.'
+            : ocrMode === 'server'
+              ? 'Server OCR finished. The page images were sent to the server (this left end-to-end encryption). Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'
+              : 'OCR finished. Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'}
         </div>
       )}
 

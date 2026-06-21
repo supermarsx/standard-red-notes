@@ -7,6 +7,7 @@ import {
   OcrCacheStorage,
   OcrPageText,
   pageNeedsOcr,
+  parseServerOcrConfig,
   readOcrCache,
   writeOcrCache,
 } from './pdfOcr'
@@ -190,6 +191,30 @@ describe('pdfOcr', () => {
     it('treats a non-true flag as disabled', () => {
       // @ts-expect-error intentionally wrong type to verify strict check
       expect(getOcrServerConfig({ ocrEnabled: 'yes' }).enabled).toBe(false)
+    })
+  })
+
+  describe('parseServerOcrConfig (server OCR availability, E2E downgrade)', () => {
+    it('fails closed for an undefined/garbage response', () => {
+      expect(parseServerOcrConfig(undefined)).toEqual({ available: false, defaultLanguage: DEFAULT_OCR_LANGUAGE })
+      expect(parseServerOcrConfig({})).toEqual({ available: false, defaultLanguage: DEFAULT_OCR_LANGUAGE })
+    })
+
+    it('is available only when env enabled AND user allowed', () => {
+      expect(parseServerOcrConfig({ serverOcrEnabled: true, allowed: false }).available).toBe(false)
+      expect(parseServerOcrConfig({ serverOcrEnabled: false, allowed: true }).available).toBe(false)
+      expect(parseServerOcrConfig({ serverOcrEnabled: true, allowed: true }).available).toBe(true)
+    })
+
+    it('honors the server-computed available flag', () => {
+      expect(parseServerOcrConfig({ available: true }).available).toBe(true)
+    })
+
+    it('reads the default language and falls back when blank', () => {
+      expect(parseServerOcrConfig({ available: true, defaultLanguage: 'deu' }).defaultLanguage).toBe('deu')
+      expect(parseServerOcrConfig({ available: true, defaultLanguage: '  ' }).defaultLanguage).toBe(
+        DEFAULT_OCR_LANGUAGE,
+      )
     })
   })
 })

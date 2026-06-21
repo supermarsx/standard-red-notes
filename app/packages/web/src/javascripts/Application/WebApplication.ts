@@ -790,6 +790,34 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     })
   }
 
+  /**
+   * Authenticated GET helper for the server-side OCR config endpoint
+   * (/v1/ocr/config). Returns whether server OCR is available FOR THIS USER
+   * (operator env master switch AND the admin-managed per-user allow flag) plus
+   * the server's default language. The client uses this to decide whether to
+   * offer the "Run OCR on server" action alongside the default browser OCR.
+   */
+  public async ocrConfigRequest<T>(path: string): Promise<T> {
+    return this.assistantConfigRequest<T>(path)
+  }
+
+  /**
+   * Authenticated JSON POST to the server-side OCR endpoint (/v1/ocr/recognize).
+   *
+   * PRIVACY: this uploads DECRYPTED PDF page images to the server, which LEAVES
+   * end-to-end encryption for that request — the server (and anyone controlling
+   * it) can read that content, exactly like the AI proxy. Only ever called after
+   * the user explicitly chooses "Run OCR on server" with the warning shown. The
+   * default browser OCR path never sends anything off the device.
+   */
+  public async ocrRecognizeRequest<T>(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T }> {
+    return this.serverJsonRequest<T>(path, body, signal)
+  }
+
   /** Authenticated GET helper for the Assistant config endpoint. */
   public async assistantConfigRequest<T>(path: string): Promise<T> {
     const host = this.getHost.execute().getValue()

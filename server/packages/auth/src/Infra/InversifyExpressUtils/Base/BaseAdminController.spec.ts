@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 
 import { Request, Response } from 'express'
-import { Result, RoleName } from '@standardnotes/domain-core'
+import { Result, RoleName, SettingName } from '@standardnotes/domain-core'
 
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from '../../../Domain/UseCase/GetSetting/GetSetting'
@@ -117,5 +117,98 @@ describe('BaseAdminController ban endpoints', () => {
     const result = await createController().getUserBanStatus(request, adminResponse)
 
     expect(result.json).toMatchObject({ uuid: '1-2-3', banned: false })
+  })
+})
+
+describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () => {
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let adminResponse: Response
+  let nonAdminResponse: Response
+
+  const createController = () =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+    )
+
+  const flagRequest = (name?: string, value?: string | null) =>
+    ({ params: { userUuid: '1-2-3' }, body: { name, value } }) as unknown as Request
+
+  beforeEach(() => {
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    doGetSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'true' }))
+
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
+
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
+  })
+
+  it('classifies OCR_SERVER_ALLOWED as admin-manageable and persists a valid value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.OcrServerAllowed, 'true'),
+      adminResponse,
+    )
+
+    expect(setSettingValue.execute).toHaveBeenCalledWith({
+      settingName: SettingName.NAMES.OcrServerAllowed,
+      value: 'true',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(result.json).toMatchObject({ success: true, name: SettingName.NAMES.OcrServerAllowed, value: 'true' })
+  })
+
+  it('rejects a non-boolean OCR_SERVER_ALLOWED value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.OcrServerAllowed, 'maybe'),
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects a setting that is NOT admin-manageable', async () => {
+    const result = await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.MfaSecret, 'x'), adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-admin requestor for the OCR flag', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.OcrServerAllowed, 'true'),
+      nonAdminResponse,
+    )
+
+    expect(result.statusCode).toEqual(401)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('includes OCR_SERVER_ALLOWED in the admin-readable feature flags', async () => {
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    expect((result.json as { flags: Record<string, string | null> }).flags).toHaveProperty(
+      SettingName.NAMES.OcrServerAllowed,
+    )
   })
 })

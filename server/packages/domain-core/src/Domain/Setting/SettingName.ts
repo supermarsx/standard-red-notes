@@ -94,6 +94,18 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // INDIVIDUAL reminders into emailing, which sends those reminders' time + text
     // to the server in PLAINTEXT (they leave end-to-end encryption for that purpose).
     EmailRemindersEnabled: 'EMAIL_REMINDERS_ENABLED',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT opt-in for SERVER-SIDE PDF OCR.
+    // When 'true' (and the operator master switch OCR_SERVER_ENABLED is on), the
+    // client is allowed to offer "Run OCR on server", which uploads the PDF's
+    // DECRYPTED page image(s) to the api-gateway OCR endpoint for tesseract-in-Node
+    // recognition. This LEAVES end-to-end encryption for that request (the server
+    // sees the page content), exactly like the AI assistant proxy — hence opt-in
+    // and admin-manageable. Default disabled (absent/anything-but-'true'); browser
+    // OCR (which stays fully on-device/E2E) remains the default path regardless.
+    // Client-MUTABLE not required: this is gated by an admin, so it is admin-set;
+    // unencrypted/unsensitive so the gateway can read it without per-user key
+    // material when deciding whether to honor a server-OCR request.
+    OcrServerAllowed: 'OCR_SERVER_ALLOWED',
   }
 
   get value(): string {

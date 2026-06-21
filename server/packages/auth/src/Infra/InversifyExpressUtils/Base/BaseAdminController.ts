@@ -27,6 +27,11 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   // opt-in ('true' to allow emailing reminders that the user opts into; anything
   // else disables). Reuses the same get/set feature-flag endpoints.
   SettingName.NAMES.EmailRemindersEnabled,
+  // Standard Red Notes: admin view/override of a user's SERVER-SIDE OCR opt-in
+  // ('true' to allow the client to send decrypted PDF page images to the gateway
+  // OCR endpoint — which leaves end-to-end encryption; anything else disables).
+  // Reuses the same get/set feature-flag endpoints; value is validated below.
+  SettingName.NAMES.OcrServerAllowed,
 ]
 
 /**
@@ -265,6 +270,12 @@ export class BaseAdminController extends BaseHttpController {
         { error: { message: `Invalid email backup frequency '${value}'.` } },
         400,
       )
+    }
+
+    // Standard Red Notes: the server-OCR opt-in is a strict boolean flag; only
+    // 'true' or 'false' are accepted so the gateway gate reads an unambiguous value.
+    if (name === SettingName.NAMES.OcrServerAllowed && value != null && value !== 'true' && value !== 'false') {
+      return this.json({ error: { message: `Invalid OCR server-allowed value '${value}'. Use 'true' or 'false'.` } }, 400)
     }
 
     const result = await this.setSettingValue.execute({

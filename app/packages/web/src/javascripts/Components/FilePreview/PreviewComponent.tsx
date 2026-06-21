@@ -146,6 +146,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
         }
       >
         <PdfPreview
+          application={application}
           bytes={bytes}
           fileUuid={file.uuid}
           fileRemoteIdentifier={file.remoteIdentifier}

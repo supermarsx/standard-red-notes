@@ -288,3 +288,54 @@ export type OcrWindow = {
   ocrEnabled?: boolean
   ocrDefaultLanguage?: string
 }
+
+// ---------------------------------------------------------------------------
+// Server-side OCR availability (OPT-IN, E2E downgrade)
+// ---------------------------------------------------------------------------
+//
+// SERVER OCR is a SEPARATE, opt-in path from the browser OCR above. Browser OCR
+// keeps everything on the device (still end-to-end encrypted). Server OCR uploads
+// the DECRYPTED PDF page images to the server's /v1/ocr/recognize endpoint, which
+// LEAVES end-to-end encryption — the server (and anyone controlling it) can read
+// that content, exactly like the AI proxy. It is therefore gated by THREE layers:
+//   1. operator env master switch  OCR_SERVER_ENABLED (server-side),
+//   2. admin-manageable per-user   OCR_SERVER_ALLOWED  (server-side),
+//   3. the client only offering it when the server reports BOTH satisfied.
+//
+// Unlike the browser flag (a static window global), availability is PER-USER, so
+// it is fetched at runtime from the authenticated /v1/ocr/config endpoint rather
+// than injected into the page.
+
+/** Response shape of the server's GET /v1/ocr/config. */
+export type ServerOcrConfigResponse = {
+  /** Operator env master switch (OCR_SERVER_ENABLED). */
+  serverOcrEnabled?: boolean
+  /** Admin-managed per-user allow flag (OCR_SERVER_ALLOWED). */
+  allowed?: boolean
+  /** Convenience: true iff serverOcrEnabled AND allowed. */
+  available?: boolean
+  /** Server's default tesseract language (e.g. "eng"). */
+  defaultLanguage?: string
+}
+
+export type ServerOcrConfig = {
+  /** Whether the client may offer "Run OCR on server" for this user. */
+  available: boolean
+  /** Default tesseract language to request from the server. */
+  defaultLanguage: string
+}
+
+/**
+ * Normalize the /v1/ocr/config response into a client-usable config. Treats a
+ * missing/garbage response as NOT available (fail closed — this is a privacy
+ * downgrade, so we never offer it unless the server clearly says yes).
+ */
+export function parseServerOcrConfig(response: Partial<ServerOcrConfigResponse> | undefined): ServerOcrConfig {
+  const available =
+    response?.available === true || (response?.serverOcrEnabled === true && response?.allowed === true)
+  const lang =
+    typeof response?.defaultLanguage === 'string' && response.defaultLanguage.trim().length > 0
+      ? response.defaultLanguage.trim()
+      : DEFAULT_OCR_LANGUAGE
+  return { available, defaultLanguage: lang }
+}

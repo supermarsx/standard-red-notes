@@ -14,6 +14,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.EmailRemindersEnabled,
+    // Standard Red Notes: per-user server-OCR opt-in. A plain 'true'/'false' flag
+    // carrying no secret; stored unencrypted so the api-gateway can read it without
+    // per-user key material when gating a server-OCR request.
+    SettingName.NAMES.OcrServerAllowed,
     // Standard Red Notes: Nextcloud scheduled-backup config. Frequency, URL, folder
     // and last-run bookkeeping carry no secret and must be readable by the trigger
     // job without per-user key material, so they are stored unencrypted. The app
@@ -37,6 +41,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.EmailRemindersEnabled,
+    // Standard Red Notes: per-user server-OCR opt-in must be retrievable by the
+    // owning client (to know whether to offer "Run OCR on server") and by the
+    // api-gateway gate. It carries no secret, so it is not marked sensitive.
+    SettingName.NAMES.OcrServerAllowed,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     // Standard Red Notes: Nextcloud scheduled-backup config that the owning client
