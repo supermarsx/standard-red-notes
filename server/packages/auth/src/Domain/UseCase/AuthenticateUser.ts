@@ -19,6 +19,7 @@ export class AuthenticateUser implements UseCaseInterface {
     @inject(TYPES.Auth_Timer) private timer: TimerInterface,
     @inject(TYPES.Auth_ACCESS_TOKEN_AGE) private accessTokenAge: number,
     @inject(TYPES.Auth_Logger) private logger: Logger,
+    @inject(TYPES.Auth_SESSION_FRESHNESS_BUFFER) private freshlyCreatedSessionSafetyBufferSeconds: number = 10,
   ) {}
 
   async execute(dto: AuthenticateUserDTO): Promise<AuthenticateUserResponse> {
@@ -153,9 +154,8 @@ export class AuthenticateUser implements UseCaseInterface {
   private sessionIsExpired(session: Session): boolean {
     const sessionIsExpired = session.accessExpiration < this.timer.getUTCDate()
 
-    const freshlyCreatedSessionSafetyBufferSeconds = 10
     const currentConfigurationAccessTokenExpiration = this.timer.getUTCDateNSecondsAhead(
-      this.accessTokenAge + freshlyCreatedSessionSafetyBufferSeconds,
+      this.accessTokenAge + this.freshlyCreatedSessionSafetyBufferSeconds,
     )
 
     const sessionIsLongerThanCurrentConfiguration = session.accessExpiration > currentConfigurationAccessTokenExpiration

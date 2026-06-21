@@ -899,6 +899,19 @@ export class ContainerConfigLoader {
     container
       .bind(TYPES.Auth_EPHEMERAL_SESSION_AGE)
       .toConstantValue(env.get('EPHEMERAL_SESSION_AGE', true) ? +env.get('EPHEMERAL_SESSION_AGE', true) : 259200)
+    // Tolerance (in seconds) added to the configured access-token age when deciding
+    // whether a session's access expiration is "longer than current configuration".
+    // Prevents freshly created sessions from being treated as stale right after issuance.
+    container
+      .bind(TYPES.Auth_SESSION_FRESHNESS_BUFFER)
+      .toConstantValue(env.get('SESSION_FRESHNESS_BUFFER', true) ? +env.get('SESSION_FRESHNESS_BUFFER', true) : 10)
+    // How long (in seconds) the previous access/refresh tokens remain accepted after a
+    // session refresh, so concurrent in-flight requests during a refresh don't 401.
+    container
+      .bind(TYPES.Auth_COOLDOWN_SESSION_TOKENS_TTL)
+      .toConstantValue(
+        env.get('COOLDOWN_SESSION_TOKENS_TTL', true) ? +env.get('COOLDOWN_SESSION_TOKENS_TTL', true) : 120,
+      )
     container.bind(TYPES.Auth_REDIS_URL).toConstantValue(env.get('REDIS_URL', true))
     container
       .bind(TYPES.Auth_DISABLE_USER_REGISTRATION)
@@ -1167,7 +1180,7 @@ export class ContainerConfigLoader {
       .bind<CooldownSessionTokens>(TYPES.Auth_CooldownSessionTokens)
       .toConstantValue(
         new CooldownSessionTokens(
-          env.get('COOLDOWN_SESSION_TOKENS_TTL', true) ? +env.get('COOLDOWN_SESSION_TOKENS_TTL', true) : 120,
+          container.get<number>(TYPES.Auth_COOLDOWN_SESSION_TOKENS_TTL),
           container.get<SessionTokensCooldownRepositoryInterface>(TYPES.Auth_SessionTokensCooldownRepository),
         ),
       )
