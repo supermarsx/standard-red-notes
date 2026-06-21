@@ -34,6 +34,12 @@ FROM nginx:1.27-alpine
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /opt/standard-red-notes/app/packages/web/dist /usr/share/nginx/html
 
+# Runtime config templating (e.g. OCR_ENABLED) for the static bundle. Rewrites
+# the window.* globals in index.html from env at container start, then hands off
+# to the stock nginx entrypoint so operators can flip flags without a rebuild.
+COPY docker/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
+
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \

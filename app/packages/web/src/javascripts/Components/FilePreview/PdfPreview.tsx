@@ -5,21 +5,30 @@ import StyledTooltip from '../StyledTooltip/StyledTooltip'
 import { copyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import { formatPdfDeepLink, PdfDeepLinkTarget } from './PdfDeepLink'
 import { getPdfjs, PDFDocumentProxy, PDFPageProxy } from './pdfjs'
+import { findMatchesAcrossPages, joinTextItems, PdfPageText, PdfSearchMatch, wrapMatchIndex } from './pdfSearch'
 import {
-  findMatchesAcrossPages,
-  joinTextItems,
-  PdfPageText,
-  PdfSearchMatch,
-  wrapMatchIndex,
-} from './pdfSearch'
+  buildOcrFileKey,
+  getOcrServerConfig,
+  joinPageTexts,
+  mergeOcrWithEmbedded,
+  OcrPageText,
+  readOcrCache,
+  writeOcrCache,
+} from './pdfOcr'
+import type { OcrProgress } from './runPdfOcr'
 
 type Props = {
   bytes: Uint8Array
   /** FileItem uuid, used to build a shareable deep link. */
   fileUuid?: string
+  /** FileItem remoteIdentifier — part of the OCR cache key (changes on edit). */
+  fileRemoteIdentifier?: string
   /** Optional location to scroll/highlight on open. */
   target?: PdfDeepLinkTarget
 }
+
+/** Phases of the client-side OCR action. */
+type OcrStatus = 'idle' | 'running' | 'done' | 'error'
 
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
@@ -197,10 +206,7 @@ const PdfPage: FunctionComponent<{
       style={{ width: `${Math.floor(baseViewport.width)}px`, height: `${Math.floor(baseViewport.height)}px` }}
     >
       <canvas ref={canvasRef} className="block" />
-      <div
-        ref={textLayerRef}
-        className="textLayer pdf-text-layer absolute left-0 top-0 overflow-hidden opacity-100"
-      />
+      <div ref={textLayerRef} className="textLayer pdf-text-layer absolute left-0 top-0 overflow-hidden opacity-100" />
       {!isRendered && (
         <div className="absolute inset-0 flex items-center justify-center text-passive-1">
           <Spinner className="h-5 w-5" />
@@ -210,7 +216,7 @@ const PdfPage: FunctionComponent<{
   )
 }
 
-const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
+const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, fileRemoteIdentifier, target }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [pdfjs, setPdfjs] = useState<any>()
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
@@ -225,6 +231,25 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
   const [matchCase, setMatchCase] = useState(false)
   const [matches, setMatches] = useState<PdfSearchMatch[]>([])
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
+
+  // --- OCR (client-side, gated by a server-exposed flag) -------------------
+  // Files are end-to-end encrypted, so OCR cannot run on the server. The server
+  // only exposes an enable flag + default language (read here); the actual OCR
+  // runs in the browser on the already-decrypted page canvases.
+  const ocrConfig = useMemo(() => getOcrServerConfig(), [])
+  const [ocrStatus, setOcrStatus] = useState<OcrStatus>('idle')
+  const [ocrProgress, setOcrProgress] = useState<OcrProgress | undefined>()
+  const [ocrError, setOcrError] = useState<string | undefined>()
+  /** Per-page extracted text (embedded + OCR merged) once OCR has run. */
+  const [extractedPages, setExtractedPages] = useState<OcrPageText[] | undefined>()
+  /** True when `extractedPages` came straight from cache (no OCR run needed). */
+  const [ocrFromCache, setOcrFromCache] = useState(false)
+  const ocrAbortRef = useRef<AbortController | undefined>(undefined)
+
+  const ocrCacheKey = useMemo(
+    () => (fileUuid ? buildOcrFileKey(fileUuid, fileRemoteIdentifier) : undefined),
+    [fileUuid, fileRemoteIdentifier],
+  )
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -375,13 +400,20 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
     }
 
     const run = async () => {
-      const pageTexts: PdfPageText[] = []
-      for (const page of pages) {
-        const content = await page.getTextContent()
-        if (cancelled) {
-          return
+      let pageTexts: PdfPageText[]
+      if (extractedPages) {
+        // OCR has run: search the merged (embedded + OCR) text so image-only
+        // pages are searchable too.
+        pageTexts = extractedPages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }))
+      } else {
+        pageTexts = []
+        for (const page of pages) {
+          const content = await page.getTextContent()
+          if (cancelled) {
+            return
+          }
+          pageTexts.push({ pageNumber: page.pageNumber, text: joinTextItems(content.items) })
         }
-        pageTexts.push({ pageNumber: page.pageNumber, text: joinTextItems(content.items) })
       }
       const found = findMatchesAcrossPages(pageTexts, query, matchCase)
       if (!cancelled) {
@@ -397,7 +429,85 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
     return () => {
       cancelled = true
     }
-  }, [committedQuery, matchCase, pages, scrollToPage])
+  }, [committedQuery, matchCase, pages, scrollToPage, extractedPages])
+
+  // Load any cached OCR result for this file as soon as the file key is known,
+  // so reopening a previously-OCR'd file is instant (never re-OCR unchanged
+  // files). A cache miss leaves the action available to run.
+  useEffect(() => {
+    if (!ocrCacheKey) {
+      return
+    }
+    const cached = readOcrCache(ocrCacheKey)
+    if (cached && cached.length > 0) {
+      setExtractedPages(cached)
+      setOcrFromCache(true)
+      setOcrStatus('done')
+    }
+  }, [ocrCacheKey])
+
+  // Cancel any in-flight OCR on unmount.
+  useEffect(() => {
+    return () => {
+      ocrAbortRef.current?.abort()
+    }
+  }, [])
+
+  const runOcr = useCallback(async () => {
+    if (pages.length === 0 || ocrStatus === 'running') {
+      return
+    }
+    setOcrStatus('running')
+    setOcrError(undefined)
+    setOcrProgress({ totalPages: 0, completedPages: 0, pageProgress: 0 })
+
+    const controller = new AbortController()
+    ocrAbortRef.current = controller
+
+    try {
+      // Lazy-load the heavy OCR runner (tesseract.js) so it is code-split out of
+      // the main bundle and only fetched when the user actually requests OCR.
+      const { runPdfOcr } = await import('./runPdfOcr')
+      const { embedded, ocr } = await runPdfOcr({
+        pages,
+        language: ocrConfig.defaultLanguage,
+        onProgress: setOcrProgress,
+        signal: controller.signal,
+      })
+      const merged = mergeOcrWithEmbedded(embedded, ocr)
+      setExtractedPages(merged)
+      setOcrFromCache(false)
+      setOcrStatus('done')
+      if (ocrCacheKey) {
+        writeOcrCache(ocrCacheKey, merged)
+      }
+    } catch (error) {
+      if ((error as DOMException)?.name === 'AbortError') {
+        setOcrStatus('idle')
+        return
+      }
+      // eslint-disable-next-line no-console
+      console.error('PDF OCR failed', error)
+      setOcrError('OCR failed. The language data may have failed to download.')
+      setOcrStatus('error')
+    } finally {
+      ocrAbortRef.current = undefined
+    }
+  }, [pages, ocrStatus, ocrConfig.defaultLanguage, ocrCacheKey])
+
+  const cancelOcr = useCallback(() => {
+    ocrAbortRef.current?.abort()
+  }, [])
+
+  const copyExtractedText = useCallback(() => {
+    if (!extractedPages) {
+      return
+    }
+    const text = joinPageTexts(extractedPages)
+    if (text.length > 0) {
+      copyTextToClipboard(text, 'Copied extracted text')
+    }
+  }, [extractedPages])
 
   const activeMatchPage = matches[activeMatchIndex]?.pageNumber
 
@@ -639,6 +749,70 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
           )}
         </div>
 
+        {/* Client-side OCR (only when the server operator has enabled it). */}
+        {ocrConfig.enabled && (
+          <>
+            <div className="mx-1 h-5 w-px bg-border" />
+            <div className="flex items-center gap-1">
+              {ocrStatus === 'running' ? (
+                <div className="flex items-center gap-2 px-1">
+                  <Spinner className="h-4 w-4" />
+                  <span className="whitespace-nowrap text-xs text-passive-1">
+                    {ocrProgress && ocrProgress.totalPages > 0
+                      ? `OCR page ${ocrProgress.completedPages + (ocrProgress.pageProgress < 1 ? 1 : 0)} / ${
+                          ocrProgress.totalPages
+                        } (${Math.round(ocrProgress.pageProgress * 100)}%)`
+                      : 'Preparing OCR...'}
+                  </span>
+                  <button
+                    className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
+                    onClick={cancelOcr}
+                    aria-label="Cancel OCR"
+                  >
+                    <Icon type="close" className="text-neutral" size="small" />
+                  </button>
+                </div>
+              ) : (
+                <StyledTooltip
+                  label={
+                    ocrStatus === 'done'
+                      ? ocrFromCache
+                        ? 'Text already extracted (cached). Re-run OCR.'
+                        : 'Text extracted. Re-run OCR.'
+                      : 'Extract text from scanned pages with OCR. Runs in your browser (slow; downloads language data).'
+                  }
+                  className="!z-modal"
+                >
+                  <button
+                    className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-neutral hover:bg-contrast"
+                    onClick={runOcr}
+                    aria-label="Extract text with OCR"
+                  >
+                    <Icon type="plain-text" className="text-neutral" />
+                    <span className="whitespace-nowrap">
+                      {ocrStatus === 'done' ? 'Re-run OCR' : 'Extract text (OCR)'}
+                    </span>
+                  </button>
+                </StyledTooltip>
+              )}
+              {ocrStatus === 'done' && extractedPages && (
+                <StyledTooltip label="Copy all extracted text" className="!z-modal">
+                  <button
+                    className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+                    onClick={copyExtractedText}
+                    aria-label="Copy extracted text"
+                  >
+                    <Icon type="copy" className="text-neutral" />
+                  </button>
+                </StyledTooltip>
+              )}
+              {ocrStatus === 'error' && ocrError && (
+                <span className="whitespace-nowrap text-xs text-danger">{ocrError}</span>
+              )}
+            </div>
+          </>
+        )}
+
         {showSearch && (
           <div className="ml-auto flex items-center gap-1">
             <input
@@ -704,6 +878,15 @@ const PdfPreview: FunctionComponent<Props> = ({ bytes, fileUuid, target }) => {
           </div>
         )}
       </div>
+
+      {/* Honest OCR caveat banner: client-side, slow, downloads data, varies. */}
+      {ocrConfig.enabled && (ocrStatus === 'running' || (ocrStatus === 'done' && !ocrFromCache)) && (
+        <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
+          {ocrStatus === 'running'
+            ? 'OCR runs in your browser on this device (your files stay end-to-end encrypted). It is slow and downloads language data on first use.'
+            : 'OCR finished. Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'}
+        </div>
+      )}
 
       {/* Pages */}
       <div ref={scrollContainerRef} data-pdf-scroll-container className="flex-grow overflow-auto bg-passive-5 p-2">

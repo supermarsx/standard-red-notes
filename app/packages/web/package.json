@@ -133,6 +133,7 @@
     "pdfjs-dist": "4.10.38",
     "react-i18next": "^15.1.0",
     "sql.js": "^1.13.0",
+    "tesseract.js": "^7.0.0",
     "ttag": "^1.8.12",
     "unicode-script": "^1.2.0",
     "wavedrom": "^3.6.1",

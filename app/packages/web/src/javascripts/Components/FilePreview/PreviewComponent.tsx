@@ -145,7 +145,12 @@ const PreviewComponent: FunctionComponent<Props> = ({
           </div>
         }
       >
-        <PdfPreview bytes={bytes} fileUuid={file.uuid} target={pdfTarget} />
+        <PdfPreview
+          bytes={bytes}
+          fileUuid={file.uuid}
+          fileRemoteIdentifier={file.remoteIdentifier}
+          target={pdfTarget}
+        />
       </Suspense>
     )
   }

@@ -86,6 +86,15 @@ services:
       dockerfile: Dockerfile
     image: standard-red-notes/app:local
     restart: unless-stopped
+    environment:
+      # Client-side PDF OCR (tesseract.js). Files are end-to-end encrypted, so the
+      # server NEVER sees decrypted PDFs and cannot run OCR — these flags only gate
+      # whether the web client offers the "Extract text (OCR)" action and which
+      # tesseract language it defaults to. The app's entrypoint templates these into
+      # the static index.html at container start (no rebuild needed). OFF by default:
+      # OCR downloads multi-MB language data at runtime, is slow, and accuracy varies.
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
     depends_on:
       server:
         condition: service_healthy

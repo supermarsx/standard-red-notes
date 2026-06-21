@@ -8,6 +8,15 @@ declare global {
     devAccountPassword?: string
     devAccountServer?: string
     enabledUnfinishedFeatures: boolean
+    /**
+     * Server-exposed enable flag for the client-side PDF OCR action. Files are
+     * end-to-end encrypted so OCR cannot run on the server; this global only
+     * gates whether the client OFFERS OCR. Injected from the operator's
+     * OCR_ENABLED env (see app Docker entrypoint / docker-compose).
+     */
+    ocrEnabled?: boolean
+    /** Default tesseract language (e.g. "eng"). From OCR_DEFAULT_LANGUAGE env. */
+    ocrDefaultLanguage?: string
     plansUrl?: string
     purchaseUrl?: string
     startApplication?: StartApplication

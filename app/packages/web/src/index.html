@@ -39,11 +39,20 @@
       content="Standard Red Notes is a self-hosted-first encrypted note-taking app for private notes, documents, and files."
     />
 
-    <!-- CSP script-src hash: sha256-r26E+iPOhx7KM7cKn4trOSoD8u5E7wL7wwJ8UrR+rGs= -->
+    <!-- CSP script-src hash (sha256 of the inline <script> body, base64): regenerate
+         if the block below changes and a CSP that pins it is enforced.
+         sha256-PjWNPpfp7Mntj53voHaSJi0riWL1HwoLgebWF4pVxFM= -->
     <script>
       window.defaultSyncServer = 'http://localhost:3000'
       window.defaultFilesHost = 'http://localhost:3000'
       window.enabledUnfinishedFeatures = false
+      // Client-side PDF OCR (tesseract.js). Files are end-to-end encrypted, so OCR
+      // runs in the browser, not on the server — these globals only gate whether
+      // the client offers the "Extract text (OCR)" action and which language it
+      // defaults to. Operators set them via OCR_ENABLED / OCR_DEFAULT_LANGUAGE
+      // (see the app Docker entrypoint, which templates this file at startup).
+      window.ocrEnabled = false
+      window.ocrDefaultLanguage = 'eng'
       window.websocketUrl = 'ws://localhost:3106'
       // Serve Excalidraw fonts from our own origin (no CDN) — see webpack copy.
       window.EXCALIDRAW_ASSET_PATH = '/excalidraw/'
