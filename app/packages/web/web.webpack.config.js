@@ -35,7 +35,15 @@ module.exports = (env) => {
       from: 'src/service-worker.js',
       transform(content) {
         const version = require('./package.json').version
-        return content.toString().replace(/__SW_VERSION__/g, version)
+        // Standard Red Notes: append a per-build fingerprint so the SW cache
+        // name changes on EVERY build. Keying solely on package.json version
+        // (which rarely changes) meant successive rebuilds reused the same
+        // CACHE_NAME, so the activate-handler purge never ran and the browser
+        // served a STALE app.js cache-first indefinitely — bug fixes never
+        // reached users. SW_BUILD_ID lets CI pin a deterministic id; otherwise
+        // the build time guarantees uniqueness.
+        const buildId = process.env.SW_BUILD_ID || String(Date.now())
+        return content.toString().replace(/__SW_VERSION__/g, `${version}-${buildId}`)
       },
     },
     { from: 'src/robots.txt' },
