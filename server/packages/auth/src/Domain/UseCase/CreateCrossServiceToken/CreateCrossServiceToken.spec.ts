@@ -149,7 +149,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -192,7 +197,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -206,7 +216,9 @@ describe('CreateCrossServiceToken', () => {
           email: 'test@test.te',
           uuid: '00000000-0000-0000-0000-000000000000',
         },
-        hasContentLimit: true,
+        hasContentLimit: false,
+        collaboration_enabled: true,
+        live_sync_enabled: true,
         version: 1,
       },
       60,
@@ -225,7 +237,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -257,7 +274,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -290,7 +312,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -328,7 +355,12 @@ describe('CreateCrossServiceToken', () => {
             name: 'role1',
             uuid: '1-3-4',
           },
+          {
+            name: 'PRO_USER',
+            uuid: 'singletier-PRO_USER',
+          },
         ],
+        shared_vault_owner_context: undefined,
         belongs_to_shared_vaults: [
           {
             shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
@@ -383,6 +415,10 @@ describe('CreateCrossServiceToken', () => {
             {
               name: 'role1',
               uuid: '1-3-4',
+            },
+            {
+              name: 'PRO_USER',
+              uuid: 'singletier-PRO_USER',
             },
           ],
           belongs_to_shared_vaults: [

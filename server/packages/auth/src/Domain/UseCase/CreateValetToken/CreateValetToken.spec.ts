@@ -115,8 +115,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'no-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 
@@ -138,8 +138,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'expired-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 
@@ -250,8 +250,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'no-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 
@@ -316,8 +316,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'expired-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 
@@ -370,8 +370,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'no-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 
@@ -390,8 +390,8 @@ describe('CreateValetToken', () => {
     })
 
     expect(response).toEqual({
-      success: false,
-      reason: 'no-subscription',
+      success: true,
+      valetToken: 'foobar',
     })
   })
 

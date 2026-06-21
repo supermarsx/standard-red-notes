@@ -21,13 +21,13 @@ export class CookieFactory implements CookieFactoryInterface {
     // cookie is silently dropped, and every authenticated request 401s.
     const domainAttr = this.domain ? ` Domain=${this.domain};` : ''
     return [
-      `access_token_${dto.sessionUuid}=${dto.accessToken}; HttpOnly;${this.secure ? 'Secure; ' : ' '}Path=/;${
-        this.partitioned ? 'Partitioned; ' : ' '
+      `access_token_${dto.sessionUuid}=${dto.accessToken}; HttpOnly; ${this.secure ? 'Secure; ' : ''}Path=/; ${
+        this.partitioned ? 'Partitioned; ' : ''
       }SameSite=${this.sameSite};${domainAttr} Expires=${dto.refreshTokenExpiration.toUTCString()};`,
-      `refresh_token_${dto.sessionUuid}=${dto.refreshToken}; HttpOnly;${
-        this.secure ? 'Secure; ' : ' '
-      }Path=/v1/sessions/refresh;${
-        this.partitioned ? 'Partitioned; ' : ' '
+      `refresh_token_${dto.sessionUuid}=${dto.refreshToken}; HttpOnly; ${
+        this.secure ? 'Secure; ' : ''
+      }Path=/v1/sessions/refresh; ${
+        this.partitioned ? 'Partitioned; ' : ''
       }SameSite=${this.sameSite};${domainAttr} Expires=${dto.refreshTokenExpiration.toUTCString()};`,
     ]
   }

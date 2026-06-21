@@ -1,5 +1,5 @@
 import * as bcrypt from 'bcryptjs'
-import { UniqueEntityId, Uuid } from '@standardnotes/domain-core'
+import { UniqueEntityId } from '@standardnotes/domain-core'
 
 import { AppPassword } from '../../AppPassword/AppPassword'
 import { AppPasswordRepositoryInterface } from '../../AppPassword/AppPasswordRepositoryInterface'
