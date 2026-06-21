@@ -30,10 +30,23 @@ export const DiaryLastPromptedKey = 'DiaryMode.lastPromptedDate'
 /** The tag every diary entry is filed under. */
 export const DiaryTagTitle = 'Diary'
 
-/** Read the persisted Diary settings (normalized, never throws). */
+/**
+ * Read the persisted Diary settings (normalized, never throws).
+ *
+ * `application.getValue` THROWS "Attempting to get storage key … before loading
+ * local storage" if called before the app's local data has loaded (e.g. during
+ * the launch sequence). The diary scheduler already guards its call on
+ * `application.isLaunched()`, but this getter is also reachable from other
+ * call sites, so it defends itself: any read failure (early-load throw included)
+ * falls back to the normalized defaults rather than crashing the caller.
+ */
 export function getDiarySettings(application: WebApplication): DiarySettings {
-  const raw = application.getValue<Partial<DiarySettings> | undefined>(DiarySettingsKey)
-  return normalizeDiarySettings(raw)
+  try {
+    const raw = application.getValue<Partial<DiarySettings> | undefined>(DiarySettingsKey)
+    return normalizeDiarySettings(raw)
+  } catch {
+    return normalizeDiarySettings(undefined)
+  }
 }
 
 /** Persist the Diary settings. */

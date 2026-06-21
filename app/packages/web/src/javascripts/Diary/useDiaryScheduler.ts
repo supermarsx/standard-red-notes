@@ -42,6 +42,20 @@ import {
 /** How often to check whether today's diary prompt is due. */
 export const DIARY_CHECK_INTERVAL_MS = 60_000
 
+/**
+ * Boot-time guard: whether the scheduler may read app storage yet.
+ *
+ * `application.getValue` (used by `getDiarySettings`) THROWS "Attempting to get
+ * storage key … before loading local storage" if called before the app's local
+ * data has loaded. This hook mounts in `ApplicationView`, which can render
+ * BEFORE launch finishes, so every tick must bail out until the app is launched.
+ * Exported (and pure aside from reading `isLaunched`) so the guard is unit-tested
+ * directly and can never silently regress.
+ */
+export const shouldRunDiaryCheck = (application: Pick<WebApplication, 'isLaunched'>): boolean => {
+  return application.isLaunched()
+}
+
 export const useDiaryScheduler = (application: WebApplication): void => {
   useEffect(() => {
     let firedForDateThisSession: string | null = null
@@ -50,7 +64,7 @@ export const useDiaryScheduler = (application: WebApplication): void => {
       // Don't touch app storage until local data has loaded: application.getValue
       // throws "before loading local storage" if called during the launch sequence
       // (this hook mounts in ApplicationView, which can render before launch finishes).
-      if (!application.isLaunched()) {
+      if (!shouldRunDiaryCheck(application)) {
         return
       }
 

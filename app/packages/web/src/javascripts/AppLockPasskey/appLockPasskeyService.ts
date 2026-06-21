@@ -23,16 +23,32 @@ import {
  * passcode).
  */
 
+/**
+ * Read the raw stored credential, defending against the app-KV early-load throw.
+ *
+ * `application.getValue` THROWS "Attempting to get storage key … before loading
+ * local storage" if called before the app's local data has loaded.
+ * `isAppLockPasskeyRegistered` is read from `ApplicationView` (on launch and on
+ * biometric soft-lock changes), so a read failure of any kind must degrade to
+ * "no credential" (the safe default: do not engage the passkey gate) rather than
+ * crash the React render.
+ */
+function readStoredCredential(application: WebApplication): Partial<AppLockPasskeyCredential> | undefined {
+  try {
+    return application.getValue<Partial<AppLockPasskeyCredential> | undefined>(AppLockPasskeyStorageKey)
+  } catch {
+    return undefined
+  }
+}
+
 /** Read the registered app-lock passkey credential (normalized), or null. */
 export function getAppLockPasskeyCredential(application: WebApplication): AppLockPasskeyCredential | null {
-  const raw = application.getValue<Partial<AppLockPasskeyCredential> | undefined>(AppLockPasskeyStorageKey)
-  return normalizeAppLockPasskeyCredential(raw)
+  return normalizeAppLockPasskeyCredential(readStoredCredential(application))
 }
 
 /** True iff an app-lock passkey is registered on this device. */
 export function isAppLockPasskeyRegistered(application: WebApplication): boolean {
-  const raw = application.getValue<Partial<AppLockPasskeyCredential> | undefined>(AppLockPasskeyStorageKey)
-  return hasRegisteredAppLockPasskey(raw)
+  return hasRegisteredAppLockPasskey(readStoredCredential(application))
 }
 
 /**

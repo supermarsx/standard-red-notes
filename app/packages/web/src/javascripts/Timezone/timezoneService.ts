@@ -16,10 +16,22 @@ import {
 
 export const TimeZoneSettingKey = 'PreferredTimeZone'
 
-/** Read the persisted timezone settings (normalized, never throws). */
+/**
+ * Read the persisted timezone settings (normalized, never throws).
+ *
+ * `application.getValue` THROWS "Attempting to get storage key … before loading
+ * local storage" if called before the app's local data has loaded. This getter
+ * defends itself so it can never crash a caller (the clock widget renders after
+ * launch, but a read failure of any kind safely falls back to the default
+ * "follow the system zone").
+ */
 export function getTimeZoneSettings(application: WebApplication): TimeZoneSettings {
-  const raw = application.getValue<Partial<TimeZoneSettings> | undefined>(TimeZoneSettingKey)
-  return normalizeTimeZoneSettings(raw)
+  try {
+    const raw = application.getValue<Partial<TimeZoneSettings> | undefined>(TimeZoneSettingKey)
+    return normalizeTimeZoneSettings(raw)
+  } catch {
+    return normalizeTimeZoneSettings(undefined)
+  }
 }
 
 /** Persist the timezone settings. */
