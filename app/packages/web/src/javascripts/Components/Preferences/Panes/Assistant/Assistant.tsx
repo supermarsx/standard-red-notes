@@ -25,6 +25,7 @@ import {
   saveContextualSearchSettings,
 } from '@/Assistant/contextualSearchSettings'
 import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/deepResearchSettings'
+import { loadResearchModeSettings, saveResearchModeSettings } from '@/Assistant/researchModeSettings'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 
 type AssistantConfig = {
@@ -81,6 +82,10 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   // (localStorage), DEFAULT OFF. Substantially more data exposure than a single
   // query, so it is gated and clearly warned.
   const [deepResearch, setDeepResearch] = useState(() => loadDeepResearchSettings().enabled)
+
+  // AI RESEARCH MODE: write a structured research note on a topic from the model's
+  // own knowledge (no web access). Web-local (localStorage), DEFAULT OFF.
+  const [researchMode, setResearchMode] = useState(() => loadResearchModeSettings().enabled)
 
   const [searchIndexEnabled, setSearchIndexEnabled] = useState(() =>
     application.getPreference(PrefKey.SearchIndexEnabled, true),
@@ -220,6 +225,11 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const handleDeepResearchToggle = useCallback((value: boolean) => {
     setDeepResearch(value)
     saveDeepResearchSettings({ enabled: value })
+  }, [])
+
+  const handleResearchModeToggle = useCallback((value: boolean) => {
+    setResearchMode(value)
+    saveResearchModeSettings({ enabled: value })
   }, [])
 
   // Whether a provider is configured at all (reuses the assistant's own check).
@@ -734,6 +744,45 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
       <PreferencesGroup>
         <PreferencesSegment>
+          <div className="flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>AI research mode (write a structured note on a topic)</Subtitle>
+              <Text>
+                Adds a “Research mode” panel to the assistant. Given a topic or question, it writes a structured note
+                (title, sections, and a Sources list) and saves it as a new note you can open. Off by default. Runs only
+                when you start a research run.
+              </Text>
+            </div>
+            <Switch checked={researchMode} onChange={handleResearchModeToggle} />
+          </div>
+
+          {researchMode && (
+            <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+              <Subtitle className="text-warning">Research mode has no web access — its output must be verified</Subtitle>
+              <Text className="mt-1">
+                There is no web-search tool in this client, so research mode writes the note from the AI model’s own
+                training data, not from live sources. The result can be outdated, incomplete, or wrong, and any sources
+                it lists are the model’s recollections that must be independently verified. The model is instructed to
+                flag uncertainty and never fabricate URLs or citations, and every generated note carries a clear
+                “unverified — verify this” warning. It is also hardened against prompt-injection in the topic text.
+              </Text>
+              <Text className="mt-1 text-passive-1">
+                Your topic is sent to the configured AI provider. With cloud providers this exposes it to a third party
+                — prefer a local model (e.g. LM Studio / Ollama in Direct mode) to keep it on your device.
+              </Text>
+              {!providerAvailability.available && (
+                <Text className="mt-1 text-warning">
+                  {providerAvailability.reason || 'Configure an AI provider above to use this.'} Until then the action
+                  appears disabled.
+                </Text>
+              )}
+            </div>
+          )}
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
           <Title>Search</Title>
           <Text>
             A client-side full-text search index speeds up note-list search on large accounts. It builds an inverted
@@ -966,12 +1015,20 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                 />
               </div>
               {!action.freeform && action.enabled && (
-                <textarea
-                  className="mt-1 w-full resize-none rounded border border-border bg-default px-2 py-1 text-sm"
-                  rows={2}
-                  value={action.prompt}
-                  onChange={(event) => updateSelectionAction(action.id, { prompt: event.target.value })}
-                />
+                <>
+                  <textarea
+                    className="mt-1 w-full resize-none rounded border border-border bg-default px-2 py-1 text-sm"
+                    rows={2}
+                    value={action.prompt}
+                    onChange={(event) => updateSelectionAction(action.id, { prompt: event.target.value })}
+                  />
+                  {action.needsLanguage && (
+                    <Text className="mt-1 text-passive-1">
+                      Use <code>{'{language}'}</code> where the target language should go. You pick the language each
+                      time you translate (any language is accepted, not just the suggested list).
+                    </Text>
+                  )}
+                </>
               )}
             </div>
           ))}

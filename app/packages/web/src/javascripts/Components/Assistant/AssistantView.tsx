@@ -14,7 +14,9 @@ import {
 } from '@/Assistant/chatTabs'
 import ConversationPanel from './ConversationPanel'
 import DeepResearchPanel from './DeepResearchPanel'
+import ResearchModePanel from './ResearchModePanel'
 import { isDeepResearchEnabled } from '@/Assistant/deepResearchSettings'
+import { isResearchModeEnabled } from '@/Assistant/researchModeSettings'
 
 type Props = {
   application: WebApplication
@@ -48,6 +50,9 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
     // only shown when the (default-off) deep-research feature is enabled.
     const [showDeepResearch, setShowDeepResearch] = useState(false)
     const deepResearchEnabled = isDeepResearchEnabled()
+    // Research mode (web-knowledge structured note) overlay. Same default-off gating.
+    const [showResearchMode, setShowResearchMode] = useState(false)
+    const researchModeEnabled = isResearchModeEnabled()
     const editInputRef = useRef<HTMLInputElement | null>(null)
 
     // Persist the tab strip (id + title + userRenamed) so it survives a reload.
@@ -167,12 +172,32 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
                   'rounded p-1 hover:bg-contrast',
                   showDeepResearch && 'bg-info-faded text-info',
                 )}
-                onClick={() => setShowDeepResearch((value) => !value)}
+                onClick={() => {
+                  setShowResearchMode(false)
+                  setShowDeepResearch((value) => !value)
+                }}
                 aria-label="Deep research"
                 aria-pressed={showDeepResearch}
                 title="Deep research over your notes"
               >
                 <Icon type="search" />
+              </button>
+            )}
+            {researchModeEnabled && (
+              <button
+                className={classNames(
+                  'rounded p-1 hover:bg-contrast',
+                  showResearchMode && 'bg-info-faded text-info',
+                )}
+                onClick={() => {
+                  setShowDeepResearch(false)
+                  setShowResearchMode((value) => !value)
+                }}
+                aria-label="Research mode"
+                aria-pressed={showResearchMode}
+                title="Research mode (write a structured note on a topic)"
+              >
+                <Icon type="notes" />
               </button>
             )}
             {!standalone && (
@@ -344,6 +369,8 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(
 
         {deepResearchEnabled && showDeepResearch ? (
           <DeepResearchPanel application={application} onClose={() => setShowDeepResearch(false)} />
+        ) : researchModeEnabled && showResearchMode ? (
+          <ResearchModePanel application={application} onClose={() => setShowResearchMode(false)} />
         ) : (
           tabs.map((tab) => {
             const isActive = tab.id === activeTabId

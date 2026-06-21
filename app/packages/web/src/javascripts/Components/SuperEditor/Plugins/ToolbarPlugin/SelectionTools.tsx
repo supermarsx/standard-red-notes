@@ -4,11 +4,13 @@ import Icon from '@/Components/Icon/Icon'
 import Popover from '@/Components/Popover/Popover'
 import { useApplication } from '@/Components/ApplicationProvider'
 import {
+  buildTranslateInstruction,
   getSelectionActions,
   getSelectionAIAvailability,
   runSelectionAction,
   SelectionAction,
 } from '@/Assistant/selectionActions'
+import { filterLanguages } from '@/Assistant/languages'
 
 type PointSnapshot = { key: string; offset: number; type: 'text' | 'element' }
 type SelectionSnapshot = { text: string; anchor: PointSnapshot; focus: PointSnapshot }
@@ -51,12 +53,15 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
   const [askText, setAskText] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The translate action expands into a target-language picker before running.
+  const [languageActionId, setLanguageActionId] = useState<string | null>(null)
+  const [languageQuery, setLanguageQuery] = useState('')
 
   const actions = useMemo(() => getSelectionActions(application).filter((a) => a.enabled), [application, isAIMenuOpen])
   const availability = useMemo(() => getSelectionAIAvailability(application), [application, isAIMenuOpen])
 
   const runAction = useCallback(
-    async (action: SelectionAction, customInstruction?: string) => {
+    async (action: SelectionAction, extra?: { customInstruction?: string; language?: string }) => {
       const snap = captureSelection(editor)
       if (!snap?.text) {
         return
@@ -66,9 +71,20 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         setError(avail.reason ?? 'The AI assistant is not available.')
         return
       }
-      const instruction = action.freeform ? (customInstruction ?? '').trim() : action.prompt
-      if (action.freeform && !instruction) {
-        return
+      let instruction: string
+      if (action.needsLanguage) {
+        const language = (extra?.language ?? '').trim()
+        if (!language) {
+          return
+        }
+        instruction = buildTranslateInstruction(action.prompt, language)
+      } else if (action.freeform) {
+        instruction = (extra?.customInstruction ?? '').trim()
+        if (!instruction) {
+          return
+        }
+      } else {
+        instruction = action.prompt
       }
       setError(null)
       setBusy(action.label)
@@ -79,6 +95,8 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         }
         setIsAIMenuOpen(false)
         setAskText('')
+        setLanguageActionId(null)
+        setLanguageQuery('')
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
@@ -127,17 +145,65 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
                     onChange={(e) => setAskText(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                        void runAction(action, askText)
+                        void runAction(action, { customInstruction: askText })
                       }
                     }}
                   />
                   <button
                     className="w-full rounded bg-info px-2 py-1 text-sm font-semibold text-info-contrast hover:opacity-90 disabled:opacity-50"
-                    onClick={() => void runAction(action, askText)}
+                    onClick={() => void runAction(action, { customInstruction: askText })}
                     disabled={!askText.trim() || busy !== null}
                   >
                     {busy === action.label ? 'Working…' : 'Ask AI'}
                   </button>
+                </div>
+              ) : action.needsLanguage ? (
+                <div key={action.id} className="flex flex-col gap-1">
+                  <button
+                    className="flex items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-text hover:bg-contrast disabled:opacity-50"
+                    onClick={() =>
+                      setLanguageActionId((current) => (current === action.id ? null : action.id))
+                    }
+                    aria-expanded={languageActionId === action.id}
+                    disabled={busy !== null}
+                  >
+                    <Icon type={action.icon} size="small" className="text-neutral" />
+                    {busy === action.label ? `${action.label}…` : action.label}
+                  </button>
+                  {languageActionId === action.id && (
+                    <div className="flex flex-col gap-1 rounded border border-border bg-default p-1.5">
+                      <input
+                        className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+                        type="text"
+                        autoFocus
+                        placeholder="Language (type any, or pick below)…"
+                        value={languageQuery}
+                        onChange={(e) => setLanguageQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && languageQuery.trim()) {
+                            void runAction(action, { language: languageQuery })
+                          }
+                        }}
+                      />
+                      <div className="max-h-40 overflow-y-auto">
+                        {filterLanguages(languageQuery).map((language) => (
+                          <button
+                            key={language}
+                            className="flex w-full items-center rounded px-2 py-1 text-left text-sm text-text hover:bg-contrast disabled:opacity-50"
+                            onClick={() => void runAction(action, { language })}
+                            disabled={busy !== null}
+                          >
+                            {language}
+                          </button>
+                        ))}
+                        {filterLanguages(languageQuery).length === 0 && (
+                          <div className="px-2 py-1 text-xs text-passive-1">
+                            Press Enter to translate into “{languageQuery.trim()}”.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <button

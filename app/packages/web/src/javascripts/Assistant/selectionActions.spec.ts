@@ -1,6 +1,7 @@
 import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import {
+  buildTranslateInstruction,
   DEFAULT_SELECTION_ACTIONS,
   getSelectionActions,
   getSelectionAIAvailability,
@@ -85,6 +86,35 @@ describe('getSelectionActions', () => {
     expect(ask.icon).toBe('dashboard')
     expect(ask.freeform).toBe(true)
     expect(ask.prompt).toBe('overridden')
+  })
+})
+
+describe('translate selection action', () => {
+  it('ships a translate action that needs a language and carries a {language} placeholder', () => {
+    const translate = DEFAULT_SELECTION_ACTIONS.find((a) => a.id === 'translate')!
+    expect(translate).toBeDefined()
+    expect(translate.needsLanguage).toBe(true)
+    expect(translate.prompt).toContain('{language}')
+  })
+
+  it('substitutes the chosen language into the {language} placeholder', () => {
+    const result = buildTranslateInstruction('Translate into {language}. Reply with only the translation.', 'French')
+    expect(result).toBe('Translate into French. Reply with only the translation.')
+    expect(result).not.toContain('{language}')
+  })
+
+  it('replaces every occurrence of the placeholder', () => {
+    expect(buildTranslateInstruction('{language} text in {language}', 'German')).toBe('German text in German')
+  })
+
+  it('appends the language when a user-edited template omits the placeholder', () => {
+    expect(buildTranslateInstruction('Translate this text.', 'Spanish')).toBe(
+      'Translate this text. Target language: Spanish.',
+    )
+  })
+
+  it('trims surrounding whitespace from the chosen language', () => {
+    expect(buildTranslateInstruction('Into {language}.', '  Japanese  ')).toBe('Into Japanese.')
   })
 })
 

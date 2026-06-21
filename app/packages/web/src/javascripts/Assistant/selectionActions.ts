@@ -4,7 +4,7 @@ import { DirectProvider } from './DirectProvider'
 import { ProxyProvider } from './ProxyProvider'
 import { Provider } from './types'
 
-export type SelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand'
+export type SelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand' | 'translate'
 
 export type SelectionAction = {
   id: SelectionActionId
@@ -15,6 +15,12 @@ export type SelectionAction = {
   prompt: string
   /** True for actions that take a user-typed instruction (Ask AI). */
   freeform?: boolean
+  /**
+   * True for actions that need a target LANGUAGE picked at run time (Translate).
+   * The chosen language is interpolated into the prompt via the `{language}`
+   * placeholder, or appended if the template has no placeholder.
+   */
+  needsLanguage?: boolean
 }
 
 const SYSTEM_PROMPT =
@@ -45,7 +51,34 @@ export const DEFAULT_SELECTION_ACTIONS: SelectionAction[] = [
     enabled: true,
     prompt: 'Expand on the following text, adding helpful detail while keeping the same voice and intent.',
   },
+  {
+    id: 'translate',
+    label: 'Translate…',
+    icon: 'comment',
+    enabled: true,
+    needsLanguage: true,
+    prompt:
+      'Translate the following text into {language}. Preserve meaning, tone, formatting, and any names or code. ' +
+      'Reply with ONLY the translation.',
+  },
 ]
+
+/** Placeholder replaced by the chosen target language in a translate prompt. */
+export const LANGUAGE_PLACEHOLDER = '{language}'
+
+/**
+ * Build the final instruction for a translate action: substitute the chosen
+ * language into the template's {language} placeholder, or append it if the
+ * (user-edited) template omits the placeholder.
+ */
+export function buildTranslateInstruction(promptTemplate: string, language: string): string {
+  const lang = language.trim()
+  const template = promptTemplate.trim()
+  if (template.includes(LANGUAGE_PLACEHOLDER)) {
+    return template.split(LANGUAGE_PLACEHOLDER).join(lang)
+  }
+  return `${template} Target language: ${lang}.`
+}
 
 type Override = { enabled?: boolean; prompt?: string }
 
