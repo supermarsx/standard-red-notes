@@ -6,11 +6,39 @@ import { KeyboardModifier } from './KeyboardModifier'
 import { KeyboardCommandHandler } from './KeyboardCommandHandler'
 import { KeyboardShortcut, KeyboardShortcutHelpItem, PlatformedKeyboardShortcut } from './KeyboardShortcut'
 import { getKeyboardShortcuts } from './getKeyboardShortcuts'
+import {
+  KeyboardShortcutOverrides,
+  loadKeyboardShortcutOverrides,
+  persistKeyboardShortcutOverrides,
+  SerializedKeyboardShortcut,
+  serializeShortcut,
+  shortcutsConflict,
+} from './KeyboardShortcutOverrides'
+import { descriptionForCommand } from './KeyboardCommandCatalog'
+
+export type ConfigurableShortcut = {
+  command: KeyboardCommand
+  /** Stable persistence key (the command Symbol's description). */
+  commandKey: string
+  defaultShortcut: PlatformedKeyboardShortcut
+  effectiveShortcut: PlatformedKeyboardShortcut
+  isOverridden: boolean
+}
 
 export class KeyboardService {
   readonly activeModifiers = new Set<KeyboardModifier>()
   private commandHandlers = new Set<KeyboardCommandHandler>()
   private commandMap = new Map<KeyboardCommand, KeyboardShortcut>()
+
+  /**
+   * Standard Red Notes: the platform defaults, kept separate from the effective
+   * {@link commandMap} so a user can reset an override back to the default chord.
+   */
+  private defaultShortcutMap = new Map<KeyboardCommand, KeyboardShortcut>()
+  /** Map of `Symbol.description` -> stable command Symbol, for applying overrides. */
+  private commandKeyToCommand = new Map<string, KeyboardCommand>()
+  private overrides: KeyboardShortcutOverrides = {}
+  private overrideChangeObservers = new Set<() => void>()
 
   private keyboardShortcutHelpItems = new Set<KeyboardShortcutHelpItem>()
 
@@ -24,8 +52,16 @@ export class KeyboardService {
 
     const shortcuts = getKeyboardShortcuts(platform, environment)
     for (const shortcut of shortcuts) {
+      this.defaultShortcutMap.set(shortcut.command, shortcut)
+      const key = descriptionForCommand(shortcut.command)
+      if (key) {
+        this.commandKeyToCommand.set(key, shortcut.command)
+      }
       this.registerShortcut(shortcut)
     }
+
+    this.overrides = loadKeyboardShortcutOverrides()
+    this.applyOverrides()
   }
 
   private isDisabled = false
@@ -204,6 +240,128 @@ export class KeyboardService {
 
   registerShortcut(shortcut: KeyboardShortcut): void {
     this.commandMap.set(shortcut.command, shortcut)
+  }
+
+  /**
+   * Standard Red Notes: rebuilds the effective {@link commandMap} from the
+   * defaults plus any user overrides. Commands without an override keep their
+   * default chord, so existing shortcuts keep working untouched.
+   */
+  private applyOverrides(): void {
+    for (const [command, defaultShortcut] of this.defaultShortcutMap.entries()) {
+      const key = descriptionForCommand(command)
+      const override = key ? this.overrides[key] : undefined
+
+      if (override) {
+        this.commandMap.set(command, {
+          command,
+          modifiers: override.modifiers,
+          key: override.key,
+          code: override.code,
+          // preventDefault is a fixed behaviour of the command, never user-editable.
+          preventDefault: defaultShortcut.preventDefault,
+        })
+      } else {
+        this.commandMap.set(command, defaultShortcut)
+      }
+    }
+  }
+
+  private notifyOverrideObservers(): void {
+    for (const observer of this.overrideChangeObservers) {
+      observer()
+    }
+  }
+
+  /** Subscribe to changes to user shortcut overrides. Returns a disposer. */
+  addOverrideChangeObserver(observer: () => void): () => void {
+    this.overrideChangeObservers.add(observer)
+    return () => {
+      this.overrideChangeObservers.delete(observer)
+    }
+  }
+
+  /**
+   * The list of commands that are exposed for user reassignment, with both their
+   * default and currently-effective chords.
+   */
+  getConfigurableShortcuts(): ConfigurableShortcut[] {
+    const result: ConfigurableShortcut[] = []
+    for (const [command, defaultShortcut] of this.defaultShortcutMap.entries()) {
+      const commandKey = descriptionForCommand(command)
+      if (!commandKey) {
+        continue
+      }
+      const effective = this.commandMap.get(command) ?? defaultShortcut
+      result.push({
+        command,
+        commandKey,
+        defaultShortcut: { platform: this.platform, ...defaultShortcut },
+        effectiveShortcut: { platform: this.platform, ...effective },
+        isOverridden: this.overrides[commandKey] != undefined,
+      })
+    }
+    return result
+  }
+
+  /**
+   * Returns the commandKey of an existing command whose effective chord matches
+   * the proposed chord, excluding the command being edited. `undefined` means no
+   * conflict.
+   */
+  findConflictingCommandKey(proposed: SerializedKeyboardShortcut, excludeCommandKey: string): string | undefined {
+    for (const [command, shortcut] of this.commandMap.entries()) {
+      const commandKey = descriptionForCommand(command)
+      if (!commandKey || commandKey === excludeCommandKey) {
+        continue
+      }
+      // Only consider commands that are part of the user-facing catalog.
+      if (!this.commandKeyToCommand.has(commandKey)) {
+        continue
+      }
+      if (shortcutsConflict(proposed, serializeShortcut(shortcut))) {
+        return commandKey
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Override a command's chord. Pass a SerializedKeyboardShortcut to set, persists
+   * and re-applies immediately so the new chord is live without a reload.
+   */
+  setShortcutOverride(commandKey: string, shortcut: SerializedKeyboardShortcut): void {
+    if (!this.commandKeyToCommand.has(commandKey)) {
+      return
+    }
+    this.overrides = { ...this.overrides, [commandKey]: shortcut }
+    persistKeyboardShortcutOverrides(this.overrides)
+    this.applyOverrides()
+    this.notifyOverrideObservers()
+  }
+
+  /** Reset a single command back to its platform default. */
+  resetShortcutOverride(commandKey: string): void {
+    if (this.overrides[commandKey] == undefined) {
+      return
+    }
+    const next = { ...this.overrides }
+    delete next[commandKey]
+    this.overrides = next
+    persistKeyboardShortcutOverrides(this.overrides)
+    this.applyOverrides()
+    this.notifyOverrideObservers()
+  }
+
+  /** Reset every command back to its platform default. */
+  resetAllShortcutOverrides(): void {
+    if (Object.keys(this.overrides).length === 0) {
+      return
+    }
+    this.overrides = {}
+    persistKeyboardShortcutOverrides(this.overrides)
+    this.applyOverrides()
+    this.notifyOverrideObservers()
   }
 
   addCommandHandler(observer: KeyboardCommandHandler): () => void {

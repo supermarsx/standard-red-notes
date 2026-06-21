@@ -21,6 +21,7 @@ import RecentNotes from './Panes/RecentNotes/RecentNotes'
 import Achievements from './Panes/Achievements/Achievements'
 import Sharing from './Panes/Sharing/Sharing'
 import Sync from './Panes/Sync/Sync'
+import Shortcuts from './Panes/Shortcuts/Shortcuts'
 
 const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = ({
   menu,
@@ -60,7 +61,7 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
     case 'backups':
       return <Backups application={application} />
     case 'shortcuts':
-      return null
+      return <Shortcuts application={application} />
     case 'plugins':
       return <PluginsPane pluginsLatestVersions={menu.extensionsLatestVersions} />
     case 'accessibility':
