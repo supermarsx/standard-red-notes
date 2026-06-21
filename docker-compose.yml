@@ -255,7 +255,7 @@ services:
       - standard-red-notes
 
   db:
-    image: mariadb:13
+    image: mariadb:lts
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
