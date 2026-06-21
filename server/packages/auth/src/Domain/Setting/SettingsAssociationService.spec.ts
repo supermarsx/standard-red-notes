@@ -190,4 +190,44 @@ describe('SettingsAssociationService', () => {
       },
     )
   })
+
+  describe('Nextcloud backup admin gate (Standard Red Notes, admin-manageable)', () => {
+    it('should be a valid, recognized setting name', () => {
+      const result = SettingName.create(SettingName.NAMES.NextcloudBackupAllowed)
+      expect(result.isFailed()).toBeFalsy()
+      expect(result.getValue().value).toEqual('NEXTCLOUD_BACKUP_ALLOWED')
+    })
+
+    it('should be stored unencrypted so the trigger job can read it without user key material', () => {
+      expect(
+        createService().getEncryptionVersionForSetting(
+          SettingName.create(SettingName.NAMES.NextcloudBackupAllowed).getValue(),
+        ),
+      ).toEqual(EncryptionVersion.Unencrypted)
+    })
+
+    it('should be unsensitive (plain readable boolean flag, not a secret)', () => {
+      expect(
+        createService().getSensitivityForSetting(
+          SettingName.create(SettingName.NAMES.NextcloudBackupAllowed).getValue(),
+        ),
+      ).toBeFalsy()
+    })
+
+    it('should NOT be part of any default settings for new accounts (OFF by default)', () => {
+      const newUserSettings = createService().getDefaultSettingsAndValuesForNewUser()
+      const newVaultSettings = createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount()
+
+      expect(newUserSettings.has(SettingName.NAMES.NextcloudBackupAllowed)).toBeFalsy()
+      expect(newVaultSettings.has(SettingName.NAMES.NextcloudBackupAllowed)).toBeFalsy()
+    })
+
+    it('should keep the Nextcloud app password SENSITIVE (admin gate does not expose it)', () => {
+      expect(
+        createService().getSensitivityForSetting(
+          SettingName.create(SettingName.NAMES.NextcloudBackupAppPassword).getValue(),
+        ),
+      ).toBeTruthy()
+    })
+  })
 })

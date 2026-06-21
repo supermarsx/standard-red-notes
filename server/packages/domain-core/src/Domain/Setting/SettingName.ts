@@ -84,6 +84,14 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // ms-epoch string of the last Nextcloud backup run, used by the due-calculator
     // so one cron can serve daily/weekly/monthly and catch up missed runs.
     NextcloudBackupLastRun: 'NEXTCLOUD_BACKUP_LAST_RUN',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT admin gate for scheduled
+    // Nextcloud backups. Mirrors OcrServerAllowed: a plain 'true'/'false' flag the
+    // admin panel toggles per user. The scheduled trigger requires this flag to be
+    // 'true' (composed with the operator master switch NEXTCLOUD_BACKUPS_ENABLED and
+    // per-user completeness) before it will upload, so an operator must opt a user
+    // in. Carries no secret; unencrypted/unsensitive so the trigger job can read it
+    // without per-user key material. Default disabled (absent/anything-but-'true').
+    NextcloudBackupAllowed: 'NEXTCLOUD_BACKUP_ALLOWED',
     // Standard Red Notes: per-user opt-in for EMAIL REMINDERS. When 'true', the
     // scheduled email-reminder cron is allowed to email this user the reminders
     // they have EXPLICITLY registered for emailing (see the email_reminders table).

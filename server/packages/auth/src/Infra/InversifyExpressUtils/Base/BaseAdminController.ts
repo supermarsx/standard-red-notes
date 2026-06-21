@@ -32,6 +32,19 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   // OCR endpoint — which leaves end-to-end encryption; anything else disables).
   // Reuses the same get/set feature-flag endpoints; value is validated below.
   SettingName.NAMES.OcrServerAllowed,
+  // Standard Red Notes: admin gate for a user's scheduled Nextcloud backups
+  // ('true' to allow the trigger job to upload this user's E2E-encrypted backup
+  // artifact to their configured Nextcloud; anything else disables). Mirrors
+  // OcrServerAllowed; the trigger additionally requires per-user completeness and
+  // the operator master switch. Reuses the same get/set feature-flag endpoints;
+  // value is validated below.
+  SettingName.NAMES.NextcloudBackupAllowed,
+  // Standard Red Notes: admin VIEW of a user's Nextcloud backup cadence so the
+  // admin panel can show/agree the user's backup state. Carries no secret. The app
+  // PASSWORD is deliberately absent here — it stays SENSITIVE and is never returned
+  // to the admin; only a read-only "configured?" status is surfaced (see
+  // getUserFeatureFlags).
+  SettingName.NAMES.NextcloudBackupFrequency,
 ]
 
 /**
@@ -235,9 +248,23 @@ export class BaseAdminController extends BaseHttpController {
       flags[settingName] = result.isFailed() ? null : (result.getValue().decryptedValue ?? null)
     }
 
+    // Standard Red Notes: read-only "configured?" status for the Nextcloud app
+    // password so the admin can SEE whether the user has finished setting up their
+    // backup destination — WITHOUT ever exposing the credential. We probe with
+    // `decrypted: false` so GetSetting only confirms the setting EXISTS and never
+    // decrypts/returns the value; the app password stays SENSITIVE and withheld.
+    const appPasswordResult = await this.doGetSetting.execute({
+      userUuid,
+      settingName: SettingName.NAMES.NextcloudBackupAppPassword,
+      allowSensitiveRetrieval: true,
+      decrypted: false,
+    })
+    const nextcloudAppPasswordConfigured = !appPasswordResult.isFailed()
+
     return this.json({
       userUuid,
       flags,
+      nextcloudAppPasswordConfigured,
     })
   }
 
@@ -276,6 +303,16 @@ export class BaseAdminController extends BaseHttpController {
     // 'true' or 'false' are accepted so the gateway gate reads an unambiguous value.
     if (name === SettingName.NAMES.OcrServerAllowed && value != null && value !== 'true' && value !== 'false') {
       return this.json({ error: { message: `Invalid OCR server-allowed value '${value}'. Use 'true' or 'false'.` } }, 400)
+    }
+
+    // Standard Red Notes: the Nextcloud-backup admin gate is likewise a strict
+    // boolean flag; only 'true' or 'false' are accepted so the trigger job reads
+    // an unambiguous value.
+    if (name === SettingName.NAMES.NextcloudBackupAllowed && value != null && value !== 'true' && value !== 'false') {
+      return this.json(
+        { error: { message: `Invalid Nextcloud backup-allowed value '${value}'. Use 'true' or 'false'.` } },
+        400,
+      )
     }
 
     const result = await this.setSettingValue.execute({

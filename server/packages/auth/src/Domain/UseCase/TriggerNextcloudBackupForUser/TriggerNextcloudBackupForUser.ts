@@ -33,6 +33,16 @@ export class TriggerNextcloudBackupForUser implements UseCaseInterface<void> {
     }
     const userUuid = userUuidOrError.getValue()
 
+    // Standard Red Notes: per-user admin gate. The operator must opt this user in
+    // via the admin panel (NEXTCLOUD_BACKUP_ALLOWED === 'true'). This composes with
+    // the operator master switch (NEXTCLOUD_BACKUPS_ENABLED, enforced upstream in
+    // TriggerNextcloudBackupForAllUsers) and the per-user completeness checks below.
+    // Default OFF: absent/anything-but-'true' skips the upload.
+    const allowed = await this.getUnsensitiveSetting(userUuid.value, SettingName.NAMES.NextcloudBackupAllowed)
+    if (allowed !== 'true') {
+      return Result.fail(`User ${userUuid.value} is not allowed Nextcloud backups by an administrator`)
+    }
+
     const frequency = await this.getUnsensitiveSetting(userUuid.value, SettingName.NAMES.NextcloudBackupFrequency)
     if (frequency === null || !this.isRecurringFrequency(frequency)) {
       return Result.fail(`User ${userUuid.value} does not have a recurring Nextcloud backup frequency configured`)

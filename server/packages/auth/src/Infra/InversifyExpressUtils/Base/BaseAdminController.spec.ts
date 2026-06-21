@@ -212,3 +212,121 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     )
   })
 })
+
+describe('BaseAdminController Nextcloud backup-allowed flag (admin-manageable)', () => {
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let adminResponse: Response
+  let nonAdminResponse: Response
+
+  const createController = () =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+    )
+
+  const flagRequest = (name?: string, value?: string | null) =>
+    ({ params: { userUuid: '1-2-3' }, body: { name, value } }) as unknown as Request
+
+  beforeEach(() => {
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    doGetSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'true' }))
+
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
+
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
+  })
+
+  it('classifies NEXTCLOUD_BACKUP_ALLOWED as admin-manageable and persists a valid value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.NextcloudBackupAllowed, 'true'),
+      adminResponse,
+    )
+
+    expect(setSettingValue.execute).toHaveBeenCalledWith({
+      settingName: SettingName.NAMES.NextcloudBackupAllowed,
+      value: 'true',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(result.json).toMatchObject({
+      success: true,
+      name: SettingName.NAMES.NextcloudBackupAllowed,
+      value: 'true',
+    })
+  })
+
+  it('rejects a non-boolean NEXTCLOUD_BACKUP_ALLOWED value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.NextcloudBackupAllowed, 'maybe'),
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-admin requestor for the Nextcloud flag', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.NextcloudBackupAllowed, 'true'),
+      nonAdminResponse,
+    )
+
+    expect(result.statusCode).toEqual(401)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('includes NEXTCLOUD_BACKUP_ALLOWED and the read-only frequency in the admin-readable feature flags', async () => {
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    const flags = (result.json as { flags: Record<string, string | null> }).flags
+    expect(flags).toHaveProperty(SettingName.NAMES.NextcloudBackupAllowed)
+    expect(flags).toHaveProperty(SettingName.NAMES.NextcloudBackupFrequency)
+  })
+
+  it('exposes a read-only "app password configured?" status WITHOUT decrypting the password', async () => {
+    // Probe must be made allowing sensitive retrieval but with decrypted:false, so
+    // the value is never returned; only existence (configured) is surfaced.
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    expect(doGetSetting.execute).toHaveBeenCalledWith({
+      userUuid: '1-2-3',
+      settingName: SettingName.NAMES.NextcloudBackupAppPassword,
+      allowSensitiveRetrieval: true,
+      decrypted: false,
+    })
+    expect((result.json as { nextcloudAppPasswordConfigured: boolean }).nextcloudAppPasswordConfigured).toBe(true)
+  })
+
+  it('reports the app password as NOT configured when the setting is absent, withholding the value either way', async () => {
+    doGetSetting.execute = jest.fn().mockResolvedValue(Result.fail('not found'))
+
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    const json = result.json as {
+      flags: Record<string, string | null>
+      nextcloudAppPasswordConfigured: boolean
+    }
+    expect(json.nextcloudAppPasswordConfigured).toBe(false)
+    // The app password is never surfaced as a flag value.
+    expect(json.flags).not.toHaveProperty(SettingName.NAMES.NextcloudBackupAppPassword)
+  })
+})

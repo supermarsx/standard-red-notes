@@ -34,6 +34,13 @@ const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
 // OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
 // decrypted PDF page images to the server, which leaves end-to-end encryption).
 const OCR_SERVER_ALLOWED = 'OCR_SERVER_ALLOWED'
+// OPT-IN scheduled Nextcloud backups. Defaults OFF. Backups remain E2E ciphertext
+// (content stays private), but the server-stored app password grants Nextcloud file
+// access and upload timing/size are exposed. See the privacy alert near the toggle.
+const NEXTCLOUD_BACKUP_ALLOWED = 'NEXTCLOUD_BACKUP_ALLOWED'
+// READ-ONLY view of the user's Nextcloud backup cadence (disabled|daily|weekly|
+// monthly). Surfaced so the admin can SEE the user's backup state.
+const NEXTCLOUD_BACKUP_FREQUENCY = 'NEXTCLOUD_BACKUP_FREQUENCY'
 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
@@ -50,6 +57,11 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
   // Server OCR is OFF by default (opt-in E2E downgrade); only 'true' enables it.
   const [ocrServerAllowed, setOcrServerAllowed] = useState(false)
+  // Nextcloud backups are OFF by default; only 'true' enables them. The cadence and
+  // app-password-configured status are read-only context for the admin.
+  const [nextcloudBackupAllowed, setNextcloudBackupAllowed] = useState(false)
+  const [nextcloudBackupFrequency, setNextcloudBackupFrequency] = useState<string | null>(null)
+  const [nextcloudAppPasswordConfigured, setNextcloudAppPasswordConfigured] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
   const [savingLimit, setSavingLimit] = useState(false)
 
@@ -90,13 +102,18 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
           return
         }
-        const data = (response as { data?: { flags?: Record<string, string | null> } }).data
+        const data = (response as {
+          data?: { flags?: Record<string, string | null>; nextcloudAppPasswordConfigured?: boolean }
+        }).data
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] === 'true')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
         setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
         setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
         setOcrServerAllowed(flags[OCR_SERVER_ALLOWED] === 'true')
+        setNextcloudBackupAllowed(flags[NEXTCLOUD_BACKUP_ALLOWED] === 'true')
+        setNextcloudBackupFrequency(flags[NEXTCLOUD_BACKUP_FREQUENCY] ?? null)
+        setNextcloudAppPasswordConfigured(Boolean(data?.nextcloudAppPasswordConfigured))
       } catch (error) {
         console.error(error)
       } finally {
@@ -440,6 +457,42 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                           setOcrServerAllowed,
                           ocrServerAllowed,
                           'Failed to update server OCR access.',
+                        )
+                      }
+                    />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Nextcloud backups</Subtitle>
+                      <Text>
+                        Allow scheduled encrypted backups of this user's data to their configured Nextcloud. Backups are
+                        end-to-end <strong>ciphertext</strong> &mdash; the content stays private and neither this server nor
+                        Nextcloud can read it. However, the dedicated Nextcloud <strong>app password is server-stored</strong>{' '}
+                        and grants Nextcloud file access, and the upload <strong>timing and size are exposed</strong> to the
+                        server and Nextcloud. Use a dedicated <strong>low-privilege Nextcloud app password</strong>. Requires
+                        the NEXTCLOUD_BACKUPS_ENABLED operator switch and the user's own URL/folder/frequency/app-password
+                        setup. Off by default.
+                      </Text>
+                      <Text className="mt-1">
+                        Current state: cadence{' '}
+                        <strong>{nextcloudBackupFrequency && nextcloudBackupFrequency !== '' ? nextcloudBackupFrequency : 'not set'}</strong>
+                        , app password{' '}
+                        <strong>{nextcloudAppPasswordConfigured ? 'configured' : 'not configured'}</strong>. (The app
+                        password itself is never shown.)
+                      </Text>
+                    </div>
+                    <Switch
+                      checked={nextcloudBackupAllowed}
+                      onChange={(checked) =>
+                        void toggleUserFlag(
+                          NEXTCLOUD_BACKUP_ALLOWED,
+                          checked,
+                          setNextcloudBackupAllowed,
+                          nextcloudBackupAllowed,
+                          'Failed to update Nextcloud backup access.',
                         )
                       }
                     />
