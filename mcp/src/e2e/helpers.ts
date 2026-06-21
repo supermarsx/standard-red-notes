@@ -19,6 +19,11 @@ export function check(name: string, cond: boolean): void {
     failures++
   }
 }
+
+/** Record a non-fatal skip (e.g. a precondition the live build doesn't satisfy). */
+export function skip(name: string, reason: string): void {
+  console.log(`  skip - ${name} (${reason})`)
+}
 export function finish(): void {
   console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
   // Delay the exit so any closing async handles (sockets, child-process stdio)
