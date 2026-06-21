@@ -28,8 +28,9 @@ type SingleButtonProps = {
 
 const AggregateViewSectionButton: FunctionComponent<SingleButtonProps> = observer(
   ({ application, paneId, icon, label, asTab }) => {
+    const activeViewTab = application.paneController.activeViewTab
     const isOpen = asTab
-      ? application.paneController.activeViewTab?.paneId === paneId
+      ? activeViewTab?.kind === 'pane' && activeViewTab.paneId === paneId
       : application.paneController.panes.includes(paneId)
 
     const handleClick = useCallback(() => {

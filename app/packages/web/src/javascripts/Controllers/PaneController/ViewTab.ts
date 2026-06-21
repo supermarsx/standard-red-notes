@@ -7,13 +7,21 @@ import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
  * taking over the whole window as a column. The `id` is the pane id string so a
  * given pane can only have a single tab open at once.
  */
-export type ViewTab = {
-  id: string
-  kind: 'pane'
-  paneId: AppPaneId
-  title: string
-  icon: VectorIconNameOrEmoji
-}
+export type ViewTab =
+  | {
+      id: string
+      kind: 'pane'
+      paneId: AppPaneId
+      title: string
+      icon: VectorIconNameOrEmoji
+    }
+  | {
+      id: string
+      kind: 'conflict'
+      noteUuid: string
+      title: string
+      icon: VectorIconNameOrEmoji
+    }
 
 /**
  * The panes that are surfaced as tabs. Each entry's icon matches the icon that

@@ -90,6 +90,7 @@ export class PaneController extends AbstractViewController implements InternalEv
       isNavigationPaneCollapsed: computed,
 
       openPaneTab: action,
+      openConflictTab: action,
       closeViewTab: action,
       setActiveViewTab: action,
 
@@ -304,6 +305,23 @@ export class PaneController extends AbstractViewController implements InternalEv
     }
 
     this.activeViewTabId = paneId
+    this.presentPane(AppPaneId.Editor)
+  }
+
+  /**
+   * Standard Red Notes: opens a note's conflict resolution UI as a tab in the
+   * editor tab bar (side-by-side current vs conflicted copy) instead of an inline
+   * modal. Idempotent per note (one conflict tab per note). Makes the editor
+   * column visible so the tab content shows.
+   */
+  openConflictTab = (noteUuid: string, title: string) => {
+    const id = `conflict:${noteUuid}`
+
+    if (!this.viewTabs.some((tab) => tab.id === id)) {
+      this.viewTabs = [...this.viewTabs, { id, kind: 'conflict', noteUuid, title, icon: 'merge' }]
+    }
+
+    this.activeViewTabId = id
     this.presentPane(AppPaneId.Editor)
   }
 

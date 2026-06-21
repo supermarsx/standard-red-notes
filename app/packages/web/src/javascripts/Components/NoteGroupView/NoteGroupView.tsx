@@ -1,4 +1,4 @@
-import { FileItem } from '@standardnotes/snjs'
+import { FileItem, SNNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { AbstractComponent } from '@/Components/Abstract/PureComponent'
 import MultipleSelectedNotes from '@/Components/MultipleSelectedNotes/MultipleSelectedNotes'
@@ -21,6 +21,7 @@ import RemindersView from '../RemindersAggregate/RemindersView'
 import TodoView from '../TodoAggregate/TodoView'
 import ResearchView from '../Research/ResearchView'
 import BookmarksView from '../Bookmarks/BookmarksView'
+import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
 
 /**
  * Standard Red Notes: the editor tile layout defaults to Single (one note shown
@@ -371,6 +372,24 @@ class NoteGroupView extends AbstractComponent<Props, State> {
    */
   private renderActiveViewTab(tab: ViewTab) {
     const viewClassName = 'flex-grow min-h-0'
+
+    if (tab.kind === 'conflict') {
+      const note = this.application.items.findItem<SNNote>(tab.noteUuid)
+      if (!note) {
+        this.application.paneController.closeViewTab(tab.id)
+        return null
+      }
+      const conflicted = this.application.items.conflictsOf(tab.noteUuid) as SNNote[]
+      return (
+        <NoteConflictResolutionView
+          currentNote={note}
+          conflictedNotes={conflicted}
+          className="flex-grow min-h-0"
+          onClose={() => this.application.paneController.closeViewTab(tab.id)}
+        />
+      )
+    }
+
     switch (tab.paneId) {
       case AppPaneId.Home:
         return <HomeView application={this.application} className={viewClassName} id={tab.id} />

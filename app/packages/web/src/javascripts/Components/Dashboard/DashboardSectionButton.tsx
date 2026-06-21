@@ -15,7 +15,8 @@ type Props = {
  * pane as the main content area; selecting it again closes it.
  */
 const DashboardSectionButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.activeViewTab?.paneId === AppPaneId.Dashboard
+  const activeViewTab = application.paneController.activeViewTab
+  const isOpen = activeViewTab?.kind === 'pane' && activeViewTab.paneId === AppPaneId.Dashboard
 
   const handleClick = useCallback(() => {
     application.paneController.openPaneTab(AppPaneId.Dashboard)

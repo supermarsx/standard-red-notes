@@ -73,8 +73,6 @@ import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
 import PresenceBadge from './PresenceBadge'
 import Button from '../Button/Button'
-import ModalOverlay from '../Modal/ModalOverlay'
-import NoteConflictResolutionModal from './NoteConflictResolutionModal/NoteConflictResolutionModal'
 import Icon from '../Icon/Icon'
 import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPadding'
 import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
@@ -126,7 +124,6 @@ type State = {
   heroHeader: HeroHeader | null
 
   conflictedNotes: SNNote[]
-  showConflictResolutionModal: boolean
 }
 
 class NoteView extends AbstractComponent<NoteViewProps, State> {
@@ -173,7 +170,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       editorFeatureIdentifier: this.controller.item.editorIdentifier,
       noteType: this.controller.item.noteType,
       conflictedNotes: [],
-      showConflictResolutionModal: false,
       customBackgroundColor: getNoteCustomBackgroundColor(this.controller.item),
       customTextColor: getNoteCustomTextColor(this.controller.item),
       heroHeader: getNoteHeroHeader(this.controller.item),
@@ -1004,12 +1000,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     this.setState({ editorFocused: false })
   }
 
-  toggleConflictResolutionModal = () => {
-    this.setState((state) => ({
-      showConflictResolutionModal: !state.showConflictResolutionModal,
-    }))
-  }
-
   triggerSyncOnAction = () => {
     if (!this.controller) {
       // component might've already unmounted
@@ -1149,7 +1139,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                   primary
                   colorStyle="warning"
                   small
-                  onClick={this.toggleConflictResolutionModal}
+                  onClick={() =>
+                    this.application.paneController.openConflictTab(this.note.uuid, this.note.title || 'Conflict')
+                  }
                 >
                   <Icon type="merge" size="small" className="mr-2" />
                   {this.state.conflictedNotes.length}{' '}
@@ -1384,18 +1376,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
             })}
           </div>
         </div>
-
-        <ModalOverlay
-          isOpen={this.state.showConflictResolutionModal}
-          close={this.toggleConflictResolutionModal}
-          className="md:h-full md:w-[70vw]"
-        >
-          <NoteConflictResolutionModal
-            currentNote={this.note}
-            conflictedNotes={this.state.conflictedNotes}
-            close={this.toggleConflictResolutionModal}
-          />
-        </ModalOverlay>
       </div>
     )
   }

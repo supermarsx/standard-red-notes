@@ -16,7 +16,8 @@ type Props = {
  * pane is popped first so panes don't accumulate.
  */
 const ResearchSectionButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.activeViewTab?.paneId === AppPaneId.Research
+  const activeViewTab = application.paneController.activeViewTab
+  const isOpen = activeViewTab?.kind === 'pane' && activeViewTab.paneId === AppPaneId.Research
 
   const handleClick = useCallback(() => {
     application.paneController.openPaneTab(AppPaneId.Research)
