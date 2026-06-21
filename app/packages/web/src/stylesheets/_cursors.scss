@@ -1,0 +1,25 @@
+/* Standard Red Notes: cursor affordances by function. Interactive elements show
+   the pointer ("hand"); genuinely disabled ones show not-allowed. Text inputs
+   keep their default text cursor; resize handles keep their own cursors. */
+button:not(:disabled):not([aria-disabled='true']),
+[role='button']:not([aria-disabled='true']),
+a[href],
+summary,
+label[for],
+select:not(:disabled),
+input[type='checkbox']:not(:disabled),
+input[type='radio']:not(:disabled),
+input[type='submit']:not(:disabled),
+input[type='button']:not(:disabled),
+input[type='reset']:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+[role='button'][aria-disabled='true'],
+select:disabled,
+input:disabled,
+textarea:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
