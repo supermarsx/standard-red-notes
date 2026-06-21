@@ -16,19 +16,11 @@ type Props = {
  * closes it. Any open Editor pane is popped first so panes don't accumulate.
  */
 const BookmarksSectionButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.panes.includes(AppPaneId.Bookmarks)
+  const isOpen = application.paneController.activeViewTab?.paneId === AppPaneId.Bookmarks
 
   const handleClick = useCallback(() => {
-    const paneController = application.paneController
-    if (isOpen) {
-      paneController.removePane(AppPaneId.Bookmarks)
-      return
-    }
-    if (paneController.panes.includes(AppPaneId.Editor)) {
-      paneController.removePane(AppPaneId.Editor)
-    }
-    paneController.presentPane(AppPaneId.Bookmarks)
-  }, [application, isOpen])
+    application.paneController.openPaneTab(AppPaneId.Bookmarks)
+  }, [application])
 
   return (
     <button

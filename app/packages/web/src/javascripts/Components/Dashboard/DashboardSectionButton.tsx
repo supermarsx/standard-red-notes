@@ -15,22 +15,11 @@ type Props = {
  * pane as the main content area; selecting it again closes it.
  */
 const DashboardSectionButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.panes.includes(AppPaneId.Dashboard)
+  const isOpen = application.paneController.activeViewTab?.paneId === AppPaneId.Dashboard
 
   const handleClick = useCallback(() => {
-    const paneController = application.paneController
-    if (isOpen) {
-      paneController.removePane(AppPaneId.Dashboard)
-      return
-    }
-    // Present the dashboard as the rightmost (main) pane. If an editor is open we
-    // pop it first so we don't accumulate panes; the dashboard then takes the
-    // flexible main column in its place.
-    if (paneController.panes.includes(AppPaneId.Editor)) {
-      paneController.removePane(AppPaneId.Editor)
-    }
-    paneController.presentPane(AppPaneId.Dashboard)
-  }, [application, isOpen])
+    application.paneController.openPaneTab(AppPaneId.Dashboard)
+  }, [application])
 
   return (
     <button

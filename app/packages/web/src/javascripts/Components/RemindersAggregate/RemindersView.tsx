@@ -72,8 +72,6 @@ const ReminderRow = ({
 }
 
 const RemindersView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { removePane } = useResponsiveAppPane()
-
   const [reminders, setReminders] = useState<AggregatedReminder[]>(() =>
     collectAllReminders(application.items.getItems<SNNote>(ContentType.TYPES.Note)),
   )
@@ -180,11 +178,11 @@ const RemindersView = forwardRef<HTMLDivElement, Props>(({ application, classNam
           </button>
           <button
             className="rounded p-1 hover:bg-default"
-            onClick={() => removePane(AppPaneId.Reminders)}
+            onClick={() => application.paneController.closeViewTab(AppPaneId.Reminders)}
             aria-label="Close reminders"
             title="Close"
           >
-            <Icon type="menu-close" />
+            <Icon type="close" />
           </button>
         </div>
       </div>

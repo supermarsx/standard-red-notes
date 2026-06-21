@@ -4,7 +4,6 @@ import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
-import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { NoteTodos, collectAllTodos, totalTodoProgress } from './allTodos'
 
@@ -37,8 +36,6 @@ const ProgressBar = ({ completed, total }: { completed: number; total: number })
 }
 
 const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { removePane } = useResponsiveAppPane()
-
   const [groups, setGroups] = useState<NoteTodos[]>(() =>
     collectAllTodos(application.items.getItems<SNNote>(ContentType.TYPES.Note)),
   )
@@ -114,11 +111,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         </div>
         <button
           className="rounded p-1 hover:bg-default"
-          onClick={() => removePane(AppPaneId.Todos)}
+          onClick={() => application.paneController.closeViewTab(AppPaneId.Todos)}
           aria-label="Close todos"
           title="Close"
         >
-          <Icon type="menu-close" />
+          <Icon type="close" />
         </button>
       </div>
 

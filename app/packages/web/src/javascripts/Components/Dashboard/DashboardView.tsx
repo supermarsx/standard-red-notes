@@ -69,7 +69,7 @@ const StatCard = ({ icon, label, value, hint }: StatCardProps) => (
 )
 
 const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { presentPane, removePane } = useResponsiveAppPane()
+  const { presentPane } = useResponsiveAppPane()
 
   // The last-login value comes from a SINGLE sessions fetch, cached for the life
   // of this pane. We never poll it.
@@ -221,11 +221,11 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
         <button
           className="rounded p-1 hover:bg-default"
-          onClick={() => removePane(AppPaneId.Dashboard)}
+          onClick={() => application.paneController.closeViewTab(AppPaneId.Dashboard)}
           aria-label="Close dashboard"
           title="Close"
         >
-          <Icon type="menu-close" />
+          <Icon type="close" />
         </button>
       </div>
 

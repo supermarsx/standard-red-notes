@@ -202,7 +202,7 @@ const ReferenceForm = ({
 type Mode = { type: 'browse' } | { type: 'add' } | { type: 'edit'; uuid: string }
 
 const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { removePane, presentPane } = useResponsiveAppPane()
+  const { presentPane } = useResponsiveAppPane()
 
   const readNotes = useCallback(
     () => application.items.getItems<SNNote>(ContentType.TYPES.Note),
@@ -440,11 +440,11 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
           </button>
           <button
             className="rounded p-1 hover:bg-default"
-            onClick={() => removePane(AppPaneId.Research)}
+            onClick={() => application.paneController.closeViewTab(AppPaneId.Research)}
             aria-label="Close research"
             title="Close"
           >
-            <Icon type="menu-close" />
+            <Icon type="close" />
           </button>
         </div>
       </div>

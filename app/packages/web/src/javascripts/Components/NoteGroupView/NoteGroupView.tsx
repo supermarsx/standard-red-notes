@@ -11,9 +11,52 @@ import { FileViewController } from '../NoteView/Controller/FileViewController'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '../Icon/Icon'
 import TilesToolbar from './TilesToolbar'
-import NoteTabBar from './NoteTabBar'
+import NoteTabBar, { TabTarget } from './NoteTabBar'
 import { getTileGridStyle, TileLayout } from './TileLayout'
 import { MediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
+import { ViewTab } from '@/Controllers/PaneController/ViewTab'
+import HomeView from '../Home/HomeView'
+import DashboardView from '../Dashboard/DashboardView'
+import RemindersView from '../RemindersAggregate/RemindersView'
+import TodoView from '../TodoAggregate/TodoView'
+import ResearchView from '../Research/ResearchView'
+import BookmarksView from '../Bookmarks/BookmarksView'
+
+/**
+ * Standard Red Notes: the editor tile layout defaults to Single (one note shown
+ * at a time) and the user's chosen layout is remembered across sessions in
+ * device-local storage, so reopening the app restores their preferred split
+ * instead of forcing them back to a multi-column tiling each time.
+ */
+const TILE_LAYOUT_STORAGE_KEY = 'srn_editor_tile_layout'
+const VALID_TILE_LAYOUTS = new Set<string>([
+  TileLayout.Single,
+  TileLayout.Columns,
+  TileLayout.Rows,
+  TileLayout.Grid,
+])
+
+const loadPersistedTileLayout = (): TileLayout => {
+  try {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(TILE_LAYOUT_STORAGE_KEY) : null
+    if (stored && VALID_TILE_LAYOUTS.has(stored)) {
+      return stored as TileLayout
+    }
+  } catch {
+    /* storage may be unavailable (private mode, etc.) — fall back to the default */
+  }
+  return TileLayout.Single
+}
+
+const persistTileLayout = (layout: TileLayout): void => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(TILE_LAYOUT_STORAGE_KEY, layout)
+    }
+  } catch {
+    /* ignore storage write failures */
+  }
+}
 
 type State = {
   showMultipleSelectedNotes: boolean
@@ -23,6 +66,13 @@ type State = {
   selectedFile: FileItem | undefined
   selectedPane?: AppPaneId
   isInMobileView?: boolean
+  /**
+   * Standard Red Notes: full-column pane views surfaced as tabs in the editor tab
+   * bar. Mirrored from `application.paneController` so this (observer-less) class
+   * component re-renders when the tabs change.
+   */
+  viewTabs: ViewTab[]
+  activeViewTabId?: string
   tileLayout: TileLayout
   /**
    * True when the viewport is below the `lg` breakpoint. In this tablet-sized
@@ -56,7 +106,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       controllers: [],
       activeControllerRuntimeId: undefined,
       selectedFile: undefined,
-      tileLayout: TileLayout.Columns,
+      viewTabs: [],
+      activeViewTabId: undefined,
+      tileLayout: loadPersistedTileLayout(),
       isNarrowTilingViewport: !lgMatches,
     }
   }
@@ -111,6 +163,15 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         })
       }
     })
+
+    this.autorun(() => {
+      if (this.application.paneController) {
+        this.setState({
+          viewTabs: this.application.paneController.viewTabs.slice(),
+          activeViewTabId: this.application.paneController.activeViewTabId,
+        })
+      }
+    })
   }
 
   override deinit() {
@@ -130,15 +191,102 @@ class NoteGroupView extends AbstractComponent<Props, State> {
   }
 
   private setTileLayout = (layout: TileLayout) => {
+    persistTileLayout(layout)
     this.setState({ tileLayout: layout })
   }
 
   private setActiveController = (controller: NoteViewController | FileViewController) => {
+    // Selecting a note tab takes over the content area, so deactivate any view tab.
+    this.application.paneController.setActiveViewTab(undefined)
     this.application.itemControllerGroup.setActiveItemController(controller)
+  }
+
+  private selectViewTab = (tab: ViewTab) => {
+    this.application.paneController.setActiveViewTab(tab.id)
+  }
+
+  private closeViewTab = (tab: ViewTab) => {
+    this.application.paneController.closeViewTab(tab.id)
   }
 
   private closeTile = (controller: NoteViewController | FileViewController) => {
     this.application.itemControllerGroup.closeItemController(controller)
+  }
+
+  /**
+   * Standard Red Notes: the combined left-to-right tab order is `[...viewTabs,
+   * ...controllers]`. The context-menu "close multiple" operations below operate
+   * across BOTH lists. A target identifies the right-clicked tab as either a view
+   * tab id or a note/file controller runtimeId.
+   */
+  private closeTab = (target: TabTarget) => {
+    if (target.kind === 'view') {
+      this.application.paneController.closeViewTab(target.id)
+    } else {
+      const controller = this.application.itemControllerGroup.itemControllers.find(
+        (controller) => controller.runtimeId === target.runtimeId,
+      )
+      if (controller) {
+        this.application.itemControllerGroup.closeItemController(controller)
+      }
+    }
+  }
+
+  /**
+   * Closes every tab EXCEPT the right-clicked one (both view tabs and note/file
+   * tabs). Arrays are snapshotted before closing because closing mutates the
+   * underlying viewTabs / controller group.
+   */
+  private closeOtherTabs = (target: TabTarget) => {
+    const viewTabs = this.application.paneController.viewTabs.slice()
+    const controllers = this.application.itemControllerGroup.itemControllers.slice()
+
+    viewTabs.forEach((tab) => {
+      if (!(target.kind === 'view' && tab.id === target.id)) {
+        this.application.paneController.closeViewTab(tab.id)
+      }
+    })
+    controllers.forEach((controller) => {
+      if (!(target.kind === 'controller' && controller.runtimeId === target.runtimeId)) {
+        this.application.itemControllerGroup.closeItemController(controller)
+      }
+    })
+  }
+
+  /**
+   * Closes all tabs AFTER the right-clicked one in the combined visual order
+   * `[...viewTabs, ...controllers]`.
+   */
+  private closeTabsToRight = (target: TabTarget) => {
+    const viewTabs = this.application.paneController.viewTabs.slice()
+    const controllers = this.application.itemControllerGroup.itemControllers.slice()
+
+    const combined: TabTarget[] = [
+      ...viewTabs.map((tab): TabTarget => ({ kind: 'view', id: tab.id })),
+      ...controllers.map((controller): TabTarget => ({ kind: 'controller', runtimeId: controller.runtimeId })),
+    ]
+
+    const targetIndex = combined.findIndex((entry) =>
+      target.kind === 'view'
+        ? entry.kind === 'view' && entry.id === target.id
+        : entry.kind === 'controller' && entry.runtimeId === target.runtimeId,
+    )
+    if (targetIndex < 0) {
+      return
+    }
+
+    combined.slice(targetIndex + 1).forEach((entry) => this.closeTab(entry))
+  }
+
+  /**
+   * Closes every tab (all view tabs + all note/file tabs).
+   */
+  private closeAllTabs = () => {
+    const viewTabs = this.application.paneController.viewTabs.slice()
+    const controllers = this.application.itemControllerGroup.itemControllers.slice()
+
+    viewTabs.forEach((tab) => this.application.paneController.closeViewTab(tab.id))
+    controllers.forEach((controller) => this.application.itemControllerGroup.closeItemController(controller))
   }
 
   /**
@@ -148,6 +296,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
    * no-op (its `alreadyOpen` guard returns early).
    */
   private addTab = () => {
+    // Opening a new note tab takes over the content area, so deactivate any view tab.
+    this.application.paneController.setActiveViewTab(undefined)
     void this.application.itemListController.openNewNoteInNewTile()
   }
 
@@ -214,13 +364,41 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     )
   }
 
+  /**
+   * Standard Red Notes: renders the active full-column "pane" view (Home,
+   * Dashboard, Reminders, Todos, Research, Bookmarks) inside the editor content
+   * slot, in place of the note/file content, when its tab is active.
+   */
+  private renderActiveViewTab(tab: ViewTab) {
+    const viewClassName = 'flex-grow min-h-0'
+    switch (tab.paneId) {
+      case AppPaneId.Home:
+        return <HomeView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Dashboard:
+        return <DashboardView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Reminders:
+        return <RemindersView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Todos:
+        return <TodoView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Research:
+        return <ResearchView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Bookmarks:
+        return <BookmarksView application={this.application} className={viewClassName} id={tab.id} />
+      default:
+        return null
+    }
+  }
+
   override render() {
     const shouldNotShowMultipleSelectedItems =
       !this.state.showMultipleSelectedNotes && !this.state.showMultipleSelectedFiles
 
     const controllers = this.state.controllers
     const hasControllers = controllers.length > 0
-    const isTiling = controllers.length > 1 && !this.state.isInMobileView
+    const activeViewTab = this.state.viewTabs.find((tab) => tab.id === this.state.activeViewTabId)
+    // While a view tab is active it takes over the content area, so no note tabs
+    // tile and no note tab looks active.
+    const isTiling = controllers.length > 1 && !this.state.isInMobileView && !activeViewTab
 
     return (
       <>
@@ -228,21 +406,31 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         {this.state.showMultipleSelectedFiles && (
           <MultipleSelectedFiles itemListController={this.application.itemListController} />
         )}
-        {shouldNotShowMultipleSelectedItems && hasControllers && (
+        {shouldNotShowMultipleSelectedItems && (hasControllers || this.state.viewTabs.length > 0) && (
           <div className="flex h-full w-full flex-col">
             <NoteTabBar
               controllers={controllers}
-              activeControllerRuntimeId={this.state.activeControllerRuntimeId}
+              activeControllerRuntimeId={activeViewTab ? undefined : this.state.activeControllerRuntimeId}
               onSelect={this.setActiveController}
               onClose={this.closeTile}
               onAddTab={this.addTab}
               canAddTab={true}
               onToggleSplit={this.toggleSplit}
               isSplit={isTiling && this.state.tileLayout !== TileLayout.Single}
-              canSplit={!this.state.isInMobileView}
+              canSplit={!this.state.isInMobileView && !activeViewTab}
+              viewTabs={this.state.viewTabs}
+              activeViewTabId={this.state.activeViewTabId}
+              onSelectViewTab={this.selectViewTab}
+              onCloseViewTab={this.closeViewTab}
+              onCloseTab={this.closeTab}
+              onCloseOtherTabs={this.closeOtherTabs}
+              onCloseTabsToRight={this.closeTabsToRight}
+              onCloseAllTabs={this.closeAllTabs}
             />
 
-            {isTiling && (
+            {activeViewTab && this.renderActiveViewTab(activeViewTab)}
+
+            {!activeViewTab && isTiling && (
               <TilesToolbar
                 layout={this.state.tileLayout}
                 onLayoutChange={this.setTileLayout}
@@ -252,7 +440,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               />
             )}
 
-            {isTiling ? (
+            {!activeViewTab &&
+              (isTiling ? (
               (() => {
                 /**
                  * On tablet-sized viewports (below `lg`) side-by-side tiles are
@@ -321,7 +510,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
                     : controller === controllers[0],
                 )
                 .map((controller) => this.renderController(controller))
-            )}
+            ))}
           </div>
         )}
       </>

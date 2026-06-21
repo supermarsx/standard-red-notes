@@ -29,6 +29,7 @@ import { log, LoggingDomain } from '@/Logging'
 import { PaneLayout } from './PaneLayout'
 import { IsTabletOrMobileScreen } from '@/Application/UseCase/IsTabletOrMobileScreen'
 import { CommandService } from '../../Components/CommandPalette/CommandService'
+import { TABBABLE_PANES, ViewTab } from './ViewTab'
 
 const MinimumNavPanelWidth = PrefDefaults[PrefKey.TagsPanelWidth]
 const MinimumNotesPanelWidth = PrefDefaults[PrefKey.NotesPanelWidth]
@@ -40,6 +41,14 @@ export class PaneController extends AbstractViewController implements InternalEv
   isInMobileView = isMobileScreen()
   protected disposers: Disposer[] = []
   panes: AppPaneId[] = []
+
+  /**
+   * Standard Red Notes: full-column "pane" views surfaced as tabs in the editor
+   * tab bar (Home, Dashboard, Reminders, Todos, Research) instead of taking over
+   * the whole window as columns.
+   */
+  viewTabs: ViewTab[] = []
+  activeViewTabId: string | undefined = undefined
 
   currentNavPanelWidth = 0
   currentItemsPanelWidth = 0
@@ -67,6 +76,8 @@ export class PaneController extends AbstractViewController implements InternalEv
 
     makeObservable(this, {
       panes: observable,
+      viewTabs: observable,
+      activeViewTabId: observable,
       isInMobileView: observable,
       currentNavPanelWidth: observable,
       currentItemsPanelWidth: observable,
@@ -74,8 +85,13 @@ export class PaneController extends AbstractViewController implements InternalEv
 
       currentPane: computed,
       previousPane: computed,
+      activeViewTab: computed,
       isListPaneCollapsed: computed,
       isNavigationPaneCollapsed: computed,
+
+      openPaneTab: action,
+      closeViewTab: action,
+      setActiveViewTab: action,
 
       setIsInMobileView: action,
       toggleListPane: action,
@@ -267,6 +283,46 @@ export class PaneController extends AbstractViewController implements InternalEv
       this.dismissLastPane()
       index--
     }
+  }
+
+  /**
+   * Standard Red Notes: opens a full-column pane view as a tab in the editor tab
+   * bar. Idempotent per pane (a pane can only have one tab). Makes the editor
+   * column visible so the tab content shows (important on mobile).
+   */
+  openPaneTab = (paneId: AppPaneId) => {
+    const meta = TABBABLE_PANES.find((entry) => entry.paneId === paneId)
+    if (!meta) {
+      return
+    }
+
+    if (!this.viewTabs.some((tab) => tab.id === paneId)) {
+      this.viewTabs = [
+        ...this.viewTabs,
+        { id: paneId, kind: 'pane', paneId, title: meta.title, icon: meta.icon },
+      ]
+    }
+
+    this.activeViewTabId = paneId
+    this.presentPane(AppPaneId.Editor)
+  }
+
+  closeViewTab = (id: string) => {
+    this.viewTabs = this.viewTabs.filter((tab) => tab.id !== id)
+    if (this.activeViewTabId === id) {
+      this.activeViewTabId = undefined
+    }
+  }
+
+  setActiveViewTab = (id: string | undefined) => {
+    this.activeViewTabId = id
+    if (id) {
+      this.presentPane(AppPaneId.Editor)
+    }
+  }
+
+  get activeViewTab(): ViewTab | undefined {
+    return this.viewTabs.find((tab) => tab.id === this.activeViewTabId)
   }
 
   toggleListPane = () => {

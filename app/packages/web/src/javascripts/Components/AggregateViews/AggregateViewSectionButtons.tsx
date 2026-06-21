@@ -19,14 +19,25 @@ type SingleButtonProps = {
   paneId: AppPaneId
   icon: VectorIconNameOrEmoji
   label: string
+  /**
+   * Standard Red Notes: when true the view opens as a TAB in the editor tab bar
+   * (Reminders, Todos) instead of taking over the window as a column (Calendar).
+   */
+  asTab?: boolean
 }
 
 const AggregateViewSectionButton: FunctionComponent<SingleButtonProps> = observer(
-  ({ application, paneId, icon, label }) => {
-    const isOpen = application.paneController.panes.includes(paneId)
+  ({ application, paneId, icon, label, asTab }) => {
+    const isOpen = asTab
+      ? application.paneController.activeViewTab?.paneId === paneId
+      : application.paneController.panes.includes(paneId)
 
     const handleClick = useCallback(() => {
       const paneController = application.paneController
+      if (asTab) {
+        paneController.openPaneTab(paneId)
+        return
+      }
       if (isOpen) {
         paneController.removePane(paneId)
         return
@@ -35,7 +46,7 @@ const AggregateViewSectionButton: FunctionComponent<SingleButtonProps> = observe
         paneController.removePane(AppPaneId.Editor)
       }
       paneController.presentPane(paneId)
-    }, [application, isOpen, paneId])
+    }, [application, isOpen, paneId, asTab])
 
     return (
       <button
@@ -74,6 +85,7 @@ const AggregateViewSectionButtons: FunctionComponent<Props> = ({
         paneId={AppPaneId.Reminders}
         icon="clock"
         label={remindersLabel}
+        asTab
       />
       <AggregateViewSectionButton
         application={application}
@@ -86,6 +98,7 @@ const AggregateViewSectionButtons: FunctionComponent<Props> = ({
         paneId={AppPaneId.Todos}
         icon="list-check"
         label={todosLabel}
+        asTab
       />
     </>
   )

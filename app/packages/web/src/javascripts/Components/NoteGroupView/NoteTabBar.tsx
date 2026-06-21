@@ -1,10 +1,23 @@
-import { FunctionComponent } from 'react'
+import { FunctionComponent, MouseEvent, useRef, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
 import Icon from '../Icon/Icon'
 import { NoteViewController } from '../NoteView/Controller/NoteViewController'
 import { FileViewController } from '../NoteView/Controller/FileViewController'
+import { ViewTab } from '@/Controllers/PaneController/ViewTab'
+import Popover from '../Popover/Popover'
+import Menu from '../Menu/Menu'
+import MenuItem from '../Menu/MenuItem'
+import MenuItemSeparator from '../Menu/MenuItemSeparator'
 
 type Controller = NoteViewController | FileViewController
+
+/**
+ * Standard Red Notes: identifies a right-clicked tab for the "close multiple"
+ * context-menu operations. A discriminated union so the same target can address
+ * either a full-column view tab (by its pane id) or a note/file tab (by its
+ * controller runtimeId).
+ */
+export type TabTarget = { kind: 'view'; id: string } | { kind: 'controller'; runtimeId: string }
 
 type Props = {
   controllers: Controller[]
@@ -13,6 +26,16 @@ type Props = {
   onClose: (controller: Controller) => void
   onAddTab: () => void
   canAddTab: boolean
+  /**
+   * Standard Red Notes: full-column "pane" views (Home, Dashboard, Reminders,
+   * Todos, Research) surfaced as tabs to the LEFT of the note tabs. Selecting one
+   * shows its view in the editor content area instead of a note; closing removes
+   * the tab.
+   */
+  viewTabs: ViewTab[]
+  activeViewTabId?: string
+  onSelectViewTab: (tab: ViewTab) => void
+  onCloseViewTab: (tab: ViewTab) => void
   /**
    * Toggles between the single-visible (tabbed) view and the side-by-side tiled
    * view for the open notes. Driven from the tab bar so users can split without
@@ -29,6 +52,14 @@ type Props = {
    * mobile where tiling collapses to a single column).
    */
   canSplit: boolean
+  /**
+   * Standard Red Notes: right-click context-menu operations. They span BOTH the
+   * view tabs and the note/file controllers, keyed off a {@link TabTarget}.
+   */
+  onCloseTab: (target: TabTarget) => void
+  onCloseOtherTabs: (target: TabTarget) => void
+  onCloseTabsToRight: (target: TabTarget) => void
+  onCloseAllTabs: () => void
 }
 
 const titleForController = (controller: Controller): string => {
@@ -36,10 +67,22 @@ const titleForController = (controller: Controller): string => {
   return title && title.length > 0 ? title : 'Untitled'
 }
 
+const targetsEqual = (a: TabTarget, b: TabTarget): boolean =>
+  a.kind === 'view' && b.kind === 'view'
+    ? a.id === b.id
+    : a.kind === 'controller' && b.kind === 'controller'
+      ? a.runtimeId === b.runtimeId
+      : false
+
 /**
  * Browser-style tab bar for the open note/file controllers. Operates on the SAME
  * `itemControllers` set as the tiled editor: clicking a tab marks it active, the ×
  * closes that controller, and "+" opens a brand new note in its own tab.
+ *
+ * Right-clicking any tab (view or note/file) opens a context menu (anchored at the
+ * cursor via Popover's `anchorPoint`, mirroring `TagContextMenu`) with close /
+ * close-others / close-to-the-right / close-all actions and, for note tabs, a
+ * split toggle.
  */
 const NoteTabBar: FunctionComponent<Props> = ({
   controllers,
@@ -51,7 +94,48 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onToggleSplit,
   isSplit,
   canSplit,
+  viewTabs,
+  activeViewTabId,
+  onSelectViewTab,
+  onCloseViewTab,
+  onCloseTab,
+  onCloseOtherTabs,
+  onCloseTabsToRight,
+  onCloseAllTabs,
 }) => {
+  const [contextMenuOpen, setContextMenuOpen] = useState(false)
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
+  const contextMenuTarget = useRef<TabTarget | null>(null)
+
+  const totalTabs = viewTabs.length + controllers.length
+  // Combined visual order = view tabs first, then note/file tabs.
+  const combinedTargets: TabTarget[] = [
+    ...viewTabs.map((tab): TabTarget => ({ kind: 'view', id: tab.id })),
+    ...controllers.map((controller): TabTarget => ({ kind: 'controller', runtimeId: controller.runtimeId })),
+  ]
+
+  const openContextMenu = (event: MouseEvent, target: TabTarget) => {
+    event.preventDefault()
+    contextMenuTarget.current = target
+    setContextMenuPosition({ x: event.clientX, y: event.clientY })
+    setContextMenuOpen(true)
+  }
+
+  const closeContextMenu = () => setContextMenuOpen(false)
+
+  const target = contextMenuTarget.current
+  const targetIndex = target ? combinedTargets.findIndex((entry) => targetsEqual(entry, target)) : -1
+  const hasTabsToRight = targetIndex >= 0 && targetIndex < combinedTargets.length - 1
+  const hasOtherTabs = totalTabs > 1
+  // The split toggle only applies to note/file tabs and only when there is more
+  // than one note/file controller open to split with.
+  const showSplitItem = target?.kind === 'controller' && controllers.length > 1
+
+  const runAndClose = (action: () => void) => {
+    action()
+    closeContextMenu()
+  }
+
   return (
     <div
       className="note-tab-bar flex flex-shrink-0 items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border bg-contrast px-2 py-1.5 md:py-1"
@@ -59,6 +143,47 @@ const NoteTabBar: FunctionComponent<Props> = ({
       role="tablist"
       aria-label="Open notes"
     >
+      {viewTabs.map((tab) => {
+        const isActive = tab.id === activeViewTabId
+        return (
+          <div
+            key={tab.id}
+            role="tab"
+            aria-selected={isActive}
+            tabIndex={0}
+            onClick={() => onSelectViewTab(tab)}
+            onContextMenu={(event) => openContextMenu(event, { kind: 'view', id: tab.id })}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onSelectViewTab(tab)
+              }
+            }}
+            className={classNames(
+              'flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
+              isActive
+                ? 'border-info bg-default font-semibold text-text'
+                : 'border-border bg-contrast text-passive-0 hover:text-text',
+            )}
+            title={tab.title}
+          >
+            <Icon type={tab.icon} size="small" className="flex-shrink-0" />
+            <span className="max-w-[8rem] truncate md:max-w-[10rem]">{tab.title}</span>
+            <button
+              type="button"
+              className="-mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-contrast md:h-auto md:w-auto md:p-0.5"
+              onClick={(event) => {
+                event.stopPropagation()
+                onCloseViewTab(tab)
+              }}
+              aria-label={`Close ${tab.title}`}
+              title={`Close ${tab.title}`}
+            >
+              <Icon type="close" size="small" />
+            </button>
+          </div>
+        )
+      })}
       {controllers.map((controller) => {
         const isActive = controller.runtimeId === activeControllerRuntimeId
         const title = titleForController(controller)
@@ -69,6 +194,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
             aria-selected={isActive}
             tabIndex={0}
             onClick={() => onSelect(controller)}
+            onContextMenu={(event) => openContextMenu(event, { kind: 'controller', runtimeId: controller.runtimeId })}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
@@ -130,6 +256,69 @@ const NoteTabBar: FunctionComponent<Props> = ({
       >
         <Icon type="open-in" size="small" />
       </button>
+
+      <Popover
+        title="Tab options"
+        open={contextMenuOpen}
+        anchorPoint={contextMenuPosition}
+        togglePopover={() => setContextMenuOpen((open) => !open)}
+        className="py-1"
+      >
+        <Menu a11yLabel="Tab context menu">
+          <MenuItem
+            icon="close"
+            onClick={() => {
+              if (target) {
+                runAndClose(() => onCloseTab(target))
+              }
+            }}
+          >
+            Close
+          </MenuItem>
+          <MenuItem
+            icon="close"
+            disabled={!hasOtherTabs}
+            onClick={() => {
+              if (target) {
+                runAndClose(() => onCloseOtherTabs(target))
+              }
+            }}
+          >
+            Close others
+          </MenuItem>
+          <MenuItem
+            icon="close"
+            disabled={!hasTabsToRight}
+            onClick={() => {
+              if (target) {
+                runAndClose(() => onCloseTabsToRight(target))
+              }
+            }}
+          >
+            Close to the right
+          </MenuItem>
+          {showSplitItem && (
+            <MenuItem
+              icon="open-in"
+              onClick={() => {
+                runAndClose(onToggleSplit)
+              }}
+            >
+              {isSplit ? 'Unsplit' : 'Split'}
+            </MenuItem>
+          )}
+          <MenuItemSeparator />
+          <MenuItem
+            icon="trash"
+            className="text-danger"
+            onClick={() => {
+              runAndClose(onCloseAllTabs)
+            }}
+          >
+            Close all
+          </MenuItem>
+        </Menu>
+      </Popover>
     </div>
   )
 }

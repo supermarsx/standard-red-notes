@@ -66,6 +66,16 @@ function presentAppPane(pane: AppPaneId): (application: WebApplication) => void 
   }
 }
 
+/**
+ * Standard Red Notes: opens a full-column "pane" view as a TAB in the editor tab
+ * bar instead of taking over the window as a column.
+ */
+function openAppPaneTab(pane: AppPaneId): (application: WebApplication) => void {
+  return (application) => {
+    application.paneController.openPaneTab(pane)
+  }
+}
+
 export const GLOBAL_COMMANDS: GlobalCommand[] = [
   // --- Creation -----------------------------------------------------------
   {
@@ -145,14 +155,14 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     title: 'Open Dashboard',
     keywords: ['view', 'overview', 'summary', 'home'],
     icon: 'dashboard',
-    run: presentAppPane(AppPaneId.Dashboard),
+    run: openAppPaneTab(AppPaneId.Dashboard),
   },
   {
     id: 'global-open-reminders',
     title: 'Open Reminders',
     keywords: ['view', 'alerts', 'due', 'notifications'],
     icon: 'clock',
-    run: presentAppPane(AppPaneId.Reminders),
+    run: openAppPaneTab(AppPaneId.Reminders),
   },
   {
     id: 'global-open-calendar',
@@ -166,7 +176,7 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     title: 'Open Todos',
     keywords: ['view', 'tasks', 'checklist', 'to-do'],
     icon: 'tasks',
-    run: presentAppPane(AppPaneId.Todos),
+    run: openAppPaneTab(AppPaneId.Todos),
   },
 
   // --- Editor -------------------------------------------------------------

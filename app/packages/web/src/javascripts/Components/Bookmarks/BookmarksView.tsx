@@ -40,7 +40,7 @@ const RECOMPUTE_THROTTLE_MS = 1500
  * — reusing the same affordances tags use.
  */
 const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { removePane, presentPane } = useResponsiveAppPane()
+  const { presentPane } = useResponsiveAppPane()
 
   const readNotes = useCallback(() => application.items.getItems<SNNote>(ContentType.TYPES.Note), [application])
 
@@ -219,11 +219,11 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
         <button
           className="rounded p-1 hover:bg-default"
-          onClick={() => removePane(AppPaneId.Bookmarks)}
+          onClick={() => application.paneController.closeViewTab(AppPaneId.Bookmarks)}
           aria-label="Close bookmarks"
           title="Close"
         >
-          <Icon type="menu-close" />
+          <Icon type="close" />
         </button>
       </div>
 

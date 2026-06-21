@@ -16,19 +16,11 @@ type Props = {
  * it. Any open Editor pane is popped first so panes don't accumulate.
  */
 const HomeSectionButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.panes.includes(AppPaneId.Home)
+  const isOpen = application.paneController.activeViewTab?.paneId === AppPaneId.Home
 
   const handleClick = useCallback(() => {
-    const paneController = application.paneController
-    if (isOpen) {
-      paneController.removePane(AppPaneId.Home)
-      return
-    }
-    if (paneController.panes.includes(AppPaneId.Editor)) {
-      paneController.removePane(AppPaneId.Editor)
-    }
-    paneController.presentPane(AppPaneId.Home)
-  }, [application, isOpen])
+    application.paneController.openPaneTab(AppPaneId.Home)
+  }, [application])
 
   return (
     <button

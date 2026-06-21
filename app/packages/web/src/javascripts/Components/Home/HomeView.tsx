@@ -58,7 +58,7 @@ const HomeCardTile = observer(
 HomeCardTile.displayName = 'HomeCardTile'
 
 const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { presentPane, removePane } = useResponsiveAppPane()
+  const { presentPane } = useResponsiveAppPane()
 
   const [config, setConfig] = useState<HomeConfig>(() => loadHomeConfig())
   const [isEditing, setIsEditing] = useState(false)
@@ -247,11 +247,11 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           )}
           <button
             className="rounded p-1 hover:bg-default"
-            onClick={() => removePane(AppPaneId.Home)}
+            onClick={() => application.paneController.closeViewTab(AppPaneId.Home)}
             aria-label="Close home"
             title="Close"
           >
-            <Icon type="menu-close" />
+            <Icon type="close" />
           </button>
         </div>
       </div>
