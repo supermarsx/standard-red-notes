@@ -984,7 +984,21 @@ export class NavigationController
     }
   }
 
+  private folderMigrationStarted = false
+
   private async runFolderMigrationIfNeeded(): Promise<void> {
+    // Re-entrancy guard. This runs from the folder streamItems callback, and the
+    // migration below CREATES folders — each insert re-fires that callback and
+    // re-enters this method while the localStorage flag is still unset and the legacy
+    // folder-tags still exist, duplicating folders nonstop. Set an in-memory guard
+    // SYNCHRONOUSLY (before any await) so re-entrant calls bail out immediately. A
+    // fresh page load (new controller instance) still retries if a prior run failed
+    // before persisting the flag.
+    if (this.folderMigrationStarted) {
+      return
+    }
+    this.folderMigrationStarted = true
+
     const MIGRATION_FLAG = 'srn_folders_migrated_v1'
     try {
       if (typeof localStorage === 'undefined' || localStorage.getItem(MIGRATION_FLAG)) {
