@@ -37,6 +37,7 @@ import { GetDataviewBlockOption } from '../Blocks/Dataview'
 import { GetCalloutBlockOption } from '../Blocks/Callout'
 import { GetEmbedBlockOption } from '../Blocks/Embed'
 import { GetWebEmbedBlockOption } from '../Blocks/WebEmbed'
+import { GetTweetEmbedBlockOption } from '../Blocks/TweetEmbed'
 import { GetMathBlockOption } from '../Blocks/Math'
 import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
 import { GetFootnoteBlockOption } from '../Blocks/Footnote'
@@ -101,6 +102,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       GetCalloutBlockOption(editor),
       GetEmbedBlockOption(editor),
       GetWebEmbedBlockOption(editor),
+      GetTweetEmbedBlockOption(editor),
       GetMathBlockOption(editor),
       GetInlineMathBlockOption(editor),
       GetFootnoteBlockOption(editor),

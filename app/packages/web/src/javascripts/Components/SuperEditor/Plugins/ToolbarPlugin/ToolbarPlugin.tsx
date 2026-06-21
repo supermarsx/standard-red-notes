@@ -76,6 +76,7 @@ import { DataviewBlock } from '../Blocks/Dataview'
 import { CalloutBlock } from '../Blocks/Callout'
 import { EmbedBlock } from '../Blocks/Embed'
 import { WebEmbedBlock } from '../Blocks/WebEmbed'
+import { TweetEmbedBlock } from '../Blocks/TweetEmbed'
 import { MathBlock } from '../Blocks/Math'
 import { InlineMathBlock } from '../Blocks/InlineMath'
 import { FootnoteBlock } from '../Blocks/Footnote'
@@ -1852,6 +1853,11 @@ const ToolbarPlugin = () => {
             name={WebEmbedBlock.name}
             iconName={WebEmbedBlock.iconName}
             onClick={() => WebEmbedBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
+            name={TweetEmbedBlock.name}
+            iconName={TweetEmbedBlock.iconName}
+            onClick={() => TweetEmbedBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
             name={MathBlock.name}

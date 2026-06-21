@@ -26,6 +26,7 @@ import { DataTableNode } from './DataTableNode'
 import { CalloutNode } from './CalloutNode'
 import { EmbedNode } from './EmbedNode'
 import { WebEmbedNode } from './WebEmbedNode'
+import { TweetEmbedNode } from './TweetEmbedNode'
 import { MathNode } from './MathNode'
 import { InlineMathNode } from './InlineMathNode'
 import { FootnoteReferenceNode } from './FootnoteReferenceNode'
@@ -74,6 +75,7 @@ const CommonNodes = [
   CalloutNode,
   EmbedNode,
   WebEmbedNode,
+  TweetEmbedNode,
   MathNode,
   InlineMathNode,
   FootnoteReferenceNode,
