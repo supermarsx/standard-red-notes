@@ -62,6 +62,28 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // only (CLIENT-IMMUTABLE); unencrypted/unsensitive so the trigger job can read
     // it without per-user key material.
     EmailBackupLastSent: 'EMAIL_BACKUP_LAST_SENT',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT scheduled encrypted-backup
+    // upload to a Nextcloud instance over WebDAV. This is NOT a sync replacement:
+    // it uploads the user's ALREADY end-to-end-encrypted backup artifact (the same
+    // ciphertext the server already holds) to a Nextcloud folder on a cadence. The
+    // server never has plaintext; Nextcloud only ever receives ciphertext.
+    //
+    // Frequency selects the cadence (disabled|daily|weekly|monthly). URL + folder
+    // address the destination. App-password authenticates the WebDAV PUT and is the
+    // ONLY sensitive value here (encrypted at rest + never returned by getSetting);
+    // url/folder/frequency are unencrypted/unsensitive so the trigger job can read
+    // them without per-user key material and the client can display them back.
+    NextcloudBackupFrequency: 'NEXTCLOUD_BACKUP_FREQUENCY',
+    NextcloudBackupUrl: 'NEXTCLOUD_BACKUP_URL',
+    NextcloudBackupFolder: 'NEXTCLOUD_BACKUP_FOLDER',
+    // SENSITIVE: a dedicated low-privilege Nextcloud app password. Encrypted at rest
+    // and excluded from the unsensitive list so a normal getSetting read returns no
+    // value; only the server-side trigger job decrypts it to perform the upload.
+    NextcloudBackupAppPassword: 'NEXTCLOUD_BACKUP_APP_PASSWORD',
+    // Server-written bookkeeping (CLIENT-IMMUTABLE) mirroring EmailBackupLastSent:
+    // ms-epoch string of the last Nextcloud backup run, used by the due-calculator
+    // so one cron can serve daily/weekly/monthly and catch up missed runs.
+    NextcloudBackupLastRun: 'NEXTCLOUD_BACKUP_LAST_RUN',
     // Standard Red Notes: per-user opt-in for EMAIL REMINDERS. When 'true', the
     // scheduled email-reminder cron is allowed to email this user the reminders
     // they have EXPLICITLY registered for emailing (see the email_reminders table).
@@ -79,7 +101,14 @@ export class SettingName extends ValueObject<SettingNameProps> {
   }
 
   isSensitive(): boolean {
-    return [SettingName.NAMES.MfaSecret, SettingName.NAMES.ExtensionKey].includes(this.props.value)
+    return [
+      SettingName.NAMES.MfaSecret,
+      SettingName.NAMES.ExtensionKey,
+      // Standard Red Notes: the Nextcloud app password grants WebDAV file access to
+      // the user's Nextcloud account, so it is treated as sensitive (encrypted at
+      // rest, never returned by a normal getSetting read).
+      SettingName.NAMES.NextcloudBackupAppPassword,
+    ].includes(this.props.value)
   }
 
   isASubscriptionSetting(): boolean {

@@ -6,6 +6,7 @@ import {
   UserRolesChangedEvent,
   UserEmailChangedEvent,
   EmailBackupRequestedEvent,
+  NextcloudBackupRequestedEvent,
   UserDisabledSessionUserAgentLoggingEvent,
   SharedSubscriptionInvitationCreatedEvent,
   SharedSubscriptionInvitationCanceledEvent,
@@ -42,6 +43,13 @@ export interface DomainEventFactoryInterface {
     protocolVersion: ProtocolVersion
   }): UserRegisteredEvent
   createEmailBackupRequestedEvent(userUuid: string, keyParams: KeyParamsData): EmailBackupRequestedEvent
+  createNextcloudBackupRequestedEvent(dto: {
+    userUuid: string
+    keyParams: KeyParamsData
+    nextcloudUrl: string
+    nextcloudFolder: string
+    nextcloudAppPassword: string
+  }): NextcloudBackupRequestedEvent
   createAccountDeletionRequestedEvent(dto: {
     userUuid: string
     email: string

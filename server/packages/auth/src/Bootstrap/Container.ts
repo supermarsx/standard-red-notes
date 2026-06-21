@@ -382,6 +382,8 @@ import { UserInvitedToSharedVaultEventHandler } from '../Domain/Handler/UserInvi
 import { TriggerPostSettingUpdateActions } from '../Domain/UseCase/TriggerPostSettingUpdateActions/TriggerPostSettingUpdateActions'
 import { TriggerEmailBackupForUser } from '../Domain/UseCase/TriggerEmailBackupForUser/TriggerEmailBackupForUser'
 import { TriggerEmailBackupForAllUsers } from '../Domain/UseCase/TriggerEmailBackupForAllUsers/TriggerEmailBackupForAllUsers'
+import { TriggerNextcloudBackupForUser } from '../Domain/UseCase/TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
+import { TriggerNextcloudBackupForAllUsers } from '../Domain/UseCase/TriggerNextcloudBackupForAllUsers/TriggerNextcloudBackupForAllUsers'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -958,6 +960,12 @@ export class ContainerConfigLoader {
     container
       .bind<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED)
       .toConstantValue(env.get('EMAIL_BACKUPS_ENABLED', true) === 'true')
+    // Standard Red Notes: operator switch for scheduled Nextcloud (WebDAV) backups.
+    // Default OFF. Per-user completeness (URL + app password + frequency) is enforced
+    // in TriggerNextcloudBackupForUser; this switch is the instance-wide kill switch.
+    container
+      .bind<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED)
+      .toConstantValue(env.get('NEXTCLOUD_BACKUPS_ENABLED', true) === 'true')
     // Standard Red Notes: operator switch for scheduled email reminders. Default OFF.
     // The trigger job additionally requires SMTP to be configured and the per-user
     // EMAIL_REMINDERS_ENABLED setting before it will send anything.
@@ -2031,6 +2039,29 @@ export class ContainerConfigLoader {
           // Email delivery is "configured" when the SMTP sender reports itself
           // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
           container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
+        ),
+      )
+    container
+      .bind<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser)
+      .toConstantValue(
+        new TriggerNextcloudBackupForUser(
+          container.get<GetUserKeyParams>(TYPES.Auth_GetUserKeyParams),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+        ),
+      )
+    container
+      .bind<TriggerNextcloudBackupForAllUsers>(TYPES.Auth_TriggerNextcloudBackupForAllUsers)
+      .toConstantValue(
+        new TriggerNextcloudBackupForAllUsers(
+          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+          container.get<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
         ),
       )
     container

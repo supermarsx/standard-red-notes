@@ -7,6 +7,7 @@ import {
   UserRegisteredEvent,
   UserRolesChangedEvent,
   EmailBackupRequestedEvent,
+  NextcloudBackupRequestedEvent,
   UserDisabledSessionUserAgentLoggingEvent,
   SharedSubscriptionInvitationCreatedEvent,
   SharedSubscriptionInvitationCanceledEvent,
@@ -301,6 +302,33 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
       payload: {
         userUuid,
         keyParams,
+      },
+    }
+  }
+
+  createNextcloudBackupRequestedEvent(dto: {
+    userUuid: string
+    keyParams: KeyParamsData
+    nextcloudUrl: string
+    nextcloudFolder: string
+    nextcloudAppPassword: string
+  }): NextcloudBackupRequestedEvent {
+    return {
+      type: 'NEXTCLOUD_BACKUP_REQUESTED',
+      createdAt: this.timer.getUTCDate(),
+      meta: {
+        correlation: {
+          userIdentifier: dto.userUuid,
+          userIdentifierType: 'uuid',
+        },
+        origin: DomainEventService.Auth,
+      },
+      payload: {
+        userUuid: dto.userUuid,
+        keyParams: dto.keyParams,
+        nextcloudUrl: dto.nextcloudUrl,
+        nextcloudFolder: dto.nextcloudFolder,
+        nextcloudAppPassword: dto.nextcloudAppPassword,
       },
     }
   }

@@ -48,6 +48,11 @@ import {
 import { AccountDeletionRequestedEventHandler } from '../Domain/Handler/AccountDeletionRequestedEventHandler'
 import { DuplicateItemSyncedEventHandler } from '../Domain/Handler/DuplicateItemSyncedEventHandler'
 import { EmailBackupRequestedEventHandler } from '../Domain/Handler/EmailBackupRequestedEventHandler'
+import { NextcloudBackupRequestedEventHandler } from '../Domain/Handler/NextcloudBackupRequestedEventHandler'
+import { WebDAVItemBackupService } from '../Infra/WebDAV/WebDAVItemBackupService'
+import { WebDAVItemBackupServiceInterface } from '../Domain/Item/WebDAVItemBackupServiceInterface'
+import { HttpsWebDAVClient } from '../Infra/WebDAV/HttpsWebDAVClient'
+import { WebDAVClientInterface } from '../Infra/WebDAV/WebDAVClientInterface'
 import { ItemRevisionCreationRequestedEventHandler } from '../Domain/Handler/ItemRevisionCreationRequestedEventHandler'
 import { ItemBackupServiceInterface } from '../Domain/Item/ItemBackupServiceInterface'
 import { FSItemBackupService } from '../Infra/FS/FSItemBackupService'
@@ -1146,6 +1151,38 @@ export class ContainerConfigLoader {
         container.get<ContentSizesFixRequestedEventHandler>(TYPES.Sync_ContentSizesFixRequestedEventHandler),
       ],
     ])
+
+    // Standard Red Notes: Nextcloud (WebDAV) encrypted-backup upload. Registered in
+    // ALL modes (including home-server / self-hosted) because the upload uses the
+    // user's configured Nextcloud destination and needs no S3 bucket. The actual run
+    // is still gated upstream by the operator switch (NEXTCLOUD_BACKUPS_ENABLED) and
+    // per-user completeness in auth's TriggerNextcloudBackupForUser.
+    container
+      .bind<WebDAVClientInterface>(TYPES.Sync_WebDAVClient)
+      .toConstantValue(new HttpsWebDAVClient())
+    container
+      .bind<WebDAVItemBackupServiceInterface>(TYPES.Sync_WebDAVItemBackupService)
+      .toConstantValue(
+        new WebDAVItemBackupService(
+          container.get<MapperInterface<Item, ItemHttpRepresentation>>(TYPES.Sync_ItemHttpMapper),
+          container.get<WebDAVClientInterface>(TYPES.Sync_WebDAVClient),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
+    container
+      .bind<NextcloudBackupRequestedEventHandler>(TYPES.Sync_NextcloudBackupRequestedEventHandler)
+      .toConstantValue(
+        new NextcloudBackupRequestedEventHandler(
+          container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
+          container.get<WebDAVItemBackupServiceInterface>(TYPES.Sync_WebDAVItemBackupService),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
+    eventHandlers.set(
+      'NEXTCLOUD_BACKUP_REQUESTED',
+      container.get(TYPES.Sync_NextcloudBackupRequestedEventHandler),
+    )
+
     if (!isConfiguredForHomeServer) {
       container
         .bind<EmailBackupRequestedEventHandler>(TYPES.Sync_EmailBackupRequestedEventHandler)

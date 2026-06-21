@@ -14,6 +14,14 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.EmailRemindersEnabled,
+    // Standard Red Notes: Nextcloud scheduled-backup config. Frequency, URL, folder
+    // and last-run bookkeeping carry no secret and must be readable by the trigger
+    // job without per-user key material, so they are stored unencrypted. The app
+    // PASSWORD is deliberately ABSENT here -> it is encrypted at rest (default).
+    SettingName.NAMES.NextcloudBackupFrequency,
+    SettingName.NAMES.NextcloudBackupUrl,
+    SettingName.NAMES.NextcloudBackupFolder,
+    SettingName.NAMES.NextcloudBackupLastRun,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -31,6 +39,14 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.EmailRemindersEnabled,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
+    // Standard Red Notes: Nextcloud scheduled-backup config that the owning client
+    // must be able to read back to render the preferences pane. These carry no
+    // secret. The app PASSWORD is intentionally NOT listed here, so it stays
+    // sensitive (getSetting returns no value) — see SettingName.isSensitive().
+    SettingName.NAMES.NextcloudBackupFrequency,
+    SettingName.NAMES.NextcloudBackupUrl,
+    SettingName.NAMES.NextcloudBackupFolder,
+    SettingName.NAMES.NextcloudBackupLastRun,
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.LogSessionUserAgent,
     SettingName.NAMES.RecoveryCodes,
@@ -56,6 +72,9 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // Standard Red Notes: last-sent bookkeeping for scheduled email backups is
     // written only by the server-side trigger job; clients may not mutate it.
     SettingName.NAMES.EmailBackupLastSent,
+    // Standard Red Notes: last-run bookkeeping for scheduled Nextcloud backups is
+    // written only by the server-side trigger job; clients may not mutate it.
+    SettingName.NAMES.NextcloudBackupLastRun,
   ]
 
   private readonly permissionsAssociatedWithSettings = new Map<string, PermissionName>([

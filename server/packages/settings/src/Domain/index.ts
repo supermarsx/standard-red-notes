@@ -1,4 +1,5 @@
 export * from './EmailBackupFrequency/EmailBackupFrequency'
+export * from './NextcloudBackupFrequency/NextcloudBackupFrequency'
 export * from './ListedAuthorSecretsData/ListedAuthorSecretsData'
 export * from './LogSessionUserAgent/LogSessionUserAgentOption'
 export * from './MuteMarketingEmails/MuteMarketingEmailsOption'

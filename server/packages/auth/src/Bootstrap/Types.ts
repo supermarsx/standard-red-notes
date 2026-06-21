@@ -251,6 +251,8 @@ const TYPES = {
   Auth_TriggerPostSettingUpdateActions: Symbol.for('Auth_TriggerPostSettingUpdateActions'),
   Auth_TriggerEmailBackupForUser: Symbol.for('Auth_TriggerEmailBackupForUser'),
   Auth_TriggerEmailBackupForAllUsers: Symbol.for('Auth_TriggerEmailBackupForAllUsers'),
+  Auth_TriggerNextcloudBackupForUser: Symbol.for('Auth_TriggerNextcloudBackupForUser'),
+  Auth_TriggerNextcloudBackupForAllUsers: Symbol.for('Auth_TriggerNextcloudBackupForAllUsers'),
   Auth_DeleteAccountsFromCSVFile: Symbol.for('Auth_DeleteAccountsFromCSVFile'),
   Auth_RenewSharedSubscriptions: Symbol.for('Auth_RenewSharedSubscriptions'),
   Auth_FixStorageQuotaForUser: Symbol.for('Auth_FixStorageQuotaForUser'),
@@ -343,6 +345,7 @@ const TYPES = {
   Auth_SMTP_PASS: Symbol.for('Auth_SMTP_PASS'),
   Auth_SMTP_FROM: Symbol.for('Auth_SMTP_FROM'),
   Auth_EMAIL_BACKUPS_ENABLED: Symbol.for('Auth_EMAIL_BACKUPS_ENABLED'),
+  Auth_NEXTCLOUD_BACKUPS_ENABLED: Symbol.for('Auth_NEXTCLOUD_BACKUPS_ENABLED'),
   Auth_EMAIL_REMINDERS_ENABLED: Symbol.for('Auth_EMAIL_REMINDERS_ENABLED'),
   Auth_EMAIL_REMINDER_NO_RECORDS: Symbol.for('Auth_EMAIL_REMINDER_NO_RECORDS'),
   // Standard Red Notes: per-user cap on server-stored email reminders. <= 0 means unlimited.
