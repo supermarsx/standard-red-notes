@@ -1008,11 +1008,34 @@ export class NavigationController
       return
     }
 
-    const legacyFolderTags = this.items
+    const allLegacyFolderTags = this.items
       .getItems<SNTag>(ContentType.TYPES.Tag)
       .filter((tag) => (tag as unknown as { isFolder?: boolean }).isFolder === true)
 
+    // Idempotency: never create a folder for a legacy tag that already has a
+    // corresponding folder. The localStorage flag is per-browser, so it is wiped
+    // by "clear site data" and is absent on other devices; without this check a
+    // re-run would re-create every folder, duplicating them. Matching on title
+    // is the stable key available across the tag->folder boundary (folders carry
+    // no back-reference to their source tag).
+    const existingFolderTitles = new Set(
+      this.items.getItems<SNFolder>(FolderContentType).map((folder) => folder.title),
+    )
+    const legacyFolderTags = allLegacyFolderTags.filter((tag) => !existingFolderTitles.has(tag.title))
+
     if (legacyFolderTags.length === 0) {
+      // Either nothing to migrate, or every legacy tag already has a folder.
+      // Delete any now-redundant legacy folder-tags so the migration converges.
+      if (allLegacyFolderTags.length > 0) {
+        try {
+          for (const tag of allLegacyFolderTags) {
+            await this.mutator.deleteItem(tag)
+          }
+          await this.sync.sync()
+        } catch (error) {
+          console.warn('Folder migration cleanup of already-migrated tags failed.', error)
+        }
+      }
       try {
         localStorage.setItem(MIGRATION_FLAG, '1')
       } catch {
@@ -1065,10 +1088,13 @@ export class NavigationController
         }
       }
 
-      // Only delete the old folder-tags once every one was successfully recreated.
+      // Only delete the old folder-tags once every one in this pass was
+      // successfully recreated. Delete ALL legacy folder-tags (including any that
+      // were skipped because a folder already existed for them) so the migration
+      // converges in a single run and leaves no folder-tags behind to re-trigger.
       const allMigrated = legacyFolderTags.every((tag) => tagUuidToNewFolder.has(tag.uuid))
       if (allMigrated) {
-        for (const tag of legacyFolderTags) {
+        for (const tag of allLegacyFolderTags) {
           await this.mutator.deleteItem(tag)
         }
       } else {
@@ -1094,6 +1120,110 @@ export class NavigationController
 
   public getNotesCount(tag: SNTag): number {
     return this.tagsCountsState.counts[tag.uuid] || 0
+  }
+
+  /**
+   * Standard Red Notes: the displayable parent of a tag (or undefined for a root
+   * tag). Exposed publicly so the bulk-organize modal can show a tag's parent title
+   * and detect duplicate (title, parent) pairs without reaching into the item store.
+   */
+  public getTagParentForDisplay(tag: SNTag): SNTag | undefined {
+    return this.items.getDisplayableTagParent(tag)
+  }
+
+  /**
+   * Standard Red Notes: bulk-delete folders in one batch + one sync (the modal
+   * confirms once, so no per-item confirm dialog). Mirrors `removeFolder`'s
+   * child-reparenting so subfolders are not orphaned, but defers syncing to the end.
+   */
+  public async bulkDeleteFolders(folders: SNFolder[]): Promise<void> {
+    for (const folder of folders) {
+      const parent = folder.parentId ? this.items.findItem<SNFolder>(folder.parentId) : undefined
+      const children = this.folders.filter((candidate) => candidate.parentId === folder.uuid)
+      for (const child of children) {
+        await this.mutator.changeItem<FolderMutator>(child, (mutator) => {
+          if (parent) {
+            mutator.makeChildOf(parent)
+          } else {
+            mutator.unsetParent()
+          }
+        })
+      }
+      await this.mutator.deleteItem(folder)
+    }
+    await this.sync.sync()
+    this.reloadFolders()
+  }
+
+  /** Standard Red Notes: bulk-delete tags in one batch + one sync (modal confirms once). */
+  public async bulkDeleteTags(tags: SNTag[]): Promise<void> {
+    for (const tag of tags) {
+      await this.mutator.deleteItem(tag)
+    }
+    await this.sync.sync()
+  }
+
+  /**
+   * Standard Red Notes: bulk-reparent folders under `parentUuid` (or to the root when
+   * undefined) in one batch + one sync. Skips any folder that would move under itself
+   * or one of its own descendants, mirroring the cycle guard in `assignFolderParent`.
+   */
+  public async bulkMoveFolders(folders: SNFolder[], parentUuid: string | undefined): Promise<void> {
+    const parent = parentUuid ? this.items.findItem<SNFolder>(parentUuid) : undefined
+
+    for (const folder of folders) {
+      if (folder.parentId === parentUuid) {
+        continue
+      }
+
+      // Prevent cycles: a folder cannot become a descendant of itself.
+      if (parentUuid) {
+        let cursor: SNFolder | undefined = this.folders.find((f) => f.uuid === parentUuid)
+        let createsCycle = false
+        while (cursor) {
+          if (cursor.uuid === folder.uuid) {
+            createsCycle = true
+            break
+          }
+          cursor = cursor.parentId ? this.folders.find((f) => f.uuid === cursor?.parentId) : undefined
+        }
+        if (createsCycle) {
+          continue
+        }
+      }
+
+      await this.mutator.changeItem<FolderMutator>(folder, (mutator) => {
+        if (parent) {
+          mutator.makeChildOf(parent)
+        } else {
+          mutator.unsetParent()
+        }
+      })
+    }
+
+    await this.sync.sync()
+    this.reloadFolders()
+  }
+
+  /**
+   * Standard Red Notes: bulk-reparent tags under `parentUuid` (or to the root when
+   * undefined) in one batch + one sync. Mirrors `assignParent`'s parent resolution.
+   */
+  public async bulkMoveTags(tags: SNTag[], parentUuid: string | undefined): Promise<void> {
+    const futureParent = parentUuid ? (this.items.findItem(parentUuid) as SNTag | undefined) : undefined
+
+    for (const tag of tags) {
+      if (futureParent) {
+        if (futureParent.uuid === tag.uuid) {
+          continue
+        }
+        await this.mutator.setTagParent(futureParent, tag)
+      } else {
+        await this.mutator.unsetTagParent(tag)
+      }
+    }
+
+    await this.sync.sync()
   }
 
   getChildren(tag: SNTag): SNTag[] {

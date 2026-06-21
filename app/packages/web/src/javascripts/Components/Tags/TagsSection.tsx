@@ -1,13 +1,16 @@
 import TagsList from '@/Components/Tags/TagsList'
+import IconButton from '@/Components/Button/IconButton'
 import { observer } from 'mobx-react-lite'
-import { FunctionComponent } from 'react'
+import { FunctionComponent, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import TagsSectionAddButton from './TagsSectionAddButton'
+import BulkOrganizeModal from './BulkOrganizeModal'
 import { useApplication } from '../ApplicationProvider'
 
 const TagsSection: FunctionComponent = () => {
   const application = useApplication()
   const { t } = useTranslation('navigation')
+  const [isOrganizeOpen, setIsOrganizeOpen] = useState(false)
 
   return (
     <>
@@ -30,6 +33,15 @@ const TagsSection: FunctionComponent = () => {
             <div className="title text-base md:text-sm">
               <span className="font-bold">{t('folders')}</span>
             </div>
+            {!application.navigationController.isSearching && (
+              <IconButton
+                focusable={true}
+                icon="list-bulleted"
+                title="Organize folders & tags"
+                className="p-0 text-neutral mr-2"
+                onClick={() => setIsOrganizeOpen(true)}
+              />
+            )}
             {!application.navigationController.isSearching && <TagsSectionAddButton isFolder={true} />}
           </div>
         </div>
@@ -42,11 +54,22 @@ const TagsSection: FunctionComponent = () => {
             <div className="title text-base md:text-sm">
               <span className="font-bold">{t('tags')}</span>
             </div>
+            {!application.navigationController.isSearching && (
+              <IconButton
+                focusable={true}
+                icon="list-bulleted"
+                title="Organize folders & tags"
+                className="p-0 text-neutral mr-2"
+                onClick={() => setIsOrganizeOpen(true)}
+              />
+            )}
             {!application.navigationController.isSearching && <TagsSectionAddButton />}
           </div>
         </div>
         <TagsList type="tags" />
       </section>
+
+      <BulkOrganizeModal isOpen={isOrganizeOpen} close={() => setIsOrganizeOpen(false)} />
     </>
   )
 }
