@@ -18,13 +18,14 @@ describe('FinishUploadSession', () => {
   let domainEventFactory: DomainEventFactoryInterface
   let valetTokenRepository: ValetTokenRepositoryInterface
 
-  const createUseCase = () =>
+  const createUseCase = (maxAttachmentByteSize = 0) =>
     new FinishUploadSession(
       fileUploader,
       uploadRepository,
       domainEventPublisher,
       domainEventFactory,
       valetTokenRepository,
+      maxAttachmentByteSize,
     )
 
   beforeEach(() => {
@@ -180,5 +181,61 @@ describe('FinishUploadSession', () => {
 
     expect(fileUploader.finishUploadSession).toHaveBeenCalled()
     expect(domainEventPublisher.publish).toHaveBeenCalled()
+  })
+
+  it('should allow a file at or under the absolute per-file size cap', async () => {
+    uploadRepository.retrieveUploadChunkResults = jest
+      .fn()
+      .mockReturnValue([{ tag: '123', chunkId: 1, chunkSize: 100 }])
+
+    const result = await createUseCase(100).execute({
+      resourceRemoteIdentifier: '2-3-4',
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      uploadBytesLimit: -1,
+      uploadBytesUsed: 0,
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(fileUploader.finishUploadSession).toHaveBeenCalled()
+  })
+
+  it('should reject a file over the absolute per-file size cap even with unlimited storage', async () => {
+    uploadRepository.retrieveUploadChunkResults = jest.fn().mockReturnValue([
+      { tag: '123', chunkId: 1, chunkSize: 100 },
+      { tag: '234', chunkId: 2, chunkSize: 1 },
+    ])
+
+    const result = await createUseCase(100).execute({
+      resourceRemoteIdentifier: '2-3-4',
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      uploadBytesLimit: -1,
+      uploadBytesUsed: 0,
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toEqual(
+      'Could not finish upload session. The file exceeds the maximum allowed size of 100 bytes.',
+    )
+    expect(fileUploader.finishUploadSession).not.toHaveBeenCalled()
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('should treat a per-file cap of 0 as unlimited', async () => {
+    uploadRepository.retrieveUploadChunkResults = jest
+      .fn()
+      .mockReturnValue([{ tag: '123', chunkId: 1, chunkSize: 999999999 }])
+
+    const result = await createUseCase(0).execute({
+      resourceRemoteIdentifier: '2-3-4',
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      uploadBytesLimit: -1,
+      uploadBytesUsed: 0,
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(fileUploader.finishUploadSession).toHaveBeenCalled()
   })
 })

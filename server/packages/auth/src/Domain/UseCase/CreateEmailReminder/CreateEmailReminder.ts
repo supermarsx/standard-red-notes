@@ -9,7 +9,14 @@ import { CreateEmailReminderResult } from './CreateEmailReminderResult'
 const MAX_MESSAGE_LENGTH = 500
 
 export class CreateEmailReminder implements UseCaseInterface<CreateEmailReminderResult> {
-  constructor(private emailReminderRepository: EmailReminderRepositoryInterface) {}
+  constructor(
+    private emailReminderRepository: EmailReminderRepositoryInterface,
+    // Standard Red Notes: operator-configurable cap on the number of server-stored
+    // (i.e. email-enabled) reminders a single user may register. Bounds the rows the
+    // server persists and the work the reminder cron must scan. A value <= 0 means
+    // "no cap" (unlimited), matching the prior unbounded behaviour.
+    private maxEmailRemindersPerUser: number,
+  ) {}
 
   async execute(dto: CreateEmailReminderDTO): Promise<Result<CreateEmailReminderResult>> {
     const userUuidOrError = Uuid.create(dto.userUuid)
@@ -17,6 +24,16 @@ export class CreateEmailReminder implements UseCaseInterface<CreateEmailReminder
       return Result.fail(`Could not create email reminder: ${userUuidOrError.getError()}`)
     }
     const userUuid = userUuidOrError.getValue()
+
+    if (this.maxEmailRemindersPerUser > 0) {
+      const existingReminders = await this.emailReminderRepository.findByUserUuid(userUuid)
+      if (existingReminders.length >= this.maxEmailRemindersPerUser) {
+        return Result.fail(
+          `Could not create email reminder: you have reached the maximum of ${this.maxEmailRemindersPerUser} ` +
+            'email reminders. Please delete an existing reminder before creating a new one.',
+        )
+      }
+    }
 
     const dueAt = this.normaliseDueAt(dto.dueAt)
     if (dueAt === null) {

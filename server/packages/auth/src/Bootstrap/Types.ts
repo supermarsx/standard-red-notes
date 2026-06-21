@@ -343,6 +343,8 @@ const TYPES = {
   Auth_EMAIL_BACKUPS_ENABLED: Symbol.for('Auth_EMAIL_BACKUPS_ENABLED'),
   Auth_EMAIL_REMINDERS_ENABLED: Symbol.for('Auth_EMAIL_REMINDERS_ENABLED'),
   Auth_EMAIL_REMINDER_NO_RECORDS: Symbol.for('Auth_EMAIL_REMINDER_NO_RECORDS'),
+  // Standard Red Notes: per-user cap on server-stored email reminders. <= 0 means unlimited.
+  Auth_MAX_EMAIL_REMINDERS_PER_USER: Symbol.for('Auth_MAX_EMAIL_REMINDERS_PER_USER'),
   Auth_EmailReminderSender: Symbol.for('Auth_EmailReminderSender'),
   // Standard Red Notes: "multiple accounts per email" (workspaces) feature flag. Default OFF.
   Auth_WORKSPACES_PER_EMAIL_ENABLED: Symbol.for('Auth_WORKSPACES_PER_EMAIL_ENABLED'),

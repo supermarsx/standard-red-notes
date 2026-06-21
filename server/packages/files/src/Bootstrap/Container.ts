@@ -82,6 +82,14 @@ export class ContainerConfigLoader {
     container
       .bind(TYPES.Files_MAX_CHUNK_BYTES)
       .toConstantValue(env.get('MAX_CHUNK_BYTES', true) ? +env.get('MAX_CHUNK_BYTES', true) : 100000000)
+    // Standard Red Notes: operator-configurable absolute cap on a single uploaded file's
+    // size (bytes). Default ~5GB (5368709120) -- generous/non-breaking. Applies even to
+    // unlimited accounts. Set to 0 (or any value <= 0) to disable the cap.
+    container
+      .bind(TYPES.Files_MAX_ATTACHMENT_BYTE_SIZE)
+      .toConstantValue(
+        env.get('MAX_ATTACHMENT_BYTE_SIZE', true) ? +env.get('MAX_ATTACHMENT_BYTE_SIZE', true) : 5368709120,
+      )
     container.bind(TYPES.Files_VERSION).toConstantValue(env.get('VERSION', true) ?? 'development')
     container
       .bind(TYPES.Files_FILE_UPLOAD_PATH)
@@ -234,6 +242,7 @@ export class ContainerConfigLoader {
           container.get(TYPES.Files_DomainEventPublisher),
           container.get(TYPES.Files_DomainEventFactory),
           container.get<ValetTokenRepositoryInterface>(TYPES.Files_ValetTokenRepository),
+          container.get<number>(TYPES.Files_MAX_ATTACHMENT_BYTE_SIZE),
         ),
       )
     container

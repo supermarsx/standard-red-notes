@@ -46,6 +46,8 @@ const TYPES = {
   Files_VALET_TOKEN_SECRET: Symbol.for('Files_VALET_TOKEN_SECRET'),
   Files_REDIS_URL: Symbol.for('Files_REDIS_URL'),
   Files_MAX_CHUNK_BYTES: Symbol.for('Files_MAX_CHUNK_BYTES'),
+  // Standard Red Notes: absolute per-file upload size cap (bytes). <= 0 means unlimited.
+  Files_MAX_ATTACHMENT_BYTE_SIZE: Symbol.for('Files_MAX_ATTACHMENT_BYTE_SIZE'),
   Files_VERSION: Symbol.for('Files_VERSION'),
   Files_FILE_UPLOAD_PATH: Symbol.for('Files_FILE_UPLOAD_PATH'),
   Files_IS_CONFIGURED_FOR_HOME_SERVER_OR_SELF_HOSTING: Symbol.for(

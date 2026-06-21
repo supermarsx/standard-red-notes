@@ -956,6 +956,14 @@ export class ContainerConfigLoader {
     container
       .bind<boolean>(TYPES.Auth_EMAIL_REMINDER_NO_RECORDS)
       .toConstantValue(env.get('EMAIL_REMINDER_NO_RECORDS', true) === 'true')
+    // Standard Red Notes: operator-configurable cap on the number of server-stored
+    // email reminders per user (bounds persisted rows + reminder-cron scan work).
+    // Default 100. A value <= 0 disables the cap (unlimited, prior behaviour).
+    container
+      .bind<number>(TYPES.Auth_MAX_EMAIL_REMINDERS_PER_USER)
+      .toConstantValue(
+        env.get('MAX_EMAIL_REMINDERS_PER_USER', true) ? +env.get('MAX_EMAIL_REMINDERS_PER_USER', true) : 100,
+      )
     container.bind<EmailSenderInterface>(TYPES.Auth_EmailSender).toConstantValue(
       new SmtpEmailSender(
         {
@@ -1452,7 +1460,12 @@ export class ContainerConfigLoader {
       .toConstantValue(new DeleteDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
     container
       .bind<CreateEmailReminder>(TYPES.Auth_CreateEmailReminder)
-      .toConstantValue(new CreateEmailReminder(container.get(TYPES.Auth_EmailReminderRepository)))
+      .toConstantValue(
+        new CreateEmailReminder(
+          container.get(TYPES.Auth_EmailReminderRepository),
+          container.get(TYPES.Auth_MAX_EMAIL_REMINDERS_PER_USER),
+        ),
+      )
     container
       .bind<ListEmailReminders>(TYPES.Auth_ListEmailReminders)
       .toConstantValue(new ListEmailReminders(container.get(TYPES.Auth_EmailReminderRepository)))

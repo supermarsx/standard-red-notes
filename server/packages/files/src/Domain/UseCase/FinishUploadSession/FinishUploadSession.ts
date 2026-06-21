@@ -14,6 +14,12 @@ export class FinishUploadSession implements UseCaseInterface<void> {
     private domainEventPublisher: DomainEventPublisherInterface,
     private domainEventFactory: DomainEventFactoryInterface,
     private valetTokenRepository: ValetTokenRepositoryInterface,
+    // Standard Red Notes: operator-configurable ABSOLUTE cap on the size of a single
+    // uploaded file (bytes). Unlike the per-user subscription quota (uploadBytesLimit),
+    // this applies even to "unlimited" accounts (uploadBytesLimit === -1), giving
+    // self-hosted operators a hard per-file bound on disk/bandwidth use. A value <= 0
+    // disables the cap (unlimited per-file size, prior behaviour).
+    private maxAttachmentByteSize: number = 0,
   ) {}
 
   async execute(dto: FinishUploadSessionDTO): Promise<Result<void>> {
@@ -45,6 +51,14 @@ export class FinishUploadSession implements UseCaseInterface<void> {
       let totalFileSize = 0
       for (const uploadChunkResult of uploadChunkResults) {
         totalFileSize += uploadChunkResult.chunkSize
+      }
+
+      // Absolute per-file cap enforced regardless of subscription/unlimited status.
+      if (this.maxAttachmentByteSize > 0 && totalFileSize > this.maxAttachmentByteSize) {
+        return Result.fail(
+          `Could not finish upload session. The file exceeds the maximum allowed size of ` +
+            `${this.maxAttachmentByteSize} bytes.`,
+        )
       }
 
       const userHasUnlimitedStorage = dto.uploadBytesLimit === -1
