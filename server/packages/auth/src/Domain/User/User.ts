@@ -171,6 +171,7 @@ export class User {
 
   @Column({
     name: 'ban_reason',
+    type: 'varchar',
     length: 255,
     nullable: true,
   })
