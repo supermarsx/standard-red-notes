@@ -1,6 +1,9 @@
-import { Component, createRef, MouseEventHandler } from 'react'
+import { Component, createRef, MouseEvent as ReactMouseEvent, MouseEventHandler } from 'react'
 import { debounce } from '@/Utils'
 import { classNames } from '@standardnotes/utils'
+import Icon from '@/Components/Icon/Icon'
+
+const DEFAULT_EXPAND_WIDTH = 250
 
 export type ResizeFinishCallback = (
   lastWidth: number,
@@ -192,17 +195,33 @@ class PanelResizer extends Component<Props, State> {
     this.lastLeft = left
   }
 
-  onDblClick = () => {
-    const collapsed = this.isCollapsed()
-    if (collapsed) {
-      this.setWidth(this.widthBeforeLastDblClick || this.props.defaultWidth || 0)
-    } else {
-      this.widthBeforeLastDblClick = this.lastWidth
-      this.setWidth(this.minWidth)
-    }
+  expandPanel = () => {
+    this.setWidth(this.widthBeforeLastDblClick || this.props.defaultWidth || DEFAULT_EXPAND_WIDTH)
     this.finishSettingWidth()
 
     this.props.resizeFinishCallback?.(this.lastWidth, this.lastLeft, this.isAtMaxWidth(), this.isCollapsed())
+  }
+
+  onExpandButtonClick = (event: ReactMouseEvent) => {
+    event.stopPropagation()
+    this.expandPanel()
+  }
+
+  onExpandButtonMouseDown = (event: ReactMouseEvent) => {
+    event.stopPropagation()
+  }
+
+  onDblClick = () => {
+    const collapsed = this.isCollapsed()
+    if (collapsed) {
+      this.expandPanel()
+    } else {
+      this.widthBeforeLastDblClick = this.lastWidth
+      this.setWidth(this.minWidth)
+      this.finishSettingWidth()
+
+      this.props.resizeFinishCallback?.(this.lastWidth, this.lastLeft, this.isAtMaxWidth(), this.isCollapsed())
+    }
   }
 
   handleWidthEvent(event?: MouseEvent) {
@@ -325,19 +344,47 @@ class PanelResizer extends Component<Props, State> {
   }
 
   override render() {
+    const isLeftSide = this.props.side === PanelSide.Left
+    const showExpandButton = this.props.collapsable && this.state.collapsed
+
     return (
-      <div
-        className={classNames(
-          'panel-resizer',
-          'absolute right-0 top-0 z-panel-resizer',
-          'hidden h-full w-[4px] cursor-col-resize border-y-0 bg-[color:var(--panel-resizer-background-color)] md:block',
-          this.props.alwaysVisible || this.state.collapsed || this.state.pressed ? 'opacity-100' : 'opacity-0',
-          this.props.hoverable && 'hover:opacity-100',
-          this.props.side === PanelSide.Left && 'left-0 right-auto',
+      <>
+        <div
+          className={classNames(
+            'panel-resizer',
+            'absolute right-0 top-0 z-panel-resizer',
+            'hidden h-full w-[4px] cursor-col-resize border-y-0 bg-[color:var(--panel-resizer-background-color)] md:block',
+            this.props.alwaysVisible || this.state.collapsed || this.state.pressed ? 'opacity-100' : 'opacity-0',
+            this.props.hoverable && 'hover:opacity-100',
+            isLeftSide && 'left-0 right-auto',
+          )}
+          onMouseDown={this.onMouseDown}
+          ref={this.resizerElementRef}
+        />
+        {showExpandButton && (
+          <button
+            type="button"
+            aria-label="Expand panel"
+            title="Expand panel"
+            className={classNames(
+              'absolute top-1/2 z-panel-resizer -translate-y-1/2',
+              'hidden h-12 w-4 cursor-pointer items-center justify-center md:flex',
+              'rounded-md border border-border bg-default text-text shadow-sm',
+              'hover:bg-contrast focus:outline-none',
+              // Straddle the panel edge (half outside) so the handle stays
+              // visible and clickable even when the panel is collapsed to a
+              // ~5px sliver. The chevron points the direction the panel opens:
+              // a right-edge resizer (PanelSide.Right) grows the panel
+              // rightward; a left-edge one (PanelSide.Left) grows it leftward.
+              isLeftSide ? 'left-0 -translate-x-1/2' : 'right-0 translate-x-1/2',
+            )}
+            onClick={this.onExpandButtonClick}
+            onMouseDown={this.onExpandButtonMouseDown}
+          >
+            <Icon type={isLeftSide ? 'chevron-left' : 'chevron-right'} size="small" />
+          </button>
         )}
-        onMouseDown={this.onMouseDown}
-        ref={this.resizerElementRef}
-      />
+      </>
     )
   }
 }
