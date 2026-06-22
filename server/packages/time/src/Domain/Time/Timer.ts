@@ -1,6 +1,5 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import * as microtime from 'microtime'
 import { Time } from './Time'
 import { TimerInterface } from './TimerInterface'
 import { TimeStructure } from './TimeStructure'
@@ -64,7 +63,11 @@ export class Timer implements TimerInterface {
   }
 
   getTimestampInMicroseconds(): number {
-    return microtime.now()
+    // Epoch time in microseconds WITHOUT the native `microtime` addon, so the
+    // server can be bundled into a dependency-free standalone binary.
+    // `performance.timeOrigin` is the epoch-ms the process started and
+    // `performance.now()` adds sub-millisecond elapsed time on top.
+    return Math.round((performance.timeOrigin + performance.now()) * 1000)
   }
 
   getTimestampInSeconds(): number {

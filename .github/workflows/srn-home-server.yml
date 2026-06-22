@@ -1,0 +1,222 @@
+# Rolling release pipeline for the self-hosted SERVER as a standalone binary.
+#
+# Packages @standardnotes/home-server — the all-in-one backend that runs auth +
+# syncing-server + files + revisions + api-gateway in ONE process — into native
+# single-file executables (no Node/yarn install needed to run).
+#
+# How: esbuild bundles the tsc-built entry through Yarn PnP into one CJS file
+# (the bundle is dependency-free for MySQL deployments — the native SQLite driver
+# is excluded and CBOR falls back to pure JS), then @yao-pkg/pkg wraps it into
+# node24 executables for the 6 OS/arch targets, exactly like the CLI tools.
+#
+# Stages (gated): build -> decide -> package -> release. A new rolling release is
+# cut only when the bundle's content fingerprint changes.
+#
+# SCOPE: this binary is the server RUNTIME and targets MySQL (DB_TYPE=mysql).
+#   - SQLite (better-sqlite3, native) is NOT supported by the binary.
+#   - DB schema migrations are NOT run by the binary (TypeORM's runtime migration
+#     glob does not resolve inside the pkg snapshot). Run migrations separately
+#     (e.g. via the Docker image) and start the binary with DB_MIGRATIONS off.
+name: srn-home-server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/srn-home-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TOOL: srn-home-server
+  SERVER_DIR: server
+  HS_DIR: server/packages/home-server
+  PKG_NODE: node24
+  PKG_VERSION: '6.20.0'
+
+jobs:
+  # 1) BUILD — install the PnP workspace, tsc-build every server package, then
+  # esbuild-bundle home-server into a single CJS + a content fingerprint.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    outputs:
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      # better-sqlite3 is still a dependency (SQLite support in source) and is
+      # built/unplugged during install even though the binary doesn't use it.
+      - name: Install native build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y python3 make g++
+
+      - name: Install workspace (PnP)
+        working-directory: ${{ env.SERVER_DIR }}
+        run: yarn install --immutable
+
+      - name: Build all server packages (tsc)
+        working-directory: ${{ env.SERVER_DIR }}
+        run: yarn build
+
+      - name: Bundle home-server (esbuild)
+        working-directory: ${{ env.SERVER_DIR }}
+        run: yarn workspace @standardnotes/home-server build:bundle
+
+      - name: Compute content fingerprint
+        id: fp
+        working-directory: ${{ env.HS_DIR }}
+        run: |
+          set -euo pipefail
+          fp="$(sha256sum dist/bundle/home-server.cjs | awk '{print $1}')"
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$fp" > "dist/bundle/${TOOL}.fingerprint"
+          echo "Bundle fingerprint: ${fp}"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: srn-home-server-bundle
+          path: |
+            ${{ env.HS_DIR }}/dist/bundle/home-server.cjs
+            ${{ env.HS_DIR }}/dist/bundle/srn-home-server.fingerprint
+          retention-days: 1
+          if-no-files-found: error
+
+  # 2) DECIDE — release only if the bundle changed since the last release.
+  decide:
+    name: decide
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+    steps:
+      - name: Compare against last released fingerprint
+        id: cmp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_FP: ${{ needs.build.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          last_tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E "^${TOOL}-v[0-9]+\.[0-9]+$" | head -n1 || true)"
+          if [ -z "$last_tag" ]; then
+            echo "No prior ${TOOL} release -> changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          old_fp=""
+          if gh release download "$last_tag" --repo "$GITHUB_REPOSITORY" --pattern "${TOOL}.fingerprint" --output old.fp --clobber 2>/dev/null; then
+            old_fp="$(tr -d '[:space:]' < old.fp)"
+          fi
+          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
+            echo "Unchanged since ${last_tag} -> skip."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed since ${last_tag} -> release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 3) PACKAGE — cross-compile the 6 native executables from the single bundle.
+  package:
+    name: package
+    needs: [build, decide]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: srn-home-server-bundle
+          path: bundle
+
+      - name: Package native executables
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          declare -A TARGETS=(
+            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
+            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
+            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
+            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
+            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
+            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
+          )
+          for out_name in "${!TARGETS[@]}"; do
+            echo "::group::pkg ${TARGETS[$out_name]} -> $out_name"
+            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
+              --no-signature \
+              --targets "${TARGETS[$out_name]}" \
+              --output "out/${out_name}" \
+              bundle/home-server.cjs
+            echo "::endgroup::"
+          done
+          cp "bundle/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
+          ls -la out
+
+      - name: Generate checksums
+        working-directory: out
+        run: sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v5
+        with:
+          name: srn-home-server-binaries
+          path: out/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # 4) RELEASE — rolling YY.N version, namespaced tag, GitHub Release with the 6
+  # binaries + checksums + fingerprint.
+  release:
+    name: release
+    needs: [decide, package]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v5
+        with:
+          name: srn-home-server-binaries
+          path: out
+
+      - name: Compute rolling version + publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          YY="$(date -u +%y)"
+          prefix="${TOOL}-v${YY}."
+          max=0
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            n="${tag#${prefix}}"
+            if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
+          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          version="${YY}.$((max + 1))"
+          tag="${TOOL}-v${version}"
+          echo "Releasing ${tag}"
+          shopt -s nullglob
+          files=(out/*)
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${TOOL} ${version}" \
+            --target "${GITHUB_SHA}" \
+            --generate-notes \
+            "${files[@]}"

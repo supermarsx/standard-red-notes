@@ -21,6 +21,8 @@
   "scripts": {
     "clean": "rm -fr dist",
     "build": "tsc --build",
+    "build:bundle": "yarn node esbuild.config.mjs",
+    "package": "yarn node esbuild.config.mjs",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "start": "yarn node dist/bin/server.js"
@@ -50,6 +52,8 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
+    "@yarnpkg/esbuild-plugin-pnp": "^3.0.0-rc.15",
+    "esbuild": "^0.28.1",
     "typescript": "^6.0.3"
   }
 }

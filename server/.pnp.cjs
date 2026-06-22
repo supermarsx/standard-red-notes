@@ -8453,9 +8453,11 @@ const RAW_RUNTIME_STATE =
           ["@types/cors", "npm:2.8.19"],\
           ["@types/express", "npm:5.0.6"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@yarnpkg/esbuild-plugin-pnp", "virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15"],\
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
           ["dotenv", "npm:17.4.2"],\
+          ["esbuild", "npm:0.28.1"],\
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.2.0"],\
           ["inversify", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:8.1.1"],\
@@ -10154,6 +10156,29 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/@xtuc-long-npm-4.2.2-37236e6d72-7217bae9fe.zip/node_modules/@xtuc/long/",\
         "packageDependencies": [\
           ["@xtuc/long", "npm:4.2.2"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@yarnpkg/esbuild-plugin-pnp", [\
+      ["npm:3.0.0-rc.15", {\
+        "packageLocation": "./.yarn/cache/@yarnpkg-esbuild-plugin-pnp-npm-3.0.0-rc.15-b916c218b3-454f521088.zip/node_modules/@yarnpkg/esbuild-plugin-pnp/",\
+        "packageDependencies": [\
+          ["@yarnpkg/esbuild-plugin-pnp", "npm:3.0.0-rc.15"]\
+        ],\
+        "linkType": "SOFT"\
+      }],\
+      ["virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15", {\
+        "packageLocation": "./.yarn/__virtual__/@yarnpkg-esbuild-plugin-pnp-virtual-5cb806a287/0/cache/@yarnpkg-esbuild-plugin-pnp-npm-3.0.0-rc.15-b916c218b3-454f521088.zip/node_modules/@yarnpkg/esbuild-plugin-pnp/",\
+        "packageDependencies": [\
+          ["@types/esbuild", null],\
+          ["@yarnpkg/esbuild-plugin-pnp", "virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15"],\
+          ["esbuild", "npm:0.28.1"],\
+          ["tslib", "npm:2.8.1"]\
+        ],\
+        "packagePeers": [\
+          "@types/esbuild",\
+          "esbuild"\
         ],\
         "linkType": "HARD"\
       }]\
