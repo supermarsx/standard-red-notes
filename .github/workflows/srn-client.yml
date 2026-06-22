@@ -1,7 +1,8 @@
 # Rolling release pipeline for the `srn-client` CLI tool.
 #
 # Gated stages (each only runs if the previous succeeded, via `needs:`):
-#   check -> build -> decide -> package -> release
+#   (lint, test, format) -> build -> decide -> package -> release
+# The three check jobs run in parallel; build fans in on all three.
 #
 # Trigger: push to `main` that touches the tool (or manual dispatch). A new
 # rolling release `srn-client <YY.N>` is cut ONLY when the freshly built bundle
@@ -37,19 +38,23 @@ env:
   PKG_VERSION: '6.20.0'
 
 jobs:
-  # 1) CHECK — typecheck for this tool.
+  # 1) CHECK — lint, format and test run as three INDEPENDENT parallel jobs;
+  # `build` fans in on all three (needs: [lint, test, format]).
   #
   # srn-client is a standalone npm package (no committed lockfile, not part of
-  # any yarn workspace root). It has its own deps, so it gets its own install.
+  # any yarn workspace root). It has its own deps, so each job installs its own.
   # The shared monorepo workspaces (root / app / server) are NOT needed to
-  # check or build this CLI, so we keep this job lean.
-  check:
-    name: check
+  # check or build this CLI, so we keep these jobs lean.
+
+  # 1a) LINT — strict typecheck (tsc --noEmit) is this TS CLI's lint gate, plus
+  # a package-shape assertion so a missing/renamed entry point fails loudly.
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -63,15 +68,57 @@ jobs:
         working-directory: ${{ env.TOOL_DIR }}
         run: npm run typecheck
 
-      # srn-client has no dedicated lint/format/test scripts of its own; the
-      # strict typecheck (tsc --noEmit) is the gate. Assert the entry points
-      # exist so a missing/renamed script fails loudly here.
       - name: Verify package shape
         working-directory: ${{ env.TOOL_DIR }}
         run: |
           node -e "const p=require('./package.json'); if(!p.bin||!p.bin['srn-client']) {console.error('missing bin'); process.exit(1)}"
           test -f esbuild.config.mjs
           test -f src/index.ts
+
+  # 1b) FORMAT — Prettier check against the shared cli/.prettierrc style. No
+  # install needed; prettier runs via npx and auto-discovers cli/.prettierrc.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check formatting
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npx --yes prettier@3 --check "src/**/*.ts" "*.mjs"
+
+  # 1c) TEST — no unit suite yet, so the functional gate is "the bundle builds
+  # and the produced CLI runs": build via esbuild, assert a non-empty bundle,
+  # then smoke-run --help (tolerant of a non-zero help exit code).
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Build bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run build
+
+      - name: Smoke-test bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          test -s dist/index.cjs
+          node dist/index.cjs --help || true
 
   # 2) BUILD — produce the bundled CJS entry (dist/index.cjs) via esbuild and a
   # deterministic content fingerprint (sha256 of that bundle). The esbuild
@@ -80,14 +127,14 @@ jobs:
   # pkg embeds the Node version/timestamps, so those are not reproducible.
   build:
     name: build
-    needs: check
+    needs: [lint, test, format]
     runs-on: ubuntu-latest
     outputs:
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -135,7 +182,7 @@ jobs:
     outputs:
       changed: ${{ steps.cmp.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Compare against last released fingerprint
         id: cmp
@@ -179,9 +226,9 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -244,7 +291,7 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download packaged binaries
         uses: actions/download-artifact@v4

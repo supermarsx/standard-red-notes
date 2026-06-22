@@ -23,7 +23,10 @@ type DatabaseFullEntryLoadChunkResponse = {
 
 const { Environment, GetSortedPayloadsByPriority } = snjs as unknown as {
   Environment: { Web: number; Desktop: number }
-  GetSortedPayloadsByPriority: (entries: FullyFormedTransferPayload[], options: DatabaseLoadOptions) => {
+  GetSortedPayloadsByPriority: (
+    entries: FullyFormedTransferPayload[],
+    options: DatabaseLoadOptions,
+  ) => {
     itemsKeyPayloads: FullyFormedTransferPayload[]
     keySystemRootKeyPayloads: FullyFormedTransferPayload[]
     keySystemItemsKeyPayloads: FullyFormedTransferPayload[]
