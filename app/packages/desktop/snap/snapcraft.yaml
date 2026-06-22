@@ -1,0 +1,60 @@
+# Snap recipe for the Standard Red Notes desktop app.
+#
+# Electron Forge has no first-party (or maintained community) snap maker, so the
+# snap is built OUTSIDE Forge: the srn-desktop workflow first runs
+# `electron-forge package` to produce the unpacked Linux app, then snapcraft
+# `dump`s that directory into a strictly-confined snap.
+#
+# NOTE: this recipe is BEST-EFFORT and not yet validated in CI (the snap job is
+# `continue-on-error`). The likely points to adjust on first real run:
+#   - the `source:` path: electron-packager names the output dir after the
+#     productName ("Standard Red Notes-linux-x64", with spaces). Confirm/quote it.
+#   - stage-packages: add any missing shared libs surfaced by `snapcraft`.
+#   - version: currently static; wire `adopt-info` to the baked app version.
+name: standard-red-notes
+base: core22
+version: '0.0.0'
+summary: Self-hosted, end-to-end encrypted notes
+description: |
+  Standard Red Notes is a self-hosted-first, end-to-end encrypted notes app — a
+  modernized fork of Standard Notes with no paid tier.
+grade: stable
+confinement: strict
+compression: lzo
+
+apps:
+  standard-red-notes:
+    command: standard-red-notes --no-sandbox
+    extensions: [gnome]
+    common-id: org.standardrednotes.app
+    plugs:
+      - home
+      - network
+      - network-bind
+      - removable-media
+      - password-manager-service
+      - browser-support
+      - audio-playback
+
+parts:
+  standard-red-notes:
+    plugin: dump
+    # Forge's `electron-forge package` output for linux/x64. Quoted because the
+    # productName contains spaces.
+    source: "app/out/Standard Red Notes-linux-x64"
+    stage-packages:
+      - libsecret-1-0
+      - libnss3
+      - libnspr4
+      - libatk1.0-0
+      - libatk-bridge2.0-0
+      - libcups2
+      - libdrm2
+      - libgbm1
+      - libasound2
+      - libxkbcommon0
+      - libgtk-3-0
+    organize:
+      '*': usr/lib/standard-red-notes/
+    stage:
+      - -usr/lib/standard-red-notes/chrome-sandbox

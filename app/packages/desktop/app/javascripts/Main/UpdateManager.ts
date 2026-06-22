@@ -1,8 +1,8 @@
 import { compareVersions } from 'compare-versions'
-import { BrowserWindow, dialog, Notification, shell } from 'electron'
+import { autoUpdater, BrowserWindow, dialog, Notification, shell } from 'electron'
 import electronLog from 'electron-log'
-import { autoUpdater } from 'electron-updater'
 import https from 'https'
+import { updateElectronApp, UpdateSourceType } from 'update-electron-app'
 import { action, computed, makeObservable, observable } from 'mobx'
 import { MessageType } from '../../../test/TestIpcMessage'
 import { AppState } from '../../AppState'
@@ -168,10 +168,8 @@ export class UpdateState {
   toggleAutoUpdate(): void {
     this.enableAutoUpdate = !this.enableAutoUpdate
     this.appState.store.set(StoreKeys.EnableAutoUpdate, this.enableAutoUpdate)
-    // Reflect the new preference onto electron-updater immediately so a freshly
-    // disabled toggle stops downloading/installing right away.
-    autoUpdater.autoDownload = this.enableAutoUpdate
-    autoUpdater.autoInstallOnAppQuit = this.enableAutoUpdate
+    // The background updater (update.electronjs.org via Squirrel) is wired once
+    // at launch when enabled; a mid-session toggle takes effect on next launch.
   }
 
   toggleNotifyUpdates(): void {
@@ -204,53 +202,42 @@ export function setupUpdates(window: BrowserWindow, appState: AppState): void {
     throw Error('Already set up updates.')
   }
   const { store } = appState
-
-  autoUpdater.logger = electronLog
-
-  /**
-   * Point electron-updater at the fork's public GitHub releases. Setting the
-   * feed programmatically means we don't rely on a build-time `app-update.yml`
-   * pointing at the wrong (upstream) repository. No token is needed for public
-   * release checks.
-   */
-  try {
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: UpdateRepo.owner,
-      repo: UpdateRepo.repo,
-    })
-  } catch (error) {
-    logError('Failed to set update feed URL', error)
-  }
-
   const updateState = appState.updates
 
   /**
-   * SAFETY: never auto-download or auto-install unless the user has explicitly
-   * enabled auto-update. Defaults are off.
+   * When Squirrel (macOS/Windows) finishes pulling an update in the background,
+   * surface it through our existing UI + the web app instead of letting
+   * update-electron-app pop its own dialog (we pass notifyUser:false below).
+   * `releaseName` carries the version/tag, which we normalize for display.
    */
-  autoUpdater.autoDownload = updateState.enableAutoUpdate
-  autoUpdater.autoInstallOnAppQuit = updateState.enableAutoUpdate
-
-  autoUpdater.on('update-downloaded', (info: { version?: string }) => {
+  autoUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
     window.webContents.send(MessageToWebApp.UpdateAvailable, null)
-    updateState.autoUpdateHasBeenDownloaded(info.version || null)
+    updateState.autoUpdateHasBeenDownloaded(parseVersionFromTag(releaseName))
   })
-
   autoUpdater.on('error', logError)
-  autoUpdater.on('update-available', (info: { version?: string }) => {
-    updateState.checkedForUpdate(info.version || null)
-    // Keep electron-updater's behavior in sync with the persisted preference.
-    autoUpdater.autoInstallOnAppQuit = updateState.enableAutoUpdate
-    autoUpdater.autoDownload = updateState.enableAutoUpdate
-    // If the user only wants notifications (auto-install off), surface an alert.
-    if (!updateState.enableAutoUpdate && updateState.notifyUpdates && info.version) {
-      maybeNotifyUpdateAvailable(updateState, info.version)
+
+  /**
+   * Background auto-update via update.electronjs.org. SAFETY: only started when
+   * the user has explicitly opted in (defaults off). This service serves macOS
+   * and Windows (Squirrel) only — Linux is not covered and relies on the
+   * cross-platform notify poll below. It throws on an unpackaged/unsigned app
+   * (e.g. local dev), so we swallow that to degrade gracefully.
+   */
+  if (updateState.enableAutoUpdate) {
+    try {
+      updateElectronApp({
+        updateSource: {
+          type: UpdateSourceType.ElectronPublicUpdateService,
+          repo: `${UpdateRepo.owner}/${UpdateRepo.repo}`,
+        },
+        updateInterval: '4 hours',
+        logger: electronLog,
+        notifyUser: false,
+      })
+    } catch (error) {
+      logError('Failed to start background auto-update', error)
     }
-  })
-  autoUpdater.on('update-not-available', (info: { version?: string }) => {
-    updateState.checkedForUpdate(info.version || null)
-  })
+  }
 
   updatesSetup = true
 
@@ -339,7 +326,7 @@ function quitAndInstall(window: BrowserWindow) {
     // index.js prevents close event on some platforms
     window.removeAllListeners('close')
     window.close()
-    autoUpdater.quitAndInstall(false)
+    autoUpdater.quitAndInstall()
   }, 0)
 }
 
@@ -367,46 +354,40 @@ export async function checkForUpdate(appState: AppState, state: UpdateState, use
     return
   }
 
-  if (state.enableAutoUpdate || userTriggered) {
-    state.setCheckingForUpdate(true)
+  if (!state.enableAutoUpdate && !userTriggered) {
+    return
+  }
 
-    try {
-      // Only allow electron-updater to download as part of the check when the
-      // user has enabled auto-update; a user-triggered manual check should not
-      // silently download/install when auto-update is off.
-      const result =
-        userTriggered && state.enableAutoUpdate
-          ? await autoUpdater.checkForUpdatesAndNotify()
-          : await autoUpdater.checkForUpdates()
+  state.setCheckingForUpdate(true)
 
-      if (!result) {
-        return
-      }
+  try {
+    // The actual download/install runs in the background via update.electronjs.org
+    // (macOS/Windows). A check — automatic or user-triggered — resolves the
+    // latest published version from the fork's GitHub releases, which also works
+    // on Linux where the update service does not serve binaries.
+    const tag = await fetchLatestReleaseTag()
+    const version = parseVersionFromTag(tag)
+    state.checkedForUpdate(version)
 
-      state.checkedForUpdate(result.updateInfo.version)
+    if (userTriggered) {
+      const message =
+        state.updateNeeded && state.latestVersion
+          ? str().finishedChecking.updateAvailable(state.latestVersion)
+          : str().finishedChecking.noUpdateAvailable(appState.version)
 
-      if (userTriggered) {
-        let message
-        if (state.updateNeeded && state.latestVersion) {
-          message = str().finishedChecking.updateAvailable(state.latestVersion)
-        } else {
-          message = str().finishedChecking.noUpdateAvailable(appState.version)
-        }
-
-        void dialog.showMessageBox({
-          title: str().finishedChecking.title,
-          message,
-        })
-      }
-    } catch (error) {
-      if (userTriggered) {
-        void dialog.showMessageBox({
-          title: str().finishedChecking.title,
-          message: str().finishedChecking.error(JSON.stringify(error)),
-        })
-      }
-    } finally {
-      state.setCheckingForUpdate(false)
+      void dialog.showMessageBox({
+        title: str().finishedChecking.title,
+        message,
+      })
     }
+  } catch (error) {
+    if (userTriggered) {
+      void dialog.showMessageBox({
+        title: str().finishedChecking.title,
+        message: str().finishedChecking.error(JSON.stringify(error)),
+      })
+    }
+  } finally {
+    state.setCheckingForUpdate(false)
   }
 }

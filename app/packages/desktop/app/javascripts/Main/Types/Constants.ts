@@ -7,9 +7,9 @@ export const keychainAccessIsUserConfigurable = isSnap
 
 /**
  * The fork's GitHub repository that hosts releases. Update checks (both the
- * electron-updater auto-update feed and the lightweight "notify me" release
- * poll) target this repository's public GitHub releases. No token is required
- * for reading public releases.
+ * update.electronjs.org background auto-update and the lightweight "notify me"
+ * release poll) target this repository's public GitHub releases. No token is
+ * required for reading public releases.
  */
 export const UpdateRepo = {
   owner: 'supermarsx',

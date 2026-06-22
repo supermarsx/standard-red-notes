@@ -9,8 +9,27 @@
   "installConfig": {
     "selfReferences": true
   },
+  "scripts": {
+    "forge:package": "electron-forge package",
+    "forge:make": "electron-forge make",
+    "forge:publish": "electron-forge publish"
+  },
   "dependencies": {
     "@standardnotes/home-server": "^1.23.0",
     "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-deb": "7.11.2",
+    "@electron-forge/maker-dmg": "7.11.2",
+    "@electron-forge/maker-rpm": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@electron-forge/maker-zip": "7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "7.11.2",
+    "@electron-forge/plugin-fuses": "7.11.2",
+    "@electron-forge/publisher-github": "7.11.2",
+    "@electron/fuses": "2.1.2",
+    "@reforged/maker-appimage": "5.2.0",
+    "electron": "42.4.1"
   }
 }
