@@ -55,6 +55,16 @@ module.exports = (env) => {
   }
 
   return {
+    // Standard Red Notes: persistent on-disk build cache. Subsequent builds only
+    // recompile changed modules, turning the cold ~minutes-long compile into a
+    // fraction of that. Invalidated automatically when this config changes. In
+    // Docker, mount node_modules/.cache to persist it across image builds.
+    cache: {
+      type: 'filesystem',
+      buildDependencies: {
+        config: [__filename],
+      },
+    },
     entry: './src/javascripts/index.ts',
     // The SN web app is intentionally large and already code-splits its heavy
     // editors (Excalidraw/Mermaid/etc.), so the 244 KiB asset-size recommendation
@@ -181,13 +191,31 @@ module.exports = (env) => {
           exclude:
             /node_modules\/(?!(@standardnotes\/common|@standardnotes\/domain-core|webextension-polyfill|yoga-layout))/,
           use: [
-            // compact output avoids babel's "deoptimised the styling of
-            // <large file>" note when it processes big bundles (e.g. snjs.js).
-            { loader: 'babel-loader', options: { compact: true } },
             {
-              loader: 'ts-loader',
+              // Standard Red Notes: one fast esbuild pass replaces the old
+              // babel + ts-loader chain. `target` tracks the project
+              // browserslist; the Safari floor is 12 (not 11) because esbuild
+              // cannot down-level ES2018 object-rest destructuring — which the
+              // workspace packages use heavily — to Safari 11.0/ES2017 (babel's
+              // preset-env could). Safari 11.1+ supports it natively, so only
+              // the 2017 Safari 11.0 is dropped. `jsx: 'automatic'` matches
+              // tsconfig's `react-jsx` runtime. esbuild does not type-check —
+              // neither did ts-loader (transpileOnly) — so `yarn tsc` stays the
+              // type gate.
+              loader: 'esbuild-loader',
               options: {
-                transpileOnly: true,
+                target: ['chrome80', 'edge88', 'firefox78', 'safari12'],
+                jsx: 'automatic',
+                // Pin an empty raw tsconfig so esbuild does NOT auto-read each
+                // file's nearest tsconfig `target` (several workspace packages
+                // extend a base that compiles to es6). Only the `target` above
+                // applies; webpack still resolves path aliases.
+                tsconfigRaw: {},
+                // All four targets above natively support destructuring, but
+                // esbuild still tries (and fails) to down-level certain array
+                // destructuring forms used in the workspace packages. Mark it
+                // supported so esbuild emits it as-is instead of erroring.
+                supported: { destructuring: true },
               },
             },
           ],

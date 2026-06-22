@@ -19,15 +19,49 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-COPY . .
+RUN npm install -g corepack@latest && corepack enable
 
-# Install only the web workspace's dependency closure. A full `yarn install` also packs the
-# desktop (`decrypt` → node-sass) and mobile (react-native forks) git deps, whose native
-# builds don't compile on Node 24; focusing skips them.
-RUN npm install -g corepack@latest \
-  && corepack enable \
-  && yarn workspaces focus @standardnotes/web \
-  && yarn build:web
+# --- Dependency layer ---------------------------------------------------------
+# Copy ONLY what Yarn needs to resolve + install the workspace graph: every
+# workspace's package.json, the lockfile, and the Yarn config/release. This keeps
+# the (slow) install below in its own cache layer so a change to application
+# SOURCE no longer re-downloads/relinks the whole dependency closure — the layer
+# is reused until a manifest or the lockfile actually changes.
+COPY package.json yarn.lock .yarnrc.yml babel.config.js ./
+COPY .yarn/ .yarn/
+COPY packages/api/package.json packages/api/
+COPY packages/clipper/package.json packages/clipper/
+COPY packages/desktop/package.json packages/desktop/
+COPY packages/desktop/app/package.json packages/desktop/app/
+COPY packages/encryption/package.json packages/encryption/
+COPY packages/features/package.json packages/features/
+COPY packages/filepicker/package.json packages/filepicker/
+COPY packages/files/package.json packages/files/
+COPY packages/icons/package.json packages/icons/
+COPY packages/mobile/package.json packages/mobile/
+COPY packages/models/package.json packages/models/
+COPY packages/releases/package.json packages/releases/
+COPY packages/responses/package.json packages/responses/
+COPY packages/services/package.json packages/services/
+COPY packages/sncrypto-common/package.json packages/sncrypto-common/
+COPY packages/sncrypto-web/package.json packages/sncrypto-web/
+COPY packages/snjs/package.json packages/snjs/
+COPY packages/styles/package.json packages/styles/
+COPY packages/toast/package.json packages/toast/
+COPY packages/ui-services/package.json packages/ui-services/
+COPY packages/utils/package.json packages/utils/
+COPY packages/web/package.json packages/web/
+
+# Install only the web workspace's dependency closure. A full `yarn install` also
+# packs the desktop (`decrypt` → node-sass) and mobile (react-native forks) git
+# deps, whose native builds don't compile on Node 24; focusing skips them.
+RUN yarn workspaces focus @standardnotes/web
+
+# --- Source + build layer -----------------------------------------------------
+# Now bring in the source and build. Only this layer rebuilds on a code change;
+# the dependency layer above stays cached.
+COPY . .
+RUN yarn build:web
 
 FROM nginx:1.27-alpine
 
