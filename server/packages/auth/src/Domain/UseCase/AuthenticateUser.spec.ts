@@ -257,6 +257,7 @@ describe('AuthenticateUser', () => {
     })
 
     expect(response.success).toBeFalsy()
+    expect(response.failureType).toEqual('REVOKED_SESSION')
   })
 
   it('should not authenticate a user if authentication method could not be determined', async () => {
