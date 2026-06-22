@@ -25,6 +25,8 @@ import BookmarksView from '../Bookmarks/BookmarksView'
 import TemplatesView from '../Templates/TemplatesView'
 import ConstellationView from '../Constellation/ConstellationView'
 import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
+import EmptyTabView from './EmptyTabView'
+import { loadNewTabBehavior } from '@/Tabs/newTabSettings'
 
 /**
  * Standard Red Notes: the editor tile layout defaults to Single (one note shown
@@ -300,6 +302,13 @@ class NoteGroupView extends AbstractComponent<Props, State> {
    * no-op (its `alreadyOpen` guard returns early).
    */
   private addTab = () => {
+    // Standard Red Notes: the "+" button is configurable. With the "empty" behavior
+    // it opens a blank placeholder tab; otherwise (the default) it creates a brand
+    // new note in its own tab.
+    if (loadNewTabBehavior() === 'empty') {
+      this.application.paneController.openEmptyTab()
+      return
+    }
     // Opening a new note tab takes over the content area, so deactivate any view tab.
     this.application.paneController.setActiveViewTab(undefined)
     void this.application.itemListController.openNewNoteInNewTile()
@@ -375,6 +384,10 @@ class NoteGroupView extends AbstractComponent<Props, State> {
    */
   private renderActiveViewTab(tab: ViewTab) {
     const viewClassName = 'flex-grow min-h-0'
+
+    if (tab.kind === 'empty') {
+      return <EmptyTabView application={this.application} tabId={tab.id} className={viewClassName} />
+    }
 
     if (tab.kind === 'conflict') {
       const note = this.application.items.findItem<SNNote>(tab.noteUuid)

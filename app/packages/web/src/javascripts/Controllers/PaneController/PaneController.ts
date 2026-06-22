@@ -50,6 +50,13 @@ export class PaneController extends AbstractViewController implements InternalEv
   viewTabs: ViewTab[] = []
   activeViewTabId: string | undefined = undefined
 
+  /**
+   * Monotonic counter used to mint unique ids for empty tabs (multiple may be open
+   * at once). Avoids Date.now()/Math.random() so ids are deterministic and stable
+   * across renders within a session.
+   */
+  private emptyTabCounter = 0
+
   currentNavPanelWidth = 0
   currentItemsPanelWidth = 0
   focusModeEnabled = false
@@ -91,6 +98,7 @@ export class PaneController extends AbstractViewController implements InternalEv
 
       openPaneTab: action,
       openConflictTab: action,
+      openEmptyTab: action,
       closeViewTab: action,
       setActiveViewTab: action,
 
@@ -320,6 +328,21 @@ export class PaneController extends AbstractViewController implements InternalEv
     if (!this.viewTabs.some((tab) => tab.id === id)) {
       this.viewTabs = [...this.viewTabs, { id, kind: 'conflict', noteUuid, title, icon: 'merge' }]
     }
+
+    this.activeViewTabId = id
+    this.presentPane(AppPaneId.Editor)
+  }
+
+  /**
+   * Standard Red Notes: opens a fresh empty placeholder tab in the editor tab bar
+   * and makes it active. Multiple empty tabs can coexist, so each gets a unique id
+   * from an incrementing instance counter. Makes the editor column visible so the
+   * tab content shows (important on mobile).
+   */
+  openEmptyTab = () => {
+    const id = `empty:${++this.emptyTabCounter}`
+
+    this.viewTabs = [...this.viewTabs, { id, kind: 'empty', title: 'New tab', icon: 'add' }]
 
     this.activeViewTabId = id
     this.presentPane(AppPaneId.Editor)

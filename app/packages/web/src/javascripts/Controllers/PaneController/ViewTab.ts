@@ -22,6 +22,17 @@ export type ViewTab =
       title: string
       icon: VectorIconNameOrEmoji
     }
+  | {
+      /**
+       * Standard Red Notes: an empty placeholder tab (no note/file/pane yet). Opened
+       * by the tab-bar "+" when the user has set the new-tab behavior to "empty". It
+       * renders an EmptyTabView from which a note can be created in place.
+       */
+      id: string
+      kind: 'empty'
+      title: string
+      icon: VectorIconNameOrEmoji
+    }
 
 /**
  * The panes that are surfaced as tabs. Each entry's icon matches the icon that

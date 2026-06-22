@@ -16,6 +16,7 @@ import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
 import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
+import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
 
 type Props = {
   application: WebApplication
@@ -33,6 +34,17 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
   const [useTranslucentUI, setUseTranslucentUI] = useLocalPreference(LocalPrefKey.UseTranslucentUI)
   const toggleTranslucentUI = () => {
     setUseTranslucentUI(!useTranslucentUI)
+  }
+
+  const [newTabBehavior, setNewTabBehavior] = useState<NewTabBehavior>(() => loadNewTabBehavior())
+  const newTabBehaviorOptions: DropdownItem[] = [
+    { label: 'New note', value: 'new-note' },
+    { label: 'Empty tab', value: 'empty' },
+  ]
+  const changeNewTabBehavior = (value: string) => {
+    const behavior = value as NewTabBehavior
+    setNewTabBehavior(behavior)
+    saveNewTabBehavior(behavior)
   }
 
   useEffect(() => {
@@ -148,6 +160,26 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
               </div>
             </div>
             <CustomThemesSection />
+          </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Editor tabs</Title>
+          <div className="mt-2">
+            <Subtitle>New tab opens</Subtitle>
+            <Text>
+              What the editor tab bar's "+" button does. "New note" creates a fresh note (the default); "Empty tab" opens
+              a blank placeholder you can turn into a note or fill from the notes list.
+            </Text>
+            <div className="mt-2">
+              <Dropdown
+                label="Select what the new tab button opens"
+                items={newTabBehaviorOptions}
+                value={newTabBehavior}
+                onChange={changeNewTabBehavior}
+              />
+            </div>
           </div>
         </PreferencesSegment>
       </PreferencesGroup>
