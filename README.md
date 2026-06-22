@@ -263,6 +263,48 @@ GitHub Actions — **no manual tagging required**. Releases roll automatically:
   `SHA256SUMS.txt`. Download the one matching your platform, verify the checksum,
   and run it directly. The two tools release as separate GitHub Releases.
 
+### Downloads
+
+Grab the prebuilt executable for your platform from the
+[**Releases**](https://github.com/supermarsx/standard-red-notes/releases) page.
+The two tools publish independently, so pick the newest release tagged
+`srn-client-v*` (client) or `srn-server-v*` (server). Node is baked in — there's
+nothing to install; download, verify, make it executable, and run.
+
+**`srn-client`** — terminal note CRUD (end-to-end encrypted):
+
+| Platform | x64 | arm64 |
+| --- | --- | --- |
+| Windows | `srn-client-windows-x64.exe` | `srn-client-windows-arm64.exe` |
+| macOS | `srn-client-macos-x64` | `srn-client-macos-arm64` |
+| Linux | `srn-client-linux-x64` | `srn-client-linux-arm64` |
+
+**`srn-server`** — operator helpers for the Docker stack:
+
+| Platform | x64 | arm64 |
+| --- | --- | --- |
+| Windows | `srn-server-windows-x64.exe` | `srn-server-windows-arm64.exe` |
+| macOS | `srn-server-macos-x64` | `srn-server-macos-arm64` |
+| Linux | `srn-server-linux-x64` | `srn-server-linux-arm64` |
+
+Direct download follows the tagged-release URL pattern (replace the tag with the
+current one from the Releases page, and the asset with your platform's row):
+
+```bash
+# Example: srn-client for Linux x64 from release srn-client-v25.1
+base=https://github.com/supermarsx/standard-red-notes/releases/download/srn-client-v25.1
+curl -LO "$base/srn-client-linux-x64"
+curl -LO "$base/SHA256SUMS.txt"
+sha256sum -c SHA256SUMS.txt --ignore-missing   # verify integrity
+chmod +x srn-client-linux-x64                  # Linux/macOS only
+./srn-client-linux-x64 --help
+```
+
+On Windows, download the matching `.exe` and run it from PowerShell or
+double-click; verify with `Get-FileHash srn-client-windows-x64.exe -Algorithm SHA256`
+against `SHA256SUMS.txt`. On macOS you may need to clear the quarantine flag with
+`xattr -d com.apple.quarantine ./srn-client-macos-arm64` before first run.
+
 ## API
 
 Your self-hosted server exposes the full Standard Notes HTTP API through the API
