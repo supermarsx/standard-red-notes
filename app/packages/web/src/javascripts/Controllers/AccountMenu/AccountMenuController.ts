@@ -2,6 +2,7 @@ import { destroyAllObjectProperties } from '@/Utils'
 import { action, computed, makeObservable, observable, runInAction } from 'mobx'
 import {
   ApplicationEvent,
+  Challenge,
   ContentType,
   GetHost,
   InternalEventBusInterface,
@@ -37,6 +38,16 @@ export class AccountMenuController extends AbstractViewController implements Int
    * deliberately re-opens sign-in from the status).
    */
   reloginPromptDismissed = false
+
+  /**
+   * The unanswered invalid-session re-auth challenge that we deliberately leave
+   * PENDING while `reloginPromptDismissed` is set. snjs suppresses further
+   * re-auth attempts (and the failed syncs behind them) while a challenge is
+   * unresolved, so holding this open is what stops the tight 401 retry storm.
+   * It is cancelled once the user successfully signs in again, which resets
+   * snjs's internal guard so a future invalid session can prompt normally.
+   */
+  pendingReauthChallenge: Challenge | undefined = undefined
 
   override deinit() {
     super.deinit()

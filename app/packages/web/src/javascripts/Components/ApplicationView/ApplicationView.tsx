@@ -118,11 +118,16 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         receiveChallenge: async (challenge) => {
           // If the user has already dismissed the invalid-session re-login
           // prompt, do NOT keep re-popping it on every subsequent failed sync.
-          // Immediately cancel this re-auth challenge (so snjs's pending promise
-          // settles) and leave the footer to surface a clickable "Login needed"
-          // status instead of nagging with a modal.
+          // Leave this re-auth challenge PENDING (do NOT cancel it): snjs guards
+          // re-auth with an internal "challenge presented" flag that stays set
+          // while a challenge is unresolved, which suppresses further re-auth
+          // attempts AND the failed-sync retries behind them. Cancelling here
+          // resets that guard, so the next 401 immediately re-presents → cancel
+          // → a ~30ms `/v1/items` 401 storm that breaks the tab. We stash it and
+          // settle it only once the user signs in again. The footer surfaces a
+          // clickable "Login needed" and openSignIn() lets them re-auth.
           if (isSessionReauthChallenge(challenge) && application.accountMenuController.reloginPromptDismissed) {
-            application.cancelChallenge(challenge)
+            application.accountMenuController.pendingReauthChallenge = challenge
             return
           }
           const challengesCopy = challenges.slice()
@@ -223,8 +228,15 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         })
       } else if (eventName === ApplicationEvent.SignedIn || eventName === ApplicationEvent.CompletedFullSync) {
         // The session is valid again (the user signed in, or a full sync
-        // succeeded after re-auth). Clear any lingering "login needed" state so
-        // the footer returns to its normal connection status.
+        // succeeded after re-auth). Settle the re-auth challenge we left pending
+        // so snjs's internal guard resets for the future (safe now — there is no
+        // active 401 loop to restart), and clear the "login needed" state so the
+        // footer returns to its normal connection status.
+        const pendingChallenge = application.accountMenuController.pendingReauthChallenge
+        if (pendingChallenge) {
+          application.accountMenuController.pendingReauthChallenge = undefined
+          application.cancelChallenge(pendingChallenge)
+        }
         if (application.accountMenuController.reloginPromptDismissed) {
           application.accountMenuController.setReloginPromptDismissed(false)
         }
