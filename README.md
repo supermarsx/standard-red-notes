@@ -241,6 +241,31 @@ the app/server lockfiles):
   status, logs, config validation, and thin `docker compose` wrappers. Zero
   runtime dependencies. See [`cli/srn-server/README.md`](cli/srn-server/README.md).
 
+### Prebuilt binaries and releases
+
+Each CLI tool is released independently as native, single-file executables via
+GitHub Actions — **no manual tagging required**. Releases roll automatically:
+
+- **Triggers.** Pushing to `main` runs the per-tool workflow when that tool's
+  directory changes — [`release-srn-client.yml`](.github/workflows/release-srn-client.yml)
+  on `cli/srn-client/**`, [`release-srn-server.yml`](.github/workflows/release-srn-server.yml)
+  on `cli/srn-server/**`. Both can also be run on demand from the Actions tab
+  (`workflow_dispatch`).
+- **Pipeline.** Each workflow is gated: **check → build → package → release**
+  (a stage only runs if the previous one passed). Packaging cross-compiles with
+  [`@yao-pkg/pkg`](https://github.com/yao-pkg/pkg) on a single Linux runner.
+- **Versioning.** Rolling, per tool, `YY.N` resetting each year (e.g. the first
+  2025 client release is `25.1`, the next `25.2`, …). The server tool counts
+  independently. The workflow computes `N` at release time from existing
+  releases and creates a namespaced tag (`srn-client-v25.1`, `srn-server-v25.1`).
+- **Artifacts.** Every release attaches **6 executables** — Windows, macOS, and
+  Linux, each in `x64` and `arm64` (Windows ones end in `.exe`) — plus a
+  `SHA256SUMS.txt`. Download the one matching your platform, verify the checksum,
+  and run it directly. The two tools release as separate GitHub Releases.
+
+`ci.yml` additionally runs the full monorepo check + build (root, `app/`, and
+`server/` Yarn PnP installs) plus both CLIs on every pull request.
+
 ## API
 
 Your self-hosted server exposes the full Standard Notes HTTP API through the API

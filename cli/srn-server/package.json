@@ -9,11 +9,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:bundle": "node esbuild.config.mjs",
+    "package": "node esbuild.config.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
   }
 }

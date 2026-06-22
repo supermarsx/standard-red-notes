@@ -1,0 +1,290 @@
+# Rolling release pipeline for the `srn-client` CLI tool.
+#
+# Gated stages (each only runs if the previous succeeded, via `needs:`):
+#   check -> build -> decide -> package -> release
+#
+# Trigger: push to `main` that touches the tool (or manual dispatch). A new
+# rolling release `srn-client <YY.N>` is cut ONLY when the freshly built bundle
+# differs from the last released one (content fingerprint gate); no-op pushes
+# do not create a release.
+name: release-srn-client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cli/srn-client/**'
+      - '.github/workflows/release-srn-client.yml'
+  workflow_dispatch:
+
+# The release job creates a tag + GitHub Release, so it needs write access to
+# repository contents. All other jobs inherit the default read-only token.
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TOOL: srn-client
+  TOOL_DIR: cli/srn-client
+  NODE_VERSION: '22'
+  # @yao-pkg/pkg base-binary target Node major. 24 is confirmed supported by
+  # @yao-pkg/pkg 6.x; the tool itself is built/bundled for node22 so this is
+  # purely the runtime baked into the produced executables.
+  PKG_NODE: node24
+  PKG_VERSION: '6.20.0'
+
+jobs:
+  # 1) CHECK — typecheck for this tool.
+  #
+  # srn-client is a standalone npm package (no committed lockfile, not part of
+  # any yarn workspace root). It has its own deps, so it gets its own install.
+  # The shared monorepo workspaces (root / app / server) are NOT needed to
+  # check or build this CLI, so we keep this job lean.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run typecheck
+
+      # srn-client has no dedicated lint/format/test scripts of its own; the
+      # strict typecheck (tsc --noEmit) is the gate. Assert the entry points
+      # exist so a missing/renamed script fails loudly here.
+      - name: Verify package shape
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          node -e "const p=require('./package.json'); if(!p.bin||!p.bin['srn-client']) {console.error('missing bin'); process.exit(1)}"
+          test -f esbuild.config.mjs
+          test -f src/index.ts
+
+  # 2) BUILD — produce the bundled CJS entry (dist/index.cjs) via esbuild and a
+  # deterministic content fingerprint (sha256 of that bundle). The esbuild
+  # output is byte-reproducible (no timestamps), so this fingerprint is a stable
+  # identity for "what would we ship". We do NOT fingerprint the pkg binaries —
+  # pkg embeds the Node version/timestamps, so those are not reproducible.
+  build:
+    name: build
+    needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Build bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run build
+
+      - name: Smoke-test bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: node dist/index.cjs --help || true
+
+      - name: Compute content fingerprint
+        id: fp
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          fp="$(sha256sum dist/index.cjs | awk '{print $1}')"
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$fp" > "dist/${TOOL}.fingerprint"
+          echo "Bundle fingerprint: ${fp}"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: srn-client-bundle
+          path: |
+            ${{ env.TOOL_DIR }}/dist/index.cjs
+            ${{ env.TOOL_DIR }}/dist/srn-client.fingerprint
+          retention-days: 1
+          if-no-files-found: error
+
+  # 3) DECIDE — compare the new bundle fingerprint against the one stored on the
+  # most recent release for THIS tool. Output changed=true to proceed, or
+  # changed=false to skip packaging + release entirely (a successful no-op).
+  decide:
+    name: decide
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare against last released fingerprint
+        id: cmp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_FP: ${{ needs.build.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          # Find the latest release tag for this tool (tags are namespaced as
+          # "<tool>-v<YY>.<N>"). Releases are returned newest-first.
+          last_tag="$(gh release list --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E "^${TOOL}-v[0-9]+\.[0-9]+$" | head -n1 || true)"
+          if [ -z "$last_tag" ]; then
+            echo "No prior ${TOOL} release found -> treat as changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Last ${TOOL} release: ${last_tag}"
+          old_fp=""
+          if gh release download "$last_tag" --pattern "${TOOL}.fingerprint" --output old.fingerprint --clobber 2>/dev/null; then
+            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
+          else
+            echo "Last release has no fingerprint asset -> treat as changed."
+          fi
+          echo "old=${old_fp}"
+          echo "new=${NEW_FP}"
+          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
+            echo "No changes since ${last_tag}, skipping release."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Bundle changed since ${last_tag} -> release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 4) PACKAGE — cross-compile native executables for every OS x arch from the
+  # single bundled CJS entry, using @yao-pkg/pkg on one Linux runner. Skipped
+  # when the bundle is unchanged.
+  package:
+    name: package
+    needs: [build, decide]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: srn-client-bundle
+          path: ${{ env.TOOL_DIR }}/dist
+
+      - name: Package native executables
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # OS/arch matrix -> deterministic output names. pkg names a target as
+          # "<node>-<os>-<arch>"; Windows binaries get a .exe suffix.
+          declare -A TARGETS=(
+            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
+            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
+            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
+            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
+            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
+            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
+          )
+          for out_name in "${!TARGETS[@]}"; do
+            target="${TARGETS[$out_name]}"
+            echo "::group::pkg $target -> $out_name"
+            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
+              --no-signature \
+              --targets "$target" \
+              --output "out/${out_name}" \
+              dist/index.cjs
+            echo "::endgroup::"
+          done
+          # Carry the fingerprint forward so it gets attached to the release.
+          cp "dist/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
+          echo "Produced:"
+          ls -la out
+
+      - name: Generate checksums
+        working-directory: ${{ env.TOOL_DIR }}/out
+        run: |
+          # Checksum only the executables (exclude the fingerprint helper file).
+          sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: srn-client-binaries
+          path: ${{ env.TOOL_DIR }}/out/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # 5) RELEASE — compute a rolling YY.N version for THIS tool, create a
+  # namespaced tag, and publish a GitHub Release with the 6 binaries, the
+  # checksums, and the fingerprint asset (read back by the next run's decide).
+  release:
+    name: release
+    needs: [decide, package]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: srn-client-binaries
+          path: out
+
+      # Rolling version: YY.N, resetting N each calendar year, namespaced per
+      # tool. List existing releases for THIS tool's "srn-client-v<YY>." tag
+      # prefix, take the max N, and add 1 (default 1 if none yet).
+      - name: Compute rolling version
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          YY="$(date -u +%y)"
+          prefix="${TOOL}-v${YY}."
+          max=0
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            n="${tag#${prefix}}"
+            if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
+              max="$n"
+            fi
+          done < <(gh release list --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          next=$((max + 1))
+          version="${YY}.${next}"
+          tag="${TOOL}-v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Next ${TOOL} release: ${tag} (version ${version})"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ env.TOOL }} ${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            out/*
