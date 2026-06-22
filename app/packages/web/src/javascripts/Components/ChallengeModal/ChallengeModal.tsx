@@ -7,6 +7,7 @@ import {
   ChallengeValidation,
   ChallengeValue,
   removeFromArray,
+  SessionStrings,
 } from '@standardnotes/snjs'
 import { ProtectedIllustration } from '@standardnotes/icons'
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
@@ -122,6 +123,16 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
 
   const cancelChallenge = useCallback(() => {
     if (challenge.cancelable) {
+      // When the user explicitly cancels/closes the invalid-session re-login
+      // prompt, remember that so the app stops force-reopening it on every
+      // failed sync. The footer surfaces a clickable "Login needed" status
+      // instead; clicking it (or a successful sign-in) clears this flag.
+      if (
+        challenge.reason === ChallengeReason.Custom &&
+        challenge.heading === SessionStrings.EnterEmailAndPassword
+      ) {
+        application.accountMenuController.setReloginPromptDismissed(true)
+      }
       application.cancelChallenge(challenge)
       onDismiss?.(challenge)
     }

@@ -19,8 +19,13 @@ export type CollaborationFrame =
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
+  // Standard Red Notes: an end-to-end-encrypted note-comment event. `payload` is
+  // a base64(iv ‖ ciphertext) blob encrypted with the same per-room key as the
+  // yjs frames, so the gateway never sees comment text. Used to push new/edited
+  // comments live to collaborators who have the same note open.
+  | { t: 'comment'; room: string; payload: string }
 
-const COLLABORATION_FRAME_TYPES = new Set(['room-join', 'room-leave', 'room-sync', 'yjs', 'awareness'])
+const COLLABORATION_FRAME_TYPES = new Set(['room-join', 'room-leave', 'room-sync', 'yjs', 'awareness', 'comment'])
 
 /**
  * Standard Red Notes (Phase 1A): payload carried by a SYNC_ITEMS_PUSHED message.

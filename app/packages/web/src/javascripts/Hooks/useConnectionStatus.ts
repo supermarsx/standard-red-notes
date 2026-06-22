@@ -1,8 +1,9 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { ApplicationEvent } from '@standardnotes/snjs'
+import { reaction } from 'mobx'
 import { useEffect, useRef, useState } from 'react'
 
-export type ConnectionStatusKind = 'online' | 'offline' | 'reconnecting'
+export type ConnectionStatusKind = 'online' | 'offline' | 'reconnecting' | 'login-needed'
 
 export type ConnectionStatus = {
   kind: ConnectionStatusKind
@@ -10,6 +11,17 @@ export type ConnectionStatus = {
   lastSyncDate?: Date
   /** True when the active account has no server session (purely local). */
   signedOut: boolean
+}
+
+/**
+ * Whether the footer should surface the "Login needed" state. This is true when
+ * the account session became involuntarily invalid (a 401/498 re-auth prompt)
+ * and the user dismissed the re-login prompt, recorded on the account menu
+ * controller. A *deliberate* full sign-out clears local data and never sets this
+ * flag, so it reads as normal `online`/`offline`, not a nag.
+ */
+function isLoginNeeded(application: WebApplication): boolean {
+  return application.accountMenuController.reloginPromptDismissed === true
 }
 
 /**
@@ -58,6 +70,12 @@ export const CONNECTION_HEARTBEAT_MS = 30_000
  *  - `reconnecting` — online at the browser level but the sync system is out of
  *                     sync or persistently failing (a degraded, recovering state).
  *  - `online`       — reachable and healthy.
+ *
+ * Note: `login-needed` is intentionally NOT produced here. It is not a
+ * connectivity signal — it is a session/re-auth state (the account session
+ * became invalid and the user dismissed the re-login prompt) layered on top of
+ * the connectivity status inside the hook. Keeping it out of this pure resolver
+ * preserves the resolver's single responsibility (signals → connectivity kind).
  *
  * The realtime websocket state is intentionally NOT an input. The websocket is a
  * live-push optimization layered on top of HTTP sync, which remains the source
@@ -138,15 +156,20 @@ export function useConnectionStatus(application: WebApplication): ConnectionStat
       const previous = statusRef.current
       const lastSyncDate = application.sync.getLastSyncDate() ?? previous.lastSyncDate
       const signedOut = application.sessions.isSignedOut()
+      // `login-needed` is an actionable, user-dismissed re-auth state and takes
+      // precedence over the connectivity kind: it must stay visible (and
+      // clickable) regardless of the underlying reachability. It is not subject
+      // to the down-grace because it isn't a flapping signal.
+      const resolvedKind: ConnectionStatusKind = isLoginNeeded(application) ? 'login-needed' : kind
       // Memoize: only emit a new object when something the chip renders changed.
       if (
-        previous.kind === kind &&
+        previous.kind === resolvedKind &&
         previous.signedOut === signedOut &&
         previous.lastSyncDate?.getTime() === lastSyncDate?.getTime()
       ) {
         return
       }
-      setStatus({ kind, lastSyncDate, signedOut })
+      setStatus({ kind: resolvedKind, lastSyncDate, signedOut })
     }
 
     /**
@@ -220,6 +243,14 @@ export function useConnectionStatus(application: WebApplication): ConnectionStat
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
 
+    // React to the "re-login dismissed" flag flipping (set when the user closes
+    // the invalid-session prompt, cleared on sign-in) so the chip flips to/from
+    // `login-needed` immediately without waiting for the next sync event.
+    const disposeReloginReaction = reaction(
+      () => application.accountMenuController.reloginPromptDismissed,
+      () => recompute(),
+    )
+
     // Slow fallback heartbeat: samples the websocket open state (no discrete
     // event exists for it) without being a spammy poll.
     const heartbeat = setInterval(recompute, CONNECTION_HEARTBEAT_MS)
@@ -229,6 +260,7 @@ export function useConnectionStatus(application: WebApplication): ConnectionStat
       clearGrace()
       clearInterval(heartbeat)
       removeEventObserver()
+      disposeReloginReaction()
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
     }

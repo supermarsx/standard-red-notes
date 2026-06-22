@@ -75,6 +75,7 @@ import { MapEditor, MapEditorIdentifier } from './MapEditor/MapEditor'
 import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
+import CommentsPanel from '../Comments/CommentsPanel'
 import PresenceBadge from './PresenceBadge'
 import Button from '../Button/Button'
 import Icon from '../Icon/Icon'
@@ -1195,6 +1196,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               />
               <div className="mt-2.5">
                 <CollaboratorsPresencePanel item={this.note} />
+              </div>
+              <div className="mt-2.5">
+                <CommentsPanel note={this.note} />
               </div>
             </div>
           </div>

@@ -28,6 +28,16 @@ export class AccountMenuController extends AbstractViewController implements Int
   showRegister = false
   currentPane = AccountMenuPane.GeneralMenu
 
+  /**
+   * True when the server session became invalid (expired/rejected — NOT a clean
+   * server-side revoke that wipes local data) and the user dismissed the
+   * automatic re-login prompt. While this is set, the app must NOT keep
+   * re-popping the sign-in challenge; instead the footer surfaces a clickable
+   * "Login needed" status. Cleared on a successful sign-in (or when the user
+   * deliberately re-opens sign-in from the status).
+   */
+  reloginPromptDismissed = false
+
   override deinit() {
     super.deinit()
     ;(this.notesAndTags as unknown) = undefined
@@ -55,6 +65,7 @@ export class AccountMenuController extends AbstractViewController implements Int
       deletingAccount: observable,
       showRegister: observable,
       currentPane: observable,
+      reloginPromptDismissed: observable,
 
       setShow: action,
       toggleShow: action,
@@ -66,6 +77,8 @@ export class AccountMenuController extends AbstractViewController implements Int
       setCurrentPane: action,
       setServer: action,
       setDeletingAccount: action,
+      setReloginPromptDismissed: action,
+      openSignIn: action,
 
       notesAndTagsCount: computed,
     })
@@ -148,6 +161,22 @@ export class AccountMenuController extends AbstractViewController implements Int
 
   setDeletingAccount = (deletingAccount: boolean): void => {
     this.deletingAccount = deletingAccount
+  }
+
+  setReloginPromptDismissed = (dismissed: boolean): void => {
+    this.reloginPromptDismissed = dismissed
+  }
+
+  /**
+   * Opens the account menu directly on the Sign In pane. Used both by the
+   * "Login needed" footer status (click-to-resume) and any other programmatic
+   * sign-in entry point. Clears the dismissed flag so the status returns to its
+   * normal state once the user is acting on the prompt.
+   */
+  openSignIn = (): void => {
+    this.reloginPromptDismissed = false
+    this.setShow(true)
+    this.setCurrentPane(AccountMenuPane.SignIn)
   }
 
   get notesAndTagsCount(): number {

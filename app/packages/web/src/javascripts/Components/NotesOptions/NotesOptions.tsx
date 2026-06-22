@@ -454,6 +454,20 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         {notes.length === 1 && (
           <MenuItem
             onClick={() => {
+              // Account-gated sharing reuses the existing trusted-contact /
+              // shared-vault E2E invite flow, which is vault-scoped. We route the
+              // user to the Vaults preferences pane where they can move the note
+              // into a shared vault and invite a contact who has an account.
+              application.openPreferences('vaults')
+            }}
+          >
+            <Icon type="user" className={iconClass} />
+            Invite by account…
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
               setPublishGitHubOpen(true)
             }}
             disabled={areSomeNotesInReadonlySharedVault}

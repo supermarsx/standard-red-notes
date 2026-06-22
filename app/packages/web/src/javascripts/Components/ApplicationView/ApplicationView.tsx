@@ -3,6 +3,8 @@ import { getPlatformString } from '@/Utils'
 import {
   ApplicationEvent,
   Challenge,
+  ChallengeReason,
+  SessionStrings,
   removeFromArray,
   WebAppEvent,
   PrefKey,
@@ -62,6 +64,17 @@ const LazyLoadedClipperView = lazy(() => import('../ClipperView/ClipperView'))
 const LazyLoadedAssistantView = lazy(() => import('../Assistant/AssistantView'))
 const LazyLoadedConstellationView = lazy(() => import('../Constellation/ConstellationView'))
 
+/**
+ * Identifies the "your session became invalid, please re-enter your email and
+ * password" challenge that snjs pops whenever an authenticated request gets a
+ * 401/498 that isn't a clean server-side revoke. It is a `Custom` challenge
+ * whose heading is the (stable) session-recovery copy. We special-case it so
+ * that, once the user dismisses it, we stop letting it re-pop on every failed
+ * sync and instead surface a clickable "Login needed" footer status.
+ */
+const isSessionReauthChallenge = (challenge: Challenge): boolean =>
+  challenge.reason === ChallengeReason.Custom && challenge.heading === SessionStrings.EnterEmailAndPassword
+
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
   const platformString = getPlatformString()
   const [launched, setLaunched] = useState(false)
@@ -103,6 +116,15 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     application
       .prepareForLaunch({
         receiveChallenge: async (challenge) => {
+          // If the user has already dismissed the invalid-session re-login
+          // prompt, do NOT keep re-popping it on every subsequent failed sync.
+          // Immediately cancel this re-auth challenge (so snjs's pending promise
+          // settles) and leave the footer to surface a clickable "Login needed"
+          // status instead of nagging with a modal.
+          if (isSessionReauthChallenge(challenge) && application.accountMenuController.reloginPromptDismissed) {
+            application.cancelChallenge(challenge)
+            return
+          }
           const challengesCopy = challenges.slice()
           challengesCopy.push(challenge)
           setChallenges(challengesCopy)
@@ -199,6 +221,13 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
           type: ToastType.Error,
           message: 'Too many requests. Please try again later.',
         })
+      } else if (eventName === ApplicationEvent.SignedIn || eventName === ApplicationEvent.CompletedFullSync) {
+        // The session is valid again (the user signed in, or a full sync
+        // succeeded after re-auth). Clear any lingering "login needed" state so
+        // the footer returns to its normal connection status.
+        if (application.accountMenuController.reloginPromptDismissed) {
+          application.accountMenuController.setReloginPromptDismissed(false)
+        }
       }
     })
 

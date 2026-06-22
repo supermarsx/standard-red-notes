@@ -9,6 +9,9 @@ export type CollabFrame =
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
+  // Standard Red Notes: an E2E-encrypted note-comment event (see WebsocketsService
+  // CollaborationFrame). Carries an encrypted JSON comment payload.
+  | { t: 'comment'; room: string; payload: string }
 
 export interface CollabChannel {
   isConnected(): boolean

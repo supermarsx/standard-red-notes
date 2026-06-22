@@ -61,6 +61,14 @@ import {
   removeBookmark as removeBookmarkFromList,
   updateBookmark as updateBookmarkInList,
 } from '../../Bookmarks/bookmarks'
+import {
+  NoteCommentsKey,
+  NoteComment,
+  getNoteComments,
+  upsertComment as upsertCommentInList,
+  removeComment as removeCommentFromList,
+  setCommentResolved as setCommentResolvedInList,
+} from '../../Comments/comments'
 import { NoteIsTemplateKey, noteIsTemplate } from '../../Templates/templates'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
@@ -656,6 +664,47 @@ export class NotesController
   ) {
     const next = updateBookmarkInList(getNoteBookmarks(note), bookmarkId, patch)
     await this.writeNoteBookmarks(note, next)
+  }
+
+  /**
+   * Standard Red Notes: per-note comment thread (+ @mentions).
+   *
+   * Persisted in the note's encrypted appData under the `comments` key — the EXACT
+   * mechanism used for bookmarks/reminders/hero above: `mutator.setAppDataItem` +
+   * `sync`. Comment text therefore rides inside the note's E2E content; the server
+   * (and the realtime relay) never see it. No models/server change. Writing an
+   * empty list clears the key. Never bypasses a locked note.
+   */
+  private async writeNoteComments(note: SNNote, comments: NoteComment[]) {
+    if (note.locked) {
+      return
+    }
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        mutator.setAppDataItem(NoteCommentsKey, comments.length > 0 ? comments : undefined)
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  /** Add or replace a comment on a note (matched by id). */
+  async upsertNoteComment(note: SNNote, comment: NoteComment) {
+    const next = upsertCommentInList(getNoteComments(note), comment)
+    await this.writeNoteComments(note, next)
+  }
+
+  /** Remove a comment (and its replies) from a note by id. */
+  async removeNoteComment(note: SNNote, commentId: string) {
+    const next = removeCommentFromList(getNoteComments(note), commentId)
+    await this.writeNoteComments(note, next)
+  }
+
+  /** Set/clear the resolved flag on a comment by id. */
+  async setNoteCommentResolved(note: SNNote, commentId: string, resolved: boolean) {
+    const next = setCommentResolvedInList(getNoteComments(note), commentId, resolved)
+    await this.writeNoteComments(note, next)
   }
 
   /** Mark a reminder (by id) as notified so the checker won't re-fire it. */

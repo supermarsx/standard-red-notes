@@ -53,6 +53,25 @@ describe('resolveConnectionStatus', () => {
     ).toBe('reconnecting')
   })
 
+  it('never produces login-needed from connectivity signals alone', () => {
+    // `login-needed` is a session/re-auth state layered on top of connectivity
+    // by the hook (driven by the account-menu controller's dismissed flag), not
+    // a product of the pure resolver. No combination of raw signals should make
+    // the resolver return it.
+    const permutations: ConnectionSignals[] = [
+      baseSignals,
+      { ...baseSignals, browserOnline: false },
+      { ...baseSignals, outOfSync: true },
+      { ...baseSignals, syncFailing: true },
+      { ...baseSignals, socketOpen: false },
+      { ...baseSignals, socketOpen: undefined },
+      { browserOnline: false, socketOpen: false, outOfSync: true, syncFailing: true },
+    ]
+    for (const signals of permutations) {
+      expect(resolveConnectionStatus(signals)).not.toBe('login-needed')
+    }
+  })
+
   describe('flapping suppression (no transient state changes from routine sync activity)', () => {
     it('does not change state across a healthy sync round-trip', () => {
       // A sync merely being in progress is not an input to the resolver, so a
