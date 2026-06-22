@@ -86,6 +86,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # This job runs only `npx prettier` (no install), so skip setup-node's
+          # auto package-manager cache — it would otherwise detect the repo
+          # root's `packageManager: yarn@4` and fail under the runner's yarn 1.x.
+          package-manager-cache: false
 
       - name: Check formatting
         working-directory: ${{ env.TOOL_DIR }}
@@ -231,6 +235,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # Packaging only runs `npx @yao-pkg/pkg` against the prebuilt bundle
+          # artifact (no install), so skip the auto package-manager cache that
+          # would detect the repo root's `packageManager: yarn@4` and fail.
+          package-manager-cache: false
 
       - name: Download bundle artifact
         uses: actions/download-artifact@v4

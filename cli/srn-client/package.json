@@ -15,7 +15,8 @@
   "dependencies": {
     "@standardnotes/sncrypto-web": "1.14.11",
     "@standardnotes/snjs": "2.211.6",
-    "libsodium-wrappers-sumo": "0.8.4"
+    "libsodium-wrappers-sumo": "0.8.4",
+    "uuid": "9.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
