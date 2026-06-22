@@ -190,8 +190,8 @@ const FONT_FAMILIES: { name: string; value: string | null }[] = [
   { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
 ]
 
-const MIN_FONT_SIZE = 10
-const MAX_FONT_SIZE = 48
+const MIN_FONT_SIZE = 8
+const MAX_FONT_SIZE = 96
 const FONT_SIZE_STEP = 2
 
 const parseFontSize = (value: string): number => {
@@ -370,6 +370,7 @@ const ToolbarPlugin = () => {
   const selectionMoreAnchorRef = useRef<HTMLButtonElement>(null)
 
   const [currentFontFamily, setCurrentFontFamily] = useState<string>('')
+  const [currentFontSize, setCurrentFontSize] = useState<number>(16)
 
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
@@ -519,6 +520,7 @@ const ToolbarPlugin = () => {
     setIsHighlight(selection.hasFormat('highlight'))
 
     setCurrentFontFamily($getSelectionStyleValueForProperty(selection, 'font-family', ''))
+    setCurrentFontSize(parseFontSize($getSelectionStyleValueForProperty(selection, 'font-size', '16px')))
 
     // Update links
     const node = getSelectedNode(selection)
@@ -677,7 +679,24 @@ const ToolbarPlugin = () => {
         }
         const current = parseFontSize($getSelectionStyleValueForProperty(selection, 'font-size', '16px'))
         const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, current + direction * FONT_SIZE_STEP))
+        setCurrentFontSize(next)
         $patchStyleText(selection, { 'font-size': `${next}px` })
+      })
+    },
+    [activeEditor],
+  )
+
+  // Apply an exact font size (from the numeric input), clamped to the allowed
+  // range, to the current selection.
+  const applyFontSize = useCallback(
+    (size: number) => {
+      const clamped = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)))
+      setCurrentFontSize(clamped)
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          $patchStyleText(selection, { 'font-size': `${clamped}px` })
+        }
       })
     },
     [activeEditor],
@@ -1237,6 +1256,40 @@ const ToolbarPlugin = () => {
         </span>
       </ToolbarButton>
     ),
+    [ToolbarButtonId.FontSize]: (
+      <div className="flex flex-shrink-0 items-center" key="fontSizeInput">
+        <input
+          type="number"
+          aria-label="Font size"
+          title="Font size"
+          min={MIN_FONT_SIZE}
+          max={MAX_FONT_SIZE}
+          value={currentFontSize}
+          onChange={(event) => {
+            const next = parseInt(event.target.value, 10)
+            if (!Number.isNaN(next)) {
+              setCurrentFontSize(next)
+            }
+          }}
+          onBlur={(event) => {
+            const next = parseInt(event.target.value, 10)
+            applyFontSize(Number.isNaN(next) ? currentFontSize : next)
+          }}
+          onKeyDown={(event) => {
+            // Keep arrow keys for the native spinner / caret rather than letting
+            // the Ariakit toolbar move focus between items.
+            event.stopPropagation()
+            if (event.key === 'Enter') {
+              const next = parseInt((event.target as HTMLInputElement).value, 10)
+              applyFontSize(Number.isNaN(next) ? currentFontSize : next)
+              ;(event.target as HTMLInputElement).blur()
+            }
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+          className="h-8 w-12 rounded-md border border-border bg-default px-1 text-center text-sm focus:border-info focus:outline-none md:h-7"
+        />
+      </div>
+    ),
     [ToolbarButtonId.DecreaseFontSize]: (
       <ToolbarButton name="Decrease font size" onSelect={() => stepFontSize(-1)}>
         <span className="text-xs font-semibold leading-none">A&minus;</span>
@@ -1254,7 +1307,14 @@ const ToolbarPlugin = () => {
         ref={fontFamilyAnchorRef}
         className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span
+          className="max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-none"
+          style={{ fontFamily: currentFontFamily || undefined }}
+        >
+          {FONT_FAMILIES.find((font) =>
+            font.value === null ? currentFontFamily === '' : currentFontFamily === font.value,
+          )?.name ?? 'Custom'}
+        </span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -1672,18 +1732,25 @@ const ToolbarPlugin = () => {
         )}
         <div className="flex w-full flex-shrink-0 border-t border-border md:border-0">
           <Toolbar
-            className="super-toolbar flex items-center gap-1 overflow-x-auto px-1 md:flex-wrap"
+            className="super-toolbar flex items-center gap-1.5 overflow-x-auto px-1 py-0.5 md:flex-wrap md:gap-y-1"
             ref={toolbarRef}
             store={toolbarStore}
           >
             {canShowAllItems
-              ? resolvedGroups.map((group, groupIndex) => (
-                  <Fragment key={group.id}>
-                    {groupIndex > 0 && <ToolbarSeparator />}
+              ? resolvedGroups.map((group) => (
+                  // Word/Office-style segmented groups: each group is a rounded
+                  // cluster (tight inner spacing) with clear space between groups,
+                  // so related formatting controls are visually chunked together.
+                  <div
+                    key={group.id}
+                    role="group"
+                    aria-label={group.label}
+                    className="super-toolbar-group flex flex-shrink-0 items-center gap-0.5 rounded-lg bg-contrast px-1 py-0.5"
+                  >
                     {group.buttons.map((button) => (
                       <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
                     ))}
-                  </Fragment>
+                  </div>
                 ))
               : floatingSelectionToolbar}
             {contextualWidget && contextualButtons.length > 0 && (

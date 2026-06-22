@@ -47,6 +47,7 @@ export enum ToolbarButtonId {
   DecreaseFontSize = 'decreaseFontSize',
   IncreaseFontSize = 'increaseFontSize',
   FontFamily = 'fontFamily',
+  FontSize = 'fontSize',
   // Paragraph / list
   BulletedList = 'bulletedList',
   NumberedList = 'numberedList',
@@ -118,13 +119,14 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   },
   {
     id: ToolbarGroupId.ColorFont,
-    label: 'Color & font',
+    label: 'Font',
     buttons: [
-      { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.FontSize, label: 'Font size', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.DecreaseFontSize, label: 'Decrease font size', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.IncreaseFontSize, label: 'Increase font size', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
     ],
   },
   {

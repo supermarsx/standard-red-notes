@@ -100,14 +100,14 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           todosLabel="Todos"
         />
         <ResearchSectionButton application={application} />
+        <BookmarksSectionButton application={application} />
+        <TemplatesSectionButton application={application} />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}
           navigationController={application.navigationController}
         />
         <TagsSection />
-        <BookmarksSectionButton application={application} />
-        <TemplatesSectionButton application={application} />
       </div>
       <div
         className={classNames(
