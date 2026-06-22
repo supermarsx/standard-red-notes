@@ -40,7 +40,6 @@ endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
 - [Building from source](#building-from-source)
 - [Command-line tools](#command-line-tools)
 - [API](#api)
-- [Product direction](#product-direction)
 - [License](#license)
 
 ## Why this fork
@@ -101,7 +100,7 @@ rather than a frozen snapshot. The highlights below are all present in this repo
 | **Collaboration** | Vaults, contacts, and invites, surfaced in a **Sharing** settings pane. |
 | **Privacy controls** | **Protected notes**, **selective sync**, **trusted devices**, and configurable **trash auto-cleanup**. |
 | **Appearance & personalization** | Auto **light/dark** theme, **custom themes with custom accent colors**, **font ligatures**, per-note colors, a per-note **hero cover image**, and a **profile picture**. |
-| **Localization** | An i18n framework with **16 locales** (including European Portuguese), switchable in settings. |
+| **Localization** | An i18n framework with **16 locales**, switchable in settings. |
 | **Spellcheck** | Multi-language spellcheck configuration. |
 | **CLI tools** | `srn-client` (real end-to-end-encrypted note CRUD from the terminal) and `srn-server` (operator helpers: health, status, logs, config validation). |
 | **MCP bridge** | An MCP stdio bridge (`mcp/`) so MCP-capable clients can talk to your server. |
@@ -257,18 +256,6 @@ are ciphertext — the easiest faithful client is the bundled
 [`srn-client`](cli/srn-client/README.md), which runs the real protocol. The API
 docs are also linked in-app under **Preferences → Documentation → Automation
 (MCP) → The HTTP API**.
-
-## Product direction
-
-The fork defaults target a self-hosted Standard Red Notes server, not the hosted
-Standard Notes service. Full-feature access is the baseline product mode, not a
-subscription or entitlement. The project does not implement client-side bypasses
-for third-party hosted services.
-
-See:
-
-- [MCP Support Plan](docs/MCP_SUPPORT_PLAN.md)
-- [Dependency Upgrade Audit](docs/DEPENDENCY_UPGRADE_AUDIT.md)
 
 ## License
 
