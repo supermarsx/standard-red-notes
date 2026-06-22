@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/supermarsx/standard-red-notes?style=flat&logo=github)](https://github.com/supermarsx/standard-red-notes/commits)
 [![Top language](https://img.shields.io/github/languages/top/supermarsx/standard-red-notes?style=flat)](https://github.com/supermarsx/standard-red-notes)
 [![CI](https://img.shields.io/badge/CI-see%20Actions-lightgrey?style=flat&logo=githubactions)](https://github.com/supermarsx/standard-red-notes/actions)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat)](LICENSE.md)
 
 > A friendly, private, **end-to-end encrypted** notes app you run yourself — with
 > every feature included, no paid tier, and nothing gatekept.
@@ -45,11 +45,21 @@ endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
 
 ## Why this fork
 
-Standard Notes is excellent software with a sustainable hosted business — and
-that business gates some of the nicer features behind a subscription. If you are
-happy to run your own server, you do not need that gate. Standard Red Notes
-takes the AGPL-3.0 source and makes the self-hosted product the first-class
-target:
+Standard Notes is genuinely great software — strong end-to-end encryption, a
+clean cross-platform client, and a self-hostable sync server. But upstream
+development has largely stalled, and a project this good shouldn't be allowed to
+quietly slide into abandonware. **This fork is, first and foremost, about
+modernization: keeping great software alive, current, and moving forward instead
+of letting a vacuum form around it.** Concretely, that means an updated
+dependency stack and toolchain, refreshed builds and Docker/reverse-proxy setup,
+ongoing bug fixes, and a steady stream of new capabilities — so you're running a
+living, maintained codebase rather than a frozen snapshot of an app that
+deserves to keep going.
+
+The second thing it changes is the business model. Standard Notes gates some of
+the nicer features behind a subscription; if you are happy to run your own
+server, you do not need that gate. Standard Red Notes takes the AGPL-3.0 source
+and makes the self-hosted product the first-class target:
 
 - **No paid tier, nothing gatekept.** Every included feature is on for every
   account on your instance. There is no "upgrade to unlock" and no subscription
@@ -263,7 +273,7 @@ See:
 ## License
 
 Standard Red Notes is licensed under the GNU Affero General Public License v3.0
-(AGPL-3.0). See the [LICENSE](LICENSE) file for the full text. Because the AGPL
+(AGPL-3.0). See the [LICENSE.md](LICENSE.md) file for the full text. Because the AGPL
 covers network use, anyone you offer this software to over a network is entitled
 to its corresponding source.
 
