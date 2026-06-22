@@ -10,8 +10,7 @@
   },
   "workspaces": [
     "mcp",
-    "openclaw",
-    "websocket-gateway"
+    "openclaw"
   ],
   "scripts": {
     "build": "yarn build:mcp && yarn build:openclaw && yarn build:app && yarn build:server",

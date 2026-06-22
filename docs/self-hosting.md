@@ -80,11 +80,10 @@ That's it. To stop the stack later: `docker compose down`.
 | Service             | Image                          | Purpose |
 |---------------------|--------------------------------|---------|
 | `app`               | built from `./app`             | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001). |
-| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). Publishes the API on `SERVER_PORT` (3000) and files on `FILES_PORT` (3125). |
-| `websocket-gateway` | built from `./websocket-gateway` | Self-hosted realtime push gateway (replaces AWS API Gateway WebSockets). Published on `WEBSOCKET_PORT` (3106). |
+| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, revisions, and the realtime websocket-gateway run together under supervisord (`MODE=self-hosted`). Publishes the API on `SERVER_PORT` (3000), files on `FILES_PORT` (3125), and the realtime websocket on `WEBSOCKET_PORT` (3106). |
 | `db`                | `mariadb:11`                   | Primary datastore for accounts, notes, sync, and revisions. |
 | `cache`             | `redis:8-alpine`               | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file. |
-| `localstack`        | `localstack/localstack:4`      | Local AWS SNS/SQS emulator. The server publishes domain events to SNS topics; the websocket-gateway and server workers consume SQS queues. Bootstrapped on first start (see below). |
+| `localstack`        | `localstack/localstack:4`      | Local AWS SNS/SQS emulator. The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on first start (see below). |
 | `mcp`               | built from `./mcp`             | Optional MCP stdio bridge. Only runs with the `mcp` profile: `docker compose --profile mcp run --rm mcp`. |
 
 ### The localstack bootstrap
@@ -256,8 +255,9 @@ Route everything under one hostname by path:
 - the **files** endpoints -> the files port (`server` container, port 3104 inside;
   published as `FILES_PORT`/3125). Point `PUBLIC_FILES_SERVER_URL` at the public
   URL you route to it.
-- the **websocket** gateway -> the `websocket-gateway` container, port 3106. The
-  browser opens `wss://<host>/...`; set `WEB_SOCKET_SERVER_URL` to that URL.
+- the **websocket** gateway -> the `server` container, port 3106 (it runs as an
+  in-container supervisord process). The browser opens `wss://<host>/...`; set
+  `WEB_SOCKET_SERVER_URL` to that URL.
 
 The web client does not hard-code an API origin - it uses whatever sync-server
 URL you configure in the client - so single-origin routing is purely a proxy
@@ -270,7 +270,7 @@ a proxy fronts the stack you can instead attach the proxy-facing services to a
 shared Docker network and stop publishing ports. `docker-compose.yml` ships
 commented examples: create the network once with `docker network create proxy`,
 then uncomment the `# - proxy` network lines (and the Traefik `labels:` blocks)
-on the `app`, `server`, and `websocket-gateway` services. Leaving the examples
+on the `app` and `server` services. Leaving the examples
 commented keeps the default flow unchanged.
 
 ### nginx example
@@ -360,15 +360,12 @@ services:
       - "traefik.http.routers.srn-api.service=srn-api"
       - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
       # A second router/service for the files port (3104) can be added the same way.
-
-  websocket-gateway:
-    networks: [standard-red-notes, proxy]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
+      # The realtime websocket gateway is an in-container process on port 3106;
+      # route /sockets to it with another router/service on this same container:
       - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
       - "traefik.http.routers.srn-ws.entrypoints=websecure"
       - "traefik.http.routers.srn-ws.tls.certresolver=le"
+      - "traefik.http.routers.srn-ws.service=srn-ws"
       - "traefik.http.services.srn-ws.loadbalancer.server.port=3106"
 
 networks:

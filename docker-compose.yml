@@ -50,9 +50,24 @@ x-server-env: &server-env
   REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-0}
   REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-0}
   PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:3125}
-  # Self-hosted realtime WebSocket gateway (replaces AWS API Gateway push).
-  WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://websocket-gateway:3106}
+  # Self-hosted realtime WebSocket gateway. Folded into this same `server`
+  # container as a supervisord-managed process listening on :3106, so the server
+  # reaches it over localhost (no separate container/service).
+  WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://localhost:3106}
   WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
+  # Connection-token signing for the in-container WebSocket gateway. The gateway
+  # process reads these directly from its environment. PORT is NOT set here on
+  # purpose — the gateway's supervisor script hardcodes PORT=3106 so it cannot be
+  # clobbered by other server processes that also honor a generic $PORT.
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
+  WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
+  # SNS/SQS event source for realtime push: the gateway consumes the syncing
+  # server's WEB_SOCKET_MESSAGE_REQUESTED events from this queue.
+  SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://localstack:4566/000000000000/websocket-local-queue}
+  SQS_ENDPOINT: ${SQS_ENDPOINT:-http://localstack:4566}
+  SQS_AWS_REGION: ${SQS_AWS_REGION:-us-east-1}
+  SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-localstack}
+  SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-localstack}
   AUTH_SERVER_U2F_RELYING_PARTY_ID: ${AUTH_SERVER_U2F_RELYING_PARTY_ID:-localhost}
   AUTH_SERVER_U2F_RELYING_PARTY_NAME: ${AUTH_SERVER_U2F_RELYING_PARTY_NAME:-Standard Red Notes}
   AUTH_SERVER_U2F_EXPECTED_ORIGIN: ${AUTH_SERVER_U2F_EXPECTED_ORIGIN:-http://localhost:3001,http://localhost}
@@ -155,6 +170,8 @@ services:
     ports:
       - "${SERVER_PORT:-3000}:3000"
       - "${FILES_PORT:-3125}:3104"
+      # Realtime WebSocket gateway, now an in-container supervisord process.
+      - "${WEBSOCKET_PORT:-3106}:3106"
     volumes:
       - server-logs:/var/lib/server/logs
       - uploads:/opt/shared/uploads
@@ -180,51 +197,6 @@ services:
     #   - "traefik.http.routers.srn-api.tls.certresolver=le"
     #   - "traefik.http.routers.srn-api.service=srn-api"
     #   - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
-
-  websocket-gateway:
-    build:
-      context: .
-      dockerfile: websocket-gateway/Dockerfile
-    image: standard-red-notes/websocket-gateway:local
-    restart: unless-stopped
-    environment:
-      PORT: 3106
-      REDIS_HOST: cache
-      REDIS_PORT: 6379
-      WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
-      WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
-      WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
-      # Must match the auth service's secret so the gateway can decode the
-      # api-gateway's forwarded cross-service token (x-auth-token) for the web flow.
-      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me}
-      # SNS/SQS event source (multi-process deployment): consume the syncing
-      # server's WEB_SOCKET_MESSAGE_REQUESTED events for realtime push.
-      SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://localstack:4566/000000000000/websocket-local-queue}
-      SQS_ENDPOINT: ${SQS_ENDPOINT:-http://localstack:4566}
-      SQS_AWS_REGION: ${SQS_AWS_REGION:-us-east-1}
-      SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-localstack}
-      SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-localstack}
-    depends_on:
-      cache:
-        condition: service_healthy
-      localstack:
-        condition: service_healthy
-    ports:
-      - "${WEBSOCKET_PORT:-3106}:3106"
-    networks:
-      - standard-red-notes
-      # - proxy
-    # Example Traefik labels (uncomment with the `proxy` network). The gateway
-    # handles the WS Upgrade itself; Traefik proxies Upgrade/Connection headers
-    # transparently, so only a router + service port are needed. Browsers reach
-    # it at wss://<host>/sockets (set WEB_SOCKET_SERVER_URL accordingly).
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.docker.network=proxy"
-    #   - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
-    #   - "traefik.http.routers.srn-ws.entrypoints=websecure"
-    #   - "traefik.http.routers.srn-ws.tls.certresolver=le"
-    #   - "traefik.http.services.srn-ws.loadbalancer.server.port=3106"
 
   mcp:
     profiles:
@@ -318,8 +290,8 @@ networks:
   # Optional: attach the proxy-facing services to an EXISTING reverse-proxy
   # network (e.g. one your Traefik/nginx container already uses) so the proxy can
   # reach them by service name without publishing host ports. Uncomment this and
-  # the `proxy` entries under the `app`, `server`, and `websocket-gateway`
-  # services, then create the network once: `docker network create proxy`.
+  # the `proxy` entries under the `app` and `server` services, then create the
+  # network once: `docker network create proxy`.
   # proxy:
   #   external: true
 
