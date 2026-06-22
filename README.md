@@ -307,21 +307,21 @@ against `SHA256SUMS.txt`. On macOS you may need to clear the quarantine flag wit
 
 ### Desktop app
 
-The desktop app (built with **Electron Forge**) publishes as its own rolling
+The desktop app (built with **electron-builder**) publishes as its own rolling
 release, tagged with a semver `vYY.M.<build>` (e.g. `v25.6.123`) — distinct from
 the CLI tools' `srn-*-v*` tags. Grab the installer for your platform from the
 [Releases](https://github.com/supermarsx/standard-red-notes/releases) page:
 
 | Platform | Formats (x64 + arm64) |
 | --- | --- |
-| Windows | `.exe` Squirrel installer (arm64 ships as a portable `.zip`) |
+| Windows | `.exe` NSIS installer |
 | macOS | `.dmg` and `.zip` (Intel + Apple Silicon) |
-| Linux | `.AppImage`, `.deb`, `.rpm`, plus `.snap` (x64) |
+| Linux | `.AppImage`, `.deb`, plus `.snap` (x64) |
 
-Auto-update is built in on **macOS and Windows** via update.electronjs.org;
-**Linux** builds instead notify you when a newer version exists and link to the
-download. The public builds are **unsigned**, so on first launch macOS may need
-right-click → Open and Windows SmartScreen may warn (More info → Run anyway).
+Auto-update is built in via **electron-updater** (it reads the GitHub release);
+it defaults to off and is opt-in under Preferences. The public builds are
+**unsigned**, so on first launch macOS may need right-click → Open and Windows
+SmartScreen may warn (More info → Run anyway).
 
 ## API
 

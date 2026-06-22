@@ -9,6 +9,15 @@ module.exports = async function (params) {
   if (platformName !== 'darwin') {
     return
   }
+
+  // Skip notarization entirely when the Apple credentials are not provided
+  // (e.g. unsigned CI / local builds). Without this guard electronNotarize is
+  // called with undefined credentials and the build fails.
+  if (!process.env.APPLE_TEAM_ID || !process.env.NOTARIZE_APPLE_ID || !process.env.NOTARIZE_APPLE_ID_PASSWORD) {
+    console.log('Skipping notarization: APPLE_TEAM_ID / NOTARIZE_APPLE_ID / NOTARIZE_APPLE_ID_PASSWORD not set')
+    return
+  }
+
   console.log('afterSign hook triggered')
 
   const { appId } = JSON.parse(await fs.promises.readFile('./package.json')).build

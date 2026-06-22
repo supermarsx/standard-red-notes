@@ -1,23 +1,21 @@
-# Rolling release pipeline for the Standard Red Notes DESKTOP app (Electron Forge).
+# Rolling release pipeline for the Standard Red Notes DESKTOP app (electron-builder).
 #
-# Unlike the CLI tools (srn-client/srn-server), Electron apps cannot be cross
-# -compiled from one runner — each OS/arch is built on its own native runner.
-# Stages:
-#   version -> make (6-way matrix) + snap -> release
+# Electron apps are built on native runners (no cross-compile). Stages:
+#   version -> build (matrix) + snap -> release
 #
-# Trigger: push to `main` touching the desktop package (or manual dispatch). Use
-# the manual dispatch to ship a desktop build that picks up the latest web UI
-# (web changes do NOT auto-trigger this heavy matrix).
+# Trigger: push to `main` touching the desktop package, or manual dispatch (use
+# dispatch to ship a desktop build that picks up the latest web UI — web changes
+# do NOT auto-trigger this heavy matrix).
 #
-# Versioning: rolling semver `YY.M.<run>` (e.g. 25.6.123) baked into the app and
-# used as the release tag `vYY.M.<run>`. Semver is REQUIRED here (not the CLIs'
-# `srn-desktop-vYY.N` form) because update.electronjs.org compares the running
-# app's semver against the latest GitHub release tag to detect updates.
+# Versioning: rolling semver `YY.M.<run>` (e.g. 25.6.123) injected via
+# electron-builder's extraMetadata and used as the release tag `vYY.M.<run>`.
+# Semver is required so electron-updater (GitHub provider) can compare the
+# running app against the latest release.
 #
-# Builds are UNSIGNED (no code-signing certificates). macOS auto-update via
-# update.electronjs.org needs a signed app, so on unsigned macOS builds the app
-# falls back to the in-app "a newer version exists" notification + manual
-# download. Windows (Squirrel) auto-updates unsigned on x64.
+# Builds are UNSIGNED: macOS notarization (scripts/notarizeMac.js) and Windows
+# signing (scripts/windowsSign.js) both no-op when their credentials are absent.
+# Auto-update via electron-updater still works for unsigned Windows; unsigned
+# macOS falls back to the in-app "newer version available" notification.
 name: srn-desktop
 
 on:
@@ -36,8 +34,8 @@ defaults:
     shell: bash
 
 jobs:
-  # 1) VERSION — compute the rolling semver once so every matrix leg bakes the
-  # SAME version into its installer and the release tags it identically.
+  # 1) VERSION — compute the rolling semver once so every leg bakes the same
+  # version and the release tags it identically.
   version:
     name: version
     runs-on: ubuntu-latest
@@ -53,49 +51,42 @@ jobs:
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
           echo "Desktop release version: ${version} (tag v${version})"
 
-  # 2) MAKE — build installers per OS/arch on native runners via Electron Forge.
-  make:
-    name: make (${{ matrix.label }})
+  # 2) BUILD — electron-builder per OS. Each OS builds BOTH arches in one run so
+  # the per-platform update metadata (latest*.yml) is produced once, not twice.
+  # (Snap is built in its own job because it needs a distinct IS_SNAP webpack.)
+  build:
+    name: build (${{ matrix.label }})
     needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { label: windows-x64, os: windows-latest, arch: x64 }
-          - { label: windows-arm64, os: windows-11-arm, arch: arm64 }
-          - { label: macos-x64, os: macos-13, arch: x64 }
-          - { label: macos-arm64, os: macos-14, arch: arm64 }
-          - { label: linux-x64, os: ubuntu-latest, arch: x64 }
-          - { label: linux-arm64, os: ubuntu-24.04-arm, arch: arm64 }
+          - { label: macos, os: macos-14, builder: '--mac dmg zip --x64 --arm64' }
+          - { label: windows, os: windows-latest, builder: '--win nsis --x64 --arm64' }
+          - { label: linux-x64, os: ubuntu-latest, builder: '--linux AppImage deb --x64' }
+          - { label: linux-arm64, os: ubuntu-24.04-arm, builder: '--linux AppImage deb --arm64' }
     env:
-      # Never let electron-packager try to auto-discover a signing identity.
+      # Never attempt to auto-discover a macOS signing identity.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      DESKTOP_DIR: app/packages/desktop
-      INNER_DIR: app/packages/desktop/app
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
           node-version-file: app/.nvmrc
-          # yarn 3 is provided via corepack below; skip setup-node's auto cache
-          # (it would mis-detect the package manager).
           package-manager-cache: false
 
       - name: Enable corepack (yarn 3.2.1)
         run: corepack enable
 
-      # Native-module + maker prerequisites for Linux: libsecret (keytar),
-      # rpm/fakeroot (deb+rpm makers), libfuse2 (AppImage).
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev rpm fakeroot libfuse2 || \
-          sudo apt-get install -y libsecret-1-dev rpm fakeroot libfuse2t64
+          sudo apt-get install -y libsecret-1-dev fakeroot libfuse2 || \
+          sudo apt-get install -y libsecret-1-dev fakeroot libfuse2t64
 
-      # node-gyp on macOS needs a Python with setuptools (distutils removed in 3.12).
       - name: Set up Python (macOS native build)
         if: runner.os == 'macOS'
         uses: actions/setup-python@v5
@@ -106,34 +97,28 @@ jobs:
         working-directory: app
         run: yarn install --immutable
 
-      - name: Bake rolling version into the app
-        working-directory: ${{ env.INNER_DIR }}
-        run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
-
       - name: Build web UI
         working-directory: app
         run: yarn workspace @standardnotes/web build
 
       - name: Build desktop bundle (webpack)
-        working-directory: ${{ env.DESKTOP_DIR }}
+        working-directory: app/packages/desktop
         run: yarn build
 
-      # Forge packages the inner app dir and rebuilds native modules (keytar,
-      # home-server) against the Electron ABI, then runs the per-OS makers.
-      - name: Forge make
-        working-directory: ${{ env.INNER_DIR }}
-        run: yarn forge:make --arch=${{ matrix.arch }}
+      - name: electron-builder
+        working-directory: app/packages/desktop
+        run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.version.outputs.version }}
 
-      - name: Collect artifacts
-        working-directory: ${{ env.INNER_DIR }}
+      - name: Collect installers
+        working-directory: app/packages/desktop
         run: |
           set -euo pipefail
           mkdir -p staged
-          # Flatten Forge's out/make/** tree, keeping only distributable files.
-          find out/make -type f \
-            \( -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \
-               -o -name '*.dmg' -o -name '*.zip' \
-               -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+          # Distributables + electron-updater metadata (latest*.yml, blockmaps).
+          find dist -maxdepth 1 -type f \
+            \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \
+               -o -name '*.AppImage' -o -name '*.deb' \
+               -o -name '*.yml' -o -name '*.blockmap' \) \
             -exec cp -v {} staged/ \; || true
           echo "Staged:" && ls -la staged
 
@@ -141,13 +126,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: srn-desktop-${{ matrix.label }}
-          path: ${{ env.INNER_DIR }}/staged/*
+          path: app/packages/desktop/staged/*
           retention-days: 2
           if-no-files-found: error
 
-  # 3) SNAP — Electron Forge has no snap maker, so build it separately with
-  # snapcraft from the recipe at app/packages/desktop/snap/snapcraft.yaml.
-  # Best-effort (does not block the release) until the recipe is validated in CI.
+  # 3) SNAP — needs a separate webpack pass (IS_SNAP define) before the snap
+  # target, plus snapcraft on the runner. x64 only. Best-effort: does not block
+  # the release.
   snap:
     name: snap (linux-x64)
     needs: version
@@ -164,52 +149,41 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
-      - name: Install Linux build deps
+      - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
+          sudo apt-get install -y libsecret-1-dev fakeroot
+          sudo snap install snapcraft --classic
 
       - name: Install workspace dependencies
         working-directory: app
         run: yarn install --immutable
 
-      - name: Bake rolling version into the app
-        working-directory: app/packages/desktop/app
-        run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
-
       - name: Build web UI
         working-directory: app
         run: yarn workspace @standardnotes/web build
 
-      - name: Build desktop bundle (webpack)
+      - name: Build desktop bundle (snap variant)
         working-directory: app/packages/desktop
-        run: yarn build
+        run: yarn build --env snap
 
-      - name: Package unpacked app (Forge)
-        working-directory: app/packages/desktop/app
-        run: yarn forge:package --arch=x64
-
-      - name: Build snap
-        uses: snapcore/action-build@v1
-        id: snapcraft
-        with:
-          path: app/packages/desktop
+      - name: electron-builder (snap)
+        working-directory: app/packages/desktop
+        run: yarn electron-builder --linux snap --x64 --publish never -c.extraMetadata.version=${{ needs.version.outputs.version }}
 
       - name: Upload snap
-        if: steps.snapcraft.outputs.snap != ''
         uses: actions/upload-artifact@v4
         with:
           name: srn-desktop-linux-snap
-          path: ${{ steps.snapcraft.outputs.snap }}
+          path: app/packages/desktop/dist/*.snap
           retention-days: 2
           if-no-files-found: warn
 
-  # 4) RELEASE — gather every leg's installers and publish ONE rolling GitHub
-  # Release. Must be a normal (non-draft) release so update.electronjs.org can
-  # read it.
+  # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
+  # rolling GitHub Release (non-draft, so electron-updater can read it).
   release:
     name: release
-    needs: [version, make, snap]
+    needs: [version, build, snap]
     runs-on: ubuntu-latest
     steps:
       - name: Download all installers
