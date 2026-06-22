@@ -14,6 +14,9 @@ import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
 import { TypeORMWebhook } from '../Infra/TypeORM/TypeORMWebhook'
 import { TypeORMAuditLogEntry } from '../Infra/TypeORM/TypeORMAuditLogEntry'
 import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
+import { TypeORMGroup } from '../Infra/TypeORM/TypeORMGroup'
+import { TypeORMGroupRole } from '../Infra/TypeORM/TypeORMGroupRole'
+import { TypeORMUserGroup } from '../Infra/TypeORM/TypeORMUserGroup'
 import { TypeORMDeadManSwitch } from '../Infra/TypeORM/TypeORMDeadManSwitch'
 import { TypeORMEmailReminder } from '../Infra/TypeORM/TypeORMEmailReminder'
 import { TypeORMTrustedDevice } from '../Infra/TypeORM/TypeORMTrustedDevice'
@@ -82,6 +85,9 @@ export class AppDataSource {
         TypeORMWebhook,
         TypeORMAuditLogEntry,
         TypeORMShare,
+        TypeORMGroup,
+        TypeORMGroupRole,
+        TypeORMUserGroup,
         TypeORMDeadManSwitch,
         TypeORMEmailReminder,
         TypeORMTrustedDevice,

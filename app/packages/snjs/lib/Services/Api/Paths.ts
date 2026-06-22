@@ -54,6 +54,14 @@ const AdminPaths = {
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
   registration: '/v1/admin/registration',
+  // Standard Red Notes: RBAC groups & granular permissions.
+  roles: '/v1/admin/roles',
+  groups: '/v1/admin/groups',
+  group: (groupUuid: string) => `/v1/admin/groups/${groupUuid}`,
+  groupRoles: (groupUuid: string) => `/v1/admin/groups/${groupUuid}/roles`,
+  groupMembers: (groupUuid: string) => `/v1/admin/groups/${groupUuid}/members`,
+  groupMember: (groupUuid: string, userUuid: string) => `/v1/admin/groups/${groupUuid}/members/${userUuid}`,
+  userEffectivePermissions: (userUuid: string) => `/v1/admin/users/${userUuid}/effective-permissions`,
 }
 
 // Standard Red Notes: app-specific passwords. These hit the gateway

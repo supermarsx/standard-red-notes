@@ -792,6 +792,95 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: RBAC groups & granular permissions admin API. All routes
+   * hit the gateway /v1/admin/* endpoints, which the auth server re-gates on the
+   * INTERNAL_TEAM_USER role.
+   */
+  async adminGetAvailableRoles(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.roles),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get roles.',
+    })
+  }
+
+  async adminListGroups(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.groups),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list groups.',
+    })
+  }
+
+  async adminCreateGroup(name: string, description: string | null, roleNames: string[]): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.groups),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create group.',
+      params: { name, description, roleNames },
+    })
+  }
+
+  async adminDeleteGroup(groupUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.group(groupUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete group.',
+    })
+  }
+
+  async adminSetGroupRoles(groupUuid: string, roleNames: string[]): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.groupRoles(groupUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set group roles.',
+      params: { roleNames },
+    })
+  }
+
+  async adminListGroupMembers(groupUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.groupMembers(groupUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list group members.',
+    })
+  }
+
+  async adminAddUserToGroup(groupUuid: string, userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.groupMembers(groupUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to add user to group.',
+      params: { userUuid },
+    })
+  }
+
+  async adminRemoveUserFromGroup(groupUuid: string, userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.groupMember(groupUuid, userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to remove user from group.',
+    })
+  }
+
+  async adminGetUserEffectivePermissions(userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.userEffectivePermissions(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get effective permissions.',
+    })
+  }
+
+  /**
    * Standard Red Notes: app-specific passwords. These hit the gateway
    * /v1/app-passwords routes, protected by the cross-service token middleware
    * (the auth server scopes every call to the authenticated user). The plaintext

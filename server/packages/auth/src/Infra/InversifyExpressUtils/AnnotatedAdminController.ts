@@ -15,6 +15,16 @@ import { AuditLogEntryHttpProjection } from '../Http/Projection/AuditLogEntryHtt
 import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInterface'
 import { MapperInterface } from '@standardnotes/domain-core'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
+import { Group } from '../../Domain/Group/Group'
+import { GroupHttpProjection } from '../Http/Projection/GroupHttpProjection'
+import { CreateGroup } from '../../Domain/UseCase/CreateGroup/CreateGroup'
+import { ListGroups } from '../../Domain/UseCase/ListGroups/ListGroups'
+import { DeleteGroup } from '../../Domain/UseCase/DeleteGroup/DeleteGroup'
+import { AddUserToGroup } from '../../Domain/UseCase/AddUserToGroup/AddUserToGroup'
+import { RemoveUserFromGroup } from '../../Domain/UseCase/RemoveUserFromGroup/RemoveUserFromGroup'
+import { SetGroupRoles } from '../../Domain/UseCase/SetGroupRoles/SetGroupRoles'
+import { ListGroupMembers } from '../../Domain/UseCase/ListGroupMembers/ListGroupMembers'
+import { GetUserEffectivePermissions } from '../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 
 @controller('/admin')
 export class AnnotatedAdminController extends BaseAdminController {
@@ -31,6 +41,16 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_AuditLogEntryHttpMapper)
     override auditLogEntryHttpMapper: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
     @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
+    @inject(TYPES.Auth_CreateGroup) override doCreateGroup: CreateGroup,
+    @inject(TYPES.Auth_ListGroups) override doListGroups: ListGroups,
+    @inject(TYPES.Auth_DeleteGroup) override doDeleteGroup: DeleteGroup,
+    @inject(TYPES.Auth_AddUserToGroup) override doAddUserToGroup: AddUserToGroup,
+    @inject(TYPES.Auth_RemoveUserFromGroup) override doRemoveUserFromGroup: RemoveUserFromGroup,
+    @inject(TYPES.Auth_SetGroupRoles) override doSetGroupRoles: SetGroupRoles,
+    @inject(TYPES.Auth_ListGroupMembers) override doListGroupMembers: ListGroupMembers,
+    @inject(TYPES.Auth_GetUserEffectivePermissions)
+    override doGetUserEffectivePermissions: GetUserEffectivePermissions,
+    @inject(TYPES.Auth_GroupHttpMapper) override groupHttpMapper: MapperInterface<Group, GroupHttpProjection>,
   ) {
     super(
       doDeleteSetting,
@@ -43,6 +63,16 @@ export class AnnotatedAdminController extends BaseAdminController {
       queryAuditLog,
       auditLogEntryHttpMapper,
       auditLogWriter,
+      undefined,
+      doCreateGroup,
+      doListGroups,
+      doDeleteGroup,
+      doAddUserToGroup,
+      doRemoveUserFromGroup,
+      doSetGroupRoles,
+      doListGroupMembers,
+      doGetUserEffectivePermissions,
+      groupHttpMapper,
     )
   }
 
@@ -116,5 +146,50 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpGet('/audit-log')
   override async getAuditLog(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getAuditLog(request, response)
+  }
+
+  @httpGet('/roles')
+  override async getAvailableRoles(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getAvailableRoles(request, response)
+  }
+
+  @httpGet('/groups')
+  override async listGroups(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.listGroups(request, response)
+  }
+
+  @httpPost('/groups')
+  override async createGroup(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.createGroup(request, response)
+  }
+
+  @httpDelete('/groups/:groupUuid')
+  override async deleteGroup(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.deleteGroup(request, response)
+  }
+
+  @httpPut('/groups/:groupUuid/roles')
+  override async setGroupRoles(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setGroupRoles(request, response)
+  }
+
+  @httpGet('/groups/:groupUuid/members')
+  override async listGroupMembers(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.listGroupMembers(request, response)
+  }
+
+  @httpPost('/groups/:groupUuid/members')
+  override async addUserToGroup(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.addUserToGroup(request, response)
+  }
+
+  @httpDelete('/groups/:groupUuid/members/:userUuid')
+  override async removeUserFromGroup(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.removeUserFromGroup(request, response)
+  }
+
+  @httpGet('/users/:userUuid/effective-permissions')
+  override async getUserEffectivePermissions(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getUserEffectivePermissions(request, response)
   }
 }

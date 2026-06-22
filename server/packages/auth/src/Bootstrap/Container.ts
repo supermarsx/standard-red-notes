@@ -273,6 +273,23 @@ import { ListShares } from '../Domain/UseCase/ListShares/ListShares'
 import { RevokeShare } from '../Domain/UseCase/RevokeShare/RevokeShare'
 import { GetShare } from '../Domain/UseCase/GetShare/GetShare'
 import { SharesController } from '../Controller/SharesController'
+import { Group } from '../Domain/Group/Group'
+import { TypeORMGroup } from '../Infra/TypeORM/TypeORMGroup'
+import { TypeORMGroupRole } from '../Infra/TypeORM/TypeORMGroupRole'
+import { TypeORMUserGroup } from '../Infra/TypeORM/TypeORMUserGroup'
+import { GroupPersistenceMapper } from '../Mapping/GroupPersistenceMapper'
+import { GroupRepositoryInterface } from '../Domain/Group/GroupRepositoryInterface'
+import { TypeORMGroupRepository } from '../Infra/TypeORM/TypeORMGroupRepository'
+import { GroupHttpProjection } from '../Infra/Http/Projection/GroupHttpProjection'
+import { GroupHttpMapper } from '../Mapping/GroupHttpMapper'
+import { CreateGroup } from '../Domain/UseCase/CreateGroup/CreateGroup'
+import { ListGroups } from '../Domain/UseCase/ListGroups/ListGroups'
+import { DeleteGroup } from '../Domain/UseCase/DeleteGroup/DeleteGroup'
+import { AddUserToGroup } from '../Domain/UseCase/AddUserToGroup/AddUserToGroup'
+import { RemoveUserFromGroup } from '../Domain/UseCase/RemoveUserFromGroup/RemoveUserFromGroup'
+import { SetGroupRoles } from '../Domain/UseCase/SetGroupRoles/SetGroupRoles'
+import { ListGroupMembers } from '../Domain/UseCase/ListGroupMembers/ListGroupMembers'
+import { GetUserEffectivePermissions } from '../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 import { BaseSharesController } from '../Infra/InversifyExpressUtils/Base/BaseSharesController'
 import { DeadManSwitch } from '../Domain/DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../Domain/DeadManSwitch/DeadManSwitchRepositoryInterface'
@@ -624,6 +641,12 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Share, ShareHttpProjection>>(TYPES.Auth_ShareHttpMapper)
       .toConstantValue(new ShareHttpMapper())
     container
+      .bind<MapperInterface<Group, TypeORMGroup>>(TYPES.Auth_GroupPersistenceMapper)
+      .toConstantValue(new GroupPersistenceMapper())
+    container
+      .bind<MapperInterface<Group, GroupHttpProjection>>(TYPES.Auth_GroupHttpMapper)
+      .toConstantValue(new GroupHttpMapper())
+    container
       .bind<MapperInterface<DeadManSwitch, TypeORMDeadManSwitch>>(TYPES.Auth_DeadManSwitchPersistenceMapper)
       .toConstantValue(new DeadManSwitchPersistenceMapper())
     container
@@ -730,6 +753,15 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMShare>>(TYPES.Auth_ORMShareRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMShare))
+    container
+      .bind<Repository<TypeORMGroup>>(TYPES.Auth_ORMGroupRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMGroup))
+    container
+      .bind<Repository<TypeORMGroupRole>>(TYPES.Auth_ORMGroupRoleRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMGroupRole))
+    container
+      .bind<Repository<TypeORMUserGroup>>(TYPES.Auth_ORMUserGroupRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMUserGroup))
     container
       .bind<Repository<TypeORMDeadManSwitch>>(TYPES.Auth_ORMDeadManSwitchRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMDeadManSwitch))
@@ -855,6 +887,16 @@ export class ContainerConfigLoader {
         new TypeORMShareRepository(
           container.get(TYPES.Auth_ORMShareRepository),
           container.get(TYPES.Auth_SharePersistenceMapper),
+        ),
+      )
+    container
+      .bind<GroupRepositoryInterface>(TYPES.Auth_GroupRepository)
+      .toConstantValue(
+        new TypeORMGroupRepository(
+          container.get(TYPES.Auth_ORMGroupRepository),
+          container.get(TYPES.Auth_ORMGroupRoleRepository),
+          container.get(TYPES.Auth_ORMUserGroupRepository),
+          container.get(TYPES.Auth_GroupPersistenceMapper),
         ),
       )
     container
@@ -1555,6 +1597,46 @@ export class ContainerConfigLoader {
     container
       .bind<GetShare>(TYPES.Auth_GetShare)
       .toConstantValue(new GetShare(container.get(TYPES.Auth_ShareRepository)))
+    container
+      .bind<CreateGroup>(TYPES.Auth_CreateGroup)
+      .toConstantValue(new CreateGroup(container.get(TYPES.Auth_GroupRepository)))
+    container
+      .bind<ListGroups>(TYPES.Auth_ListGroups)
+      .toConstantValue(new ListGroups(container.get(TYPES.Auth_GroupRepository)))
+    container
+      .bind<DeleteGroup>(TYPES.Auth_DeleteGroup)
+      .toConstantValue(new DeleteGroup(container.get(TYPES.Auth_GroupRepository)))
+    container
+      .bind<AddUserToGroup>(TYPES.Auth_AddUserToGroup)
+      .toConstantValue(
+        new AddUserToGroup(
+          container.get(TYPES.Auth_GroupRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<RemoveUserFromGroup>(TYPES.Auth_RemoveUserFromGroup)
+      .toConstantValue(new RemoveUserFromGroup(container.get(TYPES.Auth_GroupRepository)))
+    container
+      .bind<SetGroupRoles>(TYPES.Auth_SetGroupRoles)
+      .toConstantValue(new SetGroupRoles(container.get(TYPES.Auth_GroupRepository)))
+    container
+      .bind<ListGroupMembers>(TYPES.Auth_ListGroupMembers)
+      .toConstantValue(
+        new ListGroupMembers(
+          container.get(TYPES.Auth_GroupRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<GetUserEffectivePermissions>(TYPES.Auth_GetUserEffectivePermissions)
+      .toConstantValue(
+        new GetUserEffectivePermissions(
+          container.get(TYPES.Auth_UserRepository),
+          container.get(TYPES.Auth_GroupRepository),
+          container.get(TYPES.Auth_RoleRepository),
+        ),
+      )
     container
       .bind<CreateDeadManSwitch>(TYPES.Auth_CreateDeadManSwitch)
       .toConstantValue(

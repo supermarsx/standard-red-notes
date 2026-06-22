@@ -1,7 +1,18 @@
-import { ControllerContainerInterface, RoleName, SettingName, Username } from '@standardnotes/domain-core'
+import { ControllerContainerInterface, MapperInterface, RoleName, SettingName, Username } from '@standardnotes/domain-core'
 import { BaseHttpController, results } from 'inversify-express-utils'
 import { Request, Response } from 'express'
 import { Role } from '@standardnotes/security'
+
+import { Group } from '../../../Domain/Group/Group'
+import { GroupHttpProjection } from '../../Http/Projection/GroupHttpProjection'
+import { CreateGroup } from '../../../Domain/UseCase/CreateGroup/CreateGroup'
+import { ListGroups } from '../../../Domain/UseCase/ListGroups/ListGroups'
+import { DeleteGroup } from '../../../Domain/UseCase/DeleteGroup/DeleteGroup'
+import { AddUserToGroup } from '../../../Domain/UseCase/AddUserToGroup/AddUserToGroup'
+import { RemoveUserFromGroup } from '../../../Domain/UseCase/RemoveUserFromGroup/RemoveUserFromGroup'
+import { SetGroupRoles } from '../../../Domain/UseCase/SetGroupRoles/SetGroupRoles'
+import { ListGroupMembers } from '../../../Domain/UseCase/ListGroupMembers/ListGroupMembers'
+import { GetUserEffectivePermissions } from '../../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 
 import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscriptionToken/CreateSubscriptionToken'
@@ -15,7 +26,6 @@ import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
 import { AuditLogEntryHttpProjection } from '../../Http/Projection/AuditLogEntryHttpProjection'
 import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
-import { MapperInterface } from '@standardnotes/domain-core'
 import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/settings'
 
 /**
@@ -76,6 +86,18 @@ export class BaseAdminController extends BaseHttpController {
     protected auditLogEntryHttpMapper?: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
     protected auditLogWriter?: AuditLogWriterInterface,
     private controllerContainer?: ControllerContainerInterface,
+    // Standard Red Notes: RBAC groups / effective-permissions dependencies.
+    // Optional so existing tests that construct this controller with the original
+    // arity keep compiling; the group endpoints fail gracefully when absent.
+    protected doCreateGroup?: CreateGroup,
+    protected doListGroups?: ListGroups,
+    protected doDeleteGroup?: DeleteGroup,
+    protected doAddUserToGroup?: AddUserToGroup,
+    protected doRemoveUserFromGroup?: RemoveUserFromGroup,
+    protected doSetGroupRoles?: SetGroupRoles,
+    protected doListGroupMembers?: ListGroupMembers,
+    protected doGetUserEffectivePermissions?: GetUserEffectivePermissions,
+    protected groupHttpMapper?: MapperInterface<Group, GroupHttpProjection>,
   ) {
     super()
 
@@ -93,6 +115,18 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.getUserBanStatus', this.getUserBanStatus.bind(this))
       this.controllerContainer.register('admin.setUserBanStatus', this.setUserBanStatusEndpoint.bind(this))
       this.controllerContainer.register('admin.getAuditLog', this.getAuditLog.bind(this))
+      this.controllerContainer.register('admin.listGroups', this.listGroups.bind(this))
+      this.controllerContainer.register('admin.createGroup', this.createGroup.bind(this))
+      this.controllerContainer.register('admin.deleteGroup', this.deleteGroup.bind(this))
+      this.controllerContainer.register('admin.setGroupRoles', this.setGroupRoles.bind(this))
+      this.controllerContainer.register('admin.listGroupMembers', this.listGroupMembers.bind(this))
+      this.controllerContainer.register('admin.addUserToGroup', this.addUserToGroup.bind(this))
+      this.controllerContainer.register('admin.removeUserFromGroup', this.removeUserFromGroup.bind(this))
+      this.controllerContainer.register('admin.getAvailableRoles', this.getAvailableRoles.bind(this))
+      this.controllerContainer.register(
+        'admin.getUserEffectivePermissions',
+        this.getUserEffectivePermissions.bind(this),
+      )
     }
   }
 
@@ -540,5 +574,199 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     return this.json({ success: true, registrationDisabled: Boolean(registrationDisabled) })
+  }
+
+  /**
+   * Standard Red Notes: list every known role name so the admin panel can present
+   * the roles a group may confer. Backed by the canonical RoleName.NAMES so it
+   * stays in sync with the role model.
+   */
+  async getAvailableRoles(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    return this.json({ roleNames: Object.values(RoleName.NAMES) })
+  }
+
+  /**
+   * Standard Red Notes: list all RBAC groups (with their conferred role names).
+   */
+  async listGroups(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doListGroups === undefined || this.groupHttpMapper === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+    const groupHttpMapper = this.groupHttpMapper
+
+    const result = await this.doListGroups.execute()
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ groups: result.getValue().map((group) => groupHttpMapper.toProjection(group)) })
+  }
+
+  /**
+   * Standard Red Notes: create an RBAC group. Body: { name, description?,
+   * roleNames? }.
+   */
+  async createGroup(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doCreateGroup === undefined || this.groupHttpMapper === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { name, description, roleNames } = request.body as {
+      name?: string
+      description?: string | null
+      roleNames?: string[]
+    }
+
+    const result = await this.doCreateGroup.execute({
+      name: name ?? '',
+      description: description ?? null,
+      roleNames: roleNames ?? [],
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ group: this.groupHttpMapper.toProjection(result.getValue()) })
+  }
+
+  /**
+   * Standard Red Notes: delete an RBAC group (and its membership / role rows).
+   */
+  async deleteGroup(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doDeleteGroup === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { groupUuid } = request.params as Record<string, string>
+
+    const result = await this.doDeleteGroup.execute({ groupUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ success: true, groupUuid })
+  }
+
+  /**
+   * Standard Red Notes: replace the full set of role names a group confers.
+   * Body: { roleNames: string[] }.
+   */
+  async setGroupRoles(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doSetGroupRoles === undefined || this.groupHttpMapper === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { groupUuid } = request.params as Record<string, string>
+    const { roleNames } = request.body as { roleNames?: string[] }
+
+    const result = await this.doSetGroupRoles.execute({ groupUuid, roleNames: roleNames ?? [] })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ group: this.groupHttpMapper.toProjection(result.getValue()) })
+  }
+
+  /**
+   * Standard Red Notes: list a group's members (uuid + email).
+   */
+  async listGroupMembers(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doListGroupMembers === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { groupUuid } = request.params as Record<string, string>
+
+    const result = await this.doListGroupMembers.execute({ groupUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ members: result.getValue() })
+  }
+
+  /**
+   * Standard Red Notes: add a user to a group. Body: { userUuid }.
+   */
+  async addUserToGroup(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doAddUserToGroup === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { groupUuid } = request.params as Record<string, string>
+    const { userUuid } = request.body as { userUuid?: string }
+
+    const result = await this.doAddUserToGroup.execute({ groupUuid, userUuid: userUuid ?? '' })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ success: true, groupUuid, userUuid: result.getValue() })
+  }
+
+  /**
+   * Standard Red Notes: remove a user from a group.
+   */
+  async removeUserFromGroup(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doRemoveUserFromGroup === undefined) {
+      return this.json({ error: { message: 'Groups are not available.' } }, 500)
+    }
+
+    const { groupUuid, userUuid } = request.params as Record<string, string>
+
+    const result = await this.doRemoveUserFromGroup.execute({ groupUuid, userUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json({ success: true, groupUuid, userUuid: result.getValue() })
+  }
+
+  /**
+   * Standard Red Notes: compute a user's effective roles/permissions =
+   * (direct roles) ∪ (roles conferred by their groups), with permissions
+   * resolved through the existing role -> permission mapping.
+   */
+  async getUserEffectivePermissions(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+    if (this.doGetUserEffectivePermissions === undefined) {
+      return this.json({ error: { message: 'Effective permissions are not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+
+    const result = await this.doGetUserEffectivePermissions.execute({ userUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json(result.getValue())
   }
 }
