@@ -364,6 +364,11 @@ const ToolbarPlugin = () => {
   const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false)
   const caseAnchorRef = useRef<HTMLButtonElement>(null)
 
+  // Word-style floating mini-toolbar (shown on text selection): a compact "More"
+  // overflow menu hosting the less-common quick-format actions.
+  const [isSelectionMoreMenuOpen, setIsSelectionMoreMenuOpen] = useState(false)
+  const selectionMoreAnchorRef = useRef<HTMLButtonElement>(null)
+
   const [currentFontFamily, setCurrentFontFamily] = useState<string>('')
 
   const [canUndo, setCanUndo] = useState(false)
@@ -1466,6 +1471,169 @@ const ToolbarPlugin = () => {
     )
   }
 
+  // Standard Red Notes — Word-like floating selection mini-toolbar.
+  //
+  // When the toolbar is floating on a text selection (i.e. not docked to the top
+  // via the "always show toolbar" preference, and not on mobile), we render a
+  // compact, curated quick-format bar instead of the full, sprawling, config-
+  // driven toolbar. The goal is Microsoft Word's mini-toolbar feel: the most-used
+  // controls in a single tight row, active state reflected on each button, and
+  // everything else tucked behind a "More" overflow menu.
+  //
+  // All controls reuse the same editor state + handlers + popovers already wired
+  // for the docked toolbar (block-style menu, alignment menu, link command, AI
+  // SelectionTools, etc.), so behavior stays identical — only the layout changes.
+  const floatingSelectionToolbar = (
+    <>
+      {/* Block type (paragraph / headings / lists / quote / code) — reuses the
+          existing block-style popover anchored at textStyleAnchorRef. */}
+      <ToolbarButton
+        name="Block style"
+        onSelect={() => setIsTextStyleMenuOpen(!isTextStyleMenuOpen)}
+        ref={textStyleAnchorRef}
+        className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+      <ToolbarSeparator />
+
+      {/* Core inline formatting: bold / italic / underline / strikethrough. */}
+      <ToolbarButton
+        name="Bold"
+        iconName="bold"
+        active={isBold}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}
+      />
+      <ToolbarButton
+        name="Italic"
+        iconName="italic"
+        active={isItalic}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic')}
+      />
+      <ToolbarButton
+        name="Underline"
+        iconName="underline"
+        active={isUnderline}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
+      />
+      <ToolbarButton
+        name="Strikethrough"
+        iconName="strikethrough"
+        active={isStrikethrough}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough')}
+      />
+      <ToolbarButton
+        name="Inline Code"
+        iconName="code-tags"
+        active={isCode}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
+      />
+      <ToolbarSeparator />
+
+      {/* Headings + paragraph quick toggles. */}
+      <ToolbarButton
+        name="Heading 1"
+        iconName="h1"
+        active={blockType === 'h1'}
+        onSelect={() => H1Block.onSelect(editor)}
+      />
+      <ToolbarButton
+        name="Heading 2"
+        iconName="h2"
+        active={blockType === 'h2'}
+        onSelect={() => H2Block.onSelect(editor)}
+      />
+      <ToolbarButton
+        name="Heading 3"
+        iconName="h3"
+        active={blockType === 'h3'}
+        onSelect={() => H3Block.onSelect(editor)}
+      />
+      <ToolbarButton
+        name="Normal text"
+        iconName="paragraph"
+        active={blockType === 'paragraph'}
+        onSelect={() => ParagraphBlock.onSelect(editor)}
+      />
+      <ToolbarSeparator />
+
+      {/* Lists + block quote. */}
+      <ToolbarButton
+        name="Bulleted List"
+        iconName="list-bulleted"
+        active={blockType === 'bullet'}
+        onSelect={() => toggleList('bullet')}
+      />
+      <ToolbarButton
+        name="Numbered List"
+        iconName="list-numbered"
+        active={blockType === 'number'}
+        onSelect={() => toggleList('number')}
+      />
+      <ToolbarButton
+        name="Check List"
+        iconName="list-check"
+        active={blockType === 'check'}
+        onSelect={() => ChecklistBlock.onSelect(editor)}
+      />
+      <ToolbarButton
+        name="Quote"
+        iconName="quote"
+        active={blockType === 'quote'}
+        onSelect={() => QuoteBlock.onSelect(editor)}
+      />
+      <ToolbarSeparator />
+
+      {/* Alignment — reuses the existing alignment popover anchored at
+          alignmentAnchorRef. The icon reflects the current alignment. */}
+      <ToolbarButton
+        name="Alignment"
+        onSelect={() => setIsAlignmentMenuOpen(!isAlignmentMenuOpen)}
+        ref={alignmentAnchorRef}
+        className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon
+          type={
+            elementFormat === 'center'
+              ? 'align-center'
+              : elementFormat === 'right'
+                ? 'align-right'
+                : elementFormat === 'justify'
+                  ? 'align-justify'
+                  : 'align-left'
+          }
+          size="custom"
+          className="h-5 w-5 md:h-4 md:w-4"
+        />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+
+      {/* Link toggle. */}
+      <ToolbarButton
+        name="Link"
+        iconName="link"
+        active={!!linkNode}
+        onSelect={() => editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')}
+      />
+      <ToolbarSeparator />
+
+      {/* AI actions + language picker (SelectionTools) — preserved as-is. */}
+      <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />
+
+      {/* Overflow "More" menu for the less-common quick-format actions, keeping
+          the visible bar compact. */}
+      <ToolbarButton
+        name="More formatting"
+        onSelect={() => setIsSelectionMoreMenuOpen(!isSelectionMoreMenuOpen)}
+        ref={selectionMoreAnchorRef}
+        className={isSelectionMoreMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="more" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+      </ToolbarButton>
+    </>
+  )
+
   return (
     <>
       {modal}
@@ -1508,14 +1676,16 @@ const ToolbarPlugin = () => {
             ref={toolbarRef}
             store={toolbarStore}
           >
-            {resolvedGroups.map((group, groupIndex) => (
-              <Fragment key={group.id}>
-                {groupIndex > 0 && <ToolbarSeparator />}
-                {group.buttons.map((button) => (
-                  <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                ))}
-              </Fragment>
-            ))}
+            {canShowAllItems
+              ? resolvedGroups.map((group, groupIndex) => (
+                  <Fragment key={group.id}>
+                    {groupIndex > 0 && <ToolbarSeparator />}
+                    {group.buttons.map((button) => (
+                      <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                    ))}
+                  </Fragment>
+                ))
+              : floatingSelectionToolbar}
             {contextualWidget && contextualButtons.length > 0 && (
               <Fragment key="contextual">
                 <ToolbarSeparator />
@@ -2054,6 +2224,105 @@ const ToolbarPlugin = () => {
           >
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">camelCase</span>
           </MenuItem>
+        </Menu>
+      </Popover>
+      {/* Word-style floating mini-toolbar "More" overflow menu. Hosts the
+          quick-format actions that don't earn a spot on the compact visible bar:
+          highlight, sub/superscript, inline code block, change case, color, and
+          clear formatting. Active state is reflected per item. */}
+      <Popover
+        title="More formatting"
+        anchorElement={selectionMoreAnchorRef}
+        open={isSelectionMoreMenuOpen}
+        togglePopover={() => setIsSelectionMoreMenuOpen(!isSelectionMoreMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="end"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="More formatting" className="!px-0" onClick={() => setIsSelectionMoreMenuOpen(false)}>
+          <ToolbarMenuItem
+            name="Highlight"
+            iconName="draw"
+            active={isHighlight}
+            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'highlight')}
+          />
+          <ToolbarMenuItem
+            name="Subscript"
+            iconName="subscript"
+            active={isSubscript}
+            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'subscript')}
+          />
+          <ToolbarMenuItem
+            name="Superscript"
+            iconName="superscript"
+            active={isSuperscript}
+            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'superscript')}
+          />
+          <MenuItemSeparator />
+          <ToolbarMenuItem
+            name="Code Block"
+            iconName="code"
+            active={blockType === 'code'}
+            onClick={insertCodeBlock}
+          />
+          <MenuItemSeparator />
+          <ToolbarMenuItem name="UPPERCASE" iconName="text" onClick={() => transformCase('upper')} />
+          <ToolbarMenuItem name="lowercase" iconName="text" onClick={() => transformCase('lower')} />
+          <ToolbarMenuItem name="camelCase" iconName="text" onClick={() => transformCase('camel')} />
+          <MenuItemSeparator />
+          {/* Inline color swatches keep these actions self-contained so no
+              secondary anchor (absent in floating mode) is needed. */}
+          <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
+            <div className="mb-1 text-xs font-semibold text-text">Text color</div>
+            <div className="flex flex-wrap gap-1.5">
+              {COLOR_PRESETS.map((color) => (
+                <button
+                  key={`fg-${color}`}
+                  type="button"
+                  aria-label={`Text color ${color}`}
+                  className="h-6 w-6 rounded border border-border"
+                  style={{ backgroundColor: color }}
+                  onClick={() => applyStyleText({ color })}
+                />
+              ))}
+              <button
+                type="button"
+                className="rounded px-1.5 text-xs hover:bg-contrast"
+                onClick={() => applyStyleText({ color: null })}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
+            <div className="mb-1 text-xs font-semibold text-text">Highlight color</div>
+            <div className="flex flex-wrap gap-1.5">
+              {COLOR_PRESETS.map((color) => (
+                <button
+                  key={`bg-${color}`}
+                  type="button"
+                  aria-label={`Highlight color ${color}`}
+                  className="h-6 w-6 rounded border border-border"
+                  style={{ backgroundColor: color }}
+                  onClick={() => applyStyleText({ 'background-color': color })}
+                />
+              ))}
+              <button
+                type="button"
+                className="rounded px-1.5 text-xs hover:bg-contrast"
+                onClick={() => applyStyleText({ 'background-color': null })}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <MenuItemSeparator />
+          <ToolbarMenuItem name="Clear formatting" iconName="trash" onClick={clearFormatting} />
         </Menu>
       </Popover>
       {zoomBlockKey && (

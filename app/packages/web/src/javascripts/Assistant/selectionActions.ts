@@ -3,6 +3,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { DirectProvider } from './DirectProvider'
 import { ProxyProvider } from './ProxyProvider'
 import { Provider } from './types'
+import { composeSystemPromptWithPersona } from './personaSettings'
 
 export type SelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand' | 'translate'
 
@@ -246,5 +247,8 @@ export async function runSelectionAction(
   options: { signal?: AbortSignal; onDelta?: (full: string) => void } = {},
 ): Promise<string> {
   const user = `${instruction.trim()}\n\n---\n${selectedText}`
-  return runOneShotCompletion(application, SYSTEM_PROMPT, user, options)
+  // Layer the user's persona (style only) onto the immutable selection-action base
+  // prompt. The persona shapes tone but cannot relax the "reply with ONLY the
+  // resulting text" contract or the safety rules (enforced in composeSystemPromptWithPersona).
+  return runOneShotCompletion(application, composeSystemPromptWithPersona(SYSTEM_PROMPT), user, options)
 }

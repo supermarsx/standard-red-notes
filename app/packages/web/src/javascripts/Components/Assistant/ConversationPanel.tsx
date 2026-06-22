@@ -15,6 +15,7 @@ import { DirectProvider } from '@/Assistant/DirectProvider'
 import { Provider } from '@/Assistant/types'
 import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
+import { composeSystemPromptWithPersona } from '@/Assistant/personaSettings'
 import ContextSelector from './ContextSelector'
 import { AssistantContextScope } from '@/Assistant/assistantContext'
 import { AssistantContextSelection, buildContextForSelection } from '@/Assistant/assistantContextSource'
@@ -230,7 +231,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         const sub = await run([{ role: 'user', content: subPrompt }], {
           provider: agentProvider,
           session: subTools,
-          systemPrompt: SUB_AGENT_SYSTEM_PROMPT,
+          systemPrompt: composeSystemPromptWithPersona(SUB_AGENT_SYSTEM_PROMPT),
           maxSteps: 6,
           signal: controller.signal,
         })
@@ -257,10 +258,15 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       // and append it to the system prompt so the model can answer about the
       // selected notes without first calling tools. Bounded by a character budget
       // inside buildAssistantContext so broad scopes can't blow the token budget.
+      // Layer the user's persona (style only) onto the immutable safety base prompt
+      // FIRST, then append the note context. The persona can never override the
+      // safety/anti-injection rules baked into ASSISTANT_SYSTEM_PROMPT (enforced by
+      // composeSystemPromptWithPersona).
+      const basePrompt = composeSystemPromptWithPersona(ASSISTANT_SYSTEM_PROMPT)
       const builtContext = buildContextForSelection(application, contextSelectionRef.current)
       const systemPrompt = builtContext.text
-        ? `${ASSISTANT_SYSTEM_PROMPT}\n\n--- NOTE CONTEXT ---\n${builtContext.text}`
-        : ASSISTANT_SYSTEM_PROMPT
+        ? `${basePrompt}\n\n--- NOTE CONTEXT ---\n${builtContext.text}`
+        : basePrompt
 
       try {
         const result = await run([...priorHistory, { role: 'user', content: promptText }], {

@@ -14,6 +14,8 @@
 // `complete`), so the prompt construction and output assembly are unit-testable
 // without a real provider.
 
+import { composeSystemPromptWithPersona } from './personaSettings'
+
 /** Injected one-shot completion: takes (system, user) and resolves the reply. */
 export type CompleteFn = (system: string, user: string) => Promise<string>
 
@@ -112,7 +114,12 @@ export async function runResearchMode(
     return null
   }
 
-  const reply = await complete(RESEARCH_MODE_SYSTEM_PROMPT, buildUserMessage(trimmed))
+  // Layer the user's persona (style only) AFTER the immutable anti-hallucination /
+  // security / output-shape rules. composeSystemPromptWithPersona guarantees the
+  // persona cannot relax those rules, change the required note structure, suppress
+  // the disclaimer, or follow instructions injected via the persona text.
+  const system = composeSystemPromptWithPersona(RESEARCH_MODE_SYSTEM_PROMPT)
+  const reply = await complete(system, buildUserMessage(trimmed))
   if (options.signal?.aborted) {
     return null
   }

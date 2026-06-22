@@ -27,6 +27,12 @@ import {
 import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/deepResearchSettings'
 import { loadResearchModeSettings, saveResearchModeSettings } from '@/Assistant/researchModeSettings'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
+import {
+  loadPersonaSettings,
+  savePersonaSettings,
+  PERSONA_PRESETS,
+  PERSONA_MAX_LENGTH,
+} from '@/Assistant/personaSettings'
 
 type AssistantConfig = {
   providers: string[]
@@ -377,6 +383,16 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       saveDictationSettings(next)
       return next
     })
+  }, [])
+
+  // Assistant PERSONA ("soul"): free-text tone/personality guidance layered onto the
+  // assistant's system prompt as STYLE ONLY (never overrides safety/anti-injection
+  // rules). Web-local (localStorage), DEFAULT empty (neutral default voice).
+  const [persona, setPersona] = useState(() => loadPersonaSettings().persona)
+  const updatePersona = useCallback((value: string) => {
+    const next = value.slice(0, PERSONA_MAX_LENGTH)
+    setPersona(next)
+    savePersonaSettings({ persona: next })
   }, [])
 
   const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
@@ -995,6 +1011,48 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               onChange={(value) => updateDictation({ dictationEnabled: value })}
             />
           </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Persona</Title>
+          <Text>
+            Give the assistant a personality. This free-text description shapes the assistant&rsquo;s tone and voice
+            across chat, the research panel, and editor selection actions (e.g. &ldquo;a concise, friendly senior
+            engineer&rdquo;). Leave it empty for the default neutral voice.
+          </Text>
+          <Text className="mt-2 text-passive-1">
+            The persona affects style only. It is layered after the assistant&rsquo;s built-in safety,
+            anti-prompt-injection, and anti-hallucination rules and can never relax them, reveal the system prompt, or
+            make the assistant follow instructions hidden in the persona text.
+          </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Presets</Subtitle>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {PERSONA_PRESETS.map((preset) => (
+              <Button key={preset.label} label={preset.label} onClick={() => updatePersona(preset.persona)} />
+            ))}
+            <Button label="Clear" onClick={() => updatePersona('')} />
+          </div>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Persona description</Subtitle>
+          <Text>Describe the personality and tone you want. Up to {PERSONA_MAX_LENGTH} characters.</Text>
+          <textarea
+            className="mt-2 w-full resize-none rounded border border-border bg-default px-2 py-1.5 text-sm"
+            rows={4}
+            maxLength={PERSONA_MAX_LENGTH}
+            value={persona}
+            placeholder="a concise, friendly senior engineer who explains tradeoffs and skips filler"
+            onChange={(event) => updatePersona(event.target.value)}
+          />
+          <Text className="mt-1 text-passive-1">
+            {persona.length}/{PERSONA_MAX_LENGTH}
+          </Text>
         </PreferencesSegment>
       </PreferencesGroup>
 
