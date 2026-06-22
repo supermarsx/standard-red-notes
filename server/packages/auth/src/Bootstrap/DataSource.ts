@@ -11,6 +11,8 @@ import { User } from '../Domain/User/User'
 import { TypeORMAuthenticator } from '../Infra/TypeORM/TypeORMAuthenticator'
 import { TypeORMAppPassword } from '../Infra/TypeORM/TypeORMAppPassword'
 import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
+import { TypeORMWebhook } from '../Infra/TypeORM/TypeORMWebhook'
+import { TypeORMAuditLogEntry } from '../Infra/TypeORM/TypeORMAuditLogEntry'
 import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
 import { TypeORMDeadManSwitch } from '../Infra/TypeORM/TypeORMDeadManSwitch'
 import { TypeORMEmailReminder } from '../Infra/TypeORM/TypeORMEmailReminder'
@@ -77,6 +79,8 @@ export class AppDataSource {
         TypeORMAuthenticator,
         TypeORMAppPassword,
         TypeORMMcpToken,
+        TypeORMWebhook,
+        TypeORMAuditLogEntry,
         TypeORMShare,
         TypeORMDeadManSwitch,
         TypeORMEmailReminder,

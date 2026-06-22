@@ -235,6 +235,32 @@ import { AuthenticateWithMcpToken } from '../Domain/UseCase/AuthenticateWithMcpT
 import { GetMcpTokenKeys } from '../Domain/UseCase/GetMcpTokenKeys/GetMcpTokenKeys'
 import { McpTokensController } from '../Controller/McpTokensController'
 import { BaseMcpTokensController } from '../Infra/InversifyExpressUtils/Base/BaseMcpTokensController'
+import { Webhook } from '../Domain/Webhook/Webhook'
+import { TypeORMWebhook } from '../Infra/TypeORM/TypeORMWebhook'
+import { WebhookPersistenceMapper } from '../Mapping/WebhookPersistenceMapper'
+import { WebhookRepositoryInterface } from '../Domain/Webhook/WebhookRepositoryInterface'
+import { TypeORMWebhookRepository } from '../Infra/TypeORM/TypeORMWebhookRepository'
+import { WebhookHttpProjection } from '../Infra/Http/Projection/WebhookHttpProjection'
+import { WebhookHttpMapper } from '../Mapping/WebhookHttpMapper'
+import { WebhookDispatcherInterface } from '../Domain/Webhook/WebhookDispatcherInterface'
+import { WebhookDispatcher } from '../Infra/Http/WebhookDispatcher'
+import { RegisterWebhook } from '../Domain/UseCase/RegisterWebhook/RegisterWebhook'
+import { ListWebhooks } from '../Domain/UseCase/ListWebhooks/ListWebhooks'
+import { DeleteWebhook } from '../Domain/UseCase/DeleteWebhook/DeleteWebhook'
+import { WebhooksController } from '../Controller/WebhooksController'
+import { BaseWebhooksController } from '../Infra/InversifyExpressUtils/Base/BaseWebhooksController'
+import { WebhookItemDeletedEventHandler } from '../Domain/Handler/WebhookItemDeletedEventHandler'
+import { WebhookItemsChangedEventHandler } from '../Domain/Handler/WebhookItemsChangedEventHandler'
+import { AuditLogEntry } from '../Domain/AuditLog/AuditLogEntry'
+import { TypeORMAuditLogEntry } from '../Infra/TypeORM/TypeORMAuditLogEntry'
+import { AuditLogEntryPersistenceMapper } from '../Mapping/AuditLogEntryPersistenceMapper'
+import { AuditLogEntryHttpProjection } from '../Infra/Http/Projection/AuditLogEntryHttpProjection'
+import { AuditLogEntryHttpMapper } from '../Mapping/AuditLogEntryHttpMapper'
+import { AuditLogRepositoryInterface } from '../Domain/AuditLog/AuditLogRepositoryInterface'
+import { TypeORMAuditLogRepository } from '../Infra/TypeORM/TypeORMAuditLogRepository'
+import { AuditLogWriterInterface } from '../Domain/AuditLog/AuditLogWriterInterface'
+import { AuditLogWriter } from '../Domain/AuditLog/AuditLogWriter'
+import { QueryAuditLog } from '../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { Share } from '../Domain/Share/Share'
 import { TypeORMShare } from '../Infra/TypeORM/TypeORMShare'
 import { SharePersistenceMapper } from '../Mapping/SharePersistenceMapper'
@@ -580,6 +606,18 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<McpToken, McpTokenHttpProjection>>(TYPES.Auth_McpTokenHttpMapper)
       .toConstantValue(new McpTokenHttpMapper())
     container
+      .bind<MapperInterface<Webhook, TypeORMWebhook>>(TYPES.Auth_WebhookPersistenceMapper)
+      .toConstantValue(new WebhookPersistenceMapper())
+    container
+      .bind<MapperInterface<Webhook, WebhookHttpProjection>>(TYPES.Auth_WebhookHttpMapper)
+      .toConstantValue(new WebhookHttpMapper())
+    container
+      .bind<MapperInterface<AuditLogEntry, TypeORMAuditLogEntry>>(TYPES.Auth_AuditLogEntryPersistenceMapper)
+      .toConstantValue(new AuditLogEntryPersistenceMapper())
+    container
+      .bind<MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>>(TYPES.Auth_AuditLogEntryHttpMapper)
+      .toConstantValue(new AuditLogEntryHttpMapper())
+    container
       .bind<MapperInterface<Share, TypeORMShare>>(TYPES.Auth_SharePersistenceMapper)
       .toConstantValue(new SharePersistenceMapper())
     container
@@ -684,6 +722,12 @@ export class ContainerConfigLoader {
       .bind<Repository<TypeORMMcpToken>>(TYPES.Auth_ORMMcpTokenRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMMcpToken))
     container
+      .bind<Repository<TypeORMWebhook>>(TYPES.Auth_ORMWebhookRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMWebhook))
+    container
+      .bind<Repository<TypeORMAuditLogEntry>>(TYPES.Auth_ORMAuditLogRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMAuditLogEntry))
+    container
       .bind<Repository<TypeORMShare>>(TYPES.Auth_ORMShareRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMShare))
     container
@@ -779,6 +823,30 @@ export class ContainerConfigLoader {
         new TypeORMMcpTokenRepository(
           container.get(TYPES.Auth_ORMMcpTokenRepository),
           container.get(TYPES.Auth_McpTokenPersistenceMapper),
+        ),
+      )
+    container
+      .bind<WebhookRepositoryInterface>(TYPES.Auth_WebhookRepository)
+      .toConstantValue(
+        new TypeORMWebhookRepository(
+          container.get(TYPES.Auth_ORMWebhookRepository),
+          container.get(TYPES.Auth_WebhookPersistenceMapper),
+        ),
+      )
+    container
+      .bind<AuditLogRepositoryInterface>(TYPES.Auth_AuditLogRepository)
+      .toConstantValue(
+        new TypeORMAuditLogRepository(
+          container.get(TYPES.Auth_ORMAuditLogRepository),
+          container.get(TYPES.Auth_AuditLogEntryPersistenceMapper),
+        ),
+      )
+    container
+      .bind<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter)
+      .toConstantValue(
+        new AuditLogWriter(
+          container.get(TYPES.Auth_AuditLogRepository),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
     container
@@ -1182,6 +1250,7 @@ export class ContainerConfigLoader {
           container.get<GetSessionFromToken>(TYPES.Auth_GetSessionFromToken),
           container.get<SessionRepositoryInterface>(TYPES.Auth_SessionRepository),
           container.get<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository),
+          container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
         ),
       )
     container
@@ -1285,6 +1354,18 @@ export class ContainerConfigLoader {
         }),
       }),
     )
+
+    // Standard Red Notes: webhook dispatcher needs the shared Axios HTTP client,
+    // so it is bound here, after Auth_HTTPClient.
+    container
+      .bind<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher)
+      .toConstantValue(
+        new WebhookDispatcher(
+          container.get(TYPES.Auth_WebhookRepository),
+          container.get<AxiosInstance>(TYPES.Auth_HTTPClient),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
 
     container
       .bind<CaptchaServerInterface>(TYPES.Auth_CaptchaServer)
@@ -1448,6 +1529,18 @@ export class ContainerConfigLoader {
     container
       .bind<GetMcpTokenKeys>(TYPES.Auth_GetMcpTokenKeys)
       .toConstantValue(new GetMcpTokenKeys(container.get(TYPES.Auth_McpTokenRepository)))
+    container
+      .bind<RegisterWebhook>(TYPES.Auth_RegisterWebhook)
+      .toConstantValue(new RegisterWebhook(container.get(TYPES.Auth_WebhookRepository)))
+    container
+      .bind<ListWebhooks>(TYPES.Auth_ListWebhooks)
+      .toConstantValue(new ListWebhooks(container.get(TYPES.Auth_WebhookRepository)))
+    container
+      .bind<DeleteWebhook>(TYPES.Auth_DeleteWebhook)
+      .toConstantValue(new DeleteWebhook(container.get(TYPES.Auth_WebhookRepository)))
+    container
+      .bind<QueryAuditLog>(TYPES.Auth_QueryAuditLog)
+      .toConstantValue(new QueryAuditLog(container.get(TYPES.Auth_AuditLogRepository)))
     container
       .bind<CreateShare>(TYPES.Auth_CreateShare)
       .toConstantValue(
@@ -1676,6 +1769,8 @@ export class ContainerConfigLoader {
           container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
           container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
           container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
+          container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
+          container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
         ),
       )
     container
@@ -2167,6 +2262,17 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<WebhooksController>(TYPES.Auth_WebhooksController)
+      .toConstantValue(
+        new WebhooksController(
+          container.get(TYPES.Auth_RegisterWebhook),
+          container.get(TYPES.Auth_ListWebhooks),
+          container.get(TYPES.Auth_DeleteWebhook),
+          container.get(TYPES.Auth_WebhookHttpMapper),
+          container.get(TYPES.Auth_AuditLogWriter),
+        ),
+      )
+    container
       .bind<SharesController>(TYPES.Auth_SharesController)
       .toConstantValue(
         new SharesController(
@@ -2437,6 +2543,12 @@ export class ContainerConfigLoader {
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
+    container
+      .bind<WebhookItemDeletedEventHandler>(TYPES.Auth_WebhookItemDeletedEventHandler)
+      .toConstantValue(new WebhookItemDeletedEventHandler(container.get(TYPES.Auth_WebhookDispatcher)))
+    container
+      .bind<WebhookItemsChangedEventHandler>(TYPES.Auth_WebhookItemsChangedEventHandler)
+      .toConstantValue(new WebhookItemsChangedEventHandler(container.get(TYPES.Auth_WebhookDispatcher)))
 
     const eventHandlers: Map<string, DomainEventHandlerInterface> = new Map([
       ['ACCOUNT_DELETION_REQUESTED', container.get(TYPES.Auth_AccountDeletionRequestedEventHandler)],
@@ -2477,6 +2589,9 @@ export class ContainerConfigLoader {
         container.get<FileQuotaRecalculatedEventHandler>(TYPES.Auth_FileQuotaRecalculatedEventHandler),
       ],
       ['SUBSCRIPTION_STATE_FETCHED', container.get(TYPES.Auth_SubscriptionStateFetchedEventHandler)],
+      // Standard Red Notes: bridge internal item events onto outbound webhooks.
+      ['ITEM_DELETED', container.get(TYPES.Auth_WebhookItemDeletedEventHandler)],
+      ['ITEMS_CHANGED_ON_SERVER', container.get(TYPES.Auth_WebhookItemsChangedEventHandler)],
     ])
 
     if (isConfiguredForHomeServer) {
@@ -2556,6 +2671,14 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseMcpTokensController(
             container.get(TYPES.Auth_McpTokensController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      container
+        .bind<BaseWebhooksController>(TYPES.Auth_BaseWebhooksController)
+        .toConstantValue(
+          new BaseWebhooksController(
+            container.get(TYPES.Auth_WebhooksController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )
@@ -2675,6 +2798,9 @@ export class ContainerConfigLoader {
             container.get<CreateOfflineSubscriptionToken>(TYPES.Auth_CreateOfflineSubscriptionToken),
             container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
             container.get<SetUserBanStatus>(TYPES.Auth_SetUserBanStatus),
+            container.get<QueryAuditLog>(TYPES.Auth_QueryAuditLog),
+            container.get(TYPES.Auth_AuditLogEntryHttpMapper),
+            container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
           ),
         )

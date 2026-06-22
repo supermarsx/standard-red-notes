@@ -9,6 +9,11 @@ import { DeleteSetting } from '../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from './../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { SetUserBanStatus } from '../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
+import { QueryAuditLog } from '../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
+import { AuditLogEntry } from '../../Domain/AuditLog/AuditLogEntry'
+import { AuditLogEntryHttpProjection } from '../Http/Projection/AuditLogEntryHttpProjection'
+import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInterface'
+import { MapperInterface } from '@standardnotes/domain-core'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 
 @controller('/admin')
@@ -22,6 +27,10 @@ export class AnnotatedAdminController extends BaseAdminController {
     override createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
     @inject(TYPES.Auth_SetSettingValue) override setSettingValue: SetSettingValue,
     @inject(TYPES.Auth_SetUserBanStatus) override setUserBanStatus: SetUserBanStatus,
+    @inject(TYPES.Auth_QueryAuditLog) override queryAuditLog: QueryAuditLog,
+    @inject(TYPES.Auth_AuditLogEntryHttpMapper)
+    override auditLogEntryHttpMapper: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
+    @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
   ) {
     super(
       doDeleteSetting,
@@ -31,6 +40,9 @@ export class AnnotatedAdminController extends BaseAdminController {
       createOfflineSubscriptionToken,
       setSettingValue,
       setUserBanStatus,
+      queryAuditLog,
+      auditLogEntryHttpMapper,
+      auditLogWriter,
     )
   }
 
@@ -99,5 +111,10 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPut('/registration')
   override async setRegistrationFlag(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setRegistrationFlag(request, response)
+  }
+
+  @httpGet('/audit-log')
+  override async getAuditLog(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getAuditLog(request, response)
   }
 }

@@ -30,6 +30,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[DELETE]:mcp-tokens/:mcpTokenId', 'auth.mcpTokens.delete'],
     ['[GET]:mcp-tokens/keys/:mcpTokenId', 'auth.mcpTokens.getKeys'],
     ['[POST]:mcp-tokens/authenticate', 'auth.mcpTokens.authenticate'],
+    // Webhooks Controller (Standard Red Notes)
+    ['[GET]:webhooks/', 'auth.webhooks.list'],
+    ['[POST]:webhooks/', 'auth.webhooks.create'],
+    ['[DELETE]:webhooks/:webhookId', 'auth.webhooks.delete'],
     // Shares Controller (Standard Red Notes)
     ['[POST]:shares/', 'auth.shares.create'],
     ['[GET]:shares/', 'auth.shares.list'],
@@ -96,6 +100,7 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:admin/users/:userUuid/ban-status', 'admin.setUserBanStatus'],
     ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
     ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
+    ['[GET]:admin/audit-log', 'admin.getAuditLog'],
     // Syncing Server
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],

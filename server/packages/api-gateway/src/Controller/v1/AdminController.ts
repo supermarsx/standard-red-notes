@@ -112,4 +112,14 @@ export class AdminController extends BaseHttpController {
       request.body,
     )
   }
+
+  @httpGet('/audit-log', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getAuditLog(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/audit-log'),
+      request.body,
+    )
+  }
 }

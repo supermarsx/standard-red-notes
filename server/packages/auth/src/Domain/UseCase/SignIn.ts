@@ -18,6 +18,10 @@ import { ApiVersion } from '../Api/ApiVersion'
 import { HttpStatusCode } from '@standardnotes/responses'
 import { VerifyHumanInteraction } from './VerifyHumanInteraction/VerifyHumanInteraction'
 import { LockRepositoryInterface } from '../User/LockRepositoryInterface'
+import { AuditLogWriterInterface } from '../AuditLog/AuditLogWriterInterface'
+import { AuditAction } from '../AuditLog/AuditAction'
+import { WebhookDispatcherInterface } from '../Webhook/WebhookDispatcherInterface'
+import { WebhookEvent } from '../Webhook/WebhookEvent'
 
 export class SignIn implements UseCaseInterface {
   constructor(
@@ -35,6 +39,11 @@ export class SignIn implements UseCaseInterface {
     // Standard Red Notes: "multiple accounts per email" flag. Default OFF
     // (trailing optional param so existing call sites/specs are unchanged).
     private workspacesPerEmailEnabled = false,
+    // Standard Red Notes: optional integration hooks (trailing optional params so
+    // existing call sites/specs are unchanged). When provided, SignIn records
+    // login success/failure to the audit log and fires the `user.login` webhook.
+    private auditLogWriter?: AuditLogWriterInterface,
+    private webhookDispatcher?: WebhookDispatcherInterface,
   ) {}
 
   async execute(dto: SignInDTO): Promise<SignInResponse> {
@@ -113,6 +122,8 @@ export class SignIn implements UseCaseInterface {
     if (!passwordMatches) {
       this.logger.debug('Password does not match')
 
+      await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, 'invalid_password')
+
       return {
         success: false,
         errorMessage: 'Invalid email or password',
@@ -126,6 +137,8 @@ export class SignIn implements UseCaseInterface {
      */
     if (user.isBanned()) {
       this.logger.debug(`[sign-in][${user.uuid}] Banned user attempted to sign in.`)
+
+      await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, 'banned')
 
       return {
         success: false,
@@ -149,9 +162,55 @@ export class SignIn implements UseCaseInterface {
       ipAddress: dto.ipAddress,
     })
 
+    await this.recordLoginSuccess(user.uuid, dto.ipAddress)
+
     return {
       success: true,
       result,
+    }
+  }
+
+  // Standard Red Notes: best-effort audit + webhook on a successful sign-in. Both
+  // hooks are optional and never throw, so they cannot affect the sign-in result.
+  private async recordLoginSuccess(userUuid: string, ipAddress?: string | null): Promise<void> {
+    if (this.auditLogWriter !== undefined) {
+      await this.auditLogWriter.write({
+        actorUuid: userUuid,
+        action: AuditAction.LoginSuccess,
+        targetType: 'user',
+        targetUuid: userUuid,
+        ip: ipAddress ?? null,
+      })
+    }
+
+    if (this.webhookDispatcher !== undefined) {
+      try {
+        await this.webhookDispatcher.dispatch(WebhookEvent.UserLogin, {
+          userUuid,
+          metadata: { result: 'success' },
+        })
+      } catch (error) {
+        this.logger.error(`Could not dispatch user.login webhook: ${(error as Error).message}`)
+      }
+    }
+  }
+
+  private async recordLoginFailure(
+    userUuid: string | null,
+    email: string,
+    ipAddress: string | null | undefined,
+    reason: string,
+  ): Promise<void> {
+    if (this.auditLogWriter !== undefined) {
+      await this.auditLogWriter.write({
+        actorUuid: userUuid,
+        action: AuditAction.LoginFailure,
+        targetType: 'user',
+        targetUuid: userUuid,
+        ip: ipAddress ?? null,
+        // email is the login identifier the user typed; not a secret.
+        metadata: { email, reason },
+      })
     }
   }
 

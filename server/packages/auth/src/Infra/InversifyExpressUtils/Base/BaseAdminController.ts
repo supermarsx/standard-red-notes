@@ -10,6 +10,12 @@ import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSett
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
+import { QueryAuditLog } from '../../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
+import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
+import { AuditLogEntryHttpProjection } from '../../Http/Projection/AuditLogEntryHttpProjection'
+import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
+import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
+import { MapperInterface } from '@standardnotes/domain-core'
 import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/settings'
 
 /**
@@ -62,6 +68,13 @@ export class BaseAdminController extends BaseHttpController {
     protected createOfflineSubscriptionToken: CreateOfflineSubscriptionToken,
     protected setSettingValue: SetSettingValue,
     protected setUserBanStatus: SetUserBanStatus,
+    // Standard Red Notes: audit-log dependencies. Optional so existing tests that
+    // construct this controller with the original arity keep compiling; the
+    // audit-log query endpoint requires them and fails gracefully when absent,
+    // and the audit-write hooks are individually guarded.
+    protected queryAuditLog?: QueryAuditLog,
+    protected auditLogEntryHttpMapper?: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
+    protected auditLogWriter?: AuditLogWriterInterface,
     private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -79,6 +92,7 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.setRegistrationFlag', this.setRegistrationFlag.bind(this))
       this.controllerContainer.register('admin.getUserBanStatus', this.getUserBanStatus.bind(this))
       this.controllerContainer.register('admin.setUserBanStatus', this.setUserBanStatusEndpoint.bind(this))
+      this.controllerContainer.register('admin.getAuditLog', this.getAuditLog.bind(this))
     }
   }
 
@@ -326,6 +340,17 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: result.getError() } }, 400)
     }
 
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SettingChanged,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      // Record WHICH setting changed but never the value: some settings are
+      // sensitive (e.g. backup app passwords) and must not be audited in clear.
+      metadata: { name },
+    })
+
     return this.json({ success: true, userUuid, name, value: value ?? null })
   }
 
@@ -386,6 +411,15 @@ export class BaseAdminController extends BaseHttpController {
 
     const user = result.getValue()
 
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.BanChanged,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      metadata: { banned, banReason: banReason ?? null },
+    })
+
     return this.json({
       success: true,
       uuid: user.uuid,
@@ -393,6 +427,55 @@ export class BaseAdminController extends BaseHttpController {
       bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
       banReason: user.banReason ?? null,
     })
+  }
+
+  /**
+   * Standard Red Notes: admin-only query over the audit log. Supports filtering
+   * by actor uuid, action, and an inclusive created_at date range (ISO-8601),
+   * plus limit/offset pagination. Returns the matching page newest-first along
+   * with the total match count.
+   */
+  async getAuditLog(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+    }
+
+    if (this.queryAuditLog === undefined || this.auditLogEntryHttpMapper === undefined) {
+      return this.json({ error: { message: 'Audit log is not available.' } }, 500)
+    }
+    const auditLogEntryHttpMapper = this.auditLogEntryHttpMapper
+
+    const query = request.query as Record<string, string | undefined>
+
+    const result = await this.queryAuditLog.execute({
+      actorUuid: query.actorUuid,
+      action: query.action,
+      from: query.from,
+      to: query.to,
+      limit: query.limit !== undefined ? Number.parseInt(query.limit, 10) : undefined,
+      offset: query.offset !== undefined ? Number.parseInt(query.offset, 10) : undefined,
+    })
+
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const { entries, total, limit, offset } = result.getValue()
+
+    return this.json({
+      entries: entries.map((entry) => auditLogEntryHttpMapper.toProjection(entry)),
+      total,
+      limit,
+      offset,
+    })
+  }
+
+  private actorUuid(response?: Response): string | null {
+    return (response?.locals as { user?: { uuid: string } } | undefined)?.user?.uuid ?? null
+  }
+
+  private clientIp(request: Request): string | null {
+    return (request.headers['x-forwarded-for'] as string | undefined) ?? request.ip ?? null
   }
 
   /**
