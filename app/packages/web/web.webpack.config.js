@@ -70,7 +70,18 @@ module.exports = (env) => {
               chunks: 'all',
             },
           }
-        : {},
+        : // Standard Red Notes: the main web build's index.html loads a single
+          // `<script src="./app.js">` (no HtmlWebpackPlugin to inject extra
+          // tags), so we must NOT split SYNCHRONOUS entry code into separate
+          // chunks — those would never be loaded and the app would break. We
+          // deliberately leave optimization empty here: webpack already emits a
+          // separate async chunk for every dynamic import() (the lazy editors,
+          // Excalidraw, mermaid, katex, PDF viewer, etc.) without any
+          // splitChunks config, and those are fetched on demand by the runtime
+          // embedded in app.js. Enabling `splitChunks: { chunks: 'all' }` here
+          // would require also injecting the resulting initial chunks into the
+          // HTML, which is out of scope for a conservative startup tune-up.
+          {},
     plugins: [
       new CircularDependencyPlugin({
         // exclude detection of files based on a RegExp

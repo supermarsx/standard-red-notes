@@ -38,8 +38,11 @@ import {
   KeyboardModifier,
   getPrimaryModifier,
 } from '@standardnotes/ui-services'
-import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, RefObject } from 'react'
-import { SuperEditor } from '../SuperEditor/SuperEditor'
+import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, lazy, RefObject, Suspense } from 'react'
+// The Super (Lexical) editor and its plugin/node graph are heavy and only needed
+// when a Super note is opened (plain notes are the default), so it is lazy-loaded
+// out of the main bundle into an async chunk. Rendered behind <Suspense> below.
+const SuperEditor = lazy(() => import('../SuperEditor/SuperEditorLazy'))
 import IndicatorCircle from '../IndicatorCircle/IndicatorCircle'
 import LinkedItemBubblesContainer from '../LinkedItems/LinkedItemBubblesContainer'
 import LinkedItemsButton from '../LinkedItems/LinkedItemsButton'
@@ -54,6 +57,7 @@ import {
 } from './TransactionFunctions'
 import { SuperEditorContentId } from '../SuperEditor/Constants'
 import { NoteViewController } from './Controller/NoteViewController'
+import { isViewActive } from './noteViewLifecycle'
 import { PlainEditor, PlainEditorInterface } from './PlainEditor/PlainEditor'
 import { CanvasEditor, CanvasEditorIdentifier } from './CanvasEditor/CanvasEditor'
 import { BaseEditor, BaseEditorIdentifier } from './BaseEditor/BaseEditor'
@@ -144,7 +148,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     this.controller = props.controller
 
     this.onEditorComponentLoad = () => {
-      if (!this.controller || this.controller.dealloced) {
+      if (!isViewActive(this.controller)) {
         return
       }
       this.application.desktopManager?.redoSearch()
@@ -294,7 +298,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     if (this.controller.isTemplateNote) {
       setTimeout(() => {
-        if (!this.controller || this.controller.dealloced) {
+        if (!isViewActive(this.controller)) {
           return
         }
         if (this.controller.templateNoteOptions?.autofocusBehavior === 'title') {
@@ -405,7 +409,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     // This can resolve after the view was torn down (e.g. a transient template
     // note on a smart view, or rapid tab switching), at which point deinit has
     // nulled the controller/application — bail out so we don't touch them.
-    if (!this.controller || this.controller.dealloced) {
+    if (!isViewActive(this.controller)) {
       return
     }
     this.streamItems()
@@ -508,7 +512,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   streamItems() {
-    if (!this.controller || this.controller.dealloced) {
+    if (!isViewActive(this.controller)) {
       return
     }
     this.#observers.push(
@@ -735,7 +739,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   reloadLineWidth() {
-    if (!this.controller || this.controller.dealloced) {
+    if (!isViewActive(this.controller)) {
       return
     }
     const editorLineWidth = this.application.notesController.getEditorWidthForNote(this.note)
@@ -780,7 +784,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   }
 
   async reloadPreferences() {
-    if (!this.controller || this.controller.dealloced) {
+    if (!isViewActive(this.controller)) {
       return
     }
     log(LoggingDomain.NoteView, 'Reload preferences')
@@ -1318,19 +1322,21 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               className={classNames('blocks-editor w-full flex-grow overflow-hidden')}
               style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
             >
-              <SuperEditor
-                key={this.note.uuid}
-                application={this.application}
-                linkingController={this.application.linkingController}
-                filesController={this.application.filesController}
-                spellcheck={this.state.spellcheck}
-                controller={this.controller}
-                readonly={this.state.readonly}
-                onFocus={this.onEditorFocus}
-                onBlur={this.onEditorBlur}
-                customBackgroundColor={this.state.customBackgroundColor}
-                customTextColor={this.state.customTextColor}
-              />
+              <Suspense fallback={<div className="flex-grow p-4 text-sm text-passive-1">Loading editor…</div>}>
+                <SuperEditor
+                  key={this.note.uuid}
+                  application={this.application}
+                  linkingController={this.application.linkingController}
+                  filesController={this.application.filesController}
+                  spellcheck={this.state.spellcheck}
+                  controller={this.controller}
+                  readonly={this.state.readonly}
+                  onFocus={this.onEditorFocus}
+                  onBlur={this.onEditorBlur}
+                  customBackgroundColor={this.state.customBackgroundColor}
+                  customTextColor={this.state.customTextColor}
+                />
+              </Suspense>
             </div>
           )}
         </EditorContentWithSafeAreaPadding>

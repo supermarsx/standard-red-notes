@@ -13,6 +13,7 @@ import Icon from '../Icon/Icon'
 import TilesToolbar from './TilesToolbar'
 import NoteTabBar, { TabTarget } from './NoteTabBar'
 import { getTileGridStyle, TileLayout } from './TileLayout'
+import { decisionForConflictTab } from './conflictTabDecision'
 import { MediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import { ViewTab } from '@/Controllers/PaneController/ViewTab'
 import HomeView from '../Home/HomeView'
@@ -377,14 +378,14 @@ class NoteGroupView extends AbstractComponent<Props, State> {
 
     if (tab.kind === 'conflict') {
       const note = this.application.items.findItem<SNNote>(tab.noteUuid)
-      if (!note) {
+      if (decisionForConflictTab(note) === 'close') {
         this.application.paneController.closeViewTab(tab.id)
         return null
       }
       const conflicted = this.application.items.conflictsOf(tab.noteUuid) as SNNote[]
       return (
         <NoteConflictResolutionView
-          currentNote={note}
+          currentNote={note as SNNote}
           conflictedNotes={conflicted}
           className="flex-grow min-h-0"
           onClose={() => this.application.paneController.closeViewTab(tab.id)}
