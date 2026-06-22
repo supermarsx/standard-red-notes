@@ -7,14 +7,14 @@
 # rolling release `srn-client <YY.N>` is cut ONLY when the freshly built bundle
 # differs from the last released one (content fingerprint gate); no-op pushes
 # do not create a release.
-name: release-srn-client
+name: srn-client
 
 on:
   push:
     branches: [main]
     paths:
       - 'cli/srn-client/**'
-      - '.github/workflows/release-srn-client.yml'
+      - '.github/workflows/srn-client.yml'
   workflow_dispatch:
 
 # The release job creates a tag + GitHub Release, so it needs write access to

@@ -7,14 +7,14 @@
 # rolling release `srn-server <YY.N>` is cut ONLY when the freshly built bundle
 # differs from the last released one (content fingerprint gate); no-op pushes
 # do not create a release.
-name: release-srn-server
+name: srn-server
 
 on:
   push:
     branches: [main]
     paths:
       - 'cli/srn-server/**'
-      - '.github/workflows/release-srn-server.yml'
+      - '.github/workflows/srn-server.yml'
   workflow_dispatch:
 
 permissions:

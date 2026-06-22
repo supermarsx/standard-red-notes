@@ -247,8 +247,8 @@ Each CLI tool is released independently as native, single-file executables via
 GitHub Actions — **no manual tagging required**. Releases roll automatically:
 
 - **Triggers.** Pushing to `main` runs the per-tool workflow when that tool's
-  directory changes — [`release-srn-client.yml`](.github/workflows/release-srn-client.yml)
-  on `cli/srn-client/**`, [`release-srn-server.yml`](.github/workflows/release-srn-server.yml)
+  directory changes — [`srn-client.yml`](.github/workflows/srn-client.yml)
+  on `cli/srn-client/**`, [`srn-server.yml`](.github/workflows/srn-server.yml)
   on `cli/srn-server/**`. Both can also be run on demand from the Actions tab
   (`workflow_dispatch`).
 - **Pipeline.** Each workflow is gated: **check → build → package → release**
@@ -262,9 +262,6 @@ GitHub Actions — **no manual tagging required**. Releases roll automatically:
   Linux, each in `x64` and `arm64` (Windows ones end in `.exe`) — plus a
   `SHA256SUMS.txt`. Download the one matching your platform, verify the checksum,
   and run it directly. The two tools release as separate GitHub Releases.
-
-`ci.yml` additionally runs the full monorepo check + build (root, `app/`, and
-`server/` Yarn PnP installs) plus both CLIs on every pull request.
 
 ## API
 
