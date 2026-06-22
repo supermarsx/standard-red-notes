@@ -617,6 +617,9 @@ export class ItemListController
     const rawText = noteLike.text ?? ''
     const text = rawText.length > 0 ? extractPlaintextFromNoteText(rawText, noteLike.noteType) : ''
     const tagTitles = this.itemManager.getSortedTagsForItem(item).map((tag) => tag.title)
+    // A note "has files" when any item referencing it is a File. Files attached
+    // to a note reference the note, so we look at the inbound references.
+    const hasFiles = this.itemManager.itemsReferencingItem(item).some(isFile)
     // Prefer the editor identifier's trailing segment (e.g. "code" from
     // org.standardnotes.code) so `editor:code` works even when noteType is unset,
     // falling back to the structured NoteType.
@@ -634,6 +637,7 @@ export class ItemListController
       starred: noteLike.starred ?? false,
       trashed: noteLike.trashed ?? false,
       locked: noteLike.locked ?? false,
+      hasFiles,
       createdAt: item.created_at?.getTime() ?? 0,
       updatedAt: (item.userModifiedDate ?? item.created_at)?.getTime() ?? 0,
     }

@@ -34,4 +34,6 @@ export const TABBABLE_PANES: { paneId: AppPaneId; title: string; icon: VectorIco
   { paneId: AppPaneId.Todos, title: 'Todos', icon: 'list-check' },
   { paneId: AppPaneId.Research, title: 'Research', icon: 'toc' },
   { paneId: AppPaneId.Bookmarks, title: 'Bookmarks', icon: 'pin' },
+  { paneId: AppPaneId.Templates, title: 'Templates', icon: 'copy' },
+  { paneId: AppPaneId.Constellation, title: 'Constellation', icon: 'star-filled' },
 ]

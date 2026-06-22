@@ -13,6 +13,7 @@ export enum AppPaneId {
   Todos = 'TodosColumn',
   Research = 'ResearchColumn',
   Bookmarks = 'BookmarksColumn',
+  Templates = 'TemplatesColumn',
 }
 
 export const AppPaneIdToDivId = {
@@ -28,4 +29,5 @@ export const AppPaneIdToDivId = {
   [AppPaneId.Todos]: ElementIds.TodosColumn,
   [AppPaneId.Research]: ElementIds.ResearchColumn,
   [AppPaneId.Bookmarks]: ElementIds.BookmarksColumn,
+  [AppPaneId.Templates]: ElementIds.TemplatesColumn,
 }

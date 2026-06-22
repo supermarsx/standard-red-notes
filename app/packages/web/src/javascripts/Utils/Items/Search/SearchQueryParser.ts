@@ -17,6 +17,8 @@
 //   updated:<2025-01-01 last modified before a date
 //   is:protected        flag filters: protected | pinned | archived |
 //                       starred | trashed | locked | template-ish aliases
+//   has:files           note has at least one attached file (aliases:
+//                       attachments | attachment); negatable with -has:files
 //   "quoted phrase"     a phrase that must appear verbatim in the free text
 //   -tag:foo            negation: any operator (or word/phrase) may be negated
 //
@@ -33,11 +35,15 @@ export type NoteFlag = 'protected' | 'pinned' | 'archived' | 'starred' | 'trashe
 
 export type SearchScope = 'title' | 'content'
 
+/** Things a note can "have", checked by the `has:` operator. */
+export type HasSubject = 'files'
+
 /** A single parsed operator term. `negated` flips the match. */
 export type SearchOperator =
   | { kind: 'tag'; value: string; negated: boolean }
   | { kind: 'type'; value: string; negated: boolean }
   | { kind: 'is'; flag: NoteFlag; negated: boolean }
+  | { kind: 'has'; subject: HasSubject; negated: boolean }
   | { kind: 'in'; scope: SearchScope; negated: boolean }
   | { kind: 'created'; comparator: DateComparator; date: number; negated: boolean }
   | { kind: 'updated'; comparator: DateComparator; date: number; negated: boolean }
@@ -75,6 +81,8 @@ export interface SearchableNote {
   starred: boolean
   trashed: boolean
   locked: boolean
+  /** True when the note has at least one attached file. */
+  hasFiles: boolean
   /** created_at as epoch ms. */
   createdAt: number
   /** updated_at (user-modified) as epoch ms. */
@@ -208,6 +216,13 @@ function buildOperator(key: string, operand: string, negated: boolean): SearchOp
       const flag = FLAG_KEYWORDS[operand.trim().toLowerCase()]
       return flag ? { kind: 'is', flag, negated } : null
     }
+    case 'has': {
+      const subject = operand.trim().toLowerCase()
+      if (subject === 'files' || subject === 'file' || subject === 'attachments' || subject === 'attachment') {
+        return { kind: 'has', subject: 'files', negated }
+      }
+      return null
+    }
     case 'in': {
       const scope = operand.trim().toLowerCase()
       if (scope === 'title') {
@@ -245,6 +260,7 @@ export interface AdvancedSearchOptions {
   type: string
   scope: SearchScope | 'all'
   flags: Record<NoteFlag, boolean>
+  hasFiles: boolean
   createdAfter: string
   createdBefore: string
   updatedAfter: string
@@ -258,6 +274,7 @@ export const emptyAdvancedSearchOptions = (): AdvancedSearchOptions => ({
   type: '',
   scope: 'all',
   flags: { protected: false, pinned: false, archived: false, starred: false, trashed: false, locked: false },
+  hasFiles: false,
   createdAfter: '',
   createdBefore: '',
   updatedAfter: '',
@@ -292,6 +309,11 @@ export function parseAdvancedSearchOptions(input: string): AdvancedSearchOptions
       case 'is':
         if (!op.negated) {
           options.flags[op.flag] = true
+        }
+        break
+      case 'has':
+        if (!op.negated && op.subject === 'files') {
+          options.hasFiles = true
         }
         break
       case 'created':
@@ -340,6 +362,9 @@ export function buildQueryFromOptions(options: AdvancedSearchOptions): string {
     if (options.flags[flag]) {
       parts.push(`is:${flag}`)
     }
+  }
+  if (options.hasFiles) {
+    parts.push('has:files')
   }
   if (options.createdAfter.trim().length > 0) {
     parts.push(`created:>${options.createdAfter.trim()}`)
@@ -469,6 +494,14 @@ export function buildSearchPredicate(
         }
         case 'is': {
           const present = noteFlag(note, op.flag)
+          if (present === op.negated) {
+            return false
+          }
+          break
+        }
+        case 'has': {
+          // Currently only `has:files` is supported.
+          const present = note.hasFiles
           if (present === op.negated) {
             return false
           }

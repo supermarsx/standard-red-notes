@@ -21,6 +21,8 @@ import RemindersView from '../RemindersAggregate/RemindersView'
 import TodoView from '../TodoAggregate/TodoView'
 import ResearchView from '../Research/ResearchView'
 import BookmarksView from '../Bookmarks/BookmarksView'
+import TemplatesView from '../Templates/TemplatesView'
+import ConstellationView from '../Constellation/ConstellationView'
 import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
 
 /**
@@ -403,6 +405,10 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         return <ResearchView application={this.application} className={viewClassName} id={tab.id} />
       case AppPaneId.Bookmarks:
         return <BookmarksView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Templates:
+        return <TemplatesView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Constellation:
+        return <ConstellationView application={this.application} className={viewClassName} id={tab.id} />
       default:
         return null
     }

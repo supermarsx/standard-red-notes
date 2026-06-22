@@ -44,6 +44,7 @@ import PublishToGitHubModal from './PublishToGitHubModal'
 import SetReminderModal from '@/Reminders/SetReminderModal'
 import { noteHasReminder } from '@/Reminders/reminders'
 import { BOOKMARK_SPOT_COMMAND } from '@/Bookmarks/bookmarkCommand'
+import { noteIsTemplate } from '@/Templates/templates'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
 
@@ -504,6 +505,21 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           >
             <Icon type="pin" className={iconClass} />
             Bookmark this spot
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              // Standard Red Notes: flag/unflag this note as a reusable template
+              // (stored in the note's appData). Templates are listed in the
+              // Templates view, from which fresh notes can be spun up.
+              void notesController.setNoteIsTemplate(notes[0], !noteIsTemplate(notes[0]))
+              closeMenu()
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="copy" className={iconClass} />
+            {noteIsTemplate(notes[0]) ? 'Remove from templates' : 'Save as template'}
           </MenuItem>
         )}
         {notes.length === 1 && (

@@ -61,6 +61,7 @@ import {
   removeBookmark as removeBookmarkFromList,
   updateBookmark as updateBookmarkInList,
 } from '../../Bookmarks/bookmarks'
+import { NoteIsTemplateKey, noteIsTemplate } from '../../Templates/templates'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
 
@@ -1044,5 +1045,52 @@ export class NotesController
       ),
     )
     void this.application.sync.sync()
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Templates (Standard Red Notes)                                           */
+  /* ------------------------------------------------------------------------ */
+
+  /** Whether a note is flagged as a reusable template. */
+  noteIsTemplate(note: SNNote): boolean {
+    return noteIsTemplate(note)
+  }
+
+  /**
+   * Flag (or unflag) a note as a reusable template. The flag is stored in the
+   * note's encrypted appData (mirrors the bookmark/reminder/appearance helpers):
+   * `mutator.setAppDataItem` + `sync`. No models/server change. Writing `false`
+   * clears the key. Never bypasses a locked note.
+   */
+  async setNoteIsTemplate(note: SNNote, isTemplate: boolean) {
+    if (note.locked) {
+      return
+    }
+    await this.application.mutator.changeItem<NoteMutator>(
+      note,
+      (mutator) => {
+        mutator.setAppDataItem(NoteIsTemplateKey, isTemplate ? true : undefined)
+      },
+      MutationType.NoUpdateUserTimestamps,
+    )
+    this.application.sync.sync().catch(console.error)
+  }
+
+  /**
+   * Create a brand new, INDEPENDENT note from a template note. The new note copies
+   * the template's text + editor type (via `duplicateItem`, which preserves the
+   * note's editorIdentifier/noteType and appData) but is explicitly NOT itself a
+   * template (the template flag is cleared on the copy). The copy is opened.
+   */
+  async createNoteFromTemplate(template: SNNote): Promise<SNNote | undefined> {
+    const duplicated = (await this.application.mutator.duplicateItem(template)) as SNNote
+    if (!duplicated) {
+      return undefined
+    }
+    // The copy must be a normal note, not another template.
+    await this.setNoteIsTemplate(duplicated, false)
+    await this.application.itemListController.selectUuids([duplicated.uuid], true)
+    void this.application.sync.sync()
+    return duplicated
   }
 }

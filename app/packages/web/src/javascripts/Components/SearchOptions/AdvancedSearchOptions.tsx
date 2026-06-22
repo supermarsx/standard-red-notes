@@ -35,6 +35,21 @@ const FLAG_LABELS: { flag: NoteFlag; label: string }[] = [
   { flag: 'trashed', label: 'Trashed' },
 ]
 
+// Quick relative-date presets. Each maps to an "after" date computed from now,
+// applied to either the created or updated field depending on the active toggle.
+const DATE_PRESETS: { label: string; days: number }[] = [
+  { label: '24h', days: 1 },
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+]
+
+/** ISO yyyy-mm-dd for `days` ago from now, matching the date <input> format. */
+const isoDaysAgo = (days: number): string => {
+  const date = new Date()
+  date.setDate(date.getDate() - days)
+  return date.toISOString().slice(0, 10)
+}
+
 const fieldLabel = 'mb-1 block text-xs font-semibold text-passive-0'
 const fieldInput =
   'w-full rounded border border-border bg-default px-2 py-1.5 text-sm text-text focus:border-info focus:outline-none'
@@ -69,6 +84,18 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
   const togglePopover = useCallback(() => setOpen((value) => !value), [])
 
   const tagsValue = options.tags.join(', ')
+
+  // Quick presets target "recently modified" by default (updatedAfter), the most
+  // common case; the created/before fields below remain available for precision.
+  const activePresetDays = DATE_PRESETS.find((preset) => options.updatedAfter === isoDaysAgo(preset.days))?.days
+
+  const applyDatePreset = useCallback(
+    (days: number) => {
+      // Toggle off when the same preset is clicked again.
+      update({ updatedAfter: options.updatedAfter === isoDaysAgo(days) ? '' : isoDaysAgo(days) })
+    },
+    [options.updatedAfter, update],
+  )
 
   return (
     <>
@@ -155,6 +182,26 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             </div>
           </div>
 
+          <div>
+            <span className={fieldLabel}>Modified within</span>
+            <div className="flex gap-1">
+              {DATE_PRESETS.map((preset) => (
+                <button
+                  key={preset.days}
+                  className={
+                    'flex-grow rounded border px-2 py-1 text-sm transition ' +
+                    (activePresetDays === preset.days
+                      ? 'border-info bg-info text-info-contrast'
+                      : 'border-border bg-default text-neutral hover:bg-contrast')
+                  }
+                  onClick={() => applyDatePreset(preset.days)}
+                >
+                  Last {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className={fieldLabel} htmlFor="adv-created-after">
@@ -219,6 +266,13 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                   <span className="ml-2 text-sm text-text">{label}</span>
                 </Switch>
               ))}
+              <Switch
+                checked={options.hasFiles}
+                onChange={(checked) => update({ hasFiles: checked })}
+                className="flex cursor-pointer items-center"
+              >
+                <span className="ml-2 text-sm text-text">Has attachments</span>
+              </Switch>
             </div>
           </div>
 

@@ -72,7 +72,21 @@ const patchStandardSheets = () => {
     const snippet = fs.readFileSync(path.join(patchDir, 'locale-snippet.html'), 'utf8')
     const marker = '<script src="./vendor/js/kendo.spreadsheet.min.js"></script>'
     if (html.includes(marker)) {
-      fs.writeFileSync(indexPath, html.replace(marker, `${marker}\n${snippet}`))
+      html = html.replace(marker, `${marker}\n${snippet}`)
+      fs.writeFileSync(indexPath, html)
+    }
+  }
+
+  // Standard Red Notes: inject the external-clipboard paste fix (forum#3393).
+  // Installs a capture-phase paste handler (added after the spreadsheet boots) that
+  // writes Excel/Sheets/Gnumeric clipboard grids into the active sheet via the Kendo
+  // API, auto-sizing the range from the active cell and bypassing Kendo's size check.
+  if (!html.includes('onPasteCapture')) {
+    const pasteSnippet = fs.readFileSync(path.join(patchDir, 'paste-snippet.html'), 'utf8')
+    const distMarker = '<script type="text/javascript" src="dist.js"></script>'
+    if (html.includes(distMarker)) {
+      html = html.replace(distMarker, `${distMarker}\n${pasteSnippet}`)
+      fs.writeFileSync(indexPath, html)
     }
   }
 

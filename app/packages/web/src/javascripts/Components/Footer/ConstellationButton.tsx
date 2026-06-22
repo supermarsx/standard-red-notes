@@ -12,18 +12,17 @@ type Props = {
 }
 
 const ConstellationButton: FunctionComponent<Props> = ({ application }) => {
-  const isOpen = application.paneController.panes.includes(AppPaneId.Constellation)
+  const activeViewTab = application.paneController.activeViewTab
+  const isOpen = activeViewTab?.kind === 'pane' && activeViewTab.paneId === AppPaneId.Constellation
 
   const handleClick = () => {
     // If the constellation is popped out into another window, refocus it.
     if (focusConstellationWindowIfOpen()) {
       return
     }
-    if (isOpen) {
-      application.paneController.removePane(AppPaneId.Constellation)
-    } else {
-      application.paneController.presentPane(AppPaneId.Constellation)
-    }
+    // Standard Red Notes: open the constellation graph as an editor TAB (like
+    // Bookmarks/Templates) rather than a full column pane.
+    application.paneController.openPaneTab(AppPaneId.Constellation)
   }
 
   return (

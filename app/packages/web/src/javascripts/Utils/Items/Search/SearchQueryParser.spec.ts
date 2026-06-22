@@ -18,6 +18,7 @@ const baseNote = (overrides: Partial<SearchableNote> = {}): SearchableNote => ({
   starred: false,
   trashed: false,
   locked: false,
+  hasFiles: false,
   createdAt: Date.parse('2024-06-15'),
   updatedAt: Date.parse('2024-06-15'),
   ...overrides,
@@ -58,6 +59,18 @@ describe('parseSearchQuery', () => {
   it('parses is: flags', () => {
     expect(parseSearchQuery('is:pinned').operators[0]).toEqual({ kind: 'is', flag: 'pinned', negated: false })
     expect(parseSearchQuery('is:starred').operators[0]).toEqual({ kind: 'is', flag: 'starred', negated: false })
+  })
+
+  it('parses has:files and its aliases', () => {
+    expect(parseSearchQuery('has:files').operators[0]).toEqual({ kind: 'has', subject: 'files', negated: false })
+    expect(parseSearchQuery('has:attachments').operators[0]).toEqual({ kind: 'has', subject: 'files', negated: false })
+    expect(parseSearchQuery('-has:files').operators[0]).toEqual({ kind: 'has', subject: 'files', negated: true })
+  })
+
+  it('treats an unknown has: subject as free text', () => {
+    const parsed = parseSearchQuery('has:banana')
+    expect(parsed.hasOperators).toBe(false)
+    expect(parsed.freeText).toBe('has:banana')
   })
 
   it('parses in:title and in:content', () => {
@@ -136,6 +149,16 @@ describe('buildSearchPredicate', () => {
     const predicate = buildSearchPredicate(parseSearchQuery('is:protected'))
     expect(predicate(baseNote({ protected: true }))).toBe(true)
     expect(predicate(baseNote({ protected: false }))).toBe(false)
+  })
+
+  it('filters by has:files (and negation)', () => {
+    const predicate = buildSearchPredicate(parseSearchQuery('has:files'))
+    expect(predicate(baseNote({ hasFiles: true }))).toBe(true)
+    expect(predicate(baseNote({ hasFiles: false }))).toBe(false)
+
+    const negated = buildSearchPredicate(parseSearchQuery('-has:files'))
+    expect(negated(baseNote({ hasFiles: true }))).toBe(false)
+    expect(negated(baseNote({ hasFiles: false }))).toBe(true)
   })
 
   it('handles created:> and updated:< comparisons', () => {
@@ -235,14 +258,17 @@ describe('advanced options serialization', () => {
     options.type = 'code'
     options.scope = 'content'
     options.flags.protected = true
+    options.hasFiles = true
     options.updatedBefore = '2025-01-01'
     options.freeText = 'budget'
     const query = buildQueryFromOptions(options)
+    expect(query).toContain('has:files')
     const reparsed = parseAdvancedSearchOptions(query)
     expect(reparsed.tags).toEqual(['work'])
     expect(reparsed.type).toBe('code')
     expect(reparsed.scope).toBe('content')
     expect(reparsed.flags.protected).toBe(true)
+    expect(reparsed.hasFiles).toBe(true)
     expect(reparsed.updatedBefore).toBe('2025-01-01')
     expect(reparsed.freeText).toBe('budget')
   })

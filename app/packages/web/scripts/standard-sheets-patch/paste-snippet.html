@@ -1,0 +1,278 @@
+    <!--
+      External-clipboard paste fix (standardnotes/forum#3393).
+
+      Kendo Spreadsheet (this bundle is Kendo UI v2021.3.914) routes every paste
+      through its PasteCommand, which compares the shape of the clipboard payload
+      against the shape of the current selection. When you copy cells from Excel /
+      Google Sheets / Gnumeric and paste them into a SINGLE active cell, the copy
+      area (e.g. 5x3) does not match the paste area (1x1), so Kendo aborts with
+      "Cannot paste, because the copy area and the paste area are not the same size
+      and shape." (or silently no-ops). Excel/Sheets themselves auto-expand the
+      paste range from the active cell; Kendo does not.
+
+      This snippet installs a CAPTURE-PHASE `paste` listener on the document. Capture
+      fires before Kendo's own (bubble-phase) clipboard handler regardless of which
+      hidden clipboard element Kendo bound to, so we can:
+        1. Read the clipboard payload (text/html table, else text/plain TSV).
+        2. Parse it into a 2D array of values (numbers coerced, strings kept).
+        3. Reach the live widget via $('#spreadsheet').data('kendoSpreadsheet'),
+           take the active sheet's selection top-left cell, and write the values
+           into a range of the MATCHING size using the public Kendo API
+           (sheet.range(row, col, rows, cols).values(grid)).
+        4. preventDefault + stopImmediatePropagation so Kendo's size-checked
+           PasteCommand never runs.
+
+      We only intercept when the spreadsheet widget exists, has a selection, and the
+      clipboard actually contains a multi-cell grid. Anything else (single value,
+      in-sheet copy that Kendo handles fine, no widget yet, parse failure) falls
+      through to Kendo's native handling untouched, so normal copy/paste still works.
+
+      jQuery and kendo are already global here (loaded in <head> above), and the
+      widget is created with $("#spreadsheet").kendoSpreadsheet({...}) by dist.js,
+      so the widget instance is reachable from this injected script.
+    -->
+    <script>
+      (function () {
+        'use strict'
+
+        function getWidget() {
+          try {
+            if (typeof window.jQuery !== 'function') {
+              return null
+            }
+            return window.jQuery('#spreadsheet').data('kendoSpreadsheet') || null
+          } catch (e) {
+            return null
+          }
+        }
+
+        // Coerce a raw cell string into a number when it is an unambiguous numeric
+        // literal, otherwise keep it as a string. Empty cells become null so Kendo
+        // clears them rather than writing the string "".
+        function coerceValue(raw) {
+          if (raw == null) {
+            return null
+          }
+          var text = String(raw)
+          if (text === '') {
+            return null
+          }
+          var trimmed = text.trim()
+          if (trimmed === '') {
+            return text
+          }
+          // Plain integer / decimal (optionally signed), no thousands separators or
+          // currency, to avoid mangling locale-specific or formatted content.
+          if (/^[-+]?(?:\d+\.?\d*|\.\d+)$/.test(trimmed)) {
+            var num = Number(trimmed)
+            if (!isNaN(num) && isFinite(num)) {
+              return num
+            }
+          }
+          return text
+        }
+
+        // Parse a plain-text TSV (tab separated, newline rows) clipboard payload
+        // into a 2D array. Handles \r\n and \r, strips a single trailing blank row.
+        function parsePlainText(plain) {
+          if (!plain) {
+            return null
+          }
+          var normalized = plain.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+          // Drop one trailing newline (Excel/Sheets append it) but keep intentional
+          // blank rows in the middle.
+          if (normalized.charAt(normalized.length - 1) === '\n') {
+            normalized = normalized.slice(0, -1)
+          }
+          if (normalized === '') {
+            return null
+          }
+          var lines = normalized.split('\n')
+          var grid = []
+          for (var i = 0; i < lines.length; i++) {
+            var cells = lines[i].split('\t')
+            var row = []
+            for (var j = 0; j < cells.length; j++) {
+              row.push(coerceValue(cells[j]))
+            }
+            grid.push(row)
+          }
+          return grid
+        }
+
+        // Parse a text/html clipboard payload (the rich form Excel / Google Sheets /
+        // Gnumeric put on the clipboard) into a 2D array by walking the <table>.
+        function parseHtml(html) {
+          if (!html || html.indexOf('<') === -1) {
+            return null
+          }
+          var doc
+          try {
+            doc = new DOMParser().parseFromString(html, 'text/html')
+          } catch (e) {
+            return null
+          }
+          if (!doc) {
+            return null
+          }
+          var table = doc.querySelector('table')
+          if (!table) {
+            return null
+          }
+          var trs = table.querySelectorAll('tr')
+          if (!trs || !trs.length) {
+            return null
+          }
+          var grid = []
+          for (var i = 0; i < trs.length; i++) {
+            var cellNodes = trs[i].querySelectorAll('td,th')
+            var row = []
+            for (var j = 0; j < cellNodes.length; j++) {
+              var cell = cellNodes[j]
+              // colspan: repeat the value so column alignment is preserved.
+              var span = parseInt(cell.getAttribute('colspan'), 10)
+              if (isNaN(span) || span < 1) {
+                span = 1
+              }
+              var text = cell.textContent != null ? cell.textContent : ''
+              // Collapse the non-breaking spaces Excel emits for empty cells.
+              text = text.replace(/ /g, ' ')
+              var value = coerceValue(text)
+              for (var k = 0; k < span; k++) {
+                row.push(value)
+              }
+            }
+            grid.push(row)
+          }
+          return grid
+        }
+
+        // Pad every row to the same width (rectangular) so Kendo's range writer is
+        // happy; missing trailing cells become null.
+        function rectangularize(grid) {
+          if (!grid || !grid.length) {
+            return null
+          }
+          var cols = 0
+          var i
+          for (i = 0; i < grid.length; i++) {
+            if (grid[i].length > cols) {
+              cols = grid[i].length
+            }
+          }
+          if (cols === 0) {
+            return null
+          }
+          for (i = 0; i < grid.length; i++) {
+            while (grid[i].length < cols) {
+              grid[i].push(null)
+            }
+          }
+          return grid
+        }
+
+        function onPasteCapture(event) {
+          var widget = getWidget()
+          if (!widget) {
+            return
+          }
+
+          var clipboard =
+            (event.clipboardData ||
+              (event.originalEvent && event.originalEvent.clipboardData) ||
+              window.clipboardData) || null
+          if (!clipboard || typeof clipboard.getData !== 'function') {
+            return
+          }
+
+          var html = ''
+          var plain = ''
+          try {
+            html = clipboard.getData('text/html') || ''
+          } catch (e) {
+            html = ''
+          }
+          try {
+            // IE exposes only "Text"; standards browsers use "text/plain".
+            plain = clipboard.getData('text/plain') || clipboard.getData('Text') || ''
+          } catch (e) {
+            plain = ''
+          }
+
+          var grid = parseHtml(html)
+          if (!grid || !grid.length) {
+            grid = parsePlainText(plain)
+          }
+          grid = rectangularize(grid)
+          if (!grid || !grid.length) {
+            // Nothing usable parsed; let Kendo handle it natively.
+            return
+          }
+
+          // A single 1x1 paste is exactly what Kendo already handles correctly, so
+          // leave it alone to preserve native formatting/formula behavior.
+          if (grid.length === 1 && grid[0].length === 1) {
+            return
+          }
+
+          var sheet
+          var selection
+          try {
+            sheet = widget.activeSheet()
+            if (!sheet) {
+              return
+            }
+            selection = sheet.selection()
+            if (!selection) {
+              return
+            }
+          } catch (e) {
+            return
+          }
+
+          var topLeft
+          try {
+            topLeft = selection.topLeft()
+          } catch (e) {
+            topLeft = null
+          }
+          if (!topLeft || typeof topLeft.row !== 'number' || typeof topLeft.col !== 'number') {
+            return
+          }
+
+          var rows = grid.length
+          var cols = grid[0].length
+
+          try {
+            sheet.batch(function () {
+              sheet.range(topLeft.row, topLeft.col, rows, cols).values(grid)
+            }, { recalc: true })
+            // Move the selection to cover the pasted block, matching Excel/Sheets.
+            try {
+              sheet.range(topLeft.row, topLeft.col, rows, cols).select()
+            } catch (selErr) {
+              // Selection update is cosmetic; ignore failures.
+            }
+          } catch (e) {
+            // If the API write fails for any reason, do NOT swallow the event —
+            // fall back to Kendo's native paste so behavior is no worse than before.
+            return
+          }
+
+          // We handled it: stop Kendo's size-checked PasteCommand from running.
+          event.preventDefault()
+          if (typeof event.stopImmediatePropagation === 'function') {
+            event.stopImmediatePropagation()
+          } else {
+            event.stopPropagation()
+          }
+        }
+
+        try {
+          document.addEventListener('paste', onPasteCapture, true)
+        } catch (e) {
+          // If listener registration fails, the spreadsheet still works with the
+          // original (size-restricted) Kendo paste behavior.
+        }
+      })()
+    </script>

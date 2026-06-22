@@ -10,6 +10,7 @@ export const ElementIds = {
   TodosColumn: 'todos-column',
   ResearchColumn: 'research-column',
   BookmarksColumn: 'bookmarks-column',
+  TemplatesColumn: 'templates-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',
