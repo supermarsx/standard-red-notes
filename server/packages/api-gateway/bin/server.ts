@@ -52,6 +52,7 @@ import {
   resolveSharedServerAccessKeyConfig,
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
+import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
 const container = new ContainerConfigLoader()
 void container.load().then((container) => {
@@ -222,16 +223,69 @@ void container.load().then((container) => {
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  // `server.build()` returns the underlying Express application; keep a handle
+  // so the realtime WebSocket gateway can register its token route on it, then
+  // `.listen()` to get the Node http.Server the ws upgrade attaches to.
+  const app = server.build()
+  const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 
   serverInstance.keepAliveTimeout = keepAliveTimeout
 
+  // Standard Red Notes: run the realtime WebSocket gateway IN-PROCESS on the same
+  // http server / port (3000) instead of a separate listener (formerly :3106).
+  // It binds the ws upgrade to `serverInstance`, registers `POST /sockets/tokens`
+  // on the Express app, and starts the Redis bridge + (optional) SQS consumer.
+  // Adapt the winston logger to the gateway's minimal Logger interface
+  // (variadic info/warn/error returning void). winston's leveled methods accept
+  // a message + meta, so join the args into one message string.
+  const gatewayLogger = {
+    info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
+    warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
+    error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
+  }
+
+  let stopWebSocketGateway: (() => Promise<void>) | undefined
+  if (env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)) {
+    try {
+      const gateway = attachWebSocketGateway({
+        httpServer: serverInstance,
+        app,
+        logger: gatewayLogger,
+        config: {
+          connectionTokenSecret: env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true),
+          connectionTokenTtl: env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || '60s',
+          internalSecret: env.get('WEBSOCKET_GATEWAY_INTERNAL_SECRET', true) || '',
+          authJwtSecret: env.get('AUTH_JWT_SECRET', true) || '',
+          redisHost: env.get('REDIS_HOST', true) || '127.0.0.1',
+          redisPort: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+          sqs: {
+            queueUrl: env.get('SQS_QUEUE_URL', true) || undefined,
+            endpoint: env.get('SQS_ENDPOINT', true) || undefined,
+            region: env.get('SQS_AWS_REGION', true) || undefined,
+            accessKeyId: env.get('SQS_ACCESS_KEY_ID', true) || undefined,
+            secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true) || undefined,
+          },
+        },
+      })
+      stopWebSocketGateway = gateway.stop
+      logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
+    } catch (error) {
+      logger.error(`Failed to attach the realtime WebSocket gateway: ${(error as Error).message}`)
+    }
+  } else {
+    logger.info(
+      'WEB_SOCKET_CONNECTION_TOKEN_SECRET not set; realtime WebSocket gateway not attached (token minting disabled)',
+    )
+  }
+
   process.on('SIGTERM', () => {
     logger.info('SIGTERM signal received: closing HTTP server')
-    serverInstance.close(() => {
-      logger.info('HTTP server closed')
+    void Promise.resolve(stopWebSocketGateway?.()).finally(() => {
+      serverInstance.close(() => {
+        logger.info('HTTP server closed')
+      })
     })
   })
 

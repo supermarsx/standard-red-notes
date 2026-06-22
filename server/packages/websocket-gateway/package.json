@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Self-hosted WebSocket push gateway for Standard Red Notes (replaces AWS API Gateway WebSocket push).",
+  "main": "dist/gateway.js",
+  "types": "dist/gateway.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/gateway.d.ts",
+      "import": "./dist/gateway.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",

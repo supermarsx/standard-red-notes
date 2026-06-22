@@ -80,7 +80,7 @@ That's it. To stop the stack later: `docker compose down`.
 | Service             | Image                          | Purpose |
 |---------------------|--------------------------------|---------|
 | `app`               | built from `./app`             | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001). |
-| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, revisions, and the realtime websocket-gateway run together under supervisord (`MODE=self-hosted`). Publishes the API on `SERVER_PORT` (3000), files on `FILES_PORT` (3125), and the realtime websocket on `WEBSOCKET_PORT` (3106). |
+| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Publishes the API + realtime websocket on `SERVER_PORT` (3000) and files on `FILES_PORT` (3125). |
 | `db`                | `mariadb:11`                   | Primary datastore for accounts, notes, sync, and revisions. |
 | `cache`             | `redis:8-alpine`               | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file. |
 | `localstack`        | `localstack/localstack:4`      | Local AWS SNS/SQS emulator. The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on first start (see below). |
@@ -145,7 +145,6 @@ to boot otherwise).
 | `APP_PORT` | Host port for the web app. | Your choice (default `3001`) |
 | `SERVER_PORT` | Host port for the API gateway. | Your choice (default `3000`) |
 | `FILES_PORT` | Host port for the files service. | Your choice (default `3125`) |
-| `WEBSOCKET_PORT` | Host port for the realtime gateway. | Your choice (default `3106`) |
 | `PUBLIC_FILES_SERVER_URL` | Public URL clients use to reach the files service. Derived from your domain + `FILES_PORT`. | Computed by the script |
 | `AUTH_SERVER_U2F_RELYING_PARTY_ID` | WebAuthn/hardware-key relying-party ID (your host). | Computed (host of your domain, or `localhost`) |
 | `AUTH_SERVER_U2F_EXPECTED_ORIGIN` | Allowed WebAuthn origins. | Computed from your domain + app port |
@@ -255,9 +254,11 @@ Route everything under one hostname by path:
 - the **files** endpoints -> the files port (`server` container, port 3104 inside;
   published as `FILES_PORT`/3125). Point `PUBLIC_FILES_SERVER_URL` at the public
   URL you route to it.
-- the **websocket** gateway -> the `server` container, port 3106 (it runs as an
-  in-container supervisord process). The browser opens `wss://<host>/...`; set
-  `WEB_SOCKET_SERVER_URL` to that URL.
+- the **websocket** gateway -> the `server` container, port 3000 (it runs
+  IN-PROCESS inside the api-gateway, sharing its port). The `/sockets` path needs
+  the WebSocket Upgrade headers; the browser opens `wss://<host>/...`. Internally
+  the api-gateway mints connection tokens against its own `WEB_SOCKET_SERVER_URL`
+  (default `http://localhost:3000`).
 
 The web client does not hard-code an API origin - it uses whatever sync-server
 URL you configure in the client - so single-origin routing is purely a proxy
@@ -309,9 +310,10 @@ server {
     # Files service (range requests pass through transparently)
     location /files/ { proxy_pass http://127.0.0.1:3125/; }
 
-    # Realtime websocket gateway - WebSocket Upgrade pass-through is required.
+    # Realtime websocket gateway (in-process on the api-gateway, port 3000) -
+    # WebSocket Upgrade pass-through is required.
     location /sockets/ {
-        proxy_pass http://127.0.0.1:3106/;
+        proxy_pass http://127.0.0.1:3000/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -360,13 +362,14 @@ services:
       - "traefik.http.routers.srn-api.service=srn-api"
       - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
       # A second router/service for the files port (3104) can be added the same way.
-      # The realtime websocket gateway is an in-container process on port 3106;
-      # route /sockets to it with another router/service on this same container:
+      # The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the
+      # SAME port (3000); route /sockets to it with another router/service on this
+      # same container/port (Traefik passes the WebSocket Upgrade through):
       - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
       - "traefik.http.routers.srn-ws.entrypoints=websecure"
       - "traefik.http.routers.srn-ws.tls.certresolver=le"
       - "traefik.http.routers.srn-ws.service=srn-ws"
-      - "traefik.http.services.srn-ws.loadbalancer.server.port=3106"
+      - "traefik.http.services.srn-ws.loadbalancer.server.port=3000"
 
 networks:
   proxy:

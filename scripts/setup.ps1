@@ -140,7 +140,8 @@ Write-Info 'These are the ports published on the host machine.'
 $AppPort       = Read-Default 'Web app port:'            '3001'
 $ServerPort    = Read-Default 'API gateway port:'        '3000'
 $FilesPort     = Read-Default 'Files service port:'      '3125'
-$WebsocketPort = Read-Default 'Realtime websocket port:' '3106'
+# The realtime websocket gateway runs in-process on the API gateway port (no
+# separate host port), so it is not prompted for here.
 
 Write-Title '3) Database'
 $MysqlDatabase = Read-Default 'Database name:' 'standard_notes_db'
@@ -194,7 +195,6 @@ $content = @"
 APP_PORT=$AppPort
 SERVER_PORT=$ServerPort
 FILES_PORT=$FilesPort
-WEBSOCKET_PORT=$WebsocketPort
 
 # ----- Database (MariaDB) ----------------------------------------------------
 MYSQL_DATABASE=$MysqlDatabase

@@ -157,7 +157,8 @@ info "These are the ports published on the host machine."
 prompt APP_PORT       "Web app port:"            "3001"
 prompt SERVER_PORT    "API gateway port:"        "3000"
 prompt FILES_PORT     "Files service port:"      "3125"
-prompt WEBSOCKET_PORT "Realtime websocket port:" "3106"
+# The realtime websocket gateway runs in-process on the API gateway port (no
+# separate host port), so it is not prompted for here.
 
 title "3) Database"
 prompt MYSQL_DATABASE "Database name:" "standard_notes_db"
@@ -211,7 +212,6 @@ cat > "$ENV_FILE" <<EOF
 APP_PORT=${APP_PORT}
 SERVER_PORT=${SERVER_PORT}
 FILES_PORT=${FILES_PORT}
-WEBSOCKET_PORT=${WEBSOCKET_PORT}
 
 # ----- Database (MariaDB) ----------------------------------------------------
 MYSQL_DATABASE=${MYSQL_DATABASE}

@@ -50,15 +50,14 @@ x-server-env: &server-env
   REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-0}
   REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-0}
   PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:3125}
-  # Self-hosted realtime WebSocket gateway. Folded into this same `server`
-  # container as a supervisord-managed process listening on :3106, so the server
-  # reaches it over localhost (no separate container/service).
-  WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://localhost:3106}
+  # Self-hosted realtime WebSocket gateway. It now runs IN-PROCESS inside the
+  # api-gateway on the SAME port (:3000) — no separate listener/process. The
+  # api-gateway POSTs to its own /sockets/tokens to mint connection tokens, so
+  # this URL points at the api-gateway itself (localhost:3000).
+  WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://localhost:3000}
   WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
-  # Connection-token signing for the in-container WebSocket gateway. The gateway
-  # process reads these directly from its environment. PORT is NOT set here on
-  # purpose — the gateway's supervisor script hardcodes PORT=3106 so it cannot be
-  # clobbered by other server processes that also honor a generic $PORT.
+  # Connection-token signing for the in-process WebSocket gateway. The api-gateway
+  # reads these from its environment and passes them to attachWebSocketGateway.
   WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
   WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
   # SNS/SQS event source for realtime push: the gateway consumes the syncing
@@ -170,8 +169,8 @@ services:
     ports:
       - "${SERVER_PORT:-3000}:3000"
       - "${FILES_PORT:-3125}:3104"
-      # Realtime WebSocket gateway, now an in-container supervisord process.
-      - "${WEBSOCKET_PORT:-3106}:3106"
+      # The realtime WebSocket gateway runs in-process on the api-gateway's :3000
+      # listener (see SERVER_PORT above), so it no longer needs its own port.
     volumes:
       - server-logs:/var/lib/server/logs
       - uploads:/opt/shared/uploads

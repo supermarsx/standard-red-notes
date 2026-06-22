@@ -8153,6 +8153,7 @@ const RAW_RUNTIME_STATE =
           ["@babel/preset-env", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:7.29.7"],\
           ["@babel/preset-typescript", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:7.29.7"],\
           ["@grpc/grpc-js", "npm:1.14.4"],\
+          ["@standard-red-notes/websocket-gateway", "workspace:packages/websocket-gateway"],\
           ["@standardnotes/api-gateway", "workspace:packages/api-gateway"],\
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\
           ["@standardnotes/domain-events", "workspace:packages/domain-events"],\

@@ -5219,7 +5219,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@standard-red-notes/websocket-gateway@workspace:packages/websocket-gateway":
+"@standard-red-notes/websocket-gateway@workspace:*, @standard-red-notes/websocket-gateway@workspace:packages/websocket-gateway":
   version: 0.0.0-use.local
   resolution: "@standard-red-notes/websocket-gateway@workspace:packages/websocket-gateway"
   dependencies:
@@ -5294,6 +5294,7 @@ __metadata:
     "@babel/preset-env": "npm:^7.29.7"
     "@babel/preset-typescript": "npm:^7.29.7"
     "@grpc/grpc-js": "npm:1.14.4"
+    "@standard-red-notes/websocket-gateway": "workspace:*"
     "@standardnotes/domain-core": "workspace:^"
     "@standardnotes/domain-events": "workspace:*"
     "@standardnotes/domain-events-infra": "workspace:*"
