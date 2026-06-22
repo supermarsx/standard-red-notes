@@ -28305,12 +28305,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"node-abi@npm:^3.3.0":
+  version: 3.92.0
+  resolution: "node-abi@npm:3.92.0"
+  dependencies:
+    semver: ^7.3.5
+  checksum: 9a971382d1ea01dc26377380305b65827a7cef9d8cc315b6c0fc20ffe3abf5cc8f5fa9807adce01423fbeef303c427a1c90af5ca0a0680de19cf7ff24895e6f6
+  languageName: node
+  linkType: hard
+
 "node-abi@npm:^4.2.0":
-  version: 4.2.0
-  resolution: "node-abi@npm:4.2.0"
+  version: 4.31.0
+  resolution: "node-abi@npm:4.31.0"
   dependencies:
     semver: ^7.6.3
-  checksum: 8abd4d66211112a23d5d5099ca924d1e8bd782e8e93d8f92cec79ab76b2e6b48669299617b1ac8e648040b2f57621bf516f3914c53e1096050380f4b1bbf92ca
+  checksum: 6a99c61c3303868da97fe59864805bee4c2d855445ea62537d836f37895dda39ab638604350cf7c16c2e9e829b87536d02d63d4230177f29540587bb458d6f33
   languageName: node
   linkType: hard
 

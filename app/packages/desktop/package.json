@@ -130,10 +130,10 @@
       ]
     },
     "win": {
-      "certificateSubjectName": "Standard Red Notes",
-      "publisherName": "Standard Red Notes",
-      "signDlls": true,
-      "sign": "./scripts/windowsSign.js"
+      "signtoolOptions": {
+        "publisherName": "Standard Red Notes",
+        "sign": "./scripts/windowsSign.js"
+      }
     },
     "nsis": {
       "deleteAppDataOnUninstall": true
@@ -143,7 +143,9 @@
       "icon": "build/icon/",
       "executableName": "standard-red-notes",
       "desktop": {
-        "StartupWMClass": "standard red notes"
+        "entry": {
+          "StartupWMClass": "standard red notes"
+        }
       },
       "target": [
         "AppImage",
