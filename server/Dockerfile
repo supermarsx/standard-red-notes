@@ -30,7 +30,7 @@ COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # layer (PnP loads packages from it at runtime), so isolating it here means a
 # source-only change no longer re-runs the whole install — the layer is reused
 # until a manifest or the lockfile changes.
-COPY .yarnrc.yml yarn.lock .pnp.cjs ./
+COPY .yarnrc.yml yarn.lock .pnp.cjs .pnp.loader.mjs ./
 COPY .yarn/ ./.yarn/
 COPY package.json ./
 COPY packages/analytics/package.json packages/analytics/

@@ -5843,11 +5843,9 @@ __metadata:
   resolution: "@standardnotes/time@workspace:packages/time"
   dependencies:
     "@types/jest": "npm:^30.0.0"
-    "@types/microtime": "npm:^2.1.2"
     dayjs: "npm:^1.11.21"
     jest: "npm:^30.4.2"
     jest-util: "npm:^30.2.0"
-    microtime: "npm:^3.1.1"
     reflect-metadata: "npm:^0.2.2"
     ts-jest: "npm:^29.4.11"
     typescript: "npm:^6.0.3"
@@ -6267,13 +6265,6 @@ __metadata:
     "@types/ms": "npm:*"
     "@types/node": "npm:*"
   checksum: 10/d7960d995ad815511c7f4e7f09d91522dfe16e7e800cdd6226c8b1b624c534e0f3b8f8f3beb60e3189865269f028002f1a490189beca5afd02bc96ef1d68f21f
-  languageName: node
-  linkType: hard
-
-"@types/microtime@npm:^2.1.2":
-  version: 2.1.2
-  resolution: "@types/microtime@npm:2.1.2"
-  checksum: 10/65ed60012050f3c6378791f9ed9cc8d9b81b3b8878224b80382b573832c2961c2f64d9fd76c6ba11772ef45573362ad7b0ccd23bb6b11dd93258baeae6c7bbf1
   languageName: node
   linkType: hard
 
@@ -11764,17 +11755,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"microtime@npm:^3.1.1":
-  version: 3.1.1
-  resolution: "microtime@npm:3.1.1"
-  dependencies:
-    node-addon-api: "npm:^5.0.0"
-    node-gyp: "npm:latest"
-    node-gyp-build: "npm:^4.4.0"
-  checksum: 10/62c29ac611a10e5ce9696c6f1167ba9f7b7955db166828fafccec16f3b8121b358a5066dec160ae7c54187c85ef75253df589e44454685f1aaff4d85cb3a4e53
-  languageName: node
-  linkType: hard
-
 "mime-db@npm:1.52.0":
   version: 1.52.0
   resolution: "mime-db@npm:1.52.0"
@@ -12156,15 +12136,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"node-addon-api@npm:^5.0.0":
-  version: 5.1.0
-  resolution: "node-addon-api@npm:5.1.0"
-  dependencies:
-    node-gyp: "npm:latest"
-  checksum: 10/595f59ffb4630564f587c502119cbd980d302e482781021f3b479f5fc7e41cf8f2f7280fdc2795f32d148e4f3259bd15043c52d4a3442796aa6f1ae97b959636
-  languageName: node
-  linkType: hard
-
 "node-fetch@npm:^2.6.7":
   version: 2.6.11
   resolution: "node-fetch@npm:2.6.11"
@@ -12190,17 +12161,6 @@ __metadata:
     encoding:
       optional: true
   checksum: 10/b24f8a3dc937f388192e59bcf9d0857d7b6940a2496f328381641cb616efccc9866e89ec43f2ec956bbd6c3d3ee05524ce77fe7b29ccd34692b3a16f237d6676
-  languageName: node
-  linkType: hard
-
-"node-gyp-build@npm:^4.4.0":
-  version: 4.6.0
-  resolution: "node-gyp-build@npm:4.6.0"
-  bin:
-    node-gyp-build: bin.js
-    node-gyp-build-optional: optional.js
-    node-gyp-build-test: build-test.js
-  checksum: 10/c8b57abe5e6e4a28dce450e3c0136bcce88d15602c33f1258ed9c9a52f156d34a00dd8864271b2f2acfd6ef4de0af3e75e5e76e771c4bc4f38dd0ee06ad178d8
   languageName: node
   linkType: hard
 

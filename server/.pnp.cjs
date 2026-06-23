@@ -8725,11 +8725,9 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@standardnotes/time", "workspace:packages/time"],\
           ["@types/jest", "npm:30.0.0"],\
-          ["@types/microtime", "npm:2.1.2"],\
           ["dayjs", "npm:1.11.21"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
-          ["microtime", "npm:3.1.1"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["ts-jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:29.4.11"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"]\
@@ -9199,15 +9197,6 @@ const RAW_RUNTIME_STATE =
           ["@types/jsonwebtoken", "npm:9.0.10"],\
           ["@types/ms", "npm:2.1.0"],\
           ["@types/node", "npm:20.2.5"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
-    ["@types/microtime", [\
-      ["npm:2.1.2", {\
-        "packageLocation": "./.yarn/cache/@types-microtime-npm-2.1.2-ccd181ecb6-65ed600120.zip/node_modules/@types/microtime/",\
-        "packageDependencies": [\
-          ["@types/microtime", "npm:2.1.2"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -15693,18 +15682,6 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
-    ["microtime", [\
-      ["npm:3.1.1", {\
-        "packageLocation": "./.yarn/unplugged/microtime-npm-3.1.1-ff5289e8ad/node_modules/microtime/",\
-        "packageDependencies": [\
-          ["microtime", "npm:3.1.1"],\
-          ["node-addon-api", "npm:5.1.0"],\
-          ["node-gyp", "npm:9.3.1"],\
-          ["node-gyp-build", "npm:4.6.0"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
     ["mime-db", [\
       ["npm:1.52.0", {\
         "packageLocation": "./.yarn/cache/mime-db-npm-1.52.0-b5371d6fd2-54bb60bf39.zip/node_modules/mime-db/",\
@@ -16138,16 +16115,6 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
-    ["node-addon-api", [\
-      ["npm:5.1.0", {\
-        "packageLocation": "./.yarn/unplugged/node-addon-api-npm-5.1.0-b50d00f739/node_modules/node-addon-api/",\
-        "packageDependencies": [\
-          ["node-addon-api", "npm:5.1.0"],\
-          ["node-gyp", "npm:9.3.1"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
     ["node-fetch", [\
       ["npm:2.6.11", {\
         "packageLocation": "./.yarn/cache/node-fetch-npm-2.6.11-160e4174c3-de59f077d4.zip/node_modules/node-fetch/",\
@@ -16224,15 +16191,6 @@ const RAW_RUNTIME_STATE =
           ["semver", "npm:7.5.1"],\
           ["tar", "npm:6.1.15"],\
           ["which", "npm:2.0.2"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
-    ["node-gyp-build", [\
-      ["npm:4.6.0", {\
-        "packageLocation": "./.yarn/cache/node-gyp-build-npm-4.6.0-5434aac3e5-c8b57abe5e.zip/node_modules/node-gyp-build/",\
-        "packageDependencies": [\
-          ["node-gyp-build", "npm:4.6.0"]\
         ],\
         "linkType": "HARD"\
       }]\
