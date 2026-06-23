@@ -23,7 +23,9 @@ import {
   $createParagraphNode,
   $isTextNode,
   $getNodeByKey,
+  $setSelection,
   TextNode,
+  BaseSelection,
 } from 'lexical'
 import {
   mergeRegister,
@@ -193,6 +195,7 @@ const FONT_FAMILIES: { name: string; value: string | null }[] = [
 const MIN_FONT_SIZE = 8
 const MAX_FONT_SIZE = 96
 const FONT_SIZE_STEP = 2
+const FONT_SIZE_PRESETS = [8, 9, 10, 11, 12, 14, 16, 18, 24, 30, 36, 48, 60, 72, 96]
 
 const parseFontSize = (value: string): number => {
   const parsed = parseInt(value, 10)
@@ -361,6 +364,16 @@ const ToolbarPlugin = () => {
   const [isFontFamilyMenuOpen, setIsFontFamilyMenuOpen] = useState(false)
   const fontFamilyAnchorRef = useRef<HTMLButtonElement>(null)
 
+  const [isFontSizeMenuOpen, setIsFontSizeMenuOpen] = useState(false)
+  const fontSizeAnchorRef = useRef<HTMLButtonElement>(null)
+  // The text shown in the editable font-size field while the user is typing
+  // (kept separate from currentFontSize so a half-typed value isn't clobbered).
+  const [fontSizeInput, setFontSizeInput] = useState<string>('16')
+  // The editor selection at the moment focus left the editor for the font-size
+  // field. Typing into the field blurs the editor and can collapse the Lexical
+  // selection, so we stash it here and restore it before applying.
+  const fontSizeSelectionRef = useRef<BaseSelection | null>(null)
+
   const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false)
   const caseAnchorRef = useRef<HTMLButtonElement>(null)
 
@@ -371,6 +384,12 @@ const ToolbarPlugin = () => {
 
   const [currentFontFamily, setCurrentFontFamily] = useState<string>('')
   const [currentFontSize, setCurrentFontSize] = useState<number>(16)
+
+  // Mirror the detected size into the editable field (unless the user is mid-edit
+  // with the field focused, where fontSizeInput is driven by their keystrokes).
+  useEffect(() => {
+    setFontSizeInput(String(currentFontSize))
+  }, [currentFontSize])
 
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
@@ -686,14 +705,30 @@ const ToolbarPlugin = () => {
     [activeEditor],
   )
 
-  // Apply an exact font size (from the numeric input), clamped to the allowed
-  // range, to the current selection.
+  // Stash the current editor selection before focus moves to the font-size
+  // field; without this, typing a size and pressing Enter would find a collapsed
+  // (or null) selection and silently do nothing.
+  const captureFontSizeSelection = useCallback(() => {
+    activeEditor.getEditorState().read(() => {
+      const selection = $getSelection()
+      fontSizeSelectionRef.current = $isRangeSelection(selection) ? selection.clone() : null
+    })
+  }, [activeEditor])
+
+  // Apply an exact font size (from the field or a preset), clamped to the allowed
+  // range. Restores the stashed selection when the live one is no longer a range
+  // (i.e. the editor lost focus to the toolbar field).
   const applyFontSize = useCallback(
     (size: number) => {
       const clamped = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)))
       setCurrentFontSize(clamped)
+      setFontSizeInput(String(clamped))
       activeEditor.update(() => {
-        const selection = $getSelection()
+        let selection = $getSelection()
+        if (!$isRangeSelection(selection) && fontSizeSelectionRef.current) {
+          selection = fontSizeSelectionRef.current.clone()
+          $setSelection(selection)
+        }
         if ($isRangeSelection(selection)) {
           $patchStyleText(selection, { 'font-size': `${clamped}px` })
         }
@@ -1257,37 +1292,61 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ),
     [ToolbarButtonId.FontSize]: (
-      <div className="flex flex-shrink-0 items-center" key="fontSizeInput">
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-border bg-default focus-within:border-info md:h-7"
+        key="fontSizeInput"
+      >
         <input
-          type="number"
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
           aria-label="Font size"
           title="Font size"
-          min={MIN_FONT_SIZE}
-          max={MAX_FONT_SIZE}
-          value={currentFontSize}
-          onChange={(event) => {
-            const next = parseInt(event.target.value, 10)
-            if (!Number.isNaN(next)) {
-              setCurrentFontSize(next)
-            }
+          value={fontSizeInput}
+          onFocus={(event) => {
+            captureFontSizeSelection()
+            event.target.select()
           }}
-          onBlur={(event) => {
-            const next = parseInt(event.target.value, 10)
+          onChange={(event) => {
+            // Allow only digits while typing; apply on Enter/blur.
+            setFontSizeInput(event.target.value.replace(/[^0-9]/g, ''))
+          }}
+          onBlur={() => {
+            const next = parseInt(fontSizeInput, 10)
             applyFontSize(Number.isNaN(next) ? currentFontSize : next)
           }}
           onKeyDown={(event) => {
-            // Keep arrow keys for the native spinner / caret rather than letting
-            // the Ariakit toolbar move focus between items.
+            // Don't let the Ariakit toolbar hijack typing/arrow keys.
             event.stopPropagation()
             if (event.key === 'Enter') {
               const next = parseInt((event.target as HTMLInputElement).value, 10)
               applyFontSize(Number.isNaN(next) ? currentFontSize : next)
               ;(event.target as HTMLInputElement).blur()
+            } else if (event.key === 'Escape') {
+              setFontSizeInput(String(currentFontSize))
+              ;(event.target as HTMLInputElement).blur()
             }
           }}
-          onMouseDown={(event) => event.stopPropagation()}
-          className="h-8 w-12 rounded-md border border-border bg-default px-1 text-center text-sm focus:border-info focus:outline-none md:h-7"
+          className="h-full w-9 bg-transparent px-1 text-center text-sm focus:outline-none"
         />
+        <button
+          type="button"
+          aria-label="Choose font size"
+          title="Font size"
+          ref={fontSizeAnchorRef}
+          onMouseDown={(event) => {
+            // Keep the editor selection alive when opening the preset list.
+            event.preventDefault()
+            captureFontSizeSelection()
+          }}
+          onClick={() => setIsFontSizeMenuOpen(!isFontSizeMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isFontSizeMenuOpen ? 'bg-contrast' : '',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
       </div>
     ),
     [ToolbarButtonId.DecreaseFontSize]: (
@@ -2249,6 +2308,40 @@ const ToolbarPlugin = () => {
                 >
                   {font.name}
                 </span>
+                {isActive && <Icon type="check" className="ml-auto" />}
+              </MenuItem>
+            )
+          })}
+        </Menu>
+      </Popover>
+      <Popover
+        title="Font size"
+        anchorElement={fontSizeAnchorRef}
+        open={isFontSizeMenuOpen}
+        togglePopover={() => setIsFontSizeMenuOpen(!isFontSizeMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Font size" className="!px-0" onClick={() => setIsFontSizeMenuOpen(false)}>
+          {FONT_SIZE_PRESETS.map((size) => {
+            const isActive = currentFontSize === size
+            return (
+              <MenuItem
+                key={size}
+                className={classNames(
+                  'justify-center md:py-1.5',
+                  isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast',
+                )}
+                onClick={() => applyFontSize(size)}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <span className="text-sm">{size}</span>
                 {isActive && <Icon type="check" className="ml-auto" />}
               </MenuItem>
             )
