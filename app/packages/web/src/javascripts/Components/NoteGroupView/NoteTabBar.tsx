@@ -263,6 +263,10 @@ const NoteTabBar: FunctionComponent<Props> = ({
         anchorPoint={contextMenuPosition}
         togglePopover={() => setContextMenuOpen((open) => !open)}
         className="py-1"
+        // The default popover is 320px wide (min-w-80); this is a short action
+        // menu, so on desktop let it size to its longest item instead. Mobile
+        // keeps the full-width takeover.
+        containerClassName="md:!w-auto md:!min-w-0"
       >
         <Menu a11yLabel="Tab context menu">
           <MenuItem
