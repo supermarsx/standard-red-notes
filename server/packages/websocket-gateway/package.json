@@ -9,7 +9,8 @@
   "exports": {
     ".": {
       "types": "./dist/gateway.d.ts",
-      "import": "./dist/gateway.js"
+      "import": "./dist/gateway.js",
+      "require": "./dist/gateway.js"
     }
   },
   "scripts": {
