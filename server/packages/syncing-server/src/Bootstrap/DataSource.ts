@@ -52,7 +52,10 @@ export class AppDataSource {
         TypeORMSharedVaultInvite,
         TypeORMMessage,
       ],
-      migrations: [`${__dirname}/../../migrations/${migrationsSourceDirectoryName}/*.js`],
+      // SRN_MIGRATIONS_DIR override for the standalone server binary (see auth DataSource).
+      migrations: [
+        `${process.env.SRN_MIGRATIONS_DIR ?? __dirname + '/../../migrations'}/${migrationsSourceDirectoryName}/*.js`,
+      ],
       migrationsRun: this.configuration.runMigrations,
       logging: (this.configuration.env.get('DB_DEBUG_LEVEL', true) as LoggerOptions) ?? 'info',
     }

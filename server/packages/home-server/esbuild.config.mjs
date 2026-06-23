@@ -18,9 +18,12 @@
 import { build } from 'esbuild'
 import { pnpPlugin } from '@yarnpkg/esbuild-plugin-pnp'
 import { fileURLToPath } from 'node:url'
+import { cpSync, mkdirSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 
-const entry = fileURLToPath(new URL('./dist/bin/server.js', import.meta.url))
-const outfile = fileURLToPath(new URL('./dist/bundle/home-server.cjs', import.meta.url))
+const here = path.dirname(fileURLToPath(import.meta.url))
+const entry = path.join(here, 'dist/bin/server.js')
+const outfile = path.join(here, 'dist/bundle/home-server.cjs')
 
 await build({
   entryPoints: [entry],
@@ -32,6 +35,13 @@ await build({
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
+  // Standalone binary: when running under @yao-pkg/pkg, point the services'
+  // TypeORM migration loaders (SRN_MIGRATIONS_DIR) at a real `migrations/`
+  // folder shipped next to the executable, since pkg's read-only snapshot fs
+  // doesn't reliably glob bundled assets. No-op for a normal `node` run.
+  banner: {
+    js: "if (process.pkg && !process.env.SRN_MIGRATIONS_DIR) { process.env.SRN_MIGRATIONS_DIR = require('path').join(require('path').dirname(process.execPath), 'migrations') }",
+  },
   plugins: [pnpPlugin()],
   external: [
     // Native SQLite driver — excluded (MySQL-mode); TypeORM lazy-loads it only
@@ -53,3 +63,31 @@ await build({
     'sql.js',
   ],
 })
+
+// Merge every bundled service's compiled migrations into one folder that ships
+// next to the binary. In the home-server deployment all services share ONE
+// database (and one `migrations` table) and there are no migration-name
+// collisions across them, so a single merged set is correct. The DataSource
+// SRN_MIGRATIONS_DIR overrides + the banner above point the loaders here.
+const MIGRATION_SERVICES = ['auth', 'syncing-server', 'revisions', 'websockets']
+const migrationsOut = path.join(here, 'dist/bundle/migrations')
+let copied = 0
+for (const dbType of ['mysql', 'sqlite']) {
+  mkdirSync(path.join(migrationsOut, dbType), { recursive: true })
+  for (const svc of MIGRATION_SERVICES) {
+    const src = path.join(here, '..', svc, 'dist/migrations', dbType)
+    let files
+    try {
+      files = readdirSync(src)
+    } catch {
+      continue
+    }
+    for (const file of files) {
+      if (file.endsWith('.js')) {
+        cpSync(path.join(src, file), path.join(migrationsOut, dbType, file))
+        copied++
+      }
+    }
+  }
+}
+console.log(`Merged ${copied} migration files into dist/bundle/migrations`)

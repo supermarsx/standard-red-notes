@@ -98,7 +98,13 @@ export class AppDataSource {
         TypeORMCacheEntry,
         TypeORMSharedVaultUser,
       ],
-      migrations: [`${__dirname}/../../migrations/${isConfiguredForMySQL ? 'mysql' : 'sqlite'}/*.js`],
+      // SRN_MIGRATIONS_DIR lets the standalone server binary point migrations at
+      // a real on-disk folder next to the executable (the bundled __dirname is a
+      // read-only pkg snapshot whose glob is unreliable). Falls back to the
+      // normal in-package path when unset.
+      migrations: [
+        `${process.env.SRN_MIGRATIONS_DIR ?? __dirname + '/../../migrations'}/${isConfiguredForMySQL ? 'mysql' : 'sqlite'}/*.js`,
+      ],
       migrationsRun: this.configuration.runMigrations,
       logging: (this.configuration.env.get('DB_DEBUG_LEVEL', true) as LoggerOptions) ?? 'info',
     }

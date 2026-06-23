@@ -12,11 +12,13 @@
 # Stages (gated): build -> decide -> package -> release. A new rolling release is
 # cut only when the bundle's content fingerprint changes.
 #
-# SCOPE: this binary is the server RUNTIME and targets MySQL (DB_TYPE=mysql).
-#   - SQLite (better-sqlite3, native) is NOT supported by the binary.
-#   - DB schema migrations are NOT run by the binary (TypeORM's runtime migration
-#     glob does not resolve inside the pkg snapshot). Run migrations separately
-#     (e.g. via the Docker image) and start the binary with DB_MIGRATIONS off.
+# SCOPE: this binary targets MySQL (DB_TYPE=mysql); the native SQLite driver
+# (better-sqlite3) is NOT supported by the binary.
+#   - DB schema migrations ARE supported: the build merges every service's
+#     compiled migrations into a `migrations/` folder shipped alongside the
+#     binary (srn-home-server-migrations.zip). The binary auto-points its TypeORM
+#     loaders there via SRN_MIGRATIONS_DIR (the pkg snapshot can't reliably glob
+#     bundled assets). Extract the zip next to the executable before first run.
 name: srn-home-server
 
 on:
@@ -93,6 +95,7 @@ jobs:
           path: |
             ${{ env.HS_DIR }}/dist/bundle/home-server.cjs
             ${{ env.HS_DIR }}/dist/bundle/srn-home-server.fingerprint
+            ${{ env.HS_DIR }}/dist/bundle/migrations/**
           retention-days: 1
           if-no-files-found: error
 
@@ -168,11 +171,15 @@ jobs:
             echo "::endgroup::"
           done
           cp "bundle/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
+          # Ship the merged migrations next to the binaries. Operators extract this
+          # beside the executable (or set SRN_MIGRATIONS_DIR) so the binary can run
+          # TypeORM migrations on first boot.
+          ( cd bundle && zip -qr "../out/${TOOL}-migrations.zip" migrations )
           ls -la out
 
       - name: Generate checksums
         working-directory: out
-        run: sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: sha256sum ${TOOL}-* "${TOOL}-migrations.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Upload packaged binaries
         uses: actions/upload-artifact@v5
