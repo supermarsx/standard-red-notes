@@ -510,7 +510,28 @@ export class ItemListController
 
     await this.itemControllerGroup.createItemController({ note })
 
+    this.handOffEditorColumnToOpenedNote()
+
     await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
+  }
+
+  /**
+   * Standard Red Notes: when a note is opened from the list, it must show in the
+   * CURRENTLY selected tab. If a special view tab (empty placeholder, pane,
+   * conflict) is active, it would otherwise keep the editor column and hide the
+   * note. So: consume an active "empty" placeholder (the note fills it) or simply
+   * deactivate a pane/conflict tab (kept in the bar) so the note's editor shows.
+   */
+  private handOffEditorColumnToOpenedNote(): void {
+    const activeTab = this.paneController.activeViewTab
+    if (!activeTab) {
+      return
+    }
+    if (activeTab.kind === 'empty') {
+      this.paneController.closeViewTab(activeTab.id)
+    } else {
+      this.paneController.setActiveViewTab(undefined)
+    }
   }
 
   /**
