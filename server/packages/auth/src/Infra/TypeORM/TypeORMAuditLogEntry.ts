@@ -7,6 +7,7 @@ export class TypeORMAuditLogEntry {
 
   @Column({
     name: 'actor_uuid',
+    type: 'varchar',
     length: 36,
     nullable: true,
   })

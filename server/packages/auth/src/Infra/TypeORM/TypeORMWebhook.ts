@@ -7,6 +7,7 @@ export class TypeORMWebhook {
 
   @Column({
     name: 'user_uuid',
+    type: 'varchar',
     length: 36,
     nullable: true,
   })
