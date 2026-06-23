@@ -21,11 +21,14 @@ import {
   $isElementNode,
   COMMAND_PRIORITY_LOW,
   $createParagraphNode,
+  $createTextNode,
   $isTextNode,
   $getNodeByKey,
   $setSelection,
   TextNode,
   BaseSelection,
+  LexicalNode,
+  ElementNode,
 } from 'lexical'
 import {
   mergeRegister,
@@ -53,6 +56,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import { CenterAlignBlock, JustifyAlignBlock, LeftAlignBlock, RightAlignBlock } from '../Blocks/Alignment'
 import { BulletedListBlock, ChecklistBlock, NumberedListBlock } from '../Blocks/List'
@@ -89,6 +93,13 @@ import Menu from '@/Components/Menu/Menu'
 import MenuItem, { MenuItemProps } from '@/Components/Menu/MenuItem'
 import { debounce, remToPx } from '@/Utils'
 import LinkEditor, { $isLinkTextNode } from './LinkEditor'
+import {
+  applyLineOperation,
+  LINE_DEDUPE_MODES,
+  LINE_SORT_MODES,
+  LineOperation,
+} from './LineOperations'
+import { getSuperHistoryStore, HISTORY_DROPDOWN_LIMIT } from '../HistoryPlugin/SuperHistory'
 import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
 import { useStateRef } from '@/Hooks/useStateRef'
 import { getDOMRangeRect } from '../../Lexical/Utils/getDOMRangeRect'
@@ -377,6 +388,9 @@ const ToolbarPlugin = () => {
   const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false)
   const caseAnchorRef = useRef<HTMLButtonElement>(null)
 
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false)
+  const sortAnchorRef = useRef<HTMLButtonElement>(null)
+
   // Word-style floating mini-toolbar (shown on text selection): a compact "More"
   // overflow menu hosting the less-common quick-format actions.
   const [isSelectionMoreMenuOpen, setIsSelectionMoreMenuOpen] = useState(false)
@@ -393,6 +407,16 @@ const ToolbarPlugin = () => {
 
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+
+  // Introspectable history (depths + multi-step jump) backed by SuperHistoryPlugin.
+  const historyStore = getSuperHistoryStore(editor)
+  const historySnapshot = useSyncExternalStore(historyStore.subscribe, historyStore.getSnapshot)
+  const [isUndoMenuOpen, setIsUndoMenuOpen] = useState(false)
+  const undoAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isRedoMenuOpen, setIsRedoMenuOpen] = useState(false)
+  const redoAnchorRef = useRef<HTMLButtonElement>(null)
+  const undoPreviews = isUndoMenuOpen ? historyStore.getUndoPreviews(HISTORY_DROPDOWN_LIMIT) : []
+  const redoPreviews = isRedoMenuOpen ? historyStore.getRedoPreviews(HISTORY_DROPDOWN_LIMIT) : []
 
   // Issue 3928: "completed tasks move out of the way" opt-in toggle. Persisted
   // web-locally (localStorage) since synced PrefKeys live in off-limits models.
@@ -785,6 +809,60 @@ const ToolbarPlugin = () => {
         const transformed =
           transform === 'upper' ? text.toUpperCase() : transform === 'lower' ? text.toLowerCase() : toCamelCase(text)
         selection.insertText(transformed)
+      })
+    },
+    [activeEditor],
+  )
+
+  // Sort / deduplicate the block-level "lines" (paragraphs, headings, list items)
+  // intersected by a multi-line selection. Operates on the nodes (not the joined
+  // text) so block boundaries are preserved; dedupe removes the surplus blocks.
+  const transformLines = useCallback(
+    (operation: LineOperation) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection) || selection.isCollapsed()) {
+          return
+        }
+
+        const isLineBlock = (node: LexicalNode | null): node is ElementNode =>
+          node != null &&
+          $isElementNode(node) &&
+          !node.isInline() &&
+          !$isRootOrShadowRoot(node) &&
+          !node.getChildren().some((child) => $isElementNode(child) && !child.isInline())
+
+        const blocks: ElementNode[] = []
+        const seen = new Set<string>()
+        for (const node of selection.getNodes()) {
+          const block = isLineBlock(node) ? node : $findMatchingParent(node, isLineBlock)
+          if (isLineBlock(block) && !seen.has(block.getKey())) {
+            seen.add(block.getKey())
+            blocks.push(block)
+          }
+        }
+        if (blocks.length < 2) {
+          return
+        }
+
+        const texts = blocks.map((block) => block.getTextContent())
+        const result = applyLineOperation(texts, operation)
+        if (result.length === texts.length && result.every((line, index) => line === texts[index])) {
+          return
+        }
+
+        for (let index = 0; index < blocks.length; index++) {
+          const block = blocks[index]
+          if (index < result.length) {
+            block.clear()
+            block.append($createTextNode(result[index]))
+          } else {
+            block.remove()
+          }
+        }
+        // The previous selection points into cleared/removed nodes; drop it so
+        // reconciliation doesn't choke on a stale range.
+        $setSelection(null)
       })
     },
     [activeEditor],
@@ -1183,20 +1261,54 @@ const ToolbarPlugin = () => {
       />
     ) : null,
     [ToolbarButtonId.Undo]: canShowAllItems ? (
-      <ToolbarButton
-        name="Undo"
-        iconName="undo"
-        disabled={!canUndo}
-        onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
-      />
+      <div className="flex flex-shrink-0 items-center" key="undo">
+        <ToolbarButton
+          name="Undo"
+          iconName="undo"
+          disabled={!canUndo}
+          onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
+        />
+        <button
+          type="button"
+          aria-label="Undo history"
+          title="Undo multiple steps"
+          ref={undoAnchorRef}
+          disabled={historySnapshot.undoDepth === 0}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsUndoMenuOpen(!isUndoMenuOpen)}
+          className={classNames(
+            'flex h-8 items-center rounded-md px-0.5 disabled:opacity-40 md:h-7',
+            isUndoMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
+      </div>
     ) : null,
     [ToolbarButtonId.Redo]: canShowAllItems ? (
-      <ToolbarButton
-        name="Redo"
-        iconName="redo"
-        disabled={!canRedo}
-        onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
-      />
+      <div className="flex flex-shrink-0 items-center" key="redo">
+        <ToolbarButton
+          name="Redo"
+          iconName="redo"
+          disabled={!canRedo}
+          onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
+        />
+        <button
+          type="button"
+          aria-label="Redo history"
+          title="Redo multiple steps"
+          ref={redoAnchorRef}
+          disabled={historySnapshot.redoDepth === 0}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsRedoMenuOpen(!isRedoMenuOpen)}
+          className={classNames(
+            'flex h-8 items-center rounded-md px-0.5 disabled:opacity-40 md:h-7',
+            isRedoMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
+      </div>
     ) : null,
     [ToolbarButtonId.BlockStyle]: (
       <ToolbarButton
@@ -1404,6 +1516,17 @@ const ToolbarPlugin = () => {
         className={isCaseMenuOpen ? 'md:bg-default' : ''}
       >
         <span className="text-xs font-semibold leading-none">aA</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.SortLines]: (
+      <ToolbarButton
+        name="Sort & dedupe lines"
+        onSelect={() => setIsSortMenuOpen(!isSortMenuOpen)}
+        ref={sortAnchorRef}
+        className={isSortMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="sort-descending" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2384,6 +2507,102 @@ const ToolbarPlugin = () => {
           >
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">camelCase</span>
           </MenuItem>
+        </Menu>
+      </Popover>
+      <Popover
+        title="Sort & dedupe lines"
+        anchorElement={sortAnchorRef}
+        open={isSortMenuOpen}
+        togglePopover={() => setIsSortMenuOpen(!isSortMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-64 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Sort and deduplicate lines" className="!px-0" onClick={() => setIsSortMenuOpen(false)}>
+          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">Sort lines</div>
+          {LINE_SORT_MODES.map(({ mode, label }) => (
+            <MenuItem
+              key={mode}
+              className="overflow-hidden hover:bg-contrast md:py-2"
+              onClick={() => transformLines(mode)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
+            </MenuItem>
+          ))}
+          <MenuItemSeparator />
+          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">Deduplicate</div>
+          {LINE_DEDUPE_MODES.map(({ mode, label }) => (
+            <MenuItem
+              key={mode}
+              className="overflow-hidden hover:bg-contrast md:py-2"
+              onClick={() => transformLines(mode)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
+            </MenuItem>
+          ))}
+        </Menu>
+      </Popover>
+      <Popover
+        title="Undo history"
+        anchorElement={undoAnchorRef}
+        open={isUndoMenuOpen}
+        togglePopover={() => setIsUndoMenuOpen(!isUndoMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-64 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Undo multiple steps" className="!px-0" onClick={() => setIsUndoMenuOpen(false)}>
+          {undoPreviews.map((preview, index) => (
+            <MenuItem
+              key={index}
+              className="flex items-center gap-2 overflow-hidden hover:bg-contrast md:py-1.5"
+              onClick={() => historyStore.undo(index + 1)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || '(empty)'}</span>
+            </MenuItem>
+          ))}
+        </Menu>
+      </Popover>
+      <Popover
+        title="Redo history"
+        anchorElement={redoAnchorRef}
+        open={isRedoMenuOpen}
+        togglePopover={() => setIsRedoMenuOpen(!isRedoMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-64 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Redo multiple steps" className="!px-0" onClick={() => setIsRedoMenuOpen(false)}>
+          {redoPreviews.map((preview, index) => (
+            <MenuItem
+              key={index}
+              className="flex items-center gap-2 overflow-hidden hover:bg-contrast md:py-1.5"
+              onClick={() => historyStore.redo(index + 1)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || '(empty)'}</span>
+            </MenuItem>
+          ))}
         </Menu>
       </Popover>
       {/* Word-style floating mini-toolbar "More" overflow menu. Hosts the

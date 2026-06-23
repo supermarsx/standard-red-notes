@@ -7,7 +7,7 @@ import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPl
 import { TablePlugin } from '@lexical/react/LexicalTablePlugin'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { HashtagPlugin } from '@lexical/react/LexicalHashtagPlugin'
-import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin'
+import SuperHistoryPlugin from './Plugins/HistoryPlugin/SuperHistoryPlugin'
 import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin'
 import { ListPlugin } from '@lexical/react/LexicalListPlugin'
 import { EditorState, LexicalEditor } from 'lexical'
@@ -131,7 +131,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       {collaboration && application ? (
         <SuperCollaborationPlugin application={application} config={collaboration} />
       ) : (
-        <HistoryPlugin />
+        <SuperHistoryPlugin />
       )}
       <HorizontalRulePlugin />
       <ClearEditorPlugin />
