@@ -8310,6 +8310,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/predicates", "workspace:packages/predicates"],\
           ["@standardnotes/security", "workspace:packages/security"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["ts-jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:29.4.11"],\
@@ -8343,6 +8344,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/domain-events-infra", "workspace:packages/domain-events-infra"],\
           ["@types/ioredis", "npm:5.0.0"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["ioredis", "npm:5.11.1"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -8428,6 +8430,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/grpc", "workspace:packages/grpc"],\
           ["@types/google-protobuf", "npm:3.15.10"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["google-protobuf", "npm:4.0.2"],\
           ["grpc-tools", "npm:1.13.1"],\
           ["grpc_tools_node_protoc_ts", "npm:5.3.3"],\
@@ -8453,6 +8456,7 @@ const RAW_RUNTIME_STATE =
           ["@types/cors", "npm:2.8.19"],\
           ["@types/express", "npm:5.0.6"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["@yarnpkg/esbuild-plugin-pnp", "virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15"],\
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
@@ -8492,6 +8496,7 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@standardnotes/predicates", "workspace:packages/predicates"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["ts-jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:29.4.11"],\
@@ -8604,6 +8609,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/security", "workspace:packages/security"],\
           ["@types/jest", "npm:30.0.0"],\
           ["@types/jsonwebtoken", "npm:9.0.10"],\
+          ["@types/node", "npm:26.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
@@ -8621,6 +8627,7 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\
           ["@standardnotes/settings", "workspace:packages/settings"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"]\
         ],\
@@ -8725,6 +8732,7 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@standardnotes/time", "workspace:packages/time"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["dayjs", "npm:1.11.21"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
@@ -8771,6 +8779,7 @@ const RAW_RUNTIME_STATE =
           ["@types/express", "npm:5.0.6"],\
           ["@types/ioredis", "npm:5.0.0"],\
           ["@types/jest", "npm:30.0.0"],\
+          ["@types/node", "npm:26.0.0"],\
           ["babel-jest", "virtual:9989cc17e53056dd52d1030ef519a975fd39dcc5e4445c13acd98658b49c36b127a49c5734e2d7a105eb42ff52d25f39fa13aca47aaab56b41a56cbbdfbcd5dd#npm:30.4.1"],\
           ["cors", "npm:2.8.6"],\
           ["dotenv", "npm:17.4.2"],\
@@ -8780,10 +8789,10 @@ const RAW_RUNTIME_STATE =
           ["ioredis", "npm:5.11.1"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
-          ["mysql2", "virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:3.22.5"],\
+          ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.22.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["ts-jest", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:29.4.11"],\
-          ["typeorm", "virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:1.0.0"],\
+          ["typeorm", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:1.0.0"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["winston", "npm:3.19.0"]\
         ],\
@@ -15985,25 +15994,6 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:3.22.5", {\
-        "packageLocation": "./.yarn/__virtual__/mysql2-virtual-346394ccb7/0/cache/mysql2-npm-3.22.5-454a8423e0-37399d3dbf.zip/node_modules/mysql2/",\
-        "packageDependencies": [\
-          ["@types/node", null],\
-          ["aws-ssl-profiles", "npm:1.1.2"],\
-          ["denque", "npm:2.1.0"],\
-          ["generate-function", "npm:2.3.1"],\
-          ["iconv-lite", "npm:0.7.2"],\
-          ["long", "npm:5.3.2"],\
-          ["lru.min", "npm:1.1.4"],\
-          ["mysql2", "virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:3.22.5"],\
-          ["named-placeholders", "npm:1.1.6"],\
-          ["sql-escaper", "npm:1.3.3"]\
-        ],\
-        "packagePeers": [\
-          "@types/node"\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.22.5", {\
         "packageLocation": "./.yarn/__virtual__/mysql2-virtual-67f6c1257b/0/cache/mysql2-npm-3.22.5-454a8423e0-37399d3dbf.zip/node_modules/mysql2/",\
         "packageDependencies": [\
@@ -18954,85 +18944,6 @@ const RAW_RUNTIME_STATE =
           ["ts-node", null],\
           ["tslib", "npm:2.8.1"],\
           ["typeorm", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:1.0.0"],\
-          ["typeorm-aurora-data-api-driver", null],\
-          ["yargs", "npm:18.0.0"]\
-        ],\
-        "packagePeers": [\
-          "@google-cloud/spanner",\
-          "@sap/hana-client",\
-          "@types/better-sqlite3",\
-          "@types/google-cloud__spanner",\
-          "@types/ioredis",\
-          "@types/mongodb",\
-          "@types/mssql",\
-          "@types/mysql2",\
-          "@types/oracledb",\
-          "@types/pg-native",\
-          "@types/pg-query-stream",\
-          "@types/pg",\
-          "@types/redis",\
-          "@types/sap__hana-client",\
-          "@types/sql.js",\
-          "@types/ts-node",\
-          "@types/typeorm-aurora-data-api-driver",\
-          "better-sqlite3",\
-          "ioredis",\
-          "mongodb",\
-          "mssql",\
-          "mysql2",\
-          "oracledb",\
-          "pg-native",\
-          "pg-query-stream",\
-          "pg",\
-          "redis",\
-          "sql.js",\
-          "ts-node",\
-          "typeorm-aurora-data-api-driver"\
-        ],\
-        "linkType": "HARD"\
-      }],\
-      ["virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:1.0.0", {\
-        "packageLocation": "./.yarn/__virtual__/typeorm-virtual-967e95fc5b/0/cache/typeorm-npm-1.0.0-0930de2b78-56ed87a421.zip/node_modules/typeorm/",\
-        "packageDependencies": [\
-          ["@google-cloud/spanner", null],\
-          ["@sap/hana-client", null],\
-          ["@sqltools/formatter", "npm:1.2.5"],\
-          ["@types/better-sqlite3", null],\
-          ["@types/google-cloud__spanner", null],\
-          ["@types/ioredis", "npm:5.0.0"],\
-          ["@types/mongodb", null],\
-          ["@types/mssql", null],\
-          ["@types/mysql2", null],\
-          ["@types/oracledb", null],\
-          ["@types/pg", null],\
-          ["@types/pg-native", null],\
-          ["@types/pg-query-stream", null],\
-          ["@types/redis", null],\
-          ["@types/sap__hana-client", null],\
-          ["@types/sql.js", null],\
-          ["@types/ts-node", null],\
-          ["@types/typeorm-aurora-data-api-driver", null],\
-          ["ansis", "npm:4.3.1"],\
-          ["better-sqlite3", null],\
-          ["dayjs", "npm:1.11.21"],\
-          ["debug", "virtual:e5a68e66e61c28ba8fcce7f8ce38ef829d42728b97243d64a06e24fd15823e9bcb3f5a81a0473d2019bc3e22ca5c6a8f3cf8f4ab53bb42dc8844e39b4517e226#npm:4.4.3"],\
-          ["dedent", "virtual:0f7dcd409d3f1e996e433fa9621520db227dc46f6ba6673353048020c2a558f8bf20bf571456833c505e04926c25b5ea93de37de5aa1f783b1c5eb859272f9e4#npm:1.7.2"],\
-          ["ioredis", "npm:5.11.1"],\
-          ["mongodb", null],\
-          ["mssql", null],\
-          ["mysql2", "virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:3.22.5"],\
-          ["oracledb", null],\
-          ["pg", null],\
-          ["pg-native", null],\
-          ["pg-query-stream", null],\
-          ["redis", null],\
-          ["reflect-metadata", "npm:0.2.2"],\
-          ["sql-highlight", "npm:6.1.0"],\
-          ["sql.js", null],\
-          ["tinyglobby", "npm:0.2.17"],\
-          ["ts-node", null],\
-          ["tslib", "npm:2.8.1"],\
-          ["typeorm", "virtual:3a2a9224d41bd215cb55406882b3f06b5db05036f244fdbff84377211822602eba3c0599bbd65c5e07aa46ef5f52f4cff44ce2320ff21dea2b76939c92b36460#npm:1.0.0"],\
           ["typeorm-aurora-data-api-driver", null],\
           ["yargs", "npm:18.0.0"]\
         ],\
