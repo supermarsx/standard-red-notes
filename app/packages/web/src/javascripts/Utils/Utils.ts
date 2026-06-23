@@ -13,35 +13,37 @@ declare const process: {
 export const isDev = process.env.NODE_ENV === 'development'
 
 export function getPlatformString() {
+  const suffix = isDesktopApplication() ? '-desktop' : '-web'
   try {
-    const platform = navigator.platform.toLowerCase()
-    let trimmed = ''
-    if (platform.includes('iphone') || isIOS()) {
+    // navigator.platform is deprecated and is empty/undefined in some newer
+    // browsers; fall back to the user-agent string so we still detect the OS.
+    const source = (navigator.platform || navigator.userAgent || '').toLowerCase()
+    let trimmed = 'linux'
+    if (source.includes('iphone') || isIOS()) {
       trimmed = 'ios'
-    } else if (platform.includes('android') || isAndroid()) {
+    } else if (source.includes('android') || isAndroid()) {
       trimmed = 'android'
-    } else if (platform.includes('mac')) {
+    } else if (source.includes('mac')) {
       trimmed = 'mac'
-    } else if (platform.includes('win')) {
+    } else if (source.includes('win')) {
       trimmed = 'windows'
-    } else if (platform.includes('linux')) {
-      trimmed = 'linux'
-    } else {
-      /** Treat other platforms as linux */
-      trimmed = 'linux'
     }
-    return trimmed + (isDesktopApplication() ? '-desktop' : '-web')
+    /** Anything else (including empty) is treated as linux. */
+    return trimmed + suffix
   } catch (e) {
-    return 'unknown-platform'
+    return 'linux' + suffix
   }
 }
 
 export function getPlatform(device: DeviceInterface | MobileDeviceInterface): Platform {
-  if ('platform' in device) {
+  if ('platform' in device && device.platform != null) {
     return device.platform
   }
 
-  return platformFromString(getPlatformString())
+  // snjs now requires a platform when creating the application, so never
+  // propagate undefined — platformFromString returns undefined for an
+  // unrecognized string. Default to a web platform as a safe fallback.
+  return platformFromString(getPlatformString()) ?? Platform.LinuxWeb
 }
 
 export function isSameDay(dateA: Date, dateB: Date): boolean {
