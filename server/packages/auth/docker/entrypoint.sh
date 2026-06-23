@@ -42,6 +42,13 @@ case "$COMMAND" in
     exec node docker/entrypoint-fix-roles.js
     ;;
 
+  'admin' )
+    if [ -z "${REDIS_URL:-}" ] && [ -n "${REDIS_HOST:-}" ]; then
+      export REDIS_URL="redis://$REDIS_HOST"
+    fi
+    exec yarn node dist/bin/srn_admin.js "$@"
+    ;;
+
   'fix-subscriptions' )
     exec node docker/entrypoint-fix-subscriptions.js
     ;;

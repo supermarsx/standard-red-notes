@@ -241,6 +241,10 @@ the app/server lockfiles):
   status, logs, config validation, and thin `docker compose` wrappers. Zero
   runtime dependencies. See [`cli/srn-server/README.md`](cli/srn-server/README.md).
 
+A third tool, **`srn-admin`**, ships *inside* the server image (it drives the
+auth service's own database and use-cases, so it is not a downloadable binary) —
+see [In-container admin](#in-container-admin-srn-admin) below.
+
 ### Prebuilt binaries and releases
 
 Each CLI tool is released independently as native, single-file executables via
@@ -322,6 +326,41 @@ Auto-update is built in via **electron-updater** (it reads the GitHub release);
 it defaults to off and is opt-in under Preferences. The public builds are
 **unsigned**, so on first launch macOS may need right-click → Open and Windows
 SmartScreen may warn (More info → Run anyway).
+
+### In-container admin (`srn-admin`)
+
+`srn-admin` is baked into the **server** image and runs admin operations
+*directly against the auth database* — it reuses the auth service's own
+use-cases and repositories (no HTTP, no admin session, no separate container).
+Use it to bootstrap the first admin, manage RBAC groups, reset 2FA, or fix a
+storage quota. Run it inside the running stack:
+
+```sh
+docker compose exec server srn-admin help
+docker compose exec server srn-admin whois user@example.com   # uuid, email, roles
+docker compose exec server srn-admin grant-admin user@example.com   # → INTERNAL_TEAM_USER
+docker compose exec server srn-admin revoke-admin user@example.com
+docker compose exec server srn-admin list-roles user@example.com    # direct + effective
+docker compose exec server srn-admin reset-mfa user@example.com     # clear 2FA + recovery codes
+docker compose exec server srn-admin fix-quota user@example.com     # recalculate storage usage
+```
+
+A `<user>` may be an **email** or a **user uuid**. RBAC groups are managed via
+the `group` subcommands:
+
+```sh
+docker compose exec server srn-admin group list
+docker compose exec server srn-admin group create "Editors" CORE_USER,INTERNAL_TEAM_USER
+docker compose exec server srn-admin group set-roles <groupUuid> CORE_USER
+docker compose exec server srn-admin group members <groupUuid>
+docker compose exec server srn-admin group add-user <groupUuid> user@example.com
+docker compose exec server srn-admin group remove-user <groupUuid> user@example.com
+docker compose exec server srn-admin group delete <groupUuid>
+```
+
+Granting `INTERNAL_TEAM_USER` is the same role the server reads from the
+`ADMIN_EMAILS` env var at boot — `srn-admin grant-admin` is the ad-hoc
+equivalent for an already-registered user.
 
 ## API
 

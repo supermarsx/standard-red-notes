@@ -22,6 +22,7 @@ WORKDIR /opt/server
 # Supervisor config + entrypoint (rarely change) — copy early so they stay cached.
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker/srn-admin.sh /usr/local/bin/srn-admin
 
 # --- Dependency layer ---------------------------------------------------------
 # Copy ONLY what Yarn (PnP) needs to resolve + install the workspace: the
@@ -64,7 +65,7 @@ COPY . .
 
 # Normalize line endings: a CRLF checkout (Windows) leaves `#!/bin/bash\r`, which the
 # Linux kernel reads as interpreter "/bin/bash\r" → "no such file or directory" at exec.
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /etc/supervisord.conf \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
   && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} +
 
