@@ -127,16 +127,35 @@ describe('SuperHistoryStore multi-step jumps', () => {
   })
 })
 
-describe('SuperHistoryStore previews', () => {
-  it('returns up to `limit` step previews, most-recent first', () => {
+describe('SuperHistoryStore action labels', () => {
+  it('returns up to `limit` action labels, most-recent first', () => {
     const { store, unregister, typeLine } = makeEditorWithStore()
     typeLine('alpha')
     typeLine('bravo')
     typeLine('charlie')
     const previews = store.getUndoPreviews(2)
     expect(previews).toHaveLength(2)
-    // Each preview is a non-empty text snapshot of a prior state.
-    expect(previews.every((p) => typeof p === 'string')).toBe(true)
+    // The most recent action describes what actually happened (the typed text),
+    // not just a snapshot of the note's first line.
+    expect(previews[0]).toContain('charlie')
+    expect(previews[0].toLowerCase()).toMatch(/typed|inserted/)
+    unregister()
+  })
+
+  it('describes a deletion as a delete, not a snapshot', () => {
+    const { editor, store, unregister, typeLine } = makeEditorWithStore()
+    typeLine('keepme')
+    // Remove the last paragraph to produce a deletion-style action.
+    editor.update(
+      () => {
+        const last = $getRoot().getLastChild()
+        last?.remove()
+      },
+      { discrete: true },
+    )
+    const label = store.getUndoPreviews(1)[0]
+    expect(label.toLowerCase()).toMatch(/deleted|removed/)
+    unregister()
   })
 })
 

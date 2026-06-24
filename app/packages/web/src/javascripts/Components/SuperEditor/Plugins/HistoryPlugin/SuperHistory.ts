@@ -19,18 +19,64 @@ export const HISTORY_DROPDOWN_LIMIT = 25
 
 export type HistorySnapshot = { undoDepth: number; redoDepth: number }
 
-const previewOfState = (editorState: EditorState): string => {
-  let preview = ''
+type StateInfo = { text: string; blocks: number }
+
+const infoOfState = (editorState: EditorState): StateInfo => {
+  let info: StateInfo = { text: '', blocks: 0 }
   try {
     editorState.read(() => {
-      const text = $getRoot().getTextContent()
-      const firstLine = text.split('\n').find((line) => line.trim().length > 0) ?? ''
-      preview = firstLine.trim().slice(0, 60)
+      const root = $getRoot()
+      info = { text: root.getTextContent(), blocks: root.getChildrenSize() }
     })
   } catch {
-    preview = ''
+    info = { text: '', blocks: 0 }
   }
-  return preview
+  return info
+}
+
+const snippet = (value: string): string => {
+  const collapsed = value.replace(/\s+/g, ' ').trim()
+  return collapsed.length > 22 ? `${collapsed.slice(0, 22)}…` : collapsed
+}
+
+/**
+ * Describe the action that turned `before` into `after` (the forward edit), so
+ * the undo/redo dropdown shows what actually happened — "Typed …", "Deleted …",
+ * "Inserted block" — rather than a snapshot of the note's first line.
+ */
+const describeAction = (before: StateInfo, after: StateInfo): string => {
+  if (before.text !== after.text) {
+    // Isolate the changed span via common prefix/suffix.
+    const a = before.text
+    const b = after.text
+    let start = 0
+    const minLen = Math.min(a.length, b.length)
+    while (start < minLen && a[start] === b[start]) {
+      start++
+    }
+    let endA = a.length
+    let endB = b.length
+    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+      endA--
+      endB--
+    }
+    const removed = a.slice(start, endA)
+    const added = b.slice(start, endB)
+    if (added && !removed) {
+      return `Typed “${snippet(added)}”`
+    }
+    if (removed && !added) {
+      return `Deleted “${snippet(removed)}”`
+    }
+    return `Replaced “${snippet(removed)}” → “${snippet(added)}”`
+  }
+  if (after.blocks > before.blocks) {
+    return after.blocks - before.blocks === 1 ? 'Inserted block' : `Inserted ${after.blocks - before.blocks} blocks`
+  }
+  if (after.blocks < before.blocks) {
+    return before.blocks - after.blocks === 1 ? 'Removed block' : `Removed ${before.blocks - after.blocks} blocks`
+  }
+  return 'Formatting change'
 }
 
 export class SuperHistoryStore {
@@ -79,20 +125,30 @@ export class SuperHistoryStore {
     this.listeners.forEach((listener) => listener())
   }
 
-  /** Previews of the states reachable by undoing 1..limit steps (index 0 == 1 step). */
+  /** Labels of the actions reverted by undoing 1..limit steps (index 0 == 1 step). */
   getUndoPreviews(limit: number): string[] {
-    return this.previews(this.historyState.undoStack, limit)
-  }
-
-  getRedoPreviews(limit: number): string[] {
-    return this.previews(this.historyState.redoStack, limit)
-  }
-
-  private previews(stack: HistoryState['undoStack'], limit: number): string[] {
+    const stack = this.historyState.undoStack
     const out: string[] = []
     const count = Math.min(limit, stack.length)
     for (let i = 0; i < count; i++) {
-      out.push(previewOfState(stack[stack.length - 1 - i].editorState))
+      const target = stack[stack.length - 1 - i] // state landed on after undoing i+1 steps
+      const newer = i === 0 ? this.historyState.current : stack[stack.length - i]
+      // The forward action (target -> newer) is the one this row's undo reverts.
+      out.push(newer ? describeAction(infoOfState(target.editorState), infoOfState(newer.editorState)) : 'Edit')
+    }
+    return out
+  }
+
+  /** Labels of the actions re-applied by redoing 1..limit steps (index 0 == 1 step). */
+  getRedoPreviews(limit: number): string[] {
+    const stack = this.historyState.redoStack
+    const out: string[] = []
+    const count = Math.min(limit, stack.length)
+    for (let i = 0; i < count; i++) {
+      const target = stack[stack.length - 1 - i] // state redone to after redoing i+1 steps
+      const older = i === 0 ? this.historyState.current : stack[stack.length - i]
+      // The forward action (older -> target) is the one this row's redo re-applies.
+      out.push(older ? describeAction(infoOfState(older.editorState), infoOfState(target.editorState)) : 'Edit')
     }
     return out
   }
