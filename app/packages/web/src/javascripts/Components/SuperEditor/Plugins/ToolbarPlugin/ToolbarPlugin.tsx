@@ -21,14 +21,10 @@ import {
   $isElementNode,
   COMMAND_PRIORITY_LOW,
   $createParagraphNode,
-  $createTextNode,
   $isTextNode,
   $getNodeByKey,
-  $setSelection,
   TextNode,
   BaseSelection,
-  LexicalNode,
-  ElementNode,
 } from 'lexical'
 import {
   mergeRegister,
@@ -93,12 +89,9 @@ import Menu from '@/Components/Menu/Menu'
 import MenuItem, { MenuItemProps } from '@/Components/Menu/MenuItem'
 import { debounce, remToPx } from '@/Utils'
 import LinkEditor, { $isLinkTextNode } from './LinkEditor'
-import {
-  applyLineOperation,
-  LINE_DEDUPE_MODES,
-  LINE_SORT_MODES,
-  LineOperation,
-} from './LineOperations'
+import { LINE_DEDUPE_MODES, LINE_SORT_MODES, LineOperation } from './LineOperations'
+import { $transformSelectedLines } from './LineTransform'
+import { $applyFontSizeToSelection, clampFontSize, FONT_SIZE_PRESETS, FONT_SIZE_STEP, parseFontSize } from './FontSize'
 import { getSuperHistoryStore, HISTORY_DROPDOWN_LIMIT } from '../HistoryPlugin/SuperHistory'
 import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
 import { useStateRef } from '@/Hooks/useStateRef'
@@ -202,16 +195,6 @@ const FONT_FAMILIES: { name: string; value: string | null }[] = [
   { name: 'Courier New', value: '"Courier New", monospace' },
   { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
 ]
-
-const MIN_FONT_SIZE = 8
-const MAX_FONT_SIZE = 96
-const FONT_SIZE_STEP = 2
-const FONT_SIZE_PRESETS = [8, 9, 10, 11, 12, 14, 16, 18, 24, 30, 36, 48, 60, 72, 96]
-
-const parseFontSize = (value: string): number => {
-  const parsed = parseInt(value, 10)
-  return Number.isNaN(parsed) ? 16 : parsed
-}
 
 const toCamelCase = (text: string): string => {
   const words = text.split(/[^a-zA-Z0-9]+/).filter((word) => word.length > 0)
@@ -721,7 +704,7 @@ const ToolbarPlugin = () => {
           return
         }
         const current = parseFontSize($getSelectionStyleValueForProperty(selection, 'font-size', '16px'))
-        const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, current + direction * FONT_SIZE_STEP))
+        const next = clampFontSize(current + direction * FONT_SIZE_STEP)
         setCurrentFontSize(next)
         $patchStyleText(selection, { 'font-size': `${next}px` })
       })
@@ -744,18 +727,11 @@ const ToolbarPlugin = () => {
   // (i.e. the editor lost focus to the toolbar field).
   const applyFontSize = useCallback(
     (size: number) => {
-      const clamped = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)))
+      const clamped = clampFontSize(size)
       setCurrentFontSize(clamped)
       setFontSizeInput(String(clamped))
       activeEditor.update(() => {
-        let selection = $getSelection()
-        if (!$isRangeSelection(selection) && fontSizeSelectionRef.current) {
-          selection = fontSizeSelectionRef.current.clone()
-          $setSelection(selection)
-        }
-        if ($isRangeSelection(selection)) {
-          $patchStyleText(selection, { 'font-size': `${clamped}px` })
-        }
+        $applyFontSizeToSelection(clamped, fontSizeSelectionRef.current)
       })
     },
     [activeEditor],
@@ -824,45 +800,7 @@ const ToolbarPlugin = () => {
         if (!$isRangeSelection(selection) || selection.isCollapsed()) {
           return
         }
-
-        const isLineBlock = (node: LexicalNode | null): node is ElementNode =>
-          node != null &&
-          $isElementNode(node) &&
-          !node.isInline() &&
-          !$isRootOrShadowRoot(node) &&
-          !node.getChildren().some((child) => $isElementNode(child) && !child.isInline())
-
-        const blocks: ElementNode[] = []
-        const seen = new Set<string>()
-        for (const node of selection.getNodes()) {
-          const block = isLineBlock(node) ? node : $findMatchingParent(node, isLineBlock)
-          if (isLineBlock(block) && !seen.has(block.getKey())) {
-            seen.add(block.getKey())
-            blocks.push(block)
-          }
-        }
-        if (blocks.length < 2) {
-          return
-        }
-
-        const texts = blocks.map((block) => block.getTextContent())
-        const result = applyLineOperation(texts, operation)
-        if (result.length === texts.length && result.every((line, index) => line === texts[index])) {
-          return
-        }
-
-        for (let index = 0; index < blocks.length; index++) {
-          const block = blocks[index]
-          if (index < result.length) {
-            block.clear()
-            block.append($createTextNode(result[index]))
-          } else {
-            block.remove()
-          }
-        }
-        // The previous selection points into cleared/removed nodes; drop it so
-        // reconciliation doesn't choke on a stale range.
-        $setSelection(null)
+        $transformSelectedLines(selection, operation)
       })
     },
     [activeEditor],
