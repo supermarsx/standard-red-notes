@@ -234,11 +234,18 @@ const ToolbarButton = forwardRef(
       >
         <ToolbarItem
           className={classNames(
-            'flex select-none items-center justify-center rounded-md p-0.5 transition-colors duration-75 focus:shadow-none focus:outline-none enabled:hover:bg-passive-4 enabled:focus-visible:bg-passive-4 enabled:active:bg-passive-3 disabled:opacity-50 md:border md:border-transparent enabled:hover:md:border-border',
+            'flex select-none items-center justify-center rounded-md p-0.5 transition-colors duration-75 focus:shadow-none focus:outline-none md:border md:border-transparent',
+            'hover:bg-passive-4 focus-visible:bg-passive-4 active:bg-passive-3 hover:md:border-border',
+            // Disabled buttons keep aria-disabled (not the native attribute) so they
+            // stay hoverable and their tooltip still explains them; override the
+            // interactive styling back so they read as greyed and inert.
+            'aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:active:bg-transparent aria-disabled:hover:md:border-transparent',
             className,
           )}
           onClick={() => {
-            onSelect()
+            if (!disabled) {
+              onSelect()
+            }
           }}
           onMouseDown={(event) => {
             event.preventDefault()
@@ -248,6 +255,10 @@ const ToolbarButton = forwardRef(
             event.preventDefault()
           }}
           disabled={disabled}
+          // Keep disabled buttons hoverable (aria-disabled, not the native disabled
+          // attribute) so their StyledTooltip still explains what the greyed-out
+          // button does instead of being inert.
+          accessibleWhenDisabled
           ref={ref}
           {...props}
         >
@@ -1206,21 +1217,39 @@ const ToolbarPlugin = () => {
           disabled={!canUndo}
           onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
         />
-        <button
-          type="button"
-          aria-label="Undo history"
-          title="Undo multiple steps"
-          ref={undoAnchorRef}
-          disabled={historySnapshot.undoDepth === 0}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setIsUndoMenuOpen(!isUndoMenuOpen)}
-          className={classNames(
-            'flex h-8 items-center rounded-md px-0.5 disabled:opacity-40 md:h-7',
-            isUndoMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
-          )}
+        <StyledTooltip
+          showOnHover
+          showOnMobile
+          side="top"
+          label={
+            historySnapshot.undoDepth === 0
+              ? 'Undo history — nothing to undo yet'
+              : 'Undo history — go back several steps at once'
+          }
         >
-          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
-        </button>
+          <button
+            type="button"
+            aria-label="Undo history"
+            ref={undoAnchorRef}
+            aria-disabled={historySnapshot.undoDepth === 0}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (historySnapshot.undoDepth > 0) {
+                setIsUndoMenuOpen(!isUndoMenuOpen)
+              }
+            }}
+            className={classNames(
+              'flex h-8 items-center rounded-md px-0.5 md:h-7',
+              historySnapshot.undoDepth === 0
+                ? 'cursor-default opacity-40'
+                : isUndoMenuOpen
+                  ? 'bg-contrast'
+                  : 'hover:bg-contrast',
+            )}
+          >
+            <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+          </button>
+        </StyledTooltip>
       </div>
     ) : null,
     [ToolbarButtonId.Redo]: canShowAllItems ? (
@@ -1231,21 +1260,39 @@ const ToolbarPlugin = () => {
           disabled={!canRedo}
           onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
         />
-        <button
-          type="button"
-          aria-label="Redo history"
-          title="Redo multiple steps"
-          ref={redoAnchorRef}
-          disabled={historySnapshot.redoDepth === 0}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setIsRedoMenuOpen(!isRedoMenuOpen)}
-          className={classNames(
-            'flex h-8 items-center rounded-md px-0.5 disabled:opacity-40 md:h-7',
-            isRedoMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
-          )}
+        <StyledTooltip
+          showOnHover
+          showOnMobile
+          side="top"
+          label={
+            historySnapshot.redoDepth === 0
+              ? 'Redo history — nothing to redo'
+              : 'Redo history — jump forward several steps at once'
+          }
         >
-          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
-        </button>
+          <button
+            type="button"
+            aria-label="Redo history"
+            ref={redoAnchorRef}
+            aria-disabled={historySnapshot.redoDepth === 0}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (historySnapshot.redoDepth > 0) {
+                setIsRedoMenuOpen(!isRedoMenuOpen)
+              }
+            }}
+            className={classNames(
+              'flex h-8 items-center rounded-md px-0.5 md:h-7',
+              historySnapshot.redoDepth === 0
+                ? 'cursor-default opacity-40'
+                : isRedoMenuOpen
+                  ? 'bg-contrast'
+                  : 'hover:bg-contrast',
+            )}
+          >
+            <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+          </button>
+        </StyledTooltip>
       </div>
     ) : null,
     [ToolbarButtonId.BlockStyle]: (
