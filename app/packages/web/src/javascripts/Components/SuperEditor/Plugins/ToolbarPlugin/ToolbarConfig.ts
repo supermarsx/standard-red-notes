@@ -74,6 +74,8 @@ export type ToolbarButtonDescriptor = {
 export type ToolbarGroupDescriptor = {
   id: ToolbarGroupId
   label: string
+  /** Short title shown beneath the group in the toolbar (Office-ribbon style). */
+  caption?: string
   buttons: ToolbarButtonDescriptor[]
 }
 
@@ -85,6 +87,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.Clipboard,
     label: 'Clipboard',
+    caption: 'Clipboard',
     buttons: [
       { id: ToolbarButtonId.Cut, label: 'Cut', group: ToolbarGroupId.Clipboard },
       { id: ToolbarButtonId.Copy, label: 'Copy', group: ToolbarGroupId.Clipboard },
@@ -94,6 +97,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.History,
     label: 'History & navigation',
+    caption: 'History',
     buttons: [
       { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.History },
       { id: ToolbarButtonId.Search, label: 'Search', group: ToolbarGroupId.History },
@@ -104,11 +108,13 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.BlockStyle,
     label: 'Block style',
+    caption: 'Block',
     buttons: [{ id: ToolbarButtonId.BlockStyle, label: 'Formatting options', group: ToolbarGroupId.BlockStyle }],
   },
   {
     id: ToolbarGroupId.TextStyle,
     label: 'Text style',
+    caption: 'Text',
     buttons: [
       { id: ToolbarButtonId.Bold, label: 'Bold', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.Italic, label: 'Italic', group: ToolbarGroupId.TextStyle },
@@ -121,6 +127,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.ColorFont,
     label: 'Font',
+    caption: 'Font',
     buttons: [
       { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSize, label: 'Font size', group: ToolbarGroupId.ColorFont },
@@ -133,6 +140,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.ParagraphList,
     label: 'Paragraph & lists',
+    caption: 'Paragraph',
     buttons: [
       { id: ToolbarButtonId.BulletedList, label: 'Bulleted List', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.NumberedList, label: 'Numbered List', group: ToolbarGroupId.ParagraphList },
@@ -147,6 +155,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.Insert,
     label: 'Insert',
+    caption: 'Insert',
     buttons: [
       { id: ToolbarButtonId.InsertMenu, label: 'Insert menu', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.NoteFromSelection, label: 'Create note from selection', group: ToolbarGroupId.Insert },
@@ -155,6 +164,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   {
     id: ToolbarGroupId.AI,
     label: 'AI',
+    caption: 'AI',
     buttons: [{ id: ToolbarButtonId.AI, label: 'AI tools', group: ToolbarGroupId.AI }],
   },
 ]

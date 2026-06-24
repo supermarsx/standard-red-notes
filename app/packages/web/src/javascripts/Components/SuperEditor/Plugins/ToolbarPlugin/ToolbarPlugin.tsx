@@ -1119,6 +1119,9 @@ const ToolbarPlugin = () => {
 
   const toolbarRef = useRef<HTMLDivElement>(null)
   const toolbarStore = useToolbarStore()
+  // Separate store for the element-specific contextual tools, which render on
+  // their own line below the main toolbar.
+  const contextualToolbarStore = useToolbarStore()
   useEffect(() => {
     return application.keyboardService.addCommandHandler({
       command: SUPER_TOGGLE_TOOLBAR,
@@ -1906,34 +1909,28 @@ const ToolbarPlugin = () => {
             {canShowAllItems
               ? resolvedGroups.map((group) => (
                   // Word/Office-style segmented groups: each group is a rounded
-                  // cluster (tight inner spacing) with clear space between groups,
-                  // so related formatting controls are visually chunked together.
+                  // cluster (tight inner spacing) with a small caption title beneath
+                  // it, so related formatting controls are visually chunked and named.
                   <div
                     key={group.id}
                     role="group"
                     aria-label={group.label}
-                    className="super-toolbar-group flex flex-shrink-0 items-center gap-0.5 rounded-lg bg-contrast px-1 py-0.5"
+                    className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
                   >
-                    {group.buttons.map((button) => (
-                      <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                    ))}
+                    <div className="flex items-center justify-center gap-0.5">
+                      {group.buttons.map((button) => (
+                        <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                      ))}
+                    </div>
+                    <span
+                      aria-hidden
+                      className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                    >
+                      {group.caption ?? group.label}
+                    </span>
                   </div>
                 ))
               : floatingSelectionToolbar}
-            {contextualWidget && contextualButtons.length > 0 && (
-              <Fragment key="contextual">
-                <ToolbarSeparator />
-                {/* Word-style contextual ribbon tab: a small label identifying
-                    the active widget, then its tailored actions. */}
-                <span
-                  aria-hidden
-                  className="mx-1 hidden flex-shrink-0 select-none self-center whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info md:inline-block"
-                >
-                  {contextualWidget.label}
-                </span>
-                {contextualButtons}
-              </Fragment>
-            )}
           </Toolbar>
           {isMobile && (
             <button
@@ -1945,6 +1942,23 @@ const ToolbarPlugin = () => {
             </button>
           )}
         </div>
+        {/* Element-specific tooling on its own line: when a table/image/link/etc.
+            is active, its tailored actions get a dedicated row labelled with the
+            element type, instead of being crammed onto the main toolbar. */}
+        {contextualWidget && contextualButtons.length > 0 && (
+          <div className="flex w-full flex-shrink-0 items-center gap-1.5 border-t border-border px-1 py-0.5">
+            <span className="flex-shrink-0 select-none whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info">
+              {contextualWidget.label}
+            </span>
+            <Toolbar
+              className="super-toolbar flex items-center gap-0.5 overflow-x-auto"
+              store={contextualToolbarStore}
+              aria-label={`${contextualWidget.label} tools`}
+            >
+              {contextualButtons}
+            </Toolbar>
+          </div>
+        )}
       </div>
       <Popover
         title="Table of contents"
