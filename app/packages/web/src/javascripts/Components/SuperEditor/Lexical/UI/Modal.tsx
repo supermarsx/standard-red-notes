@@ -6,8 +6,6 @@
  *
  */
 
-import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-
 import { ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Icon from '@/Components/Icon/Icon'
@@ -66,7 +64,10 @@ function PortalImpl({
   }, [closeOnClickOutside, onClose])
 
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[rgba(0,0,0,0.65)]" role="dialog">
+    <div
+      className="fixed inset-0 z-modal flex flex-col items-center justify-center bg-[rgba(0,0,0,0.65)]"
+      role="dialog"
+    >
       <div
         className="relative flex min-w-[min(80vw,_20rem)] flex-col rounded border border-border bg-default"
         tabIndex={-1}
@@ -96,11 +97,12 @@ export default function Modal({
   title: string
 }): ReactNode {
   const [containerElement, setContainerElement] = useState<HTMLElement | undefined>()
-  const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
-    setContainerElement(editor.getRootElement()?.parentElement ?? document.body)
-  }, [editor])
+    // Overlay over the whole app (centered in the viewport), not just the note
+    // editor pane — portal to the body and position fixed.
+    setContainerElement(document.body)
+  }, [])
 
   if (!containerElement) {
     return null
