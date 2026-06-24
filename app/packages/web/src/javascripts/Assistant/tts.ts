@@ -224,6 +224,56 @@ function playWithModel(
   return boundHandle
 }
 
+/**
+ * Split narration into small, sentence-aligned chunks. Chromium-based browsers
+ * silently stop a SpeechSynthesisUtterance after ~15 seconds / a few hundred
+ * characters, so speaking a whole note as one utterance cuts off partway. We
+ * speak a queue of short chunks instead. Exported for testing.
+ */
+export function splitIntoSpeechChunks(text: string, maxLength = 160): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length === 0) {
+    return []
+  }
+  const sentences = normalized.match(/[^.!?]+[.!?]*\s*/g) ?? [normalized]
+  const chunks: string[] = []
+  let current = ''
+
+  const flush = () => {
+    const trimmed = current.trim()
+    if (trimmed.length > 0) {
+      chunks.push(trimmed)
+    }
+    current = ''
+  }
+
+  for (const sentence of sentences) {
+    if (sentence.length > maxLength) {
+      flush()
+      let rest = sentence
+      while (rest.length > maxLength) {
+        let cut = rest.lastIndexOf(' ', maxLength)
+        if (cut <= 0) {
+          cut = maxLength
+        }
+        const piece = rest.slice(0, cut).trim()
+        if (piece.length > 0) {
+          chunks.push(piece)
+        }
+        rest = rest.slice(cut)
+      }
+      current = rest
+    } else if ((current + sentence).length > maxLength) {
+      flush()
+      current = sentence
+    } else {
+      current += sentence
+    }
+  }
+  flush()
+  return chunks
+}
+
 function playWithWebSpeech(options: TtsPlayOptions): TtsHandle {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
     options.onError?.('Text-to-speech is not supported in this browser.')
@@ -235,44 +285,94 @@ function playWithWebSpeech(options: TtsPlayOptions): TtsHandle {
   // Cancel anything already speaking so we never overlap utterances.
   synth.cancel()
 
-  const utterance = new SpeechSynthesisUtterance(options.text)
-  utterance.rate = options.rate ?? 1
+  const chunks = splitIntoSpeechChunks(options.text)
+  if (chunks.length === 0) {
+    options.onState?.('ended')
+    return { backend: 'web-speech', pause: () => undefined, resume: () => undefined, stop: () => undefined }
+  }
 
-  if (options.voiceURI) {
-    const voice = synth.getVoices().find((candidate) => candidate.voiceURI === options.voiceURI)
+  const voice = options.voiceURI
+    ? synth.getVoices().find((candidate) => candidate.voiceURI === options.voiceURI)
+    : undefined
+
+  let index = 0
+  let stopped = false
+  let started = false
+  let paused = false
+  let keepAlive: ReturnType<typeof setInterval> | undefined
+
+  const stopKeepAlive = () => {
+    if (keepAlive !== undefined) {
+      clearInterval(keepAlive)
+      keepAlive = undefined
+    }
+  }
+  // Chromium auto-pauses long-running synthesis; a periodic resume (when not
+  // intentionally paused) keeps the queue moving across chunks.
+  keepAlive = setInterval(() => {
+    if (!stopped && !paused && synth.speaking) {
+      synth.resume()
+    }
+  }, 10000)
+
+  const speakNext = () => {
+    if (stopped || index >= chunks.length) {
+      stopKeepAlive()
+      if (!stopped) {
+        options.onState?.('ended')
+      }
+      return
+    }
+    const utterance = new SpeechSynthesisUtterance(chunks[index])
+    utterance.rate = options.rate ?? 1
     if (voice) {
       utterance.voice = voice
     }
-  }
-
-  utterance.onstart = () => options.onState?.('playing')
-  utterance.onend = () => options.onState?.('ended')
-  utterance.onerror = (event) => {
-    // 'interrupted'/'canceled' happen on a normal stop; don't surface them as errors.
-    if (event.error === 'interrupted' || event.error === 'canceled') {
-      return
+    utterance.onstart = () => {
+      if (!started) {
+        started = true
+        options.onState?.('playing')
+      }
     }
-    options.onError?.(`Speech synthesis error: ${event.error}`)
-    options.onState?.('error')
+    utterance.onend = () => {
+      if (!stopped) {
+        index++
+        speakNext()
+      }
+    }
+    utterance.onerror = (event) => {
+      // 'interrupted'/'canceled' happen on a normal stop; don't surface them.
+      if (event.error === 'interrupted' || event.error === 'canceled') {
+        return
+      }
+      stopKeepAlive()
+      options.onError?.(`Speech synthesis error: ${event.error}`)
+      options.onState?.('error')
+    }
+    synth.speak(utterance)
   }
 
-  synth.speak(utterance)
+  speakNext()
 
   return {
     backend: 'web-speech',
     pause: () => {
       if (synth.speaking && !synth.paused) {
+        paused = true
         synth.pause()
         options.onState?.('paused')
       }
     },
     resume: () => {
       if (synth.paused) {
+        paused = false
         synth.resume()
         options.onState?.('playing')
       }
     },
     stop: () => {
+      stopped = true
+      stopKeepAlive()
       synth.cancel()
       options.onState?.('idle')
     },

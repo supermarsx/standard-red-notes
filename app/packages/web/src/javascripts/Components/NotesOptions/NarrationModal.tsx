@@ -170,15 +170,12 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
         },
       ]}
     >
-      <div className="flex flex-col gap-4">
-        {/* Data-exposure notice — same pattern as the Assistant preferences pane. */}
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">Narration sends note content to an AI</div>
-          <p className="mt-1">
-            Generating narration sends this note&rsquo;s text to the AI provider you configured. If model voices are
-            active, the narration text is also sent to your speech endpoint. Device-voice playback stays local.
-          </p>
-        </div>
+      <div className="flex flex-col gap-3">
+        {/* Data-exposure notice — compact one-liner. */}
+        <p className="rounded border border-warning bg-warning-faded px-2.5 py-1.5 text-xs text-warning">
+          Generating narration (and model voices) sends this note&rsquo;s text to your configured AI provider.
+          Device-voice playback stays local.
+        </p>
 
         {/* Style selection */}
         <div className="flex flex-col gap-1">
@@ -204,7 +201,7 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
             onClick={() => void handleGenerate()}
             disabled={!aiAvailability.available || generating}
           >
-            <Icon type="dashboard" size="small" />
+            <Icon type="sparkle" size="small" />
             {generating ? 'Generating…' : 'Rewrite with AI'}
           </button>
           <button
@@ -255,7 +252,7 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
               onClick={() => speak(narration || rawText)}
               disabled={!(narration || rawText).trim() || isPlaying}
             >
-              <Icon type="forward-ios" size="small" />
+              <Icon type="play" size="small" />
               Play
             </button>
             <button
@@ -263,7 +260,7 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
               onClick={() => (isPaused ? handleRef.current?.resume() : handleRef.current?.pause())}
               disabled={ttsState === 'idle' || ttsState === 'ended' || ttsState === 'error'}
             >
-              <Icon type={isPaused ? 'forward-ios' : 'menu-close'} size="small" />
+              <Icon type={isPaused ? 'play' : 'pause'} size="small" />
               {isPaused ? 'Resume' : 'Pause'}
             </button>
             <button
@@ -271,7 +268,7 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
               onClick={stopPlayback}
               disabled={ttsState === 'idle'}
             >
-              <Icon type="close" size="small" />
+              <Icon type="stop" size="small" />
               Stop
             </button>
             <span className="ml-auto text-xs text-passive-0">
