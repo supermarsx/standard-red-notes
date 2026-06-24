@@ -1,6 +1,7 @@
 import { AbstractComponent } from '@/Components/Abstract/PureComponent'
 import ChangeEditorButton from '@/Components/ChangeEditor/ChangeEditorButton'
 import IframeFeatureView from '@/Components/ComponentView/IframeFeatureView'
+import NoteAttachmentsList from '@/Components/NoteView/NoteAttachmentsList'
 import NotesOptionsPanel from '@/Components/NotesOptions/NotesOptionsPanel'
 import PinNoteButton from '@/Components/PinNoteButton/PinNoteButton'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
@@ -1339,6 +1340,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               </Suspense>
             </div>
           )}
+
+          <NoteAttachmentsList note={this.note} filesController={this.application.filesController} />
         </EditorContentWithSafeAreaPadding>
 
         <div id="editor-pane-component-stack">
