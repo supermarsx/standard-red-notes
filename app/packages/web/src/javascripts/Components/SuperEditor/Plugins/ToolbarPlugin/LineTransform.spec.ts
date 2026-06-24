@@ -10,6 +10,7 @@ import { createHeadlessEditor } from '@lexical/headless'
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
 import { HeadingNode } from '@lexical/rich-text'
 import { $createParagraphNode, $createRangeSelection, $createTextNode, $getRoot, LexicalNode } from 'lexical'
+import { $createHeadingNode } from '@lexical/rich-text'
 
 import { $collectSelectedLineBlocks, $transformSelectedLines } from './LineTransform'
 import { LineOperation } from './LineOperations'
@@ -54,30 +55,15 @@ const setBulletList = (lines: string[]): void => {
   )
 }
 
-/** Select every leaf line (first block's first text → last block's last text) and run the op. */
+/** Select the entire document (root element span, so even empty blocks are included) and run the op. */
 const runOverAll = (operation: LineOperation): boolean => {
   let changed = false
   editor.update(
     () => {
-      const leaves: LexicalNode[] = []
-      const collect = (node: LexicalNode): void => {
-        // depth-first collect of text leaves
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const children = (node as any).getChildren?.() as LexicalNode[] | undefined
-        if (children && children.length) {
-          children.forEach(collect)
-        } else {
-          leaves.push(node)
-        }
-      }
-      $getRoot()
-        .getChildren()
-        .forEach(collect)
-      const first = leaves[0]
-      const last = leaves[leaves.length - 1]
+      const root = $getRoot()
       const selection = $createRangeSelection()
-      selection.anchor.set(first.getKey(), 0, 'text')
-      selection.focus.set(last.getKey(), last.getTextContent().length, 'text')
+      selection.anchor.set(root.getKey(), 0, 'element')
+      selection.focus.set(root.getKey(), root.getChildrenSize(), 'element')
       changed = $transformSelectedLines(selection, operation)
     },
     { discrete: true },
@@ -92,7 +78,7 @@ const readLines = (): string[] =>
       .flatMap((block) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const children = (block as any).getChildren?.() as LexicalNode[] | undefined
-        if (children && children.every((c) => 'getChildren' in c)) {
+        if (children && children.length > 0 && children.every((c) => 'getChildren' in c)) {
           // a container (e.g. a list) — read each item
           return children.map((item) => item.getTextContent())
         }
@@ -154,6 +140,55 @@ describe('$transformSelectedLines over list items', () => {
     setBulletList(['x', 'y', 'x'])
     runOverAll('dedupe')
     expect(readLines()).toEqual(['x', 'y'])
+  })
+})
+
+describe('$transformSelectedLines edge cases', () => {
+  it('sorts an empty line (paragraph) ahead of content and keeps the block count', () => {
+    setParagraphs(['banana', '', 'apple'])
+    runOverAll('digits-first-asc')
+    expect(readLines()).toEqual(['', 'apple', 'banana'])
+  })
+
+  it('collapses duplicate blocks down to the distinct set, removing the surplus', () => {
+    setParagraphs(['x', 'x', 'x', 'y'])
+    const changed = runOverAll('dedupe')
+    expect(changed).toBe(true)
+    const lines = readLines()
+    expect(lines).toEqual(['x', 'y'])
+    // surplus blocks were actually removed from the document
+    expect(editor.getEditorState().read(() => $getRoot().getChildren().length)).toBe(2)
+  })
+
+  it('dedupes whitespace-only lines that are byte-identical', () => {
+    setParagraphs(['  ', 'a', '  '])
+    runOverAll('dedupe')
+    expect(readLines()).toEqual(['  ', 'a'])
+  })
+
+  it('reorders text across mixed block types while preserving each block kind in place', () => {
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const heading = $createHeadingNode('h1')
+        heading.append($createTextNode('zeta'))
+        root.append(heading)
+        const p1 = $createParagraphNode()
+        p1.append($createTextNode('alpha'))
+        root.append(p1)
+        const p2 = $createParagraphNode()
+        p2.append($createTextNode('mu'))
+        root.append(p2)
+      },
+      { discrete: true },
+    )
+    runOverAll('letters-first-asc')
+    // text is reordered (alpha, mu, zeta)…
+    expect(readLines()).toEqual(['alpha', 'mu', 'zeta'])
+    // …but the first block stays a heading (block kinds are not reordered, only text)
+    const firstType = editor.getEditorState().read(() => $getRoot().getFirstChild()?.getType())
+    expect(firstType).toBe('heading')
   })
 })
 

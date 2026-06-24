@@ -204,5 +204,57 @@ describe('Username', () => {
         expect(result.getValue().value).toBe('user_name.test-email@domain+plus')
       })
     })
+
+    describe('uncommon edge cases', () => {
+      it('should reject unicode letters (regex only allows ASCII a-z0-9)', () => {
+        expect(Username.create('müller').isFailed()).toBeTruthy()
+        expect(Username.create('用户名').isFailed()).toBeTruthy()
+        expect(Username.create('café').isFailed()).toBeTruthy()
+      })
+
+      it('should reject emoji', () => {
+        expect(Username.create('user😀').isFailed()).toBeTruthy()
+      })
+
+      it('should reject internal spaces', () => {
+        expect(Username.create('john doe').isFailed()).toBeTruthy()
+      })
+
+      it('should accept exactly 3 characters (minimum boundary)', () => {
+        const result = Username.create('abc')
+        expect(result.isFailed()).toBeFalsy()
+      })
+
+      it('should reject exactly 2 characters (just under minimum)', () => {
+        expect(Username.create('ab').isFailed()).toBeTruthy()
+      })
+
+      it('should accept exactly 100 characters (maximum boundary)', () => {
+        const result = Username.create('a'.repeat(100))
+        expect(result.isFailed()).toBeFalsy()
+      })
+
+      it('should reject exactly 101 characters (just over maximum)', () => {
+        expect(Username.create('a'.repeat(101)).isFailed()).toBeTruthy()
+      })
+
+      it('should reject a length below minimum after trimming', () => {
+        expect(Username.create('  ab  ').isFailed()).toBeTruthy()
+      })
+
+      it('should bypass all format/length rules when skipValidation is set', () => {
+        const result = Username.create('a', { skipValidation: true })
+        expect(result.isFailed()).toBeFalsy()
+        expect(result.getValue().value).toBe('a')
+
+        const unicode = Username.create('Müller Ünïcode', { skipValidation: true })
+        expect(unicode.isFailed()).toBeFalsy()
+        expect(unicode.getValue().value).toBe('müller ünïcode')
+      })
+
+      it('should still reject an empty username even when skipValidation is set', () => {
+        expect(Username.create('   ', { skipValidation: true }).isFailed()).toBeTruthy()
+      })
+    })
   })
 })

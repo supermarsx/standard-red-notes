@@ -28,6 +28,21 @@ describe('clampFontSize', () => {
     expect(clampFontSize(-5)).toBe(MIN_FONT_SIZE)
     expect(clampFontSize(9999)).toBe(MAX_FONT_SIZE)
   })
+
+  it('is identity at the exact boundaries and clamps just outside them', () => {
+    expect(clampFontSize(MIN_FONT_SIZE)).toBe(MIN_FONT_SIZE)
+    expect(clampFontSize(MAX_FONT_SIZE)).toBe(MAX_FONT_SIZE)
+    expect(clampFontSize(MIN_FONT_SIZE - 1)).toBe(MIN_FONT_SIZE)
+    expect(clampFontSize(MAX_FONT_SIZE + 1)).toBe(MAX_FONT_SIZE)
+  })
+
+  it('rounds half-up before clamping and floors absurd values into range', () => {
+    expect(clampFontSize(8.5)).toBe(9)
+    expect(clampFontSize(8.4)).toBe(8)
+    expect(clampFontSize(0)).toBe(MIN_FONT_SIZE)
+    expect(clampFontSize(-1000)).toBe(MIN_FONT_SIZE)
+    expect(clampFontSize(1e6)).toBe(MAX_FONT_SIZE)
+  })
 })
 
 describe('parseFontSize', () => {
@@ -35,6 +50,15 @@ describe('parseFontSize', () => {
     expect(parseFontSize('24px')).toBe(24)
     expect(parseFontSize('')).toBe(16)
     expect(parseFontSize('not-a-number')).toBe(16)
+  })
+
+  it('handles uncommon numeric strings the way parseInt does', () => {
+    expect(parseFontSize('  24  ')).toBe(24) // surrounding whitespace
+    expect(parseFontSize('16.9')).toBe(16) // truncates the fraction
+    expect(parseFontSize('12.3px')).toBe(12)
+    expect(parseFontSize('0')).toBe(0)
+    expect(parseFontSize('-5')).toBe(-5)
+    expect(parseFontSize('1e3')).toBe(1) // parseInt stops at 'e'
   })
 })
 

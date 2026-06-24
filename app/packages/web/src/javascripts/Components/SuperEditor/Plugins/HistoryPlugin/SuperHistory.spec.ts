@@ -140,6 +140,56 @@ describe('SuperHistoryStore previews', () => {
   })
 })
 
+describe('SuperHistoryStore edge cases', () => {
+  it('a new edit after an undo discards the redo stack', () => {
+    const { store, unregister, typeLine } = makeEditorWithStore()
+    typeLine('a')
+    typeLine('b')
+    typeLine('c')
+    store.undo(2)
+    expect(store.getSnapshot().redoDepth).toBeGreaterThan(0)
+    typeLine('divergent') // a fresh edit invalidates the redo branch
+    expect(store.getSnapshot().redoDepth).toBe(0)
+    unregister()
+  })
+
+  it('undo / redo at the boundary are safe no-ops', () => {
+    const { store, unregister } = makeEditorWithStore()
+    expect(store.getSnapshot().undoDepth).toBe(0)
+    expect(() => store.undo(1)).not.toThrow()
+    expect(() => store.redo(1)).not.toThrow()
+    expect(store.getSnapshot()).toEqual({ undoDepth: 0, redoDepth: 0 })
+    unregister()
+  })
+
+  it('undo(0) and negative steps do nothing', () => {
+    const { store, unregister, typeLine } = makeEditorWithStore()
+    typeLine('a')
+    typeLine('b')
+    const before = store.getSnapshot().undoDepth
+    store.undo(0)
+    store.undo(-3)
+    expect(store.getSnapshot().undoDepth).toBe(before)
+    unregister()
+  })
+
+  it('getUndoPreviews never returns more than the stack depth', () => {
+    const { store, unregister, typeLine } = makeEditorWithStore()
+    typeLine('a')
+    typeLine('b')
+    const depth = store.getSnapshot().undoDepth
+    expect(store.getUndoPreviews(100).length).toBe(depth)
+    expect(store.getUndoPreviews(0)).toEqual([])
+  })
+
+  it('a fresh store (never activated) is inert', () => {
+    const store = new SuperHistoryStore()
+    expect(store.getSnapshot()).toEqual({ undoDepth: 0, redoDepth: 0 })
+    expect(() => store.undo(5)).not.toThrow()
+    expect(store.getUndoPreviews(10)).toEqual([])
+  })
+})
+
 describe('SuperHistoryStore deactivate', () => {
   it('clears the stacks and resets the snapshot', () => {
     const { editor, store, unregister, typeLine } = makeEditorWithStore()

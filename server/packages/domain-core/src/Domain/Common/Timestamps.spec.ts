@@ -20,4 +20,44 @@ describe('Timestamps', () => {
 
     expect(valueOrError.isFailed()).toBeTruthy()
   })
+
+  describe('edge cases', () => {
+    it('should accept zero timestamps', () => {
+      const valueOrError = Timestamps.create(0, 0)
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().createdAt).toEqual(0)
+    })
+
+    it('should accept negative timestamps (no range check)', () => {
+      const valueOrError = Timestamps.create(-1, -2)
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().createdAt).toEqual(-1)
+    })
+
+    it('should accept floating-point timestamps', () => {
+      const valueOrError = Timestamps.create(1.5, 2.5)
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().createdAt).toEqual(1.5)
+    })
+
+    it('should accept Infinity since it is a number and not NaN', () => {
+      const valueOrError = Timestamps.create(Infinity, 1)
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().createdAt).toEqual(Infinity)
+    })
+
+    it('should reject NaN', () => {
+      expect(Timestamps.create(NaN, 1).isFailed()).toBeTruthy()
+      expect(Timestamps.create(1, NaN).isFailed()).toBeTruthy()
+    })
+
+    it('should reject undefined and null', () => {
+      expect(Timestamps.create(undefined as unknown as number, 1).isFailed()).toBeTruthy()
+      expect(Timestamps.create(1, null as unknown as number).isFailed()).toBeTruthy()
+    })
+  })
 })

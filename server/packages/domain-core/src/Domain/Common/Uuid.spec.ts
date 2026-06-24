@@ -41,4 +41,52 @@ describe('Uuid', () => {
     expect(uuid1.equals(null as unknown as Uuid)).toBeFalsy()
     expect(uuid1.equals(undefined as unknown as Uuid)).toBeFalsy()
   })
+
+  describe('edge cases', () => {
+    it('should accept a valid v4 uuid', () => {
+      const valueOrError = Uuid.create('84c0f8e8-544a-4c7e-9adf-26209303bc1d')
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+    })
+
+    it('should accept the nil uuid (all zeros) since regex is any-version/any-variant', () => {
+      const valueOrError = Uuid.create('00000000-0000-0000-0000-000000000000')
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().value).toEqual('00000000-0000-0000-0000-000000000000')
+    })
+
+    it('should preserve the original casing of an uppercase uuid (no normalization)', () => {
+      const valueOrError = Uuid.create('00B57455-B563-4B50-A2AA-B19762102219')
+
+      expect(valueOrError.isFailed()).toBeFalsy()
+      expect(valueOrError.getValue().value).toEqual('00B57455-B563-4B50-A2AA-B19762102219')
+    })
+
+    it('should reject an empty string', () => {
+      expect(Uuid.create('').isFailed()).toBeTruthy()
+    })
+
+    it('should reject a uuid of the wrong length', () => {
+      expect(Uuid.create('84c0f8e8-544a-4c7e-9adf-26209303bc1').isFailed()).toBeTruthy()
+      expect(Uuid.create('84c0f8e8-544a-4c7e-9adf-26209303bc1dd').isFailed()).toBeTruthy()
+    })
+
+    it('should reject a uuid with non-hex characters', () => {
+      expect(Uuid.create('g4c0f8e8-544a-4c7e-9adf-26209303bc1d').isFailed()).toBeTruthy()
+      expect(Uuid.create('zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz').isFailed()).toBeTruthy()
+    })
+
+    it('should reject a brace-wrapped uuid', () => {
+      expect(Uuid.create('{84c0f8e8-544a-4c7e-9adf-26209303bc1d}').isFailed()).toBeTruthy()
+    })
+
+    it('should reject a urn-prefixed uuid', () => {
+      expect(Uuid.create('urn:uuid:84c0f8e8-544a-4c7e-9adf-26209303bc1d').isFailed()).toBeTruthy()
+    })
+
+    it('should reject a uuid with leading/trailing whitespace (no trimming)', () => {
+      expect(Uuid.create(' 84c0f8e8-544a-4c7e-9adf-26209303bc1d ').isFailed()).toBeTruthy()
+    })
+  })
 })
