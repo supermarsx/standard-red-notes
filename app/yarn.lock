@@ -12433,6 +12433,7 @@ __metadata:
     dayjs: ^1.11.21
     docx: ^9.5.1
     dotenv: ^17.4.2
+    echarts: ^5.6.0
     esbuild-loader: ^4.5.0
     eslint: ^8.57.1
     eslint-config-prettier: ^9.1.2
@@ -20019,6 +20020,16 @@ __metadata:
   dependencies:
     safe-buffer: ^5.0.1
   checksum: 207f9ab1c2669b8e65540bce29506134613dd5f122cccf1e6a560f4d63f2732d427d938f8481df175505aad94583bcb32c688737bb39a6df0625f903d6d93c03
+  languageName: node
+  linkType: hard
+
+"echarts@npm:^5.6.0":
+  version: 5.6.0
+  resolution: "echarts@npm:5.6.0"
+  dependencies:
+    tslib: 2.3.0
+    zrender: 5.6.1
+  checksum: 4b545444155f9457daa89a4ea45f9e08177a9a59d9df7e5ea5206f66e290964fb0a1a273b0dfdeb24a4aa264f6afc925918aa2b76190917abf390bef092ba95c
   languageName: node
   linkType: hard
 
@@ -35302,6 +35313,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tslib@npm:2.3.0":
+  version: 2.3.0
+  resolution: "tslib@npm:2.3.0"
+  checksum: 8869694c26e4a7b56d449662fd54a4f9ba872c889d991202c74462bd99f10e61d5bd63199566c4284c0f742277736292a969642cc7b590f98727a7cae9529122
+  languageName: node
+  linkType: hard
+
 "tslib@npm:^1.11.1, tslib@npm:^1.8.1, tslib@npm:^1.9.3":
   version: 1.14.1
   resolution: "tslib@npm:1.14.1"
@@ -37733,6 +37751,15 @@ __metadata:
   version: 4.4.3
   resolution: "zod@npm:4.4.3"
   checksum: bf236fdee7a5a5ec645eef5bfea3aad34e7df912931c2a23bc17e5b59882482751da42392916529da52ff9bc70f584797a5d496f1fb81f2d1a4c90fdd3922d2a
+  languageName: node
+  linkType: hard
+
+"zrender@npm:5.6.1":
+  version: 5.6.1
+  resolution: "zrender@npm:5.6.1"
+  dependencies:
+    tslib: 2.3.0
+  checksum: 01caeac2d30f0083009aafa531ccb7fe991b6ac0ddd8134dc7b0015f794ed7e3d4fbfe5d32f61cb591014245eca15aeebcfc962cdebfe3829598f0c94ba3dc29
   languageName: node
   linkType: hard
 
