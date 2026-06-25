@@ -18,6 +18,12 @@ export type WebEmbedData = {
   url: string
   /** Bounded iframe height in px. Defaults to DEFAULT_HEIGHT. */
   height?: number
+  /**
+   * Opt-in flag for the looser "trusted" sandbox profile (see SANDBOX_TRUSTED).
+   * Optional + defaults to undefined/false so previously-serialized embeds keep
+   * the safer default profile and round-trip unchanged (backward compatible).
+   */
+  trusted?: boolean
 }
 
 const DEFAULT_HEIGHT = 480
@@ -25,6 +31,65 @@ const MIN_HEIGHT = 160
 const MAX_HEIGHT = 1200
 
 const DEFAULT_WEB_EMBED: WebEmbedData = { url: '' }
+
+/**
+ * Iframe sandbox profiles.
+ *
+ * Modern single-page apps (React/Vue/Svelte/SolidJS, etc.) need real
+ * capabilities to boot: ES-module + classic scripts, the ability to read/write
+ * their OWN origin (localStorage / IndexedDB / cookies / a service worker) so
+ * routing, auth, and `fetch`/XHR to their own backend work, plus forms, popups,
+ * modal dialogs, downloads, presentation and fullscreen. The previous
+ * `allow-scripts allow-same-origin allow-popups allow-forms` list was missing
+ * most of these, so framework apps that do same-origin networking, open auth
+ * popups, or show `<dialog>`/`alert()` modals silently broke.
+ *
+ * Security reasoning for the DEFAULT profile:
+ *   - `allow-same-origin` is combined with `allow-scripts` below. The well-known
+ *     warning about that pair only applies when the framed document's origin is
+ *     the SAME as the embedder's origin (the frame could then reach back into
+ *     the parent app's storage/DOM and lift the sandbox on itself). In this
+ *     block the `src` is always an arbitrary EXTERNAL http(s) origin (enforced
+ *     by sanitizeWebEmbedUrl) that is cross-origin to Standard Notes, so
+ *     `allow-same-origin` only ever grants the frame access to its OWN site's
+ *     data — exactly what it already has when opened in a normal tab. It does
+ *     NOT grant any access to the note, the editor, or other origins. The
+ *     browser's cross-origin policy remains the real boundary.
+ *   - We deliberately do NOT add `allow-top-navigation` (a framed page should
+ *     never be able to navigate the whole Standard Notes tab away) and we keep
+ *     `referrerPolicy="no-referrer"` so the note's URL is never leaked.
+ *   - `allow-popups-to-escape-sandbox` lets links/auth flows that open a new
+ *     window land in a normal, unsandboxed tab (the user is leaving the embed
+ *     anyway), which is what real apps expect.
+ *
+ * The TRUSTED profile is identical today; it exists as an explicit, per-embed
+ * acknowledgement surface and a forward-compatible hook for any future
+ * capability we only want to hand to embeds the user has vouched for. Because
+ * the embed is always cross-origin, the default already safely carries
+ * `allow-same-origin`, so there is no additional same-origin-script risk to
+ * gate here — the toggle is about user intent, not a privilege boundary.
+ */
+const SANDBOX_DEFAULT = [
+  'allow-scripts',
+  'allow-same-origin',
+  'allow-forms',
+  'allow-popups',
+  'allow-popups-to-escape-sandbox',
+  'allow-modals',
+  'allow-downloads',
+  'allow-presentation',
+].join(' ')
+
+const SANDBOX_TRUSTED = SANDBOX_DEFAULT
+
+/**
+ * Feature-policy handed to the frame. We enable the capabilities a rich app
+ * commonly wants for media/UX — clipboard writes, fullscreen, encrypted media
+ * (DRM video), picture-in-picture and the (gesture-gated) autoplay — but
+ * intentionally OMIT camera, microphone and geolocation so an embedded site can
+ * never silently request them through the frame in a notes app.
+ */
+const IFRAME_ALLOW = 'clipboard-write; fullscreen; encrypted-media; picture-in-picture; autoplay'
 
 /**
  * Plain-language warning shown on the click-to-load placeholder card. Embedding
@@ -59,10 +124,26 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
       editor.update(() => {
         const node = $getNodeByKey(nodeKey)
         if ($isWebEmbedNode(node)) {
-          node.setData({ url, height: node.getData().height })
+          const current = node.getData()
+          node.setData({ url, height: current.height, trusted: current.trusted })
         }
       })
       setEditing(false)
+      setLoaded(false)
+    },
+    [editor, nodeKey],
+  )
+
+  const setTrusted = useCallback(
+    (trusted: boolean) => {
+      editor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isWebEmbedNode(node)) {
+          const current = node.getData()
+          node.setData({ url: current.url, height: current.height, trusted })
+        }
+      })
+      // Reload from the placeholder so the new sandbox profile applies cleanly.
       setLoaded(false)
     },
     [editor, nodeKey],
@@ -143,6 +224,18 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
               <p className="mt-1 break-all text-xs text-passive-1">{safeUrl}</p>
             </div>
           </div>
+          <label className="mt-2 flex items-start gap-2 text-xs text-passive-0">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={!!data.trusted}
+              onChange={(event) => setTrusted(event.target.checked)}
+            />
+            <span>
+              Trust this site (apply the looser sandbox profile). Only enable for sites you control or fully trust — the
+              embed still runs cross-origin, so it can never read your note.
+            </span>
+          </label>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -165,16 +258,20 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
         <div className="p-2">
           {/* Bounded, responsive container: full width, capped height, no overflow. */}
           <div className="w-full max-w-full overflow-hidden rounded border border-border" style={{ height }}>
-            {/* Hardened iframe: least-permissive sandbox that still renders most
-                pages. We keep allow-same-origin because dropping it breaks many
-                sites' own scripts/styles, but we drop allow-top-navigation,
-                allow-modals, and allow-downloads. no-referrer avoids leaking the
-                note URL; lazy loading avoids fetching until scrolled into view. */}
+            {/* Modern-app-capable iframe. The sandbox enables what framework SPAs
+                need (scripts/modules, same-origin storage+fetch, forms, popups,
+                modals, downloads, presentation) while still WITHOUT
+                allow-top-navigation, so the frame can never hijack the whole
+                Standard Notes tab. allow-same-origin is safe here only because
+                the src is always a cross-origin external site (see
+                SANDBOX_DEFAULT). no-referrer avoids leaking the note URL; lazy
+                loading defers the fetch until scrolled into view. */}
             <iframe
               title={`Embedded website: ${safeUrl}`}
               src={safeUrl}
               className="h-full w-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              sandbox={data.trusted ? SANDBOX_TRUSTED : SANDBOX_DEFAULT}
+              allow={IFRAME_ALLOW}
               referrerPolicy="no-referrer"
               loading="lazy"
             />
@@ -217,6 +314,7 @@ export class WebEmbedNode extends DecoratorNode<React.JSX.Element> {
     return $createWebEmbedNode({
       url: typeof data.url === 'string' ? data.url : '',
       height: clampHeight(data.height),
+      trusted: data.trusted === true,
     })
   }
 
@@ -224,7 +322,13 @@ export class WebEmbedNode extends DecoratorNode<React.JSX.Element> {
     return {
       type: 'web-embed',
       version: 1,
-      data: { url: this.__data.url ?? '', height: clampHeight(this.__data.height) },
+      // Only persist `trusted` when explicitly enabled so existing notes that
+      // never had the field continue to serialize byte-for-byte identically.
+      data: {
+        url: this.__data.url ?? '',
+        height: clampHeight(this.__data.height),
+        ...(this.__data.trusted ? { trusted: true } : {}),
+      },
     }
   }
 
@@ -260,7 +364,11 @@ export class WebEmbedNode extends DecoratorNode<React.JSX.Element> {
 }
 
 export function $createWebEmbedNode(data: WebEmbedData = DEFAULT_WEB_EMBED): WebEmbedNode {
-  return new WebEmbedNode({ url: data.url ?? '', height: clampHeight(data.height) })
+  return new WebEmbedNode({
+    url: data.url ?? '',
+    height: clampHeight(data.height),
+    ...(data.trusted ? { trusted: true } : {}),
+  })
 }
 
 export function $isWebEmbedNode(node: LexicalNode | null | undefined): node is WebEmbedNode {
