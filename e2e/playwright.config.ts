@@ -25,5 +25,12 @@ export default defineConfig({
     actionTimeout: 15_000,
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Run across all three engines: "the app doesn't open" has repeatedly turned
+  // out to be environment-specific, so a Chromium-only smoke can miss a
+  // Firefox/WebKit-only bootstrap failure.
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
 })
