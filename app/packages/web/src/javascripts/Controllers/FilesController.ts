@@ -750,6 +750,8 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
 
     let toastId: string | undefined
     let canShowProgressNotification = false
+    // Captured for the catch block so a failure alert can name the attachment.
+    let uploadFileName = 'file'
 
     if (showToast && this.mobileDevice && this.platform === Platform.Android) {
       canShowProgressNotification = await this.mobileDevice.canDisplayNotifications()
@@ -774,6 +776,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       // touched; non-image files pass through untouched. Applies to both synced
       // and local-only uploads since the local-only branch reuses fileToUpload.
       const fileToUpload = await this.maybeStripImageMetadata(resolvedFile)
+      uploadFileName = fileToUpload.name
 
       if (this.alertIfFileExceedsSizeLimit(fileToUpload)) {
         return
@@ -845,7 +848,18 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       }
 
       const onChunk: OnChunkCallbackNoProgress = async ({ data, index, isLast }) => {
-        await this.files.pushBytesForUpload(operation, data, index, isLast)
+        // CRITICAL: pushBytesForUpload RETURNS (does not throw) a
+        // ClientDisplayableError when a chunk fails to upload. Discarding it meant
+        // a mid-upload chunk failure on a large multi-chunk file was silently
+        // swallowed — the loop kept going, finishUpload still "succeeded", and a
+        // FileItem advertising the full size was synced over an incomplete upload
+        // (a "ghost attachment", only discovered later on download). Throw so the
+        // streaming read aborts, the user is alerted (outer catch), and no partial
+        // FileItem is ever inserted.
+        const pushResult = await this.files.pushBytesForUpload(operation, data, index, isLast)
+        if (pushResult instanceof ClientDisplayableError) {
+          throw pushResult
+        }
 
         const percentComplete = Math.round(operation.getProgress().percentComplete)
         this.uploadProgressMap.set(uuid, {
@@ -948,6 +962,14 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     } catch (error) {
       console.error(error)
 
+      // Surface the specific reason when we have one (e.g. a chunk upload failure
+      // carried by a ClientDisplayableError) so the failure is never silent.
+      const reason =
+        error instanceof ClientDisplayableError && error.text ? error.text : undefined
+      const message = reason
+        ? `Attachment "${uploadFileName}" failed to upload and was not saved: ${reason}`
+        : `Attachment "${uploadFileName}" failed to upload and was not saved.`
+
       if (toastId) {
         if (this.mobileDevice && canShowProgressNotification) {
           this.mobileDevice.cancelNotification(toastId).catch(console.error)
@@ -957,13 +979,13 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       if (this.mobileDevice && canShowProgressNotification) {
         this.mobileDevice
           .displayNotification({
-            title: 'There was an error while uploading the file',
+            title: message,
           })
           .catch(console.error)
       } else {
         addToast({
           type: ToastType.Error,
-          message: 'There was an error while uploading the file',
+          message,
         })
       }
     }
