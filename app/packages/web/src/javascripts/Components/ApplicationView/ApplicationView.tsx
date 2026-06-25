@@ -57,6 +57,7 @@ import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
 import { useReminderChecker } from '@/Reminders/useReminderChecker'
 import { useDiaryScheduler } from '@/Diary/useDiaryScheduler'
 import RemindersButton from '@/Reminders/RemindersButton'
+import FloatingNarrationPlayer from '../Narration/FloatingNarrationPlayer'
 import AppLockPasskeyScreen from './AppLockPasskeyScreen'
 import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
 
@@ -573,6 +574,7 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                     <div className="pointer-events-none fixed bottom-14 right-4 z-footer-bar-item">
                       <RemindersButton application={application} />
                     </div>
+                    <FloatingNarrationPlayer />
                   </>
                   {isIOS() && <IosKeyboardClose />}
                 </div>

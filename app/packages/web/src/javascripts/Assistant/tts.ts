@@ -62,10 +62,28 @@ export interface TtsPlayOptions {
   rate?: number
   /** Model-TTS voice name (e.g. 'alloy'). */
   modelVoice?: string
+  /**
+   * Free-text language / dialect hint (e.g. "British English", "es-ES"). Sent to
+   * the model TTS request and applied as a BCP-47-ish `lang` on Web Speech when it
+   * looks like a language tag.
+   */
+  language?: string
+  /**
+   * Optional free-text delivery clarification (e.g. "speak slowly and clearly").
+   * For model TTS it is passed as an `instructions` field; for Web Speech we cannot
+   * honor arbitrary instructions, so it only shapes the model request.
+   */
+  clarification?: string
   /** Force a backend; default is model when available, else web-speech. */
   backend?: TtsBackend
   onState?: (state: TtsState) => void
   onError?: (message: string) => void
+  /**
+   * Fired once the model-TTS audio Blob is available (model backend only). Lets the
+   * caller persist the produced narration audio. Not called for Web Speech, which
+   * produces no downloadable audio.
+   */
+  onAudioReady?: (blob: Blob) => void
 }
 
 export interface TtsHandle {
@@ -73,18 +91,50 @@ export interface TtsHandle {
   resume: () => void
   stop: () => void
   backend: TtsBackend
+  /**
+   * Seek to an absolute time in seconds. No-op for backends that cannot seek
+   * (Web Speech). Model backend seeks the underlying <audio> element.
+   */
+  seek?: (seconds: number) => void
+  /**
+   * Subscribe to playback time updates: (currentTime, duration) in seconds.
+   * Returns an unsubscribe fn. Web Speech reports (0, 0) — it has no timeline.
+   */
+  onTime?: (cb: (current: number, duration: number) => void) => () => void
 }
 
 /**
- * Fetch model-generated speech audio for `text` and return an object URL for an
- * <audio> element. Throws on a non-OK response so the caller can fall back.
+ * Build the spoken-delivery `instructions` string sent to model TTS from a
+ * language/dialect hint and an optional free-text clarification. Pure + exported
+ * so the request shape can be unit-tested. Returns '' when there is nothing to say.
+ */
+export function buildSpeechInstructions(language?: string, clarification?: string): string {
+  const parts: string[] = []
+  const lang = (language ?? '').trim()
+  const clar = (clarification ?? '').trim()
+  if (lang) {
+    parts.push(`Speak in ${lang}.`)
+  }
+  if (clar) {
+    parts.push(clar)
+  }
+  return parts.join(' ')
+}
+
+/**
+ * Fetch model-generated speech audio for `text` and return the audio Blob. Throws
+ * on a non-OK response so the caller can fall back. A language/dialect hint and a
+ * free-text clarification are passed as `language` and `instructions` (OpenAI's
+ * gpt-4o-mini-tts honors `instructions`; servers that ignore the extra fields still
+ * produce audio).
  */
 async function fetchModelSpeech(
   application: WebApplication,
   text: string,
   modelVoice: string,
+  options: { language?: string; clarification?: string } = {},
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<Blob> {
   const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
   const apiKey = application.getPreference(PrefKey.AssistantApiKey, '')
   const url = `${baseURL.replace(/\/$/, '')}/audio/speech`
@@ -94,16 +144,26 @@ async function fetchModelSpeech(
     headers['Authorization'] = `Bearer ${apiKey.trim()}`
   }
 
+  const instructions = buildSpeechInstructions(options.language, options.clarification)
+  const body: Record<string, unknown> = {
+    model: resolveSpeechModel(application),
+    voice: modelVoice || 'alloy',
+    input: text,
+    response_format: 'mp3',
+  }
+  if (instructions) {
+    body.instructions = instructions
+  }
+  const language = (options.language ?? '').trim()
+  if (language) {
+    body.language = language
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({
-      model: resolveSpeechModel(application),
-      voice: modelVoice || 'alloy',
-      input: text,
-      response_format: 'mp3',
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!response.ok) {
@@ -116,8 +176,7 @@ async function fetchModelSpeech(
     throw new Error(`speech endpoint: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`)
   }
 
-  const blob = await response.blob()
-  return URL.createObjectURL(blob)
+  return response.blob()
 }
 
 /**
@@ -145,6 +204,7 @@ function playWithModel(
   const abort = new AbortController()
   let objectUrl: string | null = null
   let stopped = false
+  const timeListeners = new Set<(current: number, duration: number) => void>()
 
   const cleanup = () => {
     if (objectUrl) {
@@ -153,14 +213,32 @@ function playWithModel(
     }
   }
 
+  const emitTime = () => {
+    const duration = Number.isFinite(audio.duration) ? audio.duration : 0
+    for (const listener of timeListeners) {
+      listener(audio.currentTime || 0, duration)
+    }
+  }
+  audio.ontimeupdate = emitTime
+  audio.ondurationchange = emitTime
+  audio.onloadedmetadata = emitTime
+
   options.onState?.('loading')
 
-  fetchModelSpeech(application, options.text, options.modelVoice ?? '', abort.signal)
-    .then((url) => {
+  fetchModelSpeech(
+    application,
+    options.text,
+    options.modelVoice ?? '',
+    { language: options.language, clarification: options.clarification },
+    abort.signal,
+  )
+    .then((blob) => {
       if (stopped) {
-        URL.revokeObjectURL(url)
         return
       }
+      // Surface the produced audio so callers can persist/replay it.
+      options.onAudioReady?.(blob)
+      const url = URL.createObjectURL(blob)
       objectUrl = url
       audio.src = url
       audio.onplay = () => options.onState?.('playing')
@@ -197,6 +275,8 @@ function playWithModel(
         boundHandle.pause = fallback.pause
         boundHandle.resume = fallback.resume
         boundHandle.stop = fallback.stop
+        boundHandle.seek = fallback.seek
+        boundHandle.onTime = fallback.onTime
         boundHandle.backend = 'web-speech'
       } else {
         options.onError?.(error instanceof Error ? error.message : String(error))
@@ -218,7 +298,21 @@ function playWithModel(
       audio.pause()
       audio.src = ''
       cleanup()
+      timeListeners.clear()
       options.onState?.('idle')
+    },
+    seek: (seconds: number) => {
+      if (Number.isFinite(seconds)) {
+        try {
+          audio.currentTime = Math.max(0, seconds)
+        } catch {
+          /* seeking before metadata loads can throw; ignore */
+        }
+      }
+    },
+    onTime: (cb) => {
+      timeListeners.add(cb)
+      return () => timeListeners.delete(cb)
     },
   }
   return boundHandle
@@ -328,6 +422,12 @@ function playWithWebSpeech(options: TtsPlayOptions): TtsHandle {
     if (voice) {
       utterance.voice = voice
     }
+    // Apply the language hint only when it looks like a BCP-47 tag (e.g. en-GB);
+    // free-text names like "British English" are not valid SpeechSynthesis langs.
+    const langTag = (options.language ?? '').trim()
+    if (/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(langTag)) {
+      utterance.lang = langTag
+    }
     utterance.onstart = () => {
       if (!started) {
         started = true
@@ -375,6 +475,13 @@ function playWithWebSpeech(options: TtsPlayOptions): TtsHandle {
       stopKeepAlive()
       synth.cancel()
       options.onState?.('idle')
+    },
+    // Web Speech has no seekable timeline; expose inert seek/onTime so the floating
+    // player can treat both backends uniformly.
+    seek: () => undefined,
+    onTime: (cb) => {
+      cb(0, 0)
+      return () => undefined
     },
   }
 }

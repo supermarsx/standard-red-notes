@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite'
 import { SNNote } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
+import { FilesController } from '@/Controllers/FilesController'
 import Modal from '../Modal/Modal'
 import ModalOverlay from '../Modal/ModalOverlay'
 import Icon from '../Icon/Icon'
@@ -20,6 +21,9 @@ import {
   saveNarrationSettings,
   clampRate,
 } from '@/Assistant/narrationSettings'
+import { COMMON_LANGUAGES } from '@/Assistant/languages'
+import { saveNarrationToNote } from '@/Assistant/narrationAudio'
+import { narrationPlayerStore } from '../Narration/NarrationPlayerStore'
 import {
   getTtsAvailability,
   listWebSpeechVoices,
@@ -30,12 +34,13 @@ import {
 
 type Props = {
   application: WebApplication
+  filesController: FilesController
   note: SNNote
   isOpen: boolean
   close: () => void
 }
 
-const NarrationModalContent = observer(({ application, note, close }: Omit<Props, 'isOpen'>) => {
+const NarrationModalContent = observer(({ application, filesController, note, close }: Omit<Props, 'isOpen'>) => {
   const [settings, setSettings] = useState<NarrationSettings>(() => loadNarrationSettings())
   const ttsAvailability = useMemo(() => getTtsAvailability(application), [application])
   const aiAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
@@ -59,6 +64,11 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
   const [ttsError, setTtsError] = useState<string | null>(null)
   const handleRef = useRef<TtsHandle | null>(null)
 
+  // Per-narration language/dialect + clarification overrides. Seeded from the saved
+  // defaults; editing them here does not change the saved default.
+  const [language, setLanguage] = useState<string>(() => settings.language)
+  const [clarification, setClarification] = useState<string>(() => settings.clarification)
+
   // Web Speech voices often load asynchronously.
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -72,10 +82,11 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
     }
   }, [])
 
-  // Stop any in-flight audio/generation when the modal unmounts.
+  // Abort any in-flight GENERATION when the modal unmounts. Playback is intentionally
+  // NOT stopped here: it is owned by the app-wide floating player so it survives the
+  // dialog closing. The user stops it from the floating player's close button.
   useEffect(() => {
     return () => {
-      handleRef.current?.stop()
       abortRef.current?.abort()
     }
   }, [])
@@ -86,7 +97,8 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
   }, [])
 
   const stopPlayback = useCallback(() => {
-    handleRef.current?.stop()
+    // Dismiss the floating player, which owns the handle and stops it.
+    narrationPlayerStore.dismiss()
     handleRef.current = null
     setTtsState('idle')
   }, [])
@@ -98,16 +110,53 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
       }
       stopPlayback()
       setTtsError(null)
-      handleRef.current = playNarration(application, {
+      const langLabel = language.trim()
+      const handle = playNarration(application, {
         text,
         voiceURI: settings.voiceURI,
         rate: settings.rate,
         modelVoice: settings.modelVoice,
-        onState: setTtsState,
-        onError: (message) => setTtsError(message),
+        language: langLabel,
+        clarification: clarification.trim(),
+        onState: (state) => {
+          setTtsState(state)
+          narrationPlayerStore.setState(state)
+        },
+        onError: (message) => {
+          setTtsError(message)
+          narrationPlayerStore.setError(message)
+        },
+        // Persist the produced narration audio to the note (model backend only).
+        onAudioReady: (blob) => {
+          void saveNarrationToNote(filesController, note, blob, {
+            voice: settings.modelVoice,
+            language: langLabel,
+          }).then((result) => {
+            if (result.attached) {
+              addToast({ type: ToastType.Success, message: 'Narration audio saved to note.' })
+            }
+          })
+        },
+      })
+      handleRef.current = handle
+      // Drive the app-wide floating player from this narration.
+      narrationPlayerStore.start(handle, {
+        noteTitle: note.title ?? '',
+        backend: handle.backend,
+        language: langLabel,
       })
     },
-    [application, settings.voiceURI, settings.rate, settings.modelVoice, stopPlayback],
+    [
+      application,
+      filesController,
+      note,
+      settings.voiceURI,
+      settings.rate,
+      settings.modelVoice,
+      language,
+      clarification,
+      stopPlayback,
+    ],
   )
 
   const handleGenerate = useCallback(async () => {
@@ -162,10 +211,9 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
         {
           label: 'Close',
           type: 'cancel',
-          onClick: () => {
-            stopPlayback()
-            close()
-          },
+          // Leave playback running — the floating player keeps it controllable after
+          // the dialog closes. The user stops it from the floating player.
+          onClick: () => close(),
           mobileSlot: 'left',
         },
       ]}
@@ -192,6 +240,40 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
             ))}
           </select>
           <span className="text-xs text-passive-0">{getNarrationStyle(styleId).description}</span>
+        </div>
+
+        {/* Language / dialect + free-text clarification (override the saved default). */}
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <label className="text-sm font-semibold">Language / dialect</label>
+            <input
+              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              type="text"
+              list="narration-language-list"
+              value={language}
+              placeholder="e.g. British English, es-ES (optional)"
+              onChange={(event) => setLanguage(event.target.value)}
+            />
+            <datalist id="narration-language-list">
+              {COMMON_LANGUAGES.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+            <span className="text-xs text-passive-0">
+              Hints the voice/accent. Any free text or a language code is accepted.
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <label className="text-sm font-semibold">Clarification (optional)</label>
+            <input
+              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              type="text"
+              value={clarification}
+              placeholder="e.g. speak slowly and clearly"
+              onChange={(event) => setClarification(event.target.value)}
+            />
+            <span className="text-xs text-passive-0">Delivery instruction sent to a model voice.</span>
+          </div>
         </div>
 
         {/* Generate / raw note actions */}
@@ -316,10 +398,15 @@ const NarrationModalContent = observer(({ application, note, close }: Omit<Props
   )
 })
 
-const NarrationModal = ({ application, note, isOpen, close }: Props) => {
+const NarrationModal = ({ application, filesController, note, isOpen, close }: Props) => {
   return (
     <ModalOverlay isOpen={isOpen} close={close} className="md:max-w-[36rem]">
-      <NarrationModalContent application={application} note={note} close={close} />
+      <NarrationModalContent
+        application={application}
+        filesController={filesController}
+        note={note}
+        close={close}
+      />
     </ModalOverlay>
   )
 }

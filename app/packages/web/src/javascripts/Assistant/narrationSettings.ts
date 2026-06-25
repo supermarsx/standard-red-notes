@@ -22,6 +22,17 @@ export interface NarrationSettings {
   rate: number
   /** Preferred model-TTS voice name (e.g. OpenAI 'alloy'). Empty = endpoint default. */
   modelVoice: string
+  /**
+   * Default language / dialect for narration (e.g. "English", "British English",
+   * "es-ES"). Free text — used to hint the TTS provider and to label the player.
+   * Empty means "let the provider/voice pick".
+   */
+  language: string
+  /**
+   * Optional default free-text clarification prepended to the TTS request as a
+   * spoken-delivery instruction (e.g. "speak slowly and clearly"). Empty = none.
+   */
+  clarification: string
 }
 
 export const DEFAULT_NARRATION_SETTINGS: NarrationSettings = {
@@ -29,6 +40,8 @@ export const DEFAULT_NARRATION_SETTINGS: NarrationSettings = {
   voiceURI: '',
   rate: 1,
   modelVoice: 'alloy',
+  language: '',
+  clarification: '',
 }
 
 const RATE_MIN = 0.5
@@ -59,6 +72,9 @@ export function loadNarrationSettings(): NarrationSettings {
       voiceURI: typeof parsed.voiceURI === 'string' ? parsed.voiceURI : DEFAULT_NARRATION_SETTINGS.voiceURI,
       rate: clampRate(typeof parsed.rate === 'number' ? parsed.rate : DEFAULT_NARRATION_SETTINGS.rate),
       modelVoice: typeof parsed.modelVoice === 'string' ? parsed.modelVoice : DEFAULT_NARRATION_SETTINGS.modelVoice,
+      language: typeof parsed.language === 'string' ? parsed.language : DEFAULT_NARRATION_SETTINGS.language,
+      clarification:
+        typeof parsed.clarification === 'string' ? parsed.clarification : DEFAULT_NARRATION_SETTINGS.clarification,
     }
   } catch {
     return { ...DEFAULT_NARRATION_SETTINGS }

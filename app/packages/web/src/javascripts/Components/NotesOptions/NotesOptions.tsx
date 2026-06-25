@@ -217,6 +217,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
       {notes.length === 1 && (
         <NarrationModal
           application={application}
+          filesController={application.filesController}
           note={notes[0]}
           isOpen={narrationOpen}
           close={() => setNarrationOpen(false)}
