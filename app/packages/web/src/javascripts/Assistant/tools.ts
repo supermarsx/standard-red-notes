@@ -10,13 +10,27 @@ import {
   ItemContent,
   isNote,
   isTag,
+  FeatureStatus,
 } from '@standardnotes/snjs'
+import { NativeFeatureIdentifier, NoteType } from '@standardnotes/features'
 import { WebApplication } from '@/Application/WebApplication'
 import { doesItemMatchSearchQuery } from '@/Utils/Items/Search/doesItemMatchSearchQuery'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ToolDefinition, ToolSession } from './types'
 import { retrieve } from './retrieval'
+import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
+import {
+  Reminder,
+  Recurrence,
+  RecurrenceFrequency,
+  RecurrenceUnit,
+  getNoteReminders,
+  generateReminderId,
+  describeRecurrence,
+} from '@/Reminders/reminders'
+import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
+import { webSearch, webFetch } from './webTools'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -56,6 +70,9 @@ const PANE_NAVIGATION_TARGETS: Record<string, AppPaneId> = {
 
 const NOTE_ACTIONS = ['pin', 'unpin', 'archive', 'unarchive', 'star', 'unstar', 'trash', 'untrash'] as const
 type NoteAction = (typeof NOTE_ACTIONS)[number]
+
+const RECURRENCE_FREQUENCIES: RecurrenceFrequency[] = ['none', 'daily', 'weekly', 'monthly', 'yearly', 'custom']
+const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
 
 export interface AssistantToolContext {
   /** Whether mutating tools require user confirmation before executing. */
@@ -120,6 +137,29 @@ export class AssistantTools implements ToolSession {
 
   private todos: TodoItem[] = []
 
+  /**
+   * Lazily-created headless Super converter. We construct one directly (the same
+   * pattern as NoteExportUtils / SuperNoteConverter) rather than reaching into the
+   * private DI container; spinning one up only when a Super tool is first used.
+   */
+  private _superConverter?: HeadlessSuperConverter
+
+  private get superConverter(): HeadlessSuperConverter {
+    if (!this._superConverter) {
+      this._superConverter = new HeadlessSuperConverter()
+    }
+    return this._superConverter
+  }
+
+  /** True if the SuperEditor feature is entitled (Super notes can be created). */
+  private canUseSuper(): boolean {
+    return (
+      this.application.features.getFeatureStatus(
+        NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue(),
+      ) === FeatureStatus.Entitled
+    )
+  }
+
   tools(): ToolDefinition[] {
     if (this.enableDelegate && this.context.runSubAgent) {
       return [...TOOL_DEFINITIONS, DELEGATE_TOOL]
@@ -156,8 +196,24 @@ export class AssistantTools implements ToolSession {
         return this.notesCreate(args)
       case 'notes.update':
         return this.notesUpdate(args)
+      case 'notes.createSuper':
+        return this.notesCreateSuper(args)
+      case 'notes.updateSuper':
+        return this.notesUpdateSuper(args)
+      case 'notes.readSuper':
+        return this.notesReadSuper(args)
       case 'notes.delete':
         return this.notesDelete(args)
+      case 'reminders.set':
+        return this.remindersSet(args)
+      case 'reminders.list':
+        return this.remindersList(args)
+      case 'reminders.clear':
+        return this.remindersClear(args)
+      case 'web.search':
+        return this.webSearch(args)
+      case 'web.fetch':
+        return this.webFetch(args)
       case 'tags.list':
         return this.tagsList()
       case 'tags.create':
@@ -281,18 +337,41 @@ export class AssistantTools implements ToolSession {
   }
 
   private async notesCreate(args: Record<string, unknown>) {
+    // `format: 'super'` routes to the Markdown -> Super conversion path so the
+    // model never has to hand-write Lexical JSON.
+    if (args.format === 'super') {
+      return this.notesCreateSuper(args)
+    }
+
     const title = typeof args.title === 'string' ? args.title : ''
     const text = typeof args.text === 'string' ? args.text : ''
+    // Optional editorIdentifier lets the agent create a typed note (e.g. the
+    // Calendar note type 'org.standardnotes.calendar'). We only honor it when the
+    // feature is entitled, mirroring the Importer's guard, so an unavailable type
+    // silently falls back to a plain note rather than producing a broken one.
+    const requestedEditor = typeof args.editorIdentifier === 'string' ? args.editorIdentifier : undefined
+    const editorIdentifier =
+      requestedEditor &&
+      this.application.features.getFeatureStatus(NativeFeatureIdentifier.create(requestedEditor).getValue()) ===
+        FeatureStatus.Entitled
+        ? requestedEditor
+        : undefined
+
     const template = this.application.items.createTemplateItem<NoteContent, SNNote>(ContentType.TYPES.Note, {
       title,
       text,
       references: [],
+      editorIdentifier,
     })
     const note = await this.application.mutator.insertItem<SNNote>(template)
-    return { ok: true, note: noteSummary(note) }
+    return { ok: true, note: noteSummary(note), editorIdentifier: editorIdentifier ?? null }
   }
 
   private async notesUpdate(args: Record<string, unknown>) {
+    if (args.format === 'super') {
+      return this.notesUpdateSuper(args)
+    }
+
     const note = this.requireNote(args.uuid)
     const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
       if (typeof args.title === 'string') {
@@ -305,10 +384,261 @@ export class AssistantTools implements ToolSession {
     return { ok: true, note: noteSummary(updated) }
   }
 
+  /**
+   * Create a Super (Lexical) note from MARKDOWN. The model supplies markdown
+   * (which may contain ```mermaid fenced blocks — those become MermaidNodes for
+   * free via the existing MarkdownTransformers); we convert it to Super JSON with
+   * the HeadlessSuperConverter and store it as note.text with the right noteType +
+   * editorIdentifier (mirroring Importer.ts). Falls back to a plain note (the raw
+   * markdown) when the SuperEditor feature is not entitled.
+   */
+  private async notesCreateSuper(args: Record<string, unknown>) {
+    const title = typeof args.title === 'string' ? args.title : ''
+    const markdown = typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : ''
+
+    if (!this.canUseSuper()) {
+      const template = this.application.items.createTemplateItem<NoteContent, SNNote>(ContentType.TYPES.Note, {
+        title,
+        text: markdown,
+        references: [],
+      })
+      const plain = await this.application.mutator.insertItem<SNNote>(template)
+      return {
+        ok: true,
+        note: noteSummary(plain),
+        super: false,
+        warning: 'The Super editor is not available; created a plain-text note with the markdown instead.',
+      }
+    }
+
+    let superText: string
+    try {
+      superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
+    } catch (error) {
+      throw new Error(`Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    const template = this.application.items.createTemplateItem<NoteContent, SNNote>(ContentType.TYPES.Note, {
+      title,
+      text: superText,
+      references: [],
+      noteType: NoteType.Super,
+      editorIdentifier: NativeFeatureIdentifier.TYPES.SuperEditor,
+    })
+    const note = await this.application.mutator.insertItem<SNNote>(template)
+    return { ok: true, note: noteSummary(note), super: true }
+  }
+
+  /**
+   * Update a Super note from MARKDOWN. The model is given the round-tripped
+   * markdown (via notes.readSuper) to edit, and passes the full edited markdown
+   * back here; we convert it to Super JSON and store it. If the target note is not
+   * yet a Super note it is converted into one.
+   */
+  private async notesUpdateSuper(args: Record<string, unknown>) {
+    const note = this.requireNote(args.uuid)
+    const markdown = typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : ''
+
+    if (!this.canUseSuper()) {
+      throw new Error('The Super editor is not available, so this note cannot be saved as Super.')
+    }
+
+    let superText: string
+    try {
+      superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
+    } catch (error) {
+      throw new Error(`Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
+      if (typeof args.title === 'string') {
+        mutator.title = args.title
+      }
+      mutator.text = superText
+      mutator.noteType = NoteType.Super
+      mutator.editorIdentifier = NativeFeatureIdentifier.TYPES.SuperEditor
+    })
+    return { ok: true, note: noteSummary(updated), super: true }
+  }
+
+  /**
+   * Read a Super note as MARKDOWN so the model can edit it and pass the result to
+   * notes.updateSuper. For a non-Super note this just returns its raw text.
+   */
+  private async notesReadSuper(args: Record<string, unknown>) {
+    const note = this.requireNote(args.uuid)
+    if (note.noteType !== NoteType.Super) {
+      return { ...noteSummary(note), super: false, markdown: note.text }
+    }
+    try {
+      const markdown = await this.superConverter.convertSuperStringToOtherFormat(note.text, 'md')
+      return { ...noteSummary(note), super: true, markdown }
+    } catch (error) {
+      throw new Error(`Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private async notesDelete(args: Record<string, unknown>) {
     const note = this.requireNote(args.uuid)
     await this.application.mutator.deleteItem(note)
     return { ok: true, deleted: note.uuid }
+  }
+
+  /**
+   * Resolve a note from either a uuid or a (case-insensitive) title. Reminders
+   * tools accept a title for convenience; an ambiguous title (>1 match) is an
+   * error so we never set a reminder on the wrong note.
+   */
+  private resolveNote(args: Record<string, unknown>): SNNote {
+    if (typeof args.uuid === 'string' && args.uuid) {
+      return this.requireNote(args.uuid)
+    }
+    const title = typeof args.title === 'string' ? args.title.trim() : ''
+    if (!title) {
+      throw new Error('A note "uuid" or "title" is required')
+    }
+    const matches = this.allNotes().filter((n) => !n.trashed && n.title.trim().toLowerCase() === title.toLowerCase())
+    if (matches.length === 0) {
+      throw new Error(`No note found with title: ${title}`)
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Multiple notes are titled "${title}" (${matches.length}). Pass the note "uuid" instead: ${matches
+          .map((n) => n.uuid)
+          .join(', ')}`,
+      )
+    }
+    return matches[0]
+  }
+
+  private parseRecurrence(value: unknown): Recurrence | undefined {
+    if (!value || typeof value !== 'object') {
+      return undefined
+    }
+    const raw = value as Record<string, unknown>
+    const frequency = RECURRENCE_FREQUENCIES.includes(raw.frequency as RecurrenceFrequency)
+      ? (raw.frequency as RecurrenceFrequency)
+      : 'none'
+    if (frequency === 'none') {
+      return undefined
+    }
+    if (frequency === 'custom') {
+      const interval = typeof raw.interval === 'number' && raw.interval >= 1 ? Math.floor(raw.interval) : 1
+      const unit = RECURRENCE_UNITS.includes(raw.unit as RecurrenceUnit) ? (raw.unit as RecurrenceUnit) : 'day'
+      return { frequency: 'custom', interval, unit }
+    }
+    return { frequency }
+  }
+
+  private reminderSummary(reminder: Reminder) {
+    return {
+      id: reminder.id,
+      dueAt: reminder.dueAt,
+      message: reminder.message,
+      notified: reminder.notified === true,
+      recurrence: describeRecurrence(reminder.recurrence) ?? 'does not repeat',
+      email: typeof reminder.emailReminderId === 'string',
+    }
+  }
+
+  /**
+   * Set (or update) a reminder on a note. Persists via the same synced appData
+   * path the UI uses (notesController.upsertNoteReminder). Optionally also
+   * registers the reminder for EMAIL delivery, which sends its time + message to
+   * the server in PLAINTEXT (out of end-to-end encryption) — only when the model
+   * passes `email: true` AND the user has an account.
+   */
+  private async remindersSet(args: Record<string, unknown>) {
+    const note = this.resolveNote(args)
+
+    const datetime = typeof args.datetime === 'string' ? args.datetime : ''
+    if (!datetime) {
+      throw new Error('A "datetime" (ISO 8601 string) is required')
+    }
+    const due = new Date(datetime)
+    if (Number.isNaN(due.getTime())) {
+      throw new Error(`Could not parse "datetime": ${datetime}. Use an ISO 8601 string like 2026-07-01T09:00:00.`)
+    }
+    const dueIso = due.toISOString()
+    const message = typeof args.message === 'string' && args.message.trim() ? args.message.trim() : undefined
+    const recurrence = this.parseRecurrence(args.recurrence)
+
+    const reminder: Reminder = {
+      id: generateReminderId(),
+      dueAt: dueIso,
+      message,
+      notified: false,
+      recurrence,
+    }
+
+    const wantsEmail = args.email === true
+    let emailWarning: string | undefined
+    if (wantsEmail) {
+      if (!this.application.hasAccount()) {
+        emailWarning = 'Email delivery was requested but skipped: an account is required to receive emails.'
+      } else {
+        const emailId = await createEmailReminder(this.application, dueIso, message || 'Reminder')
+        if (emailId) {
+          reminder.emailReminderId = emailId
+        } else {
+          emailWarning = 'The reminder was saved, but it could not be registered for email delivery.'
+        }
+      }
+    }
+
+    await this.application.notesController.upsertNoteReminder(note, reminder)
+
+    return {
+      ok: true,
+      noteUuid: note.uuid,
+      reminder: this.reminderSummary(reminder),
+      ...(emailWarning ? { warning: emailWarning } : {}),
+    }
+  }
+
+  /** List the reminders on a note (or, with no note given, across all notes). */
+  private remindersList(args: Record<string, unknown>) {
+    const hasTarget = (typeof args.uuid === 'string' && args.uuid) || (typeof args.title === 'string' && args.title)
+    if (hasTarget) {
+      const note = this.resolveNote(args)
+      const reminders = getNoteReminders(note)
+      return { noteUuid: note.uuid, count: reminders.length, reminders: reminders.map((r) => this.reminderSummary(r)) }
+    }
+    const all = this.allNotes()
+      .filter((n) => !n.trashed)
+      .flatMap((note) =>
+        getNoteReminders(note).map((reminder) => ({
+          noteUuid: note.uuid,
+          noteTitle: note.title,
+          ...this.reminderSummary(reminder),
+        })),
+      )
+      .sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
+    return { count: all.length, reminders: all }
+  }
+
+  /** Clear all reminders from a note (best-effort cancels any email records). */
+  private async remindersClear(args: Record<string, unknown>) {
+    const note = this.resolveNote(args)
+    const existing = getNoteReminders(note)
+    for (const reminder of existing) {
+      if (reminder.emailReminderId) {
+        await deleteEmailReminder(this.application, reminder.emailReminderId)
+      }
+    }
+    await this.application.notesController.clearNoteReminders(note)
+    return { ok: true, noteUuid: note.uuid, cleared: existing.length }
+  }
+
+  private async webSearch(args: Record<string, unknown>) {
+    const query = typeof args.query === 'string' ? args.query : ''
+    const limit = typeof args.limit === 'number' ? args.limit : undefined
+    return webSearch(this.application, query, { limit })
+  }
+
+  private async webFetch(args: Record<string, unknown>) {
+    const url = typeof args.url === 'string' ? args.url : ''
+    return webFetch(this.application, url)
   }
 
   private tagsList() {
@@ -506,19 +836,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'notes.create',
-    description: 'Create a new note with a title and text.',
+    description:
+      'Create a new note. By default the text is stored as PLAIN text. Pass format:"super" together with `markdown` (instead of `text`) to create a rich Super note from markdown — including ```mermaid fenced blocks, which become live diagrams (prefer notes.createSuper for this). Optionally pass editorIdentifier to create a typed note (e.g. "org.standardnotes.calendar" for a Calendar note).',
     mutating: true,
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
-        text: { type: 'string' },
+        text: { type: 'string', description: 'Plain-text body (for the default plain note).' },
+        format: { type: 'string', enum: ['plain', 'super'], description: 'Use "super" to convert `markdown` into a rich Super note.' },
+        markdown: { type: 'string', description: 'Markdown body when format is "super" (supports ```mermaid blocks).' },
+        editorIdentifier: {
+          type: 'string',
+          description: 'Optional note-type editor identifier, e.g. "org.standardnotes.calendar". Ignored if the feature is unavailable.',
+        },
       },
     },
   },
   {
     name: 'notes.update',
-    description: 'Update the title and/or text of an existing note by uuid.',
+    description:
+      'Update the title and/or text of an existing note by uuid. Pass format:"super" with `markdown` to (re)write the note as a rich Super note (prefer notes.updateSuper, which round-trips existing content to markdown first).',
     mutating: true,
     inputSchema: {
       type: 'object',
@@ -526,7 +864,49 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         uuid: { type: 'string' },
         title: { type: 'string' },
         text: { type: 'string' },
+        format: { type: 'string', enum: ['plain', 'super'] },
+        markdown: { type: 'string', description: 'Markdown body when format is "super".' },
       },
+      required: ['uuid'],
+    },
+  },
+  {
+    name: 'notes.createSuper',
+    description:
+      'Create a rich Super (Lexical) note from MARKDOWN. The markdown may contain headings, lists, tables, code, and ```mermaid fenced blocks (which render as live Mermaid diagrams). This is the correct way to author formatted/diagram notes — do NOT write Lexical JSON into a plain note.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        markdown: { type: 'string', description: 'The note body as markdown. Use a ```mermaid block for a diagram.' },
+      },
+      required: ['markdown'],
+    },
+  },
+  {
+    name: 'notes.updateSuper',
+    description:
+      'Rewrite a note as a rich Super note from MARKDOWN. To edit an existing Super note, first call notes.readSuper to get its markdown, edit that, then pass the full edited markdown back here.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string' },
+        title: { type: 'string' },
+        markdown: { type: 'string', description: 'The full new note body as markdown (supports ```mermaid).' },
+      },
+      required: ['uuid', 'markdown'],
+    },
+  },
+  {
+    name: 'notes.readSuper',
+    description:
+      'Read a Super note as MARKDOWN (round-tripped from its Lexical JSON) so you can edit it and pass the result to notes.updateSuper. For a non-Super note it returns the raw text.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: { uuid: { type: 'string' } },
       required: ['uuid'],
     },
   },
@@ -653,6 +1033,82 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ['todos'],
+    },
+  },
+  {
+    name: 'reminders.set',
+    description:
+      'Set a reminder on a note (identified by uuid or exact title) for a given datetime. Reminders sync across devices. Optionally repeat (recurrence) and optionally deliver by email (email:true sends the time + message to the server in PLAINTEXT, leaving end-to-end encryption — only do this when the user explicitly asks).',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string', description: 'The note uuid (preferred).' },
+        title: { type: 'string', description: 'The exact note title (used only if uuid is omitted).' },
+        datetime: { type: 'string', description: 'When the reminder is due, as an ISO 8601 string (e.g. 2026-07-01T09:00:00).' },
+        message: { type: 'string', description: 'Optional reminder message.' },
+        recurrence: {
+          type: 'object',
+          description: 'Optional repeat schedule. Omit (or frequency:"none") for a one-shot reminder.',
+          properties: {
+            frequency: { type: 'string', enum: [...RECURRENCE_FREQUENCIES] },
+            interval: { type: 'number', description: 'For frequency "custom": how many units between occurrences (>= 1).' },
+            unit: { type: 'string', enum: [...RECURRENCE_UNITS], description: 'For frequency "custom": the interval unit.' },
+          },
+        },
+        email: { type: 'boolean', description: 'Also deliver this reminder by email (requires an account; sends time + message in plaintext).' },
+      },
+      required: ['datetime'],
+    },
+  },
+  {
+    name: 'reminders.list',
+    description:
+      'List reminders. With a note uuid/title, lists that note\'s reminders; with no note, lists all reminders across notes, soonest first.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string' },
+        title: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'reminders.clear',
+    description: 'Remove all reminders from a note (identified by uuid or exact title). Also cancels any email-delivery records.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string' },
+        title: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'web.search',
+    description:
+      'Search the web for a query and get back a list of {title, url, snippet}. Runs via the server (the query leaves end-to-end encryption). Use this for facts the user notes do not contain; then web.fetch a result url for full content. Returns {error} (not an exception) if web tools are unavailable.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'number', description: 'Optional max number of results.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web.fetch',
+    description:
+      'Fetch a single web page (absolute http(s) url) and get back {title, text} (readable extracted text). Runs via the server (the url leaves end-to-end encryption). Returns {error} (not an exception) if the page cannot be fetched or web tools are unavailable.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
     },
   },
 ]
