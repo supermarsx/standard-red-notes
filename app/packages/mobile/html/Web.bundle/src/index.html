@@ -8,13 +8,24 @@
     <meta content="#ffffff" name="theme-color" />
     <link rel="stylesheet" href="web-src/app.css" />
     <script>
-        window.defaultSyncServer = "https://api.standardnotes.com";
-        window.defaultFilesHost = "https://files.standardnotes.com";
+        // Self-hosted fork: do NOT default to hosted Standard Notes servers.
+        //
+        // The default sync/files server is resolved at BUILD TIME from the
+        // `DEFAULT_SYNC_SERVER` / `DEFAULT_FILES_HOST` env vars. The build step
+        // substitutes the `__DEFAULT_SYNC_SERVER__` / `__DEFAULT_FILES_HOST__`
+        // placeholders below (see `scripts/configure-web-bundle.js`). If the env
+        // var is unset, the placeholder resolves to an empty string, which makes
+        // the in-app server picker fall back to "custom" so the user must enter
+        // their own self-hosted server URL. No SN host is hardcoded here.
+        var __defaultSyncServer = "__DEFAULT_SYNC_SERVER__";
+        var __defaultFilesHost = "__DEFAULT_FILES_HOST__";
+        window.defaultSyncServer = __defaultSyncServer.indexOf("__DEFAULT") === 0 ? "" : __defaultSyncServer;
+        window.defaultFilesHost = __defaultFilesHost.indexOf("__DEFAULT") === 0 ? "" : __defaultFilesHost;
         window.enabledUnfinishedFeatures = "" === 'true';
         window.websocketUrl = "";
-        window.purchaseUrl = "https://standardnotes.com/purchase";
-        window.plansUrl = "https://standardnotes.com/plans";
-        window.dashboardUrl = "https://standardnotes.com/dashboard";
+        window.purchaseUrl = "";
+        window.plansUrl = "";
+        window.dashboardUrl = "";
     </script>
     <script>
         window.onerror = function (message, source, lineno, colno, error) {

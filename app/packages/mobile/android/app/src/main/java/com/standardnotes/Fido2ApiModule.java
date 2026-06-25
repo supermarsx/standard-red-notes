@@ -44,7 +44,11 @@ public class Fido2ApiModule extends ReactContextBaseJavaModule {
   private static final int SIGN_REQUEST_CODE = 111;
 
   private static final String LOGS_TAG = "Fido2ApiModule";
-  private static final String RP_ID = "app.standardnotes.com";
+  // WebAuthn Relying Party ID for U2F / passkey sign-in. Self-hosted fork:
+  // this MUST match the operator's own self-hosted web app domain. Replace
+  // app.example.com with your domain (it must also serve a matching
+  // /.well-known/assetlinks.json) for hardware-key sign-in to work.
+  private static final String RP_ID = "app.example.com";
 
   private Promise signInPromise;
 

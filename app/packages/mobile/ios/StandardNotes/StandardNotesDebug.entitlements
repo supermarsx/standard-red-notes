@@ -2,9 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Self-hosted fork: associated domain for password autofill / shared web
+	     credentials. Operators MUST replace app.example.com with their own
+	     self-hosted web app domain (which serves /.well-known/apple-app-site-association)
+	     for iOS password autofill / deep links to work. Neutral placeholder by default. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>webcredentials:app.standardnotes.com</string>
+		<string>webcredentials:app.example.com</string>
 	</array>
 	<key>com.apple.developer.default-data-protection</key>
 	<string>NSFileProtectionComplete</string>

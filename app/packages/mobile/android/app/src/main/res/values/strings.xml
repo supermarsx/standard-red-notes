@@ -1,9 +1,16 @@
 <resources>
     <string name="app_name">Standard Notes</string>
 
+    <!--
+      Digital Asset Links for password autofill / app-link verification.
+      Self-hosted fork: this points at a neutral placeholder domain instead of
+      the hosted Standard Notes domain. Operators must replace app.example.com
+      with their own self-hosted web app domain that serves
+      /.well-known/assetlinks.json for autofill/deep links to work.
+    -->
     <string name="asset_statements" translatable="false">
 [{
-  \"include\": \"https://app.standardnotes.com/.well-known/assetlinks.json\"
+  \"include\": \"https://app.example.com/.well-known/assetlinks.json\"
 }]
 </string>
 </resources>
