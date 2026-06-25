@@ -43,18 +43,21 @@ export const $collectSelectedLineBlocks = (selection: RangeSelection): ElementNo
 }
 
 /**
- * Sort or deduplicate the line blocks spanned by `selection`. Rewrites each
- * block's text in the new order; surplus blocks (after a dedupe) are removed.
- * Returns true if the document changed.
+ * Apply an arbitrary line transform to the line blocks spanned by `selection`:
+ * collect them, run `transform` on their text, then rewrite each block in the new
+ * order (surplus blocks are removed). Returns true if the document changed.
  */
-export const $transformSelectedLines = (selection: RangeSelection, operation: LineOperation): boolean => {
+export const $applyLineTransform = (
+  selection: RangeSelection,
+  transform: (texts: string[]) => string[],
+): boolean => {
   const blocks = $collectSelectedLineBlocks(selection)
   if (blocks.length < 2) {
     return false
   }
 
   const texts = blocks.map((block) => block.getTextContent())
-  const result = applyLineOperation(texts, operation)
+  const result = transform(texts)
   if (result.length === texts.length && result.every((line, index) => line === texts[index])) {
     return false
   }
@@ -73,3 +76,10 @@ export const $transformSelectedLines = (selection: RangeSelection, operation: Li
   $setSelection(null)
   return true
 }
+
+/**
+ * Sort or deduplicate the line blocks spanned by `selection`. Returns true if the
+ * document changed.
+ */
+export const $transformSelectedLines = (selection: RangeSelection, operation: LineOperation): boolean =>
+  $applyLineTransform(selection, (texts) => applyLineOperation(texts, operation))

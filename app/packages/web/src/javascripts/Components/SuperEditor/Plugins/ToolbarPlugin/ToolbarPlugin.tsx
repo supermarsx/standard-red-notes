@@ -81,6 +81,7 @@ import { WebEmbedBlock } from '../Blocks/WebEmbed'
 import { TweetEmbedBlock } from '../Blocks/TweetEmbed'
 import { MathBlock } from '../Blocks/Math'
 import { InlineMathBlock } from '../Blocks/InlineMath'
+import { MermaidBlock } from '../Blocks/Mermaid'
 import { FootnoteBlock } from '../Blocks/Footnote'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
@@ -90,7 +91,9 @@ import MenuItem, { MenuItemProps } from '@/Components/Menu/MenuItem'
 import { debounce, remToPx } from '@/Utils'
 import LinkEditor, { $isLinkTextNode } from './LinkEditor'
 import { LINE_DEDUPE_MODES, LINE_SORT_MODES, LineOperation } from './LineOperations'
-import { $transformSelectedLines } from './LineTransform'
+import { $applyLineTransform, $transformSelectedLines } from './LineTransform'
+import { multiKeySort, MultiKeySortOptions } from './LineSortMultiKey'
+import MultiKeySortDialog from './MultiKeySortDialog'
 import { $applyFontSizeToSelection, clampFontSize, FONT_SIZE_PRESETS, FONT_SIZE_STEP, parseFontSize } from './FontSize'
 import { getSuperHistoryStore, HISTORY_DROPDOWN_LIMIT } from '../HistoryPlugin/SuperHistory'
 import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
@@ -384,6 +387,9 @@ const ToolbarPlugin = () => {
 
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false)
   const sortAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const [isTypographyMenuOpen, setIsTypographyMenuOpen] = useState(false)
+  const typographyAnchorRef = useRef<HTMLButtonElement>(null)
 
   // Word-style floating mini-toolbar (shown on text selection): a compact "More"
   // overflow menu hosting the less-common quick-format actions.
@@ -707,6 +713,22 @@ const ToolbarPlugin = () => {
     [activeEditor],
   )
 
+  // Toggle a CSS property on/off across the selection (used for emphasis marks
+  // and the text outline, which have no Lexical command).
+  const toggleSelectionStyle = useCallback(
+    (property: string, onValue: string) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection)) {
+          return
+        }
+        const current = $getSelectionStyleValueForProperty(selection, property, '')
+        $patchStyleText(selection, { [property]: current ? null : onValue })
+      })
+    },
+    [activeEditor],
+  )
+
   const stepFontSize = useCallback(
     (direction: 1 | -1) => {
       activeEditor.update(() => {
@@ -816,6 +838,33 @@ const ToolbarPlugin = () => {
     },
     [activeEditor],
   )
+
+  // Word-style multi-key sort of the selected lines (sort by / then by / then by).
+  const sortLinesMultiKey = useCallback(
+    (options: MultiKeySortOptions) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection) || selection.isCollapsed()) {
+          return
+        }
+        $applyLineTransform(selection, (texts) => multiKeySort(texts, options))
+      })
+    },
+    [activeEditor],
+  )
+
+  const openMultiKeySortDialog = useCallback(() => {
+    setIsSortMenuOpen(false)
+    showModal('Sort lines', (onClose) => (
+      <MultiKeySortDialog
+        onApply={(options) => {
+          sortLinesMultiKey(options)
+          onClose()
+        }}
+        onClose={onClose}
+      />
+    ))
+  }, [showModal, sortLinesMultiKey])
 
   const handleClipboardCopy = useCallback(() => {
     activeEditor.getEditorState().read(() => {
@@ -1391,6 +1440,17 @@ const ToolbarPlugin = () => {
         </span>
       </ToolbarButton>
     ),
+    [ToolbarButtonId.Typography]: (
+      <ToolbarButton
+        name="Typography — emphasis, outline, letter & word spacing"
+        onSelect={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
+        ref={typographyAnchorRef}
+        className={isTypographyMenuOpen ? 'md:bg-default' : ''}
+      >
+        <span className="text-sm font-semibold italic leading-none">Tt</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
     [ToolbarButtonId.FontSize]: (
       <div
         className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-border bg-default focus-within:border-info md:h-7"
@@ -1491,6 +1551,14 @@ const ToolbarPlugin = () => {
         iconName="list-numbered"
         active={blockType === 'number'}
         onSelect={() => toggleList('number')}
+      />
+    ),
+    [ToolbarButtonId.Quote]: (
+      <ToolbarButton
+        name="Quote"
+        iconName="quote"
+        active={blockType === 'quote'}
+        onSelect={() => QuoteBlock.onSelect(editor)}
       />
     ),
     [ToolbarButtonId.CodeBlock]: (
@@ -1946,12 +2014,12 @@ const ToolbarPlugin = () => {
             is active, its tailored actions get a dedicated row labelled with the
             element type, instead of being crammed onto the main toolbar. */}
         {contextualWidget && contextualButtons.length > 0 && (
-          <div className="flex w-full flex-shrink-0 items-center gap-1.5 border-t border-border px-1 py-0.5">
-            <span className="flex-shrink-0 select-none whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info">
+          <div className="flex w-full flex-shrink-0 items-start gap-1.5 border-t border-border px-1 py-0.5">
+            <span className="mt-0.5 flex-shrink-0 select-none whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info">
               {contextualWidget.label}
             </span>
             <Toolbar
-              className="super-toolbar flex items-center gap-0.5 overflow-x-auto"
+              className="super-toolbar flex flex-1 flex-wrap items-center gap-0.5 gap-y-1"
               store={contextualToolbarStore}
               aria-label={`${contextualWidget.label} tools`}
             >
@@ -2288,6 +2356,11 @@ const ToolbarPlugin = () => {
             onClick={() => InlineMathBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
+            name={MermaidBlock.name}
+            iconName={MermaidBlock.iconName}
+            onClick={() => MermaidBlock.onSelect(editor)}
+          />
+          <ToolbarMenuItem
             name={FootnoteBlock.name}
             iconName={FootnoteBlock.iconName}
             onClick={() => FootnoteBlock.onSelect(editor)}
@@ -2546,7 +2619,97 @@ const ToolbarPlugin = () => {
               <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
             </MenuItem>
           ))}
+          <MenuItemSeparator />
+          <MenuItem
+            className="overflow-hidden hover:bg-contrast md:py-2"
+            onClick={openMultiKeySortDialog}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">Multi-key sort (1st, 2nd, 3rd)…</span>
+          </MenuItem>
         </Menu>
+      </Popover>
+      <Popover
+        title="Typography"
+        anchorElement={typographyAnchorRef}
+        open={isTypographyMenuOpen}
+        togglePopover={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          <button
+            type="button"
+            className="rounded px-3 py-1.5 text-left hover:bg-contrast"
+            onClick={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
+          >
+            Emphasis marks
+          </button>
+          <button
+            type="button"
+            className="rounded px-3 py-1.5 text-left hover:bg-contrast"
+            onClick={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
+          >
+            Outline (text stroke)
+          </button>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Letter spacing (kerning)</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {[
+              { label: 'Tight', value: '-0.5px' },
+              { label: 'Normal', value: '0' },
+              { label: 'Wide', value: '0.5px' },
+              { label: 'Wider', value: '1px' },
+              { label: 'Widest', value: '2px' },
+            ].map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => applyStyleText({ 'letter-spacing': preset.value })}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Word spacing</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {[
+              { label: 'Normal', value: '0' },
+              { label: 'Wide', value: '2px' },
+              { label: 'Wider', value: '4px' },
+              { label: 'Widest', value: '8px' },
+            ].map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => applyStyleText({ 'word-spacing': preset.value })}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mt-1 rounded px-3 py-1.5 text-left text-danger hover:bg-contrast"
+            onClick={() =>
+              applyStyleText({
+                'text-emphasis': null,
+                '-webkit-text-stroke': null,
+                'letter-spacing': null,
+                'word-spacing': null,
+              })
+            }
+          >
+            Clear typography
+          </button>
+        </div>
       </Popover>
       <Popover
         title="Undo history"

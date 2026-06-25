@@ -48,9 +48,11 @@ export enum ToolbarButtonId {
   IncreaseFontSize = 'increaseFontSize',
   FontFamily = 'fontFamily',
   FontSize = 'fontSize',
+  Typography = 'typography',
   // Paragraph / list
   BulletedList = 'bulletedList',
   NumberedList = 'numberedList',
+  Quote = 'quote',
   CodeBlock = 'codeBlock',
   ChangeCase = 'changeCase',
   SortLines = 'sortLines',
@@ -135,6 +137,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.IncreaseFontSize, label: 'Increase font size', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Typography, label: 'Typography (emphasis, outline, spacing)', group: ToolbarGroupId.ColorFont },
     ],
   },
   {
@@ -144,6 +147,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.BulletedList, label: 'Bulleted List', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.NumberedList, label: 'Numbered List', group: ToolbarGroupId.ParagraphList },
+      { id: ToolbarButtonId.Quote, label: 'Quote', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.CodeBlock, label: 'Code Block', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.ChangeCase, label: 'Change case', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.SortLines, label: 'Sort & dedupe lines', group: ToolbarGroupId.ParagraphList },
