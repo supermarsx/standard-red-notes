@@ -1,0 +1,355 @@
+# Rolling release pipeline for the `srn-mcp` server (the MCP bridge).
+#
+# Gated stages (each only runs if the previous succeeded, via `needs:`):
+#   (lint, test, format) -> build -> decide -> package -> release
+# The three check jobs run in parallel; build fans in on all three.
+#
+# Trigger: push to `main` that touches the tool (or manual dispatch). A new
+# rolling release `srn-mcp <YY.N>` is cut ONLY when the freshly built bundle
+# differs from the last released one (content fingerprint gate); no-op pushes
+# do not create a release.
+#
+# Unlike srn-server, the MCP bridge has real runtime dependencies (snjs,
+# @modelcontextprotocol/sdk, libsodium); the `build` script esbuild-bundles them
+# into a single self-contained dist/index.cjs (libsodium WASM is inlined), so the
+# bundle is still pkg-able into native executables exactly like srn-server.
+name: srn-mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp/**'
+      - '.github/workflows/srn-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TOOL: srn-mcp
+  TOOL_DIR: mcp
+  NODE_VERSION: '22'
+  PKG_NODE: node24
+  PKG_VERSION: '6.20.0'
+
+jobs:
+  # 1) CHECK — typecheck, format and "does it build + run" run as three
+  # INDEPENDENT parallel jobs; `build` fans in on all three. The MCP package is a
+  # standalone npm package (its own node_modules at mcp/), so each job installs
+  # its own deps. Unlike srn-server, typecheck + build genuinely need the
+  # installed dependencies (snjs/sdk types + sources to bundle), so every job
+  # that needs them runs `npm install`.
+
+  # 1a) LINT — strict typecheck (tsc --noEmit) is this TS bridge's lint gate, plus
+  # a package-shape assertion so a missing/renamed entry point or bin fails loudly.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run typecheck
+
+      - name: Verify package shape
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          node -e "const p=require('./package.json'); if(!p.bin||!p.bin['standard-red-notes-mcp']) {console.error('missing bin'); process.exit(1)}"
+          test -f esbuild.config.mjs
+          test -f src/index.ts
+
+  # 1b) FORMAT — Prettier check via the package's pinned prettier (format:check
+  # script) so the config/version match exactly how the source was formatted.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Check formatting
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run format:check
+
+  # 1c) TEST — no unit suite (the e2e harness needs a live stack, so it can't run
+  # here). The functional gate is "the bundle builds and the produced server
+  # loads + runs its fail-closed guard": build the esbuild bundle, assert it is
+  # non-empty, then run it in http mode with NO token — it must print the
+  # MCP_HTTP_TOKEN fatal and exit, proving every dependency (snjs/sdk/libsodium
+  # WASM + the global polyfill banner) evaluates without throwing. This avoids the
+  # stdio default, which would block forever waiting on stdin.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Build single-file bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run build
+
+      - name: Smoke-test bundle (fail-closed http guard)
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          test -s dist/index.cjs
+          out="$(MCP_TRANSPORT=http node dist/index.cjs 2>&1 || true)"
+          printf '%s\n' "$out"
+          echo "$out" | grep -q "requires MCP_HTTP_TOKEN"
+
+  # 2) BUILD — the esbuild bundle (dist/index.cjs) that the packaging step wraps
+  # into executables, plus a deterministic content fingerprint (sha256 of that
+  # bundle). esbuild output is byte-reproducible, so the fingerprint is a stable
+  # identity for the shippable content. The pkg binaries are NOT fingerprinted
+  # (pkg bakes in non-reproducible node-version/timestamps).
+  build:
+    name: build
+    needs: [lint, test, format]
+    runs-on: ubuntu-latest
+    outputs:
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+
+      - name: Install tool dependencies
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Build single-file bundle
+        working-directory: ${{ env.TOOL_DIR }}
+        run: npm run build
+
+      - name: Smoke-test bundle (fail-closed http guard)
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          out="$(MCP_TRANSPORT=http node dist/index.cjs 2>&1 || true)"
+          printf '%s\n' "$out"
+          echo "$out" | grep -q "requires MCP_HTTP_TOKEN"
+
+      - name: Compute content fingerprint
+        id: fp
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          fp="$(sha256sum dist/index.cjs | awk '{print $1}')"
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$fp" > "dist/${TOOL}.fingerprint"
+          echo "Bundle fingerprint: ${fp}"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: srn-mcp-bundle
+          path: |
+            ${{ env.TOOL_DIR }}/dist/index.cjs
+            ${{ env.TOOL_DIR }}/dist/srn-mcp.fingerprint
+          retention-days: 1
+          if-no-files-found: error
+
+  # 3) DECIDE — compare the new bundle fingerprint against the one stored on the
+  # most recent release for THIS tool. Output changed=true to proceed, or
+  # changed=false to skip packaging + release entirely (a successful no-op).
+  decide:
+    name: decide
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare against last released fingerprint
+        id: cmp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_FP: ${{ needs.build.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          last_tag="$(gh release list --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E "^${TOOL}-v[0-9]+\.[0-9]+$" | head -n1 || true)"
+          if [ -z "$last_tag" ]; then
+            echo "No prior ${TOOL} release found -> treat as changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Last ${TOOL} release: ${last_tag}"
+          old_fp=""
+          if gh release download "$last_tag" --pattern "${TOOL}.fingerprint" --output old.fingerprint --clobber 2>/dev/null; then
+            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
+          else
+            echo "Last release has no fingerprint asset -> treat as changed."
+          fi
+          echo "old=${old_fp}"
+          echo "new=${NEW_FP}"
+          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
+            echo "No changes since ${last_tag}, skipping release."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Bundle changed since ${last_tag} -> release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 4) PACKAGE — cross-compile native executables for every OS x arch from the
+  # single bundled CJS entry, using @yao-pkg/pkg on one Linux runner. Skipped
+  # when the bundle is unchanged.
+  package:
+    name: package
+    needs: [build, decide]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Packaging only runs `npx @yao-pkg/pkg` against the prebuilt bundle
+          # artifact (no install), so skip the auto package-manager cache.
+          package-manager-cache: false
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: srn-mcp-bundle
+          path: ${{ env.TOOL_DIR }}/dist
+
+      - name: Package native executables
+        working-directory: ${{ env.TOOL_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          declare -A TARGETS=(
+            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
+            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
+            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
+            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
+            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
+            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
+          )
+          for out_name in "${!TARGETS[@]}"; do
+            target="${TARGETS[$out_name]}"
+            echo "::group::pkg $target -> $out_name"
+            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
+              --no-signature \
+              --targets "$target" \
+              --output "out/${out_name}" \
+              dist/index.cjs
+            echo "::endgroup::"
+          done
+          cp "dist/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
+          echo "Produced:"
+          ls -la out
+
+      - name: Generate checksums
+        working-directory: ${{ env.TOOL_DIR }}/out
+        run: |
+          sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v5
+        with:
+          name: srn-mcp-binaries
+          path: ${{ env.TOOL_DIR }}/out/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # 5) RELEASE — compute a rolling YY.N version for THIS tool, create a
+  # namespaced tag, and publish a GitHub Release with the 6 binaries, the
+  # checksums, and the fingerprint asset (read back by the next run's decide).
+  release:
+    name: release
+    needs: [decide, package]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v5
+        with:
+          name: srn-mcp-binaries
+          path: out
+
+      - name: Compute rolling version
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          YY="$(date -u +%y)"
+          prefix="${TOOL}-v${YY}."
+          max=0
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            n="${tag#${prefix}}"
+            if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
+              max="$n"
+            fi
+          done < <(gh release list --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          next=$((max + 1))
+          version="${YY}.${next}"
+          tag="${TOOL}-v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Next ${TOOL} release: ${tag} (version ${version})"
+
+      # Use the preinstalled `gh` CLI rather than a third-party action so the
+      # release step has no Node-runtime dependency to keep current.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(out/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release assets found in out/ (mirrors fail_on_unmatched_files)" >&2
+            exit 1
+          fi
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "${{ env.TOOL }} ${{ steps.ver.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --generate-notes \
+            "${files[@]}"
