@@ -1,5 +1,6 @@
 import { destroyAllObjectProperties } from '@/Utils'
 import { achievements, METRICS } from '@/Achievements'
+import { recordItemRestore } from '@/Services/Achievements/restoreCounter'
 import {
   confirmDialog,
   GetItemTags,
@@ -317,9 +318,15 @@ export class NotesController
         })
       }
     } else {
+      const restoredNotes = this.getSelectedNotesList()
       await this.changeSelectedNotes((mutator) => {
         mutator.trashed = trashed
       })
+      for (const note of restoredNotes) {
+        achievements.increment(METRICS.itemsRestoredTotal)
+        const n = recordItemRestore(note.uuid)
+        achievements.setAtLeast(METRICS.sameItemRestores, n)
+      }
       runInAction(() => {
         this.contextMenuOpen = false
       })
@@ -814,6 +821,7 @@ export class NotesController
       })
     ) {
       await this.application.mutator.emptyTrash()
+      achievements.increment(METRICS.trashEmptied)
       this.application.sync.sync().catch(console.error)
     }
   }

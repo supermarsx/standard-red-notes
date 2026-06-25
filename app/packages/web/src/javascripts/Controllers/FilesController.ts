@@ -215,6 +215,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       return
     }
     await this.mutator.disassociateFileWithNote(file, note)
+    achievements.markEvent(METRICS.fileDetached)
     void this.sync.sync()
   }
 
