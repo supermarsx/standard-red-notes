@@ -1,5 +1,5 @@
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken } from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
@@ -27,6 +27,21 @@ import { startSqsConsumer } from './sqsConsumer.js'
 
 /** Heartbeat interval for dropping dead sockets. */
 const HEARTBEAT_MS = 30_000
+
+/**
+ * Constant-time comparison of two secrets that does not leak length or content
+ * via timing. Both sides are SHA-256 digested first so the comparison is always
+ * over equal-length buffers (timingSafeEqual throws on length mismatch, which
+ * itself leaks length). Returns false for any missing/non-string input.
+ */
+function secretsMatch(provided: unknown, expected: string): boolean {
+  if (typeof provided !== 'string' || provided.length === 0 || expected.length === 0) {
+    return false
+  }
+  const providedDigest = createHash('sha256').update(provided, 'utf8').digest()
+  const expectedDigest = createHash('sha256').update(expected, 'utf8').digest()
+  return timingSafeEqual(providedDigest, expectedDigest)
+}
 
 export interface GatewayConfig {
   /** WEB_SOCKET_CONNECTION_TOKEN_SECRET — HS256 key for connection tokens. */
@@ -116,7 +131,9 @@ function buildMintTokenHandler(
       return
     }
     const provided = req.headers['x-internal-secret']
-    if (provided !== config.internalSecret) {
+    // Constant-time compare so the internal secret cannot be recovered byte by
+    // byte via response-timing analysis. Fails closed for missing/array headers.
+    if (!secretsMatch(provided, config.internalSecret)) {
       res.writeHead(403, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'forbidden' }))
       return

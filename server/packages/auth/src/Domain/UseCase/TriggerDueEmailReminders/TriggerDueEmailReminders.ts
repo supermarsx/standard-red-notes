@@ -94,7 +94,11 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
       return false
     }
 
-    const subject = EMAIL_SUBJECT_PREFIX + reminder.props.message
+    // Defense-in-depth: strip CR/LF from the user-controlled message before using
+    // it in the email subject (a header) so it can never inject extra headers or
+    // split the message, even if a malformed message slipped past creation.
+    const sanitizedSubjectMessage = reminder.props.message.replace(/[\r\n]+/g, ' ')
+    const subject = EMAIL_SUBJECT_PREFIX + sanitizedSubjectMessage
     const body = this.composeBody(reminder)
 
     const sent = await this.emailSender.sendEmail(email, subject, body)

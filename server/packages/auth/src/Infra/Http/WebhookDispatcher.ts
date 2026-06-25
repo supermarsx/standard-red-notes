@@ -1,4 +1,5 @@
 import { AxiosInstance } from 'axios'
+import { assertPublicHttpUrl, SsrfValidationError } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { Webhook } from '../../Domain/Webhook/Webhook'
@@ -68,6 +69,19 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
   }
 
   private async deliver(webhook: Webhook, payload: Record<string, unknown>): Promise<void> {
+    // SSRF guard at DELIVERY: re-validate the target right before sending. DNS
+    // records can change between registration and delivery (DNS rebinding), so
+    // resolving + checking here closes that window. A blocked target is logged
+    // and dropped (no retry — re-resolving would yield the same block).
+    try {
+      await assertPublicHttpUrl(webhook.props.targetUrl)
+    } catch (error) {
+      const reason = error instanceof SsrfValidationError ? error.message : (error as Error).message
+      this.logger.warn(`Skipping webhook delivery to ${webhook.props.targetUrl}: ${reason}`)
+
+      return
+    }
+
     // Sign the EXACT serialized body the subscriber will receive so signature
     // verification over the raw request body matches byte-for-byte.
     const body = JSON.stringify(payload)
@@ -80,6 +94,10 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
           url: webhook.props.targetUrl,
           data: body,
           timeout: this.REQUEST_TIMEOUT_MS,
+          // Do NOT follow redirects: a 3xx to a private/metadata host is the
+          // classic SSRF-filter bypass. The validated target was checked above;
+          // redirects would not be re-validated, so refuse to follow them.
+          maxRedirects: 0,
           headers: {
             'Content-Type': 'application/json',
             'X-SRN-Signature': signature,

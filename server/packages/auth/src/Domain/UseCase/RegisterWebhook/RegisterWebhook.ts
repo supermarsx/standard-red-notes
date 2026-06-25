@@ -1,5 +1,5 @@
 import * as crypto from 'crypto'
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { assertPublicHttpUrl, Result, SsrfValidationError, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { Webhook } from '../../Webhook/Webhook'
 import { WebhookRepositoryInterface } from '../../Webhook/WebhookRepositoryInterface'
@@ -34,6 +34,20 @@ export class RegisterWebhook implements UseCaseInterface<RegisterWebhookResult> 
       if (!isValidWebhookEvent(event)) {
         return Result.fail(`Could not register webhook: unknown event '${event}'.`)
       }
+    }
+
+    // SSRF guard at REGISTRATION: any authenticated user can register a webhook
+    // whose targetUrl the server will later POST to, so reject targets that
+    // resolve to a private / loopback / link-local / cloud-metadata address.
+    // Delivery re-validates too (DNS can change), but rejecting here gives the
+    // user immediate feedback and blocks persisting an obviously-malicious URL.
+    try {
+      await assertPublicHttpUrl(targetUrl)
+    } catch (error) {
+      if (error instanceof SsrfValidationError) {
+        return Result.fail(`Could not register webhook: ${error.message}`)
+      }
+      return Result.fail('Could not register webhook: the target URL could not be validated.')
     }
 
     const secret = crypto.randomBytes(this.SECRET_BYTE_LENGTH).toString('hex')

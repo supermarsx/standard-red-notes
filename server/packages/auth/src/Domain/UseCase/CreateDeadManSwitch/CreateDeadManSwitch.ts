@@ -37,6 +37,20 @@ export class CreateDeadManSwitch implements UseCaseInterface<CreateDeadManSwitch
       return Result.fail('Could not create dead man switch: share url is required.')
     }
 
+    // The shareUrl is later embedded verbatim into an outbound email, so it must
+    // be a well-formed https URL. Reject non-https (incl. javascript:, data:,
+    // http:) so it can never become a hostile link in the delivered message.
+    const trimmedShareUrl = dto.shareUrl.trim()
+    let parsedShareUrl: URL
+    try {
+      parsedShareUrl = new URL(trimmedShareUrl)
+    } catch {
+      return Result.fail('Could not create dead man switch: share url must be a valid URL.')
+    }
+    if (parsedShareUrl.protocol !== 'https:') {
+      return Result.fail('Could not create dead man switch: share url must be an https URL.')
+    }
+
     if (typeof dto.intervalDays !== 'number' || !Number.isInteger(dto.intervalDays) || dto.intervalDays < 1) {
       return Result.fail('Could not create dead man switch: interval must be a whole number of at least 1 day.')
     }
@@ -50,7 +64,7 @@ export class CreateDeadManSwitch implements UseCaseInterface<CreateDeadManSwitch
     const switchOrError = DeadManSwitch.create({
       userUuid: userUuid.value,
       recipientEmail: recipientEmail.value,
-      shareUrl: dto.shareUrl.trim(),
+      shareUrl: trimmedShareUrl,
       message,
       intervalDays: dto.intervalDays,
       deadline,

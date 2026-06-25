@@ -2,6 +2,8 @@ import * as https from 'https'
 import * as http from 'http'
 import { URL } from 'url'
 
+import { assertPublicHttpUrl } from '@standardnotes/domain-core'
+
 import { WebDAVClientInterface, WebDAVUploadDestination } from './WebDAVClientInterface'
 
 /**
@@ -17,6 +19,12 @@ import { WebDAVClientInterface, WebDAVUploadDestination } from './WebDAVClientIn
  */
 export class HttpsWebDAVClient implements WebDAVClientInterface {
   async putFile(destination: WebDAVUploadDestination, contents: string): Promise<void> {
+    // SSRF guard: the destination URL is user-supplied (NEXTCLOUD_BACKUP_URL) and
+    // we send it a Basic-auth-bearing request, so reject any host that resolves
+    // to a private / loopback / link-local / cloud-metadata address BEFORE any
+    // MKCOL/PUT. Throwing here is caught + logged by WebDAVItemBackupService.
+    await assertPublicHttpUrl(destination.url)
+
     const base = this.buildFilesBaseUrl(destination)
 
     // Ensure each nested folder segment exists (MKCOL is idempotent enough: an

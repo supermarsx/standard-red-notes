@@ -54,6 +54,8 @@ export * from './Notification/NotificationPayloadProps'
 export * from './Notification/NotificationType'
 export * from './Notification/NotificationTypeProps'
 
+export * from './Security/SsrfFilter'
+
 export * from './Service/ServiceConfiguration'
 export * from './Service/ServiceContainer'
 export * from './Service/ServiceContainerInterface'

@@ -43,7 +43,10 @@ export class CreateEmailReminder implements UseCaseInterface<CreateEmailReminder
     if (typeof dto.message !== 'string' || dto.message.trim().length === 0) {
       return Result.fail('Could not create email reminder: message is required.')
     }
-    const message = dto.message.trim().slice(0, MAX_MESSAGE_LENGTH)
+    // Defense-in-depth against email header injection: this message is later used
+    // verbatim as the email subject, so strip CR/LF (collapsing them to a space)
+    // before persisting so no newline can ever reach an email header.
+    const message = dto.message.replace(/[\r\n]+/g, ' ').trim().slice(0, MAX_MESSAGE_LENGTH)
 
     const now = Date.now()
 
