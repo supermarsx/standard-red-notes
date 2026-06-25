@@ -273,10 +273,13 @@ if [ -z "$AUTH_SERVER_U2F_RELYING_PARTY_ID" ]; then
   export AUTH_SERVER_U2F_RELYING_PARTY_ID="localhost"
 fi
 if [ -z "$AUTH_SERVER_U2F_RELYING_PARTY_NAME" ]; then
-  export AUTH_SERVER_U2F_RELYING_PARTY_NAME="Standard Notes"
+  export AUTH_SERVER_U2F_RELYING_PARTY_NAME="Standard Red Notes"
 fi
 if [ -z "$AUTH_SERVER_U2F_EXPECTED_ORIGIN" ]; then
-  export AUTH_SERVER_U2F_EXPECTED_ORIGIN="http://localhost,http://localhost:3001,https://app.standardnotes.com,android:apk-key-hash:WD_EG0kMOAtW--nuRzgetO9T4DcZpVA_wfKdzY4okCo"
+  # Self-hosted default: local origins only. Set AUTH_SERVER_U2F_EXPECTED_ORIGIN
+  # (and AUTH_SERVER_U2F_RELYING_PARTY_ID) to your own domain in production — do
+  # NOT trust security-key assertions for app.standardnotes.com.
+  export AUTH_SERVER_U2F_EXPECTED_ORIGIN="http://localhost,http://localhost:3001"
 fi
 if [ -z "$AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION" ]; then
   export AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION=false
