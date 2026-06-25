@@ -6,8 +6,9 @@
       Content-Security-Policy notes (desktop hardening):
 
       connect-src: The desktop talks to a USER-CONFIGURABLE sync/files/websocket
-      server. The default is https://api.standardnotes.com, but users may point
-      the app at an arbitrary self-hosted server (incl. a bundled "home server"
+      server. This self-hosted fork ships with NO preset default server (the
+      ServerPicker defaults to "Custom"); users point the app at an arbitrary
+      self-hosted server (incl. a bundled "home server"
       running on plain HTTP at http://localhost:3000 and, when exposed on the
       LAN, http://<lan-ip>:3127, plus the local extensions server at
       http://127.0.0.1:45653). Because the server origin is chosen at runtime by

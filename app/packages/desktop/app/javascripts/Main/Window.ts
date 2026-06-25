@@ -3,6 +3,7 @@ import { BrowserWindow, Rectangle, screen, Shell } from 'electron'
 import fs from 'fs'
 import { debounce } from 'lodash'
 import path from 'path'
+import { pathToFileURL } from 'url'
 import { AppMessageType, MessageType } from '../../../test/TestIpcMessage'
 import { AppState } from '../../AppState'
 import { MessageToWebApp } from '../Shared/IpcMessages'
@@ -44,6 +45,46 @@ function hideWindowsTaskbarPreviewThumbnail(window: BrowserWindow) {
   if (isWindows()) {
     window.setThumbnailClip({ x: 0, y: 0, width: 1, height: 1 })
   }
+}
+
+/**
+ * Points Chromium's spellchecker at a dictionary source that is NOT Standard
+ * Notes' (previously https://dictionaries.standardnotes.org/9.4.4/). This
+ * self-hosted fork must not phone home for `.bdic` Hunspell dictionaries.
+ *
+ * Resolution order:
+ *  1. A build-/run-time override via the SPELLCHECK_DICTIONARY_URL env var
+ *     (e.g. an operator's own static host or a local server). Must end with a
+ *     trailing slash; Chromium appends `<lang>-<hash>.bdic`.
+ *  2. Otherwise the dictionaries bundled WITH the app under the packaged
+ *     `dictionaries/` directory (sibling of the compiled main process at
+ *     `__dirname` === `app/dist`), served via a `file://` URL. Populate this
+ *     directory at build time with `yarn dictionaries:download` (see
+ *     scripts/download-dictionaries.mjs).
+ *
+ * If the bundled directory is empty/missing, the requested language simply
+ * fails to load (spellcheck is disabled for it) instead of falling back to any
+ * Standard Notes / Google host. macOS uses the OS spellchecker and ignores this
+ * entirely.
+ */
+function configureSpellCheckerDictionarySource(session: Electron.Session): void {
+  const override = process.env.SPELLCHECK_DICTIONARY_URL
+  if (override && override.length > 0) {
+    const normalized = override.endsWith('/') ? override : `${override}/`
+    session.setSpellCheckerDictionaryDownloadURL(normalized)
+    return
+  }
+
+  /**
+   * `__dirname` resolves to `app/dist` in the packaged app; the webpack
+   * CopyPlugin copies `app/dictionaries` -> `app/dist/dictionaries`. Build a
+   * proper file:// URL (with a trailing slash) from that absolute path so it
+   * works across platforms (Windows drive letters, spaces, etc.).
+   */
+  const dictionariesDir = path.join(__dirname, 'dictionaries')
+  const fileUrl = pathToFileURL(dictionariesDir).href
+  const normalized = fileUrl.endsWith('/') ? fileUrl : `${fileUrl}/`
+  session.setSpellCheckerDictionaryDownloadURL(normalized)
 }
 
 export async function createWindowState({
@@ -177,7 +218,7 @@ export async function createWindowState({
     }
   })
 
-  window.webContents.session.setSpellCheckerDictionaryDownloadURL('https://dictionaries.standardnotes.org/9.4.4/')
+  configureSpellCheckerDictionarySource(window.webContents.session)
 
   /**
    * Scope renderer permissions (File System Access, media, notifications,

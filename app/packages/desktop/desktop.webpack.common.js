@@ -102,6 +102,17 @@ module.exports = function ({ onlyTranspileTypescript = false, experimentalFeatur
             from: 'app/icon',
             to: 'icon',
           },
+          {
+            // Bundle Hunspell `.bdic` spellcheck dictionaries WITH the app so
+            // the spellchecker never contacts Standard Notes' dictionary host.
+            // Populate `app/dictionaries` at build time via
+            // `yarn dictionaries:download` (scripts/download-dictionaries.mjs).
+            // noErrorOnMissing lets builds succeed even if the dir is empty;
+            // in that case spellcheck just has no downloadable dictionaries.
+            from: 'app/dictionaries',
+            to: 'dictionaries',
+            noErrorOnMissing: true,
+          },
         ],
       }),
     ],
@@ -129,7 +140,12 @@ module.exports = function ({ onlyTranspileTypescript = false, experimentalFeatur
     },
     plugins: [
       new webpack.DefinePlugin({
-        DEFAULT_SYNC_SERVER: JSON.stringify(process.env.DEFAULT_SYNC_SERVER || 'http://localhost:3000'),
+        // Self-hosted fork: do NOT bake in any hosted Standard Notes endpoint.
+        // If DEFAULT_SYNC_SERVER is provided at BUILD time it is used as the
+        // preset "Default" server; otherwise it resolves to an empty string so
+        // the web ServerPicker shows "Custom" and the user must enter their own
+        // self-hosted server. It never falls back to api.standardnotes.com.
+        DEFAULT_SYNC_SERVER: JSON.stringify(process.env.DEFAULT_SYNC_SERVER || ''),
         PURCHASE_URL: JSON.stringify(process.env.PURCHASE_URL),
         PLANS_URL: JSON.stringify(process.env.PLANS_URL),
         DASHBOARD_URL: JSON.stringify(process.env.DASHBOARD_URL),

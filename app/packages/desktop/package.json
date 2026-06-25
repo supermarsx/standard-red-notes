@@ -19,6 +19,7 @@
     "build:remove-unpacked": "rimraf dist/{linux-*,mac,win-*}",
     "build": "yarn run webpack --config desktop.webpack.prod.js",
     "clean:build": "rimraf app/dist/",
+    "dictionaries:download": "node scripts/download-dictionaries.mjs",
     "clean:tests": "rimraf test/data/tmp/",
     "dev": "NODE_ENV=development webpack --config desktop.webpack.dev.js --watch",
     "format": "prettier --write .",

@@ -11,5 +11,11 @@ test/data/tmp/
 
 data/*
 
+# Bundled Hunspell spellcheck dictionaries are downloaded at build time via
+# `yarn dictionaries:download` (scripts/download-dictionaries.mjs) and must not
+# be committed. The directory itself is kept via app/dictionaries/.gitkeep.
+app/dictionaries/*
+!app/dictionaries/.gitkeep
+
 codeqldb
 yarn-error.log

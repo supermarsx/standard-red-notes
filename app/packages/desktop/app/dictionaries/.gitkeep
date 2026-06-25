@@ -1,0 +1,13 @@
+# This directory holds bundled Hunspell `.bdic` spellcheck dictionaries.
+#
+# Populate it before building with:
+#   yarn dictionaries:download
+#
+# The desktop main process points Chromium's spellchecker at this directory via
+# a file:// URL (see app/javascripts/Main/Window.ts ->
+# configureSpellCheckerDictionarySource) so dictionaries are served locally
+# instead of being fetched from Standard Notes' host. The webpack CopyPlugin
+# copies this directory into app/dist/dictionaries at build time.
+#
+# `.bdic` files are gitignored (see .gitignore); only this placeholder is
+# tracked so the directory exists in a fresh checkout.
