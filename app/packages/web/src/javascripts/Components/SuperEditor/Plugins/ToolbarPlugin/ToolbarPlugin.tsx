@@ -4,8 +4,11 @@ import useModal from '../../Lexical/Hooks/useModal'
 import { InsertTableDialog } from '../TablePlugin'
 import { getSelectedNode } from '../../Lexical/Utils/getSelectedNode'
 import {
+  $createRangeSelection,
+  $getRoot,
   $getSelection,
   $isRangeSelection,
+  $setSelection,
   CAN_REDO_COMMAND,
   CAN_UNDO_COMMAND,
   COMMAND_PRIORITY_CRITICAL,
@@ -65,7 +68,12 @@ import { ParagraphBlock } from '../Blocks/Paragraph'
 import { QuoteBlock } from '../Blocks/Quote'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { LocalPrefKey, PrefKey, classNames } from '@standardnotes/snjs'
-import { SUPER_TOGGLE_SEARCH, SUPER_TOGGLE_TOOLBAR } from '@standardnotes/ui-services'
+import { SUPER_TOGGLE_TOOLBAR } from '@standardnotes/ui-services'
+import {
+  OPEN_SUPER_SEARCH_COMMAND,
+  OPEN_SUPER_SEARCH_REPLACE_COMMAND,
+  SUPER_SEARCH_GO_TO_NEXT_COMMAND,
+} from '../SearchPlugin/searchCommands'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
@@ -1485,7 +1493,50 @@ const ToolbarPlugin = () => {
       <ToolbarButton
         name={t('search')}
         iconName="search"
-        onSelect={() => application.keyboardService.triggerCommand(SUPER_TOGGLE_SEARCH)}
+        onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}
+      />
+    ) : null,
+    [ToolbarButtonId.FindReplace]: canShowAllItems ? (
+      <ToolbarButton
+        name="Find &amp; replace in note"
+        iconName="search"
+        onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)}
+      >
+        <span className="text-sm font-semibold leading-none">a&rarr;b</span>
+      </ToolbarButton>
+    ) : null,
+    [ToolbarButtonId.FindNext]: canShowAllItems ? (
+      <ToolbarButton
+        name="Find next"
+        iconName="arrow-down"
+        onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}
+      />
+    ) : null,
+    [ToolbarButtonId.SelectAll]: canShowAllItems ? (
+      <ToolbarButton
+        name="Select all"
+        iconName="select-all"
+        onSelect={() => {
+          editor.update(() => {
+            const root = $getRoot()
+            const selection = $createRangeSelection()
+            selection.anchor.set(root.getKey(), 0, 'element')
+            selection.focus.set(root.getKey(), root.getChildrenSize(), 'element')
+            $setSelection(selection)
+          })
+          editor.focus()
+        }}
+      />
+    ) : null,
+    [ToolbarButtonId.Deselect]: canShowAllItems ? (
+      <ToolbarButton
+        name="Deselect"
+        iconName="close"
+        onSelect={() => {
+          editor.update(() => {
+            $setSelection(null)
+          })
+        }}
       />
     ) : null,
     [ToolbarButtonId.Undo]: canShowAllItems ? (

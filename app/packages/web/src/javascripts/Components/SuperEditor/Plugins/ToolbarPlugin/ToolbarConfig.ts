@@ -19,6 +19,7 @@ export enum ToolbarGroupId {
   ParagraphList = 'paragraphList',
   Insert = 'insert',
   AI = 'ai',
+  Selection = 'selection',
   Toolbar = 'toolbar',
 }
 
@@ -28,11 +29,16 @@ export enum ToolbarButtonId {
   Cut = 'cut',
   Copy = 'copy',
   Paste = 'paste',
-  // History / navigation
-  TableOfContents = 'tableOfContents',
-  Search = 'search',
+  // History
   Undo = 'undo',
   Redo = 'redo',
+  // Selection (in-note find / replace / select)
+  TableOfContents = 'tableOfContents',
+  Search = 'search',
+  FindReplace = 'findReplace',
+  FindNext = 'findNext',
+  SelectAll = 'selectAll',
+  Deselect = 'deselect',
   // Block style
   BlockStyle = 'blockStyle',
   // Text style
@@ -124,11 +130,9 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
   },
   {
     id: ToolbarGroupId.History,
-    label: 'History & navigation',
+    label: 'History',
     caption: 'History',
     buttons: [
-      { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.History },
-      { id: ToolbarButtonId.Search, label: 'Search', group: ToolbarGroupId.History },
       { id: ToolbarButtonId.Undo, label: 'Undo', group: ToolbarGroupId.History },
       { id: ToolbarButtonId.Redo, label: 'Redo', group: ToolbarGroupId.History },
     ],
@@ -207,6 +211,19 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [{ id: ToolbarButtonId.AI, label: 'AI tools', group: ToolbarGroupId.AI }],
   },
   {
+    id: ToolbarGroupId.Selection,
+    label: 'Selection',
+    caption: 'Selection',
+    buttons: [
+      { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.Search, label: 'Find in note', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.FindReplace, label: 'Find & replace in note', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.FindNext, label: 'Find next', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.SelectAll, label: 'Select all', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.Deselect, label: 'Deselect', group: ToolbarGroupId.Selection },
+    ],
+  },
+  {
     id: ToolbarGroupId.Toolbar,
     label: 'Toolbar',
     caption: 'Toolbar',
@@ -252,7 +269,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
   { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },
-  { id: ToolbarSuperGroupId.Tools, label: 'Tools', groups: [ToolbarGroupId.Toolbar] },
+  { id: ToolbarSuperGroupId.Tools, label: 'Tools', groups: [ToolbarGroupId.Selection, ToolbarGroupId.Toolbar] },
 ]
 
 /**

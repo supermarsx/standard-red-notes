@@ -21,7 +21,12 @@ import Button from '../../../Button/Button'
 import { canUseCSSHiglights, SearchHighlightRenderer, SearchHighlightRendererMethods } from './SearchHighlightRenderer'
 import { useStateRef } from '../../../../Hooks/useStateRef'
 import { createPortal } from 'react-dom'
-import { $createRangeSelection, $getSelection, $nodesOfType, $setSelection, TextNode } from 'lexical'
+import { $createRangeSelection, $getSelection, $nodesOfType, $setSelection, COMMAND_PRIORITY_LOW, TextNode } from 'lexical'
+import {
+  OPEN_SUPER_SEARCH_COMMAND,
+  OPEN_SUPER_SEARCH_REPLACE_COMMAND,
+  SUPER_SEARCH_GO_TO_NEXT_COMMAND,
+} from './searchCommands'
 import { compileSearch, computeReplacement, SearchOptions } from './replaceLogic'
 import { searchRegexInElement } from './searchRegexInElement'
 import { getMatchCounter, nextResultIndex, previousResultIndex } from './matchCounter'
@@ -136,6 +141,38 @@ export function SearchPlugin() {
       }
     })
   }, [editor, selectCurrentResult])
+
+  // Non-toggling toolbar entry points (the "Selection" group). These OPEN the
+  // panel rather than flipping it, so a second click keeps it open.
+  useEffect(() => {
+    const unregister = [
+      editor.registerCommand(
+        OPEN_SUPER_SEARCH_COMMAND,
+        () => {
+          setIsSearchActive(true)
+          return true
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+      editor.registerCommand(
+        OPEN_SUPER_SEARCH_REPLACE_COMMAND,
+        () => {
+          revealReplaceMode()
+          return true
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+      editor.registerCommand(
+        SUPER_SEARCH_GO_TO_NEXT_COMMAND,
+        () => {
+          goToNextResult()
+          return true
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+    ]
+    return () => unregister.forEach((cleanup) => cleanup())
+  }, [editor, revealReplaceMode, goToNextResult])
 
   useEffect(() => {
     return application.keyboardService.addCommandHandlers([
