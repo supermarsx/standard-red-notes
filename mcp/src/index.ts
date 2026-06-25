@@ -1,11 +1,23 @@
 #!/usr/bin/env node
 import "./polyfill.js";
 
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { bootstrapHeadlessApp, type HeadlessApp } from "./snjs/bootstrap.js";
 import { SnjsBackedClient } from "./snjs/SnjsBackedClient.js";
+
+// Transport selection. `stdio` (default) preserves the original single-client
+// behavior. `http` runs the bridge as a long-lived, authenticated network
+// service (an always-on tooling side-car behind compose).
+const transportMode = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
+const httpPort = process.env.MCP_HTTP_PORT
+  ? Number(process.env.MCP_HTTP_PORT)
+  : 3010;
+const httpToken = process.env.MCP_HTTP_TOKEN;
 
 const serverUrl =
   process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3000";
@@ -83,18 +95,24 @@ function getClient(): Promise<SnjsBackedClient> {
   return initPromise;
 }
 
-const server = new McpServer(
-  {
-    name: "standard-red-notes",
-    version: "0.3.0",
-  },
-  {
-    instructions:
-      "Standard Red Notes MCP bridge. Operates on a real, end-to-end-encrypted account via an embedded headless snjs client: notes and tags are decrypted locally and changes sync back encrypted. Configure STANDARD_RED_NOTES_EMAIL/_PASSWORD/_SERVER_URL. Write tools require STANDARD_RED_NOTES_ALLOW_WRITES=1.",
-  },
-);
+// Build a fresh McpServer with all tools registered. The protocol/session state
+// lives on the McpServer instance, so HTTP mode creates one per client session;
+// stdio mode uses a single instance. The underlying account/headless client
+// (getClient) is shared module-level state across all sessions — they all act on
+// the same authenticated account.
+function buildServer(): McpServer {
+  const server = new McpServer(
+    {
+      name: "standard-red-notes",
+      version: "0.3.0",
+    },
+    {
+      instructions:
+        "Standard Red Notes MCP bridge. Operates on a real, end-to-end-encrypted account via an embedded headless snjs client: notes and tags are decrypted locally and changes sync back encrypted. Configure STANDARD_RED_NOTES_EMAIL/_PASSWORD/_SERVER_URL. Write tools require STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+    },
+  );
 
-server.registerTool(
+  server.registerTool(
   "standard_red_notes_status",
   {
     title: "Standard Red Notes Status",
@@ -126,7 +144,7 @@ server.registerTool(
     const health = headless?.getSyncHealth() ?? { consecutiveFailures: 0 };
     const structuredContent = {
       status: "ready",
-      transport: "stdio",
+      transport: transportMode,
       serverUrl,
       writes: allowWrites,
       accountConfigured,
@@ -346,9 +364,174 @@ server.registerTool(
   },
 );
 
-async function start(): Promise<void> {
+  return server;
+}
+
+// ---------------------------------------------------------------------------
+// Transport bootstrap
+// ---------------------------------------------------------------------------
+
+async function startStdio(): Promise<void> {
+  const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+// Constant-time bearer-token check. Returns true only when the request carries
+// `Authorization: Bearer <token>` exactly matching MCP_HTTP_TOKEN. Uses
+// timingSafeEqual to avoid leaking the token via response timing.
+function isAuthorized(req: IncomingMessage): boolean {
+  if (!httpToken) return false;
+  const header = req.headers["authorization"];
+  if (typeof header !== "string") return false;
+  const prefix = "Bearer ";
+  if (!header.startsWith(prefix)) return false;
+  const presented = Buffer.from(header.slice(prefix.length));
+  const expected = Buffer.from(httpToken);
+  // timingSafeEqual throws on length mismatch; guard so a wrong-length token is
+  // a normal rejection, not a 500, while still comparing in constant time.
+  if (presented.length !== expected.length) return false;
+  return timingSafeEqual(presented, expected);
+}
+
+function sendJsonError(
+  res: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+): void {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    error: { code, message },
+    id: null,
+  });
+  res.writeHead(status, {
+    "content-type": "application/json",
+    ...(status === 401 ? { "www-authenticate": "Bearer" } : {}),
+  });
+  res.end(body);
+}
+
+async function startHttp(): Promise<void> {
+  // FAIL CLOSED: an autonomous HTTP MCP endpoint exposes powerful note
+  // read/write tools, so it must never serve unauthenticated. Refuse to start
+  // without a token rather than silently exposing the account.
+  if (!httpToken) {
+    console.error(
+      "[mcp] FATAL: MCP_TRANSPORT=http requires MCP_HTTP_TOKEN to be set. " +
+        "Refusing to start an unauthenticated MCP endpoint. Set MCP_HTTP_TOKEN " +
+        "to a strong secret and pass it as 'Authorization: Bearer <token>'.",
+    );
+    process.exit(1);
+  }
+  if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
+    console.error(`[mcp] FATAL: invalid MCP_HTTP_PORT: ${process.env.MCP_HTTP_PORT}`);
+    process.exit(1);
+  }
+
+  // One Streamable HTTP transport (and McpServer) per session. The session id is
+  // generated on initialize and echoed back via the `mcp-session-id` header; the
+  // client must send it on subsequent requests. State is in-memory.
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  const httpServer = createServer((req, res) => {
+    void handleHttpRequest(req, res, transports).catch((error) => {
+      console.error("[mcp] request handler error:", error);
+      if (!res.headersSent) {
+        sendJsonError(res, 500, -32603, "Internal server error");
+      } else {
+        try {
+          res.end();
+        } catch {
+          /* already torn down */
+        }
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(httpPort, "0.0.0.0", () => resolve());
+  });
+  console.error(
+    `[mcp] Streamable HTTP transport listening on 0.0.0.0:${httpPort} (POST/GET/DELETE /mcp, bearer-authenticated)`,
+  );
+
+  // Close active sessions on shutdown so in-flight streams end cleanly.
+  httpShutdownHook = async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    for (const transport of transports.values()) {
+      try {
+        await transport.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+  };
+}
+
+async function handleHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  transports: Map<string, StreamableHTTPServerTransport>,
+): Promise<void> {
+  // Only the MCP endpoint is served. A simple unauthenticated liveness probe is
+  // intentionally NOT exposed to keep the surface minimal — compose can probe
+  // the TCP port instead.
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (url.pathname !== "/mcp") {
+    sendJsonError(res, 404, -32601, "Not found");
+    return;
+  }
+
+  // Auth gate FIRST, before any MCP/session processing.
+  if (!isAuthorized(req)) {
+    sendJsonError(res, 401, -32001, "Unauthorized: missing or invalid bearer token");
+    return;
+  }
+
+  const sessionId = req.headers["mcp-session-id"];
+  const existing = typeof sessionId === "string" ? transports.get(sessionId) : undefined;
+
+  if (existing) {
+    await existing.handleRequest(req, res);
+    return;
+  }
+
+  // No existing session. Only an `initialize` POST may open one; other methods
+  // without a valid session are rejected by the transport itself.
+  if (req.method !== "POST") {
+    sendJsonError(res, 400, -32000, "Bad Request: no valid session id");
+    return;
+  }
+
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (id) => {
+      transports.set(id, transport);
+    },
+  });
+  transport.onclose = () => {
+    if (transport.sessionId) transports.delete(transport.sessionId);
+  };
+
+  const server = buildServer();
+  await server.connect(transport);
+  await transport.handleRequest(req, res);
+}
+
+let httpShutdownHook: (() => Promise<void>) | undefined;
+
+async function start(): Promise<void> {
+  if (transportMode === "http") {
+    await startHttp();
+  } else if (transportMode === "stdio") {
+    await startStdio();
+  } else {
+    console.error(
+      `[mcp] FATAL: unknown MCP_TRANSPORT '${transportMode}'. Use 'stdio' or 'http'.`,
+    );
+    process.exit(1);
+  }
 }
 
 // Flush pending storage/keychain writes before the process exits (container stop,
@@ -357,6 +540,11 @@ let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  try {
+    await httpShutdownHook?.();
+  } catch {
+    /* best-effort */
+  }
   try {
     await headless?.deinit();
   } catch {

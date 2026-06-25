@@ -26,7 +26,9 @@ WORKDIR /opt/standard-red-notes
 
 ENV NODE_ENV=production \
     STANDARD_RED_NOTES_SERVER_URL=http://server:3000 \
-    STANDARD_RED_NOTES_DATA_DIR=/var/lib/standard-red-notes-mcp
+    STANDARD_RED_NOTES_DATA_DIR=/var/lib/standard-red-notes-mcp \
+    MCP_TRANSPORT=stdio \
+    MCP_HTTP_PORT=3010
 
 # The build output is fully bundled — no node_modules needed at runtime.
 COPY --from=build /opt/standard-red-notes/mcp/dist/index.cjs ./mcp/dist/index.cjs
@@ -34,4 +36,12 @@ COPY --from=build /opt/standard-red-notes/mcp/dist/index.cjs ./mcp/dist/index.cj
 RUN mkdir -p /var/lib/standard-red-notes-mcp
 VOLUME ["/var/lib/standard-red-notes-mcp"]
 
+# Autonomous network mode (MCP_TRANSPORT=http) listens here. Harmless in the
+# default stdio mode. The single image runs either transport based on env:
+#   MCP_TRANSPORT=stdio (default)  -> stdio MCP for a single co-located client
+#   MCP_TRANSPORT=http             -> bearer-authenticated Streamable HTTP service
+#                                     on MCP_HTTP_PORT (requires MCP_HTTP_TOKEN)
+EXPOSE 3010
+
+# The same entrypoint handles both transports; it reads MCP_TRANSPORT at startup.
 ENTRYPOINT ["node", "mcp/dist/index.cjs"]
