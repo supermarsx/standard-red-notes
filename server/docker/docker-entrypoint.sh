@@ -175,6 +175,56 @@ if [ -z "$AUTH_SERVER_ENCRYPTION_SERVER_KEY" ]; then
   exit 1
 fi
 
+########################
+# INSECURE-DEFAULT GUARD #
+########################
+#
+# Hardening: refuse to start if a PUBLISHED default secret is still in use.
+# These values ship in docker-compose.yml / docs as placeholders so the stack
+# boots on localhost out of the box, but they are PUBLIC: anyone can read this
+# repo. A self-hoster who exposes the stack without overriding them would be
+# signing JWTs / valet tokens and encrypting MFA secrets with keys the whole
+# internet knows. We hard-fail here so that can't happen silently.
+#
+# Local dev that intentionally wants the defaults can opt out by setting
+# ALLOW_INSECURE_DEFAULTS=true (e.g. on localhost behind no public exposure).
+INSECURE_ENCRYPTION_DEFAULT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+INSECURE_JWT_DEFAULT="dev-auth-jwt-secret-change-me"
+INSECURE_VALET_DEFAULT="dev-valet-token-secret-change-me"
+
+case "$(printf '%s' "${ALLOW_INSECURE_DEFAULTS:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) ALLOW_INSECURE_DEFAULTS_NORM="true" ;;
+  *) ALLOW_INSECURE_DEFAULTS_NORM="false" ;;
+esac
+
+if [ "$ALLOW_INSECURE_DEFAULTS_NORM" != "true" ]; then
+  insecure_found=""
+  if [ "$AUTH_SERVER_ENCRYPTION_SERVER_KEY" = "$INSECURE_ENCRYPTION_DEFAULT" ]; then
+    insecure_found="${insecure_found} AUTH_SERVER_ENCRYPTION_SERVER_KEY"
+  fi
+  if [ "$AUTH_JWT_SECRET" = "$INSECURE_JWT_DEFAULT" ]; then
+    insecure_found="${insecure_found} AUTH_JWT_SECRET"
+  fi
+  if [ "$VALET_TOKEN_SECRET" = "$INSECURE_VALET_DEFAULT" ]; then
+    insecure_found="${insecure_found} VALET_TOKEN_SECRET"
+  fi
+  if [ -n "$insecure_found" ]; then
+    echo >&2 "==============================================================================="
+    echo >&2 "FATAL: refusing to start with PUBLISHED default secret(s) still in use:"
+    echo >&2 "      ${insecure_found}"
+    echo >&2 ""
+    echo >&2 "These placeholder values are public (they live in this repo's docker-compose.yml"
+    echo >&2 "and docs). Running with them means your signing/encryption keys are known to"
+    echo >&2 "anyone. Generate real secrets and set them in your .env, e.g.:"
+    echo >&2 "      openssl rand -hex 32"
+    echo >&2 ""
+    echo >&2 "For a throwaway LOCAL/dev instance that is not publicly exposed, you can bypass"
+    echo >&2 "this check by setting ALLOW_INSECURE_DEFAULTS=true."
+    echo >&2 "==============================================================================="
+    exit 1
+  fi
+fi
+
 export AUTH_SERVER_SYNCING_SERVER_URL=http://localhost:$SYNCING_SERVER_PORT
 
 # File Uploads

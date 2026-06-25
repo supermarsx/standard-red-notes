@@ -1,6 +1,11 @@
 name: standard-red-notes
 
 x-server-env: &server-env
+  # Set to true ONLY for local/dev to bypass the entrypoint's published-default-secret
+  # guard. A real deployment must instead supply real AUTH_JWT_SECRET /
+  # AUTH_SERVER_ENCRYPTION_SERVER_KEY / VALET_TOKEN_SECRET (the guard refuses to boot
+  # while the published defaults are in use).
+  ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
   DB_HOST: db
   DB_PORT: 3306
   DB_USERNAME: ${MYSQL_USER:-std_notes_user}
@@ -113,6 +118,23 @@ services:
       dockerfile: Dockerfile
     image: standard-red-notes/app:local
     restart: unless-stopped
+    # Hardening: the image already runs as the unprivileged `nginx` user (uid 101)
+    # and listens on 8080, so it needs no Linux capabilities. Drop them all and
+    # block privilege escalation.
+    #
+    # NOTE: read_only is intentionally NOT set here. The OCR runtime-config
+    # entrypoint (docker/docker-entrypoint.sh) rewrites the window.* globals in
+    # /usr/share/nginx/html/index.html at container start, so the served bundle
+    # must stay writable. nginx's own scratch paths (/var/cache/nginx, /var/run,
+    # /tmp) are mounted as tmpfs to keep writes off the image layer.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
     environment:
       # Client-side PDF OCR (tesseract.js). Files are end-to-end encrypted, so the
       # server NEVER sees decrypted PDFs and cannot run OCR — these flags only gate
@@ -129,9 +151,9 @@ services:
     # the proxy reach this container over the shared `proxy` network (see the
     # `networks` block at the bottom). To keep direct access, leave `ports` as-is.
     ports:
-      - "${APP_PORT:-3001}:80"
+      - "${APP_PORT:-3001}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -149,7 +171,7 @@ services:
     #   - "traefik.http.routers.srn-web.rule=Host(`notes.example.com`)"
     #   - "traefik.http.routers.srn-web.entrypoints=websecure"
     #   - "traefik.http.routers.srn-web.tls.certresolver=le"
-    #   - "traefik.http.services.srn-web.loadbalancer.server.port=80"
+    #   - "traefik.http.services.srn-web.loadbalancer.server.port=8080"
 
   server:
     build:
@@ -157,6 +179,15 @@ services:
       dockerfile: Dockerfile
     image: standard-red-notes/server:local
     restart: unless-stopped
+    # Hardening: the image runs supervisord + every node service as the
+    # unprivileged `srn` user (uid 10001). Drop all Linux capabilities and block
+    # privilege escalation. NOTE: this multi-service container WRITES at runtime
+    # (per-package .env files under /opt/server/packages, supervisord/service logs,
+    # file uploads), so it must keep a writable rootfs — do NOT set read_only here.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       <<: *server-env
     depends_on:
@@ -204,11 +235,26 @@ services:
       context: .
       dockerfile: mcp/Dockerfile
     image: standard-red-notes/mcp:local
-    stdin_open: true
-    tty: true
+    restart: unless-stopped
+    # Hardening: no privilege escalation, no capabilities. Internal-only — this
+    # service is NEVER published to the host (reachable only by other containers
+    # on the standard-red-notes network at mcp:3010). Keep it on the `mcp` profile
+    # so it only runs when explicitly requested (`--profile mcp`).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       STANDARD_RED_NOTES_SERVER_URL: http://server:3000
       STANDARD_RED_NOTES_DATA_DIR: /var/lib/standard-red-notes-mcp
+      # Autonomous HTTP mode: run the MCP server as a long-lived HTTP service
+      # (instead of stdio) so other containers/agents can reach it over the
+      # network. MCP_HTTP_TOKEN is a REQUIRED bearer token that authenticates
+      # callers — set it in your .env; with it empty the server has no auth, so
+      # provide one before relying on this service.
+      MCP_TRANSPORT: http
+      MCP_HTTP_PORT: "3010"
+      MCP_HTTP_TOKEN: ${MCP_HTTP_TOKEN:-}
       # Provide account credentials to enable note tools (read-only by default).
       STANDARD_RED_NOTES_EMAIL: ${STANDARD_RED_NOTES_EMAIL:-}
       STANDARD_RED_NOTES_PASSWORD: ${STANDARD_RED_NOTES_PASSWORD:-}
@@ -228,6 +274,21 @@ services:
   db:
     image: mariadb:lts
     restart: unless-stopped
+    # Hardening: internal-only (no host port published). Block privilege
+    # escalation and drop all caps, then add back only what the official mariadb
+    # entrypoint needs: it starts as root to fix data-dir ownership (CHOWN,
+    # DAC_OVERRIDE, FOWNER) and then drops to the `mysql` user via setpriv
+    # (SETGID, SETUID).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
       MYSQL_USER: ${MYSQL_USER:-std_notes_user}
@@ -250,6 +311,16 @@ services:
   cache:
     image: redis:8-alpine
     restart: unless-stopped
+    # Hardening: internal-only (no host port published). Block privilege
+    # escalation and drop all caps, adding back only SETGID/SETUID, which the
+    # redis entrypoint uses to drop from root to the `redis` user.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -267,6 +338,13 @@ services:
     # SNS/SQS. 4.4.0 runs the SNS/SQS the stack needs with no account/token.
     image: localstack/localstack:4.4.0
     restart: unless-stopped
+    # Hardening: internal-only (no host port published) and no privilege
+    # escalation. LocalStack runs its own root supervisor that spawns/forks the
+    # emulated AWS services and manages its runtime under /var/lib/localstack, and
+    # is known to misbehave under a stripped capability set, so we deliberately do
+    # NOT cap_drop ALL here (it's a dev-only emulator on the internal network).
+    security_opt:
+      - "no-new-privileges:true"
     environment:
       SERVICES: sns,sqs
       LS_LOG: warn

@@ -73,6 +73,21 @@ RUN CI=true yarn build \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads \
   && chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# --- Non-root runtime ---------------------------------------------------------
+# Hardening: run all services (supervisord + the node processes it spawns) as an
+# unprivileged user instead of root. All service ports are >1024
+# (API_GATEWAY 3000, FILES 3104, internal 3101/3103/3105 + gRPC 50051/50052), so
+# no CAP_NET_BIND_SERVICE is needed. The entrypoint writes per-package `.env`
+# files into /opt/server/packages/*/ and supervisord writes logs to
+# /var/lib/server/logs, the files service writes uploads to /opt/shared/uploads —
+# all must be owned by the runtime user. There is no local sqlite/data dir (the
+# DB is the external MariaDB service).
+RUN addgroup -g 10001 -S srn \
+  && adduser -u 10001 -S srn -G srn \
+  && chown -R srn:srn /opt/server /var/lib/server/logs /opt/shared/uploads
+
+USER srn:srn
+
 EXPOSE 3000 3104
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=10 \

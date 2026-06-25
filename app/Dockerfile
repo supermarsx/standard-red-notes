@@ -63,18 +63,31 @@ RUN yarn workspaces focus @standardnotes/web
 COPY . .
 RUN yarn build:web
 
-FROM nginx:1.27-alpine
+# Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
+# image is a drop-in for nginx:alpine that runs the master process as the
+# unprivileged `nginx` user (uid 101) and listens on 8080 (a port >1024, so no
+# CAP_NET_BIND_SERVICE is required). Its /docker-entrypoint.d/ runs the same
+# templating/entrypoint scripts as the stock image, so the OCR drop-in below
+# still executes at container start.
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
+# nginx.conf below listens on 8080 (the unprivileged default) instead of :80 so
+# the worker can bind without root. Compose maps the host port to 8080.
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /opt/standard-red-notes/app/packages/web/dist /usr/share/nginx/html
 
 # Runtime config templating (e.g. OCR_ENABLED) for the static bundle. Rewrites
 # the window.* globals in index.html from env at container start, then hands off
 # to the stock nginx entrypoint so operators can flip flags without a rebuild.
+# The unprivileged image's entrypoint runs these as the `nginx` user, so the
+# script and index.html must be writable by it (handled while still root below).
+USER root
 COPY docker/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
-RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
+RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh \
+  && chown -R nginx:nginx /usr/share/nginx/html
+USER nginx
 
-EXPOSE 80
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
-  CMD wget -qO- http://127.0.0.1/health >/dev/null || exit 1
+  CMD wget -qO- http://127.0.0.1:8080/health >/dev/null || exit 1
