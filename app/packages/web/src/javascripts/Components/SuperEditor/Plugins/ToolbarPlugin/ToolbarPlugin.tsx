@@ -115,7 +115,6 @@ import {
   groupsBySuperGroup,
   ToolbarButtonId,
   ToolbarGroupId,
-  ToolbarSuperGroupId,
 } from './ToolbarConfig'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
@@ -436,6 +435,9 @@ const ToolbarMenuItem = ({ name, iconName, active, onClick, ...props }: ToolbarM
     </MenuItem>
   )
 }
+
+// Pseudo-tab id for the element-specific (contextual) ribbon tab.
+const CONTEXTUAL_TAB_ID = 'contextual'
 
 const ToolbarPlugin = () => {
   const { t } = useTranslation('editor')
@@ -2059,12 +2061,7 @@ const ToolbarPlugin = () => {
   // tabs (Home / Insert / AI / Tools) and render only the active tab's groups, so
   // the bar fits without horizontal scroll unless a single tab is itself too tight.
   const superGroupTabs = groupsBySuperGroup(resolvedGroups)
-  const [activeSuperGroupId, setActiveSuperGroupId] = useState<ToolbarSuperGroupId | null>(null)
-  const effectiveSuperGroupId =
-    activeSuperGroupId && superGroupTabs.some((tab) => tab.id === activeSuperGroupId)
-      ? activeSuperGroupId
-      : (superGroupTabs[0]?.id ?? null)
-  const activeGroups = superGroupTabs.find((tab) => tab.id === effectiveSuperGroupId)?.groups ?? resolvedGroups
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
   // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
   // (each group packs its buttons into up to 3 rows below), scrolling
@@ -2217,6 +2214,35 @@ const ToolbarPlugin = () => {
       />,
     )
   }
+
+  // Office-ribbon contextual tab: when an element (table/image/link/etc.) is
+  // active in the docked ribbon, surface its tailored actions as an extra,
+  // auto-selected ribbon tab rather than a separate line. (The separate line is
+  // kept only for the non-ribbon floating selection toolbar, further below.)
+  const hasContextualTab = canShowAllItems && !!contextualWidget && contextualButtons.length > 0
+  const ribbonTabs = [
+    ...superGroupTabs.map((tab) => ({ id: tab.id as string, label: tab.label })),
+    ...(hasContextualTab ? [{ id: CONTEXTUAL_TAB_ID, label: contextualWidget!.label }] : []),
+  ]
+  const effectiveTabId =
+    activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
+  const isContextualActive = effectiveTabId === CONTEXTUAL_TAB_ID
+  const activeGroups = isContextualActive
+    ? []
+    : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
+
+  // Auto-select the contextual tab when an element becomes active, and clear it
+  // when the element goes away. Depending on the label (not just presence) means
+  // switching e.g. Table -> Image re-selects the contextual tab, while a stable
+  // label won't re-run — so a user who manually clicks another tab keeps it.
+  useEffect(() => {
+    if (hasContextualTab) {
+      setActiveTabId(CONTEXTUAL_TAB_ID)
+    } else {
+      setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasContextualTab, contextualWidget?.label])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
@@ -2420,22 +2446,27 @@ const ToolbarPlugin = () => {
         <div className="flex w-full flex-shrink-0 flex-col border-t border-border md:border-0">
           {/* Office-ribbon tab strip: one mini tab per super group. Switching tabs
               swaps which groups render below, so the bar rarely needs to scroll. */}
-          {canShowAllItems && superGroupTabs.length > 1 && (
+          {canShowAllItems && ribbonTabs.length > 1 && (
             <div className="super-toolbar-tabs flex items-center gap-1 overflow-x-auto px-2 pt-1" role="tablist">
-              {superGroupTabs.map((tab) => {
-                const isActive = tab.id === effectiveSuperGroupId
+              {ribbonTabs.map((tab) => {
+                const isActive = tab.id === effectiveTabId
+                const isContextualTab = tab.id === CONTEXTUAL_TAB_ID
                 return (
                   <button
                     key={tab.id}
                     role="tab"
                     aria-selected={isActive}
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => setActiveSuperGroupId(tab.id)}
+                    onClick={() => setActiveTabId(tab.id)}
                     className={classNames(
                       'whitespace-nowrap rounded-t-md border-b-2 px-3 py-1 text-xs font-semibold transition-colors',
-                      isActive
-                        ? 'border-info bg-contrast text-info'
-                        : 'border-transparent text-passive-1 hover:text-text',
+                      isContextualTab
+                        ? isActive
+                          ? 'border-info bg-info text-info-contrast'
+                          : 'border-info/40 text-info hover:bg-contrast'
+                        : isActive
+                          ? 'border-info bg-contrast text-info'
+                          : 'border-transparent text-passive-1 hover:text-text',
                     )}
                   >
                     {tab.label}
@@ -2445,6 +2476,15 @@ const ToolbarPlugin = () => {
             </div>
           )}
           <div className="flex w-full">
+          {isContextualActive ? (
+            <Toolbar
+              className="super-toolbar flex flex-grow flex-wrap items-center gap-0.5 gap-y-1 px-1 pb-1 pt-2"
+              store={contextualToolbarStore}
+              aria-label={`${contextualWidget?.label ?? ''} tools`}
+            >
+              {contextualButtons}
+            </Toolbar>
+          ) : (
           <Toolbar
             className={classNames(
               // A little breathing room above the group blocks pushes the (scroll)
@@ -2503,6 +2543,7 @@ const ToolbarPlugin = () => {
                 })
               : floatingSelectionToolbar}
           </Toolbar>
+          )}
           {isMobile && (
             <button
               className="flex flex-shrink-0 items-center justify-center rounded border-l border-border px-3 py-3"
@@ -2516,8 +2557,9 @@ const ToolbarPlugin = () => {
         </div>
         {/* Element-specific tooling on its own line: when a table/image/link/etc.
             is active, its tailored actions get a dedicated row labelled with the
-            element type, instead of being crammed onto the main toolbar. */}
-        {contextualWidget && contextualButtons.length > 0 && (
+            element type. In ribbon mode this surfaces as a ribbon tab instead, so
+            this separate line is kept only for the floating selection toolbar. */}
+        {!canShowAllItems && contextualWidget && contextualButtons.length > 0 && (
           <div className="flex w-full flex-shrink-0 items-start gap-1.5 border-t border-border px-1 py-0.5">
             <span className="mt-0.5 flex-shrink-0 select-none whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info">
               {contextualWidget.label}
