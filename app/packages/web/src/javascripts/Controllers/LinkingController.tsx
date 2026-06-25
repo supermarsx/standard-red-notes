@@ -4,6 +4,7 @@ import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 
 import { createLinkFromItem } from '@/Utils/Items/Search/createLinkFromItem'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
+import { achievements, METRICS } from '@/Achievements'
 import {
   ApplicationEvent,
   ContentType,
@@ -228,6 +229,7 @@ export class LinkingController extends AbstractViewController implements Interna
 
     const linkNoteToNote = async (note1: SNNote, note2: SNNote) => {
       await this.mutator.linkNoteToNote(note1, note2)
+      achievements.increment(METRICS.noteLinksTotal)
     }
 
     const linkTagToNote = async (tag: SNTag, note: SNNote) => {

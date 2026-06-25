@@ -10,6 +10,7 @@ import {
 } from '@/Constants/Strings'
 import { WebApplication } from '@/Application/WebApplication'
 import { preventRefreshing } from '@/Utils'
+import { achievements, METRICS } from '@/Achievements'
 import { alertDialog } from '@standardnotes/ui-services'
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApplicationEvent, MobileUnlockTiming } from '@standardnotes/snjs'
@@ -130,12 +131,15 @@ const PasscodeLock = ({ application }: Props) => {
     }
 
     await preventRefreshing(STRING_CONFIRM_APP_QUIT_DURING_PASSCODE_CHANGE, async () => {
-      const successful = application.hasPasscode()
-        ? await application.changePasscode(passcode as string)
-        : await application.addPasscode(passcode as string)
+      const isNewPasscode = !application.hasPasscode()
+      const successful = isNewPasscode
+        ? await application.addPasscode(passcode as string)
+        : await application.changePasscode(passcode as string)
 
       if (!successful) {
         setIsPasscodeFocused(true)
+      } else if (isNewPasscode) {
+        achievements.markEvent(METRICS.passcodeLockAdded)
       }
     })
 

@@ -21,6 +21,7 @@ import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Spinner from '@/Components/Spinner/Spinner'
 import { downloadOrShareBlobBasedOnPlatform } from '@/Utils/DownloadOrShareBasedOnPlatform'
+import { achievements, METRICS } from '@/Achievements'
 import { c } from 'ttag'
 
 type Props = {
@@ -75,6 +76,7 @@ const DataBackups = ({ application }: Props) => {
     })
 
     if (isBackupEncrypted) {
+      achievements.markEvent(METRICS.backupEncrypted)
       const filename = `Standard Red Notes Encrypted Backup and Import File - ${application.archiveService.formattedDateForExports()}`
       const sanitizedFilename = sanitizeFileName(filename) + '.txt'
       void downloadOrShareBlobBasedOnPlatform({
@@ -87,6 +89,7 @@ const DataBackups = ({ application }: Props) => {
         showToastOnAndroid: undefined,
       })
     } else {
+      achievements.markEvent(METRICS.backupUnencrypted)
       const zippedDecryptedItemsBlob = await application.archiveService.getZippedDecryptedItemsBlob(data)
       const filename = `Standard Red Notes Backup - ${application.archiveService.formattedDateForExports()}`
       const sanitizedFilename = sanitizeFileName(filename) + '.zip'
@@ -135,6 +138,8 @@ const DataBackups = ({ application }: Props) => {
       statusText = result.getError()
     } else if (result.getValue().errorCount) {
       statusText = StringImportError(result.getValue().errorCount)
+    } else {
+      achievements.markEvent(METRICS.backupImported)
     }
     void alertDialog({
       text: statusText,

@@ -10,6 +10,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
 import CopyButton from '../TwoFactorAuth/CopyButton'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -97,6 +98,7 @@ const AccountRecovery: FunctionComponent<Props> = ({ application }: Props) => {
       }
       setRecoveryCode(result.getValue())
       setEnabled(true)
+      achievements.markEvent(METRICS.recoveryMethodAdded)
       addToast({ type: ToastType.Success, message: 'Account recovery enabled. Save your recovery code now.' })
     } catch (error) {
       addToast({ type: ToastType.Error, message: `Failed to enable account recovery: ${(error as Error).message}` })

@@ -12,6 +12,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
 import { encryptShare, SharePayload } from '@/Components/SharedView/shareCrypto'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -139,6 +140,7 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
         return
       }
 
+      achievements.markEvent(METRICS.survivorSwitchEnabled)
       addToast({ type: ToastType.Success, message: 'Survivor switch created.' })
       setRecipientEmail('')
       setMessage('')

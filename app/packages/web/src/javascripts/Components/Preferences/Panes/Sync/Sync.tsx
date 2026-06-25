@@ -12,6 +12,7 @@ import {
   VectorIconNameOrEmoji,
 } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { achievements, METRICS } from '@/Achievements'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -137,6 +138,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
   /** Explicit user-initiated sync ("Sync now"). Always runs, even in manual mode. */
   const syncNow = useCallback(async () => {
     setSyncingNow(true)
+    achievements.increment(METRICS.manualSyncTotal)
     try {
       await application.sync.sync({ isUserInitiated: true })
       addToast({ type: ToastType.Success, message: 'Sync complete.' })

@@ -11,6 +11,7 @@ import {
 } from '@standardnotes/ui-services'
 import { PreferencePaneId } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
+import { achievements, METRICS } from '@/Achievements'
 import { openOrFocusConstellationWindow } from '../Constellation/constellationWindow'
 import { openOrCreateDiaryEntry } from '@/Diary/diaryService'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
@@ -302,7 +303,10 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     keywords: ['sync', 'refresh', 'push', 'pull', 'manual', 'update'],
     icon: 'sync',
     // Explicit user-initiated sync. Always runs, even when Manual sync mode is on.
-    run: (application) => void application.sync.sync({ isUserInitiated: true }),
+    run: (application) => {
+      achievements.increment(METRICS.manualSyncTotal)
+      void application.sync.sync({ isUserInitiated: true })
+    },
   },
   {
     id: 'global-open-pref-sync',

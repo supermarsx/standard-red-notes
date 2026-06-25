@@ -16,6 +16,7 @@ import Spinner from '@/Components/Spinner/Spinner'
 import CopyButton from '../TwoFactorAuth/CopyButton'
 
 import { wrapItemsKeys, WrappableItemsKey } from './wrapKeys'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -134,6 +135,7 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
       // The full token is the server token plus the client-only wrap secret.
       // It is never logged and never persisted; it is shown to the user once.
       const fullToken = serverToken + '.' + wrapped.wrapSecret
+      achievements.markEvent(METRICS.mcpTokenAdded)
       setCreatedToken(fullToken)
       setLabel('')
       setScope('read-only')

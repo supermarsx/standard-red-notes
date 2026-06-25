@@ -35,6 +35,7 @@ import NoteStats from './NoteStats'
 import NotesFolderCounter from './NotesFolderCounter'
 import AssistantUsage from './AssistantUsage'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { achievements, METRICS } from '@/Achievements'
 import { getManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
 
 type Props = {
@@ -344,6 +345,7 @@ class Footer extends AbstractComponent<Props, State> {
       return
     }
     this.setState({ syncingNow: true })
+    achievements.increment(METRICS.manualSyncTotal)
     try {
       await this.application.sync.sync({ isUserInitiated: true })
       addToast({ type: ToastType.Success, message: 'Sync complete.' })

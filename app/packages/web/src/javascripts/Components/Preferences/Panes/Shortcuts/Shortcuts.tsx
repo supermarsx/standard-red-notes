@@ -13,6 +13,7 @@ import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import { Subtitle, Text, Title } from '../../PreferencesComponents/Content'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
+import { achievements, METRICS } from '@/Achievements'
 import Button from '@/Components/Button/Button'
 import Icon from '@/Components/Icon/Icon'
 import { KeyboardShortcutIndicator } from '@/Components/KeyboardShortcutIndicator/KeyboardShortcutIndicator'
@@ -56,6 +57,7 @@ const ShortcutRow: FunctionComponent<{
       }
       setConflictLabel(null)
       keyboardService.setShortcutOverride(row.commandKey, shortcut)
+      achievements.markEvent(METRICS.shortcutsChanged)
       onStopCapture()
     },
     [keyboardService, row.commandKey, labelForCommandKey, onStopCapture],

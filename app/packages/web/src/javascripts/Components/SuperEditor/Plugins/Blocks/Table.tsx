@@ -8,6 +8,7 @@ import {
   MIN_TABLE_COLUMNS,
   MIN_TABLE_ROWS,
 } from '../TablePlugin'
+import { achievements, METRICS } from '@/Achievements'
 
 export function GetTableBlockOption(onSelect: () => void) {
   return new BlockPickerOption('Table', {
@@ -48,8 +49,10 @@ export function GetDynamicTableBlocks(editor: LexicalEditor, queryString: string
         new BlockPickerOption(`${rows}x${columns} Table`, {
           iconName: 'table',
           keywords: ['table'],
-          onSelect: () =>
-            editor.dispatchCommand(INSERT_TABLE_COMMAND, { columns: String(columns), rows: String(rows) }),
+          onSelect: () => {
+            achievements.increment(METRICS.customTablesCreated)
+            editor.dispatchCommand(INSERT_TABLE_COMMAND, { columns: String(columns), rows: String(rows) })
+          },
         }),
       )
     }
@@ -65,8 +68,10 @@ export function GetDynamicTableBlocks(editor: LexicalEditor, queryString: string
               new BlockPickerOption(`${rows}x${columns} Table`, {
                 iconName: 'table',
                 keywords: ['table'],
-                onSelect: () =>
-                  editor.dispatchCommand(INSERT_TABLE_COMMAND, { columns: String(columns), rows: String(rows) }),
+                onSelect: () => {
+                  achievements.increment(METRICS.customTablesCreated)
+                  editor.dispatchCommand(INSERT_TABLE_COMMAND, { columns: String(columns), rows: String(rows) })
+                },
               }),
           ),
       )

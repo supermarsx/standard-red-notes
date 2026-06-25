@@ -1,4 +1,5 @@
-import { noteTypeForEditorIdentifier } from '@standardnotes/features'
+import { noteTypeForEditorIdentifier, NoteType } from '@standardnotes/features'
+import { achievements, METRICS } from '@/Achievements'
 import {
   SNNote,
   SNTag,
@@ -45,6 +46,12 @@ export class NoteViewController implements ItemViewControllerInterface {
   private defaultTag?: SNTag
 
   private syncController!: NoteSyncController
+
+  // Standard Red Notes (achievements): per-note edit counter for the lifetime of
+  // this controller. Each save bumps it; we feed the running count to the
+  // achievements service's setAtLeast so the "max edits on a single note" metric
+  // reflects the most-edited note. Web-local, fire-and-forget.
+  private editCountForThisNote = 0
 
   constructor(
     item: SNNote | undefined,
@@ -185,6 +192,10 @@ export class NoteViewController implements ItemViewControllerInterface {
   public insertTemplatedNote(): Promise<DecryptedItemInterface> {
     log(LoggingDomain.NoteView, 'Inserting template note')
     this.isTemplateNote = false
+    // Achievements: count newly-created spreadsheet notes (web-local, best-effort).
+    if (this.item?.noteType === NoteType.Spreadsheet) {
+      achievements.increment(METRICS.spreadsheetNotesCreated)
+    }
     return this.mutator.insertItem(this.item)
   }
 
@@ -217,6 +228,11 @@ export class NoteViewController implements ItemViewControllerInterface {
     if (isTemplate) {
       await this.insertTemplatedNote()
     }
+
+    // Achievements: each save is one "edit" of this note. Feed the running count
+    // for THIS note to setAtLeast so the metric tracks the most-edited note.
+    this.editCountForThisNote += 1
+    achievements.setAtLeast(METRICS.maxNoteEdits, this.editCountForThisNote)
 
     await this.syncController.saveAndAwaitLocalPropagation(params)
   }

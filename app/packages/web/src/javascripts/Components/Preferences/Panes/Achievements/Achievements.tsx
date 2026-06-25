@@ -1,6 +1,5 @@
-import { FunctionComponent, useEffect, useMemo, useState } from 'react'
+import { FunctionComponent, useMemo } from 'react'
 import { observer } from 'mobx-react-lite'
-import { ApplicationEvent, ContentType } from '@standardnotes/snjs'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -9,129 +8,94 @@ import PreferencesPane from '@/Components/Preferences/PreferencesComponents/Pref
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Icon from '@/Components/Icon/Icon'
-import { AccountStatistics, computeAccountStatistics } from '@/Components/Dashboard/Statistics'
+import Switch from '@/Components/Switch/Switch'
 
-import { Achievement, AchievementTier, ACHIEVEMENTS, countEarned } from './AchievementDefinitions'
+import { achievements, useAchievements } from '@/Achievements'
+import { AchievementProgressEntry } from '@/Achievements/AchievementsService'
 
 type Props = {
   application: WebApplication
 }
 
-// Match the dashboard: recompute at most once per this interval, driven by item
-// streams / sync completion. No server polling — purely derived from synced state.
-const RECOMPUTE_THROTTLE_MS = 1500
-
-const TIER_ACCENT: Record<AchievementTier, string> = {
-  bronze: 'text-warning',
-  silver: 'text-neutral',
-  gold: 'text-info',
-  platinum: 'text-success',
+const formatUnlockedAt = (iso?: string): string | null => {
+  if (!iso) {
+    return null
+  }
+  const date = new Date(iso)
+  return isNaN(date.getTime()) ? null : date.toLocaleString()
 }
 
-const AchievementCard: FunctionComponent<{ achievement: Achievement; stats: AccountStatistics }> = ({
-  achievement,
-  stats,
-}) => {
-  const earned = achievement.isEarned(stats)
-  const { current, target } = achievement.progress(stats)
-  const clamped = Math.max(0, Math.min(current, target))
-  const percent = target > 0 ? Math.round((clamped / target) * 100) : 0
+const AchievementRow: FunctionComponent<{
+  entry: AchievementProgressEntry
+  recordTimestamps: boolean
+  individuallyEnabled: boolean
+}> = ({ entry, recordTimestamps, individuallyEnabled }) => {
+  const { def, current, unlocked, unlockedAt } = entry
+  // A still-locked HIDDEN achievement is a mystery: reveal nothing about it.
+  const isMystery = def.hidden && !unlocked
+
+  const name = isMystery ? '???' : def.name
+  const description = isMystery ? 'Hidden achievement' : def.description
+  const clampedCurrent = Math.min(current, def.threshold)
+  const unlockedDate = recordTimestamps ? formatUnlockedAt(unlockedAt) : null
 
   return (
     <div
-      className={`flex flex-col gap-2 rounded-md border border-solid p-4 ${
-        earned ? 'border-border bg-default shadow-sm' : 'border-border bg-contrast opacity-75'
+      className={`flex items-start gap-3 rounded-md border border-solid p-3 ${
+        unlocked ? 'border-border bg-default shadow-sm' : 'border-border bg-contrast opacity-80'
       }`}
     >
-      <div className="flex items-center gap-2">
-        <Icon
-          type={earned ? 'star-filled' : achievement.icon}
-          size="medium"
-          className={`flex-shrink-0 ${earned ? TIER_ACCENT[achievement.tier] : 'text-passive-1'}`}
-        />
-        <span className={`text-sm font-bold ${earned ? 'text-text' : 'text-passive-1'}`}>{achievement.title}</span>
-        {earned && <Icon type="check-circle-filled" size="small" className="ml-auto flex-shrink-0 text-success" />}
-      </div>
-
-      <p className={`m-0 text-xs ${earned ? 'text-neutral' : 'text-passive-1'}`}>{achievement.description}</p>
-
-      <div className="mt-auto">
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-passive-3">
-          <div
-            className={`h-full rounded-full ${earned ? 'bg-success' : 'bg-info'}`}
-            style={{ width: `${percent}%` }}
-          />
+      <Icon
+        type={unlocked ? 'star-filled' : isMystery ? 'help' : 'star'}
+        size="medium"
+        className={`mt-0.5 flex-shrink-0 ${unlocked ? 'text-info' : 'text-passive-1'}`}
+      />
+      <div className="min-w-0 flex-grow">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm font-bold ${unlocked ? 'text-text' : 'text-passive-1'}`}>{name}</span>
+          {unlocked && <Icon type="check-circle-filled" size="small" className="flex-shrink-0 text-success" />}
         </div>
-        <div className="mt-1 text-right text-[0.625rem] font-semibold text-passive-1">
-          {earned ? 'Unlocked' : `${clamped.toLocaleString()} / ${target.toLocaleString()}`}
-        </div>
+        <p className={`m-0 mt-0.5 text-xs ${unlocked ? 'text-neutral' : 'text-passive-1'}`}>{description}</p>
+
+        {unlocked ? (
+          unlockedDate && <p className="m-0 mt-1 text-[0.625rem] font-semibold text-passive-1">Unlocked {unlockedDate}</p>
+        ) : isMystery ? null : (
+          <div className="mt-1.5">
+            <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-passive-3">
+              <div
+                className="h-full rounded-full bg-info"
+                style={{ width: `${def.threshold > 0 ? Math.round((clampedCurrent / def.threshold) * 100) : 0}%` }}
+              />
+            </div>
+            <div className="mt-0.5 text-[0.625rem] font-semibold text-passive-1">
+              {clampedCurrent.toLocaleString()} / {def.threshold.toLocaleString()}
+            </div>
+          </div>
+        )}
       </div>
+      <Switch
+        className="mt-0.5 flex-shrink-0"
+        checked={individuallyEnabled}
+        onChange={(checked) => achievements.setAchievementEnabled(def.id, checked)}
+      />
     </div>
   )
 }
 
-const Achievements: FunctionComponent<Props> = ({ application }: Props) => {
-  // Compute once on mount; recompute on a throttle as items/sync change.
-  const [stats, setStats] = useState<AccountStatistics>(() => computeAccountStatistics(application))
+const Achievements: FunctionComponent<Props> = (_props: Props) => {
+  const { progress, config, unlockedCount, total } = useAchievements()
 
-  useEffect(() => {
-    let throttleTimeout: ReturnType<typeof setTimeout> | undefined
-    let pending = false
-
-    const recompute = () => {
-      pending = false
-      setStats(computeAccountStatistics(application))
+  const byCategory = useMemo(() => {
+    const groups = new Map<string, AchievementProgressEntry[]>()
+    for (const entry of progress) {
+      const list = groups.get(entry.def.category) ?? []
+      list.push(entry)
+      groups.set(entry.def.category, list)
     }
+    return Array.from(groups.entries())
+  }, [progress])
 
-    const scheduleRecompute = () => {
-      if (throttleTimeout) {
-        pending = true
-        return
-      }
-      recompute()
-      throttleTimeout = setTimeout(() => {
-        throttleTimeout = undefined
-        if (pending) {
-          recompute()
-        }
-      }, RECOMPUTE_THROTTLE_MS)
-    }
-
-    const removeItemObserver = application.items.streamItems(
-      [ContentType.TYPES.Note, ContentType.TYPES.Tag, ContentType.TYPES.File],
-      () => scheduleRecompute(),
-    )
-
-    const removeSyncObserver = application.addEventObserver(async () => {
-      scheduleRecompute()
-    }, ApplicationEvent.CompletedFullSync)
-
-    return () => {
-      removeItemObserver()
-      removeSyncObserver()
-      if (throttleTimeout) {
-        clearTimeout(throttleTimeout)
-      }
-    }
-  }, [application])
-
-  const earnedCount = useMemo(() => countEarned(stats), [stats])
-  const total = ACHIEVEMENTS.length
-
-  const { earned, locked } = useMemo(() => {
-    const earnedList: Achievement[] = []
-    const lockedList: Achievement[] = []
-    for (const achievement of ACHIEVEMENTS) {
-      if (achievement.isEarned(stats)) {
-        earnedList.push(achievement)
-      } else {
-        lockedList.push(achievement)
-      }
-    }
-    return { earned: earnedList, locked: lockedList }
-  }, [stats])
-
-  const overallPercent = total > 0 ? Math.round((earnedCount / total) * 100) : 0
+  const overallPercent = total > 0 ? Math.round((unlockedCount / total) * 100) : 0
 
   return (
     <PreferencesPane>
@@ -139,51 +103,71 @@ const Achievements: FunctionComponent<Props> = ({ application }: Props) => {
         <PreferencesSegment>
           <Title>Achievements</Title>
           <Text>
-            Badges you earn as you use Standard Red Notes. Every achievement is derived from your own synced library —
-            note counts, tags, files, words written, account age and more. Nothing is recomputed against the server.
+            Earn badges as you use Standard Red Notes — for writing, linking, customizing, syncing, and more. Progress is
+            tracked locally on this device only; nothing is synced or sent to a server.
           </Text>
 
           <div className="mt-4 flex items-center gap-3 rounded-md border border-solid border-border bg-contrast p-4">
             <Icon type="star-filled" size="large" className="flex-shrink-0 text-info" />
             <div className="min-w-0">
               <div className="text-lg font-bold text-text">
-                {earnedCount} / {total} unlocked
+                {unlockedCount} / {total} unlocked
               </div>
               <div className="mt-1 h-2 w-48 max-w-full overflow-hidden rounded-full bg-passive-3">
                 <div className="h-full rounded-full bg-info" style={{ width: `${overallPercent}%` }} />
               </div>
             </div>
           </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>Track achievements</Subtitle>
+              <Text className="text-passive-0">
+                Turn the whole achievements system on or off. While off, no new achievements unlock.
+              </Text>
+            </div>
+            <Switch checked={config.enabled} onChange={(checked) => achievements.setMasterEnabled(checked)} />
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>Record unlock date &amp; time</Subtitle>
+              <Text className="text-passive-0">When on, each achievement records when it was unlocked.</Text>
+            </div>
+            <Switch
+              checked={config.recordTimestamps}
+              onChange={(checked) => achievements.setRecordTimestamps(checked)}
+            />
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <div className="mr-4 flex flex-col">
+              <Subtitle>Unlock notifications</Subtitle>
+              <Text className="text-passive-0">Show a notification when you unlock an achievement.</Text>
+            </div>
+            <Switch
+              checked={config.showUnlockToasts}
+              onChange={(checked) => achievements.setShowUnlockToasts(checked)}
+            />
+          </div>
         </PreferencesSegment>
 
-        <HorizontalSeparator classes="my-4" />
-
-        <PreferencesSegment>
-          <Subtitle>Earned {earned.length > 0 ? `(${earned.length})` : ''}</Subtitle>
-          {earned.length === 0 ? (
-            <Text className="mt-2">No achievements yet. Keep writing — your first badge is within reach.</Text>
-          ) : (
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {earned.map((achievement) => (
-                <AchievementCard key={achievement.id} achievement={achievement} stats={stats} />
+        {byCategory.map(([category, entries]) => (
+          <PreferencesSegment key={category}>
+            <HorizontalSeparator classes="my-4" />
+            <Subtitle>{category}</Subtitle>
+            <div className="mt-3 flex flex-col gap-2">
+              {entries.map((entry) => (
+                <AchievementRow
+                  key={entry.def.id}
+                  entry={entry}
+                  recordTimestamps={config.recordTimestamps}
+                  individuallyEnabled={config.perAchievement[entry.def.id] !== false}
+                />
               ))}
             </div>
-          )}
-        </PreferencesSegment>
-
-        {locked.length > 0 && (
-          <>
-            <HorizontalSeparator classes="my-4" />
-            <PreferencesSegment>
-              <Subtitle>Locked ({locked.length})</Subtitle>
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {locked.map((achievement) => (
-                  <AchievementCard key={achievement.id} achievement={achievement} stats={stats} />
-                ))}
-              </div>
-            </PreferencesSegment>
-          </>
-        )}
+          </PreferencesSegment>
+        ))}
       </PreferencesGroup>
     </PreferencesPane>
   )

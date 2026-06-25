@@ -8,6 +8,7 @@ import { STRING_FAILED_TO_UPDATE_USER_SETTING } from '@/Constants/Strings'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import Spinner from '@/Components/Spinner/Spinner'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -69,6 +70,9 @@ const Privacy: FunctionComponent<Props> = ({ application }: Props) => {
 
     if (!updateResult) {
       setSessionUaLoggingValue(previousValue)
+    } else if (newValue === LogSessionUserAgentOption.Disabled) {
+      // Achievements: maximizing privacy by disabling session user-agent logging.
+      achievements.markEvent(METRICS.maxPrivacyEnabled)
     }
   }
 

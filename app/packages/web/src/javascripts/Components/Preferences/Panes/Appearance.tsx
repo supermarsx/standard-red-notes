@@ -17,6 +17,7 @@ import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -34,6 +35,7 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
   const [useTranslucentUI, setUseTranslucentUI] = useLocalPreference(LocalPrefKey.UseTranslucentUI)
   const toggleTranslucentUI = () => {
     setUseTranslucentUI(!useTranslucentUI)
+    achievements.markEvent(METRICS.appearanceCustomized)
   }
 
   const [newTabBehavior, setNewTabBehavior] = useState<NewTabBehavior>(() => loadNewTabBehavior())
@@ -45,6 +47,7 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
     const behavior = value as NewTabBehavior
     setNewTabBehavior(behavior)
     saveNewTabBehavior(behavior)
+    achievements.markEvent(METRICS.appearanceCustomized)
   }
 
   useEffect(() => {

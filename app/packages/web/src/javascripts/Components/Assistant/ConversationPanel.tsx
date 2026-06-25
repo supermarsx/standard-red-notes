@@ -10,6 +10,7 @@ import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { ChatMessage as AgentChatMessage } from '@/Assistant/types'
 import { run } from '@/Assistant/agent'
+import { achievements, METRICS } from '@/Achievements'
 import { ProxyProvider } from '@/Assistant/ProxyProvider'
 import { DirectProvider } from '@/Assistant/DirectProvider'
 import { Provider } from '@/Assistant/types'
@@ -161,6 +162,9 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 
   const runPrompt = useCallback(
     async (promptText: string) => {
+      // Achievements: one user message sent to the AI assistant (web-local).
+      achievements.increment(METRICS.aiAssistantMessages)
+
       const provider = application.getPreference(PrefKey.AssistantProvider, '')
       const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
       const apiKey = application.getPreference(PrefKey.AssistantApiKey, '')

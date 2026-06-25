@@ -31,6 +31,7 @@ import {
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
 import { webSearch, webFetch } from './webTools'
+import { achievements } from '@/Achievements'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -214,6 +215,8 @@ export class AssistantTools implements ToolSession {
         return this.webSearch(args)
       case 'web.fetch':
         return this.webFetch(args)
+      case 'get_achievements':
+        return this.getAchievements()
       case 'tags.list':
         return this.tagsList()
       case 'tags.create':
@@ -641,6 +644,34 @@ export class AssistantTools implements ToolSession {
     return webFetch(this.application, url)
   }
 
+  /**
+   * Read-only summary of the user's achievements. Preserves the mystery of
+   * still-hidden, still-locked achievements: it reveals only HOW MANY remain
+   * hidden, never their names or criteria. Unlocked achievements (even hidden
+   * ones) and visible in-progress ones are reported fully.
+   */
+  private getAchievements() {
+    const progress = achievements.getProgress()
+    const total = progress.length
+    const unlocked = progress.filter((p) => p.unlocked)
+    const lockedVisible = progress.filter((p) => !p.unlocked && !p.def.hidden)
+    const hiddenLockedCount = progress.filter((p) => !p.unlocked && p.def.hidden).length
+
+    const inProgress = lockedVisible
+      .filter((p) => p.current > 0)
+      .sort((a, b) => b.current / b.def.threshold - a.current / a.def.threshold)
+      .slice(0, 5)
+      .map((p) => ({ name: p.def.name, current: p.current, threshold: p.def.threshold }))
+
+    return {
+      unlockedCount: unlocked.length,
+      total,
+      unlocked: unlocked.map((p) => p.def.name),
+      topInProgress: inProgress,
+      hiddenLockedRemaining: hiddenLockedCount,
+    }
+  }
+
   private tagsList() {
     const tags = this.allTags()
     return { count: tags.length, tags: tags.map((tag) => tagSummary(this.application, tag)) }
@@ -923,6 +954,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'tags.list',
     description: 'List all tags with their uuid and full hierarchical title.',
+    mutating: false,
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_achievements',
+    description:
+      "Get a compact summary of the user's gamification achievements: how many are unlocked out of the total, the names of the unlocked ones, the top in-progress achievements (name, current, threshold), and how many HIDDEN achievements remain locked. Do not speculate about the names or criteria of still-hidden achievements — only report the count that remain, to preserve the surprise.",
     mutating: false,
     inputSchema: { type: 'object', properties: {} },
   },

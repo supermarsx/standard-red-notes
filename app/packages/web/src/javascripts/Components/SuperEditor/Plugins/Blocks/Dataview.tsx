@@ -3,6 +3,7 @@ import { $insertNodeToNearestRoot } from '@lexical/utils'
 import { BlockPickerOption } from '../BlockPickerPlugin/BlockPickerOption'
 import { LexicalIconName } from '@/Components/Icon/LexicalIcons'
 import { $createDataTableNode } from '../../Lexical/Nodes/DataTableNode'
+import { achievements, METRICS } from '@/Achievements'
 
 export const DataviewBlock = {
   name: 'Data Table',
@@ -11,6 +12,7 @@ export const DataviewBlock = {
   onSelect: (editor: LexicalEditor) =>
     editor.update(() => {
       $insertNodeToNearestRoot($createDataTableNode())
+      achievements.increment(METRICS.customTablesCreated)
     }),
 }
 

@@ -1,5 +1,6 @@
-import { FunctionComponent, useMemo, useState } from 'react'
+import { FunctionComponent, useEffect, useMemo, useState } from 'react'
 import { VectorIconNameOrEmoji } from '@standardnotes/snjs'
+import { achievements, METRICS } from '@/Achievements'
 import { classNames } from '@standardnotes/utils'
 import Icon from '@/Components/Icon/Icon'
 import {
@@ -205,6 +206,19 @@ const Documentation: FunctionComponent = () => {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const trimmedQuery = query.trim()
+
+  // Achievements: count opening the documentation, and accumulate time spent
+  // (in hours) across the open→close lifetime. Web-local, fire-and-forget.
+  useEffect(() => {
+    achievements.markEvent(METRICS.documentationOpened)
+    const openedAt = Date.now()
+    return () => {
+      const hours = (Date.now() - openedAt) / (1000 * 60 * 60)
+      if (hours > 0) {
+        achievements.increment(METRICS.documentationHoursSpent, hours)
+      }
+    }
+  }, [])
 
   const navigate = (id: string | null) => {
     setActiveId(id)

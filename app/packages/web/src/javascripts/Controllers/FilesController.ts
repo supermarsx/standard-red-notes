@@ -45,6 +45,7 @@ import { truncateString } from '@/Components/SuperEditor/Utils'
 import { RecentActionsState } from '../Application/Recents'
 import { stripImageMetadata } from '@/Utils/StripImageMetadata'
 import { getStripImageMetadataEnabled } from '@/Utils/StripImageMetadataSetting'
+import { achievements, METRICS } from '@/Achievements'
 
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
@@ -885,6 +886,9 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         })
         return undefined
       }
+
+      // Achievements: a file attachment was successfully uploaded (web-local).
+      achievements.increment(METRICS.fileAttachmentsTotal)
 
       if (onUploadFinish) {
         onUploadFinish()

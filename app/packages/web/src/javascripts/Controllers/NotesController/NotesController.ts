@@ -1,4 +1,5 @@
 import { destroyAllObjectProperties } from '@/Utils'
+import { achievements, METRICS } from '@/Achievements'
 import {
   confirmDialog,
   GetItemTags,
@@ -389,6 +390,13 @@ export class NotesController
   }
 
   setPinSelectedNotes(pinned: boolean): void {
+    if (pinned) {
+      // Achievements: count notes transitioning into the pinned state (web-local).
+      const newlyPinned = this.selectedNotes.filter((note) => !note.pinned).length
+      if (newlyPinned > 0) {
+        achievements.increment(METRICS.notesPinnedTotal, newlyPinned)
+      }
+    }
     this.changeSelectedNotes((mutator) => {
       mutator.pinned = pinned
     }).catch(console.error)

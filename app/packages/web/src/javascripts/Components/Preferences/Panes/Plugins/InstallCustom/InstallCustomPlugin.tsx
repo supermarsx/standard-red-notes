@@ -6,6 +6,7 @@ import ConfirmCustomPlugin from './ConfirmCustomPlugin'
 import PreferencesSegment from '../../../PreferencesComponents/PreferencesSegment'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { ThirdPartyFeatureDescription } from '@standardnotes/snjs'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   className?: string
@@ -35,6 +36,7 @@ const InstallCustomPlugin: FunctionComponent<Props> = ({ className = '' }) => {
   const confirmPlugin = async (confirm: boolean) => {
     if (confirm && confirmablePlugin) {
       await application.pluginsService.installExternalPlugin(confirmablePlugin)
+      achievements.markEvent(METRICS.pluginInstalled)
     }
     setConfirmablePlugin(undefined)
     setCustomUrl('')

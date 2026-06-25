@@ -11,6 +11,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
 import { getTrustedDeviceToken, persistTrustedDeviceToken, clearTrustedDeviceToken } from './trustedDeviceStorage'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   application: WebApplication
@@ -89,6 +90,7 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
         // sign-ins on this device can present it to skip the 2FA prompt.
         persistTrustedDeviceToken(device.token)
         setThisDeviceTrusted(true)
+        achievements.markEvent(METRICS.trustedDeviceAdded)
         addToast({ type: ToastType.Success, message: 'This device is now trusted for two-factor sign-in.' })
       }
       await loadTrustedDevices()

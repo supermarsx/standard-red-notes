@@ -4,6 +4,7 @@ import { SmallText, Subtitle } from '@/Components/Preferences/PreferencesCompone
 import { ContentType } from '@standardnotes/snjs'
 import { PluginListing } from '@standardnotes/ui-services'
 import { FunctionComponent, useCallback } from 'react'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   plugin: PluginListing
@@ -17,6 +18,7 @@ const PluginRowView: FunctionComponent<Props> = ({ plugin }) => {
     if (!result) {
       void application.alerts.alertV2({ text: 'Failed to install plugin' })
     } else {
+      achievements.markEvent(METRICS.pluginInstalled)
       void application.alerts.alertV2({ text: `${result.name} has been successfully installed.` })
     }
   }, [application, plugin])
