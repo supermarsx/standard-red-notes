@@ -215,6 +215,79 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
 ]
 
 /**
+ * Office-ribbon "super groups": the top-level tabs that each contain a set of the
+ * segmented groups above. Only the active super group's groups render at once, so
+ * the toolbar fits without horizontal scrolling unless a single tab is very tight.
+ */
+export enum ToolbarSuperGroupId {
+  Home = 'home',
+  Insert = 'insert',
+  AI = 'aiTab',
+  Tools = 'tools',
+}
+
+export type ToolbarSuperGroupDescriptor = {
+  id: ToolbarSuperGroupId
+  label: string
+  /** The segmented groups (by id) shown when this tab is active, in order. */
+  groups: ToolbarGroupId[]
+}
+
+/**
+ * Default tab → groups mapping. Any group not listed here is appended to the
+ * first (Home) tab so nothing can ever be orphaned/hidden.
+ */
+export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
+  {
+    id: ToolbarSuperGroupId.Home,
+    label: 'Home',
+    groups: [
+      ToolbarGroupId.Clipboard,
+      ToolbarGroupId.History,
+      ToolbarGroupId.BlockStyle,
+      ToolbarGroupId.TextStyle,
+      ToolbarGroupId.ColorFont,
+      ToolbarGroupId.ParagraphList,
+    ],
+  },
+  { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
+  { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },
+  { id: ToolbarSuperGroupId.Tools, label: 'Tools', groups: [ToolbarGroupId.Toolbar] },
+]
+
+/**
+ * Partition the resolved (ordered, filtered) groups into their super-group tabs,
+ * dropping empty tabs. Groups not assigned to any tab are appended to the first
+ * tab. Pure — safe to call in render.
+ */
+export function groupsBySuperGroup<T extends { id: ToolbarGroupId | string }>(
+  groups: T[],
+): { id: ToolbarSuperGroupId; label: string; groups: T[] }[] {
+  const byId = new Map(groups.map((group) => [group.id as string, group]))
+  const assigned = new Set<string>()
+
+  const tabs = DEFAULT_SUPER_GROUPS.map((superGroup) => {
+    const tabGroups: T[] = []
+    for (const groupId of superGroup.groups) {
+      const group = byId.get(groupId)
+      if (group) {
+        tabGroups.push(group)
+        assigned.add(groupId)
+      }
+    }
+    return { id: superGroup.id, label: superGroup.label, groups: tabGroups }
+  })
+
+  // Append any unmapped groups to the first tab so they remain reachable.
+  const leftovers = groups.filter((group) => !assigned.has(group.id as string))
+  if (leftovers.length > 0 && tabs.length > 0) {
+    tabs[0].groups.push(...leftovers)
+  }
+
+  return tabs.filter((tab) => tab.groups.length > 0)
+}
+
+/**
  * Persisted shape. `groupOrder` is a list of group ids (any not listed fall back
  * to their default position, appended in default order). `hiddenButtonIds` lists
  * buttons the user has turned off. Empty arrays == full default set (no-op).

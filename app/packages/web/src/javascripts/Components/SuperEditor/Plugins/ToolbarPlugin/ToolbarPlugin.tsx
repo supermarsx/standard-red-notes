@@ -102,7 +102,13 @@ import {
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import { useLocalPreference } from '@/Hooks/usePreference'
-import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
+import {
+  applyToolbarConfig,
+  groupsBySuperGroup,
+  ToolbarButtonId,
+  ToolbarGroupId,
+  ToolbarSuperGroupId,
+} from './ToolbarConfig'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
 import {
@@ -1399,12 +1405,10 @@ const ToolbarPlugin = () => {
   const buttonRenderers: Partial<Record<ToolbarButtonId, ReactNode>> = {
     [ToolbarButtonId.Cut]: (
       <div className="flex flex-shrink-0 items-center" key="cut">
-        <ToolbarButton
-          name={t('cut')}
-          iconName="scissors"
-          disabled={!hasNonCollapsedSelection}
-          onSelect={handleClipboardCut}
-        />
+        <ToolbarButton name={t('cut')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCut}>
+          <Icon type="scissors" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <span className="ml-1.5 text-sm leading-none">{t('cut')}</span>
+        </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCutOptions')}>
           <button
             type="button"
@@ -1424,12 +1428,10 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Copy]: (
       <div className="flex flex-shrink-0 items-center" key="copy">
-        <ToolbarButton
-          name={t('copy')}
-          iconName="copy"
-          disabled={!hasNonCollapsedSelection}
-          onSelect={handleClipboardCopy}
-        />
+        <ToolbarButton name={t('copy')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCopy}>
+          <Icon type="copy" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <span className="ml-1.5 text-sm leading-none">{t('copy')}</span>
+        </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCopyOptions')}>
           <button
             type="button"
@@ -1449,7 +1451,10 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Paste]: (
       <div className="flex flex-shrink-0 items-center" key="paste">
-        <ToolbarButton name={t('paste')} iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
+        <ToolbarButton name={t('paste')} onSelect={() => void handleClipboardPaste()}>
+          <Icon type="clipboard" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <span className="ml-1.5 text-sm leading-none">{t('paste')}</span>
+        </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('morePasteOptions')}>
           <button
             type="button"
@@ -1946,6 +1951,17 @@ const ToolbarPlugin = () => {
     group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
 
+  // Office-ribbon "super group" tabs: partition the resolved groups into top-level
+  // tabs (Home / Insert / AI / Tools) and render only the active tab's groups, so
+  // the bar fits without horizontal scroll unless a single tab is itself too tight.
+  const superGroupTabs = groupsBySuperGroup(resolvedGroups)
+  const [activeSuperGroupId, setActiveSuperGroupId] = useState<ToolbarSuperGroupId | null>(null)
+  const effectiveSuperGroupId =
+    activeSuperGroupId && superGroupTabs.some((tab) => tab.id === activeSuperGroupId)
+      ? activeSuperGroupId
+      : (superGroupTabs[0]?.id ?? null)
+  const activeGroups = superGroupTabs.find((tab) => tab.id === effectiveSuperGroupId)?.groups ?? resolvedGroups
+
   // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
   // (each group packs its buttons into up to 3 rows below), scrolling
   // horizontally if they overflow. Setting `horizontalScroll: false` opts back
@@ -2297,10 +2313,39 @@ const ToolbarPlugin = () => {
             linkTextNode={linkTextNode}
           />
         )}
-        <div className="flex w-full flex-shrink-0 border-t border-border md:border-0">
+        <div className="flex w-full flex-shrink-0 flex-col border-t border-border md:border-0">
+          {/* Office-ribbon tab strip: one mini tab per super group. Switching tabs
+              swaps which groups render below, so the bar rarely needs to scroll. */}
+          {canShowAllItems && superGroupTabs.length > 1 && (
+            <div className="super-toolbar-tabs flex items-center gap-1 overflow-x-auto px-2 pt-1" role="tablist">
+              {superGroupTabs.map((tab) => {
+                const isActive = tab.id === effectiveSuperGroupId
+                return (
+                  <button
+                    key={tab.id}
+                    role="tab"
+                    aria-selected={isActive}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setActiveSuperGroupId(tab.id)}
+                    className={classNames(
+                      'whitespace-nowrap rounded-t-md border-b-2 px-3 py-1 text-xs font-semibold transition-colors',
+                      isActive
+                        ? 'border-info bg-contrast text-info'
+                        : 'border-transparent text-passive-1 hover:text-text',
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          <div className="flex w-full">
           <Toolbar
             className={classNames(
-              'super-toolbar flex items-center gap-1.5 px-1 py-0.5',
+              // A little breathing room above the group blocks pushes the (scroll)
+              // content down so the horizontal scrollbar sits slightly lower.
+              'super-toolbar flex flex-grow items-center gap-1.5 px-1 pb-1 pt-2',
               // Default: one horizontal line of groups (each group stacks into up
               // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
               horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
@@ -2309,7 +2354,7 @@ const ToolbarPlugin = () => {
             store={toolbarStore}
           >
             {canShowAllItems
-              ? resolvedGroups.map((group) => {
+              ? activeGroups.map((group) => {
                   // Word/Office-style segmented groups: each group is a rounded
                   // cluster (tight inner spacing) with a small caption title
                   // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
@@ -2334,7 +2379,7 @@ const ToolbarPlugin = () => {
                       aria-label={group.label}
                       className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
                     >
-                      <div className="flex flex-col items-start gap-0.5 md:min-h-[7.375rem]">
+                      <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
                         {buttonRows.map((rowButtons, rowIndex) => (
                           <div key={rowIndex} className="flex items-center justify-start gap-0.5">
                             {rowButtons.map((button) => (
@@ -2345,7 +2390,7 @@ const ToolbarPlugin = () => {
                       </div>
                       <span
                         aria-hidden
-                        className="mt-px hidden select-none truncate text-left text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                        className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
                       >
                         {group.caption ?? group.label}
                       </span>
@@ -2363,6 +2408,7 @@ const ToolbarPlugin = () => {
               <Icon type="keyboard-close" size="medium" />
             </button>
           )}
+          </div>
         </div>
         {/* Element-specific tooling on its own line: when a table/image/link/etc.
             is active, its tailored actions get a dedicated row labelled with the
