@@ -2,16 +2,46 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <!--
+      Content-Security-Policy notes (desktop hardening):
+
+      connect-src: The desktop talks to a USER-CONFIGURABLE sync/files/websocket
+      server. The default is https://api.standardnotes.com, but users may point
+      the app at an arbitrary self-hosted server (incl. a bundled "home server"
+      running on plain HTTP at http://localhost:3000 and, when exposed on the
+      LAN, http://<lan-ip>:3127, plus the local extensions server at
+      http://127.0.0.1:45653). Because the server origin is chosen at runtime by
+      the user and is not known at build time, we cannot enumerate a fixed
+      origin allowlist without breaking self-hosting. CSP host-source syntax also
+      does not support IP/CIDR ranges, so an arbitrary LAN IP cannot be matched
+      by anything narrower than the `http:`/`ws:` schemes. We therefore allow the
+      https:/wss: secure transports plus http:/ws: (needed for the plain-HTTP
+      self-hosted home server and the loopback extensions server). This is the
+      tightest policy that keeps user-configured servers working; it still
+      improves on the previous bare `connect-src *` by dropping every other
+      scheme (ftp:, file:, chrome-extension:, etc.) and is paired with
+      webSecurity:true + allowRunningInsecureContent:false in the main process.
+
+      frame-src: youtube/vimeo embeds plus the WebEmbed feature, which lets users
+      embed ARBITRARY https pages. `https:` is therefore required; we drop the
+      bare `*` (which also allowed http:/data:/etc.). blob: kept for in-app PDF
+      and generated-document frames.
+
+      img-src: tightened from `*` to 'self' data: blob: https:.
+
+      script-src is intentionally 'self' 'wasm-unsafe-eval' (no unsafe-inline /
+      unsafe-eval). default-src/worker-src unchanged.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
       content="
         default-src 'self' blob:;
         script-src 'self' 'wasm-unsafe-eval';
         worker-src 'self' blob:;
-        connect-src * data: blob:;
+        connect-src 'self' https: wss: http: ws: data: blob:;
         style-src 'self' 'unsafe-hashes' http://localhost:* http://127.0.0.1:45653 'sha256-jpJOxTrdc58x4woq2mVygDDIvjIAGNkLZ2yfx4ppdXo=' 'sha256-tbWZ4NP1341cpcrZVDn7B3o9bt/muXgduILAnC0Zbaw=';
-        frame-src * blob:;
-        img-src * data: blob:;
+        frame-src 'self' https: blob:;
+        img-src 'self' data: blob: https:;
       "
     />
 

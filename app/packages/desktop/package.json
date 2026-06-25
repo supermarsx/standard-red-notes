@@ -36,7 +36,6 @@
     "hoistingLimits": "workspaces"
   },
   "dependencies": {
-    "@electron/remote": "^2.1.3",
     "@standardnotes/domain-core": "^1.41.3",
     "@standardnotes/electron-clear-data": "1.1.1",
     "@standardnotes/snjs": "workspace:*",

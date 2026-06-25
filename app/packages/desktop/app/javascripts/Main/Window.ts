@@ -27,6 +27,7 @@ import { initializeZoomManager } from './ZoomManager'
 import { HomeServerManager } from './HomeServer/HomeServerManager'
 import { FilesManager } from './File/FilesManager'
 import { DirectoryManager } from './Directory/DirectoryManager'
+import { configureFileSystemAccessPermissions } from '../../enableExperimentalWebFeatures'
 
 const WINDOW_DEFAULT_WIDTH = 1100
 const WINDOW_DEFAULT_HEIGHT = 800
@@ -63,18 +64,21 @@ export async function createWindowState({
 
   const services = await createWindowServices(window, appState, appLocale, onNewWindow)
 
-  require('@electron/remote/main').enable(window.webContents)
   /**
-   * The RemoteBridge is exposed to renderers as a single `global.RemoteBridge`
-   * that every window's preload reads via `getGlobal('RemoteBridge')`. With
-   * multiple windows we therefore cannot hardcode the bridge to a single
-   * BrowserWindow: window-control calls (close/minimize/maximize) must act on
-   * the window the call came from. The bridge resolves that window at call time
-   * via `BrowserWindow.getFocusedWindow()` (the window the user is interacting
-   * with), falling back to the most-recently-created window passed here.
+   * The RemoteBridge exposes an allowlisted set of main-process operations to
+   * renderers over explicit IPC channels (see RemoteBridge.registerHandlers).
+   * This replaces the previous @electron/remote based exposure
+   * (`enable(window.webContents)` + `global.RemoteBridge` read via
+   * `getGlobal('RemoteBridge')`), which handed the renderer a live
+   * main-process object graph.
+   *
+   * A fresh bridge is built per window; `setActiveBridge` repoints the global
+   * IPC handlers at the most-recently-created window's services (preserving the
+   * prior "newest window wins" behavior) and registers the IPC channels exactly
+   * once. Window-control calls still resolve the focused window at call time via
+   * `BrowserWindow.getFocusedWindow()`.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(global as any).RemoteBridge = new RemoteBridge(
+  const remoteBridge = new RemoteBridge(
     window,
     Keychain,
     services.packageManager,
@@ -92,8 +96,22 @@ export async function createWindowState({
     services.directoryManager,
     services.spellcheckerManager,
   )
+  RemoteBridge.setActiveBridge(remoteBridge)
 
-  const shouldOpenUrl = (url: string) => url.startsWith('http') || url.startsWith('mailto')
+  /**
+   * Only http(s) and mailto links may be handed to the OS via
+   * shell.openExternal. We parse the URL and check the exact protocol instead of
+   * a prefix match, so look-alikes (e.g. "httpevil:", "file:", "javascript:")
+   * cannot slip through a `startsWith('http')` check.
+   */
+  const shouldOpenUrl = (url: string): boolean => {
+    try {
+      const protocol = new URL(url).protocol
+      return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:'
+    } catch {
+      return false
+    }
+  }
 
   const windowState: WindowState = {
     window,
@@ -160,6 +178,15 @@ export async function createWindowState({
   })
 
   window.webContents.session.setSpellCheckerDictionaryDownloadURL('https://dictionaries.standardnotes.org/9.4.4/')
+
+  /**
+   * Scope renderer permissions (File System Access, media, notifications,
+   * clipboard) to an explicit allowlist. This replaces the removed process-wide
+   * `enable-experimental-web-platform-features` switch (see
+   * enableExperimentalWebFeatures.ts). Idempotent across windows that share a
+   * session.
+   */
+  configureFileSystemAccessPermissions(window.webContents.session)
 
   /** handle link clicks */
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -230,9 +257,21 @@ async function createWindow(store: Store): Promise<Electron.BrowserWindow> {
     frame: isMac() ? false : useSystemMenuBar,
     webPreferences: {
       spellcheck: true,
+      /**
+       * Hardened renderer settings. In production all of these resolve to the
+       * secure values; nodeIntegration is only ever enabled under isTesting()
+       * (where the test harness drives the renderer directly), and is false in
+       * production. The remaining flags are pinned explicitly so a future
+       * Electron default change cannot silently weaken the renderer sandbox.
+       */
       nodeIntegration: isTesting(),
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
       contextIsolation: true,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
       preload: Paths.preloadJs,
     },
   })

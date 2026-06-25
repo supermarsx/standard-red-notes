@@ -6,7 +6,14 @@ import { isTesting } from '../Utils/Utils'
 import { parseDataFile, serializeStoreData } from './createSanitizedStoreData'
 import { StoreData } from './StoreKeys'
 
-export const app = process.type === 'browser' ? require('electron').app : require('@electron/remote').app
+/**
+ * The Store is only ever loaded in the main process (the renderer/preload reach
+ * config values over IPC via the RemoteBridge, not by importing this module), so
+ * we use the plain main-process `electron.app`. This removes the previous
+ * `@electron/remote` fallback that was only relevant when Store was loaded in a
+ * renderer context.
+ */
+export const app = require('electron').app
 
 export function logError(...message: unknown[]) {
   console.error('store:', ...message)

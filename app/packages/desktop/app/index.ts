@@ -5,16 +5,11 @@ import fs from 'fs-extra'
 import path from 'path'
 import './@types/modules'
 import { initializeApplication } from './application'
-import { enableExperimentalFeaturesForFileAccessFix } from './enableExperimentalWebFeatures'
 import { Store } from './javascripts/Main/Store/Store'
 import { StoreKeys } from './javascripts/Main/Store/StoreKeys'
 import { isSnap } from './javascripts/Main/Types/Constants'
 import { Paths } from './javascripts/Main/Types/Paths'
 import { CommandLineArgs } from './javascripts/Shared/CommandLineArgs'
-
-enableExperimentalFeaturesForFileAccessFix()
-
-require('@electron/remote/main').initialize()
 
 /** Allow a custom userData path to be used. */
 const userDataPathIndex = process.argv.indexOf(CommandLineArgs.UserDataPath)

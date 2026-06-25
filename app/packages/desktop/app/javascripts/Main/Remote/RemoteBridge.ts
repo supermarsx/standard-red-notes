@@ -14,7 +14,7 @@ import {
   PlaintextBackupsMapping,
   DirectoryManagerInterface,
 } from '@web/Application/Device/DesktopSnjsExports'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { KeychainInterface } from '../Keychain/KeychainInterface'
 import { MenuManagerInterface } from '../Menus/MenuManagerInterface'
 import { Component, PackageManagerInterface } from '../Packages/PackageManagerInterface'
@@ -22,10 +22,51 @@ import { SearchManagerInterface } from '../Search/SearchManagerInterface'
 import { RemoteDataInterface } from './DataInterface'
 import { MediaManagerInterface } from '../Media/MediaManagerInterface'
 import { SpellcheckerLanguage, SpellcheckerManager } from '../SpellcheckerManager'
+import {
+  RemoteBridgeConfig,
+  RemoteBridgeInvokeChannel,
+  RemoteBridgeSyncChannel,
+} from '../../Shared/RemoteBridgeChannels'
 
 /**
- * Read https://github.com/electron/remote to understand how electron/remote works.
- * RemoteBridge is imported from the Preload process but is declared and created on the main process.
+ * Validates that a value received over IPC is a non-empty string. Throws on
+ * anything else so a malformed/hostile IPC payload cannot be passed straight
+ * into fs/path operations on the main process.
+ */
+function requireString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`RemoteBridge: expected non-empty string for "${name}"`)
+  }
+  return value
+}
+
+function requireOptionalString(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+  return requireString(value, name)
+}
+
+function requireStringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`RemoteBridge: expected string[] for "${name}"`)
+  }
+  return value as string[]
+}
+
+/**
+ * The RemoteBridge exposes a small, explicitly allowlisted set of main-process
+ * operations to the renderer.
+ *
+ * SECURITY NOTE: this used to be exposed via @electron/remote
+ * (`getGlobal('RemoteBridge')` from the preload, exposing a live main-process
+ * object graph to the renderer). That has been removed. Each operation is now a
+ * discrete, reviewed IPC channel registered in `registerHandlers()` and invoked
+ * from the preload via `ipcRenderer.invoke` / `ipcRenderer.sendSync`. The
+ * renderer can therefore only call these specific operations and never reach
+ * arbitrary main-process objects/prototypes.
+ *
+ * RemoteBridge is declared and created on the main process only.
  */
 export class RemoteBridge implements CrossProcessBridge {
   constructor(
@@ -42,7 +83,12 @@ export class RemoteBridge implements CrossProcessBridge {
     private spellcheckerManager: SpellcheckerManager | undefined,
   ) {}
 
-  get exposableValue(): CrossProcessBridge {
+  /**
+   * Synchronously-read configuration values. The renderer reads these as plain
+   * values (e.g. `electronRemoteBridge.extServerHost`) so they are fetched once
+   * over a synchronous IPC channel at preload time.
+   */
+  get config(): RemoteBridgeConfig {
     return {
       extServerHost: this.extServerHost,
       useNativeKeychain: this.useNativeKeychain,
@@ -50,53 +96,189 @@ export class RemoteBridge implements CrossProcessBridge {
       appVersion: this.appVersion,
       useSystemMenuBar: this.useSystemMenuBar,
       rendererPath: this.rendererPath,
-      closeWindow: this.closeWindow.bind(this),
-      minimizeWindow: this.minimizeWindow.bind(this),
-      maximizeWindow: this.maximizeWindow.bind(this),
-      unmaximizeWindow: this.unmaximizeWindow.bind(this),
-      isWindowMaximized: this.isWindowMaximized.bind(this),
-      getKeychainValue: this.getKeychainValue.bind(this),
-      setKeychainValue: this.setKeychainValue.bind(this),
-      clearKeychainValue: this.clearKeychainValue.bind(this),
-      displayAppMenu: this.displayAppMenu.bind(this),
-      syncComponents: this.syncComponents.bind(this),
-      onSearch: this.onSearch.bind(this),
-      destroyAllData: this.destroyAllData.bind(this),
-      getFilesBackupsMappingFile: this.getFilesBackupsMappingFile.bind(this),
-      saveFilesBackupsFile: this.saveFilesBackupsFile.bind(this),
-      isLegacyFilesBackupsEnabled: this.isLegacyFilesBackupsEnabled.bind(this),
-      getLegacyFilesBackupsLocation: this.getLegacyFilesBackupsLocation.bind(this),
-      getFileBackupReadToken: this.getFileBackupReadToken.bind(this),
-      readNextChunk: this.readNextChunk.bind(this),
-      askForMediaAccess: this.askForMediaAccess.bind(this),
-      startHomeServer: this.startHomeServer.bind(this),
-      stopHomeServer: this.stopHomeServer.bind(this),
-      wasLegacyTextBackupsExplicitlyDisabled: this.wasLegacyTextBackupsExplicitlyDisabled.bind(this),
-      getLegacyTextBackupsLocation: this.getLegacyTextBackupsLocation.bind(this),
-      saveTextBackupData: this.saveTextBackupData.bind(this),
-      savePlaintextNoteBackup: this.savePlaintextNoteBackup.bind(this),
-      openLocation: this.openLocation.bind(this),
-      presentDirectoryPickerForLocationChangeAndTransferOld:
-        this.presentDirectoryPickerForLocationChangeAndTransferOld.bind(this),
-      getDirectoryManagerLastErrorMessage: this.getDirectoryManagerLastErrorMessage.bind(this),
-      getPlaintextBackupsMappingFile: this.getPlaintextBackupsMappingFile.bind(this),
-      persistPlaintextBackupsMappingFile: this.persistPlaintextBackupsMappingFile.bind(this),
-      getTextBackupsCount: this.getTextBackupsCount.bind(this),
-      migrateLegacyFileBackupsToNewStructure: this.migrateLegacyFileBackupsToNewStructure.bind(this),
-      getUserDocumentsDirectory: this.getUserDocumentsDirectory.bind(this),
-      monitorPlaintextBackupsLocationForChanges: this.monitorPlaintextBackupsLocationForChanges.bind(this),
-      joinPaths: this.joinPaths.bind(this),
-      setHomeServerConfiguration: this.setHomeServerConfiguration.bind(this),
-      getHomeServerConfiguration: this.getHomeServerConfiguration.bind(this),
-      setHomeServerDataLocation: this.setHomeServerDataLocation.bind(this),
-      activatePremiumFeatures: this.activatePremiumFeatures.bind(this),
-      isHomeServerRunning: this.isHomeServerRunning.bind(this),
-      getHomeServerLogs: this.getHomeServerLogs.bind(this),
-      getHomeServerUrl: this.getHomeServerUrl.bind(this),
-      getHomeServerLastErrorMessage: this.getHomeServerLastErrorMessage.bind(this),
-      isSpellCheckerManagerAvailable: this.isSpellCheckerManagerAvailable.bind(this),
-      getSpellCheckerLanguages: this.getSpellCheckerLanguages.bind(this),
-      setSpellCheckerLanguages: this.setSpellCheckerLanguages.bind(this),
+    }
+  }
+
+  /**
+   * Registers the allowlisted IPC channels backing the renderer bridge.
+   *
+   * IPC handlers (ipcMain.handle/on) are GLOBAL per channel, but a fresh
+   * RemoteBridge is constructed for every window. To preserve the previous
+   * `global.RemoteBridge = new RemoteBridge(...)` ("most-recently-created window
+   * wins") semantics without registering duplicate handlers, the channels are
+   * bound once to a mutable holder; constructing a new window repoints the
+   * holder at the latest bridge via `RemoteBridge.setActiveBridge`. Window
+   * control calls still resolve the *focused* window at call time (see
+   * `activeWindow`), so window-control correctness is unaffected.
+   */
+  static setActiveBridge(bridge: RemoteBridge): void {
+    RemoteBridge.activeBridge = bridge
+    if (!RemoteBridge.handlersRegistered) {
+      RemoteBridge.handlersRegistered = true
+      bridge.registerHandlers()
+    }
+  }
+
+  private static activeBridge: RemoteBridge | undefined
+  private static handlersRegistered = false
+
+  /** Resolves the bridge that should service IPC calls. */
+  private static current(): RemoteBridge {
+    if (!RemoteBridge.activeBridge) {
+      throw new Error('RemoteBridge: no active bridge registered')
+    }
+    return RemoteBridge.activeBridge
+  }
+
+  /**
+   * Registers the allowlisted IPC channels. Called once via setActiveBridge.
+   * Every handler dispatches to RemoteBridge.current() so it always targets the
+   * most-recently-created window's services (matching prior behavior).
+   */
+  registerHandlers(): void {
+    /**
+     * Dispatch every channel through the active bridge (most-recently-created
+     * window), not `this`, so a new window's services take over as before.
+     */
+    const b = () => RemoteBridge.current()
+
+    /** Synchronous channels (renderer reads return values synchronously). */
+    ipcMain.on(RemoteBridgeSyncChannel.GetConfig, (event) => {
+      event.returnValue = b().config
+    })
+    ipcMain.on(RemoteBridgeSyncChannel.IsWindowMaximized, (event) => {
+      event.returnValue = b().isWindowMaximized()
+    })
+    ipcMain.on(RemoteBridgeSyncChannel.IsSpellCheckerManagerAvailable, (event) => {
+      event.returnValue = b().isSpellCheckerManagerAvailable()
+    })
+    ipcMain.on(RemoteBridgeSyncChannel.GetSpellCheckerLanguages, (event) => {
+      event.returnValue = b().getSpellCheckerLanguages()
+    })
+
+    /** Async (invoke) channels. */
+    const I = RemoteBridgeInvokeChannel
+    ipcMain.handle(I.CloseWindow, () => b().closeWindow())
+    ipcMain.handle(I.MinimizeWindow, () => b().minimizeWindow())
+    ipcMain.handle(I.MaximizeWindow, () => b().maximizeWindow())
+    ipcMain.handle(I.UnmaximizeWindow, () => b().unmaximizeWindow())
+    ipcMain.handle(I.GetKeychainValue, () => b().getKeychainValue())
+    ipcMain.handle(I.SetKeychainValue, (_e, value: unknown) => b().setKeychainValue(value))
+    ipcMain.handle(I.ClearKeychainValue, () => b().clearKeychainValue())
+    ipcMain.handle(I.DisplayAppMenu, () => b().displayAppMenu())
+    ipcMain.handle(I.SyncComponents, (_e, components: unknown) => b().syncComponents(components as Component[]))
+    ipcMain.handle(I.OnSearch, (_e, text: unknown) => b().onSearch(requireString(text, 'text')))
+    ipcMain.handle(I.DestroyAllData, () => b().destroyAllData())
+    ipcMain.handle(I.GetFilesBackupsMappingFile, (_e, location: unknown) =>
+      b().getFilesBackupsMappingFile(requireString(location, 'location')),
+    )
+    ipcMain.handle(
+      I.SaveFilesBackupsFile,
+      (_e, location: unknown, uuid: unknown, metaFile: unknown, downloadRequest: unknown) =>
+        b().saveFilesBackupsFile(
+          requireString(location, 'location'),
+          requireString(uuid, 'uuid'),
+          requireString(metaFile, 'metaFile'),
+          b().validateDownloadRequest(downloadRequest),
+        ),
+    )
+    ipcMain.handle(I.IsLegacyFilesBackupsEnabled, () => b().isLegacyFilesBackupsEnabled())
+    ipcMain.handle(I.GetLegacyFilesBackupsLocation, () => b().getLegacyFilesBackupsLocation())
+    ipcMain.handle(I.GetFileBackupReadToken, (_e, filePath: unknown) =>
+      b().getFileBackupReadToken(requireString(filePath, 'filePath')),
+    )
+    ipcMain.handle(I.ReadNextChunk, (_e, nextToken: unknown) =>
+      b().readNextChunk(requireString(nextToken, 'nextToken')),
+    )
+    ipcMain.handle(I.AskForMediaAccess, (_e, type: unknown) => {
+      if (type !== 'camera' && type !== 'microphone') {
+        throw new Error('RemoteBridge: invalid media access type')
+      }
+      return b().askForMediaAccess(type)
+    })
+    ipcMain.handle(I.StartHomeServer, () => b().startHomeServer())
+    ipcMain.handle(I.StopHomeServer, () => b().stopHomeServer())
+    ipcMain.handle(I.WasLegacyTextBackupsExplicitlyDisabled, () => b().wasLegacyTextBackupsExplicitlyDisabled())
+    ipcMain.handle(I.GetLegacyTextBackupsLocation, () => b().getLegacyTextBackupsLocation())
+    ipcMain.handle(I.SaveTextBackupData, (_e, location: unknown, data: unknown) =>
+      b().saveTextBackupData(requireString(location, 'location'), requireString(data, 'data')),
+    )
+    ipcMain.handle(
+      I.SavePlaintextNoteBackup,
+      (_e, location: unknown, uuid: unknown, name: unknown, tags: unknown, data: unknown) =>
+        b().savePlaintextNoteBackup(
+          requireString(location, 'location'),
+          requireString(uuid, 'uuid'),
+          requireString(name, 'name'),
+          requireStringArray(tags, 'tags'),
+          requireString(data, 'data'),
+        ),
+    )
+    ipcMain.handle(I.OpenLocation, (_e, path: unknown) => b().openLocation(requireString(path, 'path')))
+    ipcMain.handle(
+      I.PresentDirectoryPickerForLocationChangeAndTransferOld,
+      (_e, appendPath: unknown, oldLocation: unknown) =>
+        b().presentDirectoryPickerForLocationChangeAndTransferOld(
+          requireString(appendPath, 'appendPath'),
+          requireOptionalString(oldLocation, 'oldLocation'),
+        ),
+    )
+    ipcMain.handle(I.GetDirectoryManagerLastErrorMessage, () => b().getDirectoryManagerLastErrorMessage())
+    ipcMain.handle(I.GetPlaintextBackupsMappingFile, (_e, location: unknown) =>
+      b().getPlaintextBackupsMappingFile(requireString(location, 'location')),
+    )
+    ipcMain.handle(I.PersistPlaintextBackupsMappingFile, (_e, location: unknown) =>
+      b().persistPlaintextBackupsMappingFile(requireString(location, 'location')),
+    )
+    ipcMain.handle(I.GetTextBackupsCount, (_e, location: unknown) =>
+      b().getTextBackupsCount(requireString(location, 'location')),
+    )
+    ipcMain.handle(I.MigrateLegacyFileBackupsToNewStructure, (_e, newPath: unknown) =>
+      b().migrateLegacyFileBackupsToNewStructure(requireString(newPath, 'newPath')),
+    )
+    ipcMain.handle(I.GetUserDocumentsDirectory, () => b().getUserDocumentsDirectory())
+    ipcMain.handle(I.MonitorPlaintextBackupsLocationForChanges, (_e, backupsDirectory: unknown) =>
+      b().monitorPlaintextBackupsLocationForChanges(requireString(backupsDirectory, 'backupsDirectory')),
+    )
+    ipcMain.handle(I.JoinPaths, (_e, ...paths: unknown[]) => b().joinPaths(...requireStringArray(paths, 'paths')))
+    ipcMain.handle(I.SetHomeServerConfiguration, (_e, configurationJSONString: unknown) =>
+      b().setHomeServerConfiguration(requireString(configurationJSONString, 'configurationJSONString')),
+    )
+    ipcMain.handle(I.GetHomeServerConfiguration, () => b().getHomeServerConfiguration())
+    ipcMain.handle(I.SetHomeServerDataLocation, (_e, location: unknown) =>
+      b().setHomeServerDataLocation(requireString(location, 'location')),
+    )
+    ipcMain.handle(I.ActivatePremiumFeatures, (_e, username: unknown, subscriptionId: unknown) => {
+      if (typeof subscriptionId !== 'number') {
+        throw new Error('RemoteBridge: subscriptionId must be a number')
+      }
+      return b().activatePremiumFeatures(requireString(username, 'username'), subscriptionId)
+    })
+    ipcMain.handle(I.IsHomeServerRunning, () => b().isHomeServerRunning())
+    ipcMain.handle(I.GetHomeServerLogs, () => b().getHomeServerLogs())
+    ipcMain.handle(I.GetHomeServerUrl, () => b().getHomeServerUrl())
+    ipcMain.handle(I.GetHomeServerLastErrorMessage, () => b().getHomeServerLastErrorMessage())
+    ipcMain.handle(I.SetSpellCheckerLanguages, (_e, codes: unknown) =>
+      b().setSpellCheckerLanguages(requireStringArray(codes, 'codes')),
+    )
+  }
+
+  private validateDownloadRequest(downloadRequest: unknown): {
+    chunkSizes: number[]
+    valetToken: string
+    url: string
+  } {
+    if (typeof downloadRequest !== 'object' || downloadRequest === null) {
+      throw new Error('RemoteBridge: invalid downloadRequest')
+    }
+    const request = downloadRequest as { chunkSizes?: unknown; valetToken?: unknown; url?: unknown }
+    if (!Array.isArray(request.chunkSizes) || request.chunkSizes.some((size) => typeof size !== 'number')) {
+      throw new Error('RemoteBridge: downloadRequest.chunkSizes must be number[]')
+    }
+    return {
+      chunkSizes: request.chunkSizes as number[],
+      valetToken: requireString(request.valetToken, 'downloadRequest.valetToken'),
+      url: requireString(request.url, 'downloadRequest.url'),
     }
   }
 
