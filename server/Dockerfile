@@ -1,36 +1,31 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-alpine
+# =============================================================================
+# BUILD STAGE — carries the C/C++ toolchain (g++/make/python3) needed to compile
+# native node addons during `yarn install` and to build the TS workspace. NONE
+# of these compilers ship in the runtime image below, shrinking the attack
+# surface of the network-facing container (no in-container compiler for an
+# attacker to abuse).
+# =============================================================================
+FROM node:24-alpine AS build
 
 ENV NODE_ENV=production
 
 RUN apk add --update --no-cache \
   bash \
-  curl \
   g++ \
   make \
-  netcat-openbsd \
-  openssl \
   py3-pip \
-  python3 \
-  && pip install --no-cache-dir --upgrade --break-system-packages supervisor
+  python3
 
 RUN npm install -g corepack@latest && corepack enable
 
 WORKDIR /opt/server
 
-# Supervisor config + entrypoint (rarely change) — copy early so they stay cached.
-COPY docker/supervisord.conf /etc/supervisord.conf
-COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY docker/srn-admin.sh /usr/local/bin/srn-admin
-
 # --- Dependency layer ---------------------------------------------------------
-# Copy ONLY what Yarn (PnP) needs to resolve + install the workspace: the
-# lockfile, Yarn config + releases/plugins, the PnP map, and EVERY package's
-# manifest. `yarn install` downloads and populates .yarn/cache into THIS image
-# layer (PnP loads packages from it at runtime), so isolating it here means a
-# source-only change no longer re-runs the whole install — the layer is reused
-# until a manifest or the lockfile changes.
+# Copy ONLY what Yarn (PnP) needs to resolve + install: the lockfile, Yarn config
+# + releases/plugins, the PnP map, and EVERY package's manifest. Isolating this
+# means a source-only change reuses the cached install layer.
 COPY .yarnrc.yml yarn.lock .pnp.cjs .pnp.loader.mjs ./
 COPY .yarn/ ./.yarn/
 COPY package.json ./
@@ -58,31 +53,53 @@ COPY packages/websockets/package.json packages/websockets/
 RUN yarn install --immutable
 
 # --- Source + build -----------------------------------------------------------
-# Only this layer rebuilds on a code change; the dependency layer above stays
-# cached. (.yarn/cache populated by the install above is preserved — it is not
-# part of the build context, so this COPY does not remove it.)
 COPY . .
 
-# Normalize line endings: a CRLF checkout (Windows) leaves `#!/bin/bash\r`, which the
-# Linux kernel reads as interpreter "/bin/bash\r" → "no such file or directory" at exec.
+RUN CI=true yarn build
+
+# =============================================================================
+# RUNTIME STAGE — no compiler toolchain. Carries node + supervisord (its python
+# runtime) + the few CLI tools the entrypoint / healthcheck need, plus the fully
+# built, PnP-installed workspace copied from the build stage. The native addons
+# compiled in the build stage (under .yarn/unplugged) are ABI-compatible because
+# both stages share the same node:24-alpine base. Runs as an unprivileged user.
+# =============================================================================
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production
+
+RUN apk add --update --no-cache \
+  bash \
+  curl \
+  netcat-openbsd \
+  openssl \
+  py3-pip \
+  python3 \
+  && pip install --no-cache-dir --upgrade --break-system-packages supervisor
+
+RUN npm install -g corepack@latest && corepack enable
+
+WORKDIR /opt/server
+
+# Supervisor config + entrypoint (rarely change).
+COPY docker/supervisord.conf /etc/supervisord.conf
+COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker/srn-admin.sh /usr/local/bin/srn-admin
+
+# The fully built workspace (sources, per-package dist, .yarn cache + unplugged
+# native addons, the PnP map). PnP loads packages from .yarn at runtime, so the
+# whole tree comes across from the build stage rather than re-installing.
+COPY --from=build /opt/server /opt/server
+
+# Normalize line endings (a CRLF checkout leaves `#!/bin/bash\r`), create the
+# writable runtime dirs, and create + own everything as the unprivileged `srn`
+# user. All service ports are >1024 so no CAP_NET_BIND_SERVICE is needed.
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
-  && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} +
-
-RUN CI=true yarn build \
+  && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads \
-  && chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# --- Non-root runtime ---------------------------------------------------------
-# Hardening: run all services (supervisord + the node processes it spawns) as an
-# unprivileged user instead of root. All service ports are >1024
-# (API_GATEWAY 3000, FILES 3104, internal 3101/3103/3105 + gRPC 50051/50052), so
-# no CAP_NET_BIND_SERVICE is needed. The entrypoint writes per-package `.env`
-# files into /opt/server/packages/*/ and supervisord writes logs to
-# /var/lib/server/logs, the files service writes uploads to /opt/shared/uploads —
-# all must be owned by the runtime user. There is no local sqlite/data dir (the
-# DB is the external MariaDB service).
-RUN addgroup -g 10001 -S srn \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh \
+  && addgroup -g 10001 -S srn \
   && adduser -u 10001 -S srn -G srn \
   && chown -R srn:srn /opt/server /var/lib/server/logs /opt/shared/uploads
 
