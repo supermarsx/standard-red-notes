@@ -29,6 +29,7 @@ import { NavigationController } from '@/Controllers/Navigation/NavigationControl
 import { NotesController } from '@/Controllers/NotesController/NotesController'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { NoAccountWarningController } from '@/Controllers/NoAccountWarningController'
+import { NotificationsController } from '@/Controllers/NotificationsController'
 import { AccountMenuController } from '@/Controllers/AccountMenu/AccountMenuController'
 import { SubscriptionController } from '@/Controllers/Subscription/SubscriptionController'
 import { PurchaseFlowController } from '@/Controllers/PurchaseFlow/PurchaseFlowController'
@@ -330,6 +331,10 @@ export class WebDependencies extends DependencyContainer {
 
     this.bind(Web_TYPES.NoAccountWarningController, () => {
       return new NoAccountWarningController(application.sessions, application.events)
+    })
+
+    this.bind(Web_TYPES.NotificationsController, () => {
+      return new NotificationsController(application)
     })
 
     this.bind(Web_TYPES.AccountMenuController, () => {

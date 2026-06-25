@@ -32,6 +32,7 @@ export const Web_TYPES = {
   LinkingController: Symbol.for('LinkingController'),
   NavigationController: Symbol.for('NavigationController'),
   NoAccountWarningController: Symbol.for('NoAccountWarningController'),
+  NotificationsController: Symbol.for('NotificationsController'),
   NotesController: Symbol.for('NotesController'),
   PaneController: Symbol.for('PaneController'),
   PreferencesController: Symbol.for('PreferencesController'),

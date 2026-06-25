@@ -79,6 +79,7 @@ import { FilePreviewModalController } from '@/Controllers/FilePreviewModalContro
 import { OpenSubscriptionDashboard } from './UseCase/OpenSubscriptionDashboard'
 import { ItemGroupController } from '@/Components/NoteView/Controller/ItemGroupController'
 import { NoAccountWarningController } from '@/Controllers/NoAccountWarningController'
+import { NotificationsController } from '@/Controllers/NotificationsController'
 import { SearchOptionsController } from '@/Controllers/SearchOptionsController'
 import { PersistenceService } from '@/Controllers/Abstract/PersistenceService'
 import { removeFromArray } from '@standardnotes/utils'
@@ -727,6 +728,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   get noAccountWarningController(): NoAccountWarningController {
     return this.deps.get<NoAccountWarningController>(Web_TYPES.NoAccountWarningController)
+  }
+
+  get notificationsController(): NotificationsController {
+    return this.deps.get<NotificationsController>(Web_TYPES.NotificationsController)
   }
 
   get searchOptionsController(): SearchOptionsController {

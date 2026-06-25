@@ -22,6 +22,7 @@ import TagSearchBar from './TagSearchBar'
 import PaneCollapseButton from '../Panes/PaneCollapseButton'
 import DashboardSectionButton from '../Dashboard/DashboardSectionButton'
 import HomeSectionButton from '../Home/HomeSectionButton'
+import NotificationsSectionButton from '../Notifications/NotificationsSectionButton'
 import AggregateViewSectionButtons from '../AggregateViews/AggregateViewSectionButtons'
 import ResearchSectionButton from '../Research/ResearchSectionButton'
 import BookmarksSectionButton from '../Bookmarks/BookmarksSectionButton'
@@ -92,6 +93,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       <div id="navigation-content" className="flex-grow overflow-y-auto overflow-x-hidden">
         <TagSearchBar navigationController={application.navigationController} />
         <HomeSectionButton application={application} />
+        <NotificationsSectionButton application={application} />
         <DashboardSectionButton application={application} />
         <AggregateViewSectionButtons
           application={application}
