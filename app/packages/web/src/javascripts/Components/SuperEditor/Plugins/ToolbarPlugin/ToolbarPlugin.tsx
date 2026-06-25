@@ -1514,16 +1514,14 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.FindNext]: canShowAllItems ? (
-      <ToolbarButton
-        name="Find next"
-        iconName="arrow-down"
-        onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}
-      />
+      <ToolbarButton name="Find next" onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}>
+        <Icon type="arrow-down" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span className="ml-1.5 text-sm leading-none">Find next</span>
+      </ToolbarButton>
     ) : null,
     [ToolbarButtonId.SelectAll]: canShowAllItems ? (
       <ToolbarButton
         name="Select all"
-        iconName="select-all"
         onSelect={() => {
           editor.update(() => {
             const root = $getRoot()
@@ -1534,18 +1532,23 @@ const ToolbarPlugin = () => {
           })
           editor.focus()
         }}
-      />
+      >
+        <Icon type="select-all" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span className="ml-1.5 text-sm leading-none">Select all</span>
+      </ToolbarButton>
     ) : null,
     [ToolbarButtonId.Deselect]: canShowAllItems ? (
       <ToolbarButton
-        name="Deselect"
-        iconName="close"
+        name="Deselect all"
         onSelect={() => {
           editor.update(() => {
             $setSelection(null)
           })
         }}
-      />
+      >
+        <Icon type="close" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span className="ml-1.5 text-sm leading-none">Deselect all</span>
+      </ToolbarButton>
     ) : null,
     [ToolbarButtonId.Undo]: canShowAllItems ? (
       <div className="flex flex-shrink-0 items-center" key="undo">

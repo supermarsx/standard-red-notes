@@ -19,6 +19,7 @@ export enum ToolbarGroupId {
   ParagraphList = 'paragraphList',
   Insert = 'insert',
   AI = 'ai',
+  Find = 'find',
   Selection = 'selection',
   FormatPainter = 'formatPainter',
   Toolbar = 'toolbar',
@@ -267,16 +268,23 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [{ id: ToolbarButtonId.FormatPainter, label: 'Format painter', group: ToolbarGroupId.FormatPainter }],
   },
   {
+    id: ToolbarGroupId.Find,
+    label: 'Find',
+    caption: 'Find',
+    buttons: [
+      { id: ToolbarButtonId.Search, label: 'Find in note', group: ToolbarGroupId.Find },
+      { id: ToolbarButtonId.FindReplace, label: 'Find & replace in note', group: ToolbarGroupId.Find },
+      { id: ToolbarButtonId.FindNext, label: 'Find next', group: ToolbarGroupId.Find },
+    ],
+  },
+  {
     id: ToolbarGroupId.Selection,
     label: 'Selection',
     caption: 'Selection',
     buttons: [
       { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.Selection },
-      { id: ToolbarButtonId.Search, label: 'Find in note', group: ToolbarGroupId.Selection },
-      { id: ToolbarButtonId.FindReplace, label: 'Find & replace in note', group: ToolbarGroupId.Selection },
-      { id: ToolbarButtonId.FindNext, label: 'Find next', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.SelectAll, label: 'Select all', group: ToolbarGroupId.Selection },
-      { id: ToolbarButtonId.Deselect, label: 'Deselect', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.Deselect, label: 'Deselect all', group: ToolbarGroupId.Selection },
     ],
   },
   {
@@ -328,7 +336,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
   {
     id: ToolbarSuperGroupId.Tools,
     label: 'Tools',
-    groups: [ToolbarGroupId.Selection, ToolbarGroupId.FormatPainter, ToolbarGroupId.Toolbar],
+    groups: [ToolbarGroupId.Find, ToolbarGroupId.Selection, ToolbarGroupId.FormatPainter, ToolbarGroupId.Toolbar],
   },
 ]
 
