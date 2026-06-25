@@ -52,9 +52,20 @@ export class AssistantController extends BaseHttpController {
     @inject(TYPES.ApiGateway_ASSISTANT_DEFAULT_PROVIDER) private defaultProvider: string,
     @inject(TYPES.ApiGateway_ASSISTANT_DEFAULT_MODEL) private defaultModel: string,
     @inject(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT) private globalDailyLimit: number,
+    @inject(TYPES.ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS) private transcriptionModels: string[],
     @inject(TYPES.ApiGateway_Redis) @optional() private redis?: IORedis.Redis,
   ) {
     super()
+  }
+
+  // `/transcription/models` is intentionally public, like `/config`: it returns only
+  // the operator-configured speech-to-text model ids (from the TRANSCRIPTION_MODELS
+  // env, empty by default), which are non-sensitive. The web client queries it to
+  // populate the audio-recorder model picker; an empty list (or a missing endpoint on
+  // older servers) makes the client fall back to a free-text model field.
+  @httpGet('/transcription/models')
+  async transcriptionModelList(_request: Request, response: Response): Promise<void> {
+    response.json({ models: this.transcriptionModels })
   }
 
   @httpGet('/config')

@@ -85,7 +85,9 @@ export function decideSttBackend(availability: SttAvailability): {
 /**
  * The STT model to send to the transcription endpoint. Reuse the configured STT model
  * pref if set; otherwise the chat model only if it looks like a transcription model;
- * otherwise OpenAI's default whisper-1. Custom servers can ignore/override.
+ * otherwise an EMPTY string — meaning "no model id". When this is empty the request
+ * builder OMITS the `model` param entirely so the SERVER's own default model is used.
+ * Custom servers can ignore/override an explicit id.
  */
 export function resolveTranscriptionModel(application: WebApplication): string {
   const configured = loadDictationSettings().sttModel
@@ -96,7 +98,44 @@ export function resolveTranscriptionModel(application: WebApplication): string {
   if (KNOWN_STT_MODELS.includes(chatModel)) {
     return chatModel
   }
-  return 'whisper-1'
+  // Empty => the client sends no `model`, deferring to the server's default model.
+  return ''
+}
+
+/**
+ * Best-effort detection of the STT models the SERVER advertises. The web client asks
+ * the api-gateway's read-only endpoint (GET /v1/assistant/transcription/models) which
+ * returns the operator-configured list (from the TRANSCRIPTION_MODELS env). This is
+ * purely additive UI sugar: if the endpoint is missing (older server), errors, or
+ * returns nothing, callers fall back to a free-text model field. Never throws — a
+ * failed/empty detection just yields an empty list so no error is surfaced.
+ */
+export async function fetchAvailableSttModels(application: WebApplication): Promise<string[]> {
+  try {
+    const result = await application.assistantConfigRequest<{ models?: unknown }>(
+      '/v1/assistant/transcription/models',
+    )
+    const raw = (result as { models?: unknown })?.models
+    if (!Array.isArray(raw)) {
+      return []
+    }
+    // Keep only non-empty strings, trimmed and de-duplicated, order preserved.
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const entry of raw) {
+      if (typeof entry !== 'string') {
+        continue
+      }
+      const id = entry.trim()
+      if (id && !seen.has(id)) {
+        seen.add(id)
+        out.push(id)
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 export interface TranscriptionRequest {
@@ -130,7 +169,11 @@ export function buildTranscriptionRequest(options: {
 
   const formData = new FormData()
   formData.append('file', options.audio, options.fileName)
-  formData.append('model', options.model)
+  // Omit `model` entirely when blank so the SERVER's default model is used. Only
+  // send it when the user (or resolver) supplied a concrete id.
+  if (options.model && options.model.trim()) {
+    formData.append('model', options.model.trim())
+  }
   formData.append('response_format', 'json')
   if (options.language && options.language.trim()) {
     formData.append('language', options.language.trim())

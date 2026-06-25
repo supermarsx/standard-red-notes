@@ -41,6 +41,9 @@ const AudioRecorderContent = observer(
   ({ application, filesController, note, close }: Omit<Props, 'isOpen'>) => {
     const sttAvailability = useMemo(() => getSttAvailability(application), [application])
     const sttDecision = useMemo(() => decideSttBackend(sttAvailability), [sttAvailability])
+    // Resolved STT model id; empty string means the request omits `model` and the
+    // server's own default model is used.
+    const transcriptionModel = useMemo(() => resolveTranscriptionModel(application), [application])
 
     const recorderRef = useRef<AudioRecorder | null>(null)
     const [supported] = useState(() => AudioRecorder.isSupported())
@@ -239,9 +242,16 @@ const AudioRecorderContent = observer(
             <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
               <div className="font-semibold text-warning">Transcription sends audio to your AI endpoint</div>
               <p className="mt-1">
-                Choosing “Transcribe” uploads this recording to your configured Direct-mode AI endpoint (model{' '}
-                <code>{resolveTranscriptionModel(application)}</code>) for speech-to-text. Saving the recording to the
-                note does not send it anywhere except your own Standard Red Notes file storage.
+                Choosing “Transcribe” uploads this recording to your configured Direct-mode AI endpoint (
+                {transcriptionModel ? (
+                  <>
+                    model <code>{transcriptionModel}</code>
+                  </>
+                ) : (
+                  <>using the server’s default model</>
+                )}
+                ) for speech-to-text. Saving the recording to the note does not send it anywhere except your own
+                Standard Red Notes file storage.
               </p>
             </div>
           )}

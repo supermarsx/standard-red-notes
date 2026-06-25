@@ -17,7 +17,8 @@ export interface DictationSettings {
   dictationEnabled: boolean
   /**
    * Optional STT model id sent to the Direct-mode /audio/transcriptions endpoint
-   * (e.g. whisper-1, gpt-4o-transcribe). Empty = use the resolver's default.
+   * (e.g. whisper-1, gpt-4o-transcribe). EMPTY = omit the `model` param entirely so
+   * the SERVER's own default model is used (the request builder leaves it out).
    */
   sttModel: string
   /**

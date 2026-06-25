@@ -181,6 +181,14 @@ export class ContainerConfigLoader {
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
       .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
+    // Standard Red Notes: comma-separated STT model ids the audio-recorder model
+    // picker offers. Empty by default — clients then fall back to a free-text field.
+    container.bind<string[]>(TYPES.ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS).toConstantValue(
+      (env.get('TRANSCRIPTION_MODELS', true) || '')
+        .split(',')
+        .map((model) => model.trim())
+        .filter((model) => model.length > 0),
+    )
 
     // Standard Red Notes: OPT-IN server-side PDF OCR (tesseract-in-Node).
     //

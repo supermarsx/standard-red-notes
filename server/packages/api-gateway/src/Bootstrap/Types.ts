@@ -30,6 +30,9 @@ export const TYPES = {
   ApiGateway_ASSISTANT_DEFAULT_PROVIDER: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_PROVIDER'),
   ApiGateway_ASSISTANT_DEFAULT_MODEL: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_MODEL'),
   ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT: Symbol.for('ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT'),
+  // Standard Red Notes: operator-configured list of speech-to-text (STT) model ids
+  // advertised to clients for the audio-recorder transcription model picker.
+  ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS: Symbol.for('ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS'),
   // Standard Red Notes: opt-in server-side PDF OCR (tesseract-in-Node).
   ApiGateway_OCR_SERVER_ENABLED: Symbol.for('ApiGateway_OCR_SERVER_ENABLED'),
   ApiGateway_OCR_DEFAULT_LANGUAGE: Symbol.for('ApiGateway_OCR_DEFAULT_LANGUAGE'),
