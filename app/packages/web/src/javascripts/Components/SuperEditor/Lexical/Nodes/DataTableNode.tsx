@@ -1,7 +1,9 @@
 import * as React from 'react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   $getNodeByKey,
+  $getRoot,
+  $isElementNode,
   DecoratorNode,
   EditorConfig,
   LexicalEditor,
@@ -20,12 +22,37 @@ import {
   formatCellValue,
 } from './DataTableCellTypes'
 import DataTableChart, { DataTableChartConfig, DataTableChartType } from './DataTableChart'
+import {
+  buildTableMap,
+  effectiveKeyColumn,
+  IdentifiedTable,
+  linkConfigAt,
+  LinkColumnConfig,
+  linkedTargetIds,
+  linkOptionsFor,
+  resolveLink,
+} from './dataTableRelations'
 
 export type DataTableData = {
+  /**
+   * Stable identity for this table, used as the target of foreign-key links
+   * from other tables in the same document. Assigned lazily & deterministically
+   * from the Lexical node key (see ensureTableId) — never regenerated per render
+   * and persisted via importJSON/exportJSON. Optional for backward compatibility.
+   */
+  id?: string
   columns: string[]
   rows: string[][]
   /** Per-column type override; 'auto' (or missing) means infer from the data. */
   columnTypes?: ColumnTypeSetting[]
+  /** Index of the primary/label column for this table; defaults to 0. */
+  keyColumn?: number
+  /**
+   * Per-column foreign-key configs, a sparse array parallel to `columns`.
+   * A non-null entry turns that column into a "link" column whose cells store
+   * the key value of a row in another table (`targetTableId`).
+   */
+  links?: (LinkColumnConfig | null)[]
   /** Optional chart built from the columns. */
   chart?: DataTableChartConfig | null
   /** Rows per page; 0 means show all. */
@@ -42,12 +69,53 @@ const DEFAULT_DATATABLE: DataTableData = {
 
 function clone(data: DataTableData): DataTableData {
   return {
+    id: data.id,
     columns: [...data.columns],
     rows: data.rows.map((r) => [...r]),
     columnTypes: data.columnTypes ? [...data.columnTypes] : undefined,
+    keyColumn: data.keyColumn,
+    links: data.links ? data.links.map((l) => (l ? { ...l } : l)) : undefined,
     chart: data.chart ? { ...data.chart, yColumns: [...data.chart.yColumns] } : data.chart,
     rowsPerPage: data.rowsPerPage,
   }
+}
+
+/**
+ * Deterministically derive a stable table id from a Lexical node key. Node keys
+ * are unique within a document and stable across renders, so this yields a
+ * persistable id without any randomness or Date usage during render.
+ */
+const tableIdFromNodeKey = (nodeKey: NodeKey): string => `dt-${nodeKey}`
+
+const setLinkConfig = (data: DataTableData, col: number, config: LinkColumnConfig | null): void => {
+  const links = data.links ? [...data.links] : new Array<LinkColumnConfig | null>(data.columns.length).fill(null)
+  while (links.length < data.columns.length) {
+    links.push(null)
+  }
+  links[col] = config
+  data.links = links
+}
+
+/**
+ * Collect every DataTableNode's data in the current document (depth-first scan
+ * of $getRoot), excluding the table identified by `selfKey`. Cross-NOTE linking
+ * is out of scope: only tables in this editor document are returned. Must be
+ * called inside an editor read/update.
+ */
+function $collectOtherTables(selfKey: NodeKey): IdentifiedTable[] {
+  const out: IdentifiedTable[] = []
+  const visit = (node: LexicalNode): void => {
+    if ($isDataTableNode(node) && node.getKey() !== selfKey) {
+      const d = node.getData()
+      const id = d.id ?? tableIdFromNodeKey(node.getKey())
+      out.push({ id, columns: d.columns, rows: d.rows, keyColumn: d.keyColumn })
+    }
+    if ($isElementNode(node)) {
+      node.getChildren().forEach(visit)
+    }
+  }
+  visit($getRoot())
+  return out
 }
 
 const typeSettingAt = (data: DataTableData, col: number): ColumnTypeSetting => data.columnTypes?.[col] ?? 'auto'
@@ -71,6 +139,104 @@ const TYPE_LABEL: Record<ColumnType, string> = {
 
 const PAGE_SIZES = [10, 25, 50, 100, 0] // 0 = All
 
+/**
+ * Cell renderer for a "link" (foreign-key) column. Resolves the stored key
+ * against the target table: shows the resolved label as a clickable chip when
+ * matched (scrolls to the target), or the raw text when unmatched
+ * (semi-structured fallback). Editing offers a dropdown of the target table's
+ * rows by label plus a free-text fallback.
+ */
+function LinkCell({
+  raw,
+  config,
+  tableMap,
+  isEditing,
+  onStartEdit,
+  onCommit,
+  onCancel,
+  onScrollToTable,
+}: {
+  raw: string
+  config: LinkColumnConfig
+  tableMap: ReadonlyMap<string, IdentifiedTable>
+  isEditing: boolean
+  onStartEdit: () => void
+  onCommit: (value: string) => void
+  onCancel: () => void
+  onScrollToTable: (targetId: string) => void
+}): React.JSX.Element {
+  const target = tableMap.get(config.targetTableId)
+  const resolution = resolveLink(raw, config, tableMap)
+  const options = target ? linkOptionsFor(target, config) : []
+
+  if (isEditing) {
+    return (
+      <div className="flex flex-col gap-1 bg-contrast p-1">
+        {options.length > 0 && (
+          <select
+            autoFocus
+            className="w-full rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+            defaultValue={options.some((o) => o.value === raw) ? raw : ''}
+            onChange={(e) => onCommit(e.target.value)}
+          >
+            <option value="">— pick a row —</option>
+            {options.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <input
+          className="w-full rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+          placeholder="or type a key…"
+          defaultValue={raw}
+          autoFocus={options.length === 0}
+          onBlur={(e) => onCommit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              onCommit((e.target as HTMLInputElement).value)
+            } else if (e.key === 'Escape') {
+              onCancel()
+            }
+          }}
+        />
+      </div>
+    )
+  }
+
+  if (raw.trim().length === 0) {
+    return (
+      <button
+        type="button"
+        className="block w-full px-2 py-1 text-left text-passive-2 outline-none hover:bg-contrast"
+        onClick={onStartEdit}
+      >
+        {' '}
+      </button>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      className="flex w-full items-center gap-1 px-2 py-1 text-left outline-none hover:bg-contrast"
+      onClick={onStartEdit}
+      onDoubleClick={() => resolution.matched && onScrollToTable(config.targetTableId)}
+      title={resolution.matched ? 'Linked row — double-click to open target table' : 'Unresolved link (raw value)'}
+    >
+      {resolution.matched ? (
+        <span className="inline-flex items-center gap-1 rounded bg-info-backdrop px-1.5 py-px text-info">
+          <span aria-hidden>🔗</span>
+          {resolution.display}
+        </span>
+      ) : (
+        <span className="text-foreground underline decoration-dotted decoration-passive-2">{resolution.display}</span>
+      )}
+    </button>
+  )
+}
+
 function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
 
@@ -88,9 +254,48 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
     [editor, nodeKey],
   )
 
+  // Lazily assign a stable, deterministic id (derived from the node key) the
+  // first time this table is rendered without one. Runs once; never per render.
+  useEffect(() => {
+    if (data.id) {
+      return
+    }
+    editor.update(() => {
+      const node = $getNodeByKey(nodeKey)
+      if ($isDataTableNode(node) && !node.getData().id) {
+        const draft = clone(node.getData())
+        draft.id = tableIdFromNodeKey(nodeKey)
+        node.setData(draft)
+      }
+    })
+  }, [editor, nodeKey, data.id])
+
+  // Other data tables in this document, refreshed when the editor changes, used
+  // to resolve foreign-key links. Cross-note linking is out of scope (v1).
+  const [otherTables, setOtherTables] = useState<IdentifiedTable[]>([])
+  useEffect(() => {
+    const read = () => setOtherTables(editor.getEditorState().read(() => $collectOtherTables(nodeKey)))
+    read()
+    return editor.registerUpdateListener(read)
+  }, [editor, nodeKey])
+
+  const tableMap = useMemo(() => buildTableMap(otherTables), [otherTables])
+  const tableLabel = useCallback(
+    (id: string): string => {
+      const t = tableMap.get(id)
+      if (!t) {
+        return id
+      }
+      const kc = effectiveKeyColumn(t)
+      return t.columns[kc] || t.columns[0] || id
+    },
+    [tableMap],
+  )
+
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<string[]>([])
   const [showFilters, setShowFilters] = useState(false)
+  const [linkConfigCol, setLinkConfigCol] = useState<number | null>(null)
   const [sort, setSort] = useState<{ col: number; dir: 'asc' | 'desc' } | null>(null)
   const [page, setPage] = useState(0)
   const [editing, setEditing] = useState<{ row: number; col: number } | null>(null)
@@ -107,6 +312,11 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       }),
     [columns, rows, data],
   )
+
+  const links = data.links
+  const keyColumn = data.keyColumn ?? 0
+  const linkedIds = useMemo(() => linkedTargetIds(links), [links])
+  const isLinkColumn = (c: number) => linkConfigAt(links, c) !== null
 
   const filterFor = (col: number) => filters[col] ?? ''
 
@@ -179,6 +389,9 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       if (d.columnTypes) {
         d.columnTypes.push('auto')
       }
+      if (d.links) {
+        d.links.push(null)
+      }
     })
   const removeColumn = (col: number) =>
     mutate((d) => {
@@ -188,8 +401,52 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       d.columns.splice(col, 1)
       d.rows.forEach((r) => r.splice(col, 1))
       d.columnTypes?.splice(col, 1)
+      d.links?.splice(col, 1)
+      if (d.keyColumn !== undefined && d.keyColumn >= d.columns.length) {
+        d.keyColumn = 0
+      }
     })
+  const setKeyColumn = (col: number) => mutate((d) => (d.keyColumn = col))
+  const setLink = (col: number, config: LinkColumnConfig | null) => mutate((d) => setLinkConfig(d, col, config))
   const setColumnType = (col: number, setting: ColumnTypeSetting) => mutate((d) => setTypeSetting(d, col, setting))
+
+  // Scroll to (and briefly highlight) a linked target table by its id.
+  const scrollToTable = useCallback(
+    (targetId: string) => {
+      editor.getEditorState().read(() => {
+        const root = $getRoot()
+        const findKey = (node: LexicalNode): NodeKey | null => {
+          if ($isDataTableNode(node)) {
+            const d = node.getData()
+            const id = d.id ?? tableIdFromNodeKey(node.getKey())
+            if (id === targetId) {
+              return node.getKey()
+            }
+          }
+          if ($isElementNode(node)) {
+            for (const child of node.getChildren()) {
+              const found = findKey(child)
+              if (found) {
+                return found
+              }
+            }
+          }
+          return null
+        }
+        const key = findKey(root)
+        if (!key) {
+          return
+        }
+        const el = editor.getElementByKey(key)?.querySelector('[data-datatable-block="true"]') as HTMLElement | null
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          el.classList.add('ring-2', 'ring-info')
+          window.setTimeout(() => el.classList.remove('ring-2', 'ring-info'), 1200)
+        }
+      })
+    },
+    [editor],
+  )
   const setRowsPerPage = (value: number) => {
     setPage(0)
     mutate((d) => (d.rowsPerPage = value))
@@ -254,6 +511,22 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
         <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={addRow} type="button">
           + Row
         </button>
+        {linkedIds.length > 0 && (
+          <span className="ml-auto flex items-center gap-1 text-info" title="Tables this base links to">
+            <span aria-hidden>🔗</span>
+            {linkedIds.map((id, i) => (
+              <button
+                key={id}
+                type="button"
+                className="rounded px-1 py-0.5 underline decoration-dotted hover:bg-contrast"
+                onClick={() => scrollToTable(id)}
+              >
+                {tableLabel(id)}
+                {i < linkedIds.length - 1 ? ',' : ''}
+              </button>
+            ))}
+          </span>
+        )}
       </div>
 
       <div className="overflow-x-auto p-1">
@@ -279,6 +552,24 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                         {sortIndicator(c)}
                       </button>
                       <button
+                        className={`px-1 hover:text-info ${keyColumn === c ? 'text-info' : 'text-passive-2'}`}
+                        onClick={() => setKeyColumn(c)}
+                        title={keyColumn === c ? 'Primary/label column' : 'Set as primary/label column'}
+                        type="button"
+                      >
+                        {keyColumn === c ? '★' : '☆'}
+                      </button>
+                      <button
+                        className={`px-1 hover:text-info ${
+                          isLinkColumn(c) ? 'text-info' : linkConfigCol === c ? 'text-info' : 'text-passive-2'
+                        }`}
+                        onClick={() => setLinkConfigCol((v) => (v === c ? null : c))}
+                        title="Configure link (foreign key) to another table"
+                        type="button"
+                      >
+                        🔗
+                      </button>
+                      <button
                         className="px-1 text-passive-1 hover:text-danger"
                         onClick={() => removeColumn(c)}
                         title="Delete column"
@@ -289,10 +580,11 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                     </div>
                     <div className="flex items-center gap-1 px-2 pb-1">
                       <select
-                        className="rounded border border-border bg-default px-1 py-px text-[10px] uppercase tracking-wide text-passive-1 outline-none"
+                        className="rounded border border-border bg-default px-1 py-px text-[10px] uppercase tracking-wide text-passive-1 outline-none disabled:opacity-50"
                         value={typeSettingAt(data, c)}
                         onChange={(e) => setColumnType(c, e.target.value as ColumnTypeSetting)}
-                        title="Column type"
+                        title={isLinkColumn(c) ? 'Type ignored for link columns' : 'Column type'}
+                        disabled={isLinkColumn(c)}
                       >
                         <option value="auto">Auto · {TYPE_LABEL[effectiveTypes[c] ?? 'text']}</option>
                         {COLUMN_TYPES.map((t) => (
@@ -301,7 +593,80 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                           </option>
                         ))}
                       </select>
+                      {isLinkColumn(c) && <span className="text-[10px] uppercase tracking-wide text-info">Link</span>}
                     </div>
+                    {linkConfigCol === c && (
+                      <div className="flex flex-col gap-1 border-t border-border bg-default px-2 py-1 text-[11px] font-normal normal-case text-passive-1">
+                        {(() => {
+                          const cfg = linkConfigAt(links, c)
+                          const targets = otherTables
+                          if (targets.length === 0) {
+                            return <span>No other data tables in this note to link to.</span>
+                          }
+                          const targetTable = cfg ? tableMap.get(cfg.targetTableId) : undefined
+                          return (
+                            <>
+                              <label className="flex items-center justify-between gap-1">
+                                <span>Link to</span>
+                                <select
+                                  className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                  value={cfg?.targetTableId ?? ''}
+                                  onChange={(e) => {
+                                    const id = e.target.value
+                                    if (!id) {
+                                      setLink(c, null)
+                                      return
+                                    }
+                                    const t = tableMap.get(id)
+                                    const kc = t ? effectiveKeyColumn(t) : 0
+                                    setLink(c, { targetTableId: id, targetKeyColumn: kc, displayColumn: kc })
+                                  }}
+                                >
+                                  <option value="">— none (plain column) —</option>
+                                  {targets.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      {tableLabel(t.id)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              {cfg && targetTable && (
+                                <>
+                                  <label className="flex items-center justify-between gap-1">
+                                    <span>Key column</span>
+                                    <select
+                                      className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                      value={cfg.targetKeyColumn}
+                                      onChange={(e) => setLink(c, { ...cfg, targetKeyColumn: Number(e.target.value) })}
+                                    >
+                                      {targetTable.columns.map((name, i) => (
+                                        <option key={i} value={i}>
+                                          {name || `Column ${i + 1}`}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label className="flex items-center justify-between gap-1">
+                                    <span>Display column</span>
+                                    <select
+                                      className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                      value={cfg.displayColumn ?? cfg.targetKeyColumn}
+                                      onChange={(e) => setLink(c, { ...cfg, displayColumn: Number(e.target.value) })}
+                                    >
+                                      {targetTable.columns.map((name, i) => (
+                                        <option key={i} value={i}>
+                                          {name || `Column ${i + 1}`}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                </>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    )}
                     {showFilters && (
                       <div className="px-2 pb-1">
                         <input
@@ -330,9 +695,24 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                   const raw = cells[c] ?? ''
                   const isEditing = editing?.row === idx && editing.col === c
                   const type = effectiveTypes[c] ?? 'text'
+                  const link = linkConfigAt(links, c)
                   return (
                     <td key={`c-${idx}-${c}`} className="border border-border p-0 align-top">
-                      {isEditing ? (
+                      {link ? (
+                        <LinkCell
+                          raw={raw}
+                          config={link}
+                          tableMap={tableMap}
+                          isEditing={isEditing}
+                          onStartEdit={() => setEditing({ row: idx, col: c })}
+                          onCommit={(value) => {
+                            setCell(idx, c, value)
+                            setEditing(null)
+                          }}
+                          onCancel={() => setEditing(null)}
+                          onScrollToTable={scrollToTable}
+                        />
+                      ) : isEditing ? (
                         <input
                           autoFocus
                           className="w-full bg-contrast px-2 py-1 text-foreground outline-none"
