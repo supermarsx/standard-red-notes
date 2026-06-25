@@ -28,7 +28,10 @@ export class GetDefaultEditorIdentifier implements SyncUseCaseInterface<string> 
       return Result.ok(matchingEditor.identifier)
     }
 
-    return Result.ok(NativeFeatureIdentifier.TYPES.PlainEditor)
+    // Standard Red Notes default: Super notes are the default editor for new
+    // notes unless the user picks another editor (per-tag or via the global
+    // DefaultEditorIdentifier preference, both handled above).
+    return Result.ok(NativeFeatureIdentifier.TYPES.SuperEditor)
   }
 
   thirdPartyComponentsForArea(area: ComponentArea): ComponentInterface[] {

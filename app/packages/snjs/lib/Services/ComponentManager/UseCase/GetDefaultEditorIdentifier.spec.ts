@@ -18,10 +18,10 @@ describe('getDefaultEditorIdentifier', () => {
     usecase = new GetDefaultEditorIdentifier(preferences, items)
   })
 
-  it('should return plain editor if no default tag editor or component editor', () => {
+  it('should default to the Super editor if no default tag editor or component editor', () => {
     const editorIdentifier = usecase.execute().getValue()
 
-    expect(editorIdentifier).toEqual(NativeFeatureIdentifier.TYPES.PlainEditor)
+    expect(editorIdentifier).toEqual(NativeFeatureIdentifier.TYPES.SuperEditor)
   })
 
   it('should return pref key based value if available', () => {
