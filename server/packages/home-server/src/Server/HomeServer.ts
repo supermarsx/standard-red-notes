@@ -6,6 +6,7 @@ import {
   configureTrustProxy,
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
+  registerCaldavRoutes,
 } from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
@@ -50,6 +51,10 @@ export class HomeServer implements HomeServerInterface {
         CACHE_TYPE: 'memory',
         DB_SQLITE_DATABASE_PATH: `${configuration.dataDirectoryPath}/database/home_server.sqlite`,
         FILE_UPLOAD_PATH: `${configuration.dataDirectoryPath}/uploads`,
+        // Standard Red Notes: default the CalDAV JSON stores under the data dir so
+        // published reminders + scoped tokens persist with the rest of the
+        // instance. The feature stays OFF until CALDAV_ENABLED=true.
+        CALDAV_DATA_PATH: `${configuration.dataDirectoryPath}/caldav`,
         ...configuration.environment,
         MODE: 'home-server',
       }
@@ -277,7 +282,19 @@ export class HomeServer implements HomeServerInterface {
 
       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
 
-      const serverInstance = server.build().listen(port)
+      const app = server.build()
+
+      // Standard Red Notes: mount the read-only CalDAV router. It gates itself on
+      // the CALDAV_ENABLED master switch (404s when off) and authenticates every
+      // request with a scoped CalDAV token over HTTP Basic.
+      try {
+        registerCaldavRoutes(app, container)
+        logger.info('CalDAV router mounted')
+      } catch (error) {
+        logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+      }
+
+      const serverInstance = app.listen(port)
 
       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
         ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)

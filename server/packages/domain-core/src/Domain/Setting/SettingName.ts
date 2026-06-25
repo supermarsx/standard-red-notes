@@ -114,6 +114,19 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // unencrypted/unsensitive so the gateway can read it without per-user key
     // material when deciding whether to honor a server-OCR request.
     OcrServerAllowed: 'OCR_SERVER_ALLOWED',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT opt-in for the read-only CalDAV
+    // calendar feed. When 'true' (and the operator master switch CALDAV_ENABLED is
+    // on), the user's EXPLICITLY PUBLISHED reminders/todos (held in a separate,
+    // server-readable "published calendar" store — NOT the E2E note content) are
+    // served as an iCalendar VTODO feed to standard CalDAV clients authenticating
+    // with a scoped, revocable CalDAV access token. Nothing is published until the
+    // user opts in AND publishes specific items; the published copy leaves
+    // end-to-end encryption by design (it is plaintext in the published store),
+    // exactly like other opt-in server features. Default disabled
+    // (absent/anything-but-'true'). Client-MUTABLE so the user controls it;
+    // unencrypted/unsensitive so the gateway can read it without per-user key
+    // material when deciding whether to serve the feed.
+    CaldavEnabled: 'CALDAV_ENABLED',
   }
 
   get value(): string {

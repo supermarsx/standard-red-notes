@@ -60,4 +60,8 @@ export const TYPES = {
   ApiGateway_GitHubPublishService: Symbol.for('ApiGateway_GitHubPublishService'),
   // Standard Red Notes: server-side WEB proxy (fetch + search) for the browser AI agent.
   ApiGateway_WebService: Symbol.for('ApiGateway_WebService'),
+  // Standard Red Notes: read-only CalDAV feed of EXPLICITLY published reminders.
+  ApiGateway_CALDAV_ENABLED: Symbol.for('ApiGateway_CALDAV_ENABLED'),
+  ApiGateway_CALDAV_BASE_PATH: Symbol.for('ApiGateway_CALDAV_BASE_PATH'),
+  ApiGateway_CaldavService: Symbol.for('ApiGateway_CaldavService'),
 }

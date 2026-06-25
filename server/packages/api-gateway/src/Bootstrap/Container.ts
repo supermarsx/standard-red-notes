@@ -38,6 +38,10 @@ import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 import { WebFetchLike, WebService } from '../Service/Web/WebService'
+import { CaldavService } from '../Service/Caldav/CaldavService'
+import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
+import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
+import * as path from 'path'
 
 export class ContainerConfigLoader {
   async load(configuration?: {
@@ -241,6 +245,31 @@ export class ContainerConfigLoader {
         fetchTimeoutMs: env.get('WEB_FETCH_TIMEOUT_MS', true) ? +env.get('WEB_FETCH_TIMEOUT_MS', true) : undefined,
       }),
     )
+
+    // Standard Red Notes: OPT-IN read-only CalDAV feed.
+    //
+    // E2E NOTE: notes/reminders are end-to-end encrypted, so the server cannot
+    // read them. This feed serves ONLY reminders the user has EXPLICITLY
+    // published into a separate, server-readable store (plaintext by design) and
+    // is OFF by default. Gated by the operator master switch CALDAV_ENABLED plus
+    // the per-user CALDAV_ENABLED setting (enforced at token issuance). The
+    // published store + scoped CalDAV tokens are kept in JSON files under
+    // CALDAV_DATA_PATH (default ./data/caldav), keeping the feature self-contained
+    // in the api-gateway, which has no database of its own.
+    const caldavEnabled = ['true', '1', 'yes', 'on'].includes((env.get('CALDAV_ENABLED', true) || '').toLowerCase())
+    const caldavDataPath = env.get('CALDAV_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'caldav')
+    const caldavBasePath = env.get('CALDAV_BASE_PATH', true) || '/dav'
+    container.bind<boolean>(TYPES.ApiGateway_CALDAV_ENABLED).toConstantValue(caldavEnabled)
+    container.bind<string>(TYPES.ApiGateway_CALDAV_BASE_PATH).toConstantValue(caldavBasePath)
+    container
+      .bind<CaldavService>(TYPES.ApiGateway_CaldavService)
+      .toConstantValue(
+        new CaldavService(
+          caldavEnabled,
+          new CaldavTokenStore(path.join(caldavDataPath, 'tokens.json')),
+          new PublishedCalendarStore(path.join(caldavDataPath, 'published.json')),
+        ),
+      )
 
     // Middleware
     container

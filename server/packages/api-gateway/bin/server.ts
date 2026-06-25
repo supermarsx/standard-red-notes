@@ -19,6 +19,7 @@ import '../src/Controller/v1/SubscriptionInvitesController'
 import '../src/Controller/v1/AuthenticatorsController'
 import '../src/Controller/v1/AppPasswordsController'
 import '../src/Controller/v1/McpTokensController'
+import '../src/Controller/v1/CaldavTokensController'
 import '../src/Controller/v1/SharesController'
 import '../src/Controller/v1/DeadManSwitchesController'
 import '../src/Controller/v1/TrustedDevicesController'
@@ -53,6 +54,7 @@ import {
   resolveSharedServerAccessKeyConfig,
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
+import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
 const container = new ContainerConfigLoader()
@@ -228,6 +230,18 @@ void container.load().then((container) => {
   // so the realtime WebSocket gateway can register its token route on it, then
   // `.listen()` to get the Node http.Server the ws upgrade attaches to.
   const app = server.build()
+
+  // Standard Red Notes: mount the read-only CalDAV router (OPTIONS/PROPFIND/
+  // REPORT/GET) at CALDAV_BASE_PATH (default /dav). The router gates itself on
+  // the CALDAV_ENABLED master switch (404s when off) and authenticates every
+  // request with a scoped CalDAV token over HTTP Basic.
+  try {
+    registerCaldavRoutes(app, container)
+    logger.info('CalDAV router mounted')
+  } catch (error) {
+    logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+  }
+
   const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
