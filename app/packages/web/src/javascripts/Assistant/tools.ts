@@ -31,7 +31,7 @@ import {
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
 import { webSearch, webFetch } from './webTools'
-import { achievements } from '@/Achievements'
+import { achievements, ACHIEVEMENTS } from '@/Achievements'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -217,6 +217,8 @@ export class AssistantTools implements ToolSession {
         return this.webFetch(args)
       case 'get_achievements':
         return this.getAchievements()
+      case 'configure_achievements':
+        return this.configureAchievements(args)
       case 'tags.list':
         return this.tagsList()
       case 'tags.create':
@@ -672,6 +674,72 @@ export class AssistantTools implements ToolSession {
     }
   }
 
+  /**
+   * Configure the user's achievements at their request. Can toggle the whole
+   * system, the unlock toasts, the unlock-date recording, or enable/disable a
+   * single achievement (referenced by id or name), or reset all progress.
+   * Mutating — gated by the same confirmation flow as other writes.
+   */
+  private configureAchievements(args: Record<string, unknown>) {
+    const setting = String(args.setting ?? '')
+
+    if (setting === 'reset') {
+      achievements.resetAll()
+      return { ok: true, message: 'All achievement progress and unlock dates were reset.', config: achievements.getConfig() }
+    }
+
+    if (typeof args.enabled !== 'boolean') {
+      return { ok: false, message: "Provide a boolean 'enabled' (true to turn on, false to turn off)." }
+    }
+    const enabled = args.enabled
+
+    switch (setting) {
+      case 'system':
+        achievements.setMasterEnabled(enabled)
+        return { ok: true, message: `Achievements ${enabled ? 'enabled' : 'disabled'}.`, config: achievements.getConfig() }
+      case 'toasts':
+        achievements.setShowUnlockToasts(enabled)
+        return {
+          ok: true,
+          message: `Unlock notifications ${enabled ? 'enabled' : 'disabled'}.`,
+          config: achievements.getConfig(),
+        }
+      case 'timestamps':
+        achievements.setRecordTimestamps(enabled)
+        return {
+          ok: true,
+          message: `Recording of unlock date/time ${enabled ? 'enabled' : 'disabled'}.`,
+          config: achievements.getConfig(),
+        }
+      case 'achievement': {
+        const query = String(args.achievement ?? '').trim()
+        if (!query) {
+          return { ok: false, message: "Provide the 'achievement' id or name to enable/disable." }
+        }
+        const lower = query.toLowerCase()
+        const match = ACHIEVEMENTS.find((a) => a.id === query) ?? ACHIEVEMENTS.find((a) => a.name.toLowerCase() === lower)
+        if (!match) {
+          // Suggest only non-hidden names so still-secret achievements stay a surprise.
+          const suggestions = ACHIEVEMENTS.filter((a) => !a.hidden)
+            .slice(0, 12)
+            .map((a) => a.name)
+          return { ok: false, message: `No achievement matched "${query}".`, knownNames: suggestions }
+        }
+        achievements.setAchievementEnabled(match.id, enabled)
+        return {
+          ok: true,
+          message: `Achievement "${match.name}" ${enabled ? 'enabled' : 'disabled'}.`,
+          config: achievements.getConfig(),
+        }
+      }
+      default:
+        return {
+          ok: false,
+          message: "Unknown 'setting'. Use 'system', 'toasts', 'timestamps', 'achievement', or 'reset'.",
+        }
+    }
+  }
+
   private tagsList() {
     const tags = this.allTags()
     return { count: tags.length, tags: tags.map((tag) => tagSummary(this.application, tag)) }
@@ -963,6 +1031,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Get a compact summary of the user's gamification achievements: how many are unlocked out of the total, the names of the unlocked ones, the top in-progress achievements (name, current, threshold), and how many HIDDEN achievements remain locked. Do not speculate about the names or criteria of still-hidden achievements — only report the count that remain, to preserve the surprise.",
     mutating: false,
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'configure_achievements',
+    description:
+      "Configure the user's achievements when they ask. setting='system' turns the whole achievements feature on/off; 'toasts' turns unlock notifications on/off; 'timestamps' turns recording of the unlock date/time on/off; 'achievement' enables/disables one achievement (pass its name or id in 'achievement', plus 'enabled'); 'reset' clears all progress and unlock dates (no 'enabled' needed). All except 'reset' require the boolean 'enabled'. Only act on an explicit user request; do not enable/disable achievements on your own initiative.",
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        setting: { type: 'string', enum: ['system', 'toasts', 'timestamps', 'achievement', 'reset'] },
+        enabled: { type: 'boolean', description: 'Required for all settings except reset.' },
+        achievement: { type: 'string', description: "Achievement name or id; required when setting='achievement'." },
+      },
+      required: ['setting'],
+    },
   },
   {
     name: 'tags.create',
