@@ -1,0 +1,14 @@
+{
+  "name": "@standard-red-notes/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser smoke tests for the Standard Red Notes web app (does it actually open?).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1"
+  }
+}
