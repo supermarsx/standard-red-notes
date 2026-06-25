@@ -2,6 +2,8 @@ import Icon from '@/Components/Icon/Icon'
 import { PopoverItemClassNames } from '../ClassNames'
 import { BlockPickerOption } from './BlockPickerOption'
 import { classNames } from '@standardnotes/snjs'
+import { useTranslation } from 'react-i18next'
+import { translateBlockName } from '../ToolbarPlugin/ToolbarPlugin'
 
 export function BlockPickerMenuItem({
   index,
@@ -16,6 +18,7 @@ export function BlockPickerMenuItem({
   onMouseEnter: () => void
   option: BlockPickerOption
 }) {
+  const { t } = useTranslation('editor')
   return (
     <li
       key={option.key}
@@ -33,7 +36,7 @@ export function BlockPickerMenuItem({
       onClick={onClick}
     >
       <Icon type={option.iconName} className="h-5 w-5 flex-shrink-0" />
-      <div className="text-editor">{option.title}</div>
+      <div className="text-editor">{translateBlockName(option.title, t)}</div>
     </li>
   )
 }

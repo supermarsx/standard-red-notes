@@ -7,12 +7,14 @@ import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { classNames } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   itemListController: ItemListController
 }
 
 const SearchButton = ({ itemListController }: Props) => {
+  const { t } = useTranslation('notes')
   const searchButtonRef = useRef<HTMLButtonElement>(null)
 
   const { noteFilterText, setNoteFilterText, clearFilterText } = itemListController
@@ -31,7 +33,7 @@ const SearchButton = ({ itemListController }: Props) => {
           ),
           input: 'text-base placeholder:text-passive-0 lg:text-sm',
         }}
-        placeholder={'Search...'}
+        placeholder={t('searchPlaceholder')}
         value={noteFilterText}
         ref={(node) => {
           if (node && document.activeElement !== node) {
@@ -50,7 +52,7 @@ const SearchButton = ({ itemListController }: Props) => {
           setIsSearchBarVisible(!isSearchBarVisible)
         }}
         icon={isSearchBarVisible ? 'close' : 'search'}
-        label="Search"
+        label={t('common:search')}
       />
     </>
   )

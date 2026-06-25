@@ -14,6 +14,7 @@ import {
 } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Icon from '@/Components/Icon/Icon'
 import Menu from '@/Components/Menu/Menu'
 import { DisplayOptionsMenuProps } from './DisplayOptionsMenuProps'
@@ -87,6 +88,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
   selectedTag,
   paneController,
 }) => {
+  const { t } = useTranslation('notes')
   const isRegularTag = isTag(selectedTag)
   const isSystemTag = isSmartView(selectedTag) && isSystemView(selectedTag)
   const selectedTagPreferences = isSystemTag
@@ -317,11 +319,11 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
   const shouldHideNonApplicableOptions = isTableViewEnabled && !isMobileScreen
 
   return (
-    <Menu className="text-sm" a11yLabel="Notes list options menu">
-      <div className="my-1 px-3 text-base font-semibold uppercase text-text lg:text-xs">Preferences for</div>
+    <Menu className="text-sm" a11yLabel={t('notesListOptionsMenu')}>
+      <div className="my-1 px-3 text-base font-semibold uppercase text-text lg:text-xs">{t('preferencesFor')}</div>
       <div className={classNames('mt-1.5 flex w-full justify-between px-3', !controlsDisabled && 'mb-3')}>
         <div className="flex items-center gap-1.5">
-          <TabButton label="Global" mode="global" currentMode={currentMode} setCurrentMode={setCurrentMode} />
+          <TabButton label={t('global')} mode="global" currentMode={currentMode} setCurrentMode={setCurrentMode} />
           <TabButton
             label={selectedTag.title}
             icon={selectedTag.iconString}
@@ -332,7 +334,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         </div>
         {currentMode === 'tag' && (
           <button className="text-base lg:text-sm" onClick={resetTagPreferences}>
-            Reset
+            {t('reset')}
           </button>
         )}
       </div>
@@ -341,16 +343,16 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         <NoSubscriptionBanner
           className="m-2 mb-3 mt-2"
           application={application}
-          title="Upgrade for per-topic preferences"
+          title={t('upgradeForPerTopicPreferences')}
           message={
             DailyEntryModeEnabled
-              ? 'Create powerful workflows and organizational layouts with per-topic display preferences and the all-new Daily Notebook calendar layout.'
-              : 'Create powerful workflows and organizational layouts with per-topic display preferences.'
+              ? t('perTopicPreferencesMessageWithDaily')
+              : t('perTopicPreferencesMessage')
           }
         />
       )}
 
-      <MenuSection title="Sort by">
+      <MenuSection title={t('sortBy')}>
         {(isSearching || isRelevanceSortActive) && (
           <MenuRadioButtonItem
             disabled={controlsDisabled || isDailyEntry || !isSearching}
@@ -359,7 +361,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
             checked={isRelevanceSortActive}
           >
             <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
-              <span>Relevance (best match)</span>
+              <span>{t('relevanceBestMatch')}</span>
             </div>
           </MenuRadioButtonItem>
         )}
@@ -373,7 +375,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.UpdatedAt}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
-            <span>Date modified</span>
+            <span>{t('dateModified')}</span>
             <SortIcon
               enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.UpdatedAt}
               reverse={preferences.sortReverse}
@@ -390,7 +392,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.CreatedAt}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
-            <span>Creation date</span>
+            <span>{t('creationDate')}</span>
             <SortIcon
               enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.CreatedAt}
               reverse={preferences.sortReverse}
@@ -407,7 +409,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Title}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
-            <span>Title</span>
+            <span>{t('title')}</span>
             <SortIcon
               enabled={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Title}
               reverse={preferences.sortReverse}
@@ -424,12 +426,12 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!isRelevanceSortActive && preferences.sortBy === CollectionSort.Custom}
         >
           <div className="ml-1 flex flex-grow items-center justify-between md:ml-2">
-            <span>Custom (drag to reorder)</span>
+            <span>{t('customDragToReorder')}</span>
           </div>
         </MenuRadioButtonItem>
       </MenuSection>
 
-      <MenuSection title="View">
+      <MenuSection title={t('view')}>
         {!shouldHideNonApplicableOptions && !isFilesSmartView && (
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
@@ -437,7 +439,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
             checked={!preferences.hideNotePreview}
             onChange={toggleHidePreview}
           >
-            <div className="max-w-3/4 flex flex-col">Show note preview</div>
+            <div className="max-w-3/4 flex flex-col">{t('showNotePreview')}</div>
           </MenuSwitchButtonItem>
         )}
         <MenuSwitchButtonItem
@@ -446,7 +448,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!preferences.hideDate}
           onChange={toggleHideDate}
         >
-          Show date
+          {t('showDate')}
         </MenuSwitchButtonItem>
         <MenuSwitchButtonItem
           disabled={controlsDisabled}
@@ -454,7 +456,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!preferences.hideTags}
           onChange={toggleHideTags}
         >
-          Show tags
+          {t('showTags')}
         </MenuSwitchButtonItem>
         <MenuSwitchButtonItem
           disabled={controlsDisabled}
@@ -462,19 +464,19 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           checked={!preferences.hideEditorIcon}
           onChange={toggleEditorIcon}
         >
-          Show icon
+          {t('showIcon')}
         </MenuSwitchButtonItem>
       </MenuSection>
 
       {!shouldHideNonApplicableOptions && (
-        <MenuSection title="Other">
+        <MenuSection title={t('other')}>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
             className="py-1 hover:bg-contrast focus:bg-info-backdrop"
             checked={!preferences.hidePinned}
             onChange={toggleHidePinned}
           >
-            Show pinned
+            {t('showPinned')}
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
@@ -482,7 +484,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
             checked={!preferences.hideProtected}
             onChange={toggleHideProtected}
           >
-            Show protected
+            {t('showProtected')}
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
@@ -490,7 +492,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
             checked={Boolean(preferences.showArchived)}
             onChange={toggleShowArchived}
           >
-            Show archived
+            {t('showArchived')}
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
@@ -498,7 +500,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
             checked={Boolean(preferences.showTrashed)}
             onChange={toggleShowTrashed}
           >
-            Show trashed
+            {t('showTrashed')}
           </MenuSwitchButtonItem>
         </MenuSection>
       )}
@@ -513,12 +515,12 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           >
             <div className="flex flex-col pr-5">
               <div className="flex flex-row items-center">
-                <div className="text-base font-semibold uppercase text-text lg:text-xs">Daily Notebook</div>
+                <div className="text-base font-semibold uppercase text-text lg:text-xs">{t('dailyNotebook')}</div>
                 <Pill className="!py-0.5 px-1.5" style="success">
-                  Labs
+                  {t('labs')}
                 </Pill>
               </div>
-              <div className="mt-1">Capture new notes daily with a calendar-based layout</div>
+              <div className="mt-1">{t('dailyNotebookDescription')}</div>
             </div>
           </MenuSwitchButtonItem>
         </MenuSection>
@@ -534,19 +536,19 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           >
             <div className="flex flex-col pr-5">
               <div className="flex flex-row items-center">
-                <div className="text-base font-semibold uppercase text-text lg:text-xs">Table view</div>
+                <div className="text-base font-semibold uppercase text-text lg:text-xs">{t('tableView')}</div>
                 <Pill className="!py-0.5 px-1.5" style="success">
-                  Labs
+                  {t('labs')}
                 </Pill>
               </div>
-              <div className="mt-1">Display the notes and files in the current tag in a table layout</div>
+              <div className="mt-1">{t('tableViewDescription')}</div>
             </div>
           </MenuSwitchButtonItem>
         </MenuSection>
       )}
 
       {!shouldHideNonApplicableOptions && (!isSystemTag || currentMode === 'global') && (
-        <MenuSection title="New note defaults">
+        <MenuSection title={t('newNoteDefaults')}>
           <NewNotePreferences
             disabled={controlsDisabled}
             application={application}

@@ -9,6 +9,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import Icon from '../Icon/Icon'
 import DecoratedInput from '../Input/DecoratedInput'
 import { observer } from 'mobx-react-lite'
+import { useTranslation } from 'react-i18next'
 import ClearInputButton from '../ClearInputButton/ClearInputButton'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/snjs'
@@ -21,6 +22,7 @@ type Props = {
 }
 
 const SearchBar = ({ application, itemListController, searchOptionsController, hideOptions = false }: Props) => {
+  const { t } = useTranslation('search')
   const searchBarRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -56,7 +58,7 @@ const SearchBar = ({ application, itemListController, searchOptionsController, h
           container: 'px-1',
           input: 'text-base placeholder:text-passive-0 lg:text-sm',
         }}
-        placeholder={'Search...'}
+        placeholder={t('placeholder')}
         value={noteFilterText}
         ref={searchInputRef}
         onChange={onNoteFilterTextChange}

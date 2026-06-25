@@ -11,7 +11,8 @@ import {
 } from './CreateDailySections'
 import { DailyItemsDay } from './DailyItemsDaySection'
 import { DailyItemCell } from './DailyItemCell'
-import { SNTag, pluralize } from '@standardnotes/snjs'
+import { SNTag } from '@standardnotes/snjs'
+import { useTranslation } from 'react-i18next'
 import { CalendarActivity } from '../Calendar/CalendarActivity'
 import { dateToDailyDayIdentifier, getDailyWritingStreak } from './Utils'
 import InfiniteCalendar, { InfiniteCalendarInterface } from '../Calendar/InfiniteCalendar'
@@ -36,6 +37,7 @@ const DailyContentList: FunctionComponent<Props> = ({
   selectedUuids,
   selectedTag,
 }) => {
+  const { t } = useTranslation('notes')
   const { toggleAppPane } = useResponsiveAppPane()
   const [needsSelectionReload, setNeedsSelectionReload] = useState(false)
   const [todayItem, setTodayItem] = useState<DailyItemsDay>()
@@ -190,9 +192,9 @@ const DailyContentList: FunctionComponent<Props> = ({
       >
         {currentStreak > 0 && (
           <div className="flex w-full items-center justify-center border-t border-solid border-border bg-secondary-background p-2">
-            <span className="opacity-50">Current Streak</span>
+            <span className="opacity-50">{t('currentStreak')}</span>
             <span className="ml-1.5 font-bold">
-              {currentStreak} {pluralize(currentStreak, 'Day', 'Days')}
+              {currentStreak} {t('dayWithCount', { count: currentStreak })}
             </span>
           </div>
         )}

@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { WebApplication } from '@/Application/WebApplication'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { getContextualSearchAvailability, runContextualRerank } from '@/Assistant/contextualSearch'
@@ -20,6 +21,7 @@ type Props = {
  * disabled button with an explanatory tooltip when no provider is configured.
  */
 const AiContextualSearch = ({ application, itemListController }: Props) => {
+  const { t } = useTranslation('search')
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef<AbortController | null>(null)
 
@@ -63,7 +65,7 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
       if (orderedUuids) {
         itemListController.setAiContextualOrder(currentQuery, orderedUuids)
       } else {
-        setError('AI re-ranking is unavailable or returned no result.')
+        setError(t('aiUnavailable'))
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
@@ -83,11 +85,10 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
 
   const disabled = !availability.available || !hasQuery || itemListController.aiContextualLoading
   const tooltip = !availability.available
-    ? availability.reason || 'AI contextual search is unavailable.'
+    ? availability.reason || t('aiUnavailableTooltip')
     : !hasQuery
-      ? 'Type a search query first.'
-      : 'Re-rank the top results by semantic relevance using your configured AI provider. ' +
-        'Sends those candidates’ titles and short snippets, plus your query, to the provider.'
+      ? t('aiTypeQueryFirst')
+      : t('aiTooltip')
 
   return (
     <div className="flex flex-col gap-1">
@@ -95,7 +96,7 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
         <StyledTooltip label={tooltip} showOnHover>
           <button
             role="button"
-            aria-label="Search with AI"
+            aria-label={t('aiSearchWithAi')}
             aria-pressed={isActive}
             disabled={disabled}
             className={
@@ -107,16 +108,13 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
             onClick={() => void runAiSearch()}
           >
             <Icon type={itemListController.aiContextualLoading ? 'restore' : 'dashboard'} size="small" />
-            <span>{itemListController.aiContextualLoading ? 'Ranking…' : 'Search with AI'}</span>
+            <span>{itemListController.aiContextualLoading ? t('aiRanking') : t('aiSearchWithAi')}</span>
           </button>
         </StyledTooltip>
-        {isActive && <span className="text-xs text-passive-1">Ranked by AI relevance</span>}
+        {isActive && <span className="text-xs text-passive-1">{t('aiRankedByRelevance')}</span>}
       </div>
       {availability.available && hasQuery && (
-        <span className="text-xs text-passive-1">
-          Sends the top results’ titles &amp; snippets and your query to your AI provider. Cloud providers will see
-          them — a local model keeps it on-device.
-        </span>
+        <span className="text-xs text-passive-1">{t('aiPrivacyNotice')}</span>
       )}
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>

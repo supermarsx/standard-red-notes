@@ -12,6 +12,7 @@ import { PANEL_NAME_NOTES } from '@/Constants/Constants'
 import { FileItem, Platform, PrefKey, WebAppEvent } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import ContentList from '@/Components/ContentListView/ContentList'
 import NoAccountWarning from '@/Components/NoAccountWarning/NoAccountWarning'
 import { ElementIds } from '@/Constants/ElementIDs'
@@ -54,6 +55,7 @@ type Props = {
 
 const ContentListView = forwardRef<HTMLDivElement, Props>(
   ({ application, className, id, children, onPanelWidthLoad }, ref) => {
+    const { t } = useTranslation('notes')
     const {
       paneController,
       accountMenuController,
@@ -135,7 +137,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
 
       if (target && shouldAddDropTarget && currentTag) {
         addDragTarget(target, {
-          tooltipText: `Drop your files to upload and link them to topic "${currentTag.title}"`,
+          tooltipText: t('dropFilesToUpload', { title: currentTag.title }),
           callback: fileDropCallback,
         })
       }
@@ -152,6 +154,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       navigationController.selected,
       removeDragTarget,
       innerRef,
+      t,
     ])
 
     const icon = selectedTag?.iconString
@@ -295,8 +298,10 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       if (shortcut) {
         shortcut = '(' + shortcut + ')'
       }
-      return isFilesSmartView ? `Upload file ${shortcut}` : `Create a new note in the selected topic ${shortcut}`
-    }, [isFilesSmartView, shortcutForCreate])
+      return isFilesSmartView
+        ? t('uploadFileWithShortcut', { shortcut })
+        : t('createNoteInTopicWithShortcut', { shortcut })
+    }, [isFilesSmartView, shortcutForCreate, t])
 
     useEffect(
       () =>
@@ -341,7 +346,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       <div
         id={id}
         className={classNames(className, 'sn-component section h-full overflow-hidden pt-safe-top')}
-        aria-label={'Notes & Files'}
+        aria-label={t('notesAndFiles')}
         ref={mergeRefs([ref, innerRef, setElement])}
       >
         {isMobileScreen && !itemListController.isMultipleSelectionMode && (
@@ -391,7 +396,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
         {itemListController.isMultipleSelectionMode && (
           <div className="flex items-center border-b border-l-2 border-border border-l-transparent py-2.5 pr-4">
             <div className="px-4">
-              <StyledTooltip label="Select all items" showOnHover showOnMobile>
+              <StyledTooltip label={t('selectAllItems')} showOnHover showOnMobile>
                 <button
                   className="ml-auto rounded border border-border p-1 hover:bg-contrast"
                   onClick={() => {
@@ -402,8 +407,10 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
                 </button>
               </StyledTooltip>
             </div>
-            <div className="text-base font-semibold md:text-sm">{itemListController.selectedItemsCount} selected</div>
-            <StyledTooltip label="Cancel multiple selection" showOnHover showOnMobile>
+            <div className="text-base font-semibold md:text-sm">
+              {t('selectedCount', { count: itemListController.selectedItemsCount })}
+            </div>
+            <StyledTooltip label={t('cancelMultipleSelection')} showOnHover showOnMobile>
               <button
                 className="ml-auto rounded border border-border p-1 hover:bg-contrast"
                 onClick={() => {
@@ -429,14 +436,14 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             filesFolderFilter === FilesFolderFilterAll ? (
               <EmptyFilesView addNewItem={addNewItem} />
             ) : (
-              <p className="empty-items-list opacity-50">No files in this folder.</p>
+              <p className="empty-items-list opacity-50">{t('noFilesInFolder')}</p>
             )
           ) : (
-            <p className="empty-items-list opacity-50">No items.</p>
+            <p className="empty-items-list opacity-50">{t('noItems')}</p>
           )
         ) : null}
         {!dailyMode && !completedFullSync && !filteredRenderedItems.length ? (
-          <p className="empty-items-list opacity-50">Loading...</p>
+          <p className="empty-items-list opacity-50">{t('loading')}</p>
         ) : null}
         {!dailyMode && filteredRenderedItems.length ? (
           shouldUseTableView ? (

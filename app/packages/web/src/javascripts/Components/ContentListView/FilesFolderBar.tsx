@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { classNames, FileItem, SNFolder } from '@standardnotes/snjs'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import Icon from '../Icon/Icon'
@@ -28,6 +29,7 @@ type Props = {
 }
 
 const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, activeFilter, onChange }) => {
+  const { t } = useTranslation('notes')
   const [isCreating, setIsCreating] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -68,14 +70,14 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
     <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain border-b border-border px-3 py-2">
       <button className={chipClass(activeFilter === FilesFolderFilterAll)} onClick={() => onChange(FilesFolderFilterAll)}>
         <Icon type="files" className="h-4 w-4" />
-        All Files
+        {t('allFiles')}
       </button>
       <button
         className={chipClass(activeFilter === FilesFolderFilterNone)}
         onClick={() => onChange(FilesFolderFilterNone)}
       >
         <Icon type="close" className="h-4 w-4" />
-        No folder
+        {t('noFolder')}
       </button>
       {folderEntries.map(({ folder, depth }) => (
         <button
@@ -93,7 +95,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
         <input
           ref={inputRef}
           className="min-h-[2.25rem] flex-shrink-0 rounded-full border border-info bg-default px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]"
-          placeholder="Folder name"
+          placeholder={t('folderNamePlaceholder')}
           autoFocus
           onKeyDown={(event) => {
             if (event.key === KeyboardKey.Enter) {
@@ -111,10 +113,10 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
         <button
           className="flex min-h-[2.25rem] flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1 text-sm text-neutral hover:bg-contrast pointer-coarse:min-h-[2.5rem]"
           onClick={() => setIsCreating(true)}
-          title="Create a new folder"
+          title={t('createNewFolder')}
         >
           <Icon type="add" className="h-4 w-4" />
-          New folder
+          {t('newFolder')}
         </button>
       )}
     </div>

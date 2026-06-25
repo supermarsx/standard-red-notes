@@ -1,5 +1,6 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Icon from '../../Icon/Icon'
 import { classNames } from '@standardnotes/utils'
 import Popover from '@/Components/Popover/Popover'
@@ -49,6 +50,7 @@ const ContentListHeader = ({
   itemListController,
   paneController,
 }: Props) => {
+  const { t } = useTranslation('notes')
   const displayOptionsContainerRef = useRef<HTMLDivElement>(null)
   const displayOptionsButtonRef = useRef<HTMLButtonElement>(null)
   const isDailyEntry = isTag(selectedTag) && selectedTag.isDailyEntry
@@ -86,7 +88,7 @@ const ContentListHeader = ({
 
       if (event === ApplicationEvent.SyncStatusChanged) {
         setSyncSubtitle(
-          syncStatus.syncInProgress && !application.sync.completedOnlineDownloadFirstSync ? 'Syncing...' : '',
+          syncStatus.syncInProgress && !application.sync.completedOnlineDownloadFirstSync ? t('syncing') : '',
         )
         return
       }
@@ -97,11 +99,11 @@ const ContentListHeader = ({
           return
         }
 
-        setSyncSubtitle(`Loading ${localDataCurrent}/${localDataTotal} items...`)
+        setSyncSubtitle(t('loadingItemsProgress', { current: localDataCurrent, total: localDataTotal }))
         return
       }
     })
-  }, [application])
+  }, [application, t])
 
   const [showDisplayOptionsMenu, setShowDisplayOptionsMenu] = useState(false)
 
@@ -129,7 +131,7 @@ const ContentListHeader = ({
             onClick={toggleDisplayOptionsMenu}
             ref={displayOptionsButtonRef}
             icon="sort-descending"
-            label="Display options menu"
+            label={t('displayOptionsMenu')}
           />
           <Popover
             open={showDisplayOptionsMenu}
@@ -137,7 +139,7 @@ const ContentListHeader = ({
             togglePopover={toggleDisplayOptionsMenu}
             align="start"
             className="py-2"
-            title="Display options"
+            title={t('displayOptions')}
           >
             <DisplayOptionsMenu
               application={application}
@@ -149,7 +151,7 @@ const ContentListHeader = ({
         </div>
       </div>
     )
-  }, [showDisplayOptionsMenu, toggleDisplayOptionsMenu, application, isFilesSmartView, selectedTag, paneController])
+  }, [showDisplayOptionsMenu, toggleDisplayOptionsMenu, application, isFilesSmartView, selectedTag, paneController, t])
 
   const AddButton = useMemo(() => {
     return (
@@ -192,7 +194,7 @@ const ContentListHeader = ({
             <div className="text-2xl font-semibold text-text md:text-lg">{panelTitle}</div>
             {showSyncSubtitle && (
               <div className={classNames('-mt-1 text-xs md:mt-0', outOfSync ? 'text-warning' : 'text-passive-0')}>
-                {outOfSync ? 'Potentially Out of Sync' : syncSubtitle}
+                {outOfSync ? t('potentiallyOutOfSync') : syncSubtitle}
               </div>
             )}
             {optionsSubtitle && <div className="text-xs text-passive-0">{optionsSubtitle}</div>}
@@ -201,7 +203,7 @@ const ContentListHeader = ({
         </div>
       </div>
     )
-  }, [optionsSubtitle, showSyncSubtitle, icon, panelTitle, outOfSync, syncSubtitle, selectedTag])
+  }, [optionsSubtitle, showSyncSubtitle, icon, panelTitle, outOfSync, syncSubtitle, selectedTag, t])
 
   const PhoneAndDesktopLayout = useMemo(() => {
     return (
@@ -210,7 +212,7 @@ const ContentListHeader = ({
         {isNavigationPaneCollapsed && (
           <PaneCollapseButton
             onClick={toggleNavigationPane}
-            label="Expand topics panel"
+            label={t('expandTopicsPanel')}
             icon="menu-variant"
             expanded={false}
             className="mr-2 mt-1 lg:mt-0"
@@ -223,7 +225,7 @@ const ContentListHeader = ({
           {AddButton}
           <PaneCollapseButton
             onClick={toggleListPane}
-            label="Collapse notes panel"
+            label={t('collapseNotesPanel')}
             icon="menu-close"
             expanded={true}
             className="mt-1 lg:mt-0"
@@ -239,6 +241,7 @@ const ContentListHeader = ({
     isNavigationPaneCollapsed,
     toggleNavigationPane,
     toggleListPane,
+    t,
   ])
 
   const TabletLayout = useMemo(() => {

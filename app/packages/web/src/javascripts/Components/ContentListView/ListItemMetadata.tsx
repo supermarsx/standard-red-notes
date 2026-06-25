@@ -1,5 +1,6 @@
 import { CollectionSort, CollectionSortProperty } from '@standardnotes/snjs'
 import { FunctionComponent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ListableContentItem } from './Types/ListableContentItem'
 
 type Props = {
@@ -13,6 +14,7 @@ type Props = {
 }
 
 const ListItemMetadata: FunctionComponent<Props> = ({ item, hideDate, sortBy }) => {
+  const { t } = useTranslation('notes')
   const showModifiedDate = sortBy === CollectionSort.UpdatedAt
 
   if (hideDate && !item.protected) {
@@ -21,9 +23,17 @@ const ListItemMetadata: FunctionComponent<Props> = ({ item, hideDate, sortBy }) 
 
   return (
     <div className="leading-1.4 mt-0.5 text-sm opacity-50 lg:text-xs">
-      {item.protected && <span>Protected {hideDate ? '' : ' • '}</span>}
-      {!hideDate && showModifiedDate && <span>Modified {item.updatedAtString || 'Now'}</span>}
-      {!hideDate && !showModifiedDate && <span>{item.createdAtString || 'Now'}</span>}
+      {item.protected && (
+        <span>
+          {t('protected')} {hideDate ? '' : ' • '}
+        </span>
+      )}
+      {!hideDate && showModifiedDate && (
+        <span>
+          {t('modified')} {item.updatedAtString || t('now')}
+        </span>
+      )}
+      {!hideDate && !showModifiedDate && <span>{item.createdAtString || t('now')}</span>}
     </div>
   )
 }

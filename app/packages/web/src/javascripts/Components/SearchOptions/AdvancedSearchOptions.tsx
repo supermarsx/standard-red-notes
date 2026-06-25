@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import {
   AdvancedSearchOptions as AdvancedSearchOptionsValue,
@@ -16,27 +17,29 @@ type Props = {
   itemListController: ItemListController
 }
 
-const NOTE_TYPES: { label: string; value: string }[] = [
-  { label: 'Any type', value: '' },
-  { label: 'Plain text', value: 'plain-text' },
-  { label: 'Rich text', value: 'rich-text' },
-  { label: 'Super', value: 'super' },
-  { label: 'Markdown', value: 'markdown' },
-  { label: 'Code', value: 'code' },
-  { label: 'Task', value: 'task' },
-  { label: 'Spreadsheet', value: 'spreadsheet' },
+// `labelKey` references a key in the 'search' namespace, resolved at render time.
+const NOTE_TYPES: { labelKey: string; value: string }[] = [
+  { labelKey: 'noteTypeAny', value: '' },
+  { labelKey: 'noteTypePlainText', value: 'plain-text' },
+  { labelKey: 'noteTypeRichText', value: 'rich-text' },
+  { labelKey: 'noteTypeSuper', value: 'super' },
+  { labelKey: 'noteTypeMarkdown', value: 'markdown' },
+  { labelKey: 'noteTypeCode', value: 'code' },
+  { labelKey: 'noteTypeTask', value: 'task' },
+  { labelKey: 'noteTypeSpreadsheet', value: 'spreadsheet' },
 ]
 
-const FLAG_LABELS: { flag: NoteFlag; label: string }[] = [
-  { flag: 'protected', label: 'Protected' },
-  { flag: 'pinned', label: 'Pinned' },
-  { flag: 'archived', label: 'Archived' },
-  { flag: 'starred', label: 'Starred' },
-  { flag: 'trashed', label: 'Trashed' },
+const FLAG_LABELS: { flag: NoteFlag; labelKey: string }[] = [
+  { flag: 'protected', labelKey: 'flagProtected' },
+  { flag: 'pinned', labelKey: 'flagPinned' },
+  { flag: 'archived', labelKey: 'flagArchived' },
+  { flag: 'starred', labelKey: 'flagStarred' },
+  { flag: 'trashed', labelKey: 'flagTrashed' },
 ]
 
 // Quick relative-date presets. Each maps to an "after" date computed from now,
 // applied to either the created or updated field depending on the active toggle.
+// `label` is a non-localized abbreviation token shown inside the "Last {label}" phrase.
 const DATE_PRESETS: { label: string; days: number }[] = [
   { label: '24h', days: 1 },
   { label: '7d', days: 7 },
@@ -55,6 +58,7 @@ const fieldInput =
   'w-full rounded border border-border bg-default px-2 py-1.5 text-sm text-text focus:border-info focus:outline-none'
 
 const AdvancedSearchOptions = ({ itemListController }: Props) => {
+  const { t } = useTranslation('search')
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
 
@@ -99,22 +103,22 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
 
   return (
     <>
-      <StyledTooltip label="Advanced search filters" showOnHover>
+      <StyledTooltip label={t('advancedFilters')} showOnHover>
         <button
           ref={buttonRef}
           role="button"
-          aria-label="Advanced search filters"
+          aria-label={t('advancedFilters')}
           aria-pressed={open}
           className="flex items-center gap-1 rounded-full border border-border px-2 py-1 text-sm text-neutral transition hover:bg-contrast"
           onClick={togglePopover}
         >
           <Icon type="tune" size="small" />
-          <span>Filters</span>
+          <span>{t('filters')}</span>
         </button>
       </StyledTooltip>
 
       <Popover
-        title="Advanced search filters"
+        title={t('advancedFilters')}
         open={open}
         anchorElement={buttonRef}
         togglePopover={togglePopover}
@@ -125,13 +129,13 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
         <div className="flex w-80 max-w-full flex-col gap-3 p-3">
           <div>
             <label className={fieldLabel} htmlFor="adv-search-tags">
-              Topics (comma separated)
+              {t('topicsLabel')}
             </label>
             <input
               id="adv-search-tags"
               className={fieldInput}
               type="text"
-              placeholder="work, personal"
+              placeholder={t('topicsPlaceholder')}
               value={tagsValue}
               onChange={(event) =>
                 update({
@@ -146,7 +150,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
 
           <div>
             <label className={fieldLabel} htmlFor="adv-search-type">
-              Note type
+              {t('noteTypeLabel')}
             </label>
             <select
               id="adv-search-type"
@@ -156,14 +160,14 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             >
               {NOTE_TYPES.map((type) => (
                 <option key={type.value} value={type.value}>
-                  {type.label}
+                  {t(type.labelKey)}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <span className={fieldLabel}>Search in</span>
+            <span className={fieldLabel}>{t('searchInLabel')}</span>
             <div className="flex gap-1">
               {(['all', 'title', 'content'] as const).map((scope) => (
                 <button
@@ -176,14 +180,14 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                   }
                   onClick={() => update({ scope })}
                 >
-                  {scope === 'all' ? 'Title & content' : scope}
+                  {scope === 'all' ? t('searchInTitleAndContent') : scope}
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <span className={fieldLabel}>Modified within</span>
+            <span className={fieldLabel}>{t('modifiedWithinLabel')}</span>
             <div className="flex gap-1">
               {DATE_PRESETS.map((preset) => (
                 <button
@@ -196,7 +200,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                   }
                   onClick={() => applyDatePreset(preset.days)}
                 >
-                  Last {preset.label}
+                  {t('datePreset', { label: preset.label })}
                 </button>
               ))}
             </div>
@@ -205,7 +209,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className={fieldLabel} htmlFor="adv-created-after">
-                Created after
+                {t('createdAfterLabel')}
               </label>
               <input
                 id="adv-created-after"
@@ -217,7 +221,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             </div>
             <div>
               <label className={fieldLabel} htmlFor="adv-created-before">
-                Created before
+                {t('createdBeforeLabel')}
               </label>
               <input
                 id="adv-created-before"
@@ -229,7 +233,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             </div>
             <div>
               <label className={fieldLabel} htmlFor="adv-updated-after">
-                Updated after
+                {t('updatedAfterLabel')}
               </label>
               <input
                 id="adv-updated-after"
@@ -241,7 +245,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             </div>
             <div>
               <label className={fieldLabel} htmlFor="adv-updated-before">
-                Updated before
+                {t('updatedBeforeLabel')}
               </label>
               <input
                 id="adv-updated-before"
@@ -254,16 +258,16 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
           </div>
 
           <div>
-            <span className={fieldLabel}>Status</span>
+            <span className={fieldLabel}>{t('statusLabel')}</span>
             <div className="flex flex-col gap-2">
-              {FLAG_LABELS.map(({ flag, label }) => (
+              {FLAG_LABELS.map(({ flag, labelKey }) => (
                 <Switch
                   key={flag}
                   checked={options.flags[flag]}
                   onChange={(checked) => update({ flags: { ...options.flags, [flag]: checked } })}
                   className="flex cursor-pointer items-center"
                 >
-                  <span className="ml-2 text-sm text-text">{label}</span>
+                  <span className="ml-2 text-sm text-text">{t(labelKey)}</span>
                 </Switch>
               ))}
               <Switch
@@ -271,7 +275,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                 onChange={(checked) => update({ hasFiles: checked })}
                 className="flex cursor-pointer items-center"
               >
-                <span className="ml-2 text-sm text-text">Has attachments</span>
+                <span className="ml-2 text-sm text-text">{t('hasAttachments')}</span>
               </Switch>
             </div>
           </div>
@@ -281,7 +285,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             onChange={(checked) => itemListController.setSearchCaseSensitive(checked)}
             className="flex cursor-pointer items-center"
           >
-            <span className="ml-2 text-sm text-text">Case sensitive</span>
+            <span className="ml-2 text-sm text-text">{t('caseSensitive')}</span>
           </Switch>
 
           <button
@@ -291,7 +295,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
               itemListController.setSearchCaseSensitive(false)
             }}
           >
-            Clear all filters
+            {t('clearAllFilters')}
           </button>
         </div>
       </Popover>

@@ -9,6 +9,7 @@ import { FilesController } from '@/Controllers/FilesController'
 import { PhotoRecorder } from '@/Controllers/Moments/PhotoRecorder'
 import { classNames } from '@standardnotes/snjs'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 
 type Props = {
@@ -28,6 +29,7 @@ const AddItemMenuButton = ({
   addNewItem,
   uploadFolder,
 }: Props) => {
+  const { t } = useTranslation('notes')
   const addItemButtonRef = useRef<HTMLButtonElement>(null)
 
   const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -73,7 +75,7 @@ const AddItemMenuButton = ({
       </StyledTooltip>
       {canShowMenu && (
         <Popover
-          title="Add item"
+          title={t('addItem')}
           open={isMenuOpen}
           anchorElement={addItemButtonRef}
           togglePopover={() => {
@@ -101,7 +103,7 @@ const AddItemMenuButton = ({
                 }}
               >
                 <Icon type="folder" className="mr-2" />
-                Upload folder
+                {t('uploadFolder')}
               </MenuItem>
             )}
             {deviceHasCamera && (
@@ -113,7 +115,7 @@ const AddItemMenuButton = ({
                   }}
                 >
                   <Icon type="camera" className="mr-2" />
-                  Take photo
+                  {t('takePhoto')}
                 </MenuItem>
                 <MenuItem
                   onClick={async () => {
@@ -122,7 +124,7 @@ const AddItemMenuButton = ({
                   }}
                 >
                   <Icon type="camera" className="mr-2" />
-                  Record video
+                  {t('recordVideo')}
                 </MenuItem>
               </>
             )}

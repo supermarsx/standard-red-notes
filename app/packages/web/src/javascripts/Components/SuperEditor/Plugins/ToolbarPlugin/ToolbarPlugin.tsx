@@ -165,6 +165,7 @@ import {
   $setTextShading,
 } from './blockFormatting'
 import { BULLET_STYLES, NUMBER_STYLES, $setListStyle } from './listStyle'
+import { useTranslation } from 'react-i18next'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -239,6 +240,77 @@ function splitIntoRows<T>(items: T[], rows: number): T[][] {
     result.push(items.slice(i, i + perRow))
   }
   return result
+}
+
+/**
+ * Map a block catalog display name (English, the source-of-truth string used as
+ * a React key and as the search-match target) to its 'editor' translation key.
+ * Returns null for names with no localized entry, so the caller can fall back to
+ * the original English name without ever altering the underlying catalog value.
+ */
+const BLOCK_NAME_I18N_KEYS: Record<string, string> = {
+  Paragraph: 'blockParagraph',
+  'Heading 1': 'heading1',
+  'Heading 2': 'heading2',
+  'Heading 3': 'heading3',
+  Quote: 'quote',
+  'Code Block': 'codeBlock',
+  Callout: 'blockCallout',
+  Divider: 'blockDivider',
+  Collapsible: 'blockCollapsible',
+  'Bulleted List': 'bulletedList',
+  'Numbered List': 'numberedList',
+  'Check List': 'checkList',
+  'Image from URL': 'blockImageFromUrl',
+  'Upload file': 'blockUploadFile',
+  Drawing: 'blockDrawing',
+  'QR Code': 'blockQrCode',
+  Table: 'blockTable',
+  'Kanban Board': 'blockKanbanBoard',
+  Calendar: 'blockCalendar',
+  Timeline: 'blockTimeline',
+  'Data Table': 'blockDataTable',
+  'SQL Query': 'blockSqlQuery',
+  'Mermaid Diagram': 'blockMermaidDiagram',
+  'Gantt Chart': 'blockGanttChart',
+  'Timing Diagram': 'blockTimingDiagram',
+  'Music Staff': 'blockMusicStaff',
+  'TradingView Chart': 'blockTradingViewChart',
+  'Stock Chart': 'blockStockChart',
+  Embed: 'blockEmbed',
+  'Embed website': 'blockEmbedWebsite',
+  Tweet: 'blockTweet',
+  Equation: 'blockEquation',
+  'Inline Equation': 'blockInlineEquation',
+  Footnote: 'blockFootnote',
+  Bookmark: 'blockBookmark',
+  'Table of Contents': 'tableOfContents',
+  'Generate cryptographically secure password': 'blockGeneratePassword',
+  Clock: 'blockClock',
+  'Current date and time': 'blockCurrentDateTime',
+  'Current time': 'blockCurrentTime',
+  'Current date': 'blockCurrentDate',
+}
+
+const BLOCK_CATEGORY_I18N_KEYS: Record<string, string> = {
+  Basic: 'blockCategoryBasic',
+  Lists: 'blockCategoryLists',
+  Media: 'blockCategoryMedia',
+  'Data & tables': 'blockCategoryDataTables',
+  'Diagrams & charts': 'blockCategoryDiagramsCharts',
+  Finance: 'blockCategoryFinance',
+  Embeds: 'blockCategoryEmbeds',
+  Advanced: 'blockCategoryAdvanced',
+}
+
+export const translateBlockName = (name: string, t: (key: string) => string): string => {
+  const key = BLOCK_NAME_I18N_KEYS[name]
+  return key ? t(key) : name
+}
+
+const translateBlockCategory = (category: string, t: (key: string) => string): string => {
+  const key = BLOCK_CATEGORY_I18N_KEYS[category]
+  return key ? t(key) : category
 }
 
 const toCamelCase = (text: string): string => {
@@ -355,6 +427,7 @@ const ToolbarMenuItem = ({ name, iconName, active, onClick, ...props }: ToolbarM
 }
 
 const ToolbarPlugin = () => {
+  const { t } = useTranslation('editor')
   const application = useApplication()
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
@@ -945,7 +1018,7 @@ const ToolbarPlugin = () => {
 
   const openMultiKeySortDialog = useCallback(() => {
     setIsSortMenuOpen(false)
-    showModal('Sort lines', (onClose) => (
+    showModal(t('sortLinesModalTitle'), (onClose) => (
       <MultiKeySortDialog
         onApply={(options) => {
           sortLinesMultiKey(options)
@@ -954,7 +1027,7 @@ const ToolbarPlugin = () => {
         onClose={onClose}
       />
     ))
-  }, [showModal, sortLinesMultiKey])
+  }, [showModal, sortLinesMultiKey, t])
 
   const handleClipboardCopy = useCallback(() => {
     activeEditor.getEditorState().read(() => {
@@ -1301,14 +1374,14 @@ const ToolbarPlugin = () => {
     document.getElementById(ElementIds.SuperEditor) ?? editor.getRootElement()?.parentElement ?? document.body
 
   const openCustomizeDialog = useCallback(() => {
-    showModal('Customize toolbar', (onClose) => (
+    showModal(t('customizeToolbar'), (onClose) => (
       <CustomizeToolbarDialog
         config={toolbarConfig}
         onChange={(next) => setToolbarConfig(next)}
         onClose={onClose}
       />
     ))
-  }, [showModal, toolbarConfig, setToolbarConfig])
+  }, [showModal, toolbarConfig, setToolbarConfig, t])
 
   // Declarative render map keyed by stable button id. The toolbar is rendered by
   // iterating the config-resolved group/button order over this map, so adding,
@@ -1319,15 +1392,15 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Cut]: (
       <div className="flex flex-shrink-0 items-center" key="cut">
         <ToolbarButton
-          name="Cut"
+          name={t('cut')}
           iconName="scissors"
           disabled={!hasNonCollapsedSelection}
           onSelect={handleClipboardCut}
         />
-        <StyledTooltip showOnHover showOnMobile side="top" label="More cut options">
+        <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCutOptions')}>
           <button
             type="button"
-            aria-label="More cut options"
+            aria-label={t('moreCutOptions')}
             ref={cutAnchorRef}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setIsCutMenuOpen(!isCutMenuOpen)}
@@ -1344,15 +1417,15 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Copy]: (
       <div className="flex flex-shrink-0 items-center" key="copy">
         <ToolbarButton
-          name="Copy"
+          name={t('copy')}
           iconName="copy"
           disabled={!hasNonCollapsedSelection}
           onSelect={handleClipboardCopy}
         />
-        <StyledTooltip showOnHover showOnMobile side="top" label="More copy options">
+        <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCopyOptions')}>
           <button
             type="button"
-            aria-label="More copy options"
+            aria-label={t('moreCopyOptions')}
             ref={copyAnchorRef}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
@@ -1368,11 +1441,11 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Paste]: (
       <div className="flex flex-shrink-0 items-center" key="paste">
-        <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
-        <StyledTooltip showOnHover showOnMobile side="top" label="More paste options">
+        <ToolbarButton name={t('paste')} iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
+        <StyledTooltip showOnHover showOnMobile side="top" label={t('morePasteOptions')}>
           <button
             type="button"
-            aria-label="More paste options"
+            aria-label={t('morePasteOptions')}
             ref={pasteAnchorRef}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setIsPasteMenuOpen(!isPasteMenuOpen)}
@@ -1388,7 +1461,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.TableOfContents]: canShowAllItems ? (
       <ToolbarButton
-        name="Table of Contents"
+        name={t('tableOfContents')}
         iconName="toc"
         active={isTOCOpen}
         onSelect={() => setIsTOCOpen(!isTOCOpen)}
@@ -1397,7 +1470,7 @@ const ToolbarPlugin = () => {
     ) : null,
     [ToolbarButtonId.Search]: canShowAllItems ? (
       <ToolbarButton
-        name="Search"
+        name={t('search')}
         iconName="search"
         onSelect={() => application.keyboardService.triggerCommand(SUPER_TOGGLE_SEARCH)}
       />
@@ -1405,7 +1478,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Undo]: canShowAllItems ? (
       <div className="flex flex-shrink-0 items-center" key="undo">
         <ToolbarButton
-          name="Undo"
+          name={t('undo')}
           iconName="undo"
           disabled={!canUndo}
           onSelect={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
@@ -1414,15 +1487,11 @@ const ToolbarPlugin = () => {
           showOnHover
           showOnMobile
           side="top"
-          label={
-            historySnapshot.undoDepth === 0
-              ? 'Undo history — nothing to undo yet'
-              : 'Undo history — go back several steps at once'
-          }
+          label={historySnapshot.undoDepth === 0 ? t('undoHistoryEmpty') : t('undoHistoryAvailable')}
         >
           <button
             type="button"
-            aria-label="Undo history"
+            aria-label={t('undoHistory')}
             ref={undoAnchorRef}
             aria-disabled={historySnapshot.undoDepth === 0}
             onMouseDown={(event) => event.preventDefault()}
@@ -1448,7 +1517,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Redo]: canShowAllItems ? (
       <div className="flex flex-shrink-0 items-center" key="redo">
         <ToolbarButton
-          name="Redo"
+          name={t('redo')}
           iconName="redo"
           disabled={!canRedo}
           onSelect={() => editor.dispatchCommand(REDO_COMMAND, undefined)}
@@ -1457,15 +1526,11 @@ const ToolbarPlugin = () => {
           showOnHover
           showOnMobile
           side="top"
-          label={
-            historySnapshot.redoDepth === 0
-              ? 'Redo history — nothing to redo'
-              : 'Redo history — jump forward several steps at once'
-          }
+          label={historySnapshot.redoDepth === 0 ? t('redoHistoryEmpty') : t('redoHistoryAvailable')}
         >
           <button
             type="button"
-            aria-label="Redo history"
+            aria-label={t('redoHistory')}
             ref={redoAnchorRef}
             aria-disabled={historySnapshot.redoDepth === 0}
             onMouseDown={(event) => event.preventDefault()}
@@ -1490,7 +1555,7 @@ const ToolbarPlugin = () => {
     ) : null,
     [ToolbarButtonId.BlockStyle]: (
       <ToolbarButton
-        name="Formatting options"
+        name={t('formattingOptions')}
         onSelect={() => {
           setIsTextStyleMenuOpen(!isTextStyleMenuOpen)
         }}
@@ -1503,7 +1568,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Bold]: (
       <ToolbarButton
-        name="Bold"
+        name={t('bold')}
         iconName="bold"
         active={isBold}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}
@@ -1511,7 +1576,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Italic]: (
       <ToolbarButton
-        name="Italic"
+        name={t('italic')}
         iconName="italic"
         active={isItalic}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic')}
@@ -1519,7 +1584,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Underline]: (
       <ToolbarButton
-        name="Underline"
+        name={t('underline')}
         iconName="underline"
         active={isUnderline}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
@@ -1527,7 +1592,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.InlineCode]: (
       <ToolbarButton
-        name="Inline Code"
+        name={t('inlineCode')}
         iconName="code-tags"
         active={isCode}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
@@ -1535,7 +1600,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Link]: (
       <ToolbarButton
-        name="Link"
+        name={t('link')}
         iconName="link"
         active={!!linkNode}
         onSelect={() => {
@@ -1545,7 +1610,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.FormatPainter]: (
       <ToolbarButton
-        name="Format painter — copy formatting (double-click to keep on)"
+        name={t('formatPainter')}
         iconName="pencil"
         active={painter.armed}
         onSelect={() => editor.dispatchCommand(FORMAT_PAINTER_TOGGLE, undefined)}
@@ -1553,7 +1618,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.TextStyleMenu]: (
       <ToolbarButton
-        name="Text style"
+        name={t('textStyle')}
         onSelect={() => {
           setIsTextFormatMenuOpen(!isTextFormatMenuOpen)
         }}
@@ -1566,7 +1631,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.TextColor]: (
       <ToolbarButton
-        name="Text color"
+        name={t('textColor')}
         onSelect={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
         ref={textColorAnchorRef}
         className={isTextColorMenuOpen ? 'md:bg-default' : ''}
@@ -1579,7 +1644,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.HighlightColor]: (
       <ToolbarButton
-        name="Highlight color"
+        name={t('highlightColor')}
         onSelect={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
         ref={bgColorAnchorRef}
         className={isBgColorMenuOpen ? 'md:bg-default' : ''}
@@ -1591,7 +1656,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Typography]: (
       <ToolbarButton
-        name="Typography — emphasis, outline, letter & word spacing"
+        name={t('typography')}
         onSelect={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
         ref={typographyAnchorRef}
         className={isTypographyMenuOpen ? 'md:bg-default' : ''}
@@ -1609,8 +1674,8 @@ const ToolbarPlugin = () => {
           type="text"
           inputMode="numeric"
           pattern="[0-9]*"
-          aria-label="Font size"
-          title="Font size"
+          aria-label={t('fontSize')}
+          title={t('fontSize')}
           value={fontSizeInput}
           onFocus={(event) => {
             captureFontSizeSelection()
@@ -1640,8 +1705,8 @@ const ToolbarPlugin = () => {
         />
         <button
           type="button"
-          aria-label="Choose font size"
-          title="Font size"
+          aria-label={t('chooseFontSize')}
+          title={t('fontSize')}
           ref={fontSizeAnchorRef}
           onMouseDown={(event) => {
             // Keep the editor selection alive when opening the preset list.
@@ -1659,18 +1724,18 @@ const ToolbarPlugin = () => {
       </div>
     ),
     [ToolbarButtonId.DecreaseFontSize]: (
-      <ToolbarButton name="Decrease font size" onSelect={() => stepFontSize(-1)}>
+      <ToolbarButton name={t('decreaseFontSize')} onSelect={() => stepFontSize(-1)}>
         <span className="text-xs font-semibold leading-none">A&minus;</span>
       </ToolbarButton>
     ),
     [ToolbarButtonId.IncreaseFontSize]: (
-      <ToolbarButton name="Increase font size" onSelect={() => stepFontSize(1)}>
+      <ToolbarButton name={t('increaseFontSize')} onSelect={() => stepFontSize(1)}>
         <span className="text-sm font-semibold leading-none">A+</span>
       </ToolbarButton>
     ),
     [ToolbarButtonId.FontFamily]: (
       <ToolbarButton
-        name="Font family"
+        name={t('fontFamily')}
         onSelect={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
         ref={fontFamilyAnchorRef}
         className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
@@ -1681,14 +1746,14 @@ const ToolbarPlugin = () => {
         >
           {FONT_FAMILIES.find((font) =>
             font.value === null ? currentFontFamily === '' : currentFontFamily === font.value,
-          )?.name ?? 'Custom'}
+          )?.name ?? t('customFontFamily')}
         </span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
     [ToolbarButtonId.BulletedList]: (
       <ToolbarButton
-        name="Bulleted List"
+        name={t('bulletedList')}
         iconName="list-bulleted"
         active={blockType === 'bullet'}
         onSelect={() => toggleList('bullet')}
@@ -1696,7 +1761,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.NumberedList]: (
       <ToolbarButton
-        name="Numbered List"
+        name={t('numberedList')}
         iconName="list-numbered"
         active={blockType === 'number'}
         onSelect={() => toggleList('number')}
@@ -1704,18 +1769,18 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Quote]: (
       <ToolbarButton
-        name="Quote"
+        name={t('quote')}
         iconName="quote"
         active={blockType === 'quote'}
         onSelect={() => QuoteBlock.onSelect(editor)}
       />
     ),
     [ToolbarButtonId.CodeBlock]: (
-      <ToolbarButton name="Code Block" iconName="code" active={blockType === 'code'} onSelect={insertCodeBlock} />
+      <ToolbarButton name={t('codeBlock')} iconName="code" active={blockType === 'code'} onSelect={insertCodeBlock} />
     ),
     [ToolbarButtonId.ChangeCase]: (
       <ToolbarButton
-        name="Change case"
+        name={t('changeCase')}
         onSelect={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
         ref={caseAnchorRef}
         className={isCaseMenuOpen ? 'md:bg-default' : ''}
@@ -1726,7 +1791,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.SortLines]: (
       <ToolbarButton
-        name="Sort & dedupe lines"
+        name={t('sortAndDedupeLines')}
         onSelect={() => setIsSortMenuOpen(!isSortMenuOpen)}
         ref={sortAnchorRef}
         className={isSortMenuOpen ? 'md:bg-default' : ''}
@@ -1737,7 +1802,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Alignment]: (
       <ToolbarButton
-        name="Alignment"
+        name={t('alignment')}
         onSelect={() => {
           setIsAlignmentMenuOpen(!isAlignmentMenuOpen)
         }}
@@ -1764,7 +1829,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.ParagraphLayout]: (
       <ToolbarButton
-        name="Paragraph layout — line & paragraph spacing, indentation, shading"
+        name={t('paragraphLayout')}
         onSelect={() => setIsParagraphLayoutMenuOpen(!isParagraphLayoutMenuOpen)}
         ref={paragraphLayoutAnchorRef}
         className={isParagraphLayoutMenuOpen ? 'md:bg-default' : ''}
@@ -1775,7 +1840,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.ListStyle]: (
       <ToolbarButton
-        name="List style — bullet & number marker"
+        name={t('listStyleMarker')}
         onSelect={() => setIsListStyleMenuOpen(!isListStyleMenuOpen)}
         ref={listStyleAnchorRef}
         className={isListStyleMenuOpen ? 'md:bg-default' : ''}
@@ -1785,13 +1850,13 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ),
     [ToolbarButtonId.FormattingMarks]: (
-      <ToolbarButton name="Formatting marks" active={marksOn} onSelect={toggleMarks}>
+      <ToolbarButton name={t('formattingMarks')} active={marksOn} onSelect={toggleMarks}>
         <span className="text-base font-semibold leading-none">¶</span>
       </ToolbarButton>
     ),
     [ToolbarButtonId.InsertMenu]: canShowAllItems ? (
       <ToolbarButton
-        name="Insert"
+        name={t('insert')}
         onSelect={() => {
           setIsInsertMenuOpen(!isInsertMenuOpen)
         }}
@@ -1810,11 +1875,8 @@ const ToolbarPlugin = () => {
       <ToolbarButton
         name={
           <>
-            <div className="mb-1 font-semibold">Create new note from selection</div>
-            <div className="max-w-[35ch] text-xs">
-              Creates a new note containing the current selection and replaces the selection with a link to the new
-              note.
-            </div>
+            <div className="mb-1 font-semibold">{t('createNoteFromSelectionTitle')}</div>
+            <div className="max-w-[35ch] text-xs">{t('createNoteFromSelectionDescription')}</div>
           </>
         }
         iconName="notes"
@@ -1843,12 +1905,12 @@ const ToolbarPlugin = () => {
   const blockCatalogContext: BlockCatalogContext = useMemo(
     () => ({
       openInsertTableDialog: () =>
-        showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
+        showModal(t('insertTable'), (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
       openInsertImageFromUrlDialog: () =>
-        showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
+        showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
     }),
-    [showModal, editor, activeEditor],
+    [showModal, editor, activeEditor, t],
   )
 
   const insertMenuCategories = useMemo(
@@ -1867,74 +1929,74 @@ const ToolbarPlugin = () => {
         contextualButtons.push(
           <ToolbarButton
             key="ctx-row-above"
-            name="Insert row above"
+            name={t('insertRowAbove')}
             iconName="arrow-up"
             onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(false))}
           />,
           <ToolbarButton
             key="ctx-row-below"
-            name="Insert row below"
+            name={t('insertRowBelow')}
             iconName="arrow-down"
             onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(true))}
           />,
           <ToolbarButton
             key="ctx-col-left"
-            name="Insert column left"
+            name={t('insertColumnLeft')}
             iconName="arrow-left"
             onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(false))}
           />,
           <ToolbarButton
             key="ctx-col-right"
-            name="Insert column right"
+            name={t('insertColumnRight')}
             iconName="arrow-right"
             onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(true))}
           />,
           <ToolbarButton
             key="ctx-del-row"
-            name="Delete row"
+            name={t('deleteRow')}
             iconName="trash"
             onSelect={() => activeEditor.update(() => $deleteTableRowAtSelection())}
           />,
           <ToolbarButton
             key="ctx-del-col"
-            name="Delete column"
+            name={t('deleteColumn')}
             iconName="trash-sweep"
             onSelect={() => activeEditor.update(() => $deleteTableColumnAtSelection())}
           />,
           <ToolbarButton
             key="ctx-row-header"
-            name="Toggle row header"
+            name={t('toggleRowHeader')}
             iconName="tasks"
             onSelect={toggleTableRowHeader}
           />,
           <ToolbarButton
             key="ctx-col-header"
-            name="Toggle column header"
+            name={t('toggleColumnHeader')}
             iconName="select-all"
             onSelect={toggleTableColumnHeader}
           />,
-          <ToolbarButton key="ctx-del-table" name="Delete table" iconName="trash-filled" onSelect={deleteTable} />,
+          <ToolbarButton key="ctx-del-table" name={t('deleteTable')} iconName="trash-filled" onSelect={deleteTable} />,
         )
         break
       case ContextualWidgetKind.Image:
         contextualButtons.push(
           <ToolbarButton
             key="ctx-img-left"
-            name="Align left"
+            name={t('alignLeft')}
             iconName="align-left"
             active={elementFormat === 'left'}
             onSelect={() => LeftAlignBlock.onSelect(activeEditor)}
           />,
           <ToolbarButton
             key="ctx-img-center"
-            name="Align center"
+            name={t('alignCenter')}
             iconName="align-center"
             active={elementFormat === 'center'}
             onSelect={() => CenterAlignBlock.onSelect(activeEditor)}
           />,
           <ToolbarButton
             key="ctx-img-right"
-            name="Align right"
+            name={t('alignRight')}
             iconName="align-right"
             active={elementFormat === 'right'}
             onSelect={() => RightAlignBlock.onSelect(activeEditor)}
@@ -1945,11 +2007,11 @@ const ToolbarPlugin = () => {
         contextualButtons.push(
           <ToolbarButton
             key="ctx-link-edit"
-            name="Edit link"
+            name={t('editLink')}
             iconName="pencil"
             onSelect={() => activeEditor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')}
           />,
-          <ToolbarButton key="ctx-link-remove" name="Remove link" iconName="link-off" onSelect={removeLink} />,
+          <ToolbarButton key="ctx-link-remove" name={t('removeLink')} iconName="link-off" onSelect={removeLink} />,
         )
         break
       case ContextualWidgetKind.Code:
@@ -1964,7 +2026,7 @@ const ToolbarPlugin = () => {
     contextualButtons.push(
       <ToolbarButton
         key="ctx-zoom"
-        name="Zoom into block"
+        name={t('zoomIntoBlock')}
         iconName="fullscreen"
         disabled={!activeBlockKey}
         onSelect={enterZoom}
@@ -1989,7 +2051,7 @@ const ToolbarPlugin = () => {
       {/* Block type (paragraph / headings / lists / quote / code) — reuses the
           existing block-style popover anchored at textStyleAnchorRef. */}
       <ToolbarButton
-        name="Block style"
+        name={t('blockStyle')}
         onSelect={() => setIsTextStyleMenuOpen(!isTextStyleMenuOpen)}
         ref={textStyleAnchorRef}
         className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
@@ -2001,31 +2063,31 @@ const ToolbarPlugin = () => {
 
       {/* Core inline formatting: bold / italic / underline / strikethrough. */}
       <ToolbarButton
-        name="Bold"
+        name={t('bold')}
         iconName="bold"
         active={isBold}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}
       />
       <ToolbarButton
-        name="Italic"
+        name={t('italic')}
         iconName="italic"
         active={isItalic}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic')}
       />
       <ToolbarButton
-        name="Underline"
+        name={t('underline')}
         iconName="underline"
         active={isUnderline}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
       />
       <ToolbarButton
-        name="Strikethrough"
+        name={t('strikethrough')}
         iconName="strikethrough"
         active={isStrikethrough}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough')}
       />
       <ToolbarButton
-        name="Inline Code"
+        name={t('inlineCode')}
         iconName="code-tags"
         active={isCode}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
@@ -2034,25 +2096,25 @@ const ToolbarPlugin = () => {
 
       {/* Headings + paragraph quick toggles. */}
       <ToolbarButton
-        name="Heading 1"
+        name={t('heading1')}
         iconName="h1"
         active={blockType === 'h1'}
         onSelect={() => H1Block.onSelect(editor)}
       />
       <ToolbarButton
-        name="Heading 2"
+        name={t('heading2')}
         iconName="h2"
         active={blockType === 'h2'}
         onSelect={() => H2Block.onSelect(editor)}
       />
       <ToolbarButton
-        name="Heading 3"
+        name={t('heading3')}
         iconName="h3"
         active={blockType === 'h3'}
         onSelect={() => H3Block.onSelect(editor)}
       />
       <ToolbarButton
-        name="Normal text"
+        name={t('normalText')}
         iconName="paragraph"
         active={blockType === 'paragraph'}
         onSelect={() => ParagraphBlock.onSelect(editor)}
@@ -2061,25 +2123,25 @@ const ToolbarPlugin = () => {
 
       {/* Lists + block quote. */}
       <ToolbarButton
-        name="Bulleted List"
+        name={t('bulletedList')}
         iconName="list-bulleted"
         active={blockType === 'bullet'}
         onSelect={() => toggleList('bullet')}
       />
       <ToolbarButton
-        name="Numbered List"
+        name={t('numberedList')}
         iconName="list-numbered"
         active={blockType === 'number'}
         onSelect={() => toggleList('number')}
       />
       <ToolbarButton
-        name="Check List"
+        name={t('checkList')}
         iconName="list-check"
         active={blockType === 'check'}
         onSelect={() => ChecklistBlock.onSelect(editor)}
       />
       <ToolbarButton
-        name="Quote"
+        name={t('quote')}
         iconName="quote"
         active={blockType === 'quote'}
         onSelect={() => QuoteBlock.onSelect(editor)}
@@ -2089,7 +2151,7 @@ const ToolbarPlugin = () => {
       {/* Alignment — reuses the existing alignment popover anchored at
           alignmentAnchorRef. The icon reflects the current alignment. */}
       <ToolbarButton
-        name="Alignment"
+        name={t('alignment')}
         onSelect={() => setIsAlignmentMenuOpen(!isAlignmentMenuOpen)}
         ref={alignmentAnchorRef}
         className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
@@ -2112,7 +2174,7 @@ const ToolbarPlugin = () => {
 
       {/* Link toggle. */}
       <ToolbarButton
-        name="Link"
+        name={t('link')}
         iconName="link"
         active={!!linkNode}
         onSelect={() => editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')}
@@ -2125,7 +2187,7 @@ const ToolbarPlugin = () => {
       {/* Overflow "More" menu for the less-common quick-format actions, keeping
           the visible bar compact. */}
       <ToolbarButton
-        name="More formatting"
+        name={t('moreFormatting')}
         onSelect={() => setIsSelectionMoreMenuOpen(!isSelectionMoreMenuOpen)}
         ref={selectionMoreAnchorRef}
         className={isSelectionMoreMenuOpen ? 'md:bg-default' : ''}
@@ -2221,7 +2283,7 @@ const ToolbarPlugin = () => {
           {isMobile && (
             <button
               className="flex flex-shrink-0 items-center justify-center rounded border-l border-border px-3 py-3"
-              aria-label="Dismiss keyboard"
+              aria-label={t('dismissKeyboard')}
               ref={dismissButtonRef}
             >
               <Icon type="keyboard-close" size="medium" />
@@ -2247,7 +2309,7 @@ const ToolbarPlugin = () => {
         )}
       </div>
       <Popover
-        title="Table of contents"
+        title={t('tableOfContentsLower')}
         anchorElement={tocAnchorRef}
         open={isTOCOpen}
         togglePopover={() => setIsTOCOpen(!isTOCOpen)}
@@ -2260,15 +2322,15 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-1.5 mt-1 px-3 text-sm font-semibold uppercase text-text">Table of Contents</div>
+        <div className="mb-1.5 mt-1 px-3 text-sm font-semibold uppercase text-text">{t('tableOfContents')}</div>
         <TableOfContentsPlugin>
           {(tableOfContents) => {
             if (!tableOfContents.length) {
-              return <div className="py-2 text-center">No headings found</div>
+              return <div className="py-2 text-center">{t('noHeadingsFound')}</div>
             }
 
             return (
-              <Menu a11yLabel="Table of contents" className="!px-0">
+              <Menu a11yLabel={t('tableOfContentsLower')} className="!px-0">
                 {tableOfContents.map(([key, text, tag]) => {
                   const level = parseInt(tag.slice(1)) || 1
                   if (level > 3) {
@@ -2312,7 +2374,7 @@ const ToolbarPlugin = () => {
         </TableOfContentsPlugin>
       </Popover>
       <Popover
-        title="Text formatting options"
+        title={t('textFormattingOptions')}
         anchorElement={textFormatAnchorRef}
         open={isTextFormatMenuOpen}
         togglePopover={() => setIsTextFormatMenuOpen(!isTextFormatMenuOpen)}
@@ -2325,36 +2387,36 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Text formatting options" className="!px-0" onClick={() => setIsTextFormatMenuOpen(false)}>
+        <Menu a11yLabel={t('textFormattingOptions')} className="!px-0" onClick={() => setIsTextFormatMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Highlight"
+            name={t('highlight')}
             iconName="draw"
             active={isHighlight}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'highlight')}
           />
           <ToolbarMenuItem
-            name="Strikethrough"
+            name={t('strikethrough')}
             iconName="strikethrough"
             active={isStrikethrough}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough')}
           />
           <ToolbarMenuItem
-            name="Subscript"
+            name={t('subscript')}
             iconName="subscript"
             active={isSubscript}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'subscript')}
           />
           <ToolbarMenuItem
-            name="Superscript"
+            name={t('superscript')}
             iconName="superscript"
             active={isSuperscript}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'superscript')}
           />
-          <ToolbarMenuItem name="Clear formatting" iconName="trash" onClick={clearFormatting} />
+          <ToolbarMenuItem name={t('clearFormatting')} iconName="trash" onClick={clearFormatting} />
         </Menu>
       </Popover>
       <Popover
-        title="Block style"
+        title={t('blockStyle')}
         anchorElement={textStyleAnchorRef}
         open={isTextStyleMenuOpen}
         togglePopover={() => setIsTextStyleMenuOpen(!isTextStyleMenuOpen)}
@@ -2367,66 +2429,66 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Block style" className="!px-0" onClick={() => setIsTextStyleMenuOpen(false)}>
+        <Menu a11yLabel={t('blockStyle')} className="!px-0" onClick={() => setIsTextStyleMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Normal"
+            name={t('normal')}
             iconName="paragraph"
             active={blockType === 'paragraph'}
             onClick={() => ParagraphBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Heading 1"
+            name={t('heading1')}
             iconName="h1"
             active={blockType === 'h1'}
             onClick={() => H1Block.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Heading 2"
+            name={t('heading2')}
             iconName="h2"
             active={blockType === 'h2'}
             onClick={() => H2Block.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Heading 3"
+            name={t('heading3')}
             iconName="h3"
             active={blockType === 'h3'}
             onClick={() => H3Block.onSelect(editor)}
           />
           <MenuItemSeparator />
           <ToolbarMenuItem
-            name="Bulleted List"
+            name={t('bulletedList')}
             iconName="list-bulleted"
             active={blockType === 'bullet'}
             onClick={() => BulletedListBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Numbered List"
+            name={t('numberedList')}
             iconName="list-numbered"
             active={blockType === 'number'}
             onClick={() => NumberedListBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Check List"
+            name={t('checkList')}
             iconName="list-check"
             active={blockType === 'check'}
             onClick={() => ChecklistBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Auto-move completed to bottom"
+            name={t('smartChecklist')}
             iconName="list-check"
             active={autoMoveCompleted}
             onClick={toggleAutoMoveCompleted}
           />
-          <ToolbarMenuItem name="Restore completed tasks" iconName="arrow-left" onClick={restoreCompletedTasks} />
+          <ToolbarMenuItem name={t('restoreCompletedTasks')} iconName="arrow-left" onClick={restoreCompletedTasks} />
           <MenuItemSeparator />
           <ToolbarMenuItem
-            name="Quote"
+            name={t('quote')}
             iconName="quote"
             active={blockType === 'quote'}
             onClick={() => QuoteBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Code Block"
+            name={t('codeBlock')}
             iconName="code"
             active={blockType === 'code'}
             onClick={() => CodeBlock.onSelect(editor)}
@@ -2434,7 +2496,7 @@ const ToolbarPlugin = () => {
         </Menu>
       </Popover>
       <Popover
-        title="Alignment"
+        title={t('alignment')}
         anchorElement={alignmentAnchorRef}
         open={isAlignmentMenuOpen}
         togglePopover={() => setIsAlignmentMenuOpen(!isAlignmentMenuOpen)}
@@ -2447,27 +2509,27 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Alignment" className="!px-0" onClick={() => setIsAlignmentMenuOpen(false)}>
+        <Menu a11yLabel={t('alignment')} className="!px-0" onClick={() => setIsAlignmentMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Left align"
+            name={t('leftAlign')}
             iconName="align-left"
             active={elementFormat === 'left'}
             onClick={() => LeftAlignBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Center align"
+            name={t('centerAlign')}
             iconName="align-center"
             active={elementFormat === 'center'}
             onClick={() => CenterAlignBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Right align"
+            name={t('rightAlign')}
             iconName="align-right"
             active={elementFormat === 'right'}
             onClick={() => RightAlignBlock.onSelect(editor)}
           />
           <ToolbarMenuItem
-            name="Justify"
+            name={t('justify')}
             iconName="align-justify"
             active={elementFormat === 'justify'}
             onClick={() => JustifyAlignBlock.onSelect(editor)}
@@ -2475,7 +2537,7 @@ const ToolbarPlugin = () => {
         </Menu>
       </Popover>
       <Popover
-        title="Insert"
+        title={t('insert')}
         anchorElement={insertAnchorRef}
         open={isInsertMenuOpen}
         togglePopover={() => {
@@ -2503,14 +2565,14 @@ const ToolbarPlugin = () => {
               value={insertMenuQuery}
               onChange={(event) => setInsertMenuQuery(event.target.value)}
               onMouseDown={(event) => event.stopPropagation()}
-              placeholder="Search blocks…"
-              aria-label="Search blocks to insert"
+              placeholder={t('searchBlocksPlaceholder')}
+              aria-label={t('searchBlocksToInsert')}
               className="w-full bg-transparent text-sm text-text placeholder:text-passive-1 focus:outline-none"
             />
             {insertMenuQuery && (
               <button
                 type="button"
-                aria-label="Clear search"
+                aria-label={t('clearSearch')}
                 className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setInsertMenuQuery('')}
@@ -2521,7 +2583,7 @@ const ToolbarPlugin = () => {
           </div>
         </div>
         <Menu
-          a11yLabel="Insert"
+          a11yLabel={t('insert')}
           className="!px-0"
           onClick={() => {
             setIsInsertMenuOpen(false)
@@ -2529,7 +2591,9 @@ const ToolbarPlugin = () => {
           }}
         >
           {insertMenuCategories.length === 0 ? (
-            <div className="px-3 py-3 text-center text-sm text-passive-1">No blocks match “{insertMenuQuery}”</div>
+            <div className="px-3 py-3 text-center text-sm text-passive-1">
+              {t('noBlocksMatch', { query: insertMenuQuery })}
+            </div>
           ) : (
             insertMenuCategories.map((group, groupIndex) => (
               <Fragment key={group.category}>
@@ -2538,12 +2602,12 @@ const ToolbarPlugin = () => {
                   aria-hidden
                   className="select-none px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-passive-1"
                 >
-                  {group.category}
+                  {translateBlockCategory(group.category, t)}
                 </div>
                 {group.entries.map((entry) => (
                   <ToolbarMenuItem
                     key={entry.key}
-                    name={entry.name}
+                    name={translateBlockName(entry.name, t)}
                     iconName={entry.iconName}
                     onClick={() => entry.onSelect(editor, blockCatalogContext)}
                   />
@@ -2552,11 +2616,11 @@ const ToolbarPlugin = () => {
             ))
           )}
           <MenuItemSeparator />
-          <ToolbarMenuItem name="Customize toolbar" iconName="settings" onClick={openCustomizeDialog} />
+          <ToolbarMenuItem name={t('customizeToolbar')} iconName="settings" onClick={openCustomizeDialog} />
         </Menu>
       </Popover>
       <Popover
-        title="Text color"
+        title={t('textColor')}
         anchorElement={textColorAnchorRef}
         open={isTextColorMenuOpen}
         togglePopover={() => setIsTextColorMenuOpen(!isTextColorMenuOpen)}
@@ -2568,13 +2632,13 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-2 text-sm font-semibold text-text">Text color</div>
+        <div className="mb-2 text-sm font-semibold text-text">{t('textColor')}</div>
         <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
           {COLOR_PRESETS.map((color) => (
             <button
               key={color}
               type="button"
-              aria-label={`Text color ${color}`}
+              aria-label={t('textColorSwatch', { color })}
               className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
               style={{ backgroundColor: color }}
               onClick={() => {
@@ -2586,7 +2650,7 @@ const ToolbarPlugin = () => {
         </div>
         <div className="mt-3 flex items-center gap-2" onMouseDown={(e) => e.preventDefault()}>
           <label className="flex items-center gap-2 text-sm">
-            Custom
+            {t('custom')}
             <input
               type="color"
               className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
@@ -2601,12 +2665,12 @@ const ToolbarPlugin = () => {
               setIsTextColorMenuOpen(false)
             }}
           >
-            Clear
+            {t('clear')}
           </button>
         </div>
       </Popover>
       <Popover
-        title="Highlight color"
+        title={t('highlightColor')}
         anchorElement={bgColorAnchorRef}
         open={isBgColorMenuOpen}
         togglePopover={() => setIsBgColorMenuOpen(!isBgColorMenuOpen)}
@@ -2618,13 +2682,13 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-2 text-sm font-semibold text-text">Highlight color</div>
+        <div className="mb-2 text-sm font-semibold text-text">{t('highlightColor')}</div>
         <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
           {COLOR_PRESETS.map((color) => (
             <button
               key={color}
               type="button"
-              aria-label={`Highlight color ${color}`}
+              aria-label={t('highlightColorSwatch', { color })}
               className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
               style={{ backgroundColor: color }}
               onClick={() => {
@@ -2636,7 +2700,7 @@ const ToolbarPlugin = () => {
         </div>
         <div className="mt-3 flex items-center gap-2" onMouseDown={(e) => e.preventDefault()}>
           <label className="flex items-center gap-2 text-sm">
-            Custom
+            {t('custom')}
             <input
               type="color"
               className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
@@ -2651,12 +2715,12 @@ const ToolbarPlugin = () => {
               setIsBgColorMenuOpen(false)
             }}
           >
-            Clear
+            {t('clear')}
           </button>
         </div>
       </Popover>
       <Popover
-        title="Font family"
+        title={t('fontFamily')}
         anchorElement={fontFamilyAnchorRef}
         open={isFontFamilyMenuOpen}
         togglePopover={() => setIsFontFamilyMenuOpen(!isFontFamilyMenuOpen)}
@@ -2669,7 +2733,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Font family" className="!px-0" onClick={() => setIsFontFamilyMenuOpen(false)}>
+        <Menu a11yLabel={t('fontFamily')} className="!px-0" onClick={() => setIsFontFamilyMenuOpen(false)}>
           {FONT_FAMILIES.map((font) => {
             const isActive =
               font.value === null ? currentFontFamily === '' : currentFontFamily === font.value
@@ -2696,7 +2760,7 @@ const ToolbarPlugin = () => {
         </Menu>
       </Popover>
       <Popover
-        title="Font size"
+        title={t('fontSize')}
         anchorElement={fontSizeAnchorRef}
         open={isFontSizeMenuOpen}
         togglePopover={() => setIsFontSizeMenuOpen(!isFontSizeMenuOpen)}
@@ -2709,7 +2773,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Font size" className="!px-0" onClick={() => setIsFontSizeMenuOpen(false)}>
+        <Menu a11yLabel={t('fontSize')} className="!px-0" onClick={() => setIsFontSizeMenuOpen(false)}>
           {FONT_SIZE_PRESETS.map((size) => {
             const isActive = currentFontSize === size
             return (
@@ -2730,7 +2794,7 @@ const ToolbarPlugin = () => {
         </Menu>
       </Popover>
       <Popover
-        title="Change case"
+        title={t('changeCase')}
         anchorElement={caseAnchorRef}
         open={isCaseMenuOpen}
         togglePopover={() => setIsCaseMenuOpen(!isCaseMenuOpen)}
@@ -2743,32 +2807,32 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Change case" className="!px-0" onClick={() => setIsCaseMenuOpen(false)}>
+        <Menu a11yLabel={t('changeCase')} className="!px-0" onClick={() => setIsCaseMenuOpen(false)}>
           <MenuItem
             className="overflow-hidden hover:bg-contrast md:py-2"
             onClick={() => transformCase('upper')}
             onMouseDown={(e) => e.preventDefault()}
           >
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap">UPPERCASE</span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('uppercase')}</span>
           </MenuItem>
           <MenuItem
             className="overflow-hidden hover:bg-contrast md:py-2"
             onClick={() => transformCase('lower')}
             onMouseDown={(e) => e.preventDefault()}
           >
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap">lowercase</span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('lowercase')}</span>
           </MenuItem>
           <MenuItem
             className="overflow-hidden hover:bg-contrast md:py-2"
             onClick={() => transformCase('camel')}
             onMouseDown={(e) => e.preventDefault()}
           >
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap">camelCase</span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('camelCase')}</span>
           </MenuItem>
         </Menu>
       </Popover>
       <Popover
-        title="Sort & dedupe lines"
+        title={t('sortAndDedupeLines')}
         anchorElement={sortAnchorRef}
         open={isSortMenuOpen}
         togglePopover={() => setIsSortMenuOpen(!isSortMenuOpen)}
@@ -2781,8 +2845,8 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Sort and deduplicate lines" className="!px-0" onClick={() => setIsSortMenuOpen(false)}>
-          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">Sort lines</div>
+        <Menu a11yLabel={t('sortAndDeduplicateLines')} className="!px-0" onClick={() => setIsSortMenuOpen(false)}>
+          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">{t('sortLines')}</div>
           {LINE_SORT_MODES.map(({ mode, label }) => (
             <MenuItem
               key={mode}
@@ -2794,7 +2858,7 @@ const ToolbarPlugin = () => {
             </MenuItem>
           ))}
           <MenuItemSeparator />
-          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">Deduplicate</div>
+          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">{t('deduplicate')}</div>
           {LINE_DEDUPE_MODES.map(({ mode, label }) => (
             <MenuItem
               key={mode}
@@ -2811,12 +2875,12 @@ const ToolbarPlugin = () => {
             onClick={openMultiKeySortDialog}
             onMouseDown={(e) => e.preventDefault()}
           >
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap">Multi-key sort (1st, 2nd, 3rd)…</span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('multiKeySort')}</span>
           </MenuItem>
         </Menu>
       </Popover>
       <Popover
-        title="Typography"
+        title={t('typographyTitle')}
         anchorElement={typographyAnchorRef}
         open={isTypographyMenuOpen}
         togglePopover={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
@@ -2835,23 +2899,23 @@ const ToolbarPlugin = () => {
             className="rounded px-3 py-1.5 text-left hover:bg-contrast"
             onClick={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
           >
-            Emphasis marks
+            {t('emphasisMarks')}
           </button>
           <button
             type="button"
             className="rounded px-3 py-1.5 text-left hover:bg-contrast"
             onClick={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
           >
-            Outline (text stroke)
+            {t('outlineTextStroke')}
           </button>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Letter spacing (kerning)</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('letterSpacingKerning')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {[
-              { label: 'Tight', value: '-0.5px' },
-              { label: 'Normal', value: '0' },
-              { label: 'Wide', value: '0.5px' },
-              { label: 'Wider', value: '1px' },
-              { label: 'Widest', value: '2px' },
+              { label: t('spacingTight'), value: '-0.5px' },
+              { label: t('spacingNormal'), value: '0' },
+              { label: t('spacingWide'), value: '0.5px' },
+              { label: t('spacingWider'), value: '1px' },
+              { label: t('spacingWidest'), value: '2px' },
             ].map((preset) => (
               <button
                 key={preset.label}
@@ -2863,13 +2927,13 @@ const ToolbarPlugin = () => {
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Word spacing</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('wordSpacing')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {[
-              { label: 'Normal', value: '0' },
-              { label: 'Wide', value: '2px' },
-              { label: 'Wider', value: '4px' },
-              { label: 'Widest', value: '8px' },
+              { label: t('spacingNormal'), value: '0' },
+              { label: t('spacingWide'), value: '2px' },
+              { label: t('spacingWider'), value: '4px' },
+              { label: t('spacingWidest'), value: '8px' },
             ].map((preset) => (
               <button
                 key={preset.label}
@@ -2893,12 +2957,12 @@ const ToolbarPlugin = () => {
               })
             }
           >
-            Clear typography
+            {t('clearTypography')}
           </button>
         </div>
       </Popover>
       <Popover
-        title="Undo history"
+        title={t('undoHistory')}
         anchorElement={undoAnchorRef}
         open={isUndoMenuOpen}
         togglePopover={() => setIsUndoMenuOpen(!isUndoMenuOpen)}
@@ -2911,7 +2975,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Undo multiple steps" className="!px-0" onClick={() => setIsUndoMenuOpen(false)}>
+        <Menu a11yLabel={t('undoMultipleSteps')} className="!px-0" onClick={() => setIsUndoMenuOpen(false)}>
           {undoPreviews.map((preview, index) => (
             <MenuItem
               key={index}
@@ -2920,13 +2984,13 @@ const ToolbarPlugin = () => {
               onMouseDown={(e) => e.preventDefault()}
             >
               <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || '(empty)'}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || t('emptyHistoryPreview')}</span>
             </MenuItem>
           ))}
         </Menu>
       </Popover>
       <Popover
-        title="Redo history"
+        title={t('redoHistory')}
         anchorElement={redoAnchorRef}
         open={isRedoMenuOpen}
         togglePopover={() => setIsRedoMenuOpen(!isRedoMenuOpen)}
@@ -2939,7 +3003,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Redo multiple steps" className="!px-0" onClick={() => setIsRedoMenuOpen(false)}>
+        <Menu a11yLabel={t('redoMultipleSteps')} className="!px-0" onClick={() => setIsRedoMenuOpen(false)}>
           {redoPreviews.map((preview, index) => (
             <MenuItem
               key={index}
@@ -2948,7 +3012,7 @@ const ToolbarPlugin = () => {
               onMouseDown={(e) => e.preventDefault()}
             >
               <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || '(empty)'}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || t('emptyHistoryPreview')}</span>
             </MenuItem>
           ))}
         </Menu>
@@ -2957,7 +3021,7 @@ const ToolbarPlugin = () => {
           undo/redo split pattern (primary ToolbarButton + chevron) with a Menu of
           variant actions wired to the async helpers in clipboardActions.ts. */}
       <Popover
-        title="Paste options"
+        title={t('pasteOptions')}
         anchorElement={pasteAnchorRef}
         open={isPasteMenuOpen}
         togglePopover={() => setIsPasteMenuOpen(!isPasteMenuOpen)}
@@ -2970,36 +3034,36 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Paste options" className="!px-0" onClick={() => setIsPasteMenuOpen(false)}>
+        <Menu a11yLabel={t('pasteOptions')} className="!px-0" onClick={() => setIsPasteMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Paste without formatting"
+            name={t('pasteWithoutFormatting')}
             iconName="clipboard"
             onClick={() => void pasteWithoutFormatting(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Paste clean (strip hidden characters)"
+            name={t('pasteClean')}
             iconName="clipboard"
             onClick={() => void pasteSafe(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Keep source formatting"
+            name={t('keepSourceFormatting')}
             iconName="clipboard"
             onClick={() => void pasteKeepOrigin(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Match destination formatting"
+            name={t('matchDestinationFormatting')}
             iconName="clipboard"
             onClick={() => void pasteMergeFormatting(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Paste as image"
+            name={t('pasteAsImage')}
             iconName="image"
             onClick={() => void pasteAsImage(activeEditor)}
           />
         </Menu>
       </Popover>
       <Popover
-        title="Copy options"
+        title={t('copyOptions')}
         anchorElement={copyAnchorRef}
         open={isCopyMenuOpen}
         togglePopover={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
@@ -3012,26 +3076,26 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Copy options" className="!px-0" onClick={() => setIsCopyMenuOpen(false)}>
+        <Menu a11yLabel={t('copyOptions')} className="!px-0" onClick={() => setIsCopyMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Copy without formatting"
+            name={t('copyWithoutFormatting')}
             iconName="copy"
             onClick={() => void copyWithoutFormatting(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Copy text only"
+            name={t('copyTextOnly')}
             iconName="copy"
             onClick={() => void copyTextOnly(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Copy images only"
+            name={t('copyImagesOnly')}
             iconName="image"
             onClick={() => void copyImagesOnly(activeEditor)}
           />
         </Menu>
       </Popover>
       <Popover
-        title="Cut options"
+        title={t('cutOptions')}
         anchorElement={cutAnchorRef}
         open={isCutMenuOpen}
         togglePopover={() => setIsCutMenuOpen(!isCutMenuOpen)}
@@ -3044,19 +3108,19 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Cut options" className="!px-0" onClick={() => setIsCutMenuOpen(false)}>
+        <Menu a11yLabel={t('cutOptions')} className="!px-0" onClick={() => setIsCutMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Cut without formatting"
+            name={t('cutWithoutFormatting')}
             iconName="scissors"
             onClick={() => void cutWithoutFormatting(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Cut text only"
+            name={t('cutTextOnly')}
             iconName="scissors"
             onClick={() => void cutTextOnly(activeEditor)}
           />
           <ToolbarMenuItem
-            name="Cut images only"
+            name={t('cutImagesOnly')}
             iconName="image"
             onClick={() => void cutImagesOnly(activeEditor)}
           />
@@ -3066,7 +3130,7 @@ const ToolbarPlugin = () => {
           shading. Compact popover mirroring the Typography one; onMouseDown is
           prevented on the body so the editor selection survives clicks. */}
       <Popover
-        title="Paragraph layout"
+        title={t('paragraphLayoutTitle')}
         anchorElement={paragraphLayoutAnchorRef}
         open={isParagraphLayoutMenuOpen}
         togglePopover={() => setIsParagraphLayoutMenuOpen(!isParagraphLayoutMenuOpen)}
@@ -3080,7 +3144,7 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Line spacing</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('lineSpacing')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {LINE_HEIGHT_PRESETS.map((value) => (
               <button
@@ -3093,7 +3157,7 @@ const ToolbarPlugin = () => {
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Space before</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('spaceBefore')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {SPACING_PRESETS.map((value) => (
               <button
@@ -3102,11 +3166,11 @@ const ToolbarPlugin = () => {
                 className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
                 onClick={() => runBlockFormat((selection) => $setSpaceBefore(selection, value))}
               >
-                {value === '0' ? 'None' : value}
+                {value === '0' ? t('none') : value}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Space after</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('spaceAfter')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {SPACING_PRESETS.map((value) => (
               <button
@@ -3115,62 +3179,62 @@ const ToolbarPlugin = () => {
                 className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
                 onClick={() => runBlockFormat((selection) => $setSpaceAfter(selection, value))}
               >
-                {value === '0' ? 'None' : value}
+                {value === '0' ? t('none') : value}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Indentation</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('indentation')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setIndent(selection, INDENT_STEP))}
             >
-              Increase left
+              {t('increaseLeft')}
             </button>
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setIndent(selection, ''))}
             >
-              Decrease left
+              {t('decreaseLeft')}
             </button>
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setIndentRight(selection, INDENT_STEP))}
             >
-              Increase right
+              {t('increaseRight')}
             </button>
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setIndentRight(selection, ''))}
             >
-              Decrease right
+              {t('decreaseRight')}
             </button>
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, INDENT_STEP))}
             >
-              First line
+              {t('firstLine')}
             </button>
             <button
               type="button"
               className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, ''))}
             >
-              No first line
+              {t('noFirstLine')}
             </button>
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Text shading</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('textShading')}</div>
           <div className="flex flex-wrap items-center gap-1.5 px-2">
             {TEXT_SHADING_PRESETS.map((color) => (
               <button
                 key={color ?? 'none'}
                 type="button"
-                aria-label={color ? `Text shading ${color}` : 'No text shading'}
+                aria-label={color ? t('textShadingSwatch', { color }) : t('noTextShading')}
                 className="h-6 w-6 rounded border border-border"
                 style={{ backgroundColor: color ?? 'transparent' }}
                 onClick={() => runBlockFormat((selection) => $setTextShading(selection, color))}
@@ -3181,7 +3245,7 @@ const ToolbarPlugin = () => {
               className="rounded px-1.5 text-xs hover:bg-contrast"
               onClick={() => runBlockFormat((selection) => $setTextShading(selection, null))}
             >
-              Clear
+              {t('clear')}
             </button>
           </div>
         </div>
@@ -3189,7 +3253,7 @@ const ToolbarPlugin = () => {
       {/* List style: bullet & number marker presets. Applies the chosen CSS
           list-style-type to the owning list; a no-op when not in a list. */}
       <Popover
-        title="List style"
+        title={t('listStyle')}
         anchorElement={listStyleAnchorRef}
         open={isListStyleMenuOpen}
         togglePopover={() => setIsListStyleMenuOpen(!isListStyleMenuOpen)}
@@ -3203,7 +3267,7 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Bulleted</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('bulleted')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {BULLET_STYLES.map((preset) => (
               <button
@@ -3216,7 +3280,7 @@ const ToolbarPlugin = () => {
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Numbered</div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('numbered')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {NUMBER_STYLES.map((preset) => (
               <button
@@ -3236,7 +3300,7 @@ const ToolbarPlugin = () => {
           highlight, sub/superscript, inline code block, change case, color, and
           clear formatting. Active state is reflected per item. */}
       <Popover
-        title="More formatting"
+        title={t('moreFormatting')}
         anchorElement={selectionMoreAnchorRef}
         open={isSelectionMoreMenuOpen}
         togglePopover={() => setIsSelectionMoreMenuOpen(!isSelectionMoreMenuOpen)}
@@ -3249,47 +3313,47 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="More formatting" className="!px-0" onClick={() => setIsSelectionMoreMenuOpen(false)}>
+        <Menu a11yLabel={t('moreFormatting')} className="!px-0" onClick={() => setIsSelectionMoreMenuOpen(false)}>
           <ToolbarMenuItem
-            name="Highlight"
+            name={t('highlight')}
             iconName="draw"
             active={isHighlight}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'highlight')}
           />
           <ToolbarMenuItem
-            name="Subscript"
+            name={t('subscript')}
             iconName="subscript"
             active={isSubscript}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'subscript')}
           />
           <ToolbarMenuItem
-            name="Superscript"
+            name={t('superscript')}
             iconName="superscript"
             active={isSuperscript}
             onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'superscript')}
           />
           <MenuItemSeparator />
           <ToolbarMenuItem
-            name="Code Block"
+            name={t('codeBlock')}
             iconName="code"
             active={blockType === 'code'}
             onClick={insertCodeBlock}
           />
           <MenuItemSeparator />
-          <ToolbarMenuItem name="UPPERCASE" iconName="text" onClick={() => transformCase('upper')} />
-          <ToolbarMenuItem name="lowercase" iconName="text" onClick={() => transformCase('lower')} />
-          <ToolbarMenuItem name="camelCase" iconName="text" onClick={() => transformCase('camel')} />
+          <ToolbarMenuItem name={t('uppercase')} iconName="text" onClick={() => transformCase('upper')} />
+          <ToolbarMenuItem name={t('lowercase')} iconName="text" onClick={() => transformCase('lower')} />
+          <ToolbarMenuItem name={t('camelCase')} iconName="text" onClick={() => transformCase('camel')} />
           <MenuItemSeparator />
           {/* Inline color swatches keep these actions self-contained so no
               secondary anchor (absent in floating mode) is needed. */}
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
-            <div className="mb-1 text-xs font-semibold text-text">Text color</div>
+            <div className="mb-1 text-xs font-semibold text-text">{t('textColor')}</div>
             <div className="flex flex-wrap gap-1.5">
               {COLOR_PRESETS.map((color) => (
                 <button
                   key={`fg-${color}`}
                   type="button"
-                  aria-label={`Text color ${color}`}
+                  aria-label={t('textColorSwatch', { color })}
                   className="h-6 w-6 rounded border border-border"
                   style={{ backgroundColor: color }}
                   onClick={() => applyStyleText({ color })}
@@ -3300,18 +3364,18 @@ const ToolbarPlugin = () => {
                 className="rounded px-1.5 text-xs hover:bg-contrast"
                 onClick={() => applyStyleText({ color: null })}
               >
-                Clear
+                {t('clear')}
               </button>
             </div>
           </div>
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
-            <div className="mb-1 text-xs font-semibold text-text">Highlight color</div>
+            <div className="mb-1 text-xs font-semibold text-text">{t('highlightColor')}</div>
             <div className="flex flex-wrap gap-1.5">
               {COLOR_PRESETS.map((color) => (
                 <button
                   key={`bg-${color}`}
                   type="button"
-                  aria-label={`Highlight color ${color}`}
+                  aria-label={t('highlightColorSwatch', { color })}
                   className="h-6 w-6 rounded border border-border"
                   style={{ backgroundColor: color }}
                   onClick={() => applyStyleText({ 'background-color': color })}
@@ -3322,12 +3386,12 @@ const ToolbarPlugin = () => {
                 className="rounded px-1.5 text-xs hover:bg-contrast"
                 onClick={() => applyStyleText({ 'background-color': null })}
               >
-                Clear
+                {t('clear')}
               </button>
             </div>
           </div>
           <MenuItemSeparator />
-          <ToolbarMenuItem name="Clear formatting" iconName="trash" onClick={clearFormatting} />
+          <ToolbarMenuItem name={t('clearFormatting')} iconName="trash" onClick={clearFormatting} />
         </Menu>
       </Popover>
       {zoomBlockKey && (

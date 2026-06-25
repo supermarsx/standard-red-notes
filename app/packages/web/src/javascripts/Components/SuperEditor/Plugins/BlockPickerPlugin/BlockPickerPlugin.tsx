@@ -22,8 +22,10 @@ import {
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
 import { LexicalIconName } from '@/Components/Icon/LexicalIcons'
 import { getFullBlockCatalog, BlockCatalogContext } from '../Blocks/blockCatalog'
+import { useTranslation } from 'react-i18next'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
+  const { t } = useTranslation('editor')
   const [editor] = useLexicalComposerContext()
   const application = useApplication()
   const [modal, showModal] = useModal()
@@ -37,9 +39,9 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
     // Shared modal/command helpers the catalog's dialog-opening blocks need.
     const catalogContext: BlockCatalogContext = {
       openInsertTableDialog: () =>
-        showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
+        showModal(t('insertTable'), (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
       openInsertImageFromUrlDialog: () =>
-        showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
+        showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => editor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
     }
 
@@ -83,7 +85,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
           }),
         ]
       : baseOptions
-  }, [editor, queryString, showModal, application])
+  }, [editor, queryString, showModal, application, t])
 
   const onSelectOption = useCallback(
     (
@@ -118,7 +120,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
 
           return (
             <Popover
-              title="Block picker"
+              title={t('blockPicker')}
               align="start"
               anchorElement={anchorElementRef.current}
               open={true}
