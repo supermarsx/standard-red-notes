@@ -1489,17 +1489,19 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Search]: canShowAllItems ? (
       <ToolbarButton
         name={t('search')}
-        iconName="search"
         onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}
-      />
+      >
+        <Icon type="search" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span className="ml-1.5 text-sm leading-none">Find</span>
+      </ToolbarButton>
     ) : null,
     [ToolbarButtonId.FindReplace]: canShowAllItems ? (
       <ToolbarButton
         name="Find &amp; replace in note"
-        iconName="search"
         onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)}
       >
-        <span className="text-sm font-semibold leading-none">a&rarr;b</span>
+        <Icon type="search" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <span className="ml-1.5 text-sm leading-none">Find &amp; replace</span>
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.FindNext]: canShowAllItems ? (
@@ -1696,10 +1698,19 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.FormatPainter]: (
       <ToolbarButton
         name={t('formatPainter')}
-        iconName="pencil"
         active={painter.armed}
+        className="w-full justify-center"
         onSelect={() => editor.dispatchCommand(FORMAT_PAINTER_TOGGLE, undefined)}
-      />
+      >
+        <div className="flex flex-col items-center justify-center gap-1">
+          <Icon
+            type="pencil"
+            size="custom"
+            className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current"
+          />
+          <span className="text-center text-[10px] leading-none md:text-xs">Format painter</span>
+        </div>
+      </ToolbarButton>
     ),
     [ToolbarButtonId.TextStyleMenu]: (
       <ToolbarButton
@@ -2025,7 +2036,16 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.AI]: <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />,
     // Standalone group: opens the Customize Toolbar dialog directly from the bar.
     [ToolbarButtonId.CustomizeToolbar]: (
-      <ToolbarButton name={t('customizeToolbar')} iconName="settings" onSelect={openCustomizeDialog} />
+      <ToolbarButton name={t('customizeToolbar')} className="w-full justify-center" onSelect={openCustomizeDialog}>
+        <div className="flex flex-col items-center justify-center gap-1">
+          <Icon
+            type="settings"
+            size="custom"
+            className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current"
+          />
+          <span className="text-center text-[10px] leading-none md:text-xs">Customize toolbar</span>
+        </div>
+      </ToolbarButton>
     ),
   }
 

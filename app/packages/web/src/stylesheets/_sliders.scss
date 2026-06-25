@@ -1,0 +1,106 @@
+/**
+ * Standard Red Notes: theme the otherwise-unstyled browser-default range inputs
+ * to match the app's stylekit. Generic — applies to every `input[type='range']`
+ * (font-size, spacing, shading, opacity sliders, etc.). Track is a slim rounded
+ * themed bar; thumb is a circular accent-colored knob with a subtle border and
+ * shadow plus hover/focus-visible affordances; disabled state dims the control.
+ */
+
+$slider-track-height: 5px;
+$slider-thumb-size: 15px;
+
+input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  vertical-align: middle;
+
+  &:focus {
+    outline: none;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  // ----- WebKit / Blink (Chrome, Safari, Edge) -----------------------------
+  &::-webkit-slider-runnable-track {
+    height: $slider-track-height;
+    border-radius: 9999px;
+    background: var(--sn-stylekit-secondary-contrast-background-color);
+    border: 1px solid var(--sn-stylekit-border-color);
+  }
+
+  &::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    height: $slider-thumb-size;
+    width: $slider-thumb-size;
+    border-radius: 50%;
+    background: var(--sn-stylekit-info-color);
+    border: 2px solid var(--sn-stylekit-background-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    // Centre the thumb on the slim track (track height + its 1px borders).
+    margin-top: calc((#{$slider-track-height} + 2px - #{$slider-thumb-size}) / 2);
+    transition:
+      transform 75ms ease,
+      box-shadow 75ms ease;
+  }
+
+  &:hover::-webkit-slider-thumb {
+    transform: scale(1.1);
+  }
+
+  &:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px var(--sn-stylekit-info-color-darkened);
+  }
+
+  &:disabled::-webkit-slider-thumb {
+    transform: none;
+    box-shadow: none;
+  }
+
+  // ----- Firefox / Gecko ---------------------------------------------------
+  &::-moz-range-track {
+    height: $slider-track-height;
+    border-radius: 9999px;
+    background: var(--sn-stylekit-secondary-contrast-background-color);
+    border: 1px solid var(--sn-stylekit-border-color);
+  }
+
+  // The portion of the track to the left of the thumb, filled with the accent.
+  &::-moz-range-progress {
+    height: $slider-track-height;
+    border-radius: 9999px;
+    background: var(--sn-stylekit-info-color);
+  }
+
+  &::-moz-range-thumb {
+    height: $slider-thumb-size;
+    width: $slider-thumb-size;
+    border-radius: 50%;
+    background: var(--sn-stylekit-info-color);
+    border: 2px solid var(--sn-stylekit-background-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    transition:
+      transform 75ms ease,
+      box-shadow 75ms ease;
+  }
+
+  &:hover::-moz-range-thumb {
+    transform: scale(1.1);
+  }
+
+  &:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px var(--sn-stylekit-info-color-darkened);
+  }
+
+  &:disabled::-moz-range-thumb {
+    transform: none;
+    box-shadow: none;
+  }
+}
