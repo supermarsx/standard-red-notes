@@ -3,9 +3,17 @@ import { WebApplication } from '@/Application/WebApplication'
 import { DirectProvider } from './DirectProvider'
 import { ProxyProvider } from './ProxyProvider'
 import { Provider } from './types'
-import { composeSystemPromptWithPersona } from './personaSettings'
+import { composeSystemPromptWithPersona, getActiveProfile } from './personaSettings'
+import { loadSamplingSettings, SamplingSettings } from './samplingSettings'
 
-export type SelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand' | 'translate'
+export type BuiltInSelectionActionId = 'ask' | 'refine' | 'summarize' | 'expand' | 'translate'
+
+/**
+ * An action id is one of the fixed built-ins or any string a user gives to a
+ * custom action. Built-in ids are reserved and cannot be reused by custom
+ * actions (see {@link CUSTOM_ACTION_ID_PREFIX}).
+ */
+export type SelectionActionId = string
 
 export type SelectionAction = {
   id: SelectionActionId
@@ -22,7 +30,15 @@ export type SelectionAction = {
    * placeholder, or appended if the template has no placeholder.
    */
   needsLanguage?: boolean
+  /** True for user-created actions (vs the immutable built-in set). */
+  custom?: boolean
 }
+
+/** Prefix every user-created action id carries, so it can never collide with a built-in. */
+export const CUSTOM_ACTION_ID_PREFIX = 'custom:'
+
+/** Default icon used by custom actions when the user doesn't pick one. */
+export const DEFAULT_CUSTOM_ACTION_ICON = 'dashboard'
 
 const SYSTEM_PROMPT =
   'You are a writing assistant embedded in a note editor. Apply the requested transformation to the ' +
@@ -81,27 +97,152 @@ export function buildTranslateInstruction(promptTemplate: string, language: stri
   return `${template} Target language: ${lang}.`
 }
 
-type Override = { enabled?: boolean; prompt?: string }
+/** Override applied to a built-in action (enabled/prompt only — label/icon are fixed). */
+type BuiltInOverride = { enabled?: boolean; prompt?: string }
+
+/** A user-defined custom action stored verbatim in the pref. */
+type CustomActionRecord = {
+  id: string
+  label: string
+  prompt: string
+  enabled?: boolean
+  icon?: string
+  needsLanguage?: boolean
+}
 
 /**
- * Effective selection actions: built-in defaults (which a server may override via
- * the assistant config), overlaid with the user's per-action overrides.
+ * Shape of the AssistantSelectionActions preference. Two complementary parts:
+ *  - `overrides`: per built-in id, the user's enabled/prompt edits.
+ *  - `custom`: an ordered list of fully user-defined actions.
+ * The legacy shape was a bare `Record<builtInId, override>` map; that is still
+ * accepted (treated as `overrides`) so existing prefs keep working.
+ */
+type SelectionActionsPref = {
+  overrides?: Partial<Record<BuiltInSelectionActionId, BuiltInOverride>>
+  custom?: CustomActionRecord[]
+}
+
+const BUILT_IN_IDS = new Set<string>(DEFAULT_SELECTION_ACTIONS.map((action) => action.id))
+
+function parseSelectionActionsPref(raw: string): SelectionActionsPref {
+  if (!raw) {
+    return {}
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return {}
+  }
+  const obj = parsed as Record<string, unknown>
+  // New shape: { overrides, custom }.
+  if ('overrides' in obj || 'custom' in obj) {
+    const overrides = (obj.overrides as SelectionActionsPref['overrides']) ?? {}
+    const custom = Array.isArray(obj.custom) ? (obj.custom as CustomActionRecord[]) : []
+    return { overrides, custom }
+  }
+  // Legacy shape: a bare built-in override map.
+  return { overrides: obj as SelectionActionsPref['overrides'], custom: [] }
+}
+
+/** Coerce a stored custom record into a valid SelectionAction, dropping unusable ones. */
+function normalizeCustomAction(record: CustomActionRecord): SelectionAction | null {
+  if (!record || typeof record !== 'object') {
+    return null
+  }
+  const id = typeof record.id === 'string' ? record.id.trim() : ''
+  // A custom id must be non-empty, prefixed, and must not shadow a built-in.
+  if (!id || !id.startsWith(CUSTOM_ACTION_ID_PREFIX) || BUILT_IN_IDS.has(id)) {
+    return null
+  }
+  const prompt = typeof record.prompt === 'string' ? record.prompt : ''
+  const label = (typeof record.label === 'string' && record.label.trim()) || 'Custom action'
+  return {
+    id,
+    label,
+    icon: (typeof record.icon === 'string' && record.icon.trim()) || DEFAULT_CUSTOM_ACTION_ICON,
+    enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
+    prompt,
+    needsLanguage: record.needsLanguage === true,
+    custom: true,
+  }
+}
+
+/**
+ * Effective selection actions: the built-in defaults (which a server may override
+ * via the assistant config) overlaid with the user's per-action overrides, FOLLOWED
+ * by any user-defined custom actions (in their stored order).
  */
 export function getSelectionActions(application: WebApplication): SelectionAction[] {
-  let overrides: Partial<Record<SelectionActionId, Override>> = {}
-  const raw = application.getPreference(PrefKey.AssistantSelectionActions, '')
-  if (raw) {
-    try {
-      overrides = JSON.parse(raw) as Partial<Record<SelectionActionId, Override>>
-    } catch {
-      /* malformed override; fall back to defaults */
+  const { overrides = {}, custom = [] } = parseSelectionActionsPref(
+    application.getPreference(PrefKey.AssistantSelectionActions, ''),
+  )
+
+  const builtIns = DEFAULT_SELECTION_ACTIONS.map((action) => ({
+    ...action,
+    enabled: overrides[action.id as BuiltInSelectionActionId]?.enabled ?? action.enabled,
+    prompt: overrides[action.id as BuiltInSelectionActionId]?.prompt ?? action.prompt,
+  }))
+
+  const customActions: SelectionAction[] = []
+  const seen = new Set<string>(BUILT_IN_IDS)
+  for (const record of custom) {
+    const normalized = normalizeCustomAction(record)
+    if (normalized && !seen.has(normalized.id)) {
+      seen.add(normalized.id)
+      customActions.push(normalized)
     }
   }
-  return DEFAULT_SELECTION_ACTIONS.map((action) => ({
-    ...action,
-    enabled: overrides[action.id]?.enabled ?? action.enabled,
-    prompt: overrides[action.id]?.prompt ?? action.prompt,
-  }))
+
+  return [...builtIns, ...customActions]
+}
+
+/**
+ * Serialize the current set of effective actions back into the pref's
+ * `{ overrides, custom }` shape. Built-ins contribute only their enabled/prompt
+ * overrides; custom actions are stored verbatim. This is the single chokepoint the
+ * Preferences UI uses to persist edits, adds, and removals.
+ */
+export function serializeSelectionActions(actions: SelectionAction[]): string {
+  const overrides: Record<string, BuiltInOverride> = {}
+  const custom: CustomActionRecord[] = []
+  for (const action of actions) {
+    if (action.custom || action.id.startsWith(CUSTOM_ACTION_ID_PREFIX)) {
+      custom.push({
+        id: action.id,
+        label: action.label,
+        prompt: action.prompt,
+        enabled: action.enabled,
+        icon: action.icon,
+        needsLanguage: action.needsLanguage,
+      })
+    } else {
+      overrides[action.id] = { enabled: action.enabled, prompt: action.prompt }
+    }
+  }
+  return JSON.stringify({ overrides, custom })
+}
+
+/** Build a fresh, valid custom action with a unique prefixed id. */
+export function createCustomSelectionAction(existing: SelectionAction[]): SelectionAction {
+  const usedIds = new Set(existing.map((action) => action.id))
+  let suffix = Date.now()
+  let id = `${CUSTOM_ACTION_ID_PREFIX}${suffix}`
+  while (usedIds.has(id)) {
+    suffix += 1
+    id = `${CUSTOM_ACTION_ID_PREFIX}${suffix}`
+  }
+  return {
+    id,
+    label: 'New action',
+    icon: DEFAULT_CUSTOM_ACTION_ICON,
+    enabled: true,
+    prompt: '',
+    custom: true,
+  }
 }
 
 /** Whether the AI is usable right now, with a reason when it is not. */
@@ -185,22 +326,55 @@ export function resolveDirectAuth(application: WebApplication): {
   }
 }
 
+/**
+ * Resolve the effective model / baseURL / sampling for a run, applying the active
+ * persona profile's overrides (if any) on top of the global config. Empty profile
+ * fields mean "inherit the global value". Exported so other run sites can reuse the
+ * same precedence.
+ */
+export function resolveActiveProfileOverrides(application: WebApplication): {
+  model: string
+  baseURL: string
+  sampling: SamplingSettings
+} {
+  const profile = getActiveProfile()
+  const globalModel = application.getPreference(PrefKey.AssistantModel, '')
+  const globalBaseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
+  const sampling = loadSamplingSettings()
+  if (!profile) {
+    return { model: globalModel, baseURL: globalBaseURL, sampling }
+  }
+  return {
+    model: profile.model || globalModel,
+    baseURL: profile.baseURL || globalBaseURL,
+    sampling: {
+      ...sampling,
+      temperature: profile.temperature,
+      topP: profile.topP,
+      maxTokens: profile.maxTokens,
+    },
+  }
+}
+
 function buildProvider(application: WebApplication, signal?: AbortSignal): Provider {
   const mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+  const overrides = resolveActiveProfileOverrides(application)
   if (mode === 'proxy') {
     return new ProxyProvider({
       provider: application.getPreference(PrefKey.AssistantProvider, ''),
-      model: application.getPreference(PrefKey.AssistantModel, ''),
+      model: overrides.model,
+      sampling: overrides.sampling,
       signal,
       postStream: (body, sig) => application.assistantStreamRequest('/v1/assistant/stream', body, sig),
     })
   }
   const auth = resolveDirectAuth(application)
   return new DirectProvider({
-    baseURL: application.getPreference(PrefKey.AssistantBaseUrl, ''),
-    model: application.getPreference(PrefKey.AssistantModel, ''),
+    baseURL: overrides.baseURL,
+    model: overrides.model,
     apiKey: auth.apiKey,
     extraHeaders: auth.extraHeaders,
+    sampling: overrides.sampling,
     signal,
   })
 }

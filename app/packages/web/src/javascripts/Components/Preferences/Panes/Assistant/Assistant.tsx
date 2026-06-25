@@ -9,7 +9,13 @@ import { Title, Subtitle, Text } from '../../PreferencesComponents/Content'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import Button from '@/Components/Button/Button'
-import { getSelectionActions, SelectionActionId } from '@/Assistant/selectionActions'
+import {
+  createCustomSelectionAction,
+  getSelectionActions,
+  SelectionAction,
+  SelectionActionId,
+  serializeSelectionActions,
+} from '@/Assistant/selectionActions'
 import { NARRATION_STYLES } from '@/Assistant/narration'
 import {
   clampRate,
@@ -28,11 +34,32 @@ import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/
 import { loadResearchModeSettings, saveResearchModeSettings } from '@/Assistant/researchModeSettings'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import {
+  createPersonaProfile,
+  loadPersonaProfiles,
   loadPersonaSettings,
+  PersonaProfile,
+  savePersonaProfiles,
   savePersonaSettings,
   PERSONA_PRESETS,
   PERSONA_MAX_LENGTH,
+  PROFILE_NAME_MAX_LENGTH,
 } from '@/Assistant/personaSettings'
+import {
+  clampMaxSteps,
+  clampMaxTokens,
+  clampTemperature,
+  clampTopP,
+  loadSamplingSettings,
+  MAX_STEPS_MAX,
+  MAX_STEPS_MIN,
+  MAX_TOKENS_MAX,
+  SamplingSettings,
+  saveSamplingSettings,
+  TEMPERATURE_MAX,
+  TEMPERATURE_MIN,
+  TOP_P_MAX,
+  TOP_P_MIN,
+} from '@/Assistant/samplingSettings'
 
 type AssistantConfig = {
   providers: string[]
@@ -395,20 +422,108 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     savePersonaSettings({ persona: next })
   }, [])
 
-  const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
-  const updateSelectionAction = useCallback(
-    (id: SelectionActionId, patch: { enabled?: boolean; prompt?: string }) => {
-      setSelectionActions((prev) => {
-        const next = prev.map((action) => (action.id === id ? { ...action, ...patch } : action))
-        const overrides: Record<string, { enabled: boolean; prompt: string }> = {}
-        next.forEach((action) => {
-          overrides[action.id] = { enabled: action.enabled, prompt: action.prompt }
-        })
-        void application.setPreference(PrefKey.AssistantSelectionActions, JSON.stringify(overrides))
+  // Persona PROFILES: named bundles of (persona + model + baseURL + sampling) with
+  // one active. When a profile is active it overrides the global persona/model/
+  // sampling for assistant runs. Device-local (localStorage).
+  const [personaProfiles, setPersonaProfiles] = useState(() => loadPersonaProfiles())
+  const persistPersonaProfiles = useCallback((next: ReturnType<typeof loadPersonaProfiles>) => {
+    setPersonaProfiles(next)
+    savePersonaProfiles(next)
+  }, [])
+  const updatePersonaProfile = useCallback(
+    (id: string, patch: Partial<PersonaProfile>) => {
+      setPersonaProfiles((prev) => {
+        const next = {
+          ...prev,
+          profiles: prev.profiles.map((profile) => (profile.id === id ? { ...profile, ...patch } : profile)),
+        }
+        savePersonaProfiles(next)
         return next
       })
     },
+    [],
+  )
+  const addPersonaProfile = useCallback(() => {
+    setPersonaProfiles((prev) => {
+      const created = createPersonaProfile(prev.profiles)
+      const next = { activeId: created.id, profiles: [...prev.profiles, created] }
+      savePersonaProfiles(next)
+      return next
+    })
+  }, [])
+  const removePersonaProfile = useCallback((id: string) => {
+    setPersonaProfiles((prev) => {
+      const profiles = prev.profiles.filter((profile) => profile.id !== id)
+      const activeId = prev.activeId === id ? profiles[0]?.id ?? '' : prev.activeId
+      const next = { activeId, profiles }
+      savePersonaProfiles(next)
+      return next
+    })
+  }, [])
+  const setActiveProfile = useCallback(
+    (id: string) => {
+      persistPersonaProfiles({ ...personaProfiles, activeId: id })
+    },
+    [persistPersonaProfiles, personaProfiles],
+  )
+  const activeProfile = personaProfiles.profiles.find((p) => p.id === personaProfiles.activeId)
+
+  // Model SAMPLING params + agent-loop step cap (device-local; localStorage).
+  // temperature/top_p/max_tokens flow into every model request body; maxSteps is
+  // the default agent-loop step cap read by agent.ts.
+  const [sampling, setSampling] = useState<SamplingSettings>(() => loadSamplingSettings())
+  const updateSampling = useCallback((patch: Partial<SamplingSettings>) => {
+    setSampling((prev) => {
+      const next = { ...prev, ...patch }
+      saveSamplingSettings(next)
+      return next
+    })
+  }, [])
+
+  const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
+  const persistSelectionActions = useCallback(
+    (next: SelectionAction[]) => {
+      void application.setPreference(PrefKey.AssistantSelectionActions, serializeSelectionActions(next))
+    },
     [application],
+  )
+  const updateSelectionAction = useCallback(
+    (id: SelectionActionId, patch: Partial<Pick<SelectionAction, 'enabled' | 'prompt' | 'label' | 'icon'>>) => {
+      setSelectionActions((prev) => {
+        const next = prev.map((action) => {
+          if (action.id !== id) {
+            return action
+          }
+          const merged = { ...action, ...patch }
+          // For custom actions, derive language-prompting from the {language} placeholder
+          // so the editor asks for a target language whenever the template uses it.
+          if (action.custom && patch.prompt !== undefined) {
+            merged.needsLanguage = patch.prompt.includes('{language}')
+          }
+          return merged
+        })
+        persistSelectionActions(next)
+        return next
+      })
+    },
+    [persistSelectionActions],
+  )
+  const addCustomSelectionAction = useCallback(() => {
+    setSelectionActions((prev) => {
+      const next = [...prev, createCustomSelectionAction(prev)]
+      persistSelectionActions(next)
+      return next
+    })
+  }, [persistSelectionActions])
+  const removeSelectionAction = useCallback(
+    (id: SelectionActionId) => {
+      setSelectionActions((prev) => {
+        const next = prev.filter((action) => action.id !== id)
+        persistSelectionActions(next)
+        return next
+      })
+    },
+    [persistSelectionActions],
   )
 
   return (
@@ -799,6 +914,82 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
       <PreferencesGroup>
         <PreferencesSegment>
+          <Title>Sampling &amp; agent loop</Title>
+          <Text>
+            Tune how the model generates text and how far the agent loop runs. These apply to every assistant request
+            (chat, selection actions, research) in both Direct and Server proxy modes. Stored on this device only.
+          </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Temperature: {sampling.temperature.toFixed(2)}</Subtitle>
+          <Text>
+            Higher values make output more random/creative; lower values make it more focused and deterministic. Range{' '}
+            {TEMPERATURE_MIN}–{TEMPERATURE_MAX}. Default 0.7.
+          </Text>
+          <input
+            className="mt-2 w-full"
+            type="range"
+            min={TEMPERATURE_MIN}
+            max={TEMPERATURE_MAX}
+            step={0.05}
+            value={sampling.temperature}
+            onChange={(event) => updateSampling({ temperature: clampTemperature(Number(event.target.value)) })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Top-p (nucleus sampling): {sampling.topP.toFixed(2)}</Subtitle>
+          <Text>
+            Limits sampling to the most probable tokens whose cumulative probability reaches this value. {TOP_P_MAX}{' '}
+            disables the filter. Range {TOP_P_MIN}–{TOP_P_MAX}. Default 1.
+          </Text>
+          <input
+            className="mt-2 w-full"
+            type="range"
+            min={TOP_P_MIN}
+            max={TOP_P_MAX}
+            step={0.05}
+            value={sampling.topP}
+            onChange={(event) => updateSampling({ topP: clampTopP(Number(event.target.value)) })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Max output tokens</Subtitle>
+          <Text>
+            Cap on tokens generated per turn (request <code>max_tokens</code>). Leave 0 to let the endpoint use its own
+            default. Up to {MAX_TOKENS_MAX}.
+          </Text>
+          <input
+            className="mt-2 w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="number"
+            min={0}
+            max={MAX_TOKENS_MAX}
+            value={sampling.maxTokens}
+            onChange={(event) => updateSampling({ maxTokens: clampMaxTokens(Number(event.target.value)) })}
+          />
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Max agent steps</Subtitle>
+          <Text>
+            How many model turns the agent loop may take before it stops and summarizes. Higher allows more tool use per
+            request; lower keeps runs short. Range {MAX_STEPS_MIN}–{MAX_STEPS_MAX}. Default 8.
+          </Text>
+          <input
+            className="mt-2 w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="number"
+            min={MAX_STEPS_MIN}
+            max={MAX_STEPS_MAX}
+            value={sampling.maxSteps}
+            onChange={(event) => updateSampling({ maxSteps: clampMaxSteps(Number(event.target.value)) })}
+          />
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      <PreferencesGroup>
+        <PreferencesSegment>
           <Title>Search</Title>
           <Text>
             A client-side full-text search index speeds up note-list search on large accounts. It builds an inverted
@@ -1053,6 +1244,124 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           <Text className="mt-1 text-passive-1">
             {persona.length}/{PERSONA_MAX_LENGTH}
           </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Profiles</Subtitle>
+          <Text>
+            Optional named profiles bundle a persona with a model, an optional Direct-mode base URL, and sampling
+            params. When a profile is active it overrides the global persona, model, base URL, and sampling for assistant
+            runs. Leave a profile field empty to inherit the global setting. With no profiles, the single persona above
+            is used.
+          </Text>
+
+          <div className="mt-2 flex items-center gap-2">
+            <select
+              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              value={personaProfiles.activeId}
+              onChange={(event) => setActiveProfile(event.target.value)}
+              disabled={personaProfiles.profiles.length === 0}
+            >
+              <option value="">None (use global persona)</option>
+              {personaProfiles.profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+            <Button label="Add profile" onClick={addPersonaProfile} />
+          </div>
+
+          {activeProfile && (
+            <div className="mt-3 rounded border border-border p-3">
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  className="w-full rounded border border-border bg-default px-2 py-1 text-sm font-semibold"
+                  type="text"
+                  value={activeProfile.name}
+                  maxLength={PROFILE_NAME_MAX_LENGTH}
+                  placeholder="Profile name"
+                  onChange={(event) => updatePersonaProfile(activeProfile.id, { name: event.target.value })}
+                />
+                <Button label="Remove" onClick={() => removePersonaProfile(activeProfile.id)} />
+              </div>
+
+              <Text className="mt-3">Persona (up to {PERSONA_MAX_LENGTH} characters)</Text>
+              <textarea
+                className="mt-1 w-full resize-none rounded border border-border bg-default px-2 py-1.5 text-sm"
+                rows={3}
+                maxLength={PERSONA_MAX_LENGTH}
+                value={activeProfile.persona}
+                placeholder="a concise, friendly senior engineer"
+                onChange={(event) => updatePersonaProfile(activeProfile.id, { persona: event.target.value })}
+              />
+
+              <div className="mt-3 flex flex-wrap gap-3">
+                <div className="flex flex-col">
+                  <Text>Model (optional)</Text>
+                  <input
+                    className="mt-1 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                    type="text"
+                    value={activeProfile.model}
+                    placeholder="inherit global"
+                    onChange={(event) => updatePersonaProfile(activeProfile.id, { model: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <Text>Base URL (optional, Direct mode)</Text>
+                  <input
+                    className="mt-1 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                    type="text"
+                    value={activeProfile.baseURL}
+                    placeholder="inherit global"
+                    onChange={(event) => updatePersonaProfile(activeProfile.id, { baseURL: event.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-4">
+                <div className="flex flex-col">
+                  <Text>Temperature: {activeProfile.temperature.toFixed(2)}</Text>
+                  <input
+                    type="range"
+                    min={TEMPERATURE_MIN}
+                    max={TEMPERATURE_MAX}
+                    step={0.05}
+                    value={activeProfile.temperature}
+                    onChange={(event) =>
+                      updatePersonaProfile(activeProfile.id, { temperature: clampTemperature(Number(event.target.value)) })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <Text>Top-p: {activeProfile.topP.toFixed(2)}</Text>
+                  <input
+                    type="range"
+                    min={TOP_P_MIN}
+                    max={TOP_P_MAX}
+                    step={0.05}
+                    value={activeProfile.topP}
+                    onChange={(event) =>
+                      updatePersonaProfile(activeProfile.id, { topP: clampTopP(Number(event.target.value)) })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <Text>Max tokens (0 = unset)</Text>
+                  <input
+                    className="mt-1 w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                    type="number"
+                    min={0}
+                    max={MAX_TOKENS_MAX}
+                    value={activeProfile.maxTokens}
+                    onChange={(event) =>
+                      updatePersonaProfile(activeProfile.id, { maxTokens: clampMaxTokens(Number(event.target.value)) })
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </PreferencesSegment>
       </PreferencesGroup>
 
@@ -1060,17 +1369,32 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         <PreferencesSegment>
           <Subtitle>Text selection AI actions</Subtitle>
           <Text>
-            Actions shown in the editor’s selection toolbar when text is selected. Toggle them on or off and edit their
-            prompts. These override the defaults.
+            Actions shown in the editor’s selection toolbar when text is selected. Toggle the built-ins on or off and
+            edit their prompts (these override the defaults), or add your own custom actions below.
           </Text>
           {selectionActions.map((action) => (
             <div key={action.id} className="mt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">{action.label}</span>
-                <Switch
-                  checked={action.enabled}
-                  onChange={(value) => updateSelectionAction(action.id, { enabled: value })}
-                />
+              <div className="flex items-center justify-between gap-2">
+                {action.custom ? (
+                  <input
+                    className="w-full rounded border border-border bg-default px-2 py-1 text-sm font-semibold"
+                    type="text"
+                    value={action.label}
+                    placeholder="Action label"
+                    onChange={(event) => updateSelectionAction(action.id, { label: event.target.value })}
+                  />
+                ) : (
+                  <span className="text-sm font-semibold">{action.label}</span>
+                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Switch
+                    checked={action.enabled}
+                    onChange={(value) => updateSelectionAction(action.id, { enabled: value })}
+                  />
+                  {action.custom && (
+                    <Button label="Remove" onClick={() => removeSelectionAction(action.id)} />
+                  )}
+                </div>
               </div>
               {!action.freeform && action.enabled && (
                 <>
@@ -1078,6 +1402,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                     className="mt-1 w-full resize-none rounded border border-border bg-default px-2 py-1 text-sm"
                     rows={2}
                     value={action.prompt}
+                    placeholder={action.custom ? 'Instruction applied to the selected text…' : undefined}
                     onChange={(event) => updateSelectionAction(action.id, { prompt: event.target.value })}
                   />
                   {action.needsLanguage && (
@@ -1090,6 +1415,14 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               )}
             </div>
           ))}
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Button label="Add custom action" onClick={addCustomSelectionAction} />
+          <Text className="mt-2 text-passive-1">
+            Custom actions run their instruction over the selected text and replace it with the result. Include{' '}
+            <code>{'{language}'}</code> in the instruction to be prompted for a target language each time.
+          </Text>
         </PreferencesSegment>
       </PreferencesGroup>
     </PreferencesPane>

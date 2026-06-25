@@ -2,10 +2,14 @@ import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import {
   buildTranslateInstruction,
+  createCustomSelectionAction,
+  CUSTOM_ACTION_ID_PREFIX,
   DEFAULT_SELECTION_ACTIONS,
   getSelectionActions,
   getSelectionAIAvailability,
+  SelectionAction,
   SelectionActionId,
+  serializeSelectionActions,
 } from './selectionActions'
 
 type Prefs = Partial<Record<string, unknown>>
@@ -86,6 +90,97 @@ describe('getSelectionActions', () => {
     expect(ask.icon).toBe('dashboard')
     expect(ask.freeform).toBe(true)
     expect(ask.prompt).toBe('overridden')
+  })
+})
+
+describe('custom selection actions', () => {
+  it('accepts the legacy bare-override pref shape (back-compat)', () => {
+    const actions = getSelectionActions(
+      fakeApplication({
+        [PrefKey.AssistantSelectionActions]: JSON.stringify({ refine: { enabled: false } }),
+      }),
+    )
+    expect(actions.find((a) => a.id === 'refine')!.enabled).toBe(false)
+    // No custom actions in the legacy shape.
+    expect(actions.filter((a) => a.custom)).toHaveLength(0)
+  })
+
+  it('appends custom actions after the built-ins from the new pref shape', () => {
+    const pref = {
+      overrides: { summarize: { prompt: 'Short summary.' } },
+      custom: [
+        { id: `${CUSTOM_ACTION_ID_PREFIX}1`, label: 'Bulletize', prompt: 'Turn into bullets.', enabled: true },
+      ],
+    }
+    const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: JSON.stringify(pref) }))
+    expect(actions.find((a) => a.id === 'summarize')!.prompt).toBe('Short summary.')
+    const custom = actions.find((a) => a.id === `${CUSTOM_ACTION_ID_PREFIX}1`)!
+    expect(custom).toBeDefined()
+    expect(custom.custom).toBe(true)
+    expect(custom.label).toBe('Bulletize')
+    expect(custom.prompt).toBe('Turn into bullets.')
+    // Custom actions come after every built-in.
+    expect(actions.indexOf(custom)).toBeGreaterThanOrEqual(DEFAULT_SELECTION_ACTIONS.length)
+  })
+
+  it('drops custom records whose id is missing, unprefixed, or shadows a built-in', () => {
+    const pref = {
+      custom: [
+        { id: '', label: 'No id', prompt: 'x' },
+        { id: 'unprefixed', label: 'Bad id', prompt: 'x' },
+        { id: 'refine', label: 'Shadows built-in', prompt: 'x' },
+        { id: `${CUSTOM_ACTION_ID_PREFIX}ok`, label: 'Good', prompt: 'x' },
+      ],
+    }
+    const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: JSON.stringify(pref) }))
+    const customs = actions.filter((a) => a.custom)
+    expect(customs).toHaveLength(1)
+    expect(customs[0].id).toBe(`${CUSTOM_ACTION_ID_PREFIX}ok`)
+    // The built-in refine is untouched (not replaced by the shadowing record).
+    expect(actions.find((a) => a.id === 'refine')!.label).toBe('Refine')
+  })
+
+  it('defaults missing custom fields (icon/enabled/needsLanguage)', () => {
+    const pref = { custom: [{ id: `${CUSTOM_ACTION_ID_PREFIX}1`, label: 'X', prompt: 'do x' }] }
+    const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: JSON.stringify(pref) }))
+    const custom = actions.find((a) => a.id === `${CUSTOM_ACTION_ID_PREFIX}1`)!
+    expect(custom.icon).toBe('dashboard')
+    expect(custom.enabled).toBe(true)
+    expect(custom.needsLanguage).toBe(false)
+  })
+
+  it('createCustomSelectionAction makes a prefixed, unique, enabled action', () => {
+    const existing: SelectionAction[] = [...DEFAULT_SELECTION_ACTIONS]
+    const created = createCustomSelectionAction(existing)
+    expect(created.custom).toBe(true)
+    expect(created.enabled).toBe(true)
+    expect(created.id.startsWith(CUSTOM_ACTION_ID_PREFIX)).toBe(true)
+    expect(existing.some((a) => a.id === created.id)).toBe(false)
+  })
+
+  it('serializeSelectionActions splits built-in overrides from custom records and round-trips', () => {
+    const base = getSelectionActions(fakeApplication())
+    const edited: SelectionAction[] = base.map((a) =>
+      a.id === 'refine' ? { ...a, enabled: false, prompt: 'Edited refine.' } : a,
+    )
+    const custom = createCustomSelectionAction(edited)
+    custom.label = 'My action'
+    custom.prompt = 'Translate into {language}.'
+    custom.needsLanguage = true
+    const all = [...edited, custom]
+
+    const serialized = serializeSelectionActions(all)
+    const parsed = JSON.parse(serialized)
+    expect(parsed.overrides.refine).toEqual({ enabled: false, prompt: 'Edited refine.' })
+    expect(parsed.custom).toHaveLength(1)
+    expect(parsed.custom[0].id).toBe(custom.id)
+
+    // Feeding the serialized pref back yields the same effective actions.
+    const reloaded = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: serialized }))
+    expect(reloaded.find((a) => a.id === 'refine')!.prompt).toBe('Edited refine.')
+    const reloadedCustom = reloaded.find((a) => a.id === custom.id)!
+    expect(reloadedCustom.label).toBe('My action')
+    expect(reloadedCustom.needsLanguage).toBe(true)
   })
 })
 

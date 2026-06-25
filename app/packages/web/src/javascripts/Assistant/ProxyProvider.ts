@@ -1,4 +1,5 @@
 import { assistantUsageService } from './AssistantUsageService'
+import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 
 export interface ProxyProviderOptions {
@@ -11,6 +12,12 @@ export interface ProxyProviderOptions {
    * application's host + session token.
    */
   postStream: (body: unknown, signal?: AbortSignal) => Promise<Response>
+  /**
+   * Sampling parameters forwarded to the server proxy. When omitted the provider
+   * reads the user's saved {@link loadSamplingSettings} values. The server may
+   * apply or ignore these; sending them is harmless to older servers.
+   */
+  sampling?: SamplingSettings
   signal?: AbortSignal
 }
 
@@ -33,6 +40,9 @@ export class ProxyProvider implements Provider {
       system: req.system,
       messages: req.messages,
       tools: req.tools,
+      // User-configurable sampling (temperature / top_p / optional max_tokens);
+      // the server proxy applies these to the upstream provider call.
+      ...samplingRequestFields(this.options.sampling),
     }
 
     let response: Response

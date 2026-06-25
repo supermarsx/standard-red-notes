@@ -1,4 +1,5 @@
 import { assistantUsageService } from './AssistantUsageService'
+import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest, ProviderStopReason, ToolDescriptor } from './types'
 
 export interface DirectProviderOptions {
@@ -17,6 +18,12 @@ export interface DirectProviderOptions {
    * OpenAI-Beta flag in subscription mode, or any custom header).
    */
   extraHeaders?: Record<string, string>
+  /**
+   * Sampling parameters (temperature / top_p / max_tokens). When omitted the
+   * provider reads the user's saved {@link loadSamplingSettings} values, so
+   * callers that don't care about sampling get the configured defaults for free.
+   */
+  sampling?: SamplingSettings
   signal?: AbortSignal
 }
 
@@ -56,6 +63,9 @@ export class DirectProvider implements Provider {
       // surface token consumption in the footer. Endpoints that don't support this
       // simply ignore the option (and report no usage), which we handle gracefully.
       stream_options: { include_usage: true },
+      // User-configurable sampling (temperature / top_p / optional max_tokens).
+      // Defaults to the saved sampling settings when the caller passes none.
+      ...samplingRequestFields(this.options.sampling),
       messages: this.toOpenAIMessages(req.system, req.messages),
     }
 

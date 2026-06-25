@@ -1,3 +1,4 @@
+import { getMaxSteps } from './samplingSettings'
 import {
   AssistantToolCall,
   ChatMessage,
@@ -48,7 +49,9 @@ export interface AgentResult {
 
 export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<AgentResult> {
   const { provider, session } = opts
-  const maxSteps = opts.maxSteps ?? 8
+  // Explicit caller cap wins (e.g. sub-agents pass a small fixed value); otherwise
+  // fall back to the user-configured agent-loop step cap.
+  const maxSteps = opts.maxSteps ?? getMaxSteps()
   const systemPrompt = opts.systemPrompt
   const tools = describeTools(session.tools())
 

@@ -86,8 +86,161 @@ export function savePersonaSettings(settings: PersonaSettings): void {
   }
 }
 
-/** Convenience: the user's current persona text (trimmed, capped). Empty if none. */
+// ---------------------------------------------------------------------------
+// PROFILES: named bundles of (persona + model + sampling params + optional
+// baseURL) with one active at a time. Additive on top of the single-persona
+// setting above: when at least one profile exists, the ACTIVE profile's persona
+// is the effective persona (so getPersona / composeSystemPromptWithPersona keep
+// working unchanged). When no profiles exist, behavior is exactly as before.
+//
+// Stored under a separate localStorage key so the legacy single-persona pref is
+// never clobbered. Like the sampling settings, every numeric field is clamped on
+// load and save so a hand-edited value can't reach a request body out of range.
+// ---------------------------------------------------------------------------
+
+import {
+  clampMaxTokens,
+  clampTemperature,
+  clampTopP,
+  DEFAULT_SAMPLING_SETTINGS,
+} from './samplingSettings'
+
+const PROFILES_STORAGE_KEY = 'standardnotes.assistantPersonaProfiles.settings.v1'
+
+/** Max length for a profile name (UI label). */
+export const PROFILE_NAME_MAX_LENGTH = 60
+
+export interface PersonaProfile {
+  /** Stable unique id. */
+  id: string
+  /** User-facing name (e.g. "Coding", "Creative"). */
+  name: string
+  /** Persona text (same semantics + cap as the single persona). */
+  persona: string
+  /** Optional model override; empty = use the globally-configured model. */
+  model: string
+  /** Optional Direct-mode base URL override; empty = use the global base URL. */
+  baseURL: string
+  /** Per-profile sampling params (clamped). */
+  temperature: number
+  topP: number
+  maxTokens: number
+}
+
+export interface PersonaProfilesState {
+  activeId: string
+  profiles: PersonaProfile[]
+}
+
+export const DEFAULT_PERSONA_PROFILES_STATE: PersonaProfilesState = {
+  activeId: '',
+  profiles: [],
+}
+
+function clampName(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, PROFILE_NAME_MAX_LENGTH) : ''
+}
+
+function normalizeProfile(raw: Partial<PersonaProfile> | null | undefined): PersonaProfile | null {
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  if (!id) {
+    return null
+  }
+  return {
+    id,
+    name: clampName(raw.name) || 'Profile',
+    persona: typeof raw.persona === 'string' ? clampPersona(raw.persona) : '',
+    model: typeof raw.model === 'string' ? raw.model.trim() : '',
+    baseURL: typeof raw.baseURL === 'string' ? raw.baseURL.trim() : '',
+    temperature: clampTemperature(raw.temperature ?? DEFAULT_SAMPLING_SETTINGS.temperature),
+    topP: clampTopP(raw.topP ?? DEFAULT_SAMPLING_SETTINGS.topP),
+    maxTokens: clampMaxTokens(raw.maxTokens ?? DEFAULT_SAMPLING_SETTINGS.maxTokens),
+  }
+}
+
+export function normalizePersonaProfilesState(
+  parsed: Partial<PersonaProfilesState> | null | undefined,
+): PersonaProfilesState {
+  if (!parsed || typeof parsed !== 'object') {
+    return { ...DEFAULT_PERSONA_PROFILES_STATE }
+  }
+  const profiles: PersonaProfile[] = []
+  const seen = new Set<string>()
+  const rawProfiles = Array.isArray(parsed.profiles) ? parsed.profiles : []
+  for (const record of rawProfiles) {
+    const normalized = normalizeProfile(record)
+    if (normalized && !seen.has(normalized.id)) {
+      seen.add(normalized.id)
+      profiles.push(normalized)
+    }
+  }
+  // Active id must reference an existing profile; otherwise fall back to the first.
+  let activeId = typeof parsed.activeId === 'string' ? parsed.activeId : ''
+  if (!profiles.some((p) => p.id === activeId)) {
+    activeId = profiles.length > 0 ? profiles[0].id : ''
+  }
+  return { activeId, profiles }
+}
+
+export function loadPersonaProfiles(): PersonaProfilesState {
+  try {
+    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
+    if (!raw) {
+      return { ...DEFAULT_PERSONA_PROFILES_STATE }
+    }
+    return normalizePersonaProfilesState(JSON.parse(raw) as Partial<PersonaProfilesState>)
+  } catch {
+    return { ...DEFAULT_PERSONA_PROFILES_STATE }
+  }
+}
+
+export function savePersonaProfiles(state: PersonaProfilesState): void {
+  try {
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(normalizePersonaProfilesState(state)))
+  } catch {
+    /* storage may be unavailable (private mode); profiles fall back to default */
+  }
+}
+
+/** The active profile, or undefined when none are defined. */
+export function getActiveProfile(): PersonaProfile | undefined {
+  const { activeId, profiles } = loadPersonaProfiles()
+  return profiles.find((p) => p.id === activeId)
+}
+
+/** Build a fresh profile with a unique id and sane defaults. */
+export function createPersonaProfile(existing: PersonaProfile[]): PersonaProfile {
+  const used = new Set(existing.map((p) => p.id))
+  let suffix = Date.now()
+  let id = `profile_${suffix}`
+  while (used.has(id)) {
+    suffix += 1
+    id = `profile_${suffix}`
+  }
+  return {
+    id,
+    name: 'New profile',
+    persona: '',
+    model: '',
+    baseURL: '',
+    temperature: DEFAULT_SAMPLING_SETTINGS.temperature,
+    topP: DEFAULT_SAMPLING_SETTINGS.topP,
+    maxTokens: DEFAULT_SAMPLING_SETTINGS.maxTokens,
+  }
+}
+
+/**
+ * The effective persona text: the active profile's persona when profiles exist,
+ * otherwise the legacy single-persona setting. Trimmed and capped either way.
+ */
 export function getPersona(): string {
+  const active = getActiveProfile()
+  if (active) {
+    return clampPersona(active.persona)
+  }
   return clampPersona(loadPersonaSettings().persona)
 }
 
