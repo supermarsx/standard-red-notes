@@ -47,4 +47,5 @@ export const TABBABLE_PANES: { paneId: AppPaneId; title: string; icon: VectorIco
   { paneId: AppPaneId.Bookmarks, title: 'Bookmarks', icon: 'pin' },
   { paneId: AppPaneId.Templates, title: 'Templates', icon: 'copy' },
   { paneId: AppPaneId.Constellation, title: 'Constellation', icon: 'star-filled' },
+  { paneId: AppPaneId.Notifications, title: 'Notifications', icon: 'info' },
 ]

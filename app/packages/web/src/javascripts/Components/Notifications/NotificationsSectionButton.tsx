@@ -17,7 +17,7 @@ type Props = {
  */
 const NotificationsSectionButton: FunctionComponent<Props> = ({ application }) => {
   const controller = application.notificationsController
-  const count = controller.count
+  const count = controller.unreadCount
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
 

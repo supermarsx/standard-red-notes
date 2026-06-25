@@ -11,6 +11,7 @@ export const ElementIds = {
   ResearchColumn: 'research-column',
   BookmarksColumn: 'bookmarks-column',
   TemplatesColumn: 'templates-column',
+  NotificationsColumn: 'notifications-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

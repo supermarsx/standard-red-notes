@@ -14,7 +14,6 @@ import { observer } from 'mobx-react-lite'
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ContentList from '@/Components/ContentListView/ContentList'
-import NoAccountWarning from '@/Components/NoAccountWarning/NoAccountWarning'
 import { ElementIds } from '@/Constants/ElementIDs'
 import ContentListHeader from './Header/ContentListHeader'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
@@ -58,11 +57,9 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
     const { t } = useTranslation('notes')
     const {
       paneController,
-      accountMenuController,
       filesController,
       itemListController,
       navigationController,
-      noAccountWarningController,
       searchOptionsController,
       linkingController,
       notesController,
@@ -379,10 +376,6 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
                 hideOptions={shouldUseTableView}
               />
             )}
-            <NoAccountWarning
-              accountMenuController={accountMenuController}
-              noAccountWarningController={noAccountWarningController}
-            />
           </div>
         </div>
         {!itemListController.isMultipleSelectionMode && <QuickActionsBar application={application} />}
