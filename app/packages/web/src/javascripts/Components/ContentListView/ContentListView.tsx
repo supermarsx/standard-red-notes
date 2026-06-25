@@ -443,7 +443,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             <ContentTableView items={filteredItems} application={application} />
           ) : (
             <ContentList
-              items={filteredRenderedItems}
+              items={filteredItems}
               selectedUuids={selectedUuids}
               application={application}
               paginate={paginate}

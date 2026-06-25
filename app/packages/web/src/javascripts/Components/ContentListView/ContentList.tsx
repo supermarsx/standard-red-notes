@@ -1,8 +1,8 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import { observer } from 'mobx-react-lite'
-import { FunctionComponent, KeyboardEventHandler, UIEventHandler, useCallback } from 'react'
-import { FOCUSABLE_BUT_NOT_TABBABLE, NOTES_LIST_SCROLL_THRESHOLD } from '@/Constants/Constants'
+import { FunctionComponent, KeyboardEventHandler, useCallback, useEffect, useRef } from 'react'
+import { FOCUSABLE_BUT_NOT_TABBABLE } from '@/Constants/Constants'
 import { ListableContentItem } from './Types/ListableContentItem'
 import ContentListItem from './ContentListItem'
 import { ElementIds } from '@/Constants/ElementIDs'
@@ -10,6 +10,7 @@ import { classNames } from '@standardnotes/utils'
 import { SNTag } from '@standardnotes/snjs'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
+import { VirtualizedList, VirtualizedListInterface } from './VirtualizedList'
 
 type Props = {
   application: WebApplication
@@ -28,16 +29,25 @@ const ContentList: FunctionComponent<Props> = ({ application, items, selectedUui
 
   const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
-  const onScroll: UIEventHandler = useCallback(
-    (e) => {
-      const offset = NOTES_LIST_SCROLL_THRESHOLD
-      const element = e.target as HTMLElement
-      if (element.scrollTop + element.offsetHeight >= element.scrollHeight - offset) {
-        paginate()
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const virtualListRef = useRef<VirtualizedListInterface | null>(null)
+
+  // Standard Red Notes: register a scroll-to-uuid handler so the controller's
+  // scrollToItem (used by selection, keyboard nav, new-note creation) can bring a
+  // row into view even when the windowed list hasn't mounted it yet.
+  useEffect(() => {
+    itemListController.registerListScrollHandler((uuid, animated) => {
+      const api = virtualListRef.current
+      if (!api || !api.hasUuid(uuid)) {
+        return false
       }
-    },
-    [paginate],
-  )
+      api.scrollToUuid(uuid, animated ? 'smooth' : 'auto', 'nearest')
+      return true
+    })
+    return () => {
+      itemListController.registerListScrollHandler(undefined)
+    }
+  }, [itemListController])
 
   const onKeyDown: KeyboardEventHandler = useCallback(
     (e) => {
@@ -81,8 +91,44 @@ const ContentList: FunctionComponent<Props> = ({ application, items, selectedUui
     [hideTags, selectedTag, application],
   )
 
+  const renderItem = useCallback(
+    (item: ListableContentItem) => {
+      return (
+        <ContentListItem
+          key={item.uuid}
+          application={application}
+          item={item}
+          selected={selectedUuids.has(item.uuid)}
+          hideDate={hideDate}
+          hidePreview={hideNotePreview}
+          hideTags={hideTags}
+          hideIcon={hideEditorIcon}
+          sortBy={sortBy}
+          filesController={filesController}
+          onSelect={selectItem}
+          tags={getTagsForItem(item)}
+          notesController={notesController}
+        />
+      )
+    },
+    [
+      application,
+      selectedUuids,
+      hideDate,
+      hideNotePreview,
+      hideTags,
+      hideEditorIcon,
+      sortBy,
+      filesController,
+      selectItem,
+      getTagsForItem,
+      notesController,
+    ],
+  )
+
   return (
     <div
+      ref={scrollContainerRef}
       className={classNames(
         'infinite-scroll overflow-y-auto overflow-x-hidden focus:shadow-none focus:outline-none',
         'md:max-h-full pointer-coarse:md:overflow-y-auto',
@@ -90,29 +136,16 @@ const ContentList: FunctionComponent<Props> = ({ application, items, selectedUui
         isMobileScreen ? !itemListController.isMultipleSelectionMode && 'pb-safe-bottom' : 'pb-2',
       )}
       id={ElementIds.ContentList}
-      onScroll={onScroll}
       onKeyDown={onKeyDown}
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
     >
-      {items.map((item) => {
-        return (
-          <ContentListItem
-            key={item.uuid}
-            application={application}
-            item={item}
-            selected={selectedUuids.has(item.uuid)}
-            hideDate={hideDate}
-            hidePreview={hideNotePreview}
-            hideTags={hideTags}
-            hideIcon={hideEditorIcon}
-            sortBy={sortBy}
-            filesController={filesController}
-            onSelect={selectItem}
-            tags={getTagsForItem(item)}
-            notesController={notesController}
-          />
-        )
-      })}
+      <VirtualizedList
+        ref={virtualListRef}
+        items={items}
+        scrollContainerRef={scrollContainerRef}
+        renderItem={renderItem}
+        onNearEnd={paginate}
+      />
     </div>
   )
 }

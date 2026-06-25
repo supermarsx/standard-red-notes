@@ -2050,7 +2050,24 @@ export class ItemListController
     }
   }
 
+  /**
+   * Standard Red Notes: the windowed notes/files list (VirtualizedList inside
+   * ContentList) only mounts the rows near the viewport, so a target row may not
+   * be in the DOM. ContentList registers a scroll-to-uuid handler here that knows
+   * how to scroll the virtual list to ANY index (mounting the row). When present
+   * we prefer it; otherwise we fall back to the historical getElementById path
+   * (used by the daily/table views, which are not windowed).
+   */
+  private scrollToUuidHandler: ((uuid: UuidString, animated: boolean) => boolean) | undefined
+
+  registerListScrollHandler = (handler: ((uuid: UuidString, animated: boolean) => boolean) | undefined): void => {
+    this.scrollToUuidHandler = handler
+  }
+
   scrollToItem = (item: { uuid: ListableContentItem['uuid'] }, animated = true): void => {
+    if (this.scrollToUuidHandler?.(item.uuid, animated)) {
+      return
+    }
     const itemElement = document.getElementById(item.uuid)
     itemElement?.scrollIntoView({
       behavior: animated ? 'smooth' : 'auto',
@@ -2095,12 +2112,33 @@ export class ItemListController
 
       this.selectItemWithScrollHandling(nextItem, { userTriggered }).catch(console.error)
 
-      const nextNoteElement = document.getElementById(nextItem.uuid)
-
-      nextNoteElement?.focus()
+      this.focusItemRowWhenAvailable(nextItem.uuid)
 
       return
     }
+  }
+
+  /**
+   * Standard Red Notes: focus a list row by uuid. With the windowed list the row
+   * may not be mounted yet at call time (a scroll was just requested to bring it
+   * into view). Try immediately, then once more on the next animation frame after
+   * the virtual list has had a chance to mount the scrolled-to slice.
+   */
+  private focusItemRowWhenAvailable = (uuid: UuidString): void => {
+    const focusNow = () => {
+      const element = document.getElementById(uuid)
+      if (element) {
+        element.focus()
+        return true
+      }
+      return false
+    }
+    if (focusNow()) {
+      return
+    }
+    requestAnimationFrame(() => {
+      focusNow()
+    })
   }
 
   /** Standard Red Notes: whether the notes list is currently in Custom (manual) sort mode. */
@@ -2166,9 +2204,7 @@ export class ItemListController
 
       this.selectItemWithScrollHandling(previousItem, { userTriggered: true }).catch(console.error)
 
-      const previousNoteElement = document.getElementById(previousItem.uuid)
-
-      previousNoteElement?.focus()
+      this.focusItemRowWhenAvailable(previousItem.uuid)
 
       return
     }
