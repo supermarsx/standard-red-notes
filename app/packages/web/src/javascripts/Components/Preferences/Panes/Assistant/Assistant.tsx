@@ -16,14 +16,9 @@ import {
   SelectionActionId,
   serializeSelectionActions,
 } from '@/Assistant/selectionActions'
-import { NARRATION_STYLES } from '@/Assistant/narration'
-import {
-  clampRate,
-  loadNarrationSettings,
-  NarrationStyleSetting,
-  saveNarrationSettings,
-} from '@/Assistant/narrationSettings'
-import { getTtsAvailability, listWebSpeechVoices } from '@/Assistant/tts'
+import AgentRuntimeSettings from '@/Components/Assistant/AgentRuntimeSettings'
+import NarrationSettings from '@/Components/Narration/NarrationSettings'
+import SttModelSettings from '@/Components/AudioRecorder/SttModelSettings'
 import { loadDictationSettings, saveDictationSettings, DictationSettings } from '@/Assistant/dictationSettings'
 import { getSttAvailability, getSpeechRecognitionCtor } from '@/Assistant/transcription'
 import {
@@ -45,13 +40,10 @@ import {
   PROFILE_NAME_MAX_LENGTH,
 } from '@/Assistant/personaSettings'
 import {
-  clampMaxSteps,
   clampMaxTokens,
   clampTemperature,
   clampTopP,
   loadSamplingSettings,
-  MAX_STEPS_MAX,
-  MAX_STEPS_MIN,
   MAX_TOKENS_MAX,
   SamplingSettings,
   saveSamplingSettings,
@@ -374,30 +366,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   }, [application, provider])
 
   const providers = config?.providers ?? []
-
-  // Narration / TTS settings (device-local; persisted in localStorage — not a synced
-  // PrefKey, which would require touching @standardnotes/models).
-  const [narration, setNarration] = useState(() => loadNarrationSettings())
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() => listWebSpeechVoices())
-  const ttsAvailability = useMemo(() => getTtsAvailability(application), [application])
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return
-    }
-    const update = () => setVoices(listWebSpeechVoices())
-    update()
-    window.speechSynthesis.onvoiceschanged = update
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null
-    }
-  }, [])
-  const updateNarration = useCallback((patch: Partial<ReturnType<typeof loadNarrationSettings>>) => {
-    setNarration((prev) => {
-      const next = { ...prev, ...patch }
-      saveNarrationSettings(next)
-      return next
-    })
-  }, [])
 
   // Dictation / speech-to-text settings (device-local; persisted in localStorage).
   // dictationEnabled is DEFAULT OFF — it gates the editor mic toggle.
@@ -912,47 +880,15 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         </PreferencesSegment>
       </PreferencesGroup>
 
+      <AgentRuntimeSettings application={application} />
+
       <PreferencesGroup>
         <PreferencesSegment>
-          <Title>Sampling &amp; agent loop</Title>
+          <Title>Output length</Title>
           <Text>
-            Tune how the model generates text and how far the agent loop runs. These apply to every assistant request
-            (chat, selection actions, research) in both Direct and Server proxy modes. Stored on this device only.
+            Cap how many tokens the model generates per turn. Applies to every assistant request (chat, selection
+            actions, research) in both Direct and Server proxy modes. Stored on this device only.
           </Text>
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Temperature: {sampling.temperature.toFixed(2)}</Subtitle>
-          <Text>
-            Higher values make output more random/creative; lower values make it more focused and deterministic. Range{' '}
-            {TEMPERATURE_MIN}–{TEMPERATURE_MAX}. Default 0.7.
-          </Text>
-          <input
-            className="mt-2 w-full"
-            type="range"
-            min={TEMPERATURE_MIN}
-            max={TEMPERATURE_MAX}
-            step={0.05}
-            value={sampling.temperature}
-            onChange={(event) => updateSampling({ temperature: clampTemperature(Number(event.target.value)) })}
-          />
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Top-p (nucleus sampling): {sampling.topP.toFixed(2)}</Subtitle>
-          <Text>
-            Limits sampling to the most probable tokens whose cumulative probability reaches this value. {TOP_P_MAX}{' '}
-            disables the filter. Range {TOP_P_MIN}–{TOP_P_MAX}. Default 1.
-          </Text>
-          <input
-            className="mt-2 w-full"
-            type="range"
-            min={TOP_P_MIN}
-            max={TOP_P_MAX}
-            step={0.05}
-            value={sampling.topP}
-            onChange={(event) => updateSampling({ topP: clampTopP(Number(event.target.value)) })}
-          />
 
           <HorizontalSeparator classes="my-4" />
 
@@ -968,22 +904,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             max={MAX_TOKENS_MAX}
             value={sampling.maxTokens}
             onChange={(event) => updateSampling({ maxTokens: clampMaxTokens(Number(event.target.value)) })}
-          />
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Max agent steps</Subtitle>
-          <Text>
-            How many model turns the agent loop may take before it stops and summarizes. Higher allows more tool use per
-            request; lower keeps runs short. Range {MAX_STEPS_MIN}–{MAX_STEPS_MAX}. Default 8.
-          </Text>
-          <input
-            className="mt-2 w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
-            type="number"
-            min={MAX_STEPS_MIN}
-            max={MAX_STEPS_MAX}
-            value={sampling.maxSteps}
-            onChange={(event) => updateSampling({ maxSteps: clampMaxSteps(Number(event.target.value)) })}
           />
         </PreferencesSegment>
       </PreferencesGroup>
@@ -1043,87 +963,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         </PreferencesSegment>
       </PreferencesGroup>
 
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Narration &amp; text-to-speech</Title>
-          <Text>
-            Narrate a note from its options menu: the AI rewrites it into clean, listenable text and a player reads it
-            aloud. Generating narration sends the note&rsquo;s content to your configured AI provider.
-          </Text>
-          <Text className="mt-2 text-passive-1">
-            {ttsAvailability.modelAvailable
-              ? 'Playback prefers model voices via your Direct endpoint’s /audio/speech route (sending the narration text there), and falls back to your device’s built-in voices.'
-              : 'Playback uses your device’s built-in voices (browser text-to-speech) — no network and no key required. Model voices need Direct mode with a base URL.'}
-          </Text>
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Default narration style</Subtitle>
-          <Text>Used when you narrate a note. Choose “Ask each time” to pick a style on every narration.</Text>
-          <select
-            className="mt-2 rounded border border-border bg-default px-2 py-1.5 text-sm"
-            value={narration.defaultStyle}
-            onChange={(event) => updateNarration({ defaultStyle: event.target.value as NarrationStyleSetting })}
-          >
-            <option value="ask">Ask each time</option>
-            {NARRATION_STYLES.map((style) => (
-              <option key={style.id} value={style.id}>
-                {style.label}
-              </option>
-            ))}
-          </select>
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Device voice</Subtitle>
-          <Text>Voice used for browser text-to-speech. Available voices depend on your OS and browser.</Text>
-          {voices.length > 0 ? (
-            <select
-              className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
-              value={narration.voiceURI}
-              onChange={(event) => updateNarration({ voiceURI: event.target.value })}
-            >
-              <option value="">Browser default</option>
-              {voices.map((voice) => (
-                <option key={voice.voiceURI} value={voice.voiceURI}>
-                  {voice.name} ({voice.lang})
-                </option>
-              ))}
-            </select>
-          ) : (
-            <Text className="mt-2 text-passive-1">No device voices detected yet.</Text>
-          )}
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Model voice</Subtitle>
-          <Text>
-            Voice name sent to a model speech endpoint when one is configured (e.g. OpenAI&rsquo;s alloy, echo, fable,
-            onyx, nova, shimmer). Ignored when using device voices.
-          </Text>
-          <input
-            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
-            type="text"
-            value={narration.modelVoice}
-            placeholder="alloy"
-            onChange={(event) => updateNarration({ modelVoice: event.target.value })}
-          />
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Speaking speed: {narration.rate.toFixed(1)}×</Subtitle>
-          <Text>Playback rate for device-voice narration. 1× is normal.</Text>
-          <input
-            className="mt-2 w-full"
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.1}
-            value={narration.rate}
-            onChange={(event) => updateNarration({ rate: clampRate(Number(event.target.value)) })}
-          />
-        </PreferencesSegment>
-      </PreferencesGroup>
+      <NarrationSettings application={application} />
 
       <PreferencesGroup>
         <PreferencesSegment>
@@ -1152,18 +992,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
           <HorizontalSeparator classes="my-4" />
 
-          <Subtitle>Speech-to-text model</Subtitle>
-          <Text>
-            Model id sent to the transcription endpoint (e.g. whisper-1, gpt-4o-transcribe). Leave empty to use the
-            default (whisper-1). Direct mode only.
-          </Text>
-          <input
-            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
-            type="text"
-            value={dictation.sttModel}
-            placeholder="whisper-1"
-            onChange={(event) => updateDictation({ sttModel: event.target.value })}
-          />
+          <SttModelSettings application={application} />
 
           <HorizontalSeparator classes="my-4" />
 
