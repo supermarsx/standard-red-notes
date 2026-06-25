@@ -525,8 +525,15 @@ const ToolbarPlugin = () => {
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false)
   const sortAnchorRef = useRef<HTMLButtonElement>(null)
 
-  const [isTypographyMenuOpen, setIsTypographyMenuOpen] = useState(false)
-  const typographyAnchorRef = useRef<HTMLButtonElement>(null)
+  // Individual typography controls (replacing the former single Typography menu):
+  // outline width presets, letter-spacing (kerning) presets, and word-spacing
+  // presets each get their own split-button popover.
+  const [isOutlineMenuOpen, setIsOutlineMenuOpen] = useState(false)
+  const outlineAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isKerningMenuOpen, setIsKerningMenuOpen] = useState(false)
+  const kerningAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isWordSpacingMenuOpen, setIsWordSpacingMenuOpen] = useState(false)
+  const wordSpacingAnchorRef = useRef<HTMLButtonElement>(null)
 
   // Standard Red Notes — paragraph layout (line spacing, paragraph spacing,
   // indentation, text shading) popover, mirroring the Typography popover.
@@ -1752,16 +1759,104 @@ const ToolbarPlugin = () => {
         </span>
       </ToolbarButton>
     ),
-    [ToolbarButtonId.Typography]: (
+    [ToolbarButtonId.Emphasis]: (
       <ToolbarButton
-        name={t('typography')}
-        onSelect={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
-        ref={typographyAnchorRef}
-        className={isTypographyMenuOpen ? 'md:bg-default' : ''}
+        name={t('emphasisMarks')}
+        iconName="sparkle"
+        onSelect={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
+      />
+    ),
+    [ToolbarButtonId.Outline]: (
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        key="outlineControl"
       >
-        <span className="text-sm font-semibold italic leading-none">Tt</span>
-        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
-      </ToolbarButton>
+        <ToolbarButton
+          name={t('outlineTextStroke')}
+          iconName="bold"
+          onSelect={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
+        />
+        <button
+          type="button"
+          aria-label={t('outlineTextStroke')}
+          title={t('outlineTextStroke')}
+          ref={outlineAnchorRef}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsOutlineMenuOpen(!isOutlineMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isOutlineMenuOpen ? 'bg-contrast' : '',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
+      </div>
+    ),
+    [ToolbarButtonId.Kerning]: (
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        key="kerningControl"
+      >
+        <ToolbarButton
+          name={t('letterSpacingKerning')}
+          iconName="line-width"
+          onSelect={() => setIsKerningMenuOpen(!isKerningMenuOpen)}
+        />
+        <button
+          type="button"
+          aria-label={t('letterSpacingKerning')}
+          title={t('letterSpacingKerning')}
+          ref={kerningAnchorRef}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsKerningMenuOpen(!isKerningMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isKerningMenuOpen ? 'bg-contrast' : '',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
+      </div>
+    ),
+    [ToolbarButtonId.WordSpacing]: (
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        key="wordSpacingControl"
+      >
+        <ToolbarButton
+          name={t('wordSpacing')}
+          iconName="align-justify"
+          onSelect={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
+        />
+        <button
+          type="button"
+          aria-label={t('wordSpacing')}
+          title={t('wordSpacing')}
+          ref={wordSpacingAnchorRef}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isWordSpacingMenuOpen ? 'bg-contrast' : '',
+          )}
+        >
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
+      </div>
+    ),
+    [ToolbarButtonId.ClearTypography]: (
+      <ToolbarButton
+        name={t('clearTypography')}
+        iconName="trash-sweep"
+        onSelect={() =>
+          applyStyleText({
+            'text-emphasis': null,
+            '-webkit-text-stroke': null,
+            'letter-spacing': null,
+            'word-spacing': null,
+          })
+        }
+      />
     ),
     [ToolbarButtonId.FontSize]: (
       <div
@@ -2515,7 +2610,16 @@ const ToolbarPlugin = () => {
                   // Toolbar) still tunes how buttons stack, while md:min-height keeps
                   // every group the same height regardless.
                   const rows = Math.min(TOOLBAR_GROUP_ROWS, Math.max(1, group.rows ?? TOOLBAR_GROUP_ROWS))
-                  const buttonRows = splitIntoRows(group.buttons, rows)
+                  // Groups can opt into an EXPLICIT row layout (ids per row); we
+                  // resolve those ids back to this group's own descriptors and
+                  // drop any that were hidden/filtered. Otherwise fall back to the
+                  // automatic top-heavy packing.
+                  const byId = new Map(group.buttons.map((b) => [b.id, b]))
+                  const buttonRows = group.layout
+                    ? group.layout.map((row) =>
+                        row.map((id) => byId.get(id)).filter((b): b is NonNullable<typeof b> => Boolean(b)),
+                      )
+                    : splitIntoRows(group.buttons, rows)
                   return (
                     <div
                       key={group.id}
@@ -3224,103 +3328,108 @@ const ToolbarPlugin = () => {
         </Menu>
       </Popover>
       <Popover
-        title={t('typographyTitle')}
-        anchorElement={typographyAnchorRef}
-        open={isTypographyMenuOpen}
-        togglePopover={() => setIsTypographyMenuOpen(!isTypographyMenuOpen)}
+        title={t('outlineTextStroke')}
+        anchorElement={outlineAnchorRef}
+        open={isOutlineMenuOpen}
+        togglePopover={() => setIsOutlineMenuOpen(!isOutlineMenuOpen)}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
         className="py-1"
         disableMobileFullscreenTakeover
         disableFlip
-        containerClassName="md:!min-w-60 md:!w-auto"
+        containerClassName="md:!min-w-48 md:!w-auto"
         portal={false}
         documentElement={popoverDocumentElement}
       >
         <div className="flex flex-col py-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
-          <button
-            type="button"
-            className="flex items-center gap-2.5 px-3 py-2 text-left hover:bg-contrast"
-            onClick={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
-          >
-            <Icon type="sparkle" size="custom" className="h-4 w-4 flex-shrink-0 text-info" />
-            <span>{t('emphasisMarks')}</span>
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-2.5 px-3 py-2 text-left hover:bg-contrast"
-            onClick={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
-          >
-            <Icon type="bold" size="custom" className="h-4 w-4 flex-shrink-0 text-info" />
-            <span>{t('outlineTextStroke')}</span>
-          </button>
-
+          {[
+            { label: 'Thin', value: '1px currentColor' },
+            { label: 'Medium', value: '2px currentColor' },
+            { label: 'Thick', value: '3px currentColor' },
+          ].map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              onClick={() => applyStyleText({ '-webkit-text-stroke': preset.value })}
+            >
+              <span>{preset.label}</span>
+            </button>
+          ))}
           <div className="mx-3 my-1 h-px bg-border" />
-
-          <div className="flex items-center gap-2.5 px-3 pb-1.5 pt-1">
-            <Icon type="line-width" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
-            <span className="text-xs font-semibold uppercase tracking-wide text-passive-0">
-              {t('letterSpacingKerning')}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-1 px-3 pb-1">
-            {[
-              { label: t('spacingTight'), value: '-0.5px' },
-              { label: t('spacingNormal'), value: '0' },
-              { label: t('spacingWide'), value: '0.5px' },
-              { label: t('spacingWider'), value: '1px' },
-              { label: t('spacingWidest'), value: '2px' },
-            ].map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className="rounded border border-border px-2 py-1 text-xs hover:border-info hover:bg-contrast"
-                onClick={() => applyStyleText({ 'letter-spacing': preset.value })}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2.5 px-3 pb-1.5 pt-2">
-            <Icon type="align-justify" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
-            <span className="text-xs font-semibold uppercase tracking-wide text-passive-0">{t('wordSpacing')}</span>
-          </div>
-          <div className="flex flex-wrap gap-1 px-3 pb-1">
-            {[
-              { label: t('spacingNormal'), value: '0' },
-              { label: t('spacingWide'), value: '2px' },
-              { label: t('spacingWider'), value: '4px' },
-              { label: t('spacingWidest'), value: '8px' },
-            ].map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className="rounded border border-border px-2 py-1 text-xs hover:border-info hover:bg-contrast"
-                onClick={() => applyStyleText({ 'word-spacing': preset.value })}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="mx-3 my-1 h-px bg-border" />
-
           <button
             type="button"
             className="flex items-center gap-2.5 px-3 py-2 text-left text-danger hover:bg-contrast"
-            onClick={() =>
-              applyStyleText({
-                'text-emphasis': null,
-                '-webkit-text-stroke': null,
-                'letter-spacing': null,
-                'word-spacing': null,
-              })
-            }
+            onClick={() => applyStyleText({ '-webkit-text-stroke': null })}
           >
             <Icon type="trash-sweep" size="custom" className="h-4 w-4 flex-shrink-0" />
-            <span>{t('clearTypography')}</span>
+            <span>{t('remove')}</span>
           </button>
+        </div>
+      </Popover>
+      <Popover
+        title={t('letterSpacingKerning')}
+        anchorElement={kerningAnchorRef}
+        open={isKerningMenuOpen}
+        togglePopover={() => setIsKerningMenuOpen(!isKerningMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-48 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex flex-col py-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          {[
+            { label: t('spacingTight'), value: '-0.5px' },
+            { label: t('spacingNormal'), value: '0' },
+            { label: t('spacingWide'), value: '0.5px' },
+            { label: t('spacingWider'), value: '1px' },
+            { label: t('spacingWidest'), value: '2px' },
+          ].map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              onClick={() => applyStyleText({ 'letter-spacing': preset.value })}
+            >
+              <span>{preset.label}</span>
+            </button>
+          ))}
+        </div>
+      </Popover>
+      <Popover
+        title={t('wordSpacing')}
+        anchorElement={wordSpacingAnchorRef}
+        open={isWordSpacingMenuOpen}
+        togglePopover={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-48 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex flex-col py-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          {[
+            { label: t('spacingNormal'), value: '0' },
+            { label: t('spacingWide'), value: '2px' },
+            { label: t('spacingWider'), value: '4px' },
+            { label: t('spacingWidest'), value: '8px' },
+          ].map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              onClick={() => applyStyleText({ 'word-spacing': preset.value })}
+            >
+              <span>{preset.label}</span>
+            </button>
+          ))}
         </div>
       </Popover>
       <Popover

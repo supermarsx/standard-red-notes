@@ -63,7 +63,13 @@ export enum ToolbarButtonId {
   FontWeight = 'fontWeight',
   FontFamily = 'fontFamily',
   FontSize = 'fontSize',
+  /** @deprecated kept for back-compat; replaced by the individual controls below. */
   Typography = 'typography',
+  Emphasis = 'emphasis',
+  Outline = 'outline',
+  Kerning = 'kerning',
+  WordSpacing = 'wordSpacing',
+  ClearTypography = 'clearTypography',
   // Paragraph / list
   BulletedList = 'bulletedList',
   NumberedList = 'numberedList',
@@ -111,6 +117,13 @@ export type ToolbarGroupDescriptor = {
    * the toolbar treats the group as a single row (default).
    */
   rows?: number
+  /**
+   * Explicit row layout: each inner array is a row of button ids, rendered in
+   * order. When present it overrides the automatic `rows`/`splitIntoRows`
+   * packing so the group lays out exactly as specified. Hidden (filtered-out)
+   * ids are skipped at render time.
+   */
+  layout?: ToolbarButtonId[][]
 }
 
 /** Minimum / maximum / default rows a group may wrap its buttons onto. */
@@ -175,7 +188,36 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.Superscript, label: 'Superscript', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.Typography, label: 'Typography (emphasis, outline, spacing)', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Emphasis, label: 'Emphasis marks', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Outline, label: 'Outline (text stroke)', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Kerning, label: 'Letter spacing / kerning', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.WordSpacing, label: 'Word spacing', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.ClearTypography, label: 'Clear typography', group: ToolbarGroupId.ColorFont },
+    ],
+    layout: [
+      [
+        ToolbarButtonId.FontFamily,
+        ToolbarButtonId.FontWeight,
+        ToolbarButtonId.FontSize,
+        ToolbarButtonId.FontSizeStepper,
+      ],
+      [
+        ToolbarButtonId.Bold,
+        ToolbarButtonId.Italic,
+        ToolbarButtonId.Underline,
+        ToolbarButtonId.Strikethrough,
+        ToolbarButtonId.Subscript,
+        ToolbarButtonId.Superscript,
+        ToolbarButtonId.TextColor,
+      ],
+      [
+        ToolbarButtonId.HighlightColor,
+        ToolbarButtonId.Emphasis,
+        ToolbarButtonId.Outline,
+        ToolbarButtonId.Kerning,
+        ToolbarButtonId.WordSpacing,
+        ToolbarButtonId.ClearTypography,
+      ],
     ],
   },
   {
