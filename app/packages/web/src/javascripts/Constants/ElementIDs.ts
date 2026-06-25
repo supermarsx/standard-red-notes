@@ -12,6 +12,7 @@ export const ElementIds = {
   BookmarksColumn: 'bookmarks-column',
   TemplatesColumn: 'templates-column',
   NotificationsColumn: 'notifications-column',
+  FilesColumn: 'files-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

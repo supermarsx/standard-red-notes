@@ -15,6 +15,7 @@ export enum AppPaneId {
   Bookmarks = 'BookmarksColumn',
   Templates = 'TemplatesColumn',
   Notifications = 'NotificationsColumn',
+  Files = 'FilesColumn',
 }
 
 export const AppPaneIdToDivId = {
@@ -32,4 +33,5 @@ export const AppPaneIdToDivId = {
   [AppPaneId.Bookmarks]: ElementIds.BookmarksColumn,
   [AppPaneId.Templates]: ElementIds.TemplatesColumn,
   [AppPaneId.Notifications]: ElementIds.NotificationsColumn,
+  [AppPaneId.Files]: ElementIds.FilesColumn,
 }

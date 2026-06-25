@@ -25,6 +25,7 @@ import BookmarksView from '../Bookmarks/BookmarksView'
 import TemplatesView from '../Templates/TemplatesView'
 import ConstellationView from '../Constellation/ConstellationView'
 import NotificationsView from '../Notifications/NotificationsView'
+import FilesView from '../FilesView/FilesView'
 import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
 import EmptyTabView from './EmptyTabView'
 import { loadNewTabBehavior } from '@/Tabs/newTabSettings'
@@ -450,6 +451,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         return <ConstellationView application={this.application} className={viewClassName} id={tab.id} />
       case AppPaneId.Notifications:
         return <NotificationsView application={this.application} className={viewClassName} id={tab.id} />
+      case AppPaneId.Files:
+        return <FilesView application={this.application} className={viewClassName} id={tab.id} />
       default:
         return null
     }

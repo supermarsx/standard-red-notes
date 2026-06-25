@@ -179,6 +179,13 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     icon: 'tasks',
     run: openAppPaneTab(AppPaneId.Todos),
   },
+  {
+    id: 'global-open-files',
+    title: 'Open Files',
+    keywords: ['attachments', 'gallery', 'uploads', 'documents'],
+    icon: 'attachment-file',
+    run: openAppPaneTab(AppPaneId.Files),
+  },
 
   // --- Editor -------------------------------------------------------------
   {

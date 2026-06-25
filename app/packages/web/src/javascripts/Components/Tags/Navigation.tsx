@@ -27,6 +27,7 @@ import AggregateViewSectionButtons from '../AggregateViews/AggregateViewSectionB
 import ResearchSectionButton from '../Research/ResearchSectionButton'
 import BookmarksSectionButton from '../Bookmarks/BookmarksSectionButton'
 import TemplatesSectionButton from '../Templates/TemplatesSectionButton'
+import FilesSectionButton from '../FilesView/FilesSectionButton'
 
 type Props = {
   application: WebApplication
@@ -104,6 +105,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
         <ResearchSectionButton application={application} />
         <BookmarksSectionButton application={application} />
         <TemplatesSectionButton application={application} />
+        <FilesSectionButton application={application} />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}
