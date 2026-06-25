@@ -148,7 +148,13 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     await new Promise<void>((resolve, reject) => {
       const convertToFormat = () => {
         switch (toFormat) {
-          case 'txt':
+          case 'txt': {
+            // Plain text stripped of ALL formatting: just the document's text
+            // content, no Markdown syntax, no HTML — newlines between blocks.
+            content = $getRoot().getTextContent()
+            resolve()
+            break
+          }
           case 'md': {
             content = $convertToMarkdownString(MarkdownTransformers)
             resolve()

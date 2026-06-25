@@ -10,6 +10,7 @@ import snColorsCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"mod
 // @ts-ignore inline webpack loader imports
 import exportOverridesCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/export-overrides.scss'
 import { getBase64FromBlob } from './Utils'
+import { buildDocxBlobFromHtml, DOCX_MIME_TYPE } from './DocxExport'
 import { parseFileName, parseAndCreateZippableFileName, sanitizeFileName } from '@standardnotes/utils'
 
 export const getNoteFormat = (application: WebApplicationInterface, note: SNNote) => {
@@ -68,7 +69,7 @@ export const getNoteBlob = async (
 ) => {
   const format = getNoteFormat(application, note)
   let type: string
-  switch (format) {
+  switch (format as string) {
     case 'html':
       type = 'text/html'
       break
@@ -81,12 +82,18 @@ export const getNoteBlob = async (
     case 'pdf':
       type = 'application/pdf'
       break
+    case 'docx':
+      type = DOCX_MIME_TYPE
+      break
     default:
       type = 'text/plain'
       break
   }
   if (note.noteType === NoteType.Super) {
-    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(note.text, format, {
+    const isDocx = (format as string) === 'docx'
+    // A Word document is produced from the HTML export, embedded as an altChunk.
+    const converterFormat = (isDocx ? 'html' : format) as 'txt' | 'md' | 'html' | 'json' | 'pdf'
+    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(note.text, converterFormat, {
       embedBehavior: superEmbedBehavior,
       getFileItem: (id) => application.items.findItem<FileItem>(id),
       getFileBase64: async (id) => {
@@ -107,6 +114,9 @@ export const getNoteBlob = async (
         ),
       },
     })
+    if (isDocx) {
+      return buildDocxBlobFromHtml(superHTML(note, content))
+    }
     const useMDFrontmatter =
       format === 'md' &&
       application.getPreference(
@@ -146,7 +156,12 @@ const noteRequiresFolder = (
   if (!isSuperNote(note)) {
     return false
   }
-  if (superExportFormat === 'json' || superExportFormat === 'pdf') {
+  if (
+    superExportFormat === 'json' ||
+    superExportFormat === 'pdf' ||
+    (superExportFormat as string) === 'docx' ||
+    (superExportFormat as string) === 'txt'
+  ) {
     return false
   }
   if (superEmbedBehavior !== 'separate') {
@@ -201,7 +216,7 @@ export const createNoteExport = async (
     PrefDefaults[PrefKey.SuperNoteExportFormat],
   )
   const superEmbedBehaviorPref =
-    superExportFormatPref === 'pdf'
+    superExportFormatPref === 'pdf' || (superExportFormatPref as string) === 'docx'
       ? 'inline'
       : application.getPreference(
           PrefKey.SuperNoteExportEmbedBehavior,

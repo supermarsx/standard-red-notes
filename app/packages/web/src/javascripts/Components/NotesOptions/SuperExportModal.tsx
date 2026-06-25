@@ -29,11 +29,16 @@ const ModalContent = observer(() => {
     if (superNoteExportFormat === 'pdf' && superNoteExportEmbedBehavior !== 'inline') {
       void application.setPreference(PrefKey.SuperNoteExportEmbedBehavior, 'inline')
     }
+    // Word docs embed images inline (as base64 in the HTML altChunk).
+    if ((superNoteExportFormat as string) === 'docx' && superNoteExportEmbedBehavior !== 'inline') {
+      void application.setPreference(PrefKey.SuperNoteExportEmbedBehavior, 'inline')
+    }
   }, [application, superNoteExportEmbedBehavior, superNoteExportFormat])
 
   const someNotesHaveEmbeddedFiles = notes.some(noteHasEmbeddedFiles)
 
-  const canShowEmbeddedFileOptions = !['json', 'pdf'].includes(superNoteExportFormat)
+  // json/pdf bundle everything in one file; docx embeds inline; txt strips files.
+  const canShowEmbeddedFileOptions = !['json', 'pdf', 'docx', 'txt'].includes(superNoteExportFormat)
 
   return (
     <Modal
@@ -67,6 +72,8 @@ const ModalContent = observer(() => {
               { label: 'Super (.json)', value: 'json' },
               { label: 'Markdown (.md)', value: 'md' },
               { label: 'HTML', value: 'html' },
+              { label: 'Word (.docx)', value: 'docx' },
+              { label: 'Plain text (.txt)', value: 'txt' },
               { label: 'PDF', value: 'pdf' },
             ]}
             value={superNoteExportFormat}
@@ -86,6 +93,15 @@ const ModalContent = observer(() => {
             Note that conversion to Markdown is not lossless. Some features like collapsible blocks and formatting like
             superscript/subscript may not be correctly converted.
           </div>
+        )}
+        {(superNoteExportFormat as string) === 'docx' && (
+          <div className="mt-2 text-xs text-passive-0">
+            Exports a Word document that keeps the note&apos;s formatting when opened in Microsoft Word. Other word
+            processors may render it less faithfully.
+          </div>
+        )}
+        {(superNoteExportFormat as string) === 'txt' && (
+          <div className="mt-2 text-xs text-passive-0">Exports plain text with all formatting removed.</div>
         )}
       </div>
       {superNoteExportFormat === 'pdf' && (
