@@ -9,6 +9,7 @@ import WorkspaceMenuItem from './WorkspaceMenuItem'
 import { useApplication } from '@/Components/ApplicationProvider'
 import MenuSection from '@/Components/Menu/MenuSection'
 import { useTranslation } from 'react-i18next'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   mainApplicationGroup: WebApplicationGroup
@@ -61,6 +62,7 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
 
   const activateWorkspace = useCallback(
     async (descriptor: ApplicationDescriptor) => {
+      achievements.increment(METRICS.workspaceSwitchTotal)
       void mainApplicationGroup.unloadCurrentAndActivateDescriptor(descriptor)
     },
     [mainApplicationGroup],

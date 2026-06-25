@@ -16,6 +16,7 @@ import { useCaptcha } from '@/Hooks/useCaptcha'
 import MergeLocalDataCheckbox from './MergeLocalDataCheckbox'
 import ConfirmNoMergeDialog from './ConfirmNoMergeDialog'
 import { useTranslation } from 'react-i18next'
+import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
   setMenuPane: (pane: AccountMenuPane) => void
@@ -146,6 +147,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
       })
       .catch((err) => {
         console.error(err)
+        achievements.increment(METRICS.failedLoginsTotal)
         setError(err.message ?? err.toString())
         setPassword('')
         setHVMToken('')
@@ -187,6 +189,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
       })
       .catch((err) => {
         console.error(err)
+        achievements.increment(METRICS.failedLoginsTotal)
         setError(err.message ?? err.toString())
         setPassword('')
         setHVMToken('')
