@@ -23,6 +23,8 @@ export enum ToolbarGroupId {
   Selection = 'selection',
   FormatPainter = 'formatPainter',
   Toolbar = 'toolbar',
+  /** Standard Red Notes: per-note page layout (size, orientation, margins, columns). */
+  Page = 'page',
 }
 
 /** Stable button ids. Keep in sync with the render map in ToolbarPlugin.tsx. */
@@ -95,6 +97,11 @@ export enum ToolbarButtonId {
   Dictation = 'dictation',
   // AI
   AI = 'ai',
+  // Page layout (Standard Red Notes)
+  PageSize = 'pageSize',
+  PageOrientation = 'pageOrientation',
+  PageMargins = 'pageMargins',
+  PageColumns = 'pageColumns',
   // Toolbar
   CustomizeToolbar = 'customizeToolbar',
 }
@@ -288,6 +295,17 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     ],
   },
   {
+    id: ToolbarGroupId.Page,
+    label: 'Page',
+    caption: 'Page',
+    buttons: [
+      { id: ToolbarButtonId.PageSize, label: 'Page size', group: ToolbarGroupId.Page },
+      { id: ToolbarButtonId.PageOrientation, label: 'Orientation', group: ToolbarGroupId.Page },
+      { id: ToolbarButtonId.PageMargins, label: 'Margins', group: ToolbarGroupId.Page },
+      { id: ToolbarButtonId.PageColumns, label: 'Columns', group: ToolbarGroupId.Page },
+    ],
+  },
+  {
     id: ToolbarGroupId.Toolbar,
     label: 'Toolbar',
     caption: 'Toolbar',
@@ -303,6 +321,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
 export enum ToolbarSuperGroupId {
   Home = 'home',
   Insert = 'insert',
+  Layout = 'layout',
   AI = 'aiTab',
   Tools = 'tools',
 }
@@ -332,6 +351,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
     ],
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
+  { id: ToolbarSuperGroupId.Layout, label: 'Layout', groups: [ToolbarGroupId.Page] },
   { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },
   {
     id: ToolbarSuperGroupId.Tools,

@@ -107,6 +107,17 @@ import {
   setChecklistAutoMoveEnabled,
   subscribeChecklistAutoMove,
 } from '../CheckListAutoMovePlugin/autoMoveSetting'
+import {
+  CUSTOM_MARGIN_ID,
+  MARGIN_PRESETS,
+  MAX_COLUMNS,
+  MIN_COLUMNS,
+  NoteLayout,
+  PAGE_SIZE_OPTIONS,
+  loadNoteLayout,
+  resolvePageSize,
+  saveNoteLayout,
+} from '../../Layout/layoutSettings'
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import { useLocalPreference } from '@/Hooks/usePreference'
@@ -551,6 +562,31 @@ const ToolbarPlugin = () => {
   const copyAnchorRef = useRef<HTMLButtonElement>(null)
   const [isCutMenuOpen, setIsCutMenuOpen] = useState(false)
   const cutAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // Standard Red Notes — per-note page Layout controls (size / orientation /
+  // margins / columns). The active note's layout is web-local localStorage keyed
+  // by note uuid; it drives print/export. Each dropdown gets its own popover.
+  const activeNoteUuid = application.notesController.firstSelectedNote?.uuid
+  const [noteLayout, setNoteLayout] = useState<NoteLayout>(() => loadNoteLayout(activeNoteUuid))
+  useEffect(() => {
+    setNoteLayout(loadNoteLayout(activeNoteUuid))
+  }, [activeNoteUuid])
+  const updateNoteLayout = useCallback(
+    (patch: Partial<NoteLayout>) => {
+      setNoteLayout((prev) => {
+        const next = { ...prev, ...patch }
+        saveNoteLayout(activeNoteUuid, next)
+        return next
+      })
+    },
+    [activeNoteUuid],
+  )
+  const [isPageSizeMenuOpen, setIsPageSizeMenuOpen] = useState(false)
+  const pageSizeAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isPageMarginsMenuOpen, setIsPageMarginsMenuOpen] = useState(false)
+  const pageMarginsAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isPageColumnsMenuOpen, setIsPageColumnsMenuOpen] = useState(false)
+  const pageColumnsAnchorRef = useRef<HTMLButtonElement>(null)
 
   // Format painter (Word-style) armed state + formatting marks (¶) toggle.
   const painter = useFormatPainter()
@@ -2134,6 +2170,62 @@ const ToolbarPlugin = () => {
       />
     ),
     [ToolbarButtonId.AI]: <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />,
+    // Standard Red Notes — per-note page Layout controls. These set the active
+    // note's persisted layout used when printing / exporting (see applyPrintLayout).
+    [ToolbarButtonId.PageSize]: (
+      <ToolbarButton
+        name="Page size"
+        onSelect={() => setIsPageSizeMenuOpen(!isPageSizeMenuOpen)}
+        ref={pageSizeAnchorRef}
+        className={isPageSizeMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="file-doc" className="-mt-px mr-1.5 flex-shrink-0" />
+        <span className="text-sm leading-none">{resolvePageSize(noteLayout).label}</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.PageOrientation]: (
+      <ToolbarButton
+        name={noteLayout.orientation === 'portrait' ? 'Orientation: Portrait' : 'Orientation: Landscape'}
+        onSelect={() =>
+          updateNoteLayout({ orientation: noteLayout.orientation === 'portrait' ? 'landscape' : 'portrait' })
+        }
+      >
+        <Icon
+          type={noteLayout.orientation === 'portrait' ? 'arrows-vertical' : 'line-width'}
+          className="-mt-px mr-1.5 flex-shrink-0"
+        />
+        <span className="text-sm capitalize leading-none">{noteLayout.orientation}</span>
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.PageMargins]: (
+      <ToolbarButton
+        name="Margins"
+        onSelect={() => setIsPageMarginsMenuOpen(!isPageMarginsMenuOpen)}
+        ref={pageMarginsAnchorRef}
+        className={isPageMarginsMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="line-width" className="-mt-px mr-1.5 flex-shrink-0" />
+        <span className="text-sm leading-none">
+          {noteLayout.marginId === CUSTOM_MARGIN_ID
+            ? 'Custom'
+            : MARGIN_PRESETS.find((preset) => preset.id === noteLayout.marginId)?.label ?? 'Normal'}
+        </span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.PageColumns]: (
+      <ToolbarButton
+        name="Columns"
+        onSelect={() => setIsPageColumnsMenuOpen(!isPageColumnsMenuOpen)}
+        ref={pageColumnsAnchorRef}
+        className={isPageColumnsMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="format-align-justify" className="-mt-px mr-1.5 flex-shrink-0" />
+        <span className="text-sm leading-none">{`${noteLayout.columns} col${noteLayout.columns > 1 ? 's' : ''}`}</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
     // Standalone group: opens the Customize Toolbar dialog directly from the bar.
     [ToolbarButtonId.CustomizeToolbar]: (
       <ToolbarButton name={t('customizeToolbar')} className="w-full justify-center" onSelect={openCustomizeDialog}>
@@ -3243,6 +3335,151 @@ const ToolbarPlugin = () => {
             )
           })}
         </Menu>
+      </Popover>
+      {/* Standard Red Notes — Page size dropdown (ISO A-series + US sizes). */}
+      <Popover
+        title="Page size"
+        anchorElement={pageSizeAnchorRef}
+        open={isPageSizeMenuOpen}
+        togglePopover={() => setIsPageSizeMenuOpen(!isPageSizeMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Page size" className="!px-0" onClick={() => setIsPageSizeMenuOpen(false)}>
+          {PAGE_SIZE_OPTIONS.map((option) => {
+            const isActive = noteLayout.pageSizeId === option.id
+            return (
+              <MenuItem
+                key={option.id}
+                className={classNames('md:py-1.5', isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast')}
+                onClick={() => updateNoteLayout({ pageSizeId: option.id })}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <span className="text-sm">{option.label}</span>
+                {isActive && <Icon type="check" className="ml-auto" />}
+              </MenuItem>
+            )
+          })}
+        </Menu>
+      </Popover>
+      {/* Standard Red Notes — Margins dropdown (presets + custom value). */}
+      <Popover
+        title="Margins"
+        anchorElement={pageMarginsAnchorRef}
+        open={isPageMarginsMenuOpen}
+        togglePopover={() => setIsPageMarginsMenuOpen(!isPageMarginsMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Margins" className="!px-0">
+          {MARGIN_PRESETS.map((preset) => {
+            const isActive = noteLayout.marginId === preset.id
+            return (
+              <MenuItem
+                key={preset.id}
+                className={classNames('md:py-1.5', isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast')}
+                onClick={() => {
+                  updateNoteLayout({ marginId: preset.id })
+                  setIsPageMarginsMenuOpen(false)
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <span className="text-sm">{preset.label}</span>
+                <span className="ml-auto text-xs text-passive-1">{preset.value}</span>
+                {isActive && <Icon type="check" className="ml-2" />}
+              </MenuItem>
+            )
+          })}
+        </Menu>
+        <div className="border-t border-border px-3 py-2">
+          <label className="mb-1 block text-xs text-passive-1">Custom…</label>
+          <input
+            type="text"
+            aria-label="Custom margin"
+            placeholder="e.g. 1cm, 0.5in"
+            value={noteLayout.marginId === CUSTOM_MARGIN_ID ? noteLayout.customMargin : ''}
+            onChange={(event) =>
+              updateNoteLayout({ marginId: CUSTOM_MARGIN_ID, customMargin: event.target.value })
+            }
+            onKeyDown={(event) => {
+              event.stopPropagation()
+              if (event.key === 'Enter') {
+                setIsPageMarginsMenuOpen(false)
+              }
+            }}
+            className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+          />
+        </div>
+      </Popover>
+      {/* Standard Red Notes — Columns dropdown (1 / 2 / 3 / custom). */}
+      <Popover
+        title="Columns"
+        anchorElement={pageColumnsAnchorRef}
+        open={isPageColumnsMenuOpen}
+        togglePopover={() => setIsPageColumnsMenuOpen(!isPageColumnsMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Columns">
+          {[1, 2, 3].map((count) => {
+            const isActive = noteLayout.columns === count
+            return (
+              <MenuItem
+                key={count}
+                className={classNames('md:py-1.5', isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast')}
+                onClick={() => {
+                  updateNoteLayout({ columns: count })
+                  setIsPageColumnsMenuOpen(false)
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <span className="text-sm">{count === 1 ? '1 column' : `${count} columns`}</span>
+                {isActive && <Icon type="check" className="ml-auto" />}
+              </MenuItem>
+            )
+          })}
+        </Menu>
+        <div className="border-t border-border px-3 py-2">
+          <label className="mb-1 block text-xs text-passive-1">Custom…</label>
+          <input
+            type="number"
+            min={MIN_COLUMNS}
+            max={MAX_COLUMNS}
+            aria-label="Custom column count"
+            value={noteLayout.columns}
+            onChange={(event) => {
+              const next = parseInt(event.target.value, 10)
+              if (!Number.isNaN(next)) {
+                updateNoteLayout({ columns: Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, next)) })
+              }
+            }}
+            onKeyDown={(event) => {
+              event.stopPropagation()
+              if (event.key === 'Enter') {
+                setIsPageColumnsMenuOpen(false)
+              }
+            }}
+            className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+          />
+        </div>
       </Popover>
       <Popover
         title={t('changeCase')}

@@ -42,6 +42,7 @@ import { MusicStaffNode } from './MusicStaffNode'
 import { ClockNode } from './ClockNode'
 import { BookmarkAnchorNode } from './BookmarkAnchorNode'
 import { TableOfContentsNode } from './TableOfContentsNode'
+import { PageBreakNode } from './PageBreakNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -92,6 +93,7 @@ const CommonNodes = [
   ClockNode,
   BookmarkAnchorNode,
   TableOfContentsNode,
+  PageBreakNode,
 ]
 
 export const BlockEditorNodes = CommonNodes

@@ -181,6 +181,20 @@
     page-break-after: avoid !important;
   }
 
+  // Standard Red Notes: the "Page break" block forces a hard page break when
+  // printed. The on-screen divider chrome is hidden; only the break remains.
+  // (The dynamic print-layout <style> injected before window.print() also sets
+  // this, but keeping it here means a page break still works for plain browser
+  // Ctrl+P without going through the per-note print path.)
+  .srn-page-break {
+    break-after: page !important;
+    page-break-after: always !important;
+    height: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    visibility: hidden !important;
+  }
+
   // Code blocks / preformatted text should wrap rather than overflow the page.
   #editor-content pre,
   #editor-content code {

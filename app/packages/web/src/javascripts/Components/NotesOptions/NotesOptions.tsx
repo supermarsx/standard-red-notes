@@ -47,6 +47,7 @@ import { BOOKMARK_SPOT_COMMAND } from '@/Bookmarks/bookmarkCommand'
 import { noteIsTemplate } from '@/Templates/templates'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
+import { applyPrintLayout, removePrintLayout } from '@/Components/SuperEditor/Layout/applyPrintLayout'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -137,18 +138,29 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
     })
   }, [application, notes])
 
-  // Standard Red Notes: print the active note. The actual layout (hide app
-  // chrome, show only the note title + editor content, force legible light
-  // colors) is handled by the `@media print` rules in the global stylesheet.
-  // Here we only need to dismiss the floating options menu first so it doesn't
-  // capture focus / appear in the print, then defer window.print() to the next
-  // frame so the menu has fully unmounted.
+  // Standard Red Notes: print the active note. The base layout (hide app chrome,
+  // show only the note title + editor content, force legible light colors) is
+  // handled by the static `@media print` rules in the global stylesheet. On top
+  // of that we inject the note's per-note Layout settings (page size,
+  // orientation, margins, columns + the page-break rule) right before printing
+  // and remove the injected style afterwards. We dismiss the floating options
+  // menu first so it doesn't capture focus / appear in the print, then defer
+  // window.print() to the next frame so the menu has fully unmounted.
   const printNote = useCallback(() => {
     closeMenu()
+    const noteUuid = notes[0]?.uuid
+    applyPrintLayout(noteUuid)
+    const cleanup = () => {
+      removePrintLayout()
+      window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
     requestAnimationFrame(() => {
       window.print()
+      // Fallback cleanup for browsers that don't fire `afterprint` reliably.
+      setTimeout(cleanup, 1000)
     })
-  }, [closeMenu])
+  }, [closeMenu, notes])
 
   const closeMenuAndToggleNotesList = useCallback(() => {
     const isMobileScreen = matchMedia(MutuallyExclusiveMediaQueryBreakpoints.sm).matches
