@@ -169,9 +169,11 @@ function readColors(element: HTMLElement): Colors {
 
 const ConstellationView = forwardRef<HTMLDivElement, Props>(
   ({ application, className, id, children, standalone }, ref) => {
-  const { presentPane, removePane } = useResponsiveAppPane()
+  const { presentPane } = useResponsiveAppPane()
   const [selected, setSelected] = useState<SelectedNote | null>(null)
-  const [position, setPosition] = useState<ConstellationPosition>(
+  // Constellation is an editor tab now; it no longer docks to a screen edge, so
+  // the position is fixed (kept only for the residual border styling).
+  const [position] = useState<ConstellationPosition>(
     application.getPreference(PrefKey.ConstellationPosition, 'right'),
   )
 
@@ -198,14 +200,6 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
   )
   const scopeRef = useRef(scope)
   scopeRef.current = scope
-
-  const changePosition = useCallback(
-    (next: ConstellationPosition) => {
-      setPosition(next)
-      void application.setPreference(PrefKey.ConstellationPosition, next).catch(console.error)
-    },
-    [application],
-  )
 
   const changeScopeKind = useCallback((next: ConstellationScopeKind) => {
     setScopeKind(next)
@@ -730,54 +724,18 @@ const ConstellationView = forwardRef<HTMLDivElement, Props>(
         </div>
         <div className="flex flex-shrink-0 items-center gap-0.5">
           {!standalone && (
-            <>
-              <button
-                className={classNames('rounded p-1 hover:bg-default', position === 'left' && 'text-info')}
-                onClick={() => changePosition('left')}
-                aria-label="Dock left"
-                title="Dock left"
-              >
-                <Icon type="chevron-left" size="small" />
-              </button>
-              <button
-                className={classNames('rounded p-1 hover:bg-default', position === 'bottom' && 'text-info')}
-                onClick={() => changePosition('bottom')}
-                aria-label="Dock bottom"
-                title="Dock bottom"
-              >
-                <Icon type="chevron-down" size="small" />
-              </button>
-              <button
-                className={classNames('rounded p-1 hover:bg-default', position === 'right' && 'text-info')}
-                onClick={() => changePosition('right')}
-                aria-label="Dock right"
-                title="Dock right"
-              >
-                <Icon type="chevron-right" size="small" />
-              </button>
-              <button
-                className="rounded p-1 hover:bg-default"
-                onClick={openOrFocusConstellationWindow}
-                aria-label="Open in new window"
-                title="Open in new window"
-              >
-                <Icon type="open-in" />
-              </button>
-            </>
+            <button
+              className="rounded p-1 hover:bg-default"
+              onClick={openOrFocusConstellationWindow}
+              aria-label="Open in new window"
+              title="Open in new window"
+            >
+              <Icon type="open-in" />
+            </button>
           )}
           <button className="rounded p-1 hover:bg-default" onClick={recenter} aria-label="Recenter graph" title="Recenter">
             <Icon type="fullscreen-exit" />
           </button>
-          {!standalone && (
-            <button
-              className="rounded p-1 hover:bg-default"
-              onClick={() => removePane(AppPaneId.Constellation)}
-              aria-label="Close constellation"
-              title="Close"
-            >
-              <Icon type="menu-close" />
-            </button>
-          )}
         </div>
       </div>
 
