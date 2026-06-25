@@ -41,7 +41,12 @@ import { useEffect } from 'react'
  * when online" variant instead. We never claim "synced" for a local-only save.
  */
 
-export const PREFERENCE_SYNC_TOAST_DEBOUNCE_MS = 1_000
+/**
+ * Trailing debounce window. Every pref change (or save-confirmation) pushes the
+ * toast out by this much, so a burst of setting changes collapses into a single
+ * toast fired only after ~2s of no further activity — never a spammy stream.
+ */
+export const PREFERENCE_SYNC_TOAST_DEBOUNCE_MS = 2_000
 
 export type PreferenceSyncOutcome = 'synced' | 'saved-locally'
 
@@ -143,14 +148,20 @@ export const usePreferenceSyncToast = (application: WebApplication): void => {
       })
     }
 
-    const scheduleToast = (outcome: PreferenceSyncOutcome) => {
+    // Trailing debounce: (re)start the quiet-window timer. Each call pushes the
+    // toast out, so continued activity keeps deferring it until things settle.
+    const bumpDebounce = () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+      }
+      debounceTimer = setTimeout(flush, PREFERENCE_SYNC_TOAST_DEBOUNCE_MS)
+    }
+
+    const queueOutcome = (outcome: PreferenceSyncOutcome) => {
       // A genuine "synced" confirmation supersedes a queued "saved-locally"
       // (e.g. an offline save that then reached the server in the same window).
       if (pendingOutcome !== 'synced') {
         pendingOutcome = outcome
-      }
-      if (!debounceTimer) {
-        debounceTimer = setTimeout(flush, PREFERENCE_SYNC_TOAST_DEBOUNCE_MS)
       }
     }
 
@@ -165,7 +176,14 @@ export const usePreferenceSyncToast = (application: WebApplication): void => {
         const result = reducePreferenceSync(state, source, stillDirty)
         state = result.state
         if (result.emit) {
-          scheduleToast(result.emit)
+          queueOutcome(result.emit)
+        }
+
+        // Reset the quiet window on genuine pref activity — the user changing a
+        // setting (LocalChanged) OR a save-confirmation. Hydration/retrieval
+        // emits produce no `emit` and aren't LocalChanged, so they're ignored.
+        if (result.emit || source === PayloadEmitSource.LocalChanged) {
+          bumpDebounce()
         }
       },
     )
