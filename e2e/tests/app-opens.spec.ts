@@ -48,4 +48,25 @@ test.describe('Standard Red Notes web app', () => {
       .poll(async () => page.evaluate(() => document.body.querySelectorAll('div').length), { timeout: 30_000 })
       .toBeGreaterThan(0)
   })
+
+  test('opens fully styled: app.css is loaded and the shell has real layout', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('.main-ui-view, #footer-bar').first()).toBeVisible({ timeout: 30_000 })
+
+    // Guards against the "flash of unstyled content / never opens in full" bug:
+    // the app stylesheet must actually be loaded AND the mounted root must have
+    // computed layout from it (non-zero height), not render before CSS is ready.
+    const styled = await page.evaluate(() => {
+      const sheets = Array.from(document.styleSheets)
+      const root = document.getElementById('app-group-root')
+      return {
+        sheetCount: sheets.length,
+        hasAppCss: sheets.some((sheet) => (sheet.href ?? '').includes('app.css')),
+        rootHeight: root ? Math.round(root.getBoundingClientRect().height) : 0,
+      }
+    })
+    expect(styled.sheetCount, 'no stylesheets loaded').toBeGreaterThan(0)
+    expect(styled.hasAppCss, 'app.css stylesheet not loaded').toBe(true)
+    expect(styled.rootHeight, 'app root has no laid-out height (unstyled/blank)').toBeGreaterThan(0)
+  })
 })

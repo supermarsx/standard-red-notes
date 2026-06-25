@@ -122,8 +122,13 @@
       })
     </script>
 
-    <script src="./app.js" debug="false"></script>
+    <!-- Stylesheet BEFORE the script: a render-blocking <script> placed after a
+         stylesheet link waits for that CSS to finish loading before executing,
+         so the app never measures layout (mounts React, sizes the panes) while
+         the stylesheet is still loading. Loading the script first caused a
+         forced layout / flash of unstyled content and a broken initial render. -->
     <link rel="stylesheet" media="all" href="./app.css" debug="false" />
+    <script src="./app.js" debug="false"></script>
   </head>
   <body></body>
 </html>
