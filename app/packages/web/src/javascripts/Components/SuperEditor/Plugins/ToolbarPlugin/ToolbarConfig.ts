@@ -20,6 +20,7 @@ export enum ToolbarGroupId {
   Insert = 'insert',
   AI = 'ai',
   Selection = 'selection',
+  FormatPainter = 'formatPainter',
   Toolbar = 'toolbar',
 }
 
@@ -45,6 +46,9 @@ export enum ToolbarButtonId {
   Bold = 'bold',
   Italic = 'italic',
   Underline = 'underline',
+  Strikethrough = 'strikethrough',
+  Subscript = 'subscript',
+  Superscript = 'superscript',
   InlineCode = 'inlineCode',
   Link = 'link',
   FormatPainter = 'formatPainter',
@@ -148,12 +152,8 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'Text style',
     caption: 'Text',
     buttons: [
-      { id: ToolbarButtonId.Bold, label: 'Bold', group: ToolbarGroupId.TextStyle },
-      { id: ToolbarButtonId.Italic, label: 'Italic', group: ToolbarGroupId.TextStyle },
-      { id: ToolbarButtonId.Underline, label: 'Underline', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.Link, label: 'Link', group: ToolbarGroupId.TextStyle },
-      { id: ToolbarButtonId.FormatPainter, label: 'Format painter', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.TextStyleMenu, label: 'Text style menu', group: ToolbarGroupId.TextStyle },
     ],
   },
@@ -162,6 +162,12 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'Font',
     caption: 'Font',
     buttons: [
+      { id: ToolbarButtonId.Bold, label: 'Bold', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Italic, label: 'Italic', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Underline, label: 'Underline', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Strikethrough, label: 'Strikethrough', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Subscript, label: 'Subscript', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.Superscript, label: 'Superscript', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSize, label: 'Font size', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSizeStepper, label: 'Font size +/-', group: ToolbarGroupId.ColorFont },
@@ -209,6 +215,12 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'AI',
     caption: 'AI',
     buttons: [{ id: ToolbarButtonId.AI, label: 'AI tools', group: ToolbarGroupId.AI }],
+  },
+  {
+    id: ToolbarGroupId.FormatPainter,
+    label: 'Format painter',
+    caption: 'Painter',
+    buttons: [{ id: ToolbarButtonId.FormatPainter, label: 'Format painter', group: ToolbarGroupId.FormatPainter }],
   },
   {
     id: ToolbarGroupId.Selection,
@@ -269,7 +281,11 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },
   { id: ToolbarSuperGroupId.AI, label: 'AI', groups: [ToolbarGroupId.AI] },
-  { id: ToolbarSuperGroupId.Tools, label: 'Tools', groups: [ToolbarGroupId.Selection, ToolbarGroupId.Toolbar] },
+  {
+    id: ToolbarSuperGroupId.Tools,
+    label: 'Tools',
+    groups: [ToolbarGroupId.Selection, ToolbarGroupId.FormatPainter, ToolbarGroupId.Toolbar],
+  },
 ]
 
 /**

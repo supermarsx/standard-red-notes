@@ -1654,6 +1654,30 @@ const ToolbarPlugin = () => {
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline')}
       />
     ),
+    [ToolbarButtonId.Strikethrough]: (
+      <ToolbarButton
+        name={t('strikethrough')}
+        iconName="strikethrough"
+        active={isStrikethrough}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough')}
+      />
+    ),
+    [ToolbarButtonId.Subscript]: (
+      <ToolbarButton
+        name={t('subscript')}
+        iconName="subscript"
+        active={isSubscript}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'subscript')}
+      />
+    ),
+    [ToolbarButtonId.Superscript]: (
+      <ToolbarButton
+        name={t('superscript')}
+        iconName="superscript"
+        active={isSuperscript}
+        onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'superscript')}
+      />
+    ),
     [ToolbarButtonId.InlineCode]: (
       <ToolbarButton
         name={t('inlineCode')}

@@ -113,13 +113,13 @@ describe('normalizeToolbarConfig', () => {
       groupOrder: [],
       hiddenButtonIds: [],
       buttonOrder: {
-        [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold, ToolbarButtonId.Cut, '__nope__'],
+        [ToolbarGroupId.ColorFont]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold, ToolbarButtonId.Cut, '__nope__'],
         __unknownGroup__: [ToolbarButtonId.Bold],
       },
     })
-    // Cut belongs to Clipboard, not TextStyle, so it's dropped; unknown ids too.
+    // Cut belongs to Clipboard, not the Font group, so it's dropped; unknown ids too.
     expect(normalized.buttonOrder).toEqual({
-      [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold],
+      [ToolbarGroupId.ColorFont]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold],
     })
   })
 
@@ -156,13 +156,13 @@ describe('applyToolbarConfig with new fields', () => {
     const result = applyToolbarConfig({
       groupOrder: [],
       hiddenButtonIds: [],
-      buttonOrder: { [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Link, ToolbarButtonId.Bold] },
+      buttonOrder: { [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Link, ToolbarButtonId.InlineCode] },
     })
     const textGroup = result.find((g) => g.id === ToolbarGroupId.TextStyle)
     expect(textGroup).toBeDefined()
     const ids = textGroup!.buttons.map((b) => b.id)
     expect(ids[0]).toBe(ToolbarButtonId.Link)
-    expect(ids[1]).toBe(ToolbarButtonId.Bold)
+    expect(ids[1]).toBe(ToolbarButtonId.InlineCode)
     // All original buttons still present.
     const defaultTextIds = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.TextStyle)!.buttons.map(
       (b) => b.id,
