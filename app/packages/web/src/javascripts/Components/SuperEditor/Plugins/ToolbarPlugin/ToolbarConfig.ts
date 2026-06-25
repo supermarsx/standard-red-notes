@@ -19,6 +19,7 @@ export enum ToolbarGroupId {
   ParagraphList = 'paragraphList',
   Insert = 'insert',
   AI = 'ai',
+  Toolbar = 'toolbar',
 }
 
 /** Stable button ids. Keep in sync with the render map in ToolbarPlugin.tsx. */
@@ -47,6 +48,8 @@ export enum ToolbarButtonId {
   HighlightColor = 'highlightColor',
   DecreaseFontSize = 'decreaseFontSize',
   IncreaseFontSize = 'increaseFontSize',
+  /** Combined A-/A+ stepper that keeps decrease + increase on one line. */
+  FontSizeStepper = 'fontSizeStepper',
   FontFamily = 'fontFamily',
   FontSize = 'fontSize',
   Typography = 'typography',
@@ -65,10 +68,17 @@ export enum ToolbarButtonId {
   FormattingMarks = 'formattingMarks',
   // Insert
   InsertMenu = 'insertMenu',
+  InsertTable = 'insertTable',
+  InsertImageFile = 'insertImageFile',
+  InsertDrawing = 'insertDrawing',
+  InsertEquation = 'insertEquation',
+  InsertFootnote = 'insertFootnote',
   NoteFromSelection = 'noteFromSelection',
   Dictation = 'dictation',
   // AI
   AI = 'ai',
+  // Toolbar
+  CustomizeToolbar = 'customizeToolbar',
 }
 
 export type ToolbarButtonDescriptor = {
@@ -150,8 +160,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSize, label: 'Font size', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.DecreaseFontSize, label: 'Decrease font size', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.IncreaseFontSize, label: 'Increase font size', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.FontSizeStepper, label: 'Font size +/-', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Typography, label: 'Typography (emphasis, outline, spacing)', group: ToolbarGroupId.ColorFont },
@@ -182,6 +191,11 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     caption: 'Insert',
     buttons: [
       { id: ToolbarButtonId.InsertMenu, label: 'Insert menu', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.InsertTable, label: 'Insert table', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.InsertImageFile, label: 'Insert image or file', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.InsertDrawing, label: 'Insert drawing', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.InsertEquation, label: 'Insert equation', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.InsertFootnote, label: 'Insert footnote', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.NoteFromSelection, label: 'Create note from selection', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.Dictation, label: 'Dictate (speech-to-text)', group: ToolbarGroupId.Insert },
     ],
@@ -191,6 +205,12 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'AI',
     caption: 'AI',
     buttons: [{ id: ToolbarButtonId.AI, label: 'AI tools', group: ToolbarGroupId.AI }],
+  },
+  {
+    id: ToolbarGroupId.Toolbar,
+    label: 'Toolbar',
+    caption: 'Toolbar',
+    buttons: [{ id: ToolbarButtonId.CustomizeToolbar, label: 'Customize toolbar', group: ToolbarGroupId.Toolbar }],
   },
 ]
 

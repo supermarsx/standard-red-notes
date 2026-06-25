@@ -106,6 +106,7 @@ import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarCo
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
 import {
+  BLOCK_CATALOG,
   BlockCatalogContext,
   filterBlockCatalog,
   getFullBlockCatalog,
@@ -229,6 +230,13 @@ const FONT_FAMILIES: { name: string; value: string | null }[] = [
  * button-heavy group renders as a compact 2–3 row block. `rows === 1` (or fewer
  * buttons than rows) collapses to a single row, preserving the prior behavior.
  */
+/** Block-catalog icon name keyed by catalog `key`, for the toolbar's direct
+ * "quick insert" buttons (Table, image/file, drawing, equation, footnote) so
+ * their icons stay in sync with the Insert menu / slash picker. */
+const BLOCK_ICON_BY_KEY: Record<string, string> = Object.fromEntries(
+  BLOCK_CATALOG.map((entry) => [entry.key, entry.iconName]),
+)
+
 function splitIntoRows<T>(items: T[], rows: number): T[][] {
   const rowCount = Math.max(1, Math.min(rows, items.length || 1))
   if (rowCount <= 1) {
@@ -1723,15 +1731,17 @@ const ToolbarPlugin = () => {
         </button>
       </div>
     ),
-    [ToolbarButtonId.DecreaseFontSize]: (
-      <ToolbarButton name={t('decreaseFontSize')} onSelect={() => stepFontSize(-1)}>
-        <span className="text-xs font-semibold leading-none">A&minus;</span>
-      </ToolbarButton>
-    ),
-    [ToolbarButtonId.IncreaseFontSize]: (
-      <ToolbarButton name={t('increaseFontSize')} onSelect={() => stepFontSize(1)}>
-        <span className="text-sm font-semibold leading-none">A+</span>
-      </ToolbarButton>
+    // A-/A+ rendered as one connected cell so they always stay together on a
+    // single line (never split across the group's wrapped rows).
+    [ToolbarButtonId.FontSizeStepper]: (
+      <div className="flex flex-shrink-0 items-center" key="fontSizeStepper">
+        <ToolbarButton name={t('decreaseFontSize')} onSelect={() => stepFontSize(-1)}>
+          <span className="text-xs font-semibold leading-none">A&minus;</span>
+        </ToolbarButton>
+        <ToolbarButton name={t('increaseFontSize')} onSelect={() => stepFontSize(1)}>
+          <span className="text-sm font-semibold leading-none">A+</span>
+        </ToolbarButton>
+      </div>
     ),
     [ToolbarButtonId.FontFamily]: (
       <ToolbarButton
@@ -1867,6 +1877,43 @@ const ToolbarPlugin = () => {
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ) : null,
+    // Quick-insert buttons: one-tap access to the most-used blocks, each reusing
+    // the shared block catalog so behavior matches the Insert menu / slash picker.
+    [ToolbarButtonId.InsertTable]: canShowAllItems ? (
+      <ToolbarButton
+        name={translateBlockName('Table', t)}
+        iconName={BLOCK_ICON_BY_KEY['Table']}
+        onSelect={() => insertCatalogBlock('Table')}
+      />
+    ) : null,
+    [ToolbarButtonId.InsertImageFile]: canShowAllItems ? (
+      <ToolbarButton
+        name={translateBlockName('Upload file', t)}
+        iconName={BLOCK_ICON_BY_KEY['UploadFile']}
+        onSelect={() => insertCatalogBlock('UploadFile')}
+      />
+    ) : null,
+    [ToolbarButtonId.InsertDrawing]: canShowAllItems ? (
+      <ToolbarButton
+        name={translateBlockName('Drawing', t)}
+        iconName={BLOCK_ICON_BY_KEY['Drawing']}
+        onSelect={() => insertCatalogBlock('Drawing')}
+      />
+    ) : null,
+    [ToolbarButtonId.InsertEquation]: canShowAllItems ? (
+      <ToolbarButton
+        name={translateBlockName('Equation', t)}
+        iconName={BLOCK_ICON_BY_KEY['Equation']}
+        onSelect={() => insertCatalogBlock('Equation')}
+      />
+    ) : null,
+    [ToolbarButtonId.InsertFootnote]: canShowAllItems ? (
+      <ToolbarButton
+        name={translateBlockName('Footnote', t)}
+        iconName={BLOCK_ICON_BY_KEY['Footnote']}
+        onSelect={() => insertCatalogBlock('Footnote')}
+      />
+    ) : null,
     // Live speech-to-text toggle. DictationButton encapsulates the existing STT
     // start/stop logic and self-hides unless the user opted in AND the browser
     // supports SpeechRecognition, so it renders null when unavailable.
@@ -1887,6 +1934,10 @@ const ToolbarPlugin = () => {
       />
     ),
     [ToolbarButtonId.AI]: <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />,
+    // Standalone group: opens the Customize Toolbar dialog directly from the bar.
+    [ToolbarButtonId.CustomizeToolbar]: (
+      <ToolbarButton name={t('customizeToolbar')} iconName="settings" onSelect={openCustomizeDialog} />
+    ),
   }
 
   // Resolve the config into the ordered, filtered groups to render, then emit
@@ -1913,6 +1964,17 @@ const ToolbarPlugin = () => {
       openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
     }),
     [showModal, editor, activeEditor, t],
+  )
+
+  // Direct "quick insert" used by the Insert group's per-block buttons: look the
+  // block up in the same catalog the Insert menu uses and run its onSelect, so
+  // the buttons and the menu can never drift.
+  const insertCatalogBlock = useCallback(
+    (key: string) => {
+      const entry = getFullBlockCatalog(editor).find((candidate) => candidate.key === key)
+      entry?.onSelect(editor, blockCatalogContext)
+    },
+    [editor, blockCatalogContext],
   )
 
   const insertMenuCategories = useMemo(
