@@ -55,4 +55,6 @@ export const TYPES = {
   ApiGateway_GRPCSyncingClient: Symbol.for('ApiGateway_GRPCSyncingClient'),
   // Standard Red Notes: optional server-mediated "Publish note to GitHub" use-case.
   ApiGateway_GitHubPublishService: Symbol.for('ApiGateway_GitHubPublishService'),
+  // Standard Red Notes: server-side WEB proxy (fetch + search) for the browser AI agent.
+  ApiGateway_WebService: Symbol.for('ApiGateway_WebService'),
 }

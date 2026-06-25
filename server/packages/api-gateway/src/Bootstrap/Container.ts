@@ -37,6 +37,7 @@ import { DomainEventFactory } from '../Event/DomainEventFactory'
 import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
+import { WebFetchLike, WebService } from '../Service/Web/WebService'
 
 export class ContainerConfigLoader {
   async load(configuration?: {
@@ -216,6 +217,22 @@ export class ContainerConfigLoader {
     container
       .bind<GitHubPublishService>(TYPES.ApiGateway_GitHubPublishService)
       .toConstantValue(new GitHubPublishService(globalThis.fetch.bind(globalThis) as unknown as FetchLike))
+
+    // Standard Red Notes: server-side WEB proxy (fetch + search) for the browser
+    // AI agent. fetch() has an SSRF guard (private/loopback/metadata hosts are
+    // rejected, see WebService.assertPublicHttpUrl); search() uses a configurable
+    // backend (SEARCH_PROVIDER + SEARCH_API_URL + SEARCH_API_KEY) and returns an
+    // empty result set (never 500) when unconfigured. Both routes are
+    // authenticated by the WebController so this is not an open proxy.
+    container.bind<WebService>(TYPES.ApiGateway_WebService).toConstantValue(
+      new WebService(globalThis.fetch.bind(globalThis) as unknown as WebFetchLike, {
+        searchProvider: env.get('SEARCH_PROVIDER', true) || undefined,
+        searchApiUrl: env.get('SEARCH_API_URL', true) || undefined,
+        searchApiKey: env.get('SEARCH_API_KEY', true) || undefined,
+        maxContentChars: env.get('WEB_FETCH_MAX_CHARS', true) ? +env.get('WEB_FETCH_MAX_CHARS', true) : undefined,
+        fetchTimeoutMs: env.get('WEB_FETCH_TIMEOUT_MS', true) ? +env.get('WEB_FETCH_TIMEOUT_MS', true) : undefined,
+      }),
+    )
 
     // Middleware
     container
