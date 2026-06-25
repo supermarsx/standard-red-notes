@@ -2253,11 +2253,17 @@ const ToolbarPlugin = () => {
                   // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
                   // so a button-heavy group becomes a tidy 2–3 row block instead
                   // of a long single row.
-                  // To keep every group on one line, pack a group's buttons into
-                  // up to 3 rows by default (≈2 columns) so wide groups become
-                  // tidy compact blocks. An explicit per-group `rows` wins.
-                  const autoRows = Math.min(3, Math.max(1, Math.ceil(group.buttons.length / 2)))
-                  const rows = Math.min(3, Math.max(1, group.rows ?? autoRows))
+                  // On desktop every group is a uniform three-icon-tall block so the
+                  // segmented toolbar keeps a consistent height regardless of how many
+                  // buttons a group holds: buttons pack top-heavy into 3 rows and the
+                  // button area reserves the height of three icon-button rows (≈38px
+                  // each + two 2px gaps = 118px) via md:min-height, with shorter groups
+                  // leaving empty space below. Icons are left-aligned within the group.
+                  const TOOLBAR_GROUP_ROWS = 3
+                  // Default to a full 3-row pack; a per-group override (Customize
+                  // Toolbar) still tunes how buttons stack, while md:min-height keeps
+                  // every group the same height regardless.
+                  const rows = Math.min(TOOLBAR_GROUP_ROWS, Math.max(1, group.rows ?? TOOLBAR_GROUP_ROWS))
                   const buttonRows = splitIntoRows(group.buttons, rows)
                   return (
                     <div
@@ -2266,9 +2272,9 @@ const ToolbarPlugin = () => {
                       aria-label={group.label}
                       className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
                     >
-                      <div className="flex flex-col gap-0.5">
+                      <div className="flex flex-col items-start gap-0.5 md:min-h-[7.375rem]">
                         {buttonRows.map((rowButtons, rowIndex) => (
-                          <div key={rowIndex} className="flex items-center justify-center gap-0.5">
+                          <div key={rowIndex} className="flex items-center justify-start gap-0.5">
                             {rowButtons.map((button) => (
                               <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
                             ))}
@@ -2277,7 +2283,7 @@ const ToolbarPlugin = () => {
                       </div>
                       <span
                         aria-hidden
-                        className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                        className="mt-px hidden select-none truncate text-left text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
                       >
                         {group.caption ?? group.label}
                       </span>
