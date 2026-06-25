@@ -41,6 +41,12 @@ type Props = {
 
 const PADDING_BASE_PX = 14
 const PADDING_PER_LEVEL_PX = 21
+// Sub-tags nest to any depth, but each level adds PADDING_PER_LEVEL_PX of indent
+// which would push deep tags (e.g. 50 levels) off-screen. Cap the VISUAL indent
+// so deeply-nested tags stay readable/clickable; the collapse/expand tree still
+// conveys the hierarchy beyond the cap.
+const MAX_INDENT_LEVELS = 8
+const indentPx = (lvl: number): number => Math.min(lvl, MAX_INDENT_LEVELS) * PADDING_PER_LEVEL_PX + PADDING_BASE_PX
 
 export const TagsListItem: FunctionComponent<Props> = observer(
   ({ tag, type, features, navigationController, level, onContextMenu, linkingController }) => {
@@ -379,7 +385,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             },
           ])}
           style={{
-            paddingLeft: `${level * PADDING_PER_LEVEL_PX + PADDING_BASE_PX}px`,
+            paddingLeft: `${indentPx(level)}px`,
           }}
           onContextMenu={(e) => {
             e.preventDefault()
@@ -490,7 +496,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           <div
             className="tag overflow-hidden"
             style={{
-              paddingLeft: `${(level + 1) * PADDING_PER_LEVEL_PX + PADDING_BASE_PX}px`,
+              paddingLeft: `${indentPx(level + 1)}px`,
             }}
           >
             <div className="tag-info">

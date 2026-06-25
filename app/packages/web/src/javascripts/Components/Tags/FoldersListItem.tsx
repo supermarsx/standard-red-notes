@@ -37,6 +37,12 @@ type Props = {
 
 const PADDING_BASE_PX = 14
 const PADDING_PER_LEVEL_PX = 21
+// Folders nest to any depth, but each level adds PADDING_PER_LEVEL_PX of indent
+// which would push deep folders (e.g. 50 levels) off-screen. Cap the VISUAL
+// indent so deeply-nested folders stay readable/clickable; the collapse/expand
+// tree still conveys the hierarchy beyond the cap.
+const MAX_INDENT_LEVELS = 8
+const indentPx = (lvl: number): number => Math.min(lvl, MAX_INDENT_LEVELS) * PADDING_PER_LEVEL_PX + PADDING_BASE_PX
 const TYPE: TagListSectionType = 'folders'
 
 export const FoldersListItem: FunctionComponent<Props> = observer(
@@ -295,7 +301,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
           }}
           ref={folderRef}
           style={{
-            paddingLeft: `${level * PADDING_PER_LEVEL_PX + PADDING_BASE_PX}px`,
+            paddingLeft: `${indentPx(level)}px`,
           }}
           onContextMenu={(e) => {
             e.preventDefault()
@@ -401,7 +407,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
           <div
             className="tag overflow-hidden"
             style={{
-              paddingLeft: `${(level + 1) * PADDING_PER_LEVEL_PX + PADDING_BASE_PX}px`,
+              paddingLeft: `${indentPx(level + 1)}px`,
             }}
           >
             <div className="tag-info">
