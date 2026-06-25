@@ -29,6 +29,22 @@ on:
 permissions:
   contents: write
 
+env:
+  # The `decrypt` git dependency (github:standardnotes/decrypt) ships a Yarn
+  # Classic v1 lockfile, so Yarn Berry bootstraps Yarn 1.22.x to pack it during
+  # `yarn install`. Two Classic-only problems break that bootstrap:
+  #   * decrypt declares `engines.node: ">=14.0.0 <17.0.0"`, which Classic
+  #     enforces and aborts on against the runner's Node 22 ("incompatible
+  #     module"). YARN_IGNORE_ENGINES makes Classic skip the check.
+  #   * decrypt's devDependencies include node-sass@7, which cannot compile on
+  #     Node 22. YARN_PRODUCTION makes Classic skip devDependencies entirely;
+  #     packing only needs the committed prebuilt `dist/decrypt.html`.
+  # These env vars are read by the bootstrapped Yarn Classic; Yarn Berry (which
+  # packs the other git deps, e.g. react-native-keychain) ignores them — our
+  # vendored Yarn 3.2.1 release is patched to allowlist them instead of erroring.
+  YARN_IGNORE_ENGINES: 'true'
+  YARN_PRODUCTION: 'true'
+
 defaults:
   run:
     shell: bash
