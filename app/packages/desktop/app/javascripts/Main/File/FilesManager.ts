@@ -255,7 +255,15 @@ export class FilesManager implements FilesManagerInterface {
 
             stream.on('error', tryReject)
 
-            const filepath = path.join(dest, entry.fileName)
+            // Zip-slip guard: an extension package is fetched from synced
+            // component content, so a malicious/compromised package could contain
+            // an entry like "../../../.bashrc" or an absolute path. Resolve the
+            // target and refuse anything that escapes the destination directory.
+            const resolvedDest = path.resolve(dest)
+            const filepath = path.resolve(resolvedDest, entry.fileName)
+            if (filepath !== resolvedDest && !filepath.startsWith(resolvedDest + path.sep)) {
+              return tryReject(new Error(`Refusing to extract zip entry outside destination: ${entry.fileName}`))
+            }
 
             try {
               await this.ensureDirectoryExists(path.dirname(filepath))
