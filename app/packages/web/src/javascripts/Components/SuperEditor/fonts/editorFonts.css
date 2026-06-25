@@ -1,0 +1,55 @@
+/*
+ * Standard Red Notes: self-hosted editor web fonts. The woff2 files live in
+ * ./files and are emitted to assets/fonts/ by webpack's asset/resource rule
+ * (imported via fontCatalog.ts), so the editor's font picker works fully
+ * offline with no CDN / remote font requests.
+ */
+
+/* ---- Sans-serif ---------------------------------------------------------- */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('./files/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/inter-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 300; font-display: swap; src: url('./files/manrope-300.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/manrope-400.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/manrope-500.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/manrope-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Fira Sans'; font-style: normal; font-weight: 300; font-display: swap; src: url('./files/fira-sans-300.woff2') format('woff2'); }
+@font-face { font-family: 'Fira Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/fira-sans-400.woff2') format('woff2'); }
+@font-face { font-family: 'Fira Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/fira-sans-500.woff2') format('woff2'); }
+@font-face { font-family: 'Fira Sans'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/fira-sans-700.woff2') format('woff2'); }
+
+/* ---- Serif --------------------------------------------------------------- */
+@font-face { font-family: 'IBM Plex Serif'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/ibm-plex-serif-400.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Serif'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/ibm-plex-serif-500.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Serif'; font-style: normal; font-weight: 600; font-display: swap; src: url('./files/ibm-plex-serif-600.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Serif'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/ibm-plex-serif-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Rokkitt'; font-style: normal; font-weight: 300; font-display: swap; src: url('./files/rokkitt-300.woff2') format('woff2'); }
+@font-face { font-family: 'Rokkitt'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/rokkitt-400.woff2') format('woff2'); }
+@font-face { font-family: 'Rokkitt'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/rokkitt-500.woff2') format('woff2'); }
+@font-face { font-family: 'Rokkitt'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/rokkitt-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Coustard'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/coustard-400.woff2') format('woff2'); }
+@font-face { font-family: 'Coustard'; font-style: normal; font-weight: 900; font-display: swap; src: url('./files/coustard-900.woff2') format('woff2'); }
+
+/* ---- Monospace ----------------------------------------------------------- */
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/jetbrains-mono-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/jetbrains-mono-500.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/jetbrains-mono-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Inconsolata'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/inconsolata-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inconsolata'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/inconsolata-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inconsolata'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/inconsolata-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Source Code Pro'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/source-code-pro-400.woff2') format('woff2'); }
+@font-face { font-family: 'Source Code Pro'; font-style: normal; font-weight: 500; font-display: swap; src: url('./files/source-code-pro-500.woff2') format('woff2'); }
+@font-face { font-family: 'Source Code Pro'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/source-code-pro-700.woff2') format('woff2'); }
+
+/* ---- Handwriting --------------------------------------------------------- */
+@font-face { font-family: 'Caveat'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/caveat-400.woff2') format('woff2'); }
+@font-face { font-family: 'Caveat'; font-style: normal; font-weight: 700; font-display: swap; src: url('./files/caveat-700.woff2') format('woff2'); }
+
+@font-face { font-family: 'Patrick Hand'; font-style: normal; font-weight: 400; font-display: swap; src: url('./files/patrick-hand-400.woff2') format('woff2'); }

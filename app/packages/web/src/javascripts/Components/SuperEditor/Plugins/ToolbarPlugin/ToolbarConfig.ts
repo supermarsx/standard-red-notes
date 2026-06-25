@@ -60,6 +60,7 @@ export enum ToolbarButtonId {
   IncreaseFontSize = 'increaseFontSize',
   /** Combined A-/A+ stepper that keeps decrease + increase on one line. */
   FontSizeStepper = 'fontSizeStepper',
+  FontWeight = 'fontWeight',
   FontFamily = 'fontFamily',
   FontSize = 'fontSize',
   Typography = 'typography',
@@ -171,6 +172,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.FontFamily, label: 'Font family', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSize, label: 'Font size', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.FontSizeStepper, label: 'Font size +/-', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.FontWeight, label: 'Font weight', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Typography, label: 'Typography (emphasis, outline, spacing)', group: ToolbarGroupId.ColorFont },

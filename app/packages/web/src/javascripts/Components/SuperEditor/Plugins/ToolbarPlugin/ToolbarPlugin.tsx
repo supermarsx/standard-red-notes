@@ -117,6 +117,7 @@ import {
   ToolbarGroupId,
   ToolbarSuperGroupId,
 } from './ToolbarConfig'
+import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
 import {
@@ -225,18 +226,6 @@ const COLOR_PRESETS = [
   '#2563eb',
   '#7c3aed',
   '#db2777',
-]
-
-const FONT_FAMILIES: { name: string; value: string | null }[] = [
-  { name: 'Default', value: null },
-  { name: 'Sans-serif', value: 'sans-serif' },
-  { name: 'Serif', value: 'serif' },
-  { name: 'Monospace', value: 'monospace' },
-  { name: 'Arial', value: 'Arial, sans-serif' },
-  { name: 'Georgia', value: 'Georgia, serif' },
-  { name: 'Times New Roman', value: '"Times New Roman", serif' },
-  { name: 'Courier New', value: '"Courier New", monospace' },
-  { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
 ]
 
 /**
@@ -511,6 +500,12 @@ const ToolbarPlugin = () => {
 
   const [isFontFamilyMenuOpen, setIsFontFamilyMenuOpen] = useState(false)
   const fontFamilyAnchorRef = useRef<HTMLButtonElement>(null)
+  // Free-text search box at the top of the (categorized) font-family picker.
+  const [fontQuery, setFontQuery] = useState('')
+
+  // Per-font weight dropdown — the available weights depend on the selected font.
+  const [isFontWeightMenuOpen, setIsFontWeightMenuOpen] = useState(false)
+  const fontWeightAnchorRef = useRef<HTMLButtonElement>(null)
 
   const [isFontSizeMenuOpen, setIsFontSizeMenuOpen] = useState(false)
   const fontSizeAnchorRef = useRef<HTMLButtonElement>(null)
@@ -582,6 +577,7 @@ const ToolbarPlugin = () => {
   const selectionMoreAnchorRef = useRef<HTMLButtonElement>(null)
 
   const [currentFontFamily, setCurrentFontFamily] = useState<string>('')
+  const [currentFontWeight, setCurrentFontWeight] = useState<string>('')
   const [currentFontSize, setCurrentFontSize] = useState<number>(16)
 
   // Mirror the detected size into the editable field (unless the user is mid-edit
@@ -748,6 +744,7 @@ const ToolbarPlugin = () => {
     setIsHighlight(selection.hasFormat('highlight'))
 
     setCurrentFontFamily($getSelectionStyleValueForProperty(selection, 'font-family', ''))
+    setCurrentFontWeight($getSelectionStyleValueForProperty(selection, 'font-weight', ''))
     setCurrentFontSize(parseFontSize($getSelectionStyleValueForProperty(selection, 'font-size', '16px')))
 
     // Update links
@@ -1834,9 +1831,21 @@ const ToolbarPlugin = () => {
           className="max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-none"
           style={{ fontFamily: currentFontFamily || undefined }}
         >
-          {FONT_FAMILIES.find((font) =>
-            font.value === null ? currentFontFamily === '' : currentFontFamily === font.value,
-          )?.name ?? t('customFontFamily')}
+          {findFontByCss(currentFontFamily).name}
+        </span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.FontWeight]: (
+      <ToolbarButton
+        name={t('fontFamily')}
+        onSelect={() => setIsFontWeightMenuOpen(!isFontWeightMenuOpen)}
+        ref={fontWeightAnchorRef}
+        className={isFontWeightMenuOpen ? 'md:bg-default' : ''}
+      >
+        <span className="max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-none">
+          {findFontByCss(currentFontFamily).weights.find((wt) => String(wt.value) === currentFontWeight)?.label ??
+            'Regular'}
         </span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
@@ -2928,25 +2937,103 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel={t('fontFamily')} className="!px-0" onClick={() => setIsFontFamilyMenuOpen(false)}>
-          {FONT_FAMILIES.map((font) => {
-            const isActive =
-              font.value === null ? currentFontFamily === '' : currentFontFamily === font.value
+        <div className="px-2 pb-1.5 pt-1">
+          <div className="flex items-center gap-2 rounded-md border border-border bg-default px-2 py-1.5">
+            <Icon type="search" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
+            <input
+              type="text"
+              autoFocus
+              value={fontQuery}
+              onChange={(event) => setFontQuery(event.target.value)}
+              onMouseDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              placeholder="Search fonts…"
+              aria-label={t('fontFamily')}
+              className="w-full bg-transparent text-sm text-text placeholder:text-passive-1 focus:outline-none"
+            />
+            {fontQuery && (
+              <button
+                type="button"
+                aria-label={t('clearSearch')}
+                className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setFontQuery('')}
+              >
+                <Icon type="close" size="custom" className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-h-72 overflow-y-auto">
+          {groupFontsByCategory(filterFonts(fontQuery)).map((group) => (
+            <Fragment key={group.category}>
+              <div
+                aria-hidden
+                className="select-none px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-passive-1"
+              >
+                {group.category}
+              </div>
+              {group.fonts.map((font) => {
+                const isActive =
+                  font.css === null ? currentFontFamily === '' : currentFontFamily === font.css
+                return (
+                  <button
+                    key={font.name}
+                    type="button"
+                    className={classNames(
+                      'flex w-full items-center overflow-hidden px-3 py-2 text-left',
+                      isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast',
+                    )}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      applyStyleText({ 'font-family': font.css })
+                      setIsFontFamilyMenuOpen(false)
+                      setFontQuery('')
+                    }}
+                  >
+                    <span
+                      className="overflow-hidden text-ellipsis whitespace-nowrap"
+                      style={{ fontFamily: font.css ?? undefined }}
+                    >
+                      {font.name}
+                    </span>
+                    {isActive && <Icon type="check" className="ml-auto" />}
+                  </button>
+                )
+              })}
+            </Fragment>
+          ))}
+        </div>
+      </Popover>
+      <Popover
+        title={t('fontFamily')}
+        anchorElement={fontWeightAnchorRef}
+        open={isFontWeightMenuOpen}
+        togglePopover={() => setIsFontWeightMenuOpen(!isFontWeightMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel={t('fontFamily')} className="!px-0" onClick={() => setIsFontWeightMenuOpen(false)}>
+          {findFontByCss(currentFontFamily).weights.map((wt) => {
+            const isActive = String(wt.value) === currentFontWeight
             return (
               <MenuItem
-                key={font.name}
+                key={wt.value}
                 className={classNames(
                   'overflow-hidden md:py-2',
                   isActive ? '!bg-info !text-info-contrast' : 'hover:bg-contrast',
                 )}
-                onClick={() => applyStyleText({ 'font-family': font.value })}
+                onClick={() => applyStyleText({ 'font-weight': String(wt.value) })}
                 onMouseDown={(e) => e.preventDefault()}
               >
-                <span
-                  className="overflow-hidden text-ellipsis whitespace-nowrap"
-                  style={{ fontFamily: font.value ?? undefined }}
-                >
-                  {font.name}
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap" style={{ fontWeight: wt.value }}>
+                  {wt.label}
                 </span>
                 {isActive && <Icon type="check" className="ml-auto" />}
               </MenuItem>
