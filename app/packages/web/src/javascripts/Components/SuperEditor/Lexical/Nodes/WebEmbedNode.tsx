@@ -97,10 +97,17 @@ const IFRAME_ALLOW = 'clipboard-write; fullscreen; encrypted-media; picture-in-p
  * we surface the tradeoffs up front and require an explicit opt-in to load.
  */
 const RISK_WARNING =
-  'Embedding an external website can expose you to tracking and third-party scripts. ' +
-  'The page is loaded directly from that site, so it is not end-to-end encrypted or protected by Standard Notes. ' +
-  'Many sites block embedding (via X-Frame-Options or Content-Security-Policy), so it may not load. ' +
-  'Only embed websites you trust.'
+  'Embedding a website can be dangerous. It loads third-party code directly inside the app, which can track you, ' +
+  'run arbitrary scripts, and may attempt to compromise the application or your privacy. The page is loaded straight ' +
+  'from that site, so it is not end-to-end encrypted or protected by Standard Notes. ' +
+  'Use website embeds sparingly and only when strictly necessary — prefer safer options first, such as a plain link, ' +
+  'a screenshot/image, or a built-in embed (YouTube, Vimeo, tweet) where available. ' +
+  'Only embed sites you fully trust (and note that many block embedding, so it may not load).'
+
+/** Short caution shown at the insert/edit step, before a URL is even added. */
+const INSERT_WARNING =
+  'Caution: embedding an external website runs third-party code in the app and can hurt your privacy and security. ' +
+  'Use it sparingly and only when truly needed — prefer a link, an image, or a built-in embed instead.'
 
 function clampHeight(height: number | undefined): number {
   if (!height || Number.isNaN(height)) {
@@ -156,6 +163,10 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           <span className="font-semibold">Embed website</span>
         </div>
         <div className="p-2">
+          <div className="mb-2 flex items-start gap-2 rounded border border-warning bg-warning-faded p-2 text-xs text-warning">
+            <Icon type="warning" className="mt-0.5 flex-shrink-0" />
+            <p className="break-words">{INSERT_WARNING}</p>
+          </div>
           <input
             className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
             placeholder="Paste a website URL (https://…) to embed"
@@ -216,10 +227,10 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
         /* Risk-alert placeholder card: shown FIRST instead of an auto-loaded
            iframe. The user must explicitly opt in to loading external content. */
         <div className="p-3">
-          <div className="flex items-start gap-2 rounded border border-warning bg-contrast p-2 text-sm text-foreground">
+          <div className="flex items-start gap-2 rounded border border-warning bg-warning-faded p-2 text-sm text-foreground">
             <Icon type="warning" className="mt-0.5 flex-shrink-0 text-warning" />
             <div>
-              <div className="font-semibold">Load external website?</div>
+              <div className="font-semibold text-warning">Embedding a website can be dangerous</div>
               <p className="mt-1 break-words text-passive-0">{RISK_WARNING}</p>
               <p className="mt-1 break-all text-xs text-passive-1">{safeUrl}</p>
             </div>
