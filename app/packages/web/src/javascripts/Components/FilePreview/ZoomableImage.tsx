@@ -13,6 +13,7 @@ import {
   zoomToPoint,
   ZoomTransform,
 } from './imageZoomTransform'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   objectUrl: string
@@ -31,6 +32,7 @@ const DOUBLE_CLICK_ZOOM = 2
  * - +/- buttons, a Fit button and a 1:1 button mirror the PDF viewer's controls.
  */
 const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
+  const { t } = useTranslation('files')
   const viewportRef = useRef<HTMLDivElement>(null)
   const imageNaturalSize = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
 
@@ -269,12 +271,12 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
 
       {/* Controls */}
       <div className="pointer-events-none absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded border border-solid border-border bg-default px-2 py-1 shadow-main">
-        <StyledTooltip label="Zoom out" className="!z-modal">
+        <StyledTooltip label={t('zoomOut')} className="!z-modal">
           <button
             className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
             onClick={() => zoomAtCenter(1 / ZOOM_BUTTON_FACTOR)}
             disabled={transform.scale <= MIN_IMAGE_SCALE}
-            aria-label="Zoom out"
+            aria-label={t('zoomOut')}
           >
             <Icon type="subtract" className="text-neutral" />
           </button>
@@ -282,27 +284,27 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
         <button
           className="pointer-events-auto min-w-[3.5rem] rounded px-1.5 py-1 text-center text-sm text-neutral hover:bg-contrast"
           onClick={resetToActualSize}
-          aria-label="Reset to actual size"
-          title="Reset to 100%"
+          aria-label={t('resetToActualSize')}
+          title={t('resetTo100')}
         >
           {percent}%
         </button>
-        <StyledTooltip label="Zoom in" className="!z-modal">
+        <StyledTooltip label={t('zoomIn')} className="!z-modal">
           <button
             className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
             onClick={() => zoomAtCenter(ZOOM_BUTTON_FACTOR)}
             disabled={transform.scale >= MAX_IMAGE_SCALE}
-            aria-label="Zoom in"
+            aria-label={t('zoomIn')}
           >
             <Icon type="add" className="text-neutral" />
           </button>
         </StyledTooltip>
         <div className="mx-1 h-5 w-px bg-border" />
-        <StyledTooltip label="Fit to screen" className="!z-modal">
+        <StyledTooltip label={t('fitToScreen')} className="!z-modal">
           <button
             className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
             onClick={fitAndResume}
-            aria-label="Fit to screen"
+            aria-label={t('fitToScreen')}
           >
             <Icon type="arrows-vertical" className="rotate-45 text-neutral" />
           </button>

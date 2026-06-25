@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Menu from '../Menu/Menu'
 import RadioButtonGroup from '@/Components/RadioButtonGroup/RadioButtonGroup'
 import ManyVaultSelectionMenu from './ManyVaultSelectionMenu'
@@ -12,6 +13,7 @@ type SettingsMode = 'many' | 'single'
 
 const VaultSelectionMenu = () => {
   const application = useApplication()
+  const { t } = useTranslation('sharing')
 
   const [mode, setMode] = useState<SettingsMode>(
     application.vaultDisplayService.isInExclusiveDisplayMode() ? 'single' : 'many',
@@ -28,11 +30,11 @@ const VaultSelectionMenu = () => {
   }
 
   return (
-    <Menu a11yLabel="Vault selection menu">
+    <Menu a11yLabel={t('vaultSelectionMenu')}>
       <RadioButtonGroup
         items={[
-          { label: 'Multiple', value: 'many' },
-          { label: 'One', value: 'single' },
+          { label: t('selectionModeMultiple'), value: 'many' },
+          { label: t('selectionModeOne'), value: 'single' },
         ]}
         value={mode}
         onChange={(value) => changeSelectionMode(value)}
@@ -47,7 +49,7 @@ const VaultSelectionMenu = () => {
           application.preferencesController.openPreferences('vaults')
         }}
       >
-        Open vault settings
+        {t('openVaultSettings')}
       </MenuItem>
     </Menu>
   )

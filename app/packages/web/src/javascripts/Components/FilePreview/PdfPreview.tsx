@@ -20,6 +20,7 @@ import {
 } from './pdfOcr'
 import type { OcrProgress } from './runPdfOcr'
 import type { WebApplication } from '@/Application/WebApplication'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   /** Used for the authenticated server-OCR config + recognize requests. */
@@ -226,6 +227,7 @@ const PdfPage: FunctionComponent<{
 }
 
 const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fileRemoteIdentifier, target }) => {
+  const { t } = useTranslation('files')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [pdfjs, setPdfjs] = useState<any>()
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
@@ -560,15 +562,15 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         console.error('PDF OCR failed', error)
         setOcrError(
           mode === 'server'
-            ? `Server OCR failed: ${(error as Error)?.message ?? 'unknown error'}`
-            : 'OCR failed. The language data may have failed to download.',
+            ? t('serverOcrFailed', { message: (error as Error)?.message ?? t('ocrUnknownError') })
+            : t('ocrFailed'),
         )
         setOcrStatus('error')
       } finally {
         ocrAbortRef.current = undefined
       }
     },
-    [pages, ocrStatus, ocrConfig.defaultLanguage, ocrCacheKey, serverOcr, application],
+    [pages, ocrStatus, ocrConfig.defaultLanguage, ocrCacheKey, serverOcr, application, t],
   )
 
   const cancelOcr = useCallback(() => {
@@ -581,9 +583,9 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
     }
     const text = joinPageTexts(extractedPages)
     if (text.length > 0) {
-      copyTextToClipboard(text, 'Copied extracted text')
+      copyTextToClipboard(text, t('copiedExtractedText'))
     }
-  }, [extractedPages])
+  }, [extractedPages, t])
 
   const activeMatchPage = matches[activeMatchIndex]?.pageNumber
 
@@ -676,8 +678,8 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       return
     }
     const link = formatPdfDeepLink(fileUuid, { page: currentPage })
-    copyTextToClipboard(link, `Copied link to page ${currentPage}`)
-  }, [fileUuid, currentPage])
+    copyTextToClipboard(link, t('copiedLinkToPage', { page: currentPage }))
+  }, [fileUuid, currentPage, t])
 
   const copyQuoteLink = useCallback(() => {
     if (!fileUuid) {
@@ -688,15 +690,15 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       return
     }
     const link = formatPdfDeepLink(fileUuid, { page: currentPage, quote: selection })
-    copyTextToClipboard(link, 'Copied link to selected text')
-  }, [fileUuid, currentPage])
+    copyTextToClipboard(link, t('copiedLinkToSelectedText'))
+  }, [fileUuid, currentPage, t])
 
   if (loadError) {
     return (
       <div className="flex flex-grow flex-col items-center justify-center p-4 text-center">
         <Icon type="file-pdf" size="large" className="mb-3 text-passive-1" />
-        <div className="text-base font-bold">Unable to render this PDF.</div>
-        <p className="mt-1 max-w-[40ch] text-sm text-passive-0">The file may be corrupted or password-protected.</p>
+        <div className="text-base font-bold">{t('unableToRenderPdf')}</div>
+        <p className="mt-1 max-w-[40ch] text-sm text-passive-0">{t('pdfCorruptedOrProtected')}</p>
       </div>
     )
   }
@@ -705,7 +707,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
         <Spinner className="h-6 w-6" />
-        <span className="mt-3 text-sm text-passive-0">Loading PDF...</span>
+        <span className="mt-3 text-sm text-passive-0">{t('loadingPdf')}</span>
       </div>
     )
   }
@@ -715,12 +717,12 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       {/* Toolbar */}
       <div className="flex flex-shrink-0 flex-wrap items-center gap-1 border-b border-border bg-default px-2 py-1.5">
         <div className="flex items-center gap-1">
-          <StyledTooltip label="Previous page" className="!z-modal">
+          <StyledTooltip label={t('previousPage')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
               onClick={() => goToPage(currentPage - 1)}
               disabled={currentPage <= 1}
-              aria-label="Previous page"
+              aria-label={t('previousPage')}
             >
               <Icon type="chevron-left" className="text-neutral" />
             </button>
@@ -730,7 +732,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               className="w-10 rounded border border-border bg-default px-1 py-0.5 text-center text-sm text-text"
               value={pageInput}
               inputMode="numeric"
-              aria-label="Page number"
+              aria-label={t('pageNumber')}
               onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
               onBlur={commitPageInput}
               onKeyDown={(e) => {
@@ -742,12 +744,12 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
             />
             <span className="mx-1 whitespace-nowrap text-passive-1">/ {numPages}</span>
           </div>
-          <StyledTooltip label="Next page" className="!z-modal">
+          <StyledTooltip label={t('nextPage')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
               onClick={() => goToPage(currentPage + 1)}
               disabled={currentPage >= numPages}
-              aria-label="Next page"
+              aria-label={t('nextPage')}
             >
               <Icon type="chevron-right" className="text-neutral" />
             </button>
@@ -757,32 +759,32 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         <div className="mx-1 h-5 w-px bg-border" />
 
         <div className="flex items-center gap-1">
-          <StyledTooltip label="Zoom out" className="!z-modal">
+          <StyledTooltip label={t('zoomOut')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
               onClick={zoomOut}
               disabled={scale <= MIN_SCALE}
-              aria-label="Zoom out"
+              aria-label={t('zoomOut')}
             >
               <Icon type="subtract" className="text-neutral" />
             </button>
           </StyledTooltip>
           <span className="w-12 text-center text-sm text-passive-1">{Math.round(scale * 100)}%</span>
-          <StyledTooltip label="Zoom in" className="!z-modal">
+          <StyledTooltip label={t('zoomIn')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
               onClick={zoomIn}
               disabled={scale >= MAX_SCALE}
-              aria-label="Zoom in"
+              aria-label={t('zoomIn')}
             >
               <Icon type="add" className="text-neutral" />
             </button>
           </StyledTooltip>
-          <StyledTooltip label="Fit width" className="!z-modal">
+          <StyledTooltip label={t('fitWidth')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
               onClick={fitWidth}
-              aria-label="Fit width"
+              aria-label={t('fitWidth')}
             >
               <Icon type="arrows-vertical" className="rotate-90 text-neutral" />
             </button>
@@ -792,31 +794,31 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         <div className="mx-1 h-5 w-px bg-border" />
 
         <div className="flex items-center gap-1">
-          <StyledTooltip label="Search in document (Ctrl/Cmd+F)" className="!z-modal">
+          <StyledTooltip label={t('searchInDocumentShortcut')} className="!z-modal">
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
               onClick={() => (showSearch ? closeSearch() : openSearch())}
-              aria-label="Search in document"
+              aria-label={t('searchInDocument')}
             >
               <Icon type="search" className="text-neutral" />
             </button>
           </StyledTooltip>
           {fileUuid && (
             <>
-              <StyledTooltip label={`Copy link to page ${currentPage}`} className="!z-modal">
+              <StyledTooltip label={t('copyLinkToPage', { page: currentPage })} className="!z-modal">
                 <button
                   className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
                   onClick={copyPageLink}
-                  aria-label="Copy link to this page"
+                  aria-label={t('copyLinkToThisPage')}
                 >
                   <Icon type="link" className="text-neutral" />
                 </button>
               </StyledTooltip>
-              <StyledTooltip label="Copy link to selected text" className="!z-modal">
+              <StyledTooltip label={t('copyLinkToSelectedText')} className="!z-modal">
                 <button
                   className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
                   onClick={copyQuoteLink}
-                  aria-label="Copy link to selected text"
+                  aria-label={t('copyLinkToSelectedText')}
                 >
                   <Icon type="copy" className="text-neutral" />
                 </button>
@@ -835,15 +837,17 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                   <Spinner className="h-4 w-4" />
                   <span className="whitespace-nowrap text-xs text-passive-1">
                     {ocrProgress && ocrProgress.totalPages > 0
-                      ? `OCR page ${ocrProgress.completedPages + (ocrProgress.pageProgress < 1 ? 1 : 0)} / ${
-                          ocrProgress.totalPages
-                        } (${Math.round(ocrProgress.pageProgress * 100)}%)`
-                      : 'Preparing OCR...'}
+                      ? t('ocrProgress', {
+                          current: ocrProgress.completedPages + (ocrProgress.pageProgress < 1 ? 1 : 0),
+                          total: ocrProgress.totalPages,
+                          percent: Math.round(ocrProgress.pageProgress * 100),
+                        })
+                      : t('preparingOcr')}
                   </span>
                   <button
                     className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
                     onClick={cancelOcr}
-                    aria-label="Cancel OCR"
+                    aria-label={t('cancelOcr')}
                   >
                     <Icon type="close" className="text-neutral" size="small" />
                   </button>
@@ -854,20 +858,20 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                     label={
                       ocrStatus === 'done'
                         ? ocrFromCache
-                          ? 'Text already extracted (cached). Re-run OCR in your browser (stays on your device).'
-                          : 'Text extracted. Re-run OCR in your browser (stays on your device).'
-                        : 'Extract text from scanned pages with OCR. Runs in your browser; nothing leaves your device (slow; downloads language data).'
+                          ? t('ocrCachedReRunTooltip')
+                          : t('ocrExtractedReRunTooltip')
+                        : t('ocrExtractTooltip')
                     }
                     className="!z-modal"
                   >
                     <button
                       className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-neutral hover:bg-contrast"
                       onClick={() => runOcr('browser')}
-                      aria-label="Extract text with OCR in your browser"
+                      aria-label={t('extractTextWithOcrBrowser')}
                     >
                       <Icon type="plain-text" className="text-neutral" />
                       <span className="whitespace-nowrap">
-                        {ocrStatus === 'done' ? 'Re-run OCR (browser)' : 'Extract text (OCR)'}
+                        {ocrStatus === 'done' ? t('reRunOcrBrowser') : t('extractTextOcr')}
                       </span>
                     </button>
                   </StyledTooltip>
@@ -876,28 +880,25 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                       the server — an E2E downgrade — so it carries a warning icon
                       and is NEVER the default. */}
                   {serverOcr?.available && (
-                    <StyledTooltip
-                      label="Run OCR on the SERVER. This sends this PDF's page images to the server and LEAVES end-to-end encryption — the server can read that content. Browser OCR keeps everything on your device."
-                      className="!z-modal"
-                    >
+                    <StyledTooltip label={t('serverOcrTooltip')} className="!z-modal">
                       <button
                         className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-warning hover:bg-contrast"
                         onClick={() => runOcr('server')}
-                        aria-label="Run OCR on the server (sends page images to the server; leaves end-to-end encryption)"
+                        aria-label={t('runOcrOnServerAria')}
                       >
                         <Icon type="warning" className="text-warning" />
-                        <span className="whitespace-nowrap">Run OCR on server</span>
+                        <span className="whitespace-nowrap">{t('runOcrOnServer')}</span>
                       </button>
                     </StyledTooltip>
                   )}
                 </>
               )}
               {ocrStatus === 'done' && extractedPages && (
-                <StyledTooltip label="Copy all extracted text" className="!z-modal">
+                <StyledTooltip label={t('copyAllExtractedText')} className="!z-modal">
                   <button
                     className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
                     onClick={copyExtractedText}
-                    aria-label="Copy extracted text"
+                    aria-label={t('copyExtractedTextAria')}
                   >
                     <Icon type="copy" className="text-neutral" />
                   </button>
@@ -915,7 +916,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
             <input
               ref={searchInputRef}
               className="w-40 rounded border border-border bg-default px-2 py-0.5 text-sm text-text"
-              placeholder="Find in document"
+              placeholder={t('findInDocument')}
               autoFocus
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -930,13 +931,13 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                 }
               }}
             />
-            <StyledTooltip label="Match case" className="!z-modal">
+            <StyledTooltip label={t('matchCase')} className="!z-modal">
               <button
                 className={`flex cursor-pointer rounded border-0 p-1 text-sm font-bold ${
                   matchCase ? 'bg-info text-info-contrast' : 'bg-transparent text-neutral hover:bg-contrast'
                 }`}
                 onClick={() => setMatchCase((m) => !m)}
-                aria-label="Match case"
+                aria-label={t('matchCase')}
                 aria-pressed={matchCase}
               >
                 Aa
@@ -945,15 +946,15 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
             <span className="min-w-[4.5rem] text-center text-xs text-passive-1">
               {committedQuery
                 ? matches.length === 0
-                  ? 'No results'
-                  : `${activeMatchIndex + 1} of ${matches.length}`
+                  ? t('noResults')
+                  : t('matchOfTotal', { current: activeMatchIndex + 1, total: matches.length })
                 : ''}
             </span>
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast disabled:opacity-40"
               onClick={() => goToMatch(-1)}
               disabled={matches.length === 0}
-              aria-label="Previous match"
+              aria-label={t('previousMatch')}
             >
               <Icon type="chevron-up" className="text-neutral" size="small" />
             </button>
@@ -961,14 +962,14 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast disabled:opacity-40"
               onClick={() => goToMatch(1)}
               disabled={matches.length === 0}
-              aria-label="Next match"
+              aria-label={t('nextMatch')}
             >
               <Icon type="chevron-down" className="text-neutral" size="small" />
             </button>
             <button
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
               onClick={closeSearch}
-              aria-label="Close search"
+              aria-label={t('closeSearch')}
             >
               <Icon type="close" className="text-neutral" size="small" />
             </button>
@@ -981,9 +982,8 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           before the user clicks, not only while running. */}
       {ocrConfig.enabled && serverOcr?.available && ocrStatus === 'idle' && (
         <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
-          Server OCR is available for your account. It sends this PDF&apos;s page images to the server and{' '}
-          <strong>leaves end-to-end encryption</strong> — the server (and anyone who controls it) can read that content.
-          Browser OCR keeps everything on your device. Default is browser OCR.
+          {t('serverOcrDisclosurePrefix')} <strong>{t('serverOcrDisclosureBold')}</strong>
+          {t('serverOcrDisclosureSuffix')}
         </div>
       )}
 
@@ -993,11 +993,11 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
           {ocrStatus === 'running'
             ? ocrMode === 'server'
-              ? 'Server OCR: this PDF’s page images are being uploaded to the server, which LEAVES end-to-end encryption — the server can read that content. (Browser OCR keeps everything on your device.)'
-              : 'OCR runs in your browser on this device (your files stay end-to-end encrypted). It is slow and downloads language data on first use.'
+              ? t('ocrRunningServer')
+              : t('ocrRunningBrowser')
             : ocrMode === 'server'
-              ? 'Server OCR finished. The page images were sent to the server (this left end-to-end encryption). Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'
-              : 'OCR finished. Accuracy varies with scan quality; extracted text is now searchable and copyable, and is cached on this device.'}
+              ? t('ocrDoneServer')
+              : t('ocrDoneBrowser')}
         </div>
       )}
 

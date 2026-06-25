@@ -1,5 +1,6 @@
 import { VaultListingInterface, classNames } from '@standardnotes/snjs'
 import { useState, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import Icon from '../Icon/Icon'
 import VaultOptionsMenu from './VaultOptionsMenu'
 import Popover from '../Popover/Popover'
@@ -11,6 +12,7 @@ const VaultSelectMenuItemWithOptions = ({
   vault: VaultListingInterface
   children: React.ReactNode
 }) => {
+  const { t } = useTranslation('sharing')
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false)
   const optionsButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -32,7 +34,7 @@ const VaultSelectMenuItemWithOptions = ({
         <Icon type="more" size="small" />
       </button>
       <Popover
-        title="Vault options"
+        title={t('vaultOptions')}
         open={isOptionsMenuOpen}
         anchorElement={optionsButtonRef}
         side="top"

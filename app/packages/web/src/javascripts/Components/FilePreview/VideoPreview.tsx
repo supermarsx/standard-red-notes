@@ -4,6 +4,7 @@ import { FileItem } from '@standardnotes/snjs'
 import { useState } from 'react'
 import Button from '../Button/Button'
 import { FileItemActionType } from '../AttachedFilesPopover/PopoverFileItemAction'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   file: FileItem
@@ -19,6 +20,7 @@ type Props = {
  * We show an error message if neither works.
  */
 const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: Props) => {
+  const { t } = useTranslation('files')
   const [showError, setShowError] = useState(false)
   const [shouldTryFallback, setShouldTryFallback] = useState(false)
 
@@ -26,10 +28,8 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
         <NoPreviewIllustration className="mb-4 h-30 w-30" />
-        <div className="mb-2 text-base font-bold">This video can't be previewed.</div>
-        <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">
-          To view this file, download it and open it using another application.
-        </div>
+        <div className="mb-2 text-base font-bold">{t('videoCannotBePreviewed')}</div>
+        <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('downloadToView')}</div>
         <Button
           primary
           onClick={() => {
@@ -41,7 +41,7 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
               .catch(console.error)
           }}
         >
-          Download
+          {t('common:download')}
         </Button>
       </div>
     )

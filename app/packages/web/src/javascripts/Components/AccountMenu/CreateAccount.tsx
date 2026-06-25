@@ -16,7 +16,7 @@ import Icon from '@/Components/Icon/Icon'
 import IconButton from '@/Components/Button/IconButton'
 import AdvancedOptions from './AdvancedOptions'
 import HorizontalSeparator from '../Shared/HorizontalSeparator'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   setMenuPane: (pane: AccountMenuPane) => void
@@ -40,6 +40,7 @@ const CreateAccount: FunctionComponent<Props> = ({
   workspaceIdentifier,
   setWorkspaceIdentifier,
 }) => {
+  const { t } = useTranslation('auth')
   const emailInputRef = useRef<HTMLInputElement>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const [isPrivateUsername, setIsPrivateUsername] = useState(false)
@@ -123,12 +124,12 @@ const CreateAccount: FunctionComponent<Props> = ({
       <div className="mb-3 mt-1 flex items-center px-3">
         <IconButton
           icon="arrow-left"
-          title={c('Action').t`Go back`}
+          title={t('goBack')}
           className="mr-2 flex p-0 text-neutral"
           onClick={handleClose}
           focusable={true}
         />
-        <div className="text-base font-bold">{c('Title').t`Create account`}</div>
+        <div className="text-base font-bold">{t('createAccount')}</div>
       </div>
       <form onSubmit={handleRegisterFormSubmit} className="mb-1 px-3">
         <DecoratedInput
@@ -137,7 +138,7 @@ const CreateAccount: FunctionComponent<Props> = ({
           left={[<Icon type="email" className="text-neutral" />]}
           onChange={handleEmailChange}
           onKeyDown={handleKeyDown}
-          placeholder={c('Label').t`Email`}
+          placeholder={t('account:email')}
           ref={emailInputRef}
           type="email"
           value={email}
@@ -148,7 +149,7 @@ const CreateAccount: FunctionComponent<Props> = ({
           left={[<Icon type="password" className="text-neutral" />]}
           onChange={handlePasswordChange}
           onKeyDown={handleKeyDown}
-          placeholder={c('Label').t`Password`}
+          placeholder={t('account:password')}
           ref={passwordInputRef}
           value={password}
         />
@@ -163,14 +164,14 @@ const CreateAccount: FunctionComponent<Props> = ({
           left={[<Icon type="user" className="text-neutral" />]}
           onChange={handleWorkspaceIdentifierChange}
           onKeyDown={handleKeyDown}
-          placeholder={c('Label').t`Workspace name (optional)`}
+          placeholder={t('workspaceNameOptional')}
           type="text"
           value={workspaceIdentifier}
           spellcheck={false}
         />
         <Button
           className="mt-1"
-          label={c('Action').t`Next`}
+          label={t('common:next')}
           primary
           onClick={handleRegisterFormSubmit}
           fullWidth={true}

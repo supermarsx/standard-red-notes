@@ -2,7 +2,7 @@ import AlertDialog from '@/Components/AlertDialog/AlertDialog'
 import Button from '@/Components/Button/Button'
 import Icon from '@/Components/Icon/Icon'
 import { FunctionComponent } from 'react'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   onClose: () => void
@@ -10,29 +10,26 @@ type Props = {
 }
 
 const ConfirmNoMergeDialog: FunctionComponent<Props> = ({ onClose, onConfirm }) => {
+  const { t } = useTranslation('auth')
+
   return (
     <AlertDialog closeDialog={onClose}>
       <div className="flex items-center justify-between text-lg font-bold">
-        {c('Title').t`Delete local data?`}
+        {t('deleteLocalDataTitle')}
         <button className="rounded p-1 font-bold hover:bg-contrast" onClick={onClose}>
           <Icon type="close" />
         </button>
       </div>
       <div className="sk-panel-row">
         <div>
-          <p className="text-base text-foreground lg:text-sm">
-            {c('Info')
-              .t`You have chosen not to merge your local data. If you proceed, your local notes and topics will be permanently deleted and replaced with data from your account. This action cannot be undone.`}
-          </p>
-          <p className="mt-2 text-base font-semibold text-danger lg:text-sm">
-            {c('Info').t`Are you sure you want to continue without merging?`}
-          </p>
+          <p className="text-base text-foreground lg:text-sm">{t('noMergeWarning')}</p>
+          <p className="mt-2 text-base font-semibold text-danger lg:text-sm">{t('noMergeConfirmQuestion')}</p>
         </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">
-        <Button onClick={onClose}>{c('Action').t`Cancel`}</Button>
+        <Button onClick={onClose}>{t('common:cancel')}</Button>
         <Button primary colorStyle="danger" onClick={onConfirm}>
-          {c('Action').t`Delete Local Data and Continue`}
+          {t('deleteLocalDataAndContinue')}
         </Button>
       </div>
     </AlertDialog>

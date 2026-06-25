@@ -18,6 +18,7 @@ import { iconClass } from '../NotesOptions/ClassNames'
 import { useApplication } from '../ApplicationProvider'
 import MenuSection from '../Menu/MenuSection'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   closeMenu: () => void
@@ -36,6 +37,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
   shouldShowAttachOption,
   selectedFiles,
 }) => {
+  const { t } = useTranslation('files')
   const application = useApplication()
 
   const { shouldUseStreamingAPI, handleFileAction } = application.filesController
@@ -108,7 +110,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
   })
 
   if (selectedFiles.length === 0) {
-    return <div className="text-center">No files selected</div>
+    return <div className="text-center">{t('noFilesSelected')}</div>
   }
 
   if (isRenaming && fileToRename) {
@@ -144,12 +146,12 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           {isFileAttachedToNote ? (
             <MenuItem onClick={onDetach}>
               <Icon type="link-off" className="mr-2 text-neutral" />
-              Detach from note
+              {t('detachFromNote')}
             </MenuItem>
           ) : shouldShowAttachOption ? (
             <MenuItem onClick={onAttach}>
               <Icon type="link" className="mr-2 text-neutral" />
-              Attach to note
+              {t('attachToNote')}
             </MenuItem>
           ) : null}
         </MenuSection>
@@ -185,7 +187,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           disabled={areSomeFilesInReadonlySharedVault}
         >
           <Icon type="lock" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
-          Password protect
+          {t('passwordProtect')}
         </MenuSwitchButtonItem>
       </MenuSection>
       <MenuSection>
@@ -196,7 +198,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           }}
         >
           <Icon type="download" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
-          Download {canShowZipDownloadOption ? 'separately' : ''}
+          {canShowZipDownloadOption ? t('downloadSeparately') : t('common:download')}
         </MenuItem>
         {canShowZipDownloadOption && (
           <MenuItem
@@ -208,20 +210,20 @@ const FileMenuOptions: FunctionComponent<Props> = ({
                 console.error(error)
                 addToast({
                   type: ToastType.Error,
-                  message: error.message || 'Failed to download files as archive',
+                  message: error.message || t('failedToDownloadArchive'),
                 })
               })
               closeMenu()
             }}
           >
             <Icon type="download" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
-            Download as archive
+            {t('downloadAsArchive')}
           </MenuItem>
         )}
         {shouldShowRenameOption && fileToRename && (
           <MenuItem onClick={beginRename} disabled={areSomeFilesInReadonlySharedVault}>
             <Icon type="pencil" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
-            Rename
+            {t('common:rename')}
           </MenuItem>
         )}
         <MenuItem
@@ -232,7 +234,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           disabled={areSomeFilesInReadonlySharedVault}
         >
           <Icon type="trash" className={`mr-2 text-danger ${MenuItemIconSize}`} />
-          <span className="text-danger">Delete permanently</span>
+          <span className="text-danger">{t('common:deletePermanently')}</span>
         </MenuItem>
       </MenuSection>
 
@@ -241,11 +243,11 @@ const FileMenuOptions: FunctionComponent<Props> = ({
       <div className="px-3 pb-0.5 pt-1 text-xs font-medium text-neutral">
         {!hasSelectedMultipleFiles && (
           <div className="mb-1">
-            <span className="font-semibold">File ID:</span> {selectedFiles[0].uuid}
+            <span className="font-semibold">{t('fileId')}</span> {selectedFiles[0].uuid}
           </div>
         )}
         <div>
-          <span className="font-semibold">{hasSelectedMultipleFiles ? 'Total Size:' : 'Size:'}</span>{' '}
+          <span className="font-semibold">{hasSelectedMultipleFiles ? t('totalSize') : t('size')}</span>{' '}
           {formatSizeToReadableString(totalFileSize)}
         </div>
       </div>

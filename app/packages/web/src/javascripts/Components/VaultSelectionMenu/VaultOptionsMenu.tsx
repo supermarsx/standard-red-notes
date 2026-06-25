@@ -3,6 +3,7 @@ import Menu from '../Menu/Menu'
 import MenuItem from '../Menu/MenuItem'
 import Icon from '../Icon/Icon'
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import EditVaultModal from '../Preferences/Panes/Vaults/Vaults/VaultModal/EditVaultModal'
 import { useVault } from '@/Hooks/useVault'
 
@@ -11,6 +12,7 @@ type Props = {
 }
 
 const VaultOptionsMenu = ({ vault }: Props) => {
+  const { t } = useTranslation('sharing')
   const { canShowLockOption, isLocked, toggleLock, ensureVaultIsUnlocked } = useVault(vault)
 
   const [isVaultModalOpen, setIsVaultModalOpen] = useState(false)
@@ -24,15 +26,15 @@ const VaultOptionsMenu = ({ vault }: Props) => {
 
   return (
     <>
-      <Menu a11yLabel="Vault options menu">
+      <Menu a11yLabel={t('vaultOptionsMenu')}>
         <MenuItem onClick={openEditModal}>
           <Icon type="pencil-filled" className="mr-2" />
-          Edit vault
+          {t('editVault')}
         </MenuItem>
         {canShowLockOption && (
           <MenuItem onClick={toggleLock}>
             <Icon type="lock" className="mr-2" />
-            {isLocked ? 'Unlock' : 'Lock'} vault
+            {isLocked ? t('unlockVault') : t('lockVault')}
           </MenuItem>
         )}
       </Menu>

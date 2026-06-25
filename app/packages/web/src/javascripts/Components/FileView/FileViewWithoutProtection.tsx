@@ -14,11 +14,13 @@ import RoundIconButton from '../Button/RoundIconButton'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import Icon from '../Icon/Icon'
 import { VaultUserServiceEvent } from '@standardnotes/snjs'
+import { useTranslation } from 'react-i18next'
 
 const SyncTimeoutNoDebounceMs = 100
 const SyncTimeoutDebounceMs = 350
 
 const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
+  const { t } = useTranslation('files')
   const { vault } = useItemVaultInfo(file)
 
   const [isReadonly, setIsReadonly] = useState(false)
@@ -74,7 +76,7 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
 
     if (target) {
       addDragTarget(target, {
-        tooltipText: 'Drop your files to upload and link them to the current file',
+        tooltipText: t('dropToUploadTooltip'),
         async callback(uploadedFile) {
           await application.linkingController.linkItems(uploadedFile, file)
         },
@@ -86,15 +88,15 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
         removeDragTarget(target)
       }
     }
-  }, [addDragTarget, file, removeDragTarget, application.linkingController])
+  }, [addDragTarget, file, removeDragTarget, application.linkingController, t])
 
   return (
-    <div className="sn-component section editor" aria-label="File" ref={fileDragTargetRef}>
+    <div className="sn-component section editor" aria-label={t('fileAriaLabel')} ref={fileDragTargetRef}>
       <div className="flex flex-col">
         {isReadonly && (
           <div className="bg-warning-faded relative flex items-center px-3.5 py-2 text-sm text-accessory-tint-3">
             <Icon type="pencil-off" className="mr-3" />
-            This file is readonly
+            {t('fileReadonly')}
           </div>
         )}
         <div
@@ -122,13 +124,13 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
             <div className="flex items-center gap-3">
               {!isReadonly && <LinkedItemsButton linkingController={application.linkingController} />}
               <RoundIconButton
-                label="File information panel"
+                label={t('fileInformationPanel')}
                 onClick={toggleFileInfoPanel}
                 ref={fileInfoButtonRef}
                 icon="info"
               />
               <Popover
-                title="Details"
+                title={t('details')}
                 open={isFileInfoPanelOpen}
                 togglePopover={toggleFileInfoPanel}
                 anchorElement={fileInfoButtonRef}

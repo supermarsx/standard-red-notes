@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { useCallback, useRef } from 'react'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 import { STRING_DELETE_ACCOUNT_CONFIRMATION } from '@/Constants/Strings'
 import Button from '@/Components/Button/Button'
 import { WebApplication } from '@/Application/WebApplication'
@@ -12,6 +12,8 @@ type Props = {
 }
 
 const ConfirmDeleteAccountModal = ({ application }: Props) => {
+  const { t } = useTranslation('auth')
+
   const closeDialog = useCallback(() => {
     application.accountMenuController.setDeletingAccount(false)
   }, [application.accountMenuController])
@@ -26,7 +28,7 @@ const ConfirmDeleteAccountModal = ({ application }: Props) => {
   return (
     <AlertDialog closeDialog={closeDialog}>
       <div className="flex items-center justify-between text-lg font-bold">
-        {c('Title').t`Delete account?`}
+        {t('deleteAccountTitle')}
         <button className="rounded p-1 font-bold hover:bg-contrast" onClick={closeDialog}>
           <Icon type="close" />
         </button>
@@ -38,10 +40,10 @@ const ConfirmDeleteAccountModal = ({ application }: Props) => {
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <Button ref={cancelRef} onClick={closeDialog}>
-          {c('Action').t`Cancel`}
+          {t('common:cancel')}
         </Button>
         <Button primary colorStyle="danger" onClick={confirm}>
-          {c('Action').t`Delete my account for good`}
+          {t('deleteMyAccountForGood')}
         </Button>
       </div>
     </AlertDialog>

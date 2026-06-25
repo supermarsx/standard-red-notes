@@ -3,6 +3,7 @@ import { NoPreviewIllustration } from '@standardnotes/icons'
 import { FileItem } from '@standardnotes/snjs'
 import { FileItemActionType } from '../AttachedFilesPopover/PopoverFileItemAction'
 import Button from '../Button/Button'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   file: FileItem
@@ -12,15 +13,14 @@ type Props = {
 }
 
 const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCallback }: Props) => {
+  const { t } = useTranslation('files')
   return (
     <div className="flex flex-grow flex-col items-center justify-center">
       <NoPreviewIllustration className="mb-4 h-30 w-30" />
-      <div className="mb-2 text-base font-bold">This file can't be previewed.</div>
+      <div className="mb-2 text-base font-bold">{t('fileCannotBePreviewed')}</div>
       {isFilePreviewable ? (
         <>
-          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">
-            There was an error loading the file. Try again, or download the file and open it using another application.
-          </div>
+          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('errorLoadingFile')}</div>
           <div className="flex items-center">
             <Button
               primary
@@ -29,7 +29,7 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
                 tryAgainCallback()
               }}
             >
-              Try again
+              {t('tryAgain')}
             </Button>
             <Button
               onClick={() => {
@@ -43,15 +43,13 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
                   .catch(console.error)
               }}
             >
-              Download
+              {t('common:download')}
             </Button>
           </div>
         </>
       ) : (
         <>
-          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">
-            To view this file, download it and open it using another application.
-          </div>
+          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('downloadToView')}</div>
           <Button
             primary
             onClick={() => {
@@ -63,7 +61,7 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
                 .catch(console.error)
             }}
           >
-            Download
+            {t('common:download')}
           </Button>
         </>
       )}

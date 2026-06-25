@@ -16,7 +16,7 @@ import { useApplication } from '../ApplicationProvider'
 import MenuSection from '../Menu/MenuSection'
 import { TOGGLE_COMMAND_PALETTE, TOGGLE_KEYBOARD_SHORTCUTS_MODAL, isMobilePlatform } from '@standardnotes/ui-services'
 import { KeyboardShortcutIndicator } from '../KeyboardShortcutIndicator/KeyboardShortcutIndicator'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   mainApplicationGroup: WebApplicationGroup
@@ -28,6 +28,7 @@ const iconClassName = `text-neutral mr-2 ${MenuItemIconSize}`
 
 const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, mainApplicationGroup }) => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const [isSyncingInProgress, setIsSyncingInProgress] = useState(false)
   const [lastSyncDate, setLastSyncDate] = useState(formatLastSyncDate(application.sync.getLastSyncDate() as Date))
@@ -94,7 +95,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
   return (
     <>
       <div className="mb-1 mt-1 hidden items-center justify-between px-4 md:flex md:px-3">
-        <div className="text-lg font-bold lg:text-base">{c('Title').t`Account`}</div>
+        <div className="text-lg font-bold lg:text-base">{t('account:account')}</div>
         <div className="flex cursor-pointer" onClick={closeMenu}>
           <Icon type="close" className="text-neutral" />
         </div>
@@ -104,7 +105,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
           <div className="mb-3 flex items-center gap-3 px-4 text-lg text-foreground md:px-3 lg:text-sm">
             <Avatar email={user.email} size={40} />
             <div className="min-w-0">
-              <div>{c('Info').t`You're signed in as:`}</div>
+              <div>{t('signedInAs')}</div>
               <div className="wrap my-0.5 font-bold">{user.email}</div>
               <span className="text-neutral">{application.getHost.execute().getValue()}</span>
             </div>
@@ -113,13 +114,13 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
             {isSyncingInProgress ? (
               <div className="flex items-center font-semibold text-info">
                 <Spinner className="mr-2 h-5 w-5" />
-                {c('Status').t`Syncing...`}
+                {t('syncing')}
               </div>
             ) : (
               <div className="flex items-start">
                 <Icon type="check-circle" className={`mr-2 text-success ${MenuItemIconSize}`} />
                 <div>
-                  <div className="font-semibold text-success">{c('Label').t`Last synced:`}</div>
+                  <div className="font-semibold text-success">{t('lastSynced')}</div>
                   <div className="text-text">{lastSyncDate}</div>
                 </div>
               </div>
@@ -133,18 +134,17 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
         <>
           <div className="mb-1 px-4 md:px-3">
             <div className="mb-3 text-base text-foreground lg:text-sm">
-              {c('Info')
-                .t`You’re offline. Sign in to sync your notes and preferences across all your devices and enable end-to-end encryption.`}
+              {t('offlineSignInPrompt')}
             </div>
             <div className="flex items-center text-passive-1">
               <Icon type="cloud-off" className={`mr-2 ${MenuItemIconSize}`} />
-              <span className="text-lg font-semibold lg:text-sm">{c('Status').t`Offline`}</span>
+              <span className="text-lg font-semibold lg:text-sm">{t('offline')}</span>
             </div>
           </div>
         </>
       )}
       <Menu
-        a11yLabel="General account menu"
+        a11yLabel={t('generalAccountMenuLabel')}
         closeMenu={closeMenu}
         initialFocus={!application.hasAccount() ? CREATE_ACCOUNT_INDEX : SWITCHER_INDEX}
       >
@@ -155,17 +155,17 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
           {user ? (
             <MenuItem onClick={openPreferences}>
               <Icon type="user" className={iconClassName} />
-              {c('Action').t`Account settings`}
+              {t('accountSettings')}
             </MenuItem>
           ) : (
             <>
               <MenuItem onClick={activateRegisterPane}>
                 <Icon type="user" className={iconClassName} />
-                {c('Action').t`Create free account`}
+                {t('createFreeAccount')}
               </MenuItem>
               <MenuItem onClick={activateSignInPane}>
                 <Icon type="signIn" className={iconClassName} />
-                {c('Action').t`Sign in`}
+                {t('account:signIn')}
               </MenuItem>
             </>
           )}
@@ -176,7 +176,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
             }}
           >
             <Icon type="download" className={iconClassName} />
-            {c('Action').t`Export`}
+            {t('common:export')}
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -185,12 +185,12 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
             }}
           >
             <Icon type="archive" className={iconClassName} />
-            {c('Action').t`Import`}
+            {t('common:import')}
           </MenuItem>
           <MenuItem className="justify-between" onClick={openHelp}>
             <div className="flex items-center">
               <Icon type="help" className={iconClassName} />
-              {c('Action').t`Documentation`}
+              {t('documentation')}
             </div>
             <span className="text-neutral">v{application.version}</span>
           </MenuItem>
@@ -202,7 +202,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
                 }}
               >
                 <Icon type="keyboard" className={iconClassName} />
-                {c('Action').t`Keyboard shortcuts`}
+                {t('keyboardShortcuts')}
                 {keyboardShortcutsHelpShortcut && (
                   <KeyboardShortcutIndicator shortcut={keyboardShortcutsHelpShortcut} className="ml-auto" />
                 )}
@@ -213,7 +213,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
                 }}
               >
                 <Icon type="info" className={iconClassName} />
-                {c('Action').t`Command palette`}
+                {t('commandPalette')}
                 {commandPaletteShortcut && (
                   <KeyboardShortcutIndicator shortcut={commandPaletteShortcut} className="ml-auto" />
                 )}
@@ -225,7 +225,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
           <MenuSection>
             <MenuItem onClick={signOut}>
               <Icon type="signOut" className={iconClassName} />
-              {c('Action').t`Sign out workspace`}
+              {t('signOutWorkspace')}
             </MenuItem>
           </MenuSection>
         ) : null}

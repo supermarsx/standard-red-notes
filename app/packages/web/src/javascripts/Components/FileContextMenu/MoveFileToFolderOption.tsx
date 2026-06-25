@@ -7,6 +7,7 @@ import Popover from '../Popover/Popover'
 import { classNames, FileItem, SNFolder } from '@standardnotes/snjs'
 import MenuItem from '../Menu/MenuItem'
 import Menu from '../Menu/Menu'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   navigationController: NavigationController
@@ -21,6 +22,7 @@ type FolderListEntry = {
 }
 
 const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController, file, iconClassName, disabled }) => {
+  const { t } = useTranslation('files')
   const menuContainerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -59,7 +61,7 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
     return (
       <MenuItem disabled>
         <Icon type="folder" className={iconClassName} />
-        No folders yet
+        {t('noFoldersYet')}
       </MenuItem>
     )
   }
@@ -80,14 +82,14 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
         <div className="flex items-center overflow-hidden">
           <Icon type="folder" className={iconClassName} />
           <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">
-            Move to folder
+            {t('moveToFolder')}
             {currentFolder && <span className="ml-1 text-neutral">({currentFolder.title})</span>}
           </span>
         </div>
         <Icon type="chevron-right" className="text-neutral" />
       </MenuItem>
       <Popover
-        title="Move to folder"
+        title={t('moveToFolder')}
         togglePopover={toggleMenu}
         anchorElement={buttonRef}
         open={isOpen}
@@ -96,13 +98,13 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
         className="py-2"
         overrideZIndex="z-modal"
       >
-        <Menu a11yLabel="Folder selection menu" className="!px-0">
+        <Menu a11yLabel={t('folderSelectionMenu')} className="!px-0">
           <MenuItem onClick={() => moveToFolder(undefined)}>
             <Icon type="close" className={iconClassName} />
             <span
               className={classNames('overflow-hidden overflow-ellipsis whitespace-nowrap', !currentFolder && 'font-bold')}
             >
-              No folder
+              {t('noFolder')}
             </span>
           </MenuItem>
           {folderEntries.map(({ folder, depth }) => {

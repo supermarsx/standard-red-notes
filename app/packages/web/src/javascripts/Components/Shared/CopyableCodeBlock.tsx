@@ -1,6 +1,7 @@
 import { classNames } from '@standardnotes/utils'
 import { addToast, ToastType } from '@standardnotes/toast'
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Icon from '../Icon/Icon'
 
 type Props = {
@@ -8,6 +9,7 @@ type Props = {
 }
 
 const CopyableCodeBlock = ({ code }: Props) => {
+  const { t } = useTranslation('sharing')
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [didCopy, setDidCopy] = useState(false)
   const [isCopyButtonVisible, setIsCopyButtonVisible] = useState(false)
@@ -32,7 +34,7 @@ const CopyableCodeBlock = ({ code }: Props) => {
                 setDidCopy(true)
                 addToast({
                   type: ToastType.Success,
-                  message: 'Copied to clipboard',
+                  message: t('copiedToClipboard'),
                 })
                 setTimeout(() => {
                   setDidCopy(false)
@@ -42,7 +44,7 @@ const CopyableCodeBlock = ({ code }: Props) => {
               () => {
                 addToast({
                   type: ToastType.Error,
-                  message: 'Failed to copy to clipboard',
+                  message: t('failedToCopyToClipboard'),
                 })
                 setDidCopy(false)
               },
@@ -57,7 +59,7 @@ const CopyableCodeBlock = ({ code }: Props) => {
             'absolute right-0 top-full min-w-max translate-x-2 translate-y-1 select-none rounded border border-border bg-default px-3 py-1.5 text-left md:peer-hover:block',
           )}
         >
-          {didCopy ? 'Copied!' : 'Copy example to clipboard'}
+          {didCopy ? t('copiedExclaim') : t('copyExampleToClipboard')}
         </div>
       </div>
     </div>

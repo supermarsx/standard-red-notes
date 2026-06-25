@@ -19,12 +19,14 @@ import { classNames } from '@standardnotes/snjs'
 import ModalOverlay from '../Modal/ModalOverlay'
 import Modal from '../Modal/Modal'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   application: WebApplication
 }
 
 const FilePreviewModal = observer(({ application }: Props) => {
+  const { t } = useTranslation('files')
   const { currentFile, setCurrentFile, otherFiles, dismiss, pdfTarget } = application.filePreviewModalController
 
   const [isRenaming, setIsRenaming] = useState(false)
@@ -122,26 +124,26 @@ const FilePreviewModal = observer(({ application }: Props) => {
       close={dismiss}
       actions={[
         {
-          label: 'Done',
+          label: t('common:done'),
           type: 'primary',
           onClick: dismiss,
           hidden: !isMobileScreen,
           mobileSlot: 'right',
         },
         {
-          label: 'Show file options',
+          label: t('showFileOptions'),
           type: 'secondary',
           onClick: toggleOptionsMenu,
           hidden: !isMobileScreen,
         },
         {
-          label: `${showFileInfoPanel ? 'Hide' : 'Show'} file info`,
+          label: showFileInfoPanel ? t('hideFileInfo') : t('showFileInfo'),
           type: 'secondary',
           onClick: toggleInfoPanel,
           hidden: !isMobileScreen,
         },
         {
-          label: `${showLinkedBubblesContainer ? 'Hide' : 'Show'} links section`,
+          label: showLinkedBubblesContainer ? t('hideLinksSection') : t('showLinksSection'),
           type: 'secondary',
           onClick: toggleLinkedBubblesContainer,
           hidden: !isMobileScreen,
@@ -171,7 +173,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
                 right={[
                   <button
                     className="flex h-full items-center justify-center border-l border-border px-2 py-1.5 text-neutral hover:bg-passive-4"
-                    title="Submit"
+                    title={t('submit')}
                     onClick={handleRename}
                   >
                     <Icon type="check" size="small" />
@@ -185,37 +187,37 @@ const FilePreviewModal = observer(({ application }: Props) => {
           </div>
           <div className="flex items-center">
             {!isReadonly && (
-              <StyledTooltip label="Rename file" className="!z-modal">
+              <StyledTooltip label={t('renameFile')} className="!z-modal">
                 <button
                   className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
                   onClick={() => setIsRenaming((isRenaming) => !isRenaming)}
-                  aria-label="Rename file"
+                  aria-label={t('renameFile')}
                 >
                   <Icon type="pencil-filled" className="text-neutral" />
                 </button>
               </StyledTooltip>
             )}
-            <StyledTooltip label="Show linked items" className="!z-modal">
+            <StyledTooltip label={t('showLinkedItems')} className="!z-modal">
               <button
                 className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
                 onClick={toggleLinkedBubblesContainer}
-                aria-label="Show linked items"
+                aria-label={t('showLinkedItems')}
               >
                 <Icon type="link" className="text-neutral" />
               </button>
             </StyledTooltip>
-            <StyledTooltip label="Show file options" className="!z-modal">
+            <StyledTooltip label={t('showFileOptions')} className="!z-modal">
               <button
                 className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
                 onClick={toggleOptionsMenu}
                 ref={menuButtonRef}
-                aria-label="Show file options"
+                aria-label={t('showFileOptions')}
               >
                 <Icon type="more" className="text-neutral" />
               </button>
             </StyledTooltip>
             <Popover
-              title="File options"
+              title={t('fileOptions')}
               open={showOptionsMenu}
               anchorElement={menuButtonRef}
               togglePopover={closeOptionsMenu}
@@ -224,7 +226,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
               className="md:pb-2"
               overrideZIndex="z-modal"
             >
-              <Menu a11yLabel="File context menu">
+              <Menu a11yLabel={t('fileContextMenu')}>
                 <FileMenuOptions
                   selectedFiles={[currentFile]}
                   closeMenu={closeOptionsMenu}
@@ -233,11 +235,11 @@ const FilePreviewModal = observer(({ application }: Props) => {
                 />
               </Menu>
             </Popover>
-            <StyledTooltip label="Show file info" className="!z-modal">
+            <StyledTooltip label={t('showFileInfo')} className="!z-modal">
               <button
                 className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
                 onClick={toggleInfoPanel}
-                aria-label="Show file info"
+                aria-label={t('showFileInfo')}
               >
                 <Icon type="info" className="text-neutral" />
               </button>
@@ -245,7 +247,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
             <button
               ref={closeButtonRef}
               onClick={dismiss}
-              aria-label="Close modal"
+              aria-label={t('closeModal')}
               className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
             >
               <Icon type="close" className="text-neutral" />
@@ -285,9 +287,10 @@ const FilePreviewModal = observer(({ application }: Props) => {
 FilePreviewModal.displayName = 'FilePreviewModal'
 
 const FilePreviewModalWrapper: FunctionComponent<Props> = ({ application }) => {
+  const { t } = useTranslation('files')
   return (
     <ModalOverlay
-      aria-label="File preview modal"
+      aria-label={t('filePreviewModal')}
       isOpen={application.filePreviewModalController.isOpen}
       close={application.filePreviewModalController.dismiss}
       className="md:!h-full md:max-h-[90%] md:!w-full md:max-w-[90%]"

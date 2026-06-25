@@ -7,13 +7,14 @@ import WorkspaceSwitcherMenu from './WorkspaceSwitcherMenu'
 import MenuItem from '@/Components/Menu/MenuItem'
 import Popover from '@/Components/Popover/Popover'
 import { MenuItemIconSize } from '@/Constants/TailwindClassNames'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   mainApplicationGroup: WebApplicationGroup
 }
 
 const WorkspaceSwitcherOption: FunctionComponent<Props> = ({ mainApplicationGroup }) => {
+  const { t } = useTranslation('account')
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [isOpen, setIsOpen] = useState(false)
 
@@ -26,12 +27,12 @@ const WorkspaceSwitcherOption: FunctionComponent<Props> = ({ mainApplicationGrou
       <MenuItem tabIndex={FOCUSABLE_BUT_NOT_TABBABLE} ref={buttonRef} onClick={toggleMenu} className="justify-between">
         <div className="flex items-center">
           <Icon type="user-switch" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
-          {c('Action').t`Switch workspace`}
+          {t('switchWorkspace')}
         </div>
         <Icon type="chevron-right" className={`text-neutral ${MenuItemIconSize}`} />
       </MenuItem>
       <Popover
-        title={c('Action').t`Switch workspace`}
+        title={t('switchWorkspace')}
         align="end"
         anchorElement={buttonRef}
         className="pb-2"

@@ -13,6 +13,7 @@ import { parseFileName, sanitizeFileName } from '@standardnotes/utils'
 import VideoPreview from './VideoPreview'
 import AudioPreview from './AudioPreview'
 import { PdfDeepLinkTarget } from './PdfDeepLink'
+import { useTranslation } from 'react-i18next'
 
 // PDF.js is large; lazy-load the viewer so it's code-split out of the main bundle.
 const PdfPreview = lazy(() => import('./PdfPreview'))
@@ -43,6 +44,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
   isImageSelected,
   pdfTarget,
 }) => {
+  const { t } = useTranslation('files')
   const objectUrlRef = useRef<string | undefined>(undefined)
 
   const objectUrl = useMemo(() => {
@@ -84,11 +86,9 @@ const PreviewComponent: FunctionComponent<Props> = ({
   if (isNativeMobileWeb && requiresNativePreview) {
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
-        <div className="max-w-[30ch] text-center text-base font-bold">
-          This file can only be previewed in an external app
-        </div>
+        <div className="max-w-[30ch] text-center text-base font-bold">{t('externalAppOnly')}</div>
         <Button className="mt-3" primary onClick={openNativeFilePreview}>
-          Open file preview
+          {t('openFilePreview')}
         </Button>
       </div>
     )
@@ -141,7 +141,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
         fallback={
           <div className="flex flex-grow flex-col items-center justify-center">
             <Spinner className="h-6 w-6" />
-            <span className="mt-3 text-sm text-passive-0">Loading PDF viewer...</span>
+            <span className="mt-3 text-sm text-passive-0">{t('loadingPdfViewer')}</span>
           </div>
         }
       >

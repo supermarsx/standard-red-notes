@@ -5,12 +5,14 @@ import Popover from '../Popover/Popover'
 import RoundIconButton from '../Button/RoundIconButton'
 import Menu from '../Menu/Menu'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   itemListController: ItemListController
 }
 
 const FilesOptionsPanel = ({ itemListController }: Props) => {
+  const { t } = useTranslation('files')
   const [isOpen, setIsOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -18,15 +20,15 @@ const FilesOptionsPanel = ({ itemListController }: Props) => {
 
   return (
     <>
-      <RoundIconButton label="File options menu" onClick={toggleMenu} ref={buttonRef} icon="more" />
+      <RoundIconButton label={t('fileOptionsMenu')} onClick={toggleMenu} ref={buttonRef} icon="more" />
       <Popover
-        title="File options"
+        title={t('fileOptions')}
         togglePopover={toggleMenu}
         anchorElement={buttonRef}
         open={isOpen}
         className="md:pb-2"
       >
-        <Menu a11yLabel="File options panel">
+        <Menu a11yLabel={t('fileOptionsPanel')}>
           <FileMenuOptions
             selectedFiles={itemListController.selectedFiles}
             closeMenu={() => {

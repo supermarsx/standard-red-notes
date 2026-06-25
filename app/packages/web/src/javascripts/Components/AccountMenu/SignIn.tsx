@@ -15,7 +15,7 @@ import { useApplication } from '../ApplicationProvider'
 import { useCaptcha } from '@/Hooks/useCaptcha'
 import MergeLocalDataCheckbox from './MergeLocalDataCheckbox'
 import ConfirmNoMergeDialog from './ConfirmNoMergeDialog'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   setMenuPane: (pane: AccountMenuPane) => void
@@ -23,6 +23,7 @@ type Props = {
 
 const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const { notesAndTagsCount } = application.accountMenuController
   const [email, setEmail] = useState('')
@@ -276,7 +277,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           className={{ container: `mb-2 ${error ? 'border-danger' : null}` }}
           left={[<Icon type="email" className="text-neutral" />]}
           type="email"
-          placeholder={c('Label').t`Email`}
+          placeholder={t('account:email')}
           value={email}
           onChange={handleEmailChange}
           onFocus={resetInvalid}
@@ -292,7 +293,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           onChange={handlePasswordChange}
           onFocus={resetInvalid}
           onKeyDown={handleKeyDown}
-          placeholder={c('Label').t`Password`}
+          placeholder={t('account:password')}
           ref={passwordInputRef}
           value={password}
         />
@@ -306,7 +307,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           className={{ container: 'mb-2' }}
           left={[<Icon type="user" className="text-neutral" />]}
           type="text"
-          placeholder={c('Label').t`Workspace name (optional)`}
+          placeholder={t('workspaceNameOptional')}
           value={workspaceIdentifier}
           onChange={handleWorkspaceIdentifierChange}
           onFocus={resetInvalid}
@@ -317,7 +318,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         {error ? <div className="my-2 text-danger">{error}</div> : null}
         <Button
           className="mb-3 mt-1"
-          label={isSigningIn ? c('Action').t`Signing in...` : c('Action').t`Sign in`}
+          label={isSigningIn ? t('signingIn') : t('account:signIn')}
           primary
           onClick={handleSignInFormSubmit}
           disabled={isSigningIn}
@@ -325,7 +326,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         />
         <Checkbox
           name="is-ephemeral"
-          label={c('Option').t`Stay signed in`}
+          label={t('staySignedIn')}
           checked={!isEphemeral}
           disabled={isSigningIn || isRecoverySignIn}
           onChange={handleEphemeralChange}
@@ -367,14 +368,14 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
       <div className="mb-3 mt-1 flex items-center px-3">
         <IconButton
           icon="arrow-left"
-          title={c('Action').t`Go back`}
+          title={t('goBack')}
           className="mr-2 flex p-0 text-neutral"
           onClick={() => setMenuPane(AccountMenuPane.GeneralMenu)}
           focusable={true}
           disabled={isSigningIn}
         />
         <div className="text-base font-bold">
-          {showCaptcha ? c('Title').t`Human verification` : c('Title').t`Sign in`}
+          {showCaptcha ? t('humanVerification') : t('account:signIn')}
         </div>
       </div>
       {showCaptcha ? <div className="p-[10px]">{captchaIframe}</div> : signInForm}

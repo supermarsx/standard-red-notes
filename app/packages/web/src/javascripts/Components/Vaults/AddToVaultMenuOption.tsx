@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite'
 import { useCallback, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Icon from '@/Components/Icon/Icon'
 import { KeyboardKey } from '@standardnotes/ui-services'
 import Popover from '../Popover/Popover'
@@ -10,6 +11,7 @@ import Menu from '../Menu/Menu'
 
 const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
   const application = useApplication()
+  const { t } = useTranslation('sharing')
   const vaults = application.vaults.getVaults()
 
   const addItemsToVault = useCallback(
@@ -57,7 +59,7 @@ const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
   const singleItemVault = items.length === 1 ? application.vaults.getItemVault(items[0]) : undefined
 
   return (
-    <Menu a11yLabel="Vault selection menu">
+    <Menu a11yLabel={t('vaultSelectionMenu')}>
       {doSomeItemsBelongToVault && (
         <MenuItem
           onClick={() => {
@@ -65,10 +67,12 @@ const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
           }}
         >
           <Icon type="close" className="mr-2 text-neutral" />
-          Move out of {singleItemVault ? singleItemVault.name : 'vaults'}
+          {t('moveOutOfVault', { name: singleItemVault ? singleItemVault.name : t('vaultsFallbackName') })}
         </MenuItem>
       )}
-      {!vaults.length && <div className="flex flex-col items-center justify-center py-1">No vaults found</div>}
+      {!vaults.length && (
+        <div className="flex flex-col items-center justify-center py-1">{t('noVaultsFound')}</div>
+      )}
       {vaults.map((vault) => {
         if (singleItemVault) {
           return null
@@ -112,6 +116,7 @@ const AddToVaultMenuOption = ({
   disabled?: boolean
 }) => {
   const application = useApplication()
+  const { t } = useTranslation('sharing')
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   const [isSubMenuOpen, setIsSubMenuOpen] = useState(false)
@@ -139,12 +144,12 @@ const AddToVaultMenuOption = ({
       >
         <div className="flex items-center">
           <Icon type="safe-square" className={iconClassName} />
-          Move to vault
+          {t('moveToVault')}
         </div>
         <Icon type="chevron-right" className="text-neutral" />
       </MenuItem>
       <Popover
-        title="Move to vault"
+        title={t('moveToVault')}
         togglePopover={toggleSubMenu}
         anchorElement={buttonRef}
         open={isSubMenuOpen}

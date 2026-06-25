@@ -6,7 +6,7 @@ import { useApplication } from '@/Components/ApplicationProvider'
 import { isDesktopApplication } from '@/Utils'
 import RadioButtonGroup from '@/Components/RadioButtonGroup/RadioButtonGroup'
 import { DefaultHost } from '@standardnotes/snjs'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   className?: string
@@ -14,6 +14,7 @@ type Props = {
 
 const ServerPicker = ({ className }: Props) => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const [currentType, setCurrentType] = useState<ServerType>('standard')
 
@@ -50,7 +51,7 @@ const ServerPicker = ({ className }: Props) => {
     } else if (type === 'home server') {
       if (!application.homeServer) {
         application.alerts
-          .alert(c('Error').t`Home server is not running. Please open the prefences and home server tab to start it.`)
+          .alert(t('homeServerNotRunning'))
           .catch(console.error)
 
         return
@@ -59,7 +60,7 @@ const ServerPicker = ({ className }: Props) => {
       const homeServerUrl = await application.homeServer.getHomeServerUrl()
       if (!homeServerUrl) {
         application.alerts
-          .alert(c('Error').t`Home server is not running. Please open the prefences and home server tab to start it.`)
+          .alert(t('homeServerNotRunning'))
           .catch(console.error)
 
         return
@@ -72,18 +73,18 @@ const ServerPicker = ({ className }: Props) => {
   const options = useMemo(
     () =>
       [
-        { label: c('Option').t`Default`, value: 'standard' },
-        { label: c('Option').t`Custom`, value: 'custom' },
-      ].concat(isDesktopApplication() ? [{ label: c('Option').t`Home Server`, value: 'home server' }] : []) as {
+        { label: t('serverDefault'), value: 'standard' },
+        { label: t('serverCustom'), value: 'custom' },
+      ].concat(isDesktopApplication() ? [{ label: t('serverHomeServer'), value: 'home server' }] : []) as {
         label: string
         value: ServerType
       }[],
-    [],
+    [t],
   )
 
   return (
     <div className={`flex h-full flex-grow flex-col px-3 pb-1.5 ${className}`}>
-      <div className="mb-2 flex font-bold">{c('Label').t`Sync Server`}</div>
+      <div className="mb-2 flex font-bold">{t('syncServer')}</div>
       <RadioButtonGroup value={currentType} items={options} onChange={selectTab} />
       {currentType === 'custom' && (
         <DecoratedInput

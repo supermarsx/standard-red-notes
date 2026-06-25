@@ -1,7 +1,7 @@
 import Icon from '@/Components/Icon/Icon'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { ChangeEventHandler, FunctionComponent } from 'react'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   checked: boolean
@@ -11,6 +11,8 @@ type Props = {
 }
 
 const MergeLocalDataCheckbox: FunctionComponent<Props> = ({ checked, onChange, disabled, notesAndTagsCount }) => {
+  const { t } = useTranslation('auth')
+
   return (
     <label htmlFor="should-merge-local" className="fit-content mb-2 flex items-center text-sm">
       <input
@@ -22,10 +24,9 @@ const MergeLocalDataCheckbox: FunctionComponent<Props> = ({ checked, onChange, d
         onChange={onChange}
         disabled={disabled}
       />
-      <span className="text-danger">{c('Option').t`Merge local data (${notesAndTagsCount} notes and topics)`}</span>
+      <span className="text-danger">{t('mergeLocalData', { count: notesAndTagsCount })}</span>
       <StyledTooltip
-        label={c('Info')
-          .t`If unchecked, your local notes and topics will be permanently deleted and replaced with data from your account.`}
+        label={t('mergeLocalDataTooltip')}
         showOnMobile
         className="!z-modal !max-w-[30ch] whitespace-normal"
       >

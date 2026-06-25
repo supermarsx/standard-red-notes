@@ -2,6 +2,7 @@ import { classNames, IconType } from '@standardnotes/snjs'
 import IconButton from '@/Components/Button/IconButton'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { ElementFormatType } from 'lexical'
+import { useTranslation } from 'react-i18next'
 
 export function getCSSValueFromAlignment(format: ElementFormatType) {
   switch (format) {
@@ -19,17 +20,17 @@ export function getCSSValueFromAlignment(format: ElementFormatType) {
 const Options = [
   {
     alignment: 'left',
-    label: 'Left align',
+    labelKey: 'leftAlign',
   },
   {
     alignment: 'center',
-    label: 'Center align',
+    labelKey: 'centerAlign',
   },
   {
     alignment: 'right',
-    label: 'Right align',
+    labelKey: 'rightAlign',
   },
-]
+] as const
 
 export function ImageAlignmentOptions({
   alignment: currentAlignment,
@@ -38,7 +39,10 @@ export function ImageAlignmentOptions({
   alignment: ElementFormatType
   changeAlignment: (format: ElementFormatType) => void
 }) {
-  return Options.map(({ alignment, label }) => (
+  const { t } = useTranslation('files')
+  return Options.map(({ alignment, labelKey }) => {
+    const label = t(labelKey)
+    return (
     <StyledTooltip label={label} key={alignment}>
       <IconButton
         className={classNames(
@@ -60,5 +64,6 @@ export function ImageAlignmentOptions({
         }}
       />
     </StyledTooltip>
-  ))
+    )
+  })
 }

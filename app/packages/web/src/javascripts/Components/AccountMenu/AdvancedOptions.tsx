@@ -5,7 +5,7 @@ import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '../ApplicationProvider'
 import ServerPicker from './ServerPicker/ServerPicker'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   disabled?: boolean
@@ -23,6 +23,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
   children,
 }) => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const [showAdvanced, setShowAdvanced] = useState(true)
 
@@ -48,7 +49,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
 
       if (!identifier) {
         if (privateUsername?.length > 0) {
-          application.alerts.alert(c('Error').t`Unable to compute private username.`).catch(console.error)
+          application.alerts.alert(t('unableToComputePrivateUsername')).catch(console.error)
         }
         return
       }
@@ -58,7 +59,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
     if (privateUsername) {
       recomputePrivateUsername().catch(console.error)
     }
-  }, [privateUsername, application, onPrivateUsernameModeChange])
+  }, [privateUsername, application, onPrivateUsernameModeChange, t])
 
   useEffect(() => {
     onPrivateUsernameModeChange?.(isPrivateUsername)
@@ -110,7 +111,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
         onClick={toggleShowAdvanced}
       >
         <div className="flex items-center">
-          {c('Action').t`Advanced options`}
+          {t('advancedOptions')}
           <Icon type="chevron-down" className="ml-1 text-passive-1" />
         </div>
       </button>
@@ -122,7 +123,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
             <div className="mb-1 flex items-center justify-between">
               <Checkbox
                 name="private-workspace"
-                label={c('Option').t`Private username mode`}
+                label={t('privateUsernameMode')}
                 checked={isPrivateUsername}
                 disabled={disabled || isRecoveryCodes}
                 onChange={handleIsPrivateUsernameChange}
@@ -135,7 +136,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
                   className={{ container: 'mb-2' }}
                   left={[<Icon type="account-circle" className="text-neutral" />]}
                   type="text"
-                  placeholder={c('Label').t`Username`}
+                  placeholder={t('username')}
                   value={privateUsername}
                   onChange={handlePrivateUsernameNameChange}
                   disabled={disabled || isRecoveryCodes}
@@ -149,7 +150,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
               <div className="mb-1 flex items-center justify-between">
                 <Checkbox
                   name="use-strict-signin"
-                  label={c('Option').t`Use strict sign-in`}
+                  label={t('useStrictSignIn')}
                   checked={isStrictSignin}
                   disabled={disabled || isRecoveryCodes}
                   onChange={handleStrictSigninChange}
@@ -161,7 +162,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
               <div className="mb-1 flex items-center justify-between">
                 <Checkbox
                   name="recovery-codes"
-                  label={c('Option').t`Use recovery code`}
+                  label={t('useRecoveryCode')}
                   checked={isRecoveryCodes}
                   disabled={disabled}
                   onChange={handleIsRecoveryCodesChange}
@@ -175,7 +176,7 @@ const AdvancedOptions: FunctionComponent<Props> = ({
                   className={{ container: 'mb-2' }}
                   left={[<Icon type="security" className="text-neutral" />]}
                   type="text"
-                  placeholder={c('Label').t`Recovery code`}
+                  placeholder={t('recoveryCode')}
                   value={recoveryCodes}
                   onChange={handleRecoveryCodesChange}
                   disabled={disabled}

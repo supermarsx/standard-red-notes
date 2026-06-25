@@ -8,7 +8,7 @@ import MenuItem from '@/Components/Menu/MenuItem'
 import WorkspaceMenuItem from './WorkspaceMenuItem'
 import { useApplication } from '@/Components/ApplicationProvider'
 import MenuSection from '@/Components/Menu/MenuSection'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   mainApplicationGroup: WebApplicationGroup
@@ -20,6 +20,7 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
   hideWorkspaceOptions = false,
 }: Props) => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const [applicationDescriptors, setApplicationDescriptors] = useState<ApplicationDescriptor[]>(
     mainApplicationGroup.getDescriptors(),
@@ -43,16 +44,16 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
 
   const signoutAll = useCallback(async () => {
     const confirmed = await application.alerts.confirm(
-      c('Info').t`Are you sure you want to sign out of all workspaces on this device?`,
+      t('signOutAllWorkspacesConfirm'),
       undefined,
-      c('Action').t`Sign out all`,
+      t('signOutAll'),
       ButtonType.Danger,
     )
     if (!confirmed) {
       return
     }
     mainApplicationGroup.signOutAllWorkspaces().catch(console.error)
-  }, [mainApplicationGroup, application])
+  }, [mainApplicationGroup, application, t])
 
   const destroyWorkspace = useCallback(() => {
     application.accountMenuController.setSigningOut(true)
@@ -70,7 +71,7 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
   }, [mainApplicationGroup])
 
   return (
-    <Menu a11yLabel="Workspace switcher menu" className="focus:shadow-none">
+    <Menu a11yLabel={t('workspaceSwitcherMenuLabel')} className="focus:shadow-none">
       <MenuSection>
         {applicationDescriptors.map((descriptor) => (
           <WorkspaceMenuItem
@@ -87,12 +88,12 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
       <MenuSection>
         <MenuItem onClick={addAnotherWorkspace}>
           <Icon type="user-add" className="mr-2 text-neutral" />
-          {c('Action').t`Add another workspace`}
+          {t('addAnotherWorkspace')}
         </MenuItem>
         {!hideWorkspaceOptions && (
           <MenuItem onClick={signoutAll}>
             <Icon type="signOut" className="mr-2 text-neutral" />
-            {c('Action').t`Sign out all workspaces`}
+            {t('signOutAllWorkspaces')}
           </MenuItem>
         )}
       </MenuSection>

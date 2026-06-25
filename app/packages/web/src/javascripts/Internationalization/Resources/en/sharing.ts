@@ -3,6 +3,45 @@
  * comments/mentions, permissions). Source of truth: other locales fall back to
  * these until translated.
  */
-const sharing = {}
+const sharing = {
+  vaultSelectionMenu: 'Vault selection menu',
+  vaultOptionsMenu: 'Vault options menu',
+  vaultOptions: 'Vault options',
+  noVaultsFound: 'No vaults found',
+  moveToVault: 'Move to vault',
+  moveOutOfVault: 'Move out of {{name}}',
+  vaultsFallbackName: 'vaults',
+  editVault: 'Edit vault',
+  lockVault: 'Lock vault',
+  unlockVault: 'Unlock vault',
+  openVaultSettings: 'Open vault settings',
+  selectionModeMultiple: 'Multiple',
+  selectionModeOne: 'One',
+  lastEditedBy: 'Last edited by',
+  sharedBy: 'Shared by',
+  sharedByContact: 'Shared by contact',
+  vaultName: 'Vault name',
+  sharedInVault: 'Shared in vault',
+  copiedToClipboard: 'Copied to clipboard',
+  failedToCopyToClipboard: 'Failed to copy to clipboard',
+  copyExampleToClipboard: 'Copy example to clipboard',
+  copiedExclaim: 'Copied!',
+  shareUnavailableTitle: 'Share unavailable',
+  shareUnavailableMessage: 'This share link is no longer available.',
+  invalidLinkTitle: 'Invalid link',
+  invalidLinkMessage: 'This share link is invalid or the key is missing.',
+  selfDestructTitle: 'This note self-destructs after viewing',
+  oneTimeViewConsumed: 'You are reading a one-time-view link. It has now been consumed and cannot be reopened',
+  oneTimeViewExpiresClause_one: ', and fully expires {{count}} minute from the first open',
+  oneTimeViewExpiresClause_other: ', and fully expires {{count}} minutes from the first open',
+  linkExpires_one: 'This link expires {{count}} minute after it was first opened.',
+  linkExpires_other: 'This link expires {{count}} minutes after it was first opened.',
+  untitled: 'Untitled',
+  tagHasNoNotes: 'This tag has no notes.',
+  publicReadOnlyFooter: 'This is a public, read-only shared link. The content was decrypted in your browser.',
+  confidentialWatermark: 'Confidential · {{datetime}}',
+  contentHiddenTitle: 'Content hidden',
+  contentHiddenMessage: 'Return focus to this window to view the shared content.',
+}
 
 export default sharing

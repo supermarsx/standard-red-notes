@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Button from '../Button/Button'
 import { startAuthentication } from '@simplewebauthn/browser'
 import { log, LoggingDomain } from '@/Logging'
@@ -9,6 +10,7 @@ import { log, LoggingDomain } from '@/Logging'
  * directly.
  */
 const U2FAuthIframe = () => {
+  const { t } = useTranslation('auth')
   const [username, setUsername] = useState('')
   const [apiHost, setApiHost] = useState<string | null>(null)
   const [source, setSource] = useState<MessageEvent['source'] | null>(null)
@@ -74,7 +76,7 @@ const U2FAuthIframe = () => {
         throw new Error('No options returned from server')
       }
 
-      setInfo('Waiting for security key...')
+      setInfo(t('waitingForSecurityKey'))
 
       const assertionResponse = await startAuthentication(jsonResponse.data.options)
 
@@ -85,7 +87,7 @@ const U2FAuthIframe = () => {
         NATIVE_CLIENT_ORIGIN,
       )
 
-      setInfo('Authentication successful!')
+      setInfo(t('authenticationSuccessful'))
     } catch (error) {
       if (!error) {
         return
@@ -93,14 +95,12 @@ const U2FAuthIframe = () => {
       setError(JSON.stringify(error))
       console.error(error)
     }
-  }, [source, username, apiHost])
+  }, [source, username, apiHost, t])
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-2">
-      <div className="mb-2 text-center">
-        Insert your hardware security key, then press the button below to authenticate.
-      </div>
-      <Button onClick={beginAuthentication}>Authenticate</Button>
+      <div className="mb-2 text-center">{t('insertSecurityKeyPrompt')}</div>
+      <Button onClick={beginAuthentication}>{t('authenticate')}</Button>
       <div className="mt-2">
         <div>{info}</div>
         <div className="text-danger">{error}</div>

@@ -1,4 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Menu from '../Menu/Menu'
 import { useApplication } from '../ApplicationProvider'
 import { ContentType, VaultListingInterface } from '@standardnotes/snjs'
@@ -9,6 +10,7 @@ import MenuSwitchButtonItem from '../Menu/MenuSwitchButtonItem'
 
 const ManyVaultSelectionMenu: FunctionComponent = () => {
   const application = useApplication()
+  const { t } = useTranslation('sharing')
 
   const [vaults, setVaults] = useState(() => application.vaults.getVaults())
   useEffect(() => {
@@ -36,8 +38,8 @@ const ManyVaultSelectionMenu: FunctionComponent = () => {
   )
 
   return (
-    <Menu a11yLabel="Vault selection menu">
-      {!vaults.length && <div className="py-1 text-center">No vaults found</div>}
+    <Menu a11yLabel={t('vaultSelectionMenu')}>
+      {!vaults.length && <div className="py-1 text-center">{t('noVaultsFound')}</div>}
       {vaults.map((vault) => (
         <VaultSelectMenuItemWithOptions vault={vault} key={vault.uuid}>
           <MenuSwitchButtonItem

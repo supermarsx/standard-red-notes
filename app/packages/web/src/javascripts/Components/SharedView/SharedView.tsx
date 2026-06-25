@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { sanitizeHtmlString } from '@standardnotes/snjs'
 import { markdownToHtml } from '@/Utils/markdownToHtml'
 import { decryptShare, SharePayload } from './shareCrypto'
@@ -37,6 +38,7 @@ const renderMarkdown = (text: string): string => sanitizeHtmlString(markdownToHt
  * page has no access to. These measures only raise the effort/visibility bar.
  */
 const SharedView = ({ shareId }: Props) => {
+  const { t } = useTranslation('sharing')
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   // True while the page is hidden or unfocused — we cover the content so an
   // inactive-window or alt-tab screenshot shows the overlay, not the note. This
@@ -146,7 +148,7 @@ const SharedView = ({ shareId }: Props) => {
   const isReady = state.status === 'ready'
   const isBurn = isReady && state.meta.oneTimeView
   const expiresMinutes = isReady ? state.meta.viewExpiresMinutes : null
-  const watermark = `Confidential · ${new Date().toLocaleString()}`
+  const watermark = t('confidentialWatermark', { datetime: new Date().toLocaleString() })
 
   // Disable text selection + context menu on the shared content as a (weak)
   // copy/save deterrent. These do not stop screenshots or DevTools.
@@ -162,30 +164,28 @@ const SharedView = ({ shareId }: Props) => {
       onContextMenu={blockContextMenu}
     >
       <div className="w-full max-w-2xl">
-        {state.status === 'loading' && <div className="text-center text-passive-0">Loading…</div>}
+        {state.status === 'loading' && <div className="text-center text-passive-0">{t('common:loading')}</div>}
 
         {state.status === 'gone' && (
           <div className="rounded border border-solid border-border p-6 text-center">
-            <div className="text-lg font-bold">Share unavailable</div>
-            <div className="mt-2 text-passive-0">This share link is no longer available.</div>
+            <div className="text-lg font-bold">{t('shareUnavailableTitle')}</div>
+            <div className="mt-2 text-passive-0">{t('shareUnavailableMessage')}</div>
           </div>
         )}
 
         {state.status === 'invalid' && (
           <div className="rounded border border-solid border-border p-6 text-center">
-            <div className="text-lg font-bold">Invalid link</div>
-            <div className="mt-2 text-passive-0">This share link is invalid or the key is missing.</div>
+            <div className="text-lg font-bold">{t('invalidLinkTitle')}</div>
+            <div className="mt-2 text-passive-0">{t('invalidLinkMessage')}</div>
           </div>
         )}
 
         {isBurn && (
           <div className="mb-4 rounded border border-solid border-danger bg-danger-faded p-3 text-center text-sm">
-            <div className="font-bold text-danger">This note self-destructs after viewing</div>
+            <div className="font-bold text-danger">{t('selfDestructTitle')}</div>
             <div className="mt-1">
-              You are reading a one-time-view link. It has now been consumed and cannot be reopened
-              {expiresMinutes != null ? `, and fully expires ${expiresMinutes} minute${
-                expiresMinutes === 1 ? '' : 's'
-              } from the first open` : ''}
+              {t('oneTimeViewConsumed')}
+              {expiresMinutes != null ? t('oneTimeViewExpiresClause', { count: expiresMinutes }) : ''}
               .
             </div>
           </div>
@@ -193,13 +193,13 @@ const SharedView = ({ shareId }: Props) => {
 
         {isReady && !isBurn && expiresMinutes != null && (
           <div className="mb-4 rounded border border-solid border-warning bg-warning-faded p-3 text-center text-sm">
-            This link expires {expiresMinutes} minute{expiresMinutes === 1 ? '' : 's'} after it was first opened.
+            {t('linkExpires', { count: expiresMinutes })}
           </div>
         )}
 
         {state.status === 'ready' && state.payload.kind === 'note' && (
           <article className="select-none" style={{ WebkitUserSelect: 'none', userSelect: 'none' }}>
-            <h1 className="mb-4 text-2xl font-bold">{state.payload.title || 'Untitled'}</h1>
+            <h1 className="mb-4 text-2xl font-bold">{state.payload.title || t('untitled')}</h1>
             <div
               className="markdown-preview font-editor break-words"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(state.payload.text) }}
@@ -209,11 +209,11 @@ const SharedView = ({ shareId }: Props) => {
 
         {state.status === 'ready' && state.payload.kind === 'tag' && (
           <article className="select-none" style={{ WebkitUserSelect: 'none', userSelect: 'none' }}>
-            <h1 className="mb-6 text-2xl font-bold">{state.payload.title || 'Untitled'}</h1>
-            {state.payload.notes.length === 0 && <div className="text-passive-0">This tag has no notes.</div>}
+            <h1 className="mb-6 text-2xl font-bold">{state.payload.title || t('untitled')}</h1>
+            {state.payload.notes.length === 0 && <div className="text-passive-0">{t('tagHasNoNotes')}</div>}
             {state.payload.notes.map((note, index) => (
               <section key={index} className="mb-8 border-b border-solid border-border pb-6 last:border-b-0">
-                <h2 className="mb-2 text-xl font-semibold">{note.title || 'Untitled'}</h2>
+                <h2 className="mb-2 text-xl font-semibold">{note.title || t('untitled')}</h2>
                 <div
                   className="markdown-preview font-editor break-words"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
@@ -225,7 +225,7 @@ const SharedView = ({ shareId }: Props) => {
 
         {state.status === 'ready' && (
           <div className="mt-10 border-t border-solid border-border pt-4 text-center text-xs text-passive-0">
-            This is a public, read-only shared link. The content was decrypted in your browser.
+            {t('publicReadOnlyFooter')}
           </div>
         )}
       </div>
@@ -246,8 +246,8 @@ const SharedView = ({ shareId }: Props) => {
       {isReady && obscured && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-default text-center">
           <div className="px-6">
-            <div className="text-lg font-bold">Content hidden</div>
-            <div className="mt-2 text-passive-0">Return focus to this window to view the shared content.</div>
+            <div className="text-lg font-bold">{t('contentHiddenTitle')}</div>
+            <div className="mt-2 text-passive-0">{t('contentHiddenMessage')}</div>
           </div>
         </div>
       )}

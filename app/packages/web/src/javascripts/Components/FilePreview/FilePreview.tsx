@@ -15,6 +15,7 @@ import Button from '../Button/Button'
 import { ProtectedIllustration } from '@standardnotes/icons'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import { PdfDeepLinkTarget } from './PdfDeepLink'
+import { useTranslation } from 'react-i18next'
 
 type Props = {
   application: WebApplication
@@ -40,6 +41,7 @@ const FilePreview = ({
   setFloat,
   isImageSelected,
 }: Props) => {
+  const { t } = useTranslation('files')
   const [isAuthorized, setIsAuthorized] = useState(application.isAuthorizedToRenderItem(file))
 
   const isFilePreviewable = useMemo(() => {
@@ -111,20 +113,18 @@ const FilePreview = ({
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
         <ProtectedIllustration className="mb-4 h-30 w-30" />
-        <div className="mb-2 text-base font-bold">This file is protected.</div>
+        <div className="mb-2 text-base font-bold">{t('fileProtected')}</div>
         <p className="max-w-[35ch] text-center text-sm text-passive-0">
-          {hasProtectionSources
-            ? 'Authenticate to view this file.'
-            : 'Add a passcode or create an account to require authentication to view this file.'}
+          {hasProtectionSources ? t('authenticateToView') : t('addPasscodeToView')}
         </p>
         <div className="mt-3 flex gap-3">
           {!hasProtectionSources && (
             <Button primary small onClick={() => application.showAccountMenu()}>
-              Open account menu
+              {t('openAccountMenu')}
             </Button>
           )}
           <Button primary onClick={() => application.protections.authorizeItemAccess(file)}>
-            {hasProtectionSources ? 'Authenticate' : 'View file'}
+            {hasProtectionSources ? t('authenticate') : t('viewFile')}
           </Button>
         </div>
       </div>
@@ -144,7 +144,7 @@ const FilePreview = ({
           {fileProgressToHumanReadableString(downloadProgress, file.name, { showPercent: false })}
         </span>
       ) : (
-        <span className="mt-3">Loading...</span>
+        <span className="mt-3">{t('loading')}</span>
       )}
     </div>
   ) : downloadedBytes ? (

@@ -1,10 +1,11 @@
 import { observer } from 'mobx-react-lite'
 import { User as UserType } from '@standardnotes/snjs'
 import { useApplication } from '../ApplicationProvider'
-import { c } from 'ttag'
+import { useTranslation } from 'react-i18next'
 
 const User = () => {
   const application = useApplication()
+  const { t } = useTranslation('auth')
 
   const { server } = application.accountMenuController
   const user = application.sessions.getUser() as UserType
@@ -13,10 +14,9 @@ const User = () => {
     <div className="sk-panel-section">
       {application.syncStatusController.errorMessage && (
         <div className="sk-notification danger">
-          <div className="sk-notification-title">{c('Title').t`Sync Unreachable`}</div>
+          <div className="sk-notification-title">{t('syncUnreachable')}</div>
           <div className="sk-notification-text">
-            {c('Error')
-              .t`Hmm...we can't seem to sync your account. The reason: ${application.syncStatusController.errorMessage}`}
+            {t('syncUnreachableMessage', { reason: application.syncStatusController.errorMessage })}
           </div>
         </div>
       )}
