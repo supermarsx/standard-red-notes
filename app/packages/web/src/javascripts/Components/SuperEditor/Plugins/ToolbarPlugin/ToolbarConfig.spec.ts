@@ -99,4 +99,86 @@ describe('normalizeToolbarConfig', () => {
     expect(normalizeToolbarConfig(null)).toEqual({ groupOrder: [], hiddenButtonIds: [] })
     expect(normalizeToolbarConfig('x')).toEqual({ groupOrder: [], hiddenButtonIds: [] })
   })
+
+  it('omits the new optional fields entirely for an empty/default config (no-op shape)', () => {
+    const normalized = normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [] })
+    expect(normalized).toEqual({ groupOrder: [], hiddenButtonIds: [] })
+    expect('buttonOrder' in normalized).toBe(false)
+    expect('groupRows' in normalized).toBe(false)
+    expect('horizontalScroll' in normalized).toBe(false)
+  })
+
+  it('keeps valid buttonOrder entries scoped to their own group, dropping foreign/unknown ids', () => {
+    const normalized = normalizeToolbarConfig({
+      groupOrder: [],
+      hiddenButtonIds: [],
+      buttonOrder: {
+        [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold, ToolbarButtonId.Cut, '__nope__'],
+        __unknownGroup__: [ToolbarButtonId.Bold],
+      },
+    })
+    // Cut belongs to Clipboard, not TextStyle, so it's dropped; unknown ids too.
+    expect(normalized.buttonOrder).toEqual({
+      [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Italic, ToolbarButtonId.Bold],
+    })
+  })
+
+  it('clamps groupRows to 1-3 and drops default (1) values', () => {
+    const normalized = normalizeToolbarConfig({
+      groupOrder: [],
+      hiddenButtonIds: [],
+      groupRows: {
+        [ToolbarGroupId.ParagraphList]: 9, // clamped to 3
+        [ToolbarGroupId.TextStyle]: 0, // clamped to 1 == default -> dropped
+        [ToolbarGroupId.ColorFont]: 1, // default -> dropped
+        [ToolbarGroupId.Insert]: 2, // kept
+        __unknownGroup__: 2, // unknown group -> dropped
+      },
+    })
+    expect(normalized.groupRows).toEqual({
+      [ToolbarGroupId.ParagraphList]: 3,
+      [ToolbarGroupId.Insert]: 2,
+    })
+  })
+
+  it('retains horizontalScroll only when explicitly true', () => {
+    expect(normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: true }).horizontalScroll).toBe(
+      true,
+    )
+    expect('horizontalScroll' in normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: false })).toBe(
+      false,
+    )
+  })
+})
+
+describe('applyToolbarConfig with new fields', () => {
+  it('reorders buttons within a group, appending unlisted defaults', () => {
+    const result = applyToolbarConfig({
+      groupOrder: [],
+      hiddenButtonIds: [],
+      buttonOrder: { [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Link, ToolbarButtonId.Bold] },
+    })
+    const textGroup = result.find((g) => g.id === ToolbarGroupId.TextStyle)
+    expect(textGroup).toBeDefined()
+    const ids = textGroup!.buttons.map((b) => b.id)
+    expect(ids[0]).toBe(ToolbarButtonId.Link)
+    expect(ids[1]).toBe(ToolbarButtonId.Bold)
+    // All original buttons still present.
+    const defaultTextIds = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.TextStyle)!.buttons.map(
+      (b) => b.id,
+    )
+    expect(new Set(ids)).toEqual(new Set(defaultTextIds))
+  })
+
+  it('exposes per-group rows when overridden and never on the default config', () => {
+    const withRows = applyToolbarConfig({
+      groupOrder: [],
+      hiddenButtonIds: [],
+      groupRows: { [ToolbarGroupId.ParagraphList]: 3 },
+    })
+    expect(withRows.find((g) => g.id === ToolbarGroupId.ParagraphList)?.rows).toBe(3)
+    // Default config has no `rows` key on any group.
+    const defaults = applyToolbarConfig({ groupOrder: [], hiddenButtonIds: [] })
+    expect(defaults.every((g) => !('rows' in g))).toBe(true)
+  })
 })

@@ -6,16 +6,12 @@ import useModal from '../../Lexical/Hooks/useModal'
 import { InsertTableDialog } from '../../Plugins/TablePlugin'
 import { BlockPickerOption } from './BlockPickerOption'
 import { BlockPickerMenuItem } from './BlockPickerMenuItem'
-import { GetDynamicPasswordBlocks, GetPasswordBlockOption } from '../Blocks/Password'
-import { GetDynamicTableBlocks, GetTableBlockOption } from '../Blocks/Table'
+import { GetDynamicPasswordBlocks } from '../Blocks/Password'
+import { GetDynamicTableBlocks } from '../Blocks/Table'
 import Popover from '@/Components/Popover/Popover'
-import { GetDatetimeBlockOptions } from '../Blocks/DateTime'
 import { isMobileScreen } from '@/Utils'
 import { useApplication } from '@/Components/ApplicationProvider'
-import { GetRemoteImageBlockOption } from '../Blocks/RemoteImage'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
-import { GetParagraphBlockOption } from '../Blocks/Paragraph'
-import { GetH1BlockOption, GetH2BlockOption, GetH3BlockOption } from '../Blocks/Headings'
 import { GetIndentBlockOption, GetOutdentBlockOption } from '../Blocks/IndentOutdent'
 import {
   GetCenterAlignBlockOption,
@@ -23,34 +19,9 @@ import {
   GetLeftAlignBlockOption,
   GetRightAlignBlockOption,
 } from '../Blocks/Alignment'
-import { GetNumberedListBlockOption, GetBulletedListBlockOption, GetChecklistBlockOption } from '../Blocks/List'
-import { GetCodeBlockOption } from '../Blocks/Code'
-import { GetQuoteBlockOption } from '../Blocks/Quote'
-import { GetDividerBlockOption } from '../Blocks/Divider'
-import { GetCollapsibleBlockOption } from '../Blocks/Collapsible'
-import { GetUploadFileOption } from '../Blocks/File'
-import { GetMermaidBlockOption } from '../Blocks/Mermaid'
-import { GetExcalidrawBlockOption } from '../Blocks/Excalidraw'
-import { GetKanbanBlockOption } from '../Blocks/Kanban'
-import { GetCalendarBlockOption } from '../Blocks/Calendar'
-import { GetDataviewBlockOption } from '../Blocks/Dataview'
-import { GetCalloutBlockOption } from '../Blocks/Callout'
-import { GetEmbedBlockOption } from '../Blocks/Embed'
-import { GetWebEmbedBlockOption } from '../Blocks/WebEmbed'
-import { GetTweetEmbedBlockOption } from '../Blocks/TweetEmbed'
-import { GetMathBlockOption } from '../Blocks/Math'
-import { GetInlineMathBlockOption } from '../Blocks/InlineMath'
-import { GetFootnoteBlockOption } from '../Blocks/Footnote'
-import { GetBookmarkBlockOption } from '../Blocks/Bookmark'
-import { GetTimelineBlockOption } from '../Blocks/Timeline'
-import { GetQrCodeBlockOption } from '../Blocks/QrCode'
-import { GetTradingViewBlockOption } from '../Blocks/TradingView'
-import { GetStockChartBlockOption } from '../Blocks/StockChart'
-import { GetSqlQueryBlockOption } from '../Blocks/SqlQuery'
-import { GetGanttChartBlockOption } from '../Blocks/GanttChart'
-import { GetTimingDiagramBlockOption } from '../Blocks/TimingDiagram'
-import { GetMusicStaffBlockOption } from '../Blocks/MusicStaff'
-import { GetClockBlockOption } from '../Blocks/Clock'
+import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
+import { LexicalIconName } from '@/Components/Icon/LexicalIcons'
+import { getFullBlockCatalog, BlockCatalogContext } from '../Blocks/blockCatalog'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -63,58 +34,38 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
   })
 
   const options = useMemo(() => {
+    // Shared modal/command helpers the catalog's dialog-opening blocks need.
+    const catalogContext: BlockCatalogContext = {
+      openInsertTableDialog: () =>
+        showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
+      openInsertImageFromUrlDialog: () =>
+        showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
+      openFileUpload: () => editor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
+    }
+
+    // The slash picker shares the toolbar Insert menu's single source of truth
+    // (blockCatalog) so the two stay in parity. Indent/Outdent (mobile-only) and
+    // the alignment shortcuts have no catalog entry, so they're appended here.
+    const catalogOptions = getFullBlockCatalog(editor).map(
+      (entry) =>
+        new BlockPickerOption(entry.name, {
+          iconName: entry.iconName as LexicalIconName,
+          keywords: entry.keywords,
+          onSelect: () => entry.onSelect(editor, catalogContext),
+        }),
+    )
+
     const indentOutdentOptions = application.isNativeMobileWeb()
       ? [GetIndentBlockOption(editor), GetOutdentBlockOption(editor)]
       : []
 
     const baseOptions = [
-      GetParagraphBlockOption(editor),
-      GetH1BlockOption(editor),
-      GetH2BlockOption(editor),
-      GetH3BlockOption(editor),
+      ...catalogOptions,
       ...indentOutdentOptions,
-      GetTableBlockOption(() =>
-        showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
-      ),
-      GetRemoteImageBlockOption(() => {
-        showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />)
-      }),
-      GetUploadFileOption(editor),
-      GetNumberedListBlockOption(editor),
-      GetBulletedListBlockOption(editor),
-      GetChecklistBlockOption(editor),
-      GetQuoteBlockOption(editor),
-      GetCodeBlockOption(editor),
-      GetMermaidBlockOption(editor),
-      GetExcalidrawBlockOption(editor),
-      GetKanbanBlockOption(editor),
-      GetCalendarBlockOption(editor),
-      GetTimelineBlockOption(editor),
-      GetQrCodeBlockOption(editor),
-      GetTradingViewBlockOption(editor),
-      GetStockChartBlockOption(editor),
-      GetSqlQueryBlockOption(editor),
-      GetGanttChartBlockOption(editor),
-      GetTimingDiagramBlockOption(editor),
-      GetMusicStaffBlockOption(editor),
-      GetClockBlockOption(editor),
-      GetDataviewBlockOption(editor),
-      GetCalloutBlockOption(editor),
-      GetEmbedBlockOption(editor),
-      GetWebEmbedBlockOption(editor),
-      GetTweetEmbedBlockOption(editor),
-      GetMathBlockOption(editor),
-      GetInlineMathBlockOption(editor),
-      GetFootnoteBlockOption(editor),
-      GetBookmarkBlockOption(editor),
-      GetDividerBlockOption(editor),
-      ...GetDatetimeBlockOptions(editor),
       GetLeftAlignBlockOption(editor),
       GetCenterAlignBlockOption(editor),
       GetRightAlignBlockOption(editor),
       GetJustifyAlignBlockOption(editor),
-      GetPasswordBlockOption(editor),
-      GetCollapsibleBlockOption(editor),
     ]
 
     const dynamicOptions = [

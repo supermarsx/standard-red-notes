@@ -66,6 +66,7 @@ export enum ToolbarButtonId {
   // Insert
   InsertMenu = 'insertMenu',
   NoteFromSelection = 'noteFromSelection',
+  Dictation = 'dictation',
   // AI
   AI = 'ai',
 }
@@ -83,7 +84,18 @@ export type ToolbarGroupDescriptor = {
   /** Short title shown beneath the group in the toolbar (Office-ribbon style). */
   caption?: string
   buttons: ToolbarButtonDescriptor[]
+  /**
+   * How many rows the group's buttons may wrap onto (1–3). Set by the user's
+   * per-group `groupRows` config; `applyToolbarConfig` populates it. When unset
+   * the toolbar treats the group as a single row (default).
+   */
+  rows?: number
 }
+
+/** Minimum / maximum / default rows a group may wrap its buttons onto. */
+export const MIN_GROUP_ROWS = 1
+export const MAX_GROUP_ROWS = 3
+export const DEFAULT_GROUP_ROWS = 1
 
 /**
  * The full, default toolbar definition. Order here IS the default order
@@ -171,6 +183,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.InsertMenu, label: 'Insert menu', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.NoteFromSelection, label: 'Create note from selection', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.Dictation, label: 'Dictate (speech-to-text)', group: ToolbarGroupId.Insert },
     ],
   },
   {
@@ -194,6 +207,19 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
 export type SuperToolbarConfig = {
   groupOrder: string[]
   hiddenButtonIds: string[]
+  /**
+   * Per-group ordered button ids. A group key maps to the order its buttons
+   * should appear in; ids not listed fall back to their default position
+   * (appended in default order). Unknown groups/buttons are dropped.
+   */
+  buttonOrder?: Record<string, string[]>
+  /** Per-group number of rows the buttons may wrap onto (clamped 1–3). */
+  groupRows?: Record<string, number>
+  /**
+   * When true, the toolbar stays on a single line with horizontal scroll
+   * (legacy behavior). Default/undefined == wrap onto multiple lines.
+   */
+  horizontalScroll?: boolean
 }
 
 export const DEFAULT_SUPER_TOOLBAR_CONFIG: SuperToolbarConfig = {
@@ -205,6 +231,13 @@ const ALL_GROUP_IDS = new Set<string>(DEFAULT_TOOLBAR_GROUPS.map((g) => g.id))
 const ALL_BUTTON_IDS = new Set<string>(
   DEFAULT_TOOLBAR_GROUPS.flatMap((g) => g.buttons.map((b) => b.id)),
 )
+/** group id -> set of button ids that legitimately belong to that group. */
+const BUTTON_IDS_BY_GROUP = new Map<string, Set<string>>(
+  DEFAULT_TOOLBAR_GROUPS.map((g) => [g.id, new Set<string>(g.buttons.map((b) => b.id))]),
+)
+
+const clampRows = (value: number): number =>
+  Math.min(MAX_GROUP_ROWS, Math.max(MIN_GROUP_ROWS, Math.round(value)))
 
 /**
  * Coerce an arbitrary (possibly malformed / partially-known) persisted value
@@ -230,7 +263,55 @@ export function normalizeToolbarConfig(raw: unknown): SuperToolbarConfig {
       ) as ToolbarButtonId[])
     : []
 
-  return { groupOrder, hiddenButtonIds }
+  const result: SuperToolbarConfig = { groupOrder, hiddenButtonIds }
+
+  // buttonOrder: keep only known groups, and within each only that group's own
+  // (unique) button ids. Empty / fully-invalid maps are dropped so the default
+  // config stays a literal `{ groupOrder: [], hiddenButtonIds: [] }`.
+  if (candidate.buttonOrder && typeof candidate.buttonOrder === 'object' && !Array.isArray(candidate.buttonOrder)) {
+    const cleaned: Record<string, string[]> = {}
+    for (const [groupId, ids] of Object.entries(candidate.buttonOrder as Record<string, unknown>)) {
+      const validIds = BUTTON_IDS_BY_GROUP.get(groupId)
+      if (!validIds || !Array.isArray(ids)) {
+        continue
+      }
+      const order = ids.filter(
+        (id, index, arr) => typeof id === 'string' && validIds.has(id) && arr.indexOf(id) === index,
+      ) as string[]
+      if (order.length > 0) {
+        cleaned[groupId] = order
+      }
+    }
+    if (Object.keys(cleaned).length > 0) {
+      result.buttonOrder = cleaned
+    }
+  }
+
+  // groupRows: keep only known groups with a finite, clamped (1–3) row count
+  // that differs from the default (DEFAULT_GROUP_ROWS), so a default config is a
+  // literal no-op.
+  if (candidate.groupRows && typeof candidate.groupRows === 'object' && !Array.isArray(candidate.groupRows)) {
+    const cleaned: Record<string, number> = {}
+    for (const [groupId, rows] of Object.entries(candidate.groupRows as Record<string, unknown>)) {
+      if (!ALL_GROUP_IDS.has(groupId) || typeof rows !== 'number' || !Number.isFinite(rows)) {
+        continue
+      }
+      const clamped = clampRows(rows)
+      if (clamped !== DEFAULT_GROUP_ROWS) {
+        cleaned[groupId] = clamped
+      }
+    }
+    if (Object.keys(cleaned).length > 0) {
+      result.groupRows = cleaned
+    }
+  }
+
+  // horizontalScroll: only retained when explicitly true (false == default).
+  if (candidate.horizontalScroll === true) {
+    result.horizontalScroll = true
+  }
+
+  return result
 }
 
 /**
@@ -276,11 +357,44 @@ export function applyToolbarConfig(
     if (!group) {
       continue
     }
-    const buttons = group.buttons.filter((b) => !hidden.has(b.id))
+
+    // Apply per-group button ordering (explicit ids first, remaining defaults
+    // appended in default order), then drop hidden buttons.
+    let buttons = group.buttons
+    const order = config.buttonOrder?.[groupId]
+    if (order && order.length > 0) {
+      const buttonById = new Map(group.buttons.map((b) => [b.id as string, b]))
+      const ordered: typeof group.buttons = []
+      const placed = new Set<string>()
+      for (const id of order) {
+        const btn = buttonById.get(id)
+        if (btn && !placed.has(id)) {
+          ordered.push(btn)
+          placed.add(id)
+        }
+      }
+      for (const btn of group.buttons) {
+        if (!placed.has(btn.id)) {
+          ordered.push(btn)
+          placed.add(btn.id)
+        }
+      }
+      buttons = ordered
+    }
+
+    buttons = buttons.filter((b) => !hidden.has(b.id))
     if (buttons.length === 0) {
       continue
     }
-    result.push({ ...group, buttons })
+
+    // Only attach `rows` when the user overrode it, so a default config stays
+    // deep-equal to DEFAULT_TOOLBAR_GROUPS (no stray `rows` key).
+    const rows = config.groupRows?.[groupId]
+    if (rows != null && rows !== DEFAULT_GROUP_ROWS) {
+      result.push({ ...group, buttons, rows })
+    } else {
+      result.push({ ...group, buttons })
+    }
   }
 
   return result

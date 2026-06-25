@@ -51,6 +51,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -58,8 +59,6 @@ import {
 import { CenterAlignBlock, JustifyAlignBlock, LeftAlignBlock, RightAlignBlock } from '../Blocks/Alignment'
 import { BulletedListBlock, ChecklistBlock, NumberedListBlock } from '../Blocks/List'
 import { CodeBlock } from '../Blocks/Code'
-import { CollapsibleBlock } from '../Blocks/Collapsible'
-import { DividerBlock } from '../Blocks/Divider'
 import { H1Block, H2Block, H3Block } from '../Blocks/Headings'
 import { IndentBlock, OutdentBlock } from '../Blocks/IndentOutdent'
 import { ParagraphBlock } from '../Blocks/Paragraph'
@@ -71,19 +70,6 @@ import { useApplication } from '@/Components/ApplicationProvider'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { Toolbar, ToolbarItem, useToolbarStore } from '@ariakit/react'
-import { PasswordBlock } from '../Blocks/Password'
-import { KanbanBlock } from '../Blocks/Kanban'
-import { CalendarBlock } from '../Blocks/Calendar'
-import { TimelineBlock } from '../Blocks/Timeline'
-import { DataviewBlock } from '../Blocks/Dataview'
-import { CalloutBlock } from '../Blocks/Callout'
-import { EmbedBlock } from '../Blocks/Embed'
-import { WebEmbedBlock } from '../Blocks/WebEmbed'
-import { TweetEmbedBlock } from '../Blocks/TweetEmbed'
-import { MathBlock } from '../Blocks/Math'
-import { InlineMathBlock } from '../Blocks/InlineMath'
-import { MermaidBlock } from '../Blocks/Mermaid'
-import { FootnoteBlock } from '../Blocks/Footnote'
 import { URL_REGEX } from '@/Constants/Constants'
 import Popover from '@/Components/Popover/Popover'
 import { TableOfContentsPlugin } from '@lexical/react/LexicalTableOfContentsPlugin'
@@ -116,9 +102,16 @@ import {
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import { useLocalPreference } from '@/Hooks/usePreference'
-import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
+import { applyToolbarConfig, DEFAULT_GROUP_ROWS, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
+import {
+  BlockCatalogContext,
+  filterBlockCatalog,
+  getFullBlockCatalog,
+  groupBlockCatalogByCategory,
+} from '../Blocks/blockCatalog'
+import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import {
   $deleteTableColumnAtSelection,
   $deleteTableRowAtSelection,
@@ -142,7 +135,6 @@ import {
   resolveContextualWidget,
 } from './ContextualToolbar'
 import BlockZoomOverlay from './BlockZoomOverlay'
-import { TableOfContentsBlock } from '../Blocks/TableOfContents'
 import { FORMAT_PAINTER_TOGGLE } from '../FormatPainterPlugin'
 import { useFormatPainter } from '../FormatPainterPlugin'
 import { useFormattingMarks } from '../FormattingMarksPlugin/FormattingMarksPlugin'
@@ -230,6 +222,24 @@ const FONT_FAMILIES: { name: string; value: string | null }[] = [
   { name: 'Courier New', value: '"Courier New", monospace' },
   { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
 ]
+
+/**
+ * Split a group's buttons into up to `rows` near-equal, top-heavy rows so a
+ * button-heavy group renders as a compact 2–3 row block. `rows === 1` (or fewer
+ * buttons than rows) collapses to a single row, preserving the prior behavior.
+ */
+function splitIntoRows<T>(items: T[], rows: number): T[][] {
+  const rowCount = Math.max(1, Math.min(rows, items.length || 1))
+  if (rowCount <= 1) {
+    return [items]
+  }
+  const perRow = Math.ceil(items.length / rowCount)
+  const result: T[][] = []
+  for (let i = 0; i < items.length; i += perRow) {
+    result.push(items.slice(i, i + perRow))
+  }
+  return result
+}
 
 const toCamelCase = (text: string): string => {
   const words = text.split(/[^a-zA-Z0-9]+/).filter((word) => word.length > 0)
@@ -394,6 +404,9 @@ const ToolbarPlugin = () => {
 
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false)
   const insertAnchorRef = useRef<HTMLButtonElement>(null)
+  // Mini search box at the top of the Insert menu so the (now full) block list
+  // can be filtered by name/keyword instead of scrolled.
+  const [insertMenuQuery, setInsertMenuQuery] = useState('')
 
   const [isTextColorMenuOpen, setIsTextColorMenuOpen] = useState(false)
   const textColorAnchorRef = useRef<HTMLButtonElement>(null)
@@ -1789,6 +1802,10 @@ const ToolbarPlugin = () => {
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ) : null,
+    // Live speech-to-text toggle. DictationButton encapsulates the existing STT
+    // start/stop logic and self-hides unless the user opted in AND the browser
+    // supports SpeechRecognition, so it renders null when unavailable.
+    [ToolbarButtonId.Dictation]: <DictationButton />,
     [ToolbarButtonId.NoteFromSelection]: (
       <ToolbarButton
         name={
@@ -1814,6 +1831,29 @@ const ToolbarPlugin = () => {
   // each group's buttons with a separator between non-empty groups.
   const resolvedGroups = applyToolbarConfig(toolbarConfig).filter((group) =>
     group.buttons.some((button) => buttonRenderers[button.id] != null),
+  )
+
+  // Whether the main toolbar uses single-line horizontal scroll (opt-in) vs. the
+  // new default of wrapping groups onto multiple lines.
+  const horizontalScroll = (toolbarConfig as { horizontalScroll?: boolean })?.horizontalScroll === true
+
+  // Catalog-driven Insert menu: single source of truth shared with the slash
+  // picker. Modal/command helpers the dialog-opening blocks (Table, Image from
+  // URL, Upload file) need are wired here.
+  const blockCatalogContext: BlockCatalogContext = useMemo(
+    () => ({
+      openInsertTableDialog: () =>
+        showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />),
+      openInsertImageFromUrlDialog: () =>
+        showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
+      openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
+    }),
+    [showModal, editor, activeEditor],
+  )
+
+  const insertMenuCategories = useMemo(
+    () => groupBlockCatalogByCategory(filterBlockCatalog(getFullBlockCatalog(editor), insertMenuQuery)),
+    [editor, insertMenuQuery],
   )
 
   // Feature #273 — build the dynamic contextual group for the active widget. It
@@ -2133,34 +2173,49 @@ const ToolbarPlugin = () => {
         )}
         <div className="flex w-full flex-shrink-0 border-t border-border md:border-0">
           <Toolbar
-            className="super-toolbar flex items-center gap-1.5 overflow-x-auto px-1 py-0.5 md:flex-wrap md:gap-y-1"
+            className={classNames(
+              'super-toolbar flex items-center gap-1.5 px-1 py-0.5',
+              // Default: wrap groups onto multiple lines (no horizontal scroll).
+              // Opt-in `horizontalScroll` restores the legacy single-line scroll.
+              horizontalScroll ? 'overflow-x-auto md:flex-wrap md:gap-y-1' : 'flex-wrap gap-y-1',
+            )}
             ref={toolbarRef}
             store={toolbarStore}
           >
             {canShowAllItems
-              ? resolvedGroups.map((group) => (
+              ? resolvedGroups.map((group) => {
                   // Word/Office-style segmented groups: each group is a rounded
-                  // cluster (tight inner spacing) with a small caption title beneath
-                  // it, so related formatting controls are visually chunked and named.
-                  <div
-                    key={group.id}
-                    role="group"
-                    aria-label={group.label}
-                    className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
-                  >
-                    <div className="flex items-center justify-center gap-0.5">
-                      {group.buttons.map((button) => (
-                        <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                      ))}
-                    </div>
-                    <span
-                      aria-hidden
-                      className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                  // cluster (tight inner spacing) with a small caption title
+                  // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
+                  // so a button-heavy group becomes a tidy 2–3 row block instead
+                  // of a long single row.
+                  const rows = Math.min(3, Math.max(1, group.rows ?? DEFAULT_GROUP_ROWS))
+                  const buttonRows = splitIntoRows(group.buttons, rows)
+                  return (
+                    <div
+                      key={group.id}
+                      role="group"
+                      aria-label={group.label}
+                      className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
                     >
-                      {group.caption ?? group.label}
-                    </span>
-                  </div>
-                ))
+                      <div className="flex flex-col gap-0.5">
+                        {buttonRows.map((rowButtons, rowIndex) => (
+                          <div key={rowIndex} className="flex items-center justify-center gap-0.5">
+                            {rowButtons.map((button) => (
+                              <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <span
+                        aria-hidden
+                        className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                      >
+                        {group.caption ?? group.label}
+                      </span>
+                    </div>
+                  )
+                })
               : floatingSelectionToolbar}
           </Toolbar>
           {isMobile && (
@@ -2423,7 +2478,13 @@ const ToolbarPlugin = () => {
         title="Insert"
         anchorElement={insertAnchorRef}
         open={isInsertMenuOpen}
-        togglePopover={() => setIsInsertMenuOpen(!isInsertMenuOpen)}
+        togglePopover={() => {
+          const next = !isInsertMenuOpen
+          setIsInsertMenuOpen(next)
+          if (!next) {
+            setInsertMenuQuery('')
+          }
+        }}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
         className="py-1"
@@ -2433,106 +2494,63 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <Menu a11yLabel="Insert" className="!px-0" onClick={() => setIsInsertMenuOpen(false)}>
-          <ToolbarMenuItem
-            name="Table"
-            iconName="table"
-            onClick={() =>
-              showModal('Insert Table', (onClose) => <InsertTableDialog activeEditor={editor} onClose={onClose} />)
-            }
-          />
-          <ToolbarMenuItem
-            name="Upload file"
-            iconName="file"
-            onClick={() => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined)}
-          />
-          <ToolbarMenuItem
-            name="Image from URL"
-            iconName="image"
-            onClick={() =>
-              showModal('Insert image from URL', (onClose) => <InsertRemoteImageDialog onClose={onClose} />)
-            }
-          />
-          <ToolbarMenuItem
-            name={DividerBlock.name}
-            iconName={DividerBlock.iconName}
-            onClick={() => DividerBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={CollapsibleBlock.name}
-            iconName={CollapsibleBlock.iconName}
-            onClick={() => CollapsibleBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={PasswordBlock.name}
-            iconName={PasswordBlock.iconName}
-            onClick={() => PasswordBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={KanbanBlock.name}
-            iconName={KanbanBlock.iconName}
-            onClick={() => KanbanBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={CalendarBlock.name}
-            iconName={CalendarBlock.iconName}
-            onClick={() => CalendarBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={TimelineBlock.name}
-            iconName={TimelineBlock.iconName}
-            onClick={() => TimelineBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={DataviewBlock.name}
-            iconName={DataviewBlock.iconName}
-            onClick={() => DataviewBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={CalloutBlock.name}
-            iconName={CalloutBlock.iconName}
-            onClick={() => CalloutBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={EmbedBlock.name}
-            iconName={EmbedBlock.iconName}
-            onClick={() => EmbedBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={WebEmbedBlock.name}
-            iconName={WebEmbedBlock.iconName}
-            onClick={() => WebEmbedBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={TweetEmbedBlock.name}
-            iconName={TweetEmbedBlock.iconName}
-            onClick={() => TweetEmbedBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={MathBlock.name}
-            iconName={MathBlock.iconName}
-            onClick={() => MathBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={InlineMathBlock.name}
-            iconName={InlineMathBlock.iconName}
-            onClick={() => InlineMathBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={MermaidBlock.name}
-            iconName={MermaidBlock.iconName}
-            onClick={() => MermaidBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={FootnoteBlock.name}
-            iconName={FootnoteBlock.iconName}
-            onClick={() => FootnoteBlock.onSelect(editor)}
-          />
-          <ToolbarMenuItem
-            name={TableOfContentsBlock.name}
-            iconName={TableOfContentsBlock.iconName}
-            onClick={() => TableOfContentsBlock.onSelect(editor)}
-          />
+        <div className="px-2 pb-1.5 pt-1">
+          <div className="flex items-center gap-2 rounded-md border border-border bg-default px-2 py-1.5">
+            <Icon type="search" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
+            <input
+              type="text"
+              autoFocus
+              value={insertMenuQuery}
+              onChange={(event) => setInsertMenuQuery(event.target.value)}
+              onMouseDown={(event) => event.stopPropagation()}
+              placeholder="Search blocks…"
+              aria-label="Search blocks to insert"
+              className="w-full bg-transparent text-sm text-text placeholder:text-passive-1 focus:outline-none"
+            />
+            {insertMenuQuery && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setInsertMenuQuery('')}
+              >
+                <Icon type="close" size="custom" className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+        <Menu
+          a11yLabel="Insert"
+          className="!px-0"
+          onClick={() => {
+            setIsInsertMenuOpen(false)
+            setInsertMenuQuery('')
+          }}
+        >
+          {insertMenuCategories.length === 0 ? (
+            <div className="px-3 py-3 text-center text-sm text-passive-1">No blocks match “{insertMenuQuery}”</div>
+          ) : (
+            insertMenuCategories.map((group, groupIndex) => (
+              <Fragment key={group.category}>
+                {groupIndex > 0 && <MenuItemSeparator />}
+                <div
+                  aria-hidden
+                  className="select-none px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-passive-1"
+                >
+                  {group.category}
+                </div>
+                {group.entries.map((entry) => (
+                  <ToolbarMenuItem
+                    key={entry.key}
+                    name={entry.name}
+                    iconName={entry.iconName}
+                    onClick={() => entry.onSelect(editor, blockCatalogContext)}
+                  />
+                ))}
+              </Fragment>
+            ))
+          )}
           <MenuItemSeparator />
           <ToolbarMenuItem name="Customize toolbar" iconName="settings" onClick={openCustomizeDialog} />
         </Menu>
