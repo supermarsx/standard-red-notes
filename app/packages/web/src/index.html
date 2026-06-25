@@ -69,6 +69,57 @@
       window.purchaseUrl = 'about:blank'
       window.plansUrl = 'about:blank'
       window.dashboardUrl = 'about:blank'
+
+      // Stale-service-worker recovery. An old service worker can serve a cached
+      // app.js that no longer matches the freshly served index.html, leaving the
+      // page BLANK — and the in-app "reload to update" prompt can't render to
+      // rescue it. If the React root (#app-group-root) hasn't mounted any content
+      // shortly after load, recover ONCE: drop the shell caches, unregister
+      // service workers, and reload to fetch a fresh bundle. The sessionStorage
+      // guard prevents a reload loop if the page is genuinely broken.
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          var root = document.getElementById('app-group-root')
+          if (root && root.childElementCount > 0) {
+            return
+          }
+          try {
+            if (sessionStorage.getItem('srn-blank-recovery')) {
+              return
+            }
+            sessionStorage.setItem('srn-blank-recovery', '1')
+          } catch (e) {}
+          var reload = function () {
+            window.location.reload()
+          }
+          var jobs = []
+          try {
+            if (window.caches && caches.keys) {
+              jobs.push(
+                caches.keys().then(function (keys) {
+                  return Promise.all(
+                    keys.map(function (k) {
+                      return k.indexOf('srn-shell-') === 0 ? caches.delete(k) : null
+                    }),
+                  )
+                }),
+              )
+            }
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+              jobs.push(
+                navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(
+                    regs.map(function (r) {
+                      return r.unregister()
+                    }),
+                  )
+                }),
+              )
+            }
+          } catch (e) {}
+          Promise.all(jobs).then(reload, reload)
+        }, 10000)
+      })
     </script>
 
     <script src="./app.js" debug="false"></script>

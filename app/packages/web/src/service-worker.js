@@ -115,9 +115,29 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Same-origin static assets (JS/CSS/fonts/images/components): cache-first,
-  // with a background refresh (stale-while-revalidate) so updated files are
-  // picked up on the next load without blocking the current one.
+  // The unhashed entry bundle (`/app.js` + `/app.css`) is rebuilt on EVERY
+  // deploy but keeps the same filename, so serve it network-first like the HTML.
+  // Otherwise a fresh, network-first `index.html` gets paired with a STALE
+  // cache-first `app.js` after a deploy — and the app renders a blank page until
+  // the cache happens to refresh. Falls back to the cached copy when offline.
+  if (url.pathname === '/app.js' || url.pathname === '/app.css') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200 && response.type === 'basic') {
+            const copy = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          }
+          return response
+        })
+        .catch(() => caches.open(CACHE_NAME).then((cache) => cache.match(request))),
+    )
+    return
+  }
+
+  // Other same-origin static assets (fonts/images/components/hashed chunks):
+  // cache-first, with a background refresh (stale-while-revalidate) so updated
+  // files are picked up on the next load without blocking the current one.
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(request).then((cached) => {
