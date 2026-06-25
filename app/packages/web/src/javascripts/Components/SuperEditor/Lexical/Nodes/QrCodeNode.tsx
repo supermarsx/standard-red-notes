@@ -2,7 +2,6 @@ import * as React from 'react'
 import {
   ComponentType,
   Component,
-  lazy,
   ReactNode,
   Suspense,
   useCallback,
@@ -10,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { lazyWithRetry } from '@/Utils/lazyWithRetry'
 import {
   $getNodeByKey,
   DecoratorNode,
@@ -104,7 +104,7 @@ type QrCodeSvgProps = {
   style?: React.CSSProperties
 }
 
-const QRCodeSVG = lazy(() =>
+const QRCodeSVG = lazyWithRetry(() =>
   import('qrcode.react').then((m) => ({
     default: m.QRCodeSVG as unknown as ComponentType<QrCodeSvgProps>,
   })),

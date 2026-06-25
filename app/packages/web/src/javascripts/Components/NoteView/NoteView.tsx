@@ -39,11 +39,16 @@ import {
   KeyboardModifier,
   getPrimaryModifier,
 } from '@standardnotes/ui-services'
-import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, lazy, RefObject, Suspense } from 'react'
+import { ChangeEventHandler, createRef, FocusEvent, KeyboardEventHandler, RefObject, Suspense } from 'react'
+import { lazyWithRetry } from '@/Utils/lazyWithRetry'
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
+import EditorLoadingPlaceholder from './EditorLoadingPlaceholder'
 // The Super (Lexical) editor and its plugin/node graph are heavy and only needed
 // when a Super note is opened (plain notes are the default), so it is lazy-loaded
 // out of the main bundle into an async chunk. Rendered behind <Suspense> below.
-const SuperEditor = lazy(() => import('../SuperEditor/SuperEditorLazy'))
+// `lazyWithRetry` retries a transient chunk failure once before surfacing it to
+// the surrounding <ComponentErrorBoundary>.
+const SuperEditor = lazyWithRetry(() => import('../SuperEditor/SuperEditorLazy'))
 import IndicatorCircle from '../IndicatorCircle/IndicatorCircle'
 import LinkedItemBubblesContainer from '../LinkedItems/LinkedItemBubblesContainer'
 import LinkedItemsButton from '../LinkedItems/LinkedItemsButton'
@@ -1324,21 +1329,23 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               className={classNames('blocks-editor w-full flex-grow overflow-hidden')}
               style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
             >
-              <Suspense fallback={<div className="flex-grow p-4 text-sm text-passive-1">Loading editor…</div>}>
-                <SuperEditor
-                  key={this.note.uuid}
-                  application={this.application}
-                  linkingController={this.application.linkingController}
-                  filesController={this.application.filesController}
-                  spellcheck={this.state.spellcheck}
-                  controller={this.controller}
-                  readonly={this.state.readonly}
-                  onFocus={this.onEditorFocus}
-                  onBlur={this.onEditorBlur}
-                  customBackgroundColor={this.state.customBackgroundColor}
-                  customTextColor={this.state.customTextColor}
-                />
-              </Suspense>
+              <ComponentErrorBoundary label="The Super editor">
+                <Suspense fallback={<EditorLoadingPlaceholder label="Super editor" />}>
+                  <SuperEditor
+                    key={this.note.uuid}
+                    application={this.application}
+                    linkingController={this.application.linkingController}
+                    filesController={this.application.filesController}
+                    spellcheck={this.state.spellcheck}
+                    controller={this.controller}
+                    readonly={this.state.readonly}
+                    onFocus={this.onEditorFocus}
+                    onBlur={this.onEditorBlur}
+                    customBackgroundColor={this.state.customBackgroundColor}
+                    customTextColor={this.state.customTextColor}
+                  />
+                </Suspense>
+              </ComponentErrorBoundary>
             </div>
           )}
 

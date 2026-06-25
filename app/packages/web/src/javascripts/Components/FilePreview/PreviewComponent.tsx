@@ -1,8 +1,10 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { getBase64FromBlob } from '@/Utils'
 import { FileItem } from '@standardnotes/snjs'
-import { FunctionComponent, lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import { FunctionComponent, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
+import { lazyWithRetry } from '@/Utils/lazyWithRetry'
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 import Button from '../Button/Button'
 import { createObjectURLWithRef } from './CreateObjectURLWithRef'
 import ImagePreview from './ImagePreview'
@@ -16,7 +18,7 @@ import { PdfDeepLinkTarget } from './PdfDeepLink'
 import { useTranslation } from 'react-i18next'
 
 // PDF.js is large; lazy-load the viewer so it's code-split out of the main bundle.
-const PdfPreview = lazy(() => import('./PdfPreview'))
+const PdfPreview = lazyWithRetry(() => import('./PdfPreview'))
 
 type Props = {
   application: WebApplication
@@ -137,22 +139,24 @@ const PreviewComponent: FunctionComponent<Props> = ({
 
   if (isPDF) {
     return (
-      <Suspense
-        fallback={
-          <div className="flex flex-grow flex-col items-center justify-center">
-            <Spinner className="h-6 w-6" />
-            <span className="mt-3 text-sm text-passive-0">{t('loadingPdfViewer')}</span>
-          </div>
-        }
-      >
-        <PdfPreview
-          application={application}
-          bytes={bytes}
-          fileUuid={file.uuid}
-          fileRemoteIdentifier={file.remoteIdentifier}
-          target={pdfTarget}
-        />
-      </Suspense>
+      <ComponentErrorBoundary label="The PDF viewer">
+        <Suspense
+          fallback={
+            <div className="flex flex-grow flex-col items-center justify-center">
+              <Spinner className="h-6 w-6" />
+              <span className="mt-3 text-sm text-passive-0">{t('loadingPdfViewer')}</span>
+            </div>
+          }
+        >
+          <PdfPreview
+            application={application}
+            bytes={bytes}
+            fileUuid={file.uuid}
+            fileRemoteIdentifier={file.remoteIdentifier}
+            target={pdfTarget}
+          />
+        </Suspense>
+      </ComponentErrorBoundary>
     )
   }
 

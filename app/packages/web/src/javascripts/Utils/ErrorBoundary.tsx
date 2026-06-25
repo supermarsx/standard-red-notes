@@ -1,37 +1,19 @@
 import React from 'react'
-
-type State = {
-  error?: Error
-}
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 
 type Props = {
+  label?: string
   children: React.ReactNode
 }
 
-export class ErrorBoundary extends React.Component<Props, State> {
-  constructor(props: Props) {
-    super(props)
-    this.state = {}
-  }
-
-  static getDerivedStateFromError(error: Error) {
-    return { error }
-  }
-
-  componentDidCatch(error: Error, errorInfo: unknown) {
-    console.error(error, errorInfo)
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <div className="text-danger">
-          <span>Something went wrong rendering this component: </span>
-          <span className="font-bold">{this.state.error.message}</span>
-        </div>
-      )
-    }
-
-    return this.props.children
-  }
-}
+/**
+ * Backwards-compatible alias for the reusable {@link ComponentErrorBoundary}.
+ * Historically this rendered a plain "Something went wrong rendering this
+ * component" message and could take down the surrounding subtree. It now
+ * delegates to ComponentErrorBoundary so every existing usage gains the
+ * graceful, retryable fallback (with chunk-load detection, a one-time toast,
+ * and logging) for free.
+ */
+export const ErrorBoundary: React.FC<Props> = ({ label, children }) => (
+  <ComponentErrorBoundary label={label}>{children}</ComponentErrorBoundary>
+)

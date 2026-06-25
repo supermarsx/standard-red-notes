@@ -24,7 +24,10 @@ import PreferencesViewWrapper from '@/Components/Preferences/PreferencesViewWrap
 import ChallengeModal from '@/Components/ChallengeModal/ChallengeModal'
 import NotesContextMenu from '@/Components/NotesContextMenu/NotesContextMenu'
 import PurchaseFlowWrapper from '@/Components/PurchaseFlow/PurchaseFlowWrapper'
-import { FunctionComponent, useCallback, useEffect, useMemo, useState, lazy, useRef } from 'react'
+import { FunctionComponent, useCallback, useEffect, useMemo, useState, Suspense, useRef } from 'react'
+import { lazyWithRetry } from '@/Utils/lazyWithRetry'
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
+import Spinner from '@/Components/Spinner/Spinner'
 import RevisionHistoryModal from '@/Components/RevisionHistoryModal/RevisionHistoryModal'
 import ConfirmSignoutContainer from '@/Components/ConfirmSignoutModal/ConfirmSignoutModal'
 import { addToast, ToastContainer, ToastType } from '@standardnotes/toast'
@@ -62,9 +65,15 @@ type Props = {
   mainApplicationGroup: WebApplicationGroup
 }
 
-const LazyLoadedClipperView = lazy(() => import('../ClipperView/ClipperView'))
-const LazyLoadedAssistantView = lazy(() => import('../Assistant/AssistantView'))
-const LazyLoadedConstellationView = lazy(() => import('../Constellation/ConstellationView'))
+const LazyLoadedClipperView = lazyWithRetry(() => import('../ClipperView/ClipperView'))
+const LazyLoadedAssistantView = lazyWithRetry(() => import('../Assistant/AssistantView'))
+const LazyLoadedConstellationView = lazyWithRetry(() => import('../Constellation/ConstellationView'))
+
+const LazyViewLoadingFallback = (
+  <div className="flex h-full w-full items-center justify-center">
+    <Spinner className="h-6 w-6" />
+  </div>
+)
 
 /**
  * Identifies the "your session became invalid, please re-enter your email and
@@ -438,12 +447,16 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
               <LinkingControllerProvider controller={application.linkingController}>
                 <FileDragNDropProvider application={application}>
                   <div className={platformString + ' main-ui-view sn-component h-full'}>
-                    <LazyLoadedAssistantView
-                      id="assistant-standalone"
-                      application={application}
-                      className="h-full"
-                      standalone
-                    />
+                    <ComponentErrorBoundary label="The Assistant">
+                      <Suspense fallback={LazyViewLoadingFallback}>
+                        <LazyLoadedAssistantView
+                          id="assistant-standalone"
+                          application={application}
+                          className="h-full"
+                          standalone
+                        />
+                      </Suspense>
+                    </ComponentErrorBoundary>
                   </div>
                   <ToastContainer />
                   <FilePreviewModalWrapper application={application} />
@@ -466,12 +479,16 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
               <LinkingControllerProvider controller={application.linkingController}>
                 <FileDragNDropProvider application={application}>
                   <div className={platformString + ' main-ui-view sn-component h-full'}>
-                    <LazyLoadedConstellationView
-                      id="constellation-standalone"
-                      application={application}
-                      className="h-full"
-                      standalone
-                    />
+                    <ComponentErrorBoundary label="The Constellation view">
+                      <Suspense fallback={LazyViewLoadingFallback}>
+                        <LazyLoadedConstellationView
+                          id="constellation-standalone"
+                          application={application}
+                          className="h-full"
+                          standalone
+                        />
+                      </Suspense>
+                    </ComponentErrorBoundary>
                   </div>
                   <ToastContainer />
                   <FilePreviewModalWrapper application={application} />
@@ -493,7 +510,11 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
             <ResponsivePaneProvider paneController={application.paneController}>
               <LinkingControllerProvider controller={application.linkingController}>
                 <FileDragNDropProvider application={application}>
-                  <LazyLoadedClipperView applicationGroup={mainApplicationGroup} />
+                  <ComponentErrorBoundary label="The Clipper view">
+                    <Suspense fallback={LazyViewLoadingFallback}>
+                      <LazyLoadedClipperView applicationGroup={mainApplicationGroup} />
+                    </Suspense>
+                  </ComponentErrorBoundary>
                   <ToastContainer />
                   <FilePreviewModalWrapper application={application} />
                   {renderChallenges()}

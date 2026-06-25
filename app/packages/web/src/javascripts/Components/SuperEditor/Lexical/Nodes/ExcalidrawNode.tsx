@@ -1,5 +1,7 @@
 import * as React from 'react'
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
+import { lazyWithRetry } from '@/Utils/lazyWithRetry'
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 import {
   DecoratorNode,
   DOMExportOutput,
@@ -21,7 +23,7 @@ const EMPTY_SCENE: ExcalidrawSceneData = { elements: [], appState: { viewBackgro
 
 // Heavy (@excalidraw/excalidraw) component is lazy-loaded so it's code-split out
 // of the main bundle and only fetched when a drawing is actually rendered.
-const LazyExcalidraw = lazy(() => import('./ExcalidrawComponent'))
+const LazyExcalidraw = lazyWithRetry(() => import('./ExcalidrawComponent'))
 
 export type SerializedExcalidrawNode = Spread<{ data: string }, SerializedLexicalNode>
 
@@ -93,9 +95,11 @@ export class ExcalidrawNode extends DecoratorNode<React.JSX.Element> {
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
     return (
-      <Suspense fallback={<div className="my-2 p-4 text-sm text-passive-1">Loading drawing…</div>}>
-        <LazyExcalidraw data={this.getSceneData()} nodeKey={this.getKey()} />
-      </Suspense>
+      <ComponentErrorBoundary label="The drawing">
+        <Suspense fallback={<div className="my-2 p-4 text-sm text-passive-1">Loading drawing…</div>}>
+          <LazyExcalidraw data={this.getSceneData()} nodeKey={this.getKey()} />
+        </Suspense>
+      </ComponentErrorBoundary>
     )
   }
 }
