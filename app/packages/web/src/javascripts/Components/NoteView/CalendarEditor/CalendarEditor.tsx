@@ -7,9 +7,15 @@ import Icon from '@/Components/Icon/Icon'
 import {
   CalendarDocument,
   CalendarEvent,
+  CalendarOccurrence,
+  CalendarRecurrenceFreq,
   buildMonthGrid,
   createCalendarId,
   createEmptyCalendarDocument,
+  eventTimeOfDay,
+  expandEventsForWindow,
+  isTimedEvent,
+  localIsoDateOf,
   parseCalendarDocument,
   serializeCalendarDocument,
   todayIso,
@@ -23,6 +29,14 @@ export const CalendarEditorIdentifier = 'org.standardnotes.calendar'
 const PERSIST_DEBOUNCE_MS = 400
 
 const EVENT_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899']
+
+const RECURRENCE_OPTIONS: { value: '' | CalendarRecurrenceFreq; label: string }[] = [
+  { value: '', label: 'Does not repeat' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+]
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTH_LABELS = [
@@ -134,21 +148,16 @@ export const CalendarEditor: FunctionComponent<Props> = ({
     }
   }, [])
 
-  // Group events by date for fast per-cell lookup.
-  const eventsByDate = useMemo(() => {
-    const map = new Map<string, CalendarEvent[]>()
-    for (const event of document.events) {
-      const existing = map.get(event.date)
-      if (existing) {
-        existing.push(event)
-      } else {
-        map.set(event.date, [event])
-      }
-    }
-    return map
-  }, [document.events])
-
   const grid = useMemo(() => buildMonthGrid(view.year, view.month), [view])
+
+  // Expand events (including recurring ones) across the visible grid for fast
+  // per-cell lookup. Each cell gets the occurrences that fall on it.
+  const occurrencesByDate = useMemo(() => {
+    return expandEventsForWindow(
+      document.events,
+      grid.map((cell) => cell.date),
+    )
+  }, [document.events, grid])
 
   const goToMonth = useCallback((direction: -1 | 1) => {
     setView((prev) => {
@@ -199,6 +208,73 @@ export const CalendarEditor: FunctionComponent<Props> = ({
     [updateDocument],
   )
 
+  /**
+   * Replace a single event with the result of `transform`. Unlike
+   * {@link updateEvent}'s shallow patch, this lets a transform *remove* optional
+   * fields (e.g. clearing `start`/`end` when switching back to all-day).
+   */
+  const replaceEvent = useCallback(
+    (id: string, transform: (event: CalendarEvent) => CalendarEvent) => {
+      updateDocument((doc) => ({
+        ...doc,
+        events: doc.events.map((event) => (event.id === id ? transform(event) : event)),
+      }))
+    },
+    [updateDocument],
+  )
+
+  /** Toggle an event between all-day and timed (default 09:00 on its date). */
+  const setEventAllDay = useCallback(
+    (event: CalendarEvent, allDay: boolean) => {
+      replaceEvent(event.id, (prev) => {
+        if (allDay) {
+          const next: CalendarEvent = { id: prev.id, date: prev.date, title: prev.title }
+          if (prev.color) {
+            next.color = prev.color
+          }
+          if (prev.recurrence) {
+            next.recurrence = prev.recurrence
+          }
+          return next
+        }
+        const start = prev.start && isTimedEvent(prev) ? prev.start : `${prev.date}T09:00`
+        const startIso = new Date(start).toISOString()
+        return { ...prev, allDay: false, start: startIso, date: localIsoDateOf(startIso) }
+      })
+    },
+    [replaceEvent],
+  )
+
+  /** Set the time-of-day (local "HH:MM") on a timed event, keeping its day. */
+  const setEventTime = useCallback(
+    (event: CalendarEvent, time: string) => {
+      const [h, m] = time.split(':')
+      const d = new Date(event.start ?? `${event.date}T00:00`)
+      if (Number.isNaN(d.getTime())) {
+        return
+      }
+      d.setHours(Number(h) || 0, Number(m) || 0, 0, 0)
+      const startIso = d.toISOString()
+      replaceEvent(event.id, (prev) => ({ ...prev, allDay: false, start: startIso, date: localIsoDateOf(startIso) }))
+    },
+    [replaceEvent],
+  )
+
+  /** Set or clear an event's recurrence. Empty freq clears it. */
+  const setEventRecurrence = useCallback(
+    (event: CalendarEvent, freq: '' | CalendarRecurrenceFreq, interval: number) => {
+      replaceEvent(event.id, (prev) => {
+        if (!freq) {
+          const { recurrence: _removed, ...rest } = prev
+          return rest
+        }
+        const clean = interval >= 1 ? Math.floor(interval) : 1
+        return { ...prev, recurrence: clean > 1 ? { freq, interval: clean } : { freq } }
+      })
+    },
+    [replaceEvent],
+  )
+
   const onDayClick = useCallback(
     (date: string) => {
       setSelectedDate((prev) => (prev === date ? null : date))
@@ -206,7 +282,18 @@ export const CalendarEditor: FunctionComponent<Props> = ({
     [],
   )
 
-  const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) ?? [] : []
+  // The day editor edits source events anchored on the selected day, plus a
+  // read-only note of recurring occurrences that merely *land* on this day.
+  const selectedEvents = useMemo(
+    () => (selectedDate ? document.events.filter((event) => event.date === selectedDate) : []),
+    [selectedDate, document.events],
+  )
+  const selectedRecurringHits = useMemo<CalendarOccurrence[]>(() => {
+    if (!selectedDate) {
+      return []
+    }
+    return (occurrencesByDate.get(selectedDate) ?? []).filter((occ) => occ.event.date !== selectedDate)
+  }, [selectedDate, occurrencesByDate])
 
   const exportICS = useCallback(() => {
     if (document.events.length === 0) {
@@ -288,7 +375,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
             </div>
           ))}
           {grid.map((cell) => {
-            const dayEvents = eventsByDate.get(cell.date) ?? []
+            const dayEvents = occurrencesByDate.get(cell.date) ?? []
             const isToday = cell.date === today
             const isSelected = cell.date === selectedDate
             return (
@@ -313,16 +400,18 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                   {cell.day}
                 </span>
                 <span className="flex flex-col gap-0.5 overflow-hidden">
-                  {dayEvents.slice(0, 3).map((event) => (
+                  {dayEvents.slice(0, 3).map((occ) => (
                     <span
-                      key={event.id}
+                      key={`${occ.event.id}-${occ.date}`}
                       className="truncate rounded px-1 text-[0.625rem] leading-tight"
                       style={{
-                        backgroundColor: event.color ?? 'var(--sn-stylekit-info-color)',
+                        backgroundColor: occ.event.color ?? 'var(--sn-stylekit-info-color)',
                         color: '#ffffff',
                       }}
+                      title={occ.event.recurrence ? 'Recurring event' : undefined}
                     >
-                      {event.title || 'Untitled'}
+                      {occ.time ? `${occ.time} ` : ''}
+                      {occ.event.title || 'Untitled'}
                     </span>
                   ))}
                   {dayEvents.length > 3 && (
@@ -360,56 +449,134 @@ export const CalendarEditor: FunctionComponent<Props> = ({
               </button>
             </div>
           </div>
-          {selectedEvents.length === 0 ? (
+          {selectedEvents.length === 0 && selectedRecurringHits.length === 0 ? (
             <p className="text-xs text-passive-1">No events on this day.</p>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {selectedEvents.map((event) => (
-                <li key={event.id} className="flex flex-wrap items-center gap-2">
-                  <input
-                    className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm text-text disabled:opacity-50"
-                    value={event.title}
-                    placeholder="Event title"
-                    disabled={isReadonly}
-                    onChange={(e) => updateEvent(event.id, { title: e.target.value })}
-                  />
-                  <input
-                    type="date"
-                    className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
-                    value={event.date}
-                    disabled={isReadonly}
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        updateEvent(event.id, { date: e.target.value })
-                        setSelectedDate(e.target.value)
-                      }
-                    }}
-                  />
-                  <div className="flex items-center gap-1">
-                    {EVENT_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        className={classNames(
-                          'h-4 w-4 rounded-full border',
-                          event.color === color ? 'border-info' : 'border-border',
-                        )}
-                        style={{ backgroundColor: color }}
+            <ul className="flex flex-col gap-3">
+              {selectedEvents.map((event) => {
+                const timed = isTimedEvent(event)
+                const time = eventTimeOfDay(event) ?? '09:00'
+                return (
+                  <li key={event.id} className="flex flex-col gap-1.5 rounded border border-border p-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm text-text disabled:opacity-50"
+                        value={event.title}
+                        placeholder="Event title"
                         disabled={isReadonly}
-                        title="Set color"
-                        aria-label={`Set color ${color}`}
-                        onClick={() => updateEvent(event.id, { color: event.color === color ? undefined : color })}
+                        onChange={(e) => updateEvent(event.id, { title: e.target.value })}
                       />
-                    ))}
-                  </div>
-                  <button
-                    className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
-                    disabled={isReadonly}
-                    onClick={() => deleteEvent(event.id)}
-                    title="Delete event"
-                    aria-label="Delete event"
-                  >
-                    <Icon type="trash" size="small" />
-                  </button>
+                      <button
+                        className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                        disabled={isReadonly}
+                        onClick={() => deleteEvent(event.id)}
+                        title="Delete event"
+                        aria-label="Delete event"
+                      >
+                        <Icon type="trash" size="small" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <input
+                        type="date"
+                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        value={event.date}
+                        disabled={isReadonly}
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            updateEvent(event.id, { date: e.target.value })
+                            setSelectedDate(e.target.value)
+                          }
+                        }}
+                      />
+                      <label className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={!timed}
+                          disabled={isReadonly}
+                          onChange={(e) => setEventAllDay(event, e.target.checked)}
+                        />
+                        All day
+                      </label>
+                      {timed && (
+                        <input
+                          type="time"
+                          className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                          value={time}
+                          disabled={isReadonly}
+                          onChange={(e) => e.target.value && setEventTime(event, e.target.value)}
+                          aria-label="Event time"
+                        />
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <select
+                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        value={event.recurrence?.freq ?? ''}
+                        disabled={isReadonly}
+                        aria-label="Repeat"
+                        onChange={(e) =>
+                          setEventRecurrence(
+                            event,
+                            e.target.value as '' | CalendarRecurrenceFreq,
+                            event.recurrence?.interval ?? 1,
+                          )
+                        }
+                      >
+                        {RECURRENCE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      {event.recurrence && (
+                        <label className="flex items-center gap-1">
+                          every
+                          <input
+                            type="number"
+                            min={1}
+                            max={365}
+                            className="w-14 rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                            value={event.recurrence.interval ?? 1}
+                            disabled={isReadonly}
+                            aria-label="Repeat interval"
+                            onChange={(e) =>
+                              setEventRecurrence(event, event.recurrence?.freq ?? 'daily', Number(e.target.value) || 1)
+                            }
+                          />
+                        </label>
+                      )}
+                      <div className="ml-auto flex items-center gap-1">
+                        {EVENT_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            className={classNames(
+                              'h-4 w-4 rounded-full border',
+                              event.color === color ? 'border-info' : 'border-border',
+                            )}
+                            style={{ backgroundColor: color }}
+                            disabled={isReadonly}
+                            title="Set color"
+                            aria-label={`Set color ${color}`}
+                            onClick={() => updateEvent(event.id, { color: event.color === color ? undefined : color })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </li>
+                )
+              })}
+              {selectedRecurringHits.map((occ) => (
+                <li
+                  key={`hit-${occ.event.id}`}
+                  className="flex items-center gap-2 rounded border border-dashed border-border px-2 py-1 text-xs text-passive-1"
+                >
+                  <Icon type="restore" size="small" className="flex-shrink-0" />
+                  <span className="truncate">
+                    {occ.time ? `${occ.time} ` : ''}
+                    {occ.event.title || 'Untitled'}
+                  </span>
+                  <span className="ml-auto whitespace-nowrap">(repeats from {occ.event.date})</span>
                 </li>
               ))}
             </ul>

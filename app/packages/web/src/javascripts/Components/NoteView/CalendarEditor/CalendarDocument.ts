@@ -1,9 +1,12 @@
 /**
  * Calendar note document model.
  *
- * A Calendar note stores a flat list of dated events. Each event has an ISO
- * date (YYYY-MM-DD), a title, and an optional color. The editor renders a month
- * grid and lets you add/edit/delete events on a given day.
+ * A Calendar note stores a flat list of dated events. Each event always carries
+ * a `date` (YYYY-MM-DD) anchor day plus a title and optional color. Events may
+ * additionally be timed (carrying `start`/`end` ISO datetimes with `allDay:false`)
+ * and/or recurring (a simple `recurrence` rule). Day-only events created by older
+ * versions of the editor keep working unchanged — they are treated as all-day on
+ * their `date`.
  *
  * Exactly like the Canvas, Base, and Sandbox note types, the serialized document
  * is stored verbatim in `note.text` (the same slot Super stores its Lexical JSON
@@ -14,13 +17,38 @@
 
 export const CALENDAR_DOCUMENT_VERSION = 1
 
+export type CalendarRecurrenceFreq = 'daily' | 'weekly' | 'monthly' | 'yearly'
+
+/** A simple repeat rule. `interval` defaults to 1 (every period) when omitted. */
+export type CalendarRecurrence = {
+  freq: CalendarRecurrenceFreq
+  /** Repeat every `interval` periods of `freq` (>= 1). */
+  interval?: number
+}
+
 export type CalendarEvent = {
   id: string
-  /** ISO date string, normalized to YYYY-MM-DD (day granularity). */
+  /**
+   * ISO date string, normalized to YYYY-MM-DD (day granularity). This is the
+   * canonical anchor day for the event and is always present, even for timed
+   * events (where it equals the local calendar day of `start`).
+   */
   date: string
   title: string
   /** Optional CSS color string for the event chip. */
   color?: string
+  /**
+   * Whether this event occupies the whole day. Defaults to true when absent so
+   * legacy day-only events normalize to all-day. When false, `start` should be
+   * a full ISO datetime carrying the time-of-day.
+   */
+  allDay?: boolean
+  /** Timed start instant as a full ISO datetime. Present for non-all-day events. */
+  start?: string
+  /** Optional timed end instant as a full ISO datetime. Ignored when all-day. */
+  end?: string
+  /** Optional repeat rule. Absent means a one-shot event. */
+  recurrence?: CalendarRecurrence
 }
 
 export type CalendarDocument = {
@@ -67,6 +95,61 @@ export const normalizeEventDate = (value: unknown): string | null => {
   return `${year}-${month}-${day}`
 }
 
+const pad2Early = (value: number): string => value.toString().padStart(2, '0')
+
+/** Local-calendar YYYY-MM-DD of an ISO datetime string. */
+export const localIsoDateOf = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) {
+    return ''
+  }
+  return `${d.getFullYear().toString().padStart(4, '0')}-${pad2Early(d.getMonth() + 1)}-${pad2Early(d.getDate())}`
+}
+
+const RECURRENCE_FREQS: ReadonlySet<string> = new Set(['daily', 'weekly', 'monthly', 'yearly'])
+
+/**
+ * Normalize a candidate ISO datetime to a canonical ISO string, or null if it is
+ * not a parseable datetime. Accepts anything `Date` accepts (full ISO, with or
+ * without zone). A bare YYYY-MM-DD is rejected here (that is a date, not a
+ * datetime) so timed fields never silently collapse to midnight UTC.
+ */
+export const normalizeEventDateTime = (value: unknown): string | null => {
+  if (!isString(value) || value.trim().length === 0) {
+    return null
+  }
+  const trimmed = value.trim()
+  // A bare date is not a datetime.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return null
+  }
+  const parsed = new Date(trimmed)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+  return parsed.toISOString()
+}
+
+/**
+ * Sanitize a candidate recurrence object. Returns undefined for anything that is
+ * not a recognizable rule so malformed stored JSON can never crash expansion.
+ */
+export const sanitizeRecurrence = (raw: unknown): CalendarRecurrence | undefined => {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined
+  }
+  const candidate = raw as Record<string, unknown>
+  if (!isString(candidate.freq) || !RECURRENCE_FREQS.has(candidate.freq)) {
+    return undefined
+  }
+  const freq = candidate.freq as CalendarRecurrenceFreq
+  let interval: number | undefined
+  if (isFiniteNumber(candidate.interval) && candidate.interval >= 1) {
+    interval = Math.floor(candidate.interval)
+  }
+  return interval && interval > 1 ? { freq, interval } : { freq }
+}
+
 const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
   if (typeof raw !== 'object' || raw === null) {
     return null
@@ -75,16 +158,39 @@ const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
   if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
     return null
   }
-  const date = normalizeEventDate(candidate.date)
+
+  const start = normalizeEventDateTime(candidate.start)
+  // The anchor date: prefer an explicit date, else derive from a timed start.
+  const date = normalizeEventDate(candidate.date) ?? (start ? localIsoDateOf(start) : null)
   if (!date) {
     return null
   }
-  return {
+
+  const event: CalendarEvent = {
     id: candidate.id,
     date,
     title: isString(candidate.title) ? candidate.title : '',
     color: isString(candidate.color) ? candidate.color : undefined,
   }
+
+  // Timed only when start parses and the event is not flagged all-day. An event
+  // with allDay !== false but a start is still treated as all-day on its date.
+  const explicitAllDay = candidate.allDay
+  if (start && explicitAllDay === false) {
+    event.allDay = false
+    event.start = start
+    const end = normalizeEventDateTime(candidate.end)
+    if (end && new Date(end).getTime() > new Date(start).getTime()) {
+      event.end = end
+    }
+  }
+
+  const recurrence = sanitizeRecurrence(candidate.recurrence)
+  if (recurrence) {
+    event.recurrence = recurrence
+  }
+
+  return event
 }
 
 /**
@@ -225,4 +331,149 @@ let idCounter = 0
 export const createCalendarId = (prefix: string): string => {
   idCounter += 1
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// ---------------------------------------------------------------------------
+// Event normalization & recurrence expansion (pure logic).
+// ---------------------------------------------------------------------------
+
+/** A normalized, fully-resolved view of an event for a single occurrence day. */
+export type CalendarOccurrence = {
+  /** The originating event (shared across all occurrences of a recurring event). */
+  event: CalendarEvent
+  /** YYYY-MM-DD of this occurrence. */
+  date: string
+  /** Whether this occurrence is all-day. */
+  allDay: boolean
+  /** Local "HH:MM" time-of-day for a timed occurrence, else null. */
+  time: string | null
+}
+
+/**
+ * Normalize an event to a consistent shape: every event is either all-day (the
+ * default, including legacy day-only events) or timed with a parseable `start`.
+ * A timed event whose start fails to parse is treated as all-day so it still
+ * renders on its anchor day rather than vanishing.
+ */
+export const isTimedEvent = (event: CalendarEvent): boolean => {
+  return event.allDay === false && typeof event.start === 'string' && !Number.isNaN(new Date(event.start).getTime())
+}
+
+/** Local "HH:MM" for a timed event's start, or null when all-day/unparseable. */
+export const eventTimeOfDay = (event: CalendarEvent): string | null => {
+  if (!isTimedEvent(event) || !event.start) {
+    return null
+  }
+  const d = new Date(event.start)
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/** Parse "YYYY-MM-DD" into a local Date at midnight, or null. */
+const parseIsoDateLocal = (iso: string): Date | null => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!m) {
+    return null
+  }
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** Whether a recurring event with given anchor falls on `target` (both local dates). */
+const recurrenceHitsDate = (anchor: Date, target: Date, recurrence: CalendarRecurrence): boolean => {
+  if (target.getTime() < anchor.getTime()) {
+    return false
+  }
+  const interval = recurrence.interval && recurrence.interval >= 1 ? Math.floor(recurrence.interval) : 1
+  const dayMs = 24 * 60 * 60 * 1000
+  switch (recurrence.freq) {
+    case 'daily': {
+      const diffDays = Math.round((target.getTime() - anchor.getTime()) / dayMs)
+      return diffDays % interval === 0
+    }
+    case 'weekly': {
+      if (target.getDay() !== anchor.getDay()) {
+        return false
+      }
+      const diffWeeks = Math.round((target.getTime() - anchor.getTime()) / (dayMs * 7))
+      return diffWeeks % interval === 0
+    }
+    case 'monthly': {
+      if (target.getDate() !== anchor.getDate()) {
+        return false
+      }
+      const diffMonths = (target.getFullYear() - anchor.getFullYear()) * 12 + (target.getMonth() - anchor.getMonth())
+      return diffMonths >= 0 && diffMonths % interval === 0
+    }
+    case 'yearly': {
+      if (target.getDate() !== anchor.getDate() || target.getMonth() !== anchor.getMonth()) {
+        return false
+      }
+      const diffYears = target.getFullYear() - anchor.getFullYear()
+      return diffYears >= 0 && diffYears % interval === 0
+    }
+    default:
+      return false
+  }
+}
+
+/** Safety cap on how many cells one recurring event may be tested against. */
+export const MAX_RECURRENCE_CELLS = 42
+
+/**
+ * Expand a list of events into per-day occurrences across the given window of
+ * ISO dates (typically the 42 cells of a month grid). Non-recurring events emit
+ * a single occurrence on their anchor day (only if that day is in the window).
+ * Recurring events emit one occurrence per window day they fall on, capped at
+ * {@link MAX_RECURRENCE_CELLS} per event so a pathological rule can't blow up.
+ *
+ * Pure: returns a Map keyed by ISO date -> occurrences (input order preserved
+ * within a day). The window order does not affect membership.
+ */
+export const expandEventsForWindow = (
+  events: CalendarEvent[],
+  windowDates: string[],
+): Map<string, CalendarOccurrence[]> => {
+  const result = new Map<string, CalendarOccurrence[]>()
+  const windowSet = new Set(windowDates)
+  const windowParsed = windowDates
+    .map((iso) => ({ iso, date: parseIsoDateLocal(iso) }))
+    .filter((w): w is { iso: string; date: Date } => w.date !== null)
+
+  const push = (date: string, occ: CalendarOccurrence): void => {
+    const existing = result.get(date)
+    if (existing) {
+      existing.push(occ)
+    } else {
+      result.set(date, [occ])
+    }
+  }
+
+  for (const event of events) {
+    const allDay = !isTimedEvent(event)
+    const time = eventTimeOfDay(event)
+
+    if (!event.recurrence) {
+      if (windowSet.has(event.date)) {
+        push(event.date, { event, date: event.date, allDay, time })
+      }
+      continue
+    }
+
+    const anchor = parseIsoDateLocal(event.date)
+    if (!anchor) {
+      continue
+    }
+    let emitted = 0
+    for (const { iso, date } of windowParsed) {
+      if (emitted >= MAX_RECURRENCE_CELLS) {
+        break
+      }
+      if (recurrenceHitsDate(anchor, date, event.recurrence)) {
+        push(iso, { event, date: iso, allDay, time })
+        emitted += 1
+      }
+    }
+  }
+
+  return result
 }
