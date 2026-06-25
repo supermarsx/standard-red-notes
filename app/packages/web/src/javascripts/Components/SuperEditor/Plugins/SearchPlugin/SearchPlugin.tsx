@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom'
 import { $createRangeSelection, $getSelection, $nodesOfType, $setSelection, TextNode } from 'lexical'
 import { compileSearch, computeReplacement, SearchOptions } from './replaceLogic'
 import { searchRegexInElement } from './searchRegexInElement'
+import { getMatchCounter, nextResultIndex, previousResultIndex } from './matchCounter'
 import StyledTooltip from '../../../StyledTooltip/StyledTooltip'
 import Icon from '../../../Icon/Icon'
 
@@ -71,7 +72,12 @@ export function SearchPlugin() {
       if (!result) {
         return
       }
-      highlightRendererRef.current?.setActiveHighlight(result)
+      const highlightRenderer = highlightRendererRef.current
+      // Re-paint all matches while excluding the new active one so the distinct active
+      // highlight isn't washed out by the all-matches highlight stacking on it. This also
+      // restores the highlight on the previously-active match.
+      highlightRenderer?.highlightMultipleRanges(results, result)
+      highlightRenderer?.setActiveHighlight(result)
       result.startContainer.parentElement?.scrollIntoView({
         block: 'center',
       })
@@ -79,17 +85,17 @@ export function SearchPlugin() {
     [results],
   )
   const goToNextResult = useCallback(() => {
-    let next = currentResultIndex + 1
-    if (next >= results.length) {
-      next = 0
+    const next = nextResultIndex(currentResultIndex, results.length)
+    if (next < 0) {
+      return
     }
     highlightAndScrollResultIntoView(next)
     setCurrentResultIndex(next)
   }, [currentResultIndex, highlightAndScrollResultIntoView, results.length])
   const goToPrevResult = useCallback(() => {
-    let prev = currentResultIndex - 1
+    const prev = previousResultIndex(currentResultIndex, results.length)
     if (prev < 0) {
-      prev = results.length - 1
+      return
     }
     highlightAndScrollResultIntoView(prev)
     setCurrentResultIndex(prev)
@@ -218,11 +224,12 @@ export function SearchPlugin() {
       }
 
       setResults(ranges)
-      highlightRenderer?.highlightMultipleRanges(ranges)
       if (ranges.length > 0) {
         setCurrentResultIndex(0)
+        highlightRenderer?.highlightMultipleRanges(ranges, ranges[0])
         highlightRenderer?.setActiveHighlight(ranges[0])
       } else {
+        highlightRenderer?.highlightMultipleRanges(ranges)
         setCurrentResultIndex(-1)
       }
     },
@@ -392,12 +399,7 @@ export function SearchPlugin() {
               ref={focusOnMount}
               right={[
                 <div className="min-w-[7ch] max-w-[7ch] flex-shrink-0 whitespace-nowrap text-right">
-                  {query.length > 0 && (
-                    <>
-                      {currentResultIndex > -1 ? currentResultIndex + 1 + ' / ' : null}
-                      {results.length}
-                    </>
-                  )}
+                  {query.length > 0 && getMatchCounter(currentResultIndex, results.length).label}
                 </div>,
               ]}
             />

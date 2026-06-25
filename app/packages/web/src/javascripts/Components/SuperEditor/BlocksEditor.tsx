@@ -37,6 +37,8 @@ import { CheckListPlugin } from './Plugins/CheckListPlugin'
 import GoogleDocsPastePlugin from './Plugins/GoogleDocsPastePlugin/GoogleDocsPastePlugin'
 import MultiCursorPlugin from './Plugins/MultiCursorPlugin/MultiCursorPlugin'
 import AutoPairPlugin from './Plugins/AutoPairPlugin/AutoPairPlugin'
+import FormattingMarksPlugin from './Plugins/FormattingMarksPlugin/FormattingMarksPlugin'
+import { FormatPainterPlugin } from './Plugins/FormatPainterPlugin'
 import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
 import { WebApplication } from '@/Application/WebApplication'
 
@@ -154,6 +156,8 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <GoogleDocsPastePlugin />
       <MultiCursorPlugin />
       <AutoPairPlugin />
+      <FormattingMarksPlugin />
+      <FormatPainterPlugin />
       {!readonly && floatingAnchorElem && (
         <>
           <DraggableBlockPlugin anchorElem={floatingAnchorElem} />

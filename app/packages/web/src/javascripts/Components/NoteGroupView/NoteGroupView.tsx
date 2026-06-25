@@ -27,6 +27,7 @@ import ConstellationView from '../Constellation/ConstellationView'
 import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
 import EmptyTabView from './EmptyTabView'
 import { loadNewTabBehavior } from '@/Tabs/newTabSettings'
+import { loadTabCustomNames, saveTabCustomNames, setTabCustomName, TabCustomNames } from '@/Tabs/tabCustomNames'
 
 /**
  * Standard Red Notes: the editor tile layout defaults to Single (one note shown
@@ -87,6 +88,12 @@ type State = {
    * narrow to use, so we stack tiles into a single scrollable column instead.
    */
   isNarrowTilingViewport: boolean
+  /**
+   * Standard Red Notes: per-tab custom names, keyed by note/file `item.uuid` and
+   * persisted device-locally in localStorage (see `tabCustomNames.ts`). An empty
+   * custom name reverts a tab label to the note title.
+   */
+  tabCustomNames: TabCustomNames
 }
 
 type Props = {
@@ -116,7 +123,24 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       activeViewTabId: undefined,
       tileLayout: loadPersistedTileLayout(),
       isNarrowTilingViewport: !lgMatches,
+      tabCustomNames: loadTabCustomNames(),
     }
+  }
+
+  /**
+   * Standard Red Notes: renames a note/file tab's label. Persists the custom name
+   * keyed by the controller's `item.uuid` (stable across sessions, unlike the
+   * controller `runtimeId`). An empty/whitespace name reverts the tab to its note
+   * title. No-ops for template/uninitialized controllers that have no item yet.
+   */
+  private renameTab = (controller: NoteViewController | FileViewController, name: string) => {
+    const uuid = controller.item?.uuid
+    if (!uuid) {
+      return
+    }
+    const next = setTabCustomName(this.state.tabCustomNames, uuid, name)
+    saveTabCustomNames(next)
+    this.setState({ tabCustomNames: next })
   }
 
   override componentDidMount(): void {
@@ -465,6 +489,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               onCloseOtherTabs={this.closeOtherTabs}
               onCloseTabsToRight={this.closeTabsToRight}
               onCloseAllTabs={this.closeAllTabs}
+              customNames={this.state.tabCustomNames}
+              onRenameTab={this.renameTab}
             />
 
             {activeViewTab && this.renderActiveViewTab(activeViewTab)}

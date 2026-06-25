@@ -25,6 +25,7 @@ import {
   $getNodeByKey,
   TextNode,
   BaseSelection,
+  RangeSelection,
 } from 'lexical'
 import {
   mergeRegister,
@@ -141,6 +142,37 @@ import {
   resolveContextualWidget,
 } from './ContextualToolbar'
 import BlockZoomOverlay from './BlockZoomOverlay'
+import { TableOfContentsBlock } from '../Blocks/TableOfContents'
+import { FORMAT_PAINTER_TOGGLE } from '../FormatPainterPlugin'
+import { useFormatPainter } from '../FormatPainterPlugin'
+import { useFormattingMarks } from '../FormattingMarksPlugin/FormattingMarksPlugin'
+import {
+  pasteWithoutFormatting,
+  pasteSafe,
+  pasteKeepOrigin,
+  pasteMergeFormatting,
+  pasteAsImage,
+  copyWithoutFormatting,
+  copyTextOnly,
+  copyImagesOnly,
+  cutWithoutFormatting,
+  cutTextOnly,
+  cutImagesOnly,
+} from './clipboardActions'
+import {
+  LINE_HEIGHT_PRESETS,
+  SPACING_PRESETS,
+  INDENT_STEP,
+  TEXT_SHADING_PRESETS,
+  $setLineHeight,
+  $setSpaceBefore,
+  $setSpaceAfter,
+  $setIndent,
+  $setIndentRight,
+  $setFirstLineIndent,
+  $setTextShading,
+} from './blockFormatting'
+import { BULLET_STYLES, NUMBER_STYLES, $setListStyle } from './listStyle'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -390,6 +422,51 @@ const ToolbarPlugin = () => {
 
   const [isTypographyMenuOpen, setIsTypographyMenuOpen] = useState(false)
   const typographyAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // Standard Red Notes — paragraph layout (line spacing, paragraph spacing,
+  // indentation, text shading) popover, mirroring the Typography popover.
+  const [isParagraphLayoutMenuOpen, setIsParagraphLayoutMenuOpen] = useState(false)
+  const paragraphLayoutAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // List-marker style popover (bulleted / numbered marker presets).
+  const [isListStyleMenuOpen, setIsListStyleMenuOpen] = useState(false)
+  const listStyleAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // Clipboard split-dropdown popovers (Cut / Copy / Paste variants).
+  const [isPasteMenuOpen, setIsPasteMenuOpen] = useState(false)
+  const pasteAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isCopyMenuOpen, setIsCopyMenuOpen] = useState(false)
+  const copyAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isCutMenuOpen, setIsCutMenuOpen] = useState(false)
+  const cutAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // Format painter (Word-style) armed state + formatting marks (¶) toggle.
+  const painter = useFormatPainter()
+  const [marksOn, toggleMarks] = useFormattingMarks()
+
+  // Apply a block-formatting helper across the current range selection.
+  const runBlockFormat = useCallback(
+    (apply: (selection: RangeSelection) => void) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          apply(selection)
+        }
+      })
+    },
+    [activeEditor],
+  )
+
+  // Apply a list-marker style (CSS list-style-type) to the owning list, if any.
+  const applyListStyle = useCallback(
+    (value: string) => {
+      activeEditor.update(() => {
+        const selection = $getSelection()
+        $setListStyle(selection, value)
+      })
+    },
+    [activeEditor],
+  )
 
   // Word-style floating mini-toolbar (shown on text selection): a compact "More"
   // overflow menu hosting the less-common quick-format actions.
@@ -1227,23 +1304,74 @@ const ToolbarPlugin = () => {
   // render `null` there, preserving the exact prior behavior.
   const buttonRenderers: Partial<Record<ToolbarButtonId, ReactNode>> = {
     [ToolbarButtonId.Cut]: (
-      <ToolbarButton
-        name="Cut"
-        iconName="scissors"
-        disabled={!hasNonCollapsedSelection}
-        onSelect={handleClipboardCut}
-      />
+      <div className="flex flex-shrink-0 items-center" key="cut">
+        <ToolbarButton
+          name="Cut"
+          iconName="scissors"
+          disabled={!hasNonCollapsedSelection}
+          onSelect={handleClipboardCut}
+        />
+        <StyledTooltip showOnHover showOnMobile side="top" label="More cut options">
+          <button
+            type="button"
+            aria-label="More cut options"
+            ref={cutAnchorRef}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setIsCutMenuOpen(!isCutMenuOpen)}
+            className={classNames(
+              'flex h-8 items-center rounded-md px-0.5 md:h-7',
+              isCutMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
+            )}
+          >
+            <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+          </button>
+        </StyledTooltip>
+      </div>
     ),
     [ToolbarButtonId.Copy]: (
-      <ToolbarButton
-        name="Copy"
-        iconName="copy"
-        disabled={!hasNonCollapsedSelection}
-        onSelect={handleClipboardCopy}
-      />
+      <div className="flex flex-shrink-0 items-center" key="copy">
+        <ToolbarButton
+          name="Copy"
+          iconName="copy"
+          disabled={!hasNonCollapsedSelection}
+          onSelect={handleClipboardCopy}
+        />
+        <StyledTooltip showOnHover showOnMobile side="top" label="More copy options">
+          <button
+            type="button"
+            aria-label="More copy options"
+            ref={copyAnchorRef}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
+            className={classNames(
+              'flex h-8 items-center rounded-md px-0.5 md:h-7',
+              isCopyMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
+            )}
+          >
+            <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+          </button>
+        </StyledTooltip>
+      </div>
     ),
     [ToolbarButtonId.Paste]: (
-      <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
+      <div className="flex flex-shrink-0 items-center" key="paste">
+        <ToolbarButton name="Paste" iconName="clipboard" onSelect={() => void handleClipboardPaste()} />
+        <StyledTooltip showOnHover showOnMobile side="top" label="More paste options">
+          <button
+            type="button"
+            aria-label="More paste options"
+            ref={pasteAnchorRef}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setIsPasteMenuOpen(!isPasteMenuOpen)}
+            className={classNames(
+              'flex h-8 items-center rounded-md px-0.5 md:h-7',
+              isPasteMenuOpen ? 'bg-contrast' : 'hover:bg-contrast',
+            )}
+          >
+            <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+          </button>
+        </StyledTooltip>
+      </div>
     ),
     [ToolbarButtonId.TableOfContents]: canShowAllItems ? (
       <ToolbarButton
@@ -1400,6 +1528,14 @@ const ToolbarPlugin = () => {
         onSelect={() => {
           editor.dispatchCommand(TOGGLE_LINK_AND_EDIT_COMMAND, '')
         }}
+      />
+    ),
+    [ToolbarButtonId.FormatPainter]: (
+      <ToolbarButton
+        name="Format painter — copy formatting (double-click to keep on)"
+        iconName="pencil"
+        active={painter.armed}
+        onSelect={() => editor.dispatchCommand(FORMAT_PAINTER_TOGGLE, undefined)}
       />
     ),
     [ToolbarButtonId.TextStyleMenu]: (
@@ -1612,6 +1748,33 @@ const ToolbarPlugin = () => {
         iconName={OutdentBlock.iconName}
         onSelect={() => OutdentBlock.onSelect(editor)}
       />
+    ),
+    [ToolbarButtonId.ParagraphLayout]: (
+      <ToolbarButton
+        name="Paragraph layout — line & paragraph spacing, indentation, shading"
+        onSelect={() => setIsParagraphLayoutMenuOpen(!isParagraphLayoutMenuOpen)}
+        ref={paragraphLayoutAnchorRef}
+        className={isParagraphLayoutMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="paragraph" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.ListStyle]: (
+      <ToolbarButton
+        name="List style — bullet & number marker"
+        onSelect={() => setIsListStyleMenuOpen(!isListStyleMenuOpen)}
+        ref={listStyleAnchorRef}
+        className={isListStyleMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="list-bulleted" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.FormattingMarks]: (
+      <ToolbarButton name="Formatting marks" active={marksOn} onSelect={toggleMarks}>
+        <span className="text-base font-semibold leading-none">¶</span>
+      </ToolbarButton>
     ),
     [ToolbarButtonId.InsertMenu]: canShowAllItems ? (
       <ToolbarButton
@@ -2365,6 +2528,11 @@ const ToolbarPlugin = () => {
             iconName={FootnoteBlock.iconName}
             onClick={() => FootnoteBlock.onSelect(editor)}
           />
+          <ToolbarMenuItem
+            name={TableOfContentsBlock.name}
+            iconName={TableOfContentsBlock.iconName}
+            onClick={() => TableOfContentsBlock.onSelect(editor)}
+          />
           <MenuItemSeparator />
           <ToolbarMenuItem name="Customize toolbar" iconName="settings" onClick={openCustomizeDialog} />
         </Menu>
@@ -2766,6 +2934,284 @@ const ToolbarPlugin = () => {
             </MenuItem>
           ))}
         </Menu>
+      </Popover>
+      {/* Clipboard split-dropdowns: Paste / Copy / Cut variants. Each mirrors the
+          undo/redo split pattern (primary ToolbarButton + chevron) with a Menu of
+          variant actions wired to the async helpers in clipboardActions.ts. */}
+      <Popover
+        title="Paste options"
+        anchorElement={pasteAnchorRef}
+        open={isPasteMenuOpen}
+        togglePopover={() => setIsPasteMenuOpen(!isPasteMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Paste options" className="!px-0" onClick={() => setIsPasteMenuOpen(false)}>
+          <ToolbarMenuItem
+            name="Paste without formatting"
+            iconName="clipboard"
+            onClick={() => void pasteWithoutFormatting(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Paste clean (strip hidden characters)"
+            iconName="clipboard"
+            onClick={() => void pasteSafe(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Keep source formatting"
+            iconName="clipboard"
+            onClick={() => void pasteKeepOrigin(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Match destination formatting"
+            iconName="clipboard"
+            onClick={() => void pasteMergeFormatting(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Paste as image"
+            iconName="image"
+            onClick={() => void pasteAsImage(activeEditor)}
+          />
+        </Menu>
+      </Popover>
+      <Popover
+        title="Copy options"
+        anchorElement={copyAnchorRef}
+        open={isCopyMenuOpen}
+        togglePopover={() => setIsCopyMenuOpen(!isCopyMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Copy options" className="!px-0" onClick={() => setIsCopyMenuOpen(false)}>
+          <ToolbarMenuItem
+            name="Copy without formatting"
+            iconName="copy"
+            onClick={() => void copyWithoutFormatting(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Copy text only"
+            iconName="copy"
+            onClick={() => void copyTextOnly(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Copy images only"
+            iconName="image"
+            onClick={() => void copyImagesOnly(activeEditor)}
+          />
+        </Menu>
+      </Popover>
+      <Popover
+        title="Cut options"
+        anchorElement={cutAnchorRef}
+        open={isCutMenuOpen}
+        togglePopover={() => setIsCutMenuOpen(!isCutMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <Menu a11yLabel="Cut options" className="!px-0" onClick={() => setIsCutMenuOpen(false)}>
+          <ToolbarMenuItem
+            name="Cut without formatting"
+            iconName="scissors"
+            onClick={() => void cutWithoutFormatting(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Cut text only"
+            iconName="scissors"
+            onClick={() => void cutTextOnly(activeEditor)}
+          />
+          <ToolbarMenuItem
+            name="Cut images only"
+            iconName="image"
+            onClick={() => void cutImagesOnly(activeEditor)}
+          />
+        </Menu>
+      </Popover>
+      {/* Paragraph layout: line spacing, paragraph spacing, indentation and text
+          shading. Compact popover mirroring the Typography one; onMouseDown is
+          prevented on the body so the editor selection survives clicks. */}
+      <Popover
+        title="Paragraph layout"
+        anchorElement={paragraphLayoutAnchorRef}
+        open={isParagraphLayoutMenuOpen}
+        togglePopover={() => setIsParagraphLayoutMenuOpen(!isParagraphLayoutMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-64 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Line spacing</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {LINE_HEIGHT_PRESETS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => runBlockFormat((selection) => $setLineHeight(selection, value))}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Space before</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {SPACING_PRESETS.map((value) => (
+              <button
+                key={`before-${value}`}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => runBlockFormat((selection) => $setSpaceBefore(selection, value))}
+              >
+                {value === '0' ? 'None' : value}
+              </button>
+            ))}
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Space after</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {SPACING_PRESETS.map((value) => (
+              <button
+                key={`after-${value}`}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => runBlockFormat((selection) => $setSpaceAfter(selection, value))}
+              >
+                {value === '0' ? 'None' : value}
+              </button>
+            ))}
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Indentation</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setIndent(selection, INDENT_STEP))}
+            >
+              Increase left
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setIndent(selection, ''))}
+            >
+              Decrease left
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setIndentRight(selection, INDENT_STEP))}
+            >
+              Increase right
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setIndentRight(selection, ''))}
+            >
+              Decrease right
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, INDENT_STEP))}
+            >
+              First line
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, ''))}
+            >
+              No first line
+            </button>
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Text shading</div>
+          <div className="flex flex-wrap items-center gap-1.5 px-2">
+            {TEXT_SHADING_PRESETS.map((color) => (
+              <button
+                key={color ?? 'none'}
+                type="button"
+                aria-label={color ? `Text shading ${color}` : 'No text shading'}
+                className="h-6 w-6 rounded border border-border"
+                style={{ backgroundColor: color ?? 'transparent' }}
+                onClick={() => runBlockFormat((selection) => $setTextShading(selection, color))}
+              />
+            ))}
+            <button
+              type="button"
+              className="rounded px-1.5 text-xs hover:bg-contrast"
+              onClick={() => runBlockFormat((selection) => $setTextShading(selection, null))}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      </Popover>
+      {/* List style: bullet & number marker presets. Applies the chosen CSS
+          list-style-type to the owning list; a no-op when not in a list. */}
+      <Popover
+        title="List style"
+        anchorElement={listStyleAnchorRef}
+        open={isListStyleMenuOpen}
+        togglePopover={() => setIsListStyleMenuOpen(!isListStyleMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-60 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Bulleted</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {BULLET_STYLES.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => applyListStyle(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">Numbered</div>
+          <div className="flex flex-wrap gap-1 px-2">
+            {NUMBER_STYLES.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                onClick={() => applyListStyle(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </Popover>
       {/* Word-style floating mini-toolbar "More" overflow menu. Hosts the
           quick-format actions that don't earn a spot on the compact visible bar:

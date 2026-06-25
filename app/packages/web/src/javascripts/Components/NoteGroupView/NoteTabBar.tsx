@@ -1,4 +1,4 @@
-import { FunctionComponent, MouseEvent, useRef, useState } from 'react'
+import { FunctionComponent, KeyboardEvent as ReactKeyboardEvent, MouseEvent, useRef, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
 import Icon from '../Icon/Icon'
 import { NoteViewController } from '../NoteView/Controller/NoteViewController'
@@ -8,6 +8,7 @@ import Popover from '../Popover/Popover'
 import Menu from '../Menu/Menu'
 import MenuItem from '../Menu/MenuItem'
 import MenuItemSeparator from '../Menu/MenuItemSeparator'
+import { resolveTabLabel, TabCustomNames } from '@/Tabs/tabCustomNames'
 
 type Controller = NoteViewController | FileViewController
 
@@ -60,6 +61,19 @@ type Props = {
   onCloseOtherTabs: (target: TabTarget) => void
   onCloseTabsToRight: (target: TabTarget) => void
   onCloseAllTabs: () => void
+  /**
+   * Standard Red Notes: per-tab custom names, keyed by the note/file `item.uuid`.
+   * When a controller's item has a non-empty entry here its tab label shows the
+   * custom name instead of the note title. Optional so existing call sites that
+   * don't rename keep working unchanged.
+   */
+  customNames?: TabCustomNames
+  /**
+   * Standard Red Notes: persists a renamed tab label for `controller`. An empty
+   * `name` reverts the tab to its note-title fallback. When omitted, the rename
+   * affordances (double-click-to-edit and the "Rename" menu item) are hidden.
+   */
+  onRenameTab?: (controller: Controller, name: string) => void
 }
 
 const titleForController = (controller: Controller): string => {
@@ -102,10 +116,40 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onCloseOtherTabs,
   onCloseTabsToRight,
   onCloseAllTabs,
+  customNames,
+  onRenameTab,
 }) => {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
   const contextMenuTarget = useRef<TabTarget | null>(null)
+  // Standard Red Notes: runtimeId of the tab currently being renamed inline (null
+  // = no edit in progress) and the in-progress draft text.
+  const [renamingRuntimeId, setRenamingRuntimeId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+
+  const labelForController = (controller: Controller): string =>
+    resolveTabLabel(customNames ?? {}, controller.item?.uuid, titleForController(controller))
+
+  const beginRename = (controller: Controller) => {
+    if (!onRenameTab) {
+      return
+    }
+    setRenamingRuntimeId(controller.runtimeId)
+    // Seed with the current custom name (not the title) so an empty box clearly
+    // means "revert to title" and a populated box means "edit the custom name".
+    setRenameDraft(controller.item?.uuid ? customNames?.[controller.item.uuid] ?? '' : '')
+  }
+
+  const commitRename = (controller: Controller) => {
+    onRenameTab?.(controller, renameDraft)
+    setRenamingRuntimeId(null)
+    setRenameDraft('')
+  }
+
+  const cancelRename = () => {
+    setRenamingRuntimeId(null)
+    setRenameDraft('')
+  }
 
   const totalTabs = viewTabs.length + controllers.length
   // Combined visual order = view tabs first, then note/file tabs.
@@ -130,6 +174,12 @@ const NoteTabBar: FunctionComponent<Props> = ({
   // The split toggle only applies to note/file tabs and only when there is more
   // than one note/file controller open to split with.
   const showSplitItem = target?.kind === 'controller' && controllers.length > 1
+
+  // Rename only applies to note/file tabs and only when a rename handler is wired.
+  const renameTargetController =
+    onRenameTab && target?.kind === 'controller'
+      ? controllers.find((controller) => controller.runtimeId === target.runtimeId)
+      : undefined
 
   const runAndClose = (action: () => void) => {
     action()
@@ -186,16 +236,25 @@ const NoteTabBar: FunctionComponent<Props> = ({
       })}
       {controllers.map((controller) => {
         const isActive = controller.runtimeId === activeControllerRuntimeId
-        const title = titleForController(controller)
+        const title = labelForController(controller)
+        const isRenaming = renamingRuntimeId === controller.runtimeId
         return (
           <div
             key={controller.runtimeId}
             role="tab"
             aria-selected={isActive}
             tabIndex={0}
-            onClick={() => onSelect(controller)}
+            onClick={() => {
+              if (!isRenaming) {
+                onSelect(controller)
+              }
+            }}
+            onDoubleClick={() => beginRename(controller)}
             onContextMenu={(event) => openContextMenu(event, { kind: 'controller', runtimeId: controller.runtimeId })}
             onKeyDown={(event) => {
+              if (isRenaming) {
+                return
+              }
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 onSelect(controller)
@@ -209,7 +268,31 @@ const NoteTabBar: FunctionComponent<Props> = ({
             )}
             title={title}
           >
-            <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
+            {isRenaming ? (
+              <input
+                type="text"
+                autoFocus
+                className="max-w-[8rem] flex-shrink rounded border border-info bg-default px-1 text-sm text-text md:max-w-[10rem] md:text-xs"
+                aria-label="Rename tab"
+                value={renameDraft}
+                placeholder={titleForController(controller)}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => setRenameDraft(event.target.value)}
+                onBlur={() => commitRename(controller)}
+                onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
+                  event.stopPropagation()
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitRename(controller)
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault()
+                    cancelRename()
+                  }
+                }}
+              />
+            ) : (
+              <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
+            )}
             <button
               type="button"
               className="-mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-contrast md:h-auto md:w-auto md:p-0.5"
@@ -269,6 +352,19 @@ const NoteTabBar: FunctionComponent<Props> = ({
         containerClassName="md:!w-auto md:!min-w-0"
       >
         <Menu a11yLabel="Tab context menu">
+          {renameTargetController && (
+            <>
+              <MenuItem
+                icon="pencil-filled"
+                onClick={() => {
+                  runAndClose(() => beginRename(renameTargetController))
+                }}
+              >
+                Rename
+              </MenuItem>
+              <MenuItemSeparator />
+            </>
+          )}
           <MenuItem
             icon="close"
             onClick={() => {

@@ -3,14 +3,33 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { ForwardedRef, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react'
 import { debounce, getScrollParent } from '../../../../Utils'
+import { ensureSearchHighlightStyles } from './searchHighlightStyles'
 
 // now, but its still Nightly-only on Firefox desktop and not supported at all on Firefox Android
 export const canUseCSSHiglights = !!('highlights' in CSS)
 
 export interface SearchHighlightRendererMethods {
   setActiveHighlight(range: Range): void
-  highlightMultipleRanges(ranges: Range[]): void
+  /**
+   * Highlights every match. Pass `activeRange` to exclude the currently-active match from
+   * the "all matches" set so it is only painted by the distinct active highlight (avoids
+   * the two highlights stacking on the same range and washing out the active style).
+   */
+  highlightMultipleRanges(ranges: Range[], activeRange?: Range | null): void
   clearHighlights(): void
+}
+
+/**
+ * Two ranges are considered the same match when they cover the same DOM positions.
+ * Range identity can't be relied on because the search recomputes fresh Range objects.
+ */
+function isSameRange(a: Range, b: Range): boolean {
+  return (
+    a.startContainer === b.startContainer &&
+    a.startOffset === b.startOffset &&
+    a.endContainer === b.endContainer &&
+    a.endOffset === b.endOffset
+  )
 }
 
 export const SearchHighlightRenderer = forwardRef(
@@ -23,6 +42,10 @@ export const SearchHighlightRenderer = forwardRef(
     ref: ForwardedRef<SearchHighlightRendererMethods>,
   ) => {
     const [editor] = useLexicalComposerContext()
+
+    useEffect(() => {
+      ensureSearchHighlightStyles()
+    }, [])
 
     const rootElement = editor.getRootElement()
     const rootElementRect = useMemo(() => {
@@ -84,13 +107,16 @@ export const SearchHighlightRenderer = forwardRef(
       return {
         setActiveHighlight: (range: Range) => {
           if (canUseCSSHiglights) {
-            CSS.highlights.set('active-search-result', new Highlight(range))
+            const activeHighlight = new Highlight(range)
+            // Ensure the active match always paints on top of the all-matches highlight.
+            activeHighlight.priority = 1
+            CSS.highlights.set('active-search-result', activeHighlight)
             return
           }
           setActiveHighlightRange(range)
           setActiveHighlightRect(getBoundingClientRectForRangeIfVisible(range))
         },
-        highlightMultipleRanges: (ranges: Range[]) => {
+        highlightMultipleRanges: (ranges: Range[], activeRange?: Range | null) => {
           if (canUseCSSHiglights) {
             const searchResultsHighlight = new Highlight()
             for (let i = 0; i < ranges.length; i++) {
@@ -98,12 +124,16 @@ export const SearchHighlightRenderer = forwardRef(
               if (!range) {
                 continue
               }
+              // Skip the active match so only the distinct active highlight paints it.
+              if (activeRange && isSameRange(range, activeRange)) {
+                continue
+              }
               searchResultsHighlight.add(range)
             }
             CSS.highlights.set('search-results', searchResultsHighlight)
             return
           }
-          setRangesToHighlight(ranges)
+          setRangesToHighlight(activeRange ? ranges.filter((range) => !isSameRange(range, activeRange)) : ranges)
         },
         clearHighlights: () => {
           if (canUseCSSHiglights) {

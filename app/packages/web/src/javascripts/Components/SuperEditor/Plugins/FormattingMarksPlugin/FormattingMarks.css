@@ -1,0 +1,57 @@
+/*
+ * Standard Red Notes: on-screen-only paragraph/formatting marks (Word's ¶).
+ *
+ * All rules are scoped under `.show-formatting-marks`, a class toggled on the
+ * Lexical editor root element (`.ContentEditable__root`) by FormattingMarksPlugin.
+ * They render purely decorative pseudo-elements (pilcrows after block elements,
+ * a line-break arrow, and middots for spaces) and NEVER affect the saved note
+ * content — pseudo-element `content` is not part of the document text and is
+ * stripped on copy in every browser.
+ *
+ * Color uses the editor's passive palette so the marks read as faint guides,
+ * matching the surrounding chrome.
+ */
+
+.show-formatting-marks .Lexical__paragraph::after,
+.show-formatting-marks .Lexical__h1::after,
+.show-formatting-marks .Lexical__h2::after,
+.show-formatting-marks .Lexical__h3::after,
+.show-formatting-marks .Lexical__h4::after,
+.show-formatting-marks .Lexical__h5::after,
+.show-formatting-marks .Lexical__h6::after,
+.show-formatting-marks .Lexical__quote::after,
+.show-formatting-marks .Lexical__listItem:not(.Lexical__listItemChecked):not(.Lexical__listItemUnchecked)::after {
+  content: '\00B6'; /* ¶ PILCROW */
+  color: var(--sn-stylekit-passive-color-1, #a3a3a3);
+  opacity: 0.55;
+  font-weight: 400;
+  /* Sit inline at the end of the block without adding layout/scroll width. */
+  display: inline;
+  margin-left: 0.15em;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/*
+ * Soft line breaks (Shift+Enter) render as <br> inside a paragraph in Lexical.
+ * Show a downward-return arrow before each one so wrapped-vs-hard breaks are
+ * distinguishable, mirroring Word's ↵ glyph.
+ */
+.show-formatting-marks .Lexical__paragraph br::before,
+.show-formatting-marks .Lexical__listItem br::before {
+  content: '\21B5'; /* ↵ DOWNWARDS ARROW WITH CORNER LEFTWARDS */
+  color: var(--sn-stylekit-passive-color-1, #a3a3a3);
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/*
+ * Nested list items already carry their own marker; keep the trailing pilcrow
+ * but don't double it up for the empty/placeholder list item Lexical inserts.
+ */
+.show-formatting-marks .Lexical__listItem.Lexical__nestedListItem::after {
+  content: none;
+}

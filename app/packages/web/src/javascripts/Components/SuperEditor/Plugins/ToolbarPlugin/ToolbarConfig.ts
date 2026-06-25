@@ -40,6 +40,7 @@ export enum ToolbarButtonId {
   Underline = 'underline',
   InlineCode = 'inlineCode',
   Link = 'link',
+  FormatPainter = 'formatPainter',
   TextStyleMenu = 'textStyleMenu',
   // Color / font
   TextColor = 'textColor',
@@ -59,6 +60,9 @@ export enum ToolbarButtonId {
   Alignment = 'alignment',
   Indent = 'indent',
   Outdent = 'outdent',
+  ParagraphLayout = 'paragraphLayout',
+  ListStyle = 'listStyle',
+  FormattingMarks = 'formattingMarks',
   // Insert
   InsertMenu = 'insertMenu',
   NoteFromSelection = 'noteFromSelection',
@@ -123,6 +127,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.Underline, label: 'Underline', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.Link, label: 'Link', group: ToolbarGroupId.TextStyle },
+      { id: ToolbarButtonId.FormatPainter, label: 'Format painter', group: ToolbarGroupId.TextStyle },
       { id: ToolbarButtonId.TextStyleMenu, label: 'Text style menu', group: ToolbarGroupId.TextStyle },
     ],
   },
@@ -154,6 +159,9 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.Alignment, label: 'Alignment', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.Indent, label: 'Indent', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.Outdent, label: 'Outdent', group: ToolbarGroupId.ParagraphList },
+      { id: ToolbarButtonId.ParagraphLayout, label: 'Paragraph layout (spacing, indent, shading)', group: ToolbarGroupId.ParagraphList },
+      { id: ToolbarButtonId.ListStyle, label: 'List style', group: ToolbarGroupId.ParagraphList },
+      { id: ToolbarButtonId.FormattingMarks, label: 'Formatting marks', group: ToolbarGroupId.ParagraphList },
     ],
   },
   {
