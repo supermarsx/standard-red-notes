@@ -290,14 +290,12 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
       />
       {notes.length === 1 && (
         <>
-          <MenuSection>
+          <MenuSection title="View">
             <MenuItem onClick={openRevisionHistoryModal}>
               <Icon type="history" className={iconClass} />
               Note history
               {historyShortcut && <KeyboardShortcutIndicator className="ml-auto" shortcut={historyShortcut} />}
             </MenuItem>
-          </MenuSection>
-          <MenuSection>
             <MenuItem onClick={toggleLineWidthModal} disabled={areSomeNotesInReadonlySharedVault}>
               <Icon type="line-width" className={iconClass} />
               Editor width
@@ -306,7 +304,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           </MenuSection>
         </>
       )}
-      <MenuSection>
+      <MenuSection title="Note settings">
         <MenuSwitchButtonItem
           checked={locked}
           onChange={(locked) => {
@@ -364,7 +362,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         </MenuSection>
       )}
 
-      <MenuSection className={notes.length > 1 ? 'md:!mb-2' : ''}>
+      <MenuSection title="Organize">
         {application.featuresController.isVaultsEnabled() && (
           <AddToVaultMenuOption
             iconClassName={iconClass}
@@ -425,78 +423,6 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
             {pinShortcut && <KeyboardShortcutIndicator className="ml-auto" shortcut={pinShortcut} />}
           </MenuItem>
         )}
-        <MenuItem onClick={notesController.exportSelectedNotes}>
-          <Icon type="download" className={iconClass} />
-          Export
-        </MenuItem>
-        {notes.length === 1 && (
-          <MenuItem onClick={printNote}>
-            <Icon type="file-doc" className={iconClass} />
-            Print note
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem onClick={downloadImages}>
-            <Icon type="image" className={iconClass} />
-            Download images (.zip)
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              setShareLinkOpen(true)
-            }}
-          >
-            <Icon type="link" className={iconClass} />
-            Create share link
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              // Account-gated sharing reuses the existing trusted-contact /
-              // shared-vault E2E invite flow, which is vault-scoped. We route the
-              // user to the Vaults preferences pane where they can move the note
-              // into a shared vault and invite a contact who has an account.
-              application.openPreferences('vaults')
-            }}
-          >
-            <Icon type="user" className={iconClass} />
-            Invite by account…
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              setPublishGitHubOpen(true)
-            }}
-            disabled={areSomeNotesInReadonlySharedVault}
-          >
-            <Icon type="upload" className={iconClass} />
-            Publish to GitHub…
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              setNarrationOpen(true)
-            }}
-          >
-            <Icon type="file-music" className={iconClass} />
-            Narrate / Listen
-          </MenuItem>
-        )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              setAudioRecorderOpen(true)
-            }}
-            disabled={areSomeNotesInReadonlySharedVault}
-          >
-            <Icon type="file-music" className={iconClass} />
-            Record audio / Transcribe…
-          </MenuItem>
-        )}
         {notes.length === 1 && (
           <MenuItem
             onClick={() => {
@@ -536,17 +462,9 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
             {noteIsTemplate(notes[0]) ? 'Remove from templates' : 'Save as template'}
           </MenuItem>
         )}
-        {notes.length === 1 && (
-          <MenuItem
-            onClick={() => {
-              setSplitOpen(true)
-            }}
-            disabled={areSomeNotesInReadonlySharedVault}
-          >
-            <Icon type="menu-arrow-down" className={iconClass} />
-            Split note…
-          </MenuItem>
-        )}
+      </MenuSection>
+
+      <MenuSection title="AI & tools">
         {notes.length === 1 && (
           <MenuItem
             onClick={() => {
@@ -578,12 +496,107 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <Icon type="folder" className={iconClass} />
           Auto-organize all notes (AI)
         </MenuItem>
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setSplitOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="menu-arrow-down" className={iconClass} />
+            Split note…
+          </MenuItem>
+        )}
+      </MenuSection>
+
+      <MenuSection title="Export & print">
+        <MenuItem onClick={notesController.exportSelectedNotes}>
+          <Icon type="download" className={iconClass} />
+          Export
+        </MenuItem>
+        {notes.length === 1 && (
+          <MenuItem onClick={printNote}>
+            <Icon type="print" className={iconClass} />
+            Print note
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem onClick={downloadImages}>
+            <Icon type="image" className={iconClass} />
+            Download images (.zip)
+          </MenuItem>
+        )}
+      </MenuSection>
+
+      <MenuSection title="Share">
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setShareLinkOpen(true)
+            }}
+          >
+            <Icon type="link" className={iconClass} />
+            Create share link
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              // Account-gated sharing reuses the existing trusted-contact /
+              // shared-vault E2E invite flow, which is vault-scoped. We route the
+              // user to the Vaults preferences pane where they can move the note
+              // into a shared vault and invite a contact who has an account.
+              application.openPreferences('vaults')
+            }}
+          >
+            <Icon type="user" className={iconClass} />
+            Invite by account…
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setPublishGitHubOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="upload" className={iconClass} />
+            Publish to GitHub…
+          </MenuItem>
+        )}
         {application.platform === Platform.Android && (
           <MenuItem onClick={shareSelectedItems}>
             <Icon type="share" className={iconClass} />
             Share
           </MenuItem>
         )}
+      </MenuSection>
+
+      <MenuSection title="Audio">
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setNarrationOpen(true)
+            }}
+          >
+            <Icon type="play" className={iconClass} />
+            Narrate / Listen
+          </MenuItem>
+        )}
+        {notes.length === 1 && (
+          <MenuItem
+            onClick={() => {
+              setAudioRecorderOpen(true)
+            }}
+            disabled={areSomeNotesInReadonlySharedVault}
+          >
+            <Icon type="mic" className={iconClass} />
+            Record audio / Transcribe…
+          </MenuItem>
+        )}
+      </MenuSection>
+
+      <MenuSection title="Actions" className={notes.length > 1 ? 'md:!mb-2' : ''}>
         <MenuItem onClick={duplicateSelectedNotes} disabled={areSomeNotesInReadonlySharedVault}>
           <Icon type="copy" className={iconClass} />
           Duplicate

@@ -1,11 +1,12 @@
 import * as icons from '@standardnotes/icons'
-import { PauseIcon, PlayIcon, SparkleIcon, StopIcon } from './MediaIcons'
+import { MicIcon, PauseIcon, PlayIcon, SparkleIcon, StopIcon } from './MediaIcons'
 
 export const LexicalIconNameToSvgMapping = {
   play: PlayIcon,
   pause: PauseIcon,
   stop: StopIcon,
   sparkle: SparkleIcon,
+  mic: MicIcon,
   'lexical-code': icons.LexicalCode,
   'align-center': icons.LexicalTextCenter,
   'align-justify': icons.LexicalTextJustify,

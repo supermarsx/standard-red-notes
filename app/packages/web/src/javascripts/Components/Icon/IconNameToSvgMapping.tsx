@@ -33,6 +33,7 @@ export const IconNameToSvgMapping = {
   'file-image': icons.FileImageIcon,
   'file-mov': icons.FileMovIcon,
   'file-music': icons.FileMusicIcon,
+  print: icons.PrintIcon,
   'file-other': icons.FileOtherIcon,
   'file-pdf': icons.FilePdfIcon,
   'file-ppt': icons.FilePptIcon,
