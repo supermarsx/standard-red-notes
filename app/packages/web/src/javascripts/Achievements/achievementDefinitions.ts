@@ -81,6 +81,15 @@ export const METRICS = {
   workspaceSwitchTotal: 'workspaceSwitchTotal',
   notesPinnedTotal: 'notesPinnedTotal',
   decadeOfTrash: 'decadeOfTrash',
+  achievementsViewed: 'achievementsViewed',
+  searchTweaked: 'searchTweaked',
+  multipleAccountsUsed: 'multipleAccountsUsed',
+  itemsDeletedTotal: 'itemsDeletedTotal',
+  appHoursSpent: 'appHoursSpent',
+  /** Set to 1 by the service when every non-hidden achievement in a category unlocks. */
+  editorCategoryComplete: 'editorCategoryComplete',
+  securityCategoryComplete: 'securityCategoryComplete',
+  powerCategoryComplete: 'powerCategoryComplete',
   /** Maintained by the service after each unlock = number of unlocked achievements. */
   unlockedCount: 'unlockedCount',
 } as const
@@ -447,14 +456,14 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     category: ACHIEVEMENT_CATEGORIES.Learning,
   },
 
-  // --- Manual sync ----------------------------------------------------------
+  // --- Manual sync (consolidated under Sync alongside sync conflicts) -------
   {
     id: 'manual-override',
     name: 'Manual Override',
     description: 'Trigger a manual sync.',
     metric: METRICS.manualSyncTotal,
     threshold: 1,
-    category: ACHIEVEMENT_CATEGORIES.Power,
+    category: ACHIEVEMENT_CATEGORIES.Sync,
   },
   {
     id: 'control-freak',
@@ -462,7 +471,7 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     description: 'Trigger 10 manual syncs.',
     metric: METRICS.manualSyncTotal,
     threshold: 10,
-    category: ACHIEVEMENT_CATEGORIES.Power,
+    category: ACHIEVEMENT_CATEGORIES.Sync,
   },
   {
     id: 'trust-no-autosave',
@@ -470,7 +479,7 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     description: 'Trigger 2,500 manual syncs.',
     metric: METRICS.manualSyncTotal,
     threshold: 2500,
-    category: ACHIEVEMENT_CATEGORIES.Power,
+    category: ACHIEVEMENT_CATEGORIES.Sync,
   },
   {
     id: 'f5-wore-out',
@@ -479,7 +488,7 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     metric: METRICS.manualSyncTotal,
     threshold: 50000,
     hidden: true,
-    category: ACHIEVEMENT_CATEGORIES.Power,
+    category: ACHIEVEMENT_CATEGORIES.Sync,
   },
 
   // --- Workspace switching --------------------------------------------------
@@ -525,6 +534,107 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     metric: METRICS.notesPinnedTotal,
     threshold: 50,
     category: ACHIEVEMENT_CATEGORIES.Organization,
+  },
+
+  // --- Time in the app ------------------------------------------------------
+  {
+    id: 'just-getting-started',
+    name: 'Just Getting Started',
+    description: 'Spend 1 hour in the app.',
+    metric: METRICS.appHoursSpent,
+    threshold: 1,
+    category: ACHIEVEMENT_CATEGORIES.Tenure,
+  },
+  {
+    id: 'clocked-in',
+    name: 'Clocked In',
+    description: 'Spend 500 hours in the app.',
+    metric: METRICS.appHoursSpent,
+    threshold: 500,
+    category: ACHIEVEMENT_CATEGORIES.Tenure,
+  },
+  {
+    id: 'where-did-time-go',
+    name: 'Where Did the Time Go?',
+    description: 'Spend 10,000 hours in the app.',
+    metric: METRICS.appHoursSpent,
+    threshold: 10000,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Tenure,
+  },
+  {
+    id: 'one-with-the-app',
+    name: 'One With the App',
+    description: 'Spend 40,000 hours in the app — a lifetime of notes.',
+    metric: METRICS.appHoursSpent,
+    threshold: 40000,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Tenure,
+  },
+
+  // --- Deletion / search / multi-account -----------------------------------
+  {
+    id: 'declutterer',
+    name: 'Declutterer',
+    description: 'Permanently delete 50 items.',
+    metric: METRICS.itemsDeletedTotal,
+    threshold: 50,
+    category: ACHIEVEMENT_CATEGORIES.Organization,
+  },
+  {
+    id: 'search-tweaker',
+    name: 'Search Tweaker',
+    description: 'Adjust a search filter or option.',
+    metric: METRICS.searchTweaked,
+    threshold: 1,
+    category: ACHIEVEMENT_CATEGORIES.Organization,
+  },
+  {
+    id: 'double-agent',
+    name: 'Double Agent',
+    description: 'Use more than one account or workspace.',
+    metric: METRICS.multipleAccountsUsed,
+    threshold: 1,
+    category: ACHIEVEMENT_CATEGORIES.Power,
+  },
+
+  // --- Achievements meta-engagement ----------------------------------------
+  {
+    id: 'trophy-polisher',
+    name: 'Trophy Polisher',
+    description: 'Open the Achievements pane 500 times. You really like these, huh?',
+    metric: METRICS.achievementsViewed,
+    threshold: 500,
+    category: ACHIEVEMENT_CATEGORIES.Meta,
+  },
+
+  // --- Category masters (unlock every non-hidden achievement in a category) -
+  {
+    id: 'editor-virtuoso',
+    name: 'Editor Virtuoso',
+    description: 'Unlock every Editor achievement.',
+    metric: METRICS.editorCategoryComplete,
+    threshold: 1,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Editor,
+  },
+  {
+    id: 'security-sentinel',
+    name: 'Security Sentinel',
+    description: 'Unlock every Security achievement.',
+    metric: METRICS.securityCategoryComplete,
+    threshold: 1,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Security,
+  },
+  {
+    id: 'power-user-supreme',
+    name: 'Power User Supreme',
+    description: 'Unlock every Power User achievement.',
+    metric: METRICS.powerCategoryComplete,
+    threshold: 1,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Power,
   },
 
   // --- Trash housekeeping ---------------------------------------------------
@@ -574,6 +684,17 @@ export const NON_HIDDEN_ACHIEVEMENT_COUNT = NON_HIDDEN_COUNT
 
 /** All distinct metric keys referenced by the catalog. */
 export const ALL_METRICS: string[] = Array.from(new Set(ACHIEVEMENTS.map((a) => a.metric)))
+
+/**
+ * "Category master" achievements: each unlocks (via its boolean `metric`) once
+ * every NON-HIDDEN achievement in `category` — excluding the master itself — has
+ * been unlocked. The service evaluates these after each normal unlock.
+ */
+export const CATEGORY_COMPLETION_ACHIEVEMENTS: { metric: string; category: string }[] = [
+  { metric: METRICS.editorCategoryComplete, category: ACHIEVEMENT_CATEGORIES.Editor },
+  { metric: METRICS.securityCategoryComplete, category: ACHIEVEMENT_CATEGORIES.Security },
+  { metric: METRICS.powerCategoryComplete, category: ACHIEVEMENT_CATEGORIES.Power },
+]
 
 /** Lookup of definitions by the metric they depend on. */
 export function definitionsForMetric(metric: string): AchievementDefinition[] {

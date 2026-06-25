@@ -17,6 +17,7 @@ import { addToast, ToastType } from '@standardnotes/toast'
 import {
   ACHIEVEMENTS,
   AchievementDefinition,
+  CATEGORY_COMPLETION_ACHIEVEMENTS,
   METRICS,
   definitionsForMetric,
 } from './achievementDefinitions'
@@ -185,6 +186,33 @@ class AchievementsServiceImpl {
         this.state.metrics[METRICS.unlockedCount] = newCount
         // Re-evaluate meta achievements (without re-persisting yet).
         this.evaluateMetric(METRICS.unlockedCount)
+      }
+    }
+
+    // After any unlock, check whether a whole category is now complete (which
+    // unlocks its "category master"). Bounded recursion: each master's metric is
+    // set once and then skipped on re-entry.
+    this.evaluateCategoryCompletions()
+  }
+
+  /**
+   * For each "category master", set its boolean metric (and unlock it) once every
+   * NON-HIDDEN achievement in that category — other than the master — is unlocked.
+   */
+  private evaluateCategoryCompletions(): void {
+    for (const { metric, category } of CATEGORY_COMPLETION_ACHIEVEMENTS) {
+      if ((this.state.metrics[metric] ?? 0) >= 1) {
+        continue
+      }
+      const targets = ACHIEVEMENTS.filter(
+        (a) => a.category === category && !a.hidden && a.metric !== metric,
+      )
+      if (targets.length === 0) {
+        continue
+      }
+      if (targets.every((a) => this.state.unlocked[a.id])) {
+        this.state.metrics[metric] = 1
+        this.evaluateMetric(metric)
       }
     }
   }

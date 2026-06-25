@@ -1,5 +1,6 @@
 import { ApplicationEvent, SNNote } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
+import { achievements, METRICS } from '@/Achievements'
 
 /**
  * Standard Red Notes: Auto-empty trash.
@@ -219,6 +220,7 @@ export class AutoEmptyTrashService {
         try {
           await this.application.mutator.deleteItem(item)
           deleted++
+          achievements.increment(METRICS.itemsDeletedTotal)
         } catch (error) {
           console.error('[AutoEmptyTrash] Failed to permanently delete trashed item', error)
         }

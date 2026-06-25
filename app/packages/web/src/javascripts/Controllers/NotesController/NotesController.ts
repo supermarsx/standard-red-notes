@@ -354,7 +354,11 @@ export class NotesController
     ) {
       this.application.itemListController.selectNextItem()
       if (permanently) {
-        await this.application.mutator.deleteItems(this.getSelectedNotesList())
+        const notesToDelete = this.getSelectedNotesList()
+        await this.application.mutator.deleteItems(notesToDelete)
+        for (let i = 0; i < notesToDelete.length; i++) {
+          achievements.increment(METRICS.itemsDeletedTotal)
+        }
         void this.application.sync.sync()
       } else {
         await this.changeSelectedNotes((mutator) => {

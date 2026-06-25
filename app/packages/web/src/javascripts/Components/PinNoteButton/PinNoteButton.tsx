@@ -6,6 +6,7 @@ import { classNames } from '@standardnotes/utils'
 import { keyboardStringForShortcut, PIN_NOTE_COMMAND } from '@standardnotes/ui-services'
 import { useKeyboardService } from '../KeyboardServiceProvider'
 import { VisuallyHidden } from '@ariakit/react'
+import StyledTooltip from '../StyledTooltip/StyledTooltip'
 
 type Props = {
   className?: string
@@ -34,20 +35,21 @@ const PinNoteButton: FunctionComponent<Props> = ({ className = '', notesControll
   const label = pinned ? `Unpin note (${shortcut})` : `Pin note (${shortcut})`
 
   return (
-    <button
-      className={classNames(
-        'sn-icon-button flex h-10 min-w-10 cursor-pointer items-center justify-center',
-        'focus:bg-contras rounded-full border border-solid border-border text-neutral hover:bg-contrast',
-        `md:h-8 md:min-w-8 ${pinned ? 'toggled' : ''}`,
-        className,
-      )}
-      onClick={togglePinned}
-      title={label}
-      aria-label={label}
-    >
-      <VisuallyHidden>Pin selected notes</VisuallyHidden>
-      <Icon type="pin" className="block" />
-    </button>
+    <StyledTooltip label={label}>
+      <button
+        className={classNames(
+          'sn-icon-button flex h-10 min-w-10 cursor-pointer items-center justify-center',
+          'focus:bg-contras rounded-full border border-solid border-border text-neutral hover:bg-contrast',
+          `md:h-8 md:min-w-8 ${pinned ? 'toggled' : ''}`,
+          className,
+        )}
+        onClick={togglePinned}
+        aria-label={label}
+      >
+        <VisuallyHidden>Pin selected notes</VisuallyHidden>
+        <Icon type="pin" className="block" />
+      </button>
+    </StyledTooltip>
   )
 }
 

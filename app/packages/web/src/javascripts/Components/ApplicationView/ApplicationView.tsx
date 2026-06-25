@@ -15,6 +15,7 @@ import {
 } from '@standardnotes/snjs'
 import { applyEditorFont } from '@/Utils/editorFont'
 import { achievements, METRICS } from '@/Achievements'
+import { startAppUsageTimeTracking } from '@/Services/AppUsageTime/AppUsageTimeTracker'
 import { reapplyPersistedCustomTheme } from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
 import { alertDialog, isIOS, RouteType } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
@@ -146,6 +147,13 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   // notification (at the configured time) prompting the user to write today's
   // diary entry. Opt-in; nothing fires until the user enables it.
   useDiaryScheduler(application)
+
+  // Standard Red Notes: accumulate active (foreground) usage time and unlock the
+  // app-hours achievements. Fire-and-forget; persists across reloads.
+  useEffect(() => {
+    const stop = startAppUsageTimeTracking()
+    return stop
+  }, [])
 
   useEffect(() => {
     const desktopService = application.desktopManager

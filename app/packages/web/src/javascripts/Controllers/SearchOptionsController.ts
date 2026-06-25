@@ -7,6 +7,7 @@ import {
 } from '@standardnotes/snjs'
 import { makeObservable, observable, action, runInAction } from 'mobx'
 import { AbstractViewController } from './Abstract/AbstractViewController'
+import { achievements, METRICS } from '@/Achievements'
 
 export class SearchOptionsController extends AbstractViewController implements InternalEventHandlerInterface {
   includeProtectedContents = false
@@ -44,10 +45,12 @@ export class SearchOptionsController extends AbstractViewController implements I
 
   toggleIncludeArchived = (): void => {
     this.includeArchived = !this.includeArchived
+    achievements.markEvent(METRICS.searchTweaked)
   }
 
   toggleIncludeTrashed = (): void => {
     this.includeTrashed = !this.includeTrashed
+    achievements.markEvent(METRICS.searchTweaked)
   }
 
   refreshIncludeProtectedContents = (): void => {
@@ -55,6 +58,7 @@ export class SearchOptionsController extends AbstractViewController implements I
   }
 
   toggleIncludeProtectedContents = async (): Promise<void> => {
+    achievements.markEvent(METRICS.searchTweaked)
     if (this.includeProtectedContents) {
       this.includeProtectedContents = false
     } else {

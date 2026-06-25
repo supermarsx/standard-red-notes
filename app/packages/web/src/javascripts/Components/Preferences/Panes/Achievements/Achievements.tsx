@@ -1,4 +1,4 @@
-import { FunctionComponent, useMemo, useState } from 'react'
+import { FunctionComponent, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 
 import { WebApplication } from '@/Application/WebApplication'
@@ -9,7 +9,7 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import Icon from '@/Components/Icon/Icon'
 import Switch from '@/Components/Switch/Switch'
 
-import { achievements, useAchievements } from '@/Achievements'
+import { achievements, METRICS, useAchievements } from '@/Achievements'
 import { AchievementProgressEntry } from '@/Achievements/AchievementsService'
 
 type Props = {
@@ -67,7 +67,10 @@ const AchievementTile: FunctionComponent<{
 
   return (
     <div
-      className={`flex flex-col gap-1.5 rounded-md border border-solid p-2.5 ${
+      // `group` + hover-raise: hovering un-truncates the name and un-clamps the
+      // description (see group-hover below) so a long achievement can be read in
+      // full temporarily; z-10 lifts it above neighbours while expanded.
+      className={`group relative flex flex-col gap-1.5 rounded-md border border-solid p-2.5 transition-shadow hover:z-10 ${
         unlocked ? 'border-info/40 bg-default shadow-sm' : 'border-border bg-contrast'
       } ${individuallyEnabled ? '' : 'opacity-60'}`}
       title={isMystery ? 'Hidden achievement' : `${def.name} — ${def.description}`}
@@ -78,7 +81,11 @@ const AchievementTile: FunctionComponent<{
           size="small"
           className={`flex-shrink-0 ${unlocked ? 'text-info' : 'text-passive-1'}`}
         />
-        <span className={`min-w-0 flex-grow truncate text-sm font-bold ${unlocked ? 'text-text' : 'text-passive-1'}`}>
+        <span
+          className={`min-w-0 flex-grow truncate group-hover:overflow-visible group-hover:whitespace-normal text-sm font-bold ${
+            unlocked ? 'text-text' : 'text-passive-1'
+          }`}
+        >
           {name}
         </span>
         {unlocked && <Icon type="check-circle-filled" size="small" className="flex-shrink-0 text-success" />}
@@ -89,7 +96,9 @@ const AchievementTile: FunctionComponent<{
         />
       </div>
 
-      <p className={`m-0 line-clamp-2 text-xs ${unlocked ? 'text-neutral' : 'text-passive-1'}`}>{description}</p>
+      <p className={`m-0 line-clamp-2 group-hover:line-clamp-none text-xs ${unlocked ? 'text-neutral' : 'text-passive-1'}`}>
+        {description}
+      </p>
 
       {unlocked
         ? unlockedDate && <div className="text-[0.625rem] font-semibold text-passive-1">Unlocked {unlockedDate}</div>
@@ -109,6 +118,12 @@ const AchievementTile: FunctionComponent<{
 
 const Achievements: FunctionComponent<Props> = (_props: Props) => {
   const { progress, config, unlockedCount, total } = useAchievements()
+
+  // Count each time the user opens the Achievements pane (drives the
+  // "Trophy Polisher" achievement). Once per mount.
+  useEffect(() => {
+    achievements.increment(METRICS.achievementsViewed)
+  }, [])
 
   const [filter, setFilter] = useState<FilterKey>('all')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())

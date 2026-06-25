@@ -63,6 +63,9 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
   const activateWorkspace = useCallback(
     async (descriptor: ApplicationDescriptor) => {
       achievements.increment(METRICS.workspaceSwitchTotal)
+      if (mainApplicationGroup.getDescriptors().length > 1) {
+        achievements.markEvent(METRICS.multipleAccountsUsed)
+      }
       void mainApplicationGroup.unloadCurrentAndActivateDescriptor(descriptor)
     },
     [mainApplicationGroup],

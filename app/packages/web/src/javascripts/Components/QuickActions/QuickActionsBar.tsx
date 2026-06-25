@@ -68,14 +68,16 @@ const QuickActionsBar = ({ application }: Props) => {
               </StyledTooltip>
             )
           })}
-          <button
-            className="ml-auto flex flex-shrink-0 items-center rounded p-1 text-passive-0 hover:bg-contrast hover:text-text"
-            onClick={toggleConfig}
-            ref={configButtonRef}
-            aria-label="Configure quick actions"
-          >
-            <Icon type="tune" size="small" />
-          </button>
+          <StyledTooltip label="Configure quick actions" showOnHover side="bottom">
+            <button
+              className="ml-auto flex flex-shrink-0 items-center rounded p-1 text-passive-0 hover:bg-contrast hover:text-text"
+              onClick={toggleConfig}
+              ref={configButtonRef}
+              aria-label="Configure quick actions"
+            >
+              <Icon type="tune" size="small" />
+            </button>
+          </StyledTooltip>
         </>
       )}
 
