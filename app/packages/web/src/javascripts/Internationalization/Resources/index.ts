@@ -18,8 +18,28 @@ import ar from './ar'
 
 export type { LocaleResource }
 
-/** The namespaces exposed by every locale. `common` is the default namespace. */
-export const NAMESPACES = ['common', 'navigation', 'account', 'preferences'] as const
+/**
+ * The namespaces exposed by the app. `common` is the default namespace. The
+ * first four are fully translated in every locale; the surface namespaces that
+ * follow are filled incrementally and fall back to English when a locale has
+ * not translated them yet.
+ */
+export const NAMESPACES = [
+  'common',
+  'navigation',
+  'account',
+  'preferences',
+  'editor',
+  'notes',
+  'files',
+  'search',
+  'dialogs',
+  'auth',
+  'sharing',
+  'settings',
+  'errors',
+  'onboarding',
+] as const
 export const DEFAULT_NAMESPACE = 'common'
 
 /**
@@ -56,7 +76,12 @@ export const buildI18nResources = (): Resource => {
   for (const [code, resource] of Object.entries(LOCALE_RESOURCES)) {
     resources[code] = {}
     for (const namespace of NAMESPACES) {
-      resources[code][namespace] = resource[namespace]
+      // Surface namespaces are optional per locale; only register the ones a
+      // locale actually provides so i18next falls back to English for the rest.
+      const value = (resource as Record<string, unknown>)[namespace]
+      if (value !== undefined) {
+        resources[code][namespace] = value as Resource[string][string]
+      }
     }
   }
   return resources

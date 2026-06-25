@@ -30,16 +30,31 @@ describe('i18n foundation', () => {
     expect(codes).toContain('pt-PT')
   })
 
-  it('exposes the full core namespace surface for every locale', () => {
-    const expectedNamespaces = Object.keys(en)
+  // The four original namespaces are fully translated in every locale and must
+  // stay that way: exact key parity with English, no missing/extra keys.
+  const CORE_NAMESPACES = ['common', 'navigation', 'account', 'preferences'] as const
+
+  it('keeps exact parity for the core namespaces in every locale', () => {
     for (const { code } of SUPPORTED_LOCALES) {
       const resource = LOCALE_RESOURCES[code]
       expect(resource).toBeDefined()
-      // Same namespaces as the English base.
-      expect(Object.keys(resource).sort()).toEqual(expectedNamespaces.sort())
-      // Same keys within each namespace (no missing/extra keys).
-      for (const ns of expectedNamespaces as Array<keyof typeof en>) {
+      for (const ns of CORE_NAMESPACES) {
         expect(Object.keys(resource[ns]).sort()).toEqual(Object.keys(en[ns]).sort())
+      }
+    }
+  })
+
+  it('never defines a surface-namespace key that does not exist in English (typo/extra guard)', () => {
+    for (const { code } of SUPPORTED_LOCALES) {
+      const resource = LOCALE_RESOURCES[code] as Record<string, Record<string, string> | undefined>
+      for (const ns of Object.keys(resource)) {
+        const enNamespace = (en as Record<string, Record<string, string>>)[ns]
+        // Every namespace a locale provides must exist in English…
+        expect(enNamespace).toBeDefined()
+        // …and every key it provides must exist in the English base.
+        for (const key of Object.keys(resource[ns] ?? {})) {
+          expect(enNamespace).toHaveProperty(key)
+        }
       }
     }
   })
