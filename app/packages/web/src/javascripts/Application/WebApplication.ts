@@ -86,6 +86,7 @@ import { removeFromArray } from '@standardnotes/utils'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
 import { RecentActionsState } from './Recents'
 import { RecentNotesState } from '@/Components/Preferences/Panes/RecentNotes/RecentNotesState'
+import { SearchIndexRunner } from '@/Utils/Items/Search/SearchIndexRunner'
 import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 
@@ -108,6 +109,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // preferences pane. Created in createBackgroundServices() so it observes note
   // opens from app start, even while the preferences modal is closed.
   private _recentNotesState?: RecentNotesState
+  // Standard Red Notes: background search-index runner (enable/disable, start/stop,
+  // scheduler). Lazily instantiated; drives WHEN the off-thread index is rebuilt.
+  private _searchIndexRunner?: SearchIndexRunner
   // Standard Red Notes: auto-empty-trash maintenance service. Created in
   // createBackgroundServices() so it can react to the first full sync and
   // periodically purge aged trashed notes while the app is open.
@@ -258,6 +262,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: tear down the recent-notes observer.
     this._recentNotesState?.deinit()
     this._recentNotesState = undefined
+
+    // Standard Red Notes: tear down the background search-index runner.
+    this._searchIndexRunner?.deinit()
+    this._searchIndexRunner = undefined
 
     // Standard Red Notes: tear down the auto-empty-trash service.
     this._autoEmptyTrashService?.deinit()
@@ -761,6 +769,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       this._recentNotesState = new RecentNotesState(this)
     }
     return this._recentNotesState
+  }
+
+  // Standard Red Notes: the background search-index runner backing the Search
+  // Index preferences pane. Lazily instantiated and cached.
+  get searchIndexRunner(): SearchIndexRunner {
+    if (!this._searchIndexRunner) {
+      this._searchIndexRunner = new SearchIndexRunner(this)
+    }
+    return this._searchIndexRunner
   }
 
   // Standard Red Notes: the auto-empty-trash maintenance service. Lazily

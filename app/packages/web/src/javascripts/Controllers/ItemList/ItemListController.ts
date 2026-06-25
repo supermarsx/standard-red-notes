@@ -6,7 +6,8 @@ import {
   DEFAULT_AI_RERANK_CANDIDATE_LIMIT,
   RerankCandidate,
 } from '@/Assistant/contextualSearchRanking'
-import { IndexableNote, SearchIndex } from '@/Utils/Items/Search/SearchIndex'
+import { IndexableNote } from '@/Utils/Items/Search/SearchIndex'
+import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
 import { rankNotesByRelevance } from '@/Utils/Items/Search/RelevanceScore'
 import {
   buildSearchPredicate,
@@ -162,7 +163,7 @@ export class ItemListController
    * incrementally from the note item-stream. A no-op (search returns null →
    * substring fallback) when the SearchIndexEnabled pref is off.
    */
-  private searchIndex = new SearchIndex()
+  private searchIndex = new ThreadedSearchIndex()
   private searchIndexCacheSize = 50
   /** Coalesced buffer of pending incremental index updates from the item stream. */
   private pendingIndexChanges: Map<string, IndexableNote> = new Map()
@@ -209,6 +210,8 @@ export class ItemListController
     ;(this.navigationController as unknown) = undefined
     ;(this.searchOptionsController as unknown) = undefined
     ;(window.onresize as unknown) = undefined
+    // Release the background indexer's Web Worker (if any) so it doesn't leak.
+    this.searchIndex.destroy()
 
     destroyAllObjectProperties(this)
   }
@@ -811,6 +814,42 @@ export class ItemListController
     this.flushIndexUpdates()
   }
 
+  /**
+   * Standard Red Notes: force a full (re)build of the background search index over
+   * the currently displayable notes, off the main thread. Used by the
+   * SearchIndexRunner's manual "Rebuild now" action and its scheduler tick.
+   * Resolves once the worker (or inline fallback) has rebuilt and the main-thread
+   * index has adopted the result.
+   */
+  async rebuildSearchIndex(): Promise<void> {
+    const cacheSize = this.preferences.getValue(
+      PrefKey.SearchQueryCacheSize,
+      PrefDefaults[PrefKey.SearchQueryCacheSize],
+    )
+    if (cacheSize !== this.searchIndexCacheSize) {
+      this.searchIndexCacheSize = cacheSize
+      this.searchIndex.destroy()
+      this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
+    }
+    await this.searchIndex.rebuild(
+      this.itemManager.getDisplayableNotes().map((note) => this.toIndexableNote(note)),
+    )
+  }
+
+  /** Clear the background search index; the next query rebuilds it lazily. */
+  flushSearchIndex(): void {
+    this.searchIndex.flush()
+  }
+
+  /** Snapshot of the background index's current state for the settings UI. */
+  get searchIndexState(): { isBuilt: boolean; size: number; isThreaded: boolean } {
+    return {
+      isBuilt: this.searchIndex.isBuilt,
+      size: this.searchIndex.size,
+      isThreaded: this.searchIndex.isThreaded,
+    }
+  }
+
   /** Whether the configurable client-side search index path is enabled. */
   private get isSearchIndexEnabled(): boolean {
     return this.preferences.getValue(PrefKey.SearchIndexEnabled, PrefDefaults[PrefKey.SearchIndexEnabled])
@@ -987,10 +1026,17 @@ export class ItemListController
     )
     if (cacheSize !== this.searchIndexCacheSize) {
       this.searchIndexCacheSize = cacheSize
-      this.searchIndex = new SearchIndex({ queryCacheSize: cacheSize })
+      this.searchIndex.destroy()
+      this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
     }
 
-    this.searchIndex.ensureBuilt(() =>
+    // Kick off a lazy build OFF the main thread. ensureBuilt resolves
+    // asynchronously (the heavy tokenization runs in the worker), so this call is
+    // fire-and-forget: until the build completes, search() below returns null and
+    // we fall back to substring ordering. The built index is adopted on the main
+    // thread when ready, and a subsequent reload uses it. Building locally inline
+    // here is the fallback path inside ThreadedSearchIndex when Workers are absent.
+    void this.searchIndex.ensureBuilt(() =>
       this.itemManager.getDisplayableNotes().map((note) => this.toIndexableNote(note)),
     )
 
