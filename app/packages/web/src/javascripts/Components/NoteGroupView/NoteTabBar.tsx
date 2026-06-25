@@ -202,6 +202,18 @@ const NoteTabBar: FunctionComponent<Props> = ({
             aria-selected={isActive}
             tabIndex={0}
             onClick={() => onSelectViewTab(tab)}
+            onAuxClick={(event) => {
+              if (event.button === 1) {
+                event.preventDefault()
+                onCloseViewTab(tab)
+              }
+            }}
+            onMouseDown={(event) => {
+              // Suppress the middle-click autoscroll affordance on the tab.
+              if (event.button === 1) {
+                event.preventDefault()
+              }
+            }}
             onContextMenu={(event) => openContextMenu(event, { kind: 'view', id: tab.id })}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
@@ -250,6 +262,18 @@ const NoteTabBar: FunctionComponent<Props> = ({
               }
             }}
             onDoubleClick={() => beginRename(controller)}
+            onAuxClick={(event) => {
+              if (event.button === 1 && !isRenaming) {
+                event.preventDefault()
+                onClose(controller)
+              }
+            }}
+            onMouseDown={(event) => {
+              // Suppress the middle-click autoscroll affordance on the tab.
+              if (event.button === 1) {
+                event.preventDefault()
+              }
+            }}
             onContextMenu={(event) => openContextMenu(event, { kind: 'controller', runtimeId: controller.runtimeId })}
             onKeyDown={(event) => {
               if (isRenaming) {
