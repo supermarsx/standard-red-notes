@@ -17,6 +17,7 @@ set -eu
 # Currently handled:
 #   OCR_ENABLED          -> window.ocrEnabled        (default: false)
 #   OCR_DEFAULT_LANGUAGE -> window.ocrDefaultLanguage (default: eng)
+#   SYNC_SERVER          -> window.defaultSyncServer  (default: window.location.origin)
 #
 # OCR runs CLIENT-SIDE (files are end-to-end encrypted, so the server never sees
 # decrypted PDF bytes). These flags only gate whether the client offers the
@@ -46,4 +47,21 @@ if [ -f "$INDEX_HTML" ]; then
     "$INDEX_HTML"
 
   echo "[entrypoint] OCR config: enabled=${OCR_ENABLED_VALUE} language=${OCR_LANG_VALUE}"
+
+  # Default sync server. When SYNC_SERVER is unset, the app keeps its built-in
+  # default of window.location.origin, so a self-hosted deploy syncs to ITSELF
+  # (never the hosted api.standardnotes.com). Operators fronting the API on a
+  # different host set SYNC_SERVER (e.g. https://sync.example.com) to make that
+  # the default the app loads with.
+  if [ -n "${SYNC_SERVER:-}" ]; then
+    # Sanitize to a plausible URL (scheme/host/port/path chars only) so the
+    # value can't break out of the JS string assignment.
+    SYNC_SERVER_VALUE="$(printf '%s' "${SYNC_SERVER}" | tr -cd 'a-zA-Z0-9:/._-')"
+    if [ -n "$SYNC_SERVER_VALUE" ]; then
+      sed -i \
+        -e "s|window\.defaultSyncServer = [^;]*|window.defaultSyncServer = '${SYNC_SERVER_VALUE}'|" \
+        "$INDEX_HTML"
+      echo "[entrypoint] default sync server: ${SYNC_SERVER_VALUE}"
+    fi
+  fi
 fi

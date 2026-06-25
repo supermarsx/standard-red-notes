@@ -144,6 +144,10 @@ services:
       # OCR downloads multi-MB language data at runtime, is slow, and accuracy varies.
       OCR_ENABLED: ${OCR_ENABLED:-false}
       OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
+      # Default sync server the app loads with. Unset => the app's own origin
+      # (this deployment syncs to ITSELF — never api.standardnotes.com). Set to
+      # front the API on a different host, e.g. SYNC_SERVER=https://sync.example.com.
+      SYNC_SERVER: ${SYNC_SERVER:-}
     depends_on:
       server:
         condition: service_healthy

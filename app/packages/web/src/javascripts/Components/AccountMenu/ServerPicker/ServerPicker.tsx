@@ -5,7 +5,6 @@ import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { isDesktopApplication } from '@/Utils'
 import RadioButtonGroup from '@/Components/RadioButtonGroup/RadioButtonGroup'
-import { DefaultHost } from '@standardnotes/snjs'
 import { useTranslation } from 'react-i18next'
 
 type Props = {
@@ -24,7 +23,7 @@ const ServerPicker = ({ className }: Props) => {
     const homeServerUrl = await application.homeServer?.getHomeServerUrl()
     if (homeServerUrl && server === homeServerUrl) {
       setCurrentType('home server')
-    } else if (server === DefaultHost.Api) {
+    } else if (server === window.defaultSyncServer) {
       setCurrentType('standard')
     } else {
       setCurrentType('custom')
@@ -47,7 +46,11 @@ const ServerPicker = ({ className }: Props) => {
   const selectTab = async (type: ServerType) => {
     setCurrentType(type)
     if (type === 'standard') {
-      handleSyncServerChange(DefaultHost.Api, DefaultHost.WebSocket)
+      // The default sync server is whatever the app was loaded with
+      // (window.defaultSyncServer / window.websocketUrl) — same-origin by
+      // default, overridable via the SYNC_SERVER env var. NOT the hosted
+      // api.standardnotes.com.
+      handleSyncServerChange(window.defaultSyncServer, window.websocketUrl)
     } else if (type === 'home server') {
       if (!application.homeServer) {
         application.alerts
@@ -93,7 +96,7 @@ const ServerPicker = ({ className }: Props) => {
           }}
           type="text"
           left={[<Icon type="server" className="text-neutral" />]}
-          placeholder={DefaultHost.Api}
+          placeholder={window.defaultSyncServer}
           value={server}
           onChange={handleSyncServerChange}
         />
