@@ -1089,6 +1089,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
             note={this.note}
             hero={this.state.heroHeader}
             notesController={this.application.notesController}
+            filesController={this.application.filesController}
             disabled={this.state.noteLocked || !!this.state.readonly}
             onError={this.showHeroError}
           />

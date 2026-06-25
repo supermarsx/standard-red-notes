@@ -1,14 +1,11 @@
-import { FunctionComponent, useCallback, useRef, useState } from 'react'
+import { FunctionComponent, useCallback, useState } from 'react'
 import { SNNote } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
 import { NotesController } from '@/Controllers/NotesController/NotesController'
-import {
-  ACCEPTED_HERO_IMAGE_TYPES,
-  HERO_MAX_HEIGHT,
-  HERO_MIN_HEIGHT,
-  HeroHeader,
-} from './heroHeader'
+import { FilesController } from '@/Controllers/FilesController'
+import { HERO_MAX_HEIGHT, HERO_MIN_HEIGHT, HeroHeader, validateHeroSourceFile } from './heroHeader'
 import { processCoverImageFile } from './heroHeaderService'
+import CoverImageSelectorModal from './CoverImageSelectorModal'
 
 /**
  * Standard Red Notes: hero header (cover banner) UI for a note.
@@ -25,32 +22,40 @@ type Props = {
   note: SNNote
   hero: HeroHeader | null
   notesController: NotesController
+  filesController: FilesController
   /** Editing is disabled for locked / readonly / protected-overlay states. */
   disabled?: boolean
   /** Surface a user-facing error message (e.g. oversized / invalid image). */
   onError?: (message: string) => void
 }
 
-const acceptAttribute = ACCEPTED_HERO_IMAGE_TYPES.join(',')
-
-const HeroHeaderBanner: FunctionComponent<Props> = ({ note, hero, notesController, disabled, onError }) => {
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+const HeroHeaderBanner: FunctionComponent<Props> = ({
+  note,
+  hero,
+  notesController,
+  filesController,
+  disabled,
+  onError,
+}) => {
   const [busy, setBusy] = useState(false)
   const [adjusting, setAdjusting] = useState(false)
+  const [selectorOpen, setSelectorOpen] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
 
   const openPicker = useCallback(() => {
     if (disabled || busy) {
       return
     }
-    fileInputRef.current?.click()
+    setSelectorOpen(true)
   }, [disabled, busy])
 
-  const onFileChosen = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0]
-      // Reset the input so picking the same file again still fires a change.
-      event.target.value = ''
-      if (!file) {
+  // Shared route for a file dropped DIRECTLY on the banner/affordance (without
+  // opening the selector). Funnels through the same bounded-data-URL pipeline.
+  const handleDroppedFile = useCallback(
+    async (file: File) => {
+      const validationError = validateHeroSourceFile({ type: file.type, size: file.size })
+      if (validationError) {
+        onError?.(validationError)
         return
       }
       setBusy(true)
@@ -65,6 +70,45 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({ note, hero, notesControlle
       }
     },
     [note, notesController, onError],
+  )
+
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault()
+      setDragOver(false)
+      if (disabled || busy) {
+        return
+      }
+      const file = event.dataTransfer.files?.[0]
+      if (file) {
+        void handleDroppedFile(file)
+      }
+    },
+    [disabled, busy, handleDroppedFile],
+  )
+
+  const onDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (disabled || busy) {
+        return
+      }
+      event.preventDefault()
+      setDragOver(true)
+    },
+    [disabled, busy],
+  )
+
+  const onDragLeave = useCallback(() => setDragOver(false), [])
+
+  const selectorModal = (
+    <CoverImageSelectorModal
+      note={note}
+      filesController={filesController}
+      notesController={notesController}
+      isOpen={selectorOpen}
+      close={() => setSelectorOpen(false)}
+      onError={onError}
+    />
   )
 
   const removeCover = useCallback(() => {
@@ -87,34 +131,27 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({ note, hero, notesControlle
     [note, notesController],
   )
 
-  const hiddenInput = (
-    <input
-      ref={fileInputRef}
-      type="file"
-      accept={acceptAttribute}
-      className="hidden"
-      onChange={(event) => {
-        onFileChosen(event).catch(console.error)
-      }}
-    />
-  )
-
-  // No cover: a subtle "Add cover" affordance, shown only when editable.
+  // No cover: a subtle "Add cover" affordance, shown only when editable. The
+  // affordance is itself a drop target so the user can drop an image without
+  // opening the selector.
   if (!hero) {
     if (disabled) {
       return null
     }
     return (
-      <div className="group/hero relative w-full">
-        {hiddenInput}
+      <div className="group/hero relative w-full" onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+        {selectorModal}
         <button
           type="button"
           onClick={openPicker}
           disabled={busy}
-          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-passive-1 opacity-0 transition-opacity hover:bg-contrast focus:opacity-100 focus-visible:opacity-100 group-hover/hero:opacity-100"
+          className={
+            'flex items-center gap-1.5 rounded px-2 py-1 text-xs text-passive-1 transition-opacity hover:bg-contrast focus:opacity-100 focus-visible:opacity-100 group-hover/hero:opacity-100 ' +
+            (dragOver ? 'opacity-100 ring-2 ring-info' : 'opacity-0')
+          }
         >
           <Icon type="file-image" size="small" />
-          {busy ? 'Adding cover…' : 'Add cover'}
+          {busy ? 'Adding cover…' : dragOver ? 'Drop image to set cover' : 'Add cover'}
         </button>
       </div>
     )
@@ -123,8 +160,20 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({ note, hero, notesControlle
   const focalSliderValue = Math.round((1 - (hero.focalY ?? 0.5)) * 100)
 
   return (
-    <div className="group/hero relative w-full select-none">
-      {hiddenInput}
+    <div
+      className="group/hero relative w-full select-none"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {selectorModal}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-info-backdrop/80 ring-2 ring-inset ring-info">
+          <span className="rounded bg-default/90 px-3 py-1.5 text-sm font-semibold text-text shadow">
+            Drop image to set cover
+          </span>
+        </div>
+      )}
       <div className="w-full overflow-hidden" style={{ height: `${hero.height}px` }}>
         <img
           src={hero.imageDataUrl}

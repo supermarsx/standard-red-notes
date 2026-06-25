@@ -19,10 +19,10 @@ import {
  */
 
 /**
- * Decode a File into an HTMLImageElement via an object URL, revoking it after.
- * Rejects if the image can't be decoded.
+ * Decode a File/Blob into an HTMLImageElement via an object URL, revoking it
+ * after. Rejects if the image can't be decoded.
  */
-function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+function loadImageFromFile(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const image = new Image()
@@ -75,8 +75,12 @@ function drawToBannerDataUrl(image: HTMLImageElement, targetWidth: number, quali
  * Resolves with the bounded data URL (the caller persists it into the note's
  * appData). Rejects with a user-facing Error on invalid input / processing
  * failure / an image that won't fit under the bound.
+ *
+ * Accepts any `Blob` (a picked `File`, a dropped `File`, or a `Blob` downloaded
+ * from an existing attached file) so all three cover-input routes funnel through
+ * the same validate + downsize + JPEG-compress + bounds pipeline.
  */
-export async function processCoverImageFile(file: File): Promise<string> {
+export async function processCoverImageFile(file: Blob): Promise<string> {
   const validationError = validateHeroSourceFile(file)
   if (validationError) {
     throw new Error(validationError)
