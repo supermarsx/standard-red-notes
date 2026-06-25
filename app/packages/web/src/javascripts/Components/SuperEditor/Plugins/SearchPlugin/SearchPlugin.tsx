@@ -21,7 +21,9 @@ import Button from '../../../Button/Button'
 import { canUseCSSHiglights, SearchHighlightRenderer, SearchHighlightRendererMethods } from './SearchHighlightRenderer'
 import { useStateRef } from '../../../../Hooks/useStateRef'
 import { createPortal } from 'react-dom'
-import { $createRangeSelection, $getSelection, $setSelection } from 'lexical'
+import { $createRangeSelection, $getSelection, $nodesOfType, $setSelection, TextNode } from 'lexical'
+import { compileSearch, computeReplacement, SearchOptions } from './replaceLogic'
+import { searchRegexInElement } from './searchRegexInElement'
 import StyledTooltip from '../../../StyledTooltip/StyledTooltip'
 import Icon from '../../../Icon/Icon'
 
@@ -39,8 +41,25 @@ export function SearchPlugin() {
   const isCaseSensitiveRef = useStateRef(isCaseSensitive)
   const toggleCaseSensitivity = useCallback(() => setIsCaseSensitive((sensitive) => !sensitive), [])
 
+  const [isWholeWord, setIsWholeWord] = useState(false)
+  const isWholeWordRef = useStateRef(isWholeWord)
+  const toggleWholeWord = useCallback(() => setIsWholeWord((enabled) => !enabled), [])
+
+  const [isRegex, setIsRegex] = useState(false)
+  const isRegexRef = useStateRef(isRegex)
+  const toggleRegex = useCallback(() => setIsRegex((enabled) => !enabled), [])
+
+  const [regexError, setRegexError] = useState<string | null>(null)
+
   const [isReplaceMode, setIsReplaceMode] = useState(false)
-  const toggleReplaceMode = useCallback(() => setIsReplaceMode((enabled) => !enabled), [])
+  const revealReplaceMode = useCallback(() => {
+    setIsSearchActive(true)
+    setIsReplaceMode(true)
+  }, [])
+  const toggleReplaceMode = useCallback(() => {
+    setIsSearchActive(true)
+    setIsReplaceMode((enabled) => !enabled)
+  }, [])
   const [replaceQuery, setReplaceQuery] = useState('')
 
   const highlightRendererRef = useRef<SearchHighlightRendererMethods>(null)
@@ -99,6 +118,9 @@ export function SearchPlugin() {
     setQuery('')
     setResults([])
     setIsCaseSensitive(false)
+    setIsWholeWord(false)
+    setIsRegex(false)
+    setRegexError(null)
     setIsReplaceMode(false)
     setReplaceQuery('')
     setShouldHighlightAll(canUseCSSHiglights)
@@ -131,7 +153,7 @@ export function SearchPlugin() {
           }
           event.preventDefault()
           event.stopPropagation()
-          toggleReplaceMode()
+          revealReplaceMode()
         },
       },
       {
@@ -161,18 +183,40 @@ export function SearchPlugin() {
         },
       },
     ])
-  }, [application.keyboardService, editor, goToNextResult, goToPrevResult, toggleCaseSensitivity, toggleReplaceMode])
+  }, [application.keyboardService, editor, goToNextResult, goToPrevResult, toggleCaseSensitivity, revealReplaceMode])
 
   const searchQueryAndHighlight = useCallback(
-    (query: string, isCaseSensitive: boolean) => {
+    (query: string, options: SearchOptions) => {
       const highlightRenderer = highlightRendererRef.current
       const rootElement = editor.getRootElement()
+      highlightRenderer?.clearHighlights()
+
       if (!rootElement || !query) {
-        highlightRenderer?.clearHighlights()
+        setResults([])
+        setCurrentResultIndex(-1)
+        setRegexError(null)
         return
       }
-      highlightRenderer?.clearHighlights()
-      const ranges = searchInElement(rootElement, query, isCaseSensitive)
+
+      let ranges: Range[] = []
+      if (options.isRegex || options.isWholeWord) {
+        const compiled = compileSearch(query, options, true)
+        if (compiled.error) {
+          setRegexError(compiled.error)
+          setResults([])
+          setCurrentResultIndex(-1)
+          return
+        }
+        setRegexError(null)
+        if (compiled.regex) {
+          ranges = searchRegexInElement(rootElement, compiled.regex)
+        }
+      } else {
+        setRegexError(null)
+        // Literal, non-whole-word search keeps the cross-node-capable implementation.
+        ranges = searchInElement(rootElement, query, options.isCaseSensitive)
+      }
+
       setResults(ranges)
       highlightRenderer?.highlightMultipleRanges(ranges)
       if (ranges.length > 0) {
@@ -189,8 +233,8 @@ export function SearchPlugin() {
   const handleEditorChange = useMemo(() => debounce(searchQueryAndHighlight, 250), [searchQueryAndHighlight])
 
   useEffect(() => {
-    void handleQueryChange(query, isCaseSensitive)
-  }, [handleQueryChange, isCaseSensitive, query])
+    void handleQueryChange(query, { isCaseSensitive, isWholeWord, isRegex })
+  }, [handleQueryChange, isCaseSensitive, isRegex, isWholeWord, query])
 
   useEffect(() => {
     return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, prevEditorState, tags }) => {
@@ -202,63 +246,70 @@ export function SearchPlugin() {
         return
       }
 
-      void handleEditorChange(queryRef.current, isCaseSensitiveRef.current)
+      void handleEditorChange(queryRef.current, {
+        isCaseSensitive: isCaseSensitiveRef.current,
+        isWholeWord: isWholeWordRef.current,
+        isRegex: isRegexRef.current,
+      })
     })
-  }, [editor, handleEditorChange, isCaseSensitiveRef, queryRef])
+  }, [editor, handleEditorChange, isCaseSensitiveRef, isRegexRef, isWholeWordRef, queryRef])
 
-  const $replaceResult = useCallback(
-    (result: Range, scrollIntoView = false) => {
-      const selection = $createRangeSelection()
-      selection.applyDOMRange(result)
-      selection.insertText(replaceQuery)
-      const nodeParent = result.startContainer.parentElement
-      if (nodeParent && scrollIntoView) {
-        nodeParent.scrollIntoView({
-          block: 'center',
-        })
-      }
-    },
-    [replaceQuery],
+  const currentOptions = useCallback(
+    (): SearchOptions => ({ isCaseSensitive, isWholeWord, isRegex }),
+    [isCaseSensitive, isRegex, isWholeWord],
   )
 
-  const replaceCurrentResult = useCallback(() => {
-    const currentResult = results[currentResultIndex]
-    if (!currentResult) {
-      return
-    }
-    editor.update(
-      () => {
-        $replaceResult(currentResult, true)
-      },
-      {
-        discrete: true,
-        tag: 'skip-dom-selection',
-      },
-    )
-    searchQueryAndHighlight(query, isCaseSensitive)
-  }, [$replaceResult, currentResultIndex, editor, isCaseSensitive, query, results, searchQueryAndHighlight])
+  /**
+   * Performs the replacement over the editor's text nodes inside a single editor.update()
+   * (one undoable step). When `replaceAll` is false only the first matching text node is
+   * mutated (its first match), otherwise all matches in all text nodes are replaced.
+   *
+   * Note: matches are computed per individual TextNode, so a match that spans multiple
+   * text nodes (across formatting boundaries) is not replaced. This mirrors the regex
+   * highlight limitation and is a documented best-effort behavior.
+   */
+  const runReplace = useCallback(
+    (replaceAll: boolean) => {
+      const options = currentOptions()
+      const compiled = compileSearch(query, options, replaceAll)
+      if (compiled.error) {
+        setRegexError(compiled.error)
+        return
+      }
+      if (!compiled.regex || !query) {
+        return
+      }
 
-  const replaceAllResults = useCallback(() => {
-    if (results.length === 0) {
-      return
-    }
-    editor.update(
-      () => {
-        for (let i = 0; i < results.length; i++) {
-          const result = results[i]
-          if (!result) {
-            continue
+      let didReplace = false
+      editor.update(
+        () => {
+          const textNodes = $nodesOfType(TextNode)
+          for (const node of textNodes) {
+            const text = node.getTextContent()
+            const { output, count } = computeReplacement(text, query, replaceQuery, options, replaceAll)
+            if (count > 0 && output !== text) {
+              node.setTextContent(output)
+              didReplace = true
+              if (!replaceAll) {
+                break
+              }
+            }
           }
-          $replaceResult(result, false)
-        }
-      },
-      {
-        discrete: true,
-        tag: 'skip-dom-selection',
-      },
-    )
-    searchQueryAndHighlight(query, isCaseSensitive)
-  }, [$replaceResult, editor, isCaseSensitive, query, results, searchQueryAndHighlight])
+        },
+        {
+          tag: 'skip-dom-selection',
+        },
+      )
+
+      if (didReplace) {
+        searchQueryAndHighlight(query, options)
+      }
+    },
+    [currentOptions, editor, query, replaceQuery, searchQueryAndHighlight],
+  )
+
+  const replaceCurrentResult = useCallback(() => runReplace(false), [runReplace])
+  const replaceAllResults = useCallback(() => runReplace(true), [runReplace])
 
   const [isMounted, setElement] = useLifecycleAnimation({
     open: isSearchActive,
@@ -366,6 +417,38 @@ export function SearchPlugin() {
               <span aria-hidden>Aa</span>
               <span className="sr-only">Case sensitive</span>
             </label>
+            <label
+              className={classNames(
+                'relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-info focus-within:ring-offset-2 focus-within:ring-offset-default',
+                isWholeWord ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
+              )}
+              title="Whole word"
+            >
+              <input
+                type="checkbox"
+                className="absolute left-0 top-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
+                checked={isWholeWord}
+                onChange={toggleWholeWord}
+              />
+              <span aria-hidden>ab</span>
+              <span className="sr-only">Whole word</span>
+            </label>
+            <label
+              className={classNames(
+                'relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-info focus-within:ring-offset-2 focus-within:ring-offset-default',
+                isRegex ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
+              )}
+              title="Use regular expression"
+            >
+              <input
+                type="checkbox"
+                className="absolute left-0 top-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
+                checked={isRegex}
+                onChange={toggleRegex}
+              />
+              <span aria-hidden>.*</span>
+              <span className="sr-only">Use regular expression</span>
+            </label>
             <button
               className="flex items-center rounded border border-border p-1.5 hover:bg-contrast disabled:cursor-not-allowed"
               onClick={goToPrevResult}
@@ -392,16 +475,22 @@ export function SearchPlugin() {
               <CloseIcon className="h-4 w-4 fill-current text-text" />
             </button>
           </div>
+          {regexError && (
+            <div className="text-sm text-danger" role="alert">
+              {regexError}
+            </div>
+          )}
           {isReplaceMode && (
             <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
               <input
                 type="text"
                 placeholder="Replace"
+                value={replaceQuery}
                 onChange={(e) => {
                   setReplaceQuery(e.target.value)
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && replaceQuery && results.length) {
+                  if (event.key === 'Enter' && results.length) {
                     if (event.ctrlKey && event.altKey) {
                       replaceAllResults()
                       event.preventDefault()
@@ -417,7 +506,7 @@ export function SearchPlugin() {
               <Button
                 small
                 onClick={replaceCurrentResult}
-                disabled={results.length < 1 || replaceQuery.length < 1}
+                disabled={results.length < 1}
                 title="Replace (Ctrl + Enter)"
               >
                 Replace
@@ -425,7 +514,7 @@ export function SearchPlugin() {
               <Button
                 small
                 onClick={replaceAllResults}
-                disabled={results.length < 1 || replaceQuery.length < 1}
+                disabled={results.length < 1}
                 title="Replace all (Ctrl + Alt + Enter)"
               >
                 Replace all
