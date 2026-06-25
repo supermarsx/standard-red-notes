@@ -115,12 +115,14 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // The unhashed entry bundle (`/app.js` + `/app.css`) is rebuilt on EVERY
-  // deploy but keeps the same filename, so serve it network-first like the HTML.
-  // Otherwise a fresh, network-first `index.html` gets paired with a STALE
-  // cache-first `app.js` after a deploy — and the app renders a blank page until
-  // the cache happens to refresh. Falls back to the cached copy when offline.
-  if (url.pathname === '/app.js' || url.pathname === '/app.css') {
+  // The app bundle (`/app.js`, `/app.css`, AND the lazy chunks `<id>.app.js`) is
+  // rebuilt on EVERY deploy but the chunk filenames are NOT content-hashed, so a
+  // chunk keeps its name while its content changes. Serve all of them
+  // network-first like the HTML: otherwise a fresh, network-first `app.js`
+  // references chunks whose STALE cache-first copies the SW returns —
+  // "Loading chunk N failed" for lazy components (e.g. the Super editor), or a
+  // blank page for the entry. Falls back to the cached copy when offline.
+  if (url.pathname.endsWith('app.js') || url.pathname.endsWith('app.css')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
