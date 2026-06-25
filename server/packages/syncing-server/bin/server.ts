@@ -53,7 +53,7 @@ void container.load().then((container) => {
           connectSrc: ["*"],
           fontSrc: ["*", "'self'"],
           formAction: ["'self'"],
-          frameAncestors: ["*", "*.standardnotes.org"],
+          frameAncestors: ["*"],
           frameSrc: ["*", "blob:"],
           imgSrc: ["'self'", "*", "data:"],
           manifestSrc: ["'self'"],

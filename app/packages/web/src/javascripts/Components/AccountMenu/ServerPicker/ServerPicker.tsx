@@ -5,6 +5,7 @@ import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { isDesktopApplication } from '@/Utils'
 import RadioButtonGroup from '@/Components/RadioButtonGroup/RadioButtonGroup'
+import { observer } from 'mobx-react-lite'
 import { useTranslation } from 'react-i18next'
 
 type Props = {
@@ -105,4 +106,7 @@ const ServerPicker = ({ className }: Props) => {
   )
 }
 
-export default ServerPicker
+// observer: the custom-server input is bound to the observable
+// accountMenuController.server, so the component must re-render on each
+// keystroke — without this the controlled input appears frozen ("can't type").
+export default observer(ServerPicker)
