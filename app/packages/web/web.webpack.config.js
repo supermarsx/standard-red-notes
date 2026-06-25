@@ -152,6 +152,16 @@ module.exports = (env) => {
           loader: 'worker-loader',
           options: {
             inline: 'fallback',
+            // Content-hash the emitted (fallback) worker file. The default
+            // `[name].worker.js` resolves `[name]` to the single `app` entry, so
+            // every worker would emit `app.worker.js`; when one worker module is
+            // pulled into more than one chunk webpack emits it twice with
+            // differing content → "Multiple assets emit ... app.worker.js".
+            // A content hash makes each emission's filename unique (identical
+            // content dedupes, different content gets a distinct name). The hashed
+            // name is also immutable, so the service worker can cache it safely.
+            filename: '[contenthash].worker.js',
+            chunkFilename: '[contenthash].worker.js',
           },
         },
         {
