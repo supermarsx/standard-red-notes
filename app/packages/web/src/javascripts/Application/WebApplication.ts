@@ -114,14 +114,19 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   constructor(
     deviceInterface: WebOrDesktopDevice,
-    platform: Platform,
+    // Accept a possibly-nullish platform: snjs throws "platform must be supplied"
+    // if it ever reaches the base Application constructor undefined. We coerce to
+    // a safe web default here — the single, permanent gate every creation path
+    // funnels through — so a flaky platform detection can never crash app boot.
+    platform: Platform | undefined,
     identifier: string,
     defaultSyncServerHost: string,
     webSocketUrl: string,
   ) {
+    const resolvedPlatform: Platform = platform ?? Platform.LinuxWeb
     super({
       environment: deviceInterface.environment,
-      platform: platform,
+      platform: resolvedPlatform,
       deviceInterface: deviceInterface,
       crypto: WebCrypto,
       alertService: new WebAlertService(),
@@ -132,7 +137,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       /**
        * iOS file:// based origin does not work with production cookies
        */
-      apiVersion: platform === Platform.Ios || platform === Platform.Android ? ApiVersion.v0 : ApiVersion.v1,
+      apiVersion:
+        resolvedPlatform === Platform.Ios || resolvedPlatform === Platform.Android ? ApiVersion.v0 : ApiVersion.v1,
       loadBatchSize:
         deviceInterface.environment === Environment.Mobile ? 250 : ApplicationOptionsDefaults.loadBatchSize,
       sleepBetweenBatches:
