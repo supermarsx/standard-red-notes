@@ -102,7 +102,7 @@ import {
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import { useLocalPreference } from '@/Hooks/usePreference'
-import { applyToolbarConfig, DEFAULT_GROUP_ROWS, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
+import { applyToolbarConfig, ToolbarButtonId, ToolbarGroupId } from './ToolbarConfig'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
 import {
@@ -1895,9 +1895,11 @@ const ToolbarPlugin = () => {
     group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
 
-  // Whether the main toolbar uses single-line horizontal scroll (opt-in) vs. the
-  // new default of wrapping groups onto multiple lines.
-  const horizontalScroll = (toolbarConfig as { horizontalScroll?: boolean })?.horizontalScroll === true
+  // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
+  // (each group packs its buttons into up to 3 rows below), scrolling
+  // horizontally if they overflow. Setting `horizontalScroll: false` opts back
+  // into wrapping the groups onto multiple lines instead.
+  const horizontalScroll = (toolbarConfig as { horizontalScroll?: boolean })?.horizontalScroll !== false
 
   // Catalog-driven Insert menu: single source of truth shared with the slash
   // picker. Modal/command helpers the dialog-opening blocks (Table, Image from
@@ -2237,9 +2239,9 @@ const ToolbarPlugin = () => {
           <Toolbar
             className={classNames(
               'super-toolbar flex items-center gap-1.5 px-1 py-0.5',
-              // Default: wrap groups onto multiple lines (no horizontal scroll).
-              // Opt-in `horizontalScroll` restores the legacy single-line scroll.
-              horizontalScroll ? 'overflow-x-auto md:flex-wrap md:gap-y-1' : 'flex-wrap gap-y-1',
+              // Default: one horizontal line of groups (each group stacks into up
+              // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
+              horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
             )}
             ref={toolbarRef}
             store={toolbarStore}
@@ -2251,7 +2253,11 @@ const ToolbarPlugin = () => {
                   // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
                   // so a button-heavy group becomes a tidy 2–3 row block instead
                   // of a long single row.
-                  const rows = Math.min(3, Math.max(1, group.rows ?? DEFAULT_GROUP_ROWS))
+                  // To keep every group on one line, pack a group's buttons into
+                  // up to 3 rows by default (≈2 columns) so wide groups become
+                  // tidy compact blocks. An explicit per-group `rows` wins.
+                  const autoRows = Math.min(3, Math.max(1, Math.ceil(group.buttons.length / 2)))
+                  const rows = Math.min(3, Math.max(1, group.rows ?? autoRows))
                   const buttonRows = splitIntoRows(group.buttons, rows)
                   return (
                     <div
