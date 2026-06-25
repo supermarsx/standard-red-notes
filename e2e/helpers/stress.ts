@@ -1,0 +1,136 @@
+import { type Page } from '@playwright/test'
+
+/**
+ * Seeding + measurement helpers for the notes stress-characterization harness.
+ *
+ * SEEDING PATH (chosen after reading the app source):
+ * The web app exposes its live snjs application group on `window`:
+ *   - `app/packages/web/.../ApplicationGroupView.tsx`  ->  `window.mainApplicationGroup = this.group`
+ *   - `app/packages/snjs/.../ApplicationGroup.ts`       ->  `public primaryApplication`
+ * The primary application (snjs `Application`) exposes public getters
+ * `mutator`, `items`, `sync` (see `app/packages/snjs/lib/Application/Application.ts`).
+ * `mutator.createItem(contentType, content, needsSync)` inserts a decrypted
+ * payload straight into the payload/item managers; created with needsSync=true
+ * the payload is marked DIRTY, and a single `sync.sync()` then persists every
+ * dirty payload to IndexedDB (local-only, no account). That is the
+ * fastest realistic path: we drive the exact same code the app uses to create
+ * notes, so the seeded items are byte-for-byte real notes (decrypted into
+ * memory, written to IndexedDB) — precisely the data path whose ceiling we
+ * want to characterize. No need to hand-shape IndexedDB payloads.
+ *
+ * ContentType.TYPES.Note === 'Note' (verified in
+ * `@standardnotes/domain-core` dist). Note content shape is `{ title, text }`.
+ */
+
+export type SeedResult = {
+  requested: number
+  created: number
+  seedMs: number
+  syncMs: number
+  totalItems: number
+}
+
+/**
+ * Wait until the snjs primary application is launched and reachable on
+ * `window.mainApplicationGroup`. Returns when the app is ready to accept
+ * mutator calls.
+ */
+export async function waitForApplicationReady(page: Page, timeoutMs = 60_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const group = (window as unknown as { mainApplicationGroup?: { primaryApplication?: { isLaunched?: () => boolean } } })
+        .mainApplicationGroup
+      const app = group?.primaryApplication
+      return Boolean(app && typeof app.isLaunched === 'function' && app.isLaunched())
+    },
+    undefined,
+    { timeout: timeoutMs },
+  )
+}
+
+/**
+ * Bulk-seed `count` notes of approximately `sizeBytes` body size via the live
+ * in-page snjs application, then persist with a single sync. Runs entirely in
+ * `page.evaluate` so we never pay the per-note round-trip cost across the CDP
+ * boundary. Notes are created DIRTY (needsSync=true) so the single trailing
+ * `sync.sync()` flushes them all to IndexedDB. With no account this "sync" is
+ * purely the local persistence pass (nothing leaves the browser).
+ */
+export async function seedNotes(page: Page, count: number, sizeBytes: number): Promise<SeedResult> {
+  return page.evaluate(
+    async ({ count, sizeBytes }) => {
+      const group = (window as unknown as {
+        mainApplicationGroup?: {
+          primaryApplication?: {
+            mutator: { createItem: (ct: string, content: unknown, needsSync?: boolean) => Promise<unknown> }
+            sync: { sync: (opts?: unknown) => Promise<unknown> }
+            items: { getItems: (ct: string) => unknown[] }
+          }
+        }
+      }).mainApplicationGroup
+      const app = group?.primaryApplication
+      if (!app) {
+        throw new Error('window.mainApplicationGroup.primaryApplication not available')
+      }
+
+      // Build a body of ~sizeBytes. ASCII so 1 char ~= 1 byte.
+      const filler = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '
+      const reps = Math.max(1, Math.ceil(sizeBytes / filler.length))
+      const body = filler.repeat(reps).slice(0, Math.max(0, sizeBytes))
+
+      const seedStart = performance.now()
+      let created = 0
+      for (let i = 0; i < count; i += 1) {
+        await app.mutator.createItem(
+          'Note',
+          { title: `Stress note ${i + 1}`, text: `${i + 1} ${body}` },
+          true,
+        )
+        created += 1
+      }
+      const seedMs = performance.now() - seedStart
+
+      const syncStart = performance.now()
+      await app.sync.sync({ sourceDescription: 'stress-seed' })
+      const syncMs = performance.now() - syncStart
+
+      const totalItems = app.items.getItems('Note').length
+
+      return { requested: count, created, seedMs, syncMs, totalItems }
+    },
+    { count, sizeBytes },
+  )
+}
+
+/** Number of note items currently held in memory by the app (verifies persistence). */
+export async function inMemoryNoteCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const group = (window as unknown as {
+      mainApplicationGroup?: { primaryApplication?: { items?: { getItems: (ct: string) => unknown[] } } }
+    }).mainApplicationGroup
+    const app = group?.primaryApplication
+    return app?.items ? app.items.getItems('Note').length : -1
+  })
+}
+
+export type LoadMeasurement = {
+  count: number
+  openMs: number | null
+  rootHasChildren: boolean
+  renderedRows: number
+  inMemoryNotes: number
+  scrollResponsive: boolean | null
+  scrollProbeMs: number | null
+  jsHeapMB: number | null
+  pageErrors: string[]
+  verdict: 'ok' | 'degraded' | 'failed'
+  notes: string
+}
+
+/** Read JS heap (Chromium only) in MB, or null where unavailable. */
+export async function readJsHeapMB(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
+    return mem ? Math.round(mem.usedJSHeapSize / (1024 * 1024)) : null
+  })
+}
