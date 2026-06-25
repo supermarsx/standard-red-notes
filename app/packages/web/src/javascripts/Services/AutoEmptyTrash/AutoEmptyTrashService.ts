@@ -49,6 +49,9 @@ export const AutoEmptyTrashInterval = {
   OneMonth: 30 * DAY_MS,
   SixMonths: 182 * DAY_MS,
   OneYear: 365 * DAY_MS,
+  FiveYears: 5 * 365 * DAY_MS,
+  TenYears: 10 * 365 * DAY_MS,
+  TwentyYears: 20 * 365 * DAY_MS,
 } as const
 
 export type AutoEmptyTrashIntervalValue = (typeof AutoEmptyTrashInterval)[keyof typeof AutoEmptyTrashInterval]
@@ -64,6 +67,9 @@ export const AUTO_EMPTY_TRASH_OPTIONS: { value: number; label: string }[] = [
   { value: AutoEmptyTrashInterval.OneMonth, label: '1 month' },
   { value: AutoEmptyTrashInterval.SixMonths, label: '6 months' },
   { value: AutoEmptyTrashInterval.OneYear, label: '1 year' },
+  { value: AutoEmptyTrashInterval.FiveYears, label: '5 years' },
+  { value: AutoEmptyTrashInterval.TenYears, label: '10 years' },
+  { value: AutoEmptyTrashInterval.TwentyYears, label: '20 years' },
 ]
 
 const VALID_INTERVALS = new Set<number>(AUTO_EMPTY_TRASH_OPTIONS.map((o) => o.value))

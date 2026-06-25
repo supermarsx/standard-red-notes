@@ -80,6 +80,7 @@ export const METRICS = {
   manualSyncTotal: 'manualSyncTotal',
   workspaceSwitchTotal: 'workspaceSwitchTotal',
   notesPinnedTotal: 'notesPinnedTotal',
+  decadeOfTrash: 'decadeOfTrash',
   /** Maintained by the service after each unlock = number of unlocked achievements. */
   unlockedCount: 'unlockedCount',
 } as const
@@ -524,6 +525,17 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     metric: METRICS.notesPinnedTotal,
     threshold: 50,
     category: ACHIEVEMENT_CATEGORIES.Organization,
+  },
+
+  // --- Trash housekeeping ---------------------------------------------------
+  {
+    id: 'decade-of-decay',
+    name: 'Decade of Decay',
+    description: 'Set the Trash to auto-empty after ten whole years. Commitment issues? Or just a slow composter.',
+    metric: METRICS.decadeOfTrash,
+    threshold: 1,
+    hidden: true,
+    category: ACHIEVEMENT_CATEGORIES.Mishaps,
   },
 
   // --- Meta -----------------------------------------------------------------

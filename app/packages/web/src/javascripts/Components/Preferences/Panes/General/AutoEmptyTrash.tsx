@@ -7,9 +7,11 @@ import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import {
   AUTO_EMPTY_TRASH_OPTIONS,
+  AutoEmptyTrashInterval,
   readAutoEmptyTrashInterval,
   writeAutoEmptyTrashInterval,
 } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
+import { achievements, METRICS } from '@/Achievements'
 
 /**
  * Standard Red Notes: lets the user choose how long notes may sit in the Trash
@@ -28,6 +30,10 @@ const AutoEmptyTrash: FunctionComponent = () => {
     const parsed = Number(value)
     setIntervalMs(parsed)
     writeAutoEmptyTrashInterval(parsed)
+    // Easter egg: choosing the ten-year option unlocks a hidden achievement.
+    if (parsed === AutoEmptyTrashInterval.TenYears) {
+      achievements.markEvent(METRICS.decadeOfTrash)
+    }
   }, [])
 
   return (
