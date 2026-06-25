@@ -2893,23 +2893,33 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
+        <div className="flex flex-col py-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
           <button
             type="button"
-            className="rounded px-3 py-1.5 text-left hover:bg-contrast"
+            className="flex items-center gap-2.5 px-3 py-2 text-left hover:bg-contrast"
             onClick={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
           >
-            {t('emphasisMarks')}
+            <Icon type="sparkle" size="custom" className="h-4 w-4 flex-shrink-0 text-info" />
+            <span>{t('emphasisMarks')}</span>
           </button>
           <button
             type="button"
-            className="rounded px-3 py-1.5 text-left hover:bg-contrast"
+            className="flex items-center gap-2.5 px-3 py-2 text-left hover:bg-contrast"
             onClick={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
           >
-            {t('outlineTextStroke')}
+            <Icon type="bold" size="custom" className="h-4 w-4 flex-shrink-0 text-info" />
+            <span>{t('outlineTextStroke')}</span>
           </button>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('letterSpacingKerning')}</div>
-          <div className="flex flex-wrap gap-1 px-2">
+
+          <div className="mx-3 my-1 h-px bg-border" />
+
+          <div className="flex items-center gap-2.5 px-3 pb-1.5 pt-1">
+            <Icon type="line-width" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-passive-0">
+              {t('letterSpacingKerning')}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1 px-3 pb-1">
             {[
               { label: t('spacingTight'), value: '-0.5px' },
               { label: t('spacingNormal'), value: '0' },
@@ -2920,15 +2930,19 @@ const ToolbarPlugin = () => {
               <button
                 key={preset.label}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="rounded border border-border px-2 py-1 text-xs hover:border-info hover:bg-contrast"
                 onClick={() => applyStyleText({ 'letter-spacing': preset.value })}
               >
                 {preset.label}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('wordSpacing')}</div>
-          <div className="flex flex-wrap gap-1 px-2">
+
+          <div className="flex items-center gap-2.5 px-3 pb-1.5 pt-2">
+            <Icon type="align-justify" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-passive-0">{t('wordSpacing')}</span>
+          </div>
+          <div className="flex flex-wrap gap-1 px-3 pb-1">
             {[
               { label: t('spacingNormal'), value: '0' },
               { label: t('spacingWide'), value: '2px' },
@@ -2938,16 +2952,19 @@ const ToolbarPlugin = () => {
               <button
                 key={preset.label}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="rounded border border-border px-2 py-1 text-xs hover:border-info hover:bg-contrast"
                 onClick={() => applyStyleText({ 'word-spacing': preset.value })}
               >
                 {preset.label}
               </button>
             ))}
           </div>
+
+          <div className="mx-3 my-1 h-px bg-border" />
+
           <button
             type="button"
-            className="mt-1 rounded px-3 py-1.5 text-left text-danger hover:bg-contrast"
+            className="flex items-center gap-2.5 px-3 py-2 text-left text-danger hover:bg-contrast"
             onClick={() =>
               applyStyleText({
                 'text-emphasis': null,
@@ -2957,7 +2974,8 @@ const ToolbarPlugin = () => {
               })
             }
           >
-            {t('clearTypography')}
+            <Icon type="trash-sweep" size="custom" className="h-4 w-4 flex-shrink-0" />
+            <span>{t('clearTypography')}</span>
           </button>
         </div>
       </Popover>
