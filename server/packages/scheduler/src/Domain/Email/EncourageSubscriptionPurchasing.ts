@@ -1,7 +1,7 @@
 import { html } from './encourage-subscription-purchasing.html'
 
 export function getSubject(): string {
-  return 'Checking in after one month with Standard Notes'
+  return 'Checking in after one month with Standard Red Notes'
 }
 
 export function getBody(registrationDate: string): string {

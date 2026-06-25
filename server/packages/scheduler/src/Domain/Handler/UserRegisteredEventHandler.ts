@@ -23,11 +23,9 @@ export class UserRegisteredEventHandler implements DomainEventHandlerInterface {
   async handle(event: UserRegisteredEvent): Promise<void> {
     await this.scheduleEncourageEmailBackupsJob(event)
 
-    await this.scheduleEncourageSubscriptionPurchasing(event)
-
-    await this.scheduleSubscriptionDiscountApplying(event)
-
-    await this.scheduleSubscriptionDiscountWithdraw(event)
+    // Paid-tier upsell / subscription emails are disabled in this self-hosted fork (no paid tier).
+    // The subscription-purchasing-encouragement and subscription-discount jobs are intentionally
+    // no longer scheduled here. See JobDoneInterpreter for the (now unreached) handlers.
   }
 
   private async scheduleEncourageEmailBackupsJob(event: UserRegisteredEvent): Promise<void> {
@@ -48,57 +46,5 @@ export class UserRegisteredEventHandler implements DomainEventHandlerInterface {
     predicate.job = Promise.resolve(job)
 
     await this.predicateRepository.save(predicate)
-  }
-
-  private async scheduleEncourageSubscriptionPurchasing(event: UserRegisteredEvent): Promise<void> {
-    const job = new Job()
-    job.name = JobName.ENCOURAGE_SUBSCRIPTION_PURCHASING
-    job.scheduledAt = this.timer.convertDateToMicroseconds(this.timer.getUTCDateNDaysAhead(30))
-    job.createdAt = this.timer.getTimestampInMicroseconds()
-    job.status = JobStatus.Pending
-    job.userIdentifier = event.payload.email
-    job.userIdentifierType = 'email'
-
-    await this.jobRepository.save(job)
-
-    const predicate = new Predicate()
-    predicate.name = PredicateName.SubscriptionPurchased
-    predicate.status = PredicateStatus.Pending
-    predicate.authority = PredicateAuthority.Auth
-    predicate.job = Promise.resolve(job)
-
-    await this.predicateRepository.save(predicate)
-  }
-
-  private async scheduleSubscriptionDiscountApplying(event: UserRegisteredEvent): Promise<void> {
-    const job = new Job()
-    job.name = JobName.APPLY_SUBSCRIPTION_DISCOUNT
-    job.scheduledAt = this.timer.convertDateToMicroseconds(this.timer.getUTCDateNDaysAhead(7))
-    job.createdAt = this.timer.getTimestampInMicroseconds()
-    job.status = JobStatus.Pending
-    job.userIdentifier = event.payload.email
-    job.userIdentifierType = 'email'
-
-    await this.jobRepository.save(job)
-
-    const predicate = new Predicate()
-    predicate.name = PredicateName.SubscriptionPurchased
-    predicate.status = PredicateStatus.Pending
-    predicate.authority = PredicateAuthority.Auth
-    predicate.job = Promise.resolve(job)
-
-    await this.predicateRepository.save(predicate)
-  }
-
-  private async scheduleSubscriptionDiscountWithdraw(event: UserRegisteredEvent): Promise<void> {
-    const job = new Job()
-    job.name = JobName.WITHDRAW_SUBSCRIPTION_DISCOUNT
-    job.scheduledAt = this.timer.convertDateToMicroseconds(this.timer.getUTCDateNDaysAhead(12))
-    job.createdAt = this.timer.getTimestampInMicroseconds()
-    job.status = JobStatus.Pending
-    job.userIdentifier = event.payload.email
-    job.userIdentifierType = 'email'
-
-    await this.jobRepository.save(job)
   }
 }

@@ -48,23 +48,13 @@ describe('UserRegisteredEventHandler', () => {
     })
   })
 
-  it('should schedule a job encouraging to purchase a subscription', async () => {
+  it('should not schedule paid-tier subscription emails (no paid tier in this fork)', async () => {
     await createHandler().handle({ payload: { email: 'test@test.te' } } as jest.Mocked<UserRegisteredEvent>)
 
-    expect(jobRepository.save).toHaveBeenNthCalledWith(2, {
-      createdAt: 1,
-      name: 'encourage-subscription-purchasing',
-      scheduledAt: 123,
-      status: 'pending',
-      userIdentifier: 'test@test.te',
-      userIdentifierType: 'email',
-    })
-
-    expect(predicateRepository.save).toHaveBeenNthCalledWith(2, {
-      authority: 'auth',
-      job: expect.any(Promise),
-      name: 'subscription-purchased',
-      status: 'pending',
-    })
+    // Only the email-backups job should be scheduled; no subscription/upsell jobs.
+    expect(jobRepository.save).toHaveBeenCalledTimes(1)
+    expect(jobRepository.save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'encourage-subscription-purchasing' }),
+    )
   })
 })
