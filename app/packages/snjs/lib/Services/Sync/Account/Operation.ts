@@ -67,11 +67,19 @@ export class AccountSyncOperation {
     this.options.syncToken = response.lastSyncToken as string
     this.options.paginationToken = response.paginationToken as string
 
-    try {
-      await this.receiver(SyncSignal.Response, response)
-    } catch (error) {
-      console.error('Sync handle response error', error)
-    }
+    /**
+     * RELIABILITY (silent-drop fix): the receiver persists this page's retrieved
+     * payloads AND advances the PERSISTED sync token (see
+     * SyncService.handleSuccessServerResponse) — but only the persisted token
+     * gates what a future sync re-pulls. If the receiver throws (e.g. a transient
+     * IndexedDB write or decrypt failure on THIS page), we must NOT keep
+     * paginating: continuing would run subsequent pages whose success could
+     * advance the persisted token PAST the items this page failed to persist,
+     * silently dropping them with no way to re-pull. Instead, surface the error so
+     * the sync is marked failed; the persisted token is still at the pre-failure
+     * position, so the existing failure-backoff retry re-pulls this page cleanly.
+     */
+    await this.receiver(SyncSignal.Response, response)
 
     if (!this.done) {
       return this.run()

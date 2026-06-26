@@ -1368,7 +1368,30 @@ export class SyncService
 
     this.currentSyncRequestPromise = operationPromise
 
-    await operationPromise
+    /**
+     * RELIABILITY (silent-drop fix, paired with AccountSyncOperation.run): the
+     * paginated operation now PROPAGATES a receiver error (e.g. a transient
+     * IndexedDB persist or decrypt failure while applying a retrieved page)
+     * instead of swallowing it and paginating on. Catch it here and treat it as a
+     * normal failed online sync: release the lock (so the client isn't wedged) and
+     * route through applyOnlineSyncResult so the existing exponential-backoff retry
+     * fires. Because the PERSISTED sync token is only advanced inside a successful
+     * handleSuccessServerResponse, the retry re-pulls the un-persisted page — no
+     * items are dropped.
+     */
+    try {
+      await operationPromise
+    } catch (error) {
+      if (this.dealloced) {
+        return
+      }
+      this.logger.error(`Sync operation threw while applying server response: ${(error as Error)?.message ?? error}`)
+      releaseLock()
+      this.opStatus?.setError(error as Error)
+      this.applyOnlineSyncResult(true, online)
+      void this.notifyEvent(SyncEvent.SyncError, error)
+      return
+    }
 
     if (this.dealloced) {
       return
