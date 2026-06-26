@@ -29,6 +29,7 @@ export class StatusService extends AbstractService<StatusServiceEvent, string> i
     achievements: 0,
     sharing: 0,
     sync: 0,
+    storage: 0,
   }
 
   getPreferencesBubbleCount(preferencePaneId: PreferencePaneId): number {

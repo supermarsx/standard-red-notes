@@ -68,6 +68,10 @@ export class PreferencesSessionController {
     // Standard Red Notes: gamified Achievements pane (badges derived from usage).
     menuItems.push({ id: 'achievements', label: 'Achievements', icon: 'star', order: 9 })
 
+    // Standard Red Notes: Storage pane — where local disk space is going, sized
+    // off the main thread by a progressive IndexedDB-scanning worker.
+    menuItems.push({ id: 'storage', label: 'Storage', icon: 'server', order: 9 })
+
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
     this.loadLatestVersions()

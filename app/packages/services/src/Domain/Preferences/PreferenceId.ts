@@ -21,6 +21,7 @@ const PREFERENCE_PANE_IDS = [
   'achievements',
   'sharing',
   'sync',
+  'storage',
 ] as const
 
 export type PreferencePaneId = (typeof PREFERENCE_PANE_IDS)[number]
