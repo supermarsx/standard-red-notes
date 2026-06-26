@@ -109,6 +109,14 @@ const TOO_MANY_REQUESTS_RESPONSE_STATUS = 429
 const DEFAULT_AUTO_SYNC_INTERVAL = 30_000
 
 /**
+ * LIVE-SYNC: when the server pushes an ITEMS_CHANGED_ON_SERVER notification over the
+ * websocket (e.g. a collaborator edited a shared vault), we trigger an immediate sync
+ * rather than waiting up to 30s for the periodic auto-sync tick. The trigger is debounced
+ * so a burst of pushes coalesces into a single sync. The 30s auto-sync remains a backstop.
+ */
+const LIVE_SYNC_DEBOUNCE_MS = 1_000
+
+/**
  * Exponential backoff parameters for auto-retrying after consecutive sync failures.
  * The delay grows as base * (multiplier ^ failures), capped, plus jitter to avoid
  * thundering-herd reconnect storms. This only governs the AUTO-RETRY-AFTER-FAILURE
@@ -174,6 +182,9 @@ export class SyncService
 
   private autoSyncInterval?: NodeJS.Timeout
   private wasNotifiedOfItemsChangeOnServer = false
+
+  /** Pending debounced live-sync timer, coalescing a burst of server-change notifications. */
+  private liveSyncDebounceTimeout?: NodeJS.Timeout
 
   /**
    * Manual Sync mode. When true, AUTOMATIC syncs are suppressed and only an explicit
@@ -368,6 +379,10 @@ export class SyncService
       clearInterval(this.autoSyncInterval)
     }
     this.cancelFailureBackoff()
+    if (this.liveSyncDebounceTimeout) {
+      clearTimeout(this.liveSyncDebounceTimeout)
+      this.liveSyncDebounceTimeout = undefined
+    }
     if (this.removeWindowListeners) {
       this.removeWindowListeners()
       this.removeWindowListeners = undefined
@@ -558,7 +573,23 @@ export class SyncService
       ? chunks.fullEntries.remainingChunks
       : chunks.keys.remainingChunks
 
+    /**
+     * COLD-LOAD COMPLETENESS: the device cheaply reports the entry/key count per chunk
+     * (the keys it intends us to load), so we can derive the EXPECTED number of regular
+     * entries without any extra device read. We then count how many were ACTUALLY emitted
+     * into memory and assert the two match at the end. This complements the per-batch
+     * isolation above: that prevents one bad batch from aborting the whole load; this
+     * catches the case where a batch was silently skipped, leaving a PARTIAL load (the
+     * "70k of 100k" symptom) — which would otherwise look like a successful load.
+     */
+    const expectedRemainingEntryCount = remainingChunks.reduce(
+      (sum, chunk) => sum + (isChunkFullEntry(chunk) ? chunk.entries.length : chunk.keys.length),
+      0,
+    )
+
     let chunkIndex = 0
+    let successfullyEmittedCount = 0
+    const failedChunkKeys: string[] = []
     const ChunkIndexOfContentTypePriorityItems = 0
 
     for (const chunk of remainingChunks) {
@@ -587,8 +618,12 @@ export class SyncService
        */
       try {
         await this.processPayloadBatch(payloads, totalProcessedCount, payloadCount)
+        successfullyEmittedCount += payloads.length
       } catch (e) {
         this.logger.error('loadDatabasePayloads: batch failed, continuing with remaining chunks', String(e))
+        if (!isChunkFullEntry(chunk)) {
+          extendArray(failedChunkKeys, chunk.keys)
+        }
       }
 
       const shouldSleepOnlyAfterFirstRegularBatch = chunkIndex > ChunkIndexOfContentTypePriorityItems
@@ -600,8 +635,70 @@ export class SyncService
       chunkIndex++
     }
 
+    await this.verifyColdLoadCompleteness(expectedRemainingEntryCount, successfullyEmittedCount, failedChunkKeys)
+
     this.databaseLoaded = true
     this.opStatus.setDatabaseLoadStatus(0, 0, true)
+  }
+
+  /**
+   * COLD-LOAD COMPLETENESS check (no silent partial loads). After draining every chunk,
+   * the number of entries we actually emitted into memory must equal the number the device
+   * told us to load. If it is SHORT, some batch failed or was skipped — a silent partial
+   * load (e.g. 70k of 100k notes). We log it clearly, and when the skipped entries came
+   * from keyed chunks we re-attempt those exact keys ONCE before giving up. A residual
+   * shortfall after the retry is logged as an error (data is on disk and will reconcile on
+   * the next sync/reload; we never report a partial load as a clean success silently).
+   */
+  private async verifyColdLoadCompleteness(
+    expectedCount: number,
+    emittedCount: number,
+    failedChunkKeys: string[],
+  ): Promise<void> {
+    if (emittedCount >= expectedCount) {
+      return
+    }
+
+    const shortfall = expectedCount - emittedCount
+    this.logger.error(
+      `loadDatabasePayloads: PARTIAL load detected — emitted ${emittedCount} of ${expectedCount} expected entries (short by ${shortfall}).`,
+    )
+
+    if (failedChunkKeys.length === 0) {
+      this.logger.error(
+        'loadDatabasePayloads: cannot identify the missing keys to re-attempt (no keyed chunks recorded); will reconcile on next sync/reload.',
+      )
+      return
+    }
+
+    this.logger.debug(`loadDatabasePayloads: re-attempting ${failedChunkKeys.length} missing keys once`)
+
+    try {
+      const retryEntries = await this.device.getDatabaseEntries(this.identifier, failedChunkKeys)
+      const retryPayloads = retryEntries
+        .map((entry) => {
+          try {
+            return CreatePayload(entry, PayloadSource.LocalDatabaseLoaded)
+          } catch (e) {
+            console.error('Creating payload failed', e)
+            return undefined
+          }
+        })
+        .filter(isNotUndefined)
+
+      await this.processPayloadBatch(retryPayloads)
+
+      const recoveredEmittedCount = emittedCount + retryPayloads.length
+      if (recoveredEmittedCount >= expectedCount) {
+        this.logger.debug('loadDatabasePayloads: re-attempt recovered the missing entries; load is now complete')
+      } else {
+        this.logger.error(
+          `loadDatabasePayloads: re-attempt still short — emitted ${recoveredEmittedCount} of ${expectedCount}; will reconcile on next sync/reload.`,
+        )
+      }
+    } catch (e) {
+      this.logger.error('loadDatabasePayloads: re-attempt of missing keys failed', String(e))
+    }
   }
 
   beginAutoSyncTimer(): void {
@@ -629,6 +726,46 @@ export class SyncService
 
       void this.sync({ sourceDescription: 'WebSockets Event - Items Changed On Server' })
     }
+  }
+
+  /**
+   * LIVE-SYNC: schedule a DEBOUNCED immediate sync in response to an
+   * ITEMS_CHANGED_ON_SERVER websocket notification, so a collaborator's change is pulled
+   * within ~1s instead of waiting up to 30s for the periodic auto-sync tick. The debounce
+   * coalesces a burst of pushes into a single sync. This only runs when there is a session
+   * (online); without one there is nothing to pull from the server. The 30s auto-sync timer
+   * remains in place as a backstop, and `wasNotifiedOfItemsChangeOnServer` is still set by
+   * the caller so the backstop will also pick up the change if this immediate sync is
+   * suppressed (e.g. manual sync mode).
+   */
+  private scheduleDebouncedLiveSync(): void {
+    if (this.dealloced) {
+      return
+    }
+
+    if (this.manualSyncMode) {
+      this.logger.debug('Manual sync mode is on; skipping debounced live sync (backstop will reconcile)')
+      return
+    }
+
+    if (!this.sessionManager?.online()) {
+      this.logger.debug('No session; skipping debounced live sync')
+      return
+    }
+
+    if (this.liveSyncDebounceTimeout) {
+      clearTimeout(this.liveSyncDebounceTimeout)
+    }
+
+    this.liveSyncDebounceTimeout = setTimeout(() => {
+      this.liveSyncDebounceTimeout = undefined
+      if (this.dealloced) {
+        return
+      }
+      this.wasNotifiedOfItemsChangeOnServer = false
+      this.logger.debug('Live-sync debounce elapsed; syncing for server-side items change')
+      void this.sync({ source: SyncSource.External, sourceDescription: 'Live Sync - Items Changed On Server' })
+    }, LIVE_SYNC_DEBOUNCE_MS)
   }
 
   private async processPayloadBatch(
@@ -1113,8 +1250,20 @@ export class SyncService
     inTimeResolveQueue: SyncPromise[],
     beginDate: Date,
     frozenDirtyIndex: number,
+    online: boolean,
   ) {
-    this.opStatus.setDidBegin()
+    /**
+     * BUG FIX ("note shows 'syncing' with NO login"): the server-sync status
+     * (opStatus.syncInProgress, which the web SyncStatusController surfaces as
+     * "syncing") must only begin for an ONLINE sync. With no session, sync() is a
+     * LOCAL-ONLY IndexedDB persist — no server request is made (see createSyncOperation's
+     * OfflineSyncOperation branch) — so presenting it as server "syncing" wrongly implies
+     * the note is being pushed to a server without an account. We still run the offline
+     * save silently below; we just don't enter the server-sync status when offline.
+     */
+    if (online) {
+      this.opStatus.setDidBegin()
+    }
 
     await this.notifyEvent(SyncEvent.SyncDidBeginProcessing)
 
@@ -1345,18 +1494,24 @@ export class SyncService
       return
     }
 
+    /**
+     * Determine online (has-session) BEFORE we begin so the server-sync status is only
+     * entered for an actual online sync. Without a session this is a local-only persist
+     * and must not surface as server "syncing".
+     */
+    const online = this.sessionManager.online()
+
     const latestItems = await this.prepareForSyncExecution(
       shouldSkipUploadsForReadOnlySession ? [] : items,
       inTimeResolveQueue,
       beginDate,
       frozenDirtyIndex,
+      online,
     )
 
     if (shouldSkipUploadsForReadOnlySession && items.length > 0) {
       this.logger.debug('Read-only session detected, skipping upload of dirty items.')
     }
-
-    const online = this.sessionManager.online()
 
     const { operation, mode: syncMode } = await this.createSyncOperation(
       latestItems.map((i) => i.payloadRepresentation()),
@@ -1923,6 +2078,7 @@ export class SyncService
         break
       case WebSocketsServiceEvent.ItemsChangedOnServer:
         this.wasNotifiedOfItemsChangeOnServer = true
+        this.scheduleDebouncedLiveSync()
         break
       case WebSocketsServiceEvent.SyncItemsPushed:
         await this.handleItemsPushedOverWebSocket(event.payload as SyncItemsPushedData)

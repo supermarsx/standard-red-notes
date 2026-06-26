@@ -750,3 +750,394 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
     })
   })
 })
+
+describe('SyncService no-session sync status (no-login "syncing" bug)', () => {
+  let logger: jest.Mocked<LoggerInterface>
+
+  const buildOpStatus = () => {
+    const status = {
+      syncing: false,
+      syncInProgress: false,
+      setDidBegin: jest.fn(),
+      setDidEnd: jest.fn(),
+      hasError: jest.fn().mockReturnValue(false),
+      reset: jest.fn(),
+      clearError: jest.fn(),
+      setUploadStatus: jest.fn(),
+      setDownloadStatus: jest.fn(),
+    }
+    // setDidBegin is the ONLY thing that should flip the server-sync status on.
+    status.setDidBegin.mockImplementation(() => {
+      status.syncing = true
+      status.syncInProgress = true
+    })
+    return status
+  }
+
+  const createService = (online: boolean): { service: SyncService; opStatus: ReturnType<typeof buildOpStatus> } => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    // A session manager that reports offline (no session) or online accordingly.
+    const sessionManager = {
+      online: jest.fn().mockReturnValue(online),
+      isCurrentSessionReadOnly: jest.fn().mockReturnValue(false),
+    }
+
+    // Records whether any server request was attempted via the api service.
+    const apiService = { getSession: jest.fn() }
+
+    const offlineRun = jest.fn().mockResolvedValue(undefined)
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      sessionManager as never,
+      {} as never, // encryptionService
+      {} as never, // storageService
+      {} as never, // payloadManager
+      apiService as never,
+      {} as never, // historyService
+      {} as never, // device
+      'test-identifier',
+      {} as never, // options
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+
+    const opStatus = buildOpStatus()
+    ;(service as unknown as { opStatus: unknown }).opStatus = opStatus
+
+    // Stub the network-vs-local operation seam so we observe WHICH path runs without
+    // needing the full encryption/payload machinery. createServerSyncOperation is what
+    // performs a server request; createOfflineSyncOperation is local IndexedDB persist.
+    const serverRun = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { createServerSyncOperation: unknown }).createServerSyncOperation = jest
+      .fn()
+      .mockResolvedValue({ run: serverRun })
+    ;(service as unknown as { getOnlineSyncParameters: unknown }).getOnlineSyncParameters = jest
+      .fn()
+      .mockResolvedValue({ uploadPayloads: [], syncMode: 0 })
+    ;(service as unknown as { createOfflineSyncOperation: unknown }).createOfflineSyncOperation = jest
+      .fn()
+      .mockReturnValue({ run: offlineRun })
+    ;(service as unknown as { handleSyncOperationFinish: unknown }).handleSyncOperationFinish = jest
+      .fn()
+      .mockResolvedValue({ hasError: false })
+    ;(service as unknown as { potentiallySyncAgainAfterSyncCompletion: unknown }).potentiallySyncAgainAfterSyncCompletion =
+      jest.fn().mockResolvedValue(false)
+    ;(service as unknown as { prepareForSync: unknown }).prepareForSync = jest
+      .fn()
+      .mockResolvedValue({ items: [], beginDate: new Date(), frozenDirtyIndex: 0, neverSyncedDeleted: [] })
+    ;(service as unknown as { notifyEvent: unknown }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { notifyEventSync: unknown }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { syncFrequencyGuard: unknown }).syncFrequencyGuard = {
+      isSyncCallsThresholdReachedThisMinute: () => false,
+      incrementCallsPerMinute: () => undefined,
+    }
+    ;(
+      service as unknown as { resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest: unknown }
+    ).resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest = jest.fn()
+
+    return { service, opStatus }
+  }
+
+  it('FAILING-FIRST: with NO session, sync() does NOT enter server-syncing status and makes NO server request', async () => {
+    const { service, opStatus } = createService(false)
+    const createServerSyncOperation = (service as unknown as { createServerSyncOperation: jest.Mock })
+      .createServerSyncOperation
+
+    await service.sync({ source: SyncSource.External })
+
+    // No server request was created/run.
+    expect(createServerSyncOperation).not.toHaveBeenCalled()
+    // The offline (local persistence) path ran instead.
+    expect(
+      (service as unknown as { createOfflineSyncOperation: jest.Mock }).createOfflineSyncOperation,
+    ).toHaveBeenCalledTimes(1)
+    // Crucially: the server-sync status was NEVER begun, so the UI won't show "syncing".
+    expect(opStatus.setDidBegin).not.toHaveBeenCalled()
+    expect(opStatus.syncInProgress).toBe(false)
+  })
+
+  it('WITH a session, behavior is unchanged: server request runs AND server-sync status begins', async () => {
+    const { service, opStatus } = createService(true)
+    const createServerSyncOperation = (service as unknown as { createServerSyncOperation: jest.Mock })
+      .createServerSyncOperation
+
+    await service.sync({ source: SyncSource.External })
+
+    expect(createServerSyncOperation).toHaveBeenCalledTimes(1)
+    expect(
+      (service as unknown as { createOfflineSyncOperation: jest.Mock }).createOfflineSyncOperation,
+    ).not.toHaveBeenCalled()
+    // Online sync DOES enter the server-sync status (the legitimate "syncing" indicator).
+    expect(opStatus.setDidBegin).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SyncService live-sync debounced immediate trigger', () => {
+  let logger: jest.Mocked<LoggerInterface>
+
+  const createService = (online: boolean, manualMode = false): SyncService => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    const sessionManager = { online: jest.fn().mockReturnValue(online) }
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      sessionManager as never,
+      {} as never, // encryptionService
+      {} as never, // storageService
+      {} as never, // payloadManager
+      {} as never, // apiService
+      {} as never, // historyService
+      {} as never, // device
+      'test-identifier',
+      {} as never, // options
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+    if (manualMode) {
+      service.setManualSyncMode(true)
+    }
+    return service
+  }
+
+  const dispatchItemsChanged = (service: SyncService) =>
+    service.handleEvent({ type: WebSocketsServiceEvent.ItemsChangedOnServer } as never)
+
+  beforeEach(() => {
+    jest.useFakeTimers()
+  })
+
+  afterEach(() => {
+    jest.clearAllTimers()
+    jest.useRealTimers()
+  })
+
+  it('triggers a DEBOUNCED immediate sync after a server items-changed notification (with a session)', async () => {
+    const service = createService(true)
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchItemsChanged(service)
+
+    // No immediate sync before the debounce elapses.
+    expect(syncSpy).not.toHaveBeenCalled()
+
+    jest.advanceTimersByTime(1_000)
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceDescription: 'Live Sync - Items Changed On Server' }),
+    )
+  })
+
+  it('COALESCES a burst of notifications into a single debounced sync', async () => {
+    const service = createService(true)
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchItemsChanged(service)
+    jest.advanceTimersByTime(300)
+    await dispatchItemsChanged(service)
+    jest.advanceTimersByTime(300)
+    await dispatchItemsChanged(service)
+
+    // Still nothing: the timer keeps resetting on each push within the window.
+    expect(syncSpy).not.toHaveBeenCalled()
+
+    jest.advanceTimersByTime(1_000)
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT trigger an immediate sync when there is no session (backstop still flags the change)', async () => {
+    const service = createService(false)
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchItemsChanged(service)
+    jest.advanceTimersByTime(5_000)
+
+    expect(syncSpy).not.toHaveBeenCalled()
+    // The 30s auto-sync backstop still sees the change.
+    expect((service as unknown as { wasNotifiedOfItemsChangeOnServer: boolean }).wasNotifiedOfItemsChangeOnServer).toBe(
+      true,
+    )
+  })
+
+  it('does NOT trigger an immediate sync in manual sync mode (backstop will reconcile)', async () => {
+    const service = createService(true, true)
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await dispatchItemsChanged(service)
+    jest.advanceTimersByTime(5_000)
+
+    expect(syncSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('SyncService cold-load COMPLETENESS (no silent partial loads)', () => {
+  let uuidCounter = 0
+  const nextUuid = () => `sync-complete-${uuidCounter++}`
+
+  const makeEntry = (content_type = ContentType.TYPES.Component) => ({
+    uuid: nextUuid(),
+    content_type,
+    content: { foo: 'bar' },
+    ...PayloadTimestampDefaults(),
+  })
+
+  const createService = (
+    device: Record<string, unknown>,
+    options: Record<string, unknown> = {},
+  ): { service: SyncService; logger: jest.Mocked<LoggerInterface> } => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    const encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
+    const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
+    const opStatus = { setDatabaseLoadStatus: jest.fn() }
+    const storageService = { getValue: jest.fn().mockReturnValue([]) }
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      encryptionService as never,
+      storageService as never,
+      payloadManager as never,
+      {} as never, // apiService
+      {} as never, // historyService
+      device as never,
+      'test-identifier',
+      { loadBatchSize: 2, sleepBetweenBatches: 0, ...options } as never,
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+    ;(service as unknown as { opStatus: unknown }).opStatus = opStatus
+    return { service, logger }
+  }
+
+  it('completes cleanly (no error log) when every chunk loads', async () => {
+    const itemsKeyEntry = makeEntry(ContentType.TYPES.ItemsKey)
+    const regular = [makeEntry(), makeEntry(), makeEntry(), makeEntry()]
+    const byKey: Record<string, unknown> = {}
+    for (const e of [itemsKeyEntry, ...regular]) {
+      byKey[e.uuid] = e
+    }
+    const chunkKeys = [regular.slice(0, 2).map((e) => e.uuid), regular.slice(2, 4).map((e) => e.uuid)]
+
+    const getDatabaseEntries = jest
+      .fn()
+      .mockImplementation(async (_id: string, keys: string[]) => keys.map((k) => byKey[k]).filter(Boolean))
+
+    const device = {
+      getDatabaseEntries,
+      getDatabaseLoadChunks: jest.fn().mockResolvedValue({
+        keys: {
+          itemsKeys: { keys: [itemsKeyEntry.uuid] },
+          keySystemRootKeys: { keys: [] },
+          keySystemItemsKeys: { keys: [] },
+          remainingChunks: chunkKeys.map((keys) => ({ keys })),
+        },
+        remainingChunksItemCount: regular.length,
+      }),
+    }
+
+    const { service, logger } = createService(device)
+    await service.loadDatabasePayloads()
+
+    // No PARTIAL-load error was logged.
+    const partialErrors = logger.error.mock.calls.filter((c) => String(c[0]).includes('PARTIAL load detected'))
+    expect(partialErrors).toHaveLength(0)
+    expect(service.isDatabaseLoaded()).toBe(true)
+  })
+
+  it('DETECTS a silently skipped batch: logs PARTIAL load and re-attempts the missing keys once', async () => {
+    const itemsKeyEntry = makeEntry(ContentType.TYPES.ItemsKey)
+    const regular = [makeEntry(), makeEntry(), makeEntry(), makeEntry()]
+    const byKey: Record<string, unknown> = {}
+    for (const e of [itemsKeyEntry, ...regular]) {
+      byKey[e.uuid] = e
+    }
+    // Two regular chunks of 2 keys each; device reports 4 expected entries.
+    const chunk0 = regular.slice(0, 2).map((e) => e.uuid)
+    const chunk1 = regular.slice(2, 4).map((e) => e.uuid)
+
+    const getDatabaseEntries = jest
+      .fn()
+      .mockImplementation(async (_id: string, keys: string[]) => keys.map((k) => byKey[k]).filter(Boolean))
+
+    const device = {
+      getDatabaseEntries,
+      getDatabaseLoadChunks: jest.fn().mockResolvedValue({
+        keys: {
+          itemsKeys: { keys: [itemsKeyEntry.uuid] },
+          keySystemRootKeys: { keys: [] },
+          keySystemItemsKeys: { keys: [] },
+          remainingChunks: [{ keys: chunk0 }, { keys: chunk1 }],
+        },
+        remainingChunksItemCount: regular.length,
+      }),
+    }
+
+    const { service, logger } = createService(device)
+
+    // Force the SECOND regular batch to be skipped (simulating a failed/dropped batch),
+    // so only 2 of 4 expected entries are emitted.
+    let batchCall = 0
+    const realProcess = (
+      service as unknown as { processPayloadBatch: (...a: unknown[]) => Promise<void> }
+    ).processPayloadBatch.bind(service)
+    ;(service as unknown as { processPayloadBatch: unknown }).processPayloadBatch = jest
+      .fn()
+      .mockImplementation(async (payloads: unknown[], pos?: number, count?: number) => {
+        batchCall += 1
+        // First call = chunk0 (succeeds); second call = chunk1 (throws -> skipped).
+        // Third call = the completeness re-attempt of chunk1's keys (succeeds).
+        if (batchCall === 2) {
+          throw new Error('simulated dropped batch')
+        }
+        return realProcess(payloads, pos, count)
+      })
+
+    await service.loadDatabasePayloads()
+
+    // The partial load must be detected and logged clearly.
+    const partialErrors = logger.error.mock.calls.filter((c) => String(c[0]).includes('PARTIAL load detected'))
+    expect(partialErrors).toHaveLength(1)
+
+    // The missing keys (chunk1) were re-attempted exactly once via a keyed device read.
+    expect(getDatabaseEntries).toHaveBeenCalledWith('test-identifier', chunk1)
+
+    // Re-attempt recovered the entries, so a recovery (not residual-shortfall) was logged.
+    const recovered = logger.debug.mock.calls.filter((c) => String(c[0]).includes('recovered the missing entries'))
+    expect(recovered).toHaveLength(1)
+
+    expect(service.isDatabaseLoaded()).toBe(true)
+  })
+})
