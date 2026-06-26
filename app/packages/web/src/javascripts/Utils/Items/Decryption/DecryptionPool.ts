@@ -1,11 +1,19 @@
 // Main-thread manager for the off-main-thread decryption worker pool.
 //
-// Spins up N = max(1, hardwareConcurrency - 1) decryption workers and fans
-// batches of payloads out across them, so cold-loading a large vault decrypts in
-// parallel across CPU cores instead of blocking the main thread with one long
-// synchronous WASM loop. Implements PayloadDecryptionPoolInterface, which
-// ItemsEncryptionService calls when AVAILABLE + ENABLED, falling back to its sync
-// path otherwise.
+// Fans batches of payloads out across a pool of decryption workers, so
+// cold-loading a large vault decrypts in parallel across CPU cores instead of
+// blocking the main thread with one long synchronous WASM loop. Implements
+// PayloadDecryptionPoolInterface, which ItemsEncryptionService calls when
+// AVAILABLE + ENABLED, falling back to its sync path otherwise.
+//
+// Workers are spawned LAZILY up to a max. Each worker compiles its OWN libsodium
+// WASM on first use, so eagerly spinning N workers on a 40-core box made SMALL
+// vaults SLOWER (heavy per-worker init + structured-clone overhead dominated the
+// tiny amount of real work). Instead we start with INITIAL_WORKERS and add a
+// worker only when a decrypt call has more batches than live workers, capped at
+// `maxWorkers`. A small vault that only queues a couple batches therefore never
+// spins more than a couple workers (no 40x WASM init), while a big cold-load grows
+// the pool all the way to the cap and uses every core.
 //
 // Worker construction MIRRORS ThreadedSearchIndex: worker-loader rewrites the
 // `*.worker.ts` import into a Worker constructor at build time (see the
@@ -39,6 +47,13 @@ const DecryptionWorker = ((DecryptionWorkerModule as { default?: { new (): Worke
  */
 const BATCH_SIZE = 500
 
+/**
+ * Workers spawned eagerly at construction. Kept tiny (a couple) so a small vault
+ * pays at most a couple per-worker WASM inits; additional workers materialize only
+ * when a real decrypt call demands more parallelism.
+ */
+const INITIAL_WORKERS = 2
+
 type PendingResolver = (response: DecryptionWorkerResponse) => void
 
 interface PoolWorker {
@@ -46,45 +61,120 @@ interface PoolWorker {
   pending: Map<number, PendingResolver>
 }
 
+/**
+ * Configuration for the pool's worker ceiling. `maxWorkers` of 0 (or omitted)
+ * selects the auto policy: hardwareConcurrency - 1. A positive value is clamped to
+ * [1, hardwareConcurrency], letting the user dedicate the full thread count.
+ */
+export interface DecryptionPoolConfig {
+  /** Pref-driven ceiling. 0 == auto (hardwareConcurrency - 1). */
+  maxWorkers?: number
+}
+
 export class DecryptionPool implements PayloadDecryptionPoolInterface {
   private workers: PoolWorker[] = []
   private nextWorker = 0
   private nextRequestId = 1
   private destroyed = false
+  private maxWorkers: number
+  /** True once the (lazy) initial workers have been spawned. */
+  private warmedUp = false
 
   /**
    * Runtime visibility into whether the pool is actually doing work or silently
    * falling back to the sync path (e.g. libsodium failing to init in the worker).
    * Exposed on globalThis.__srnDecryptPool so the stress harness can read it.
+   * `spawned` is the count of live workers; `maxWorkers` the lazy-growth ceiling.
    */
-  readonly stats = { workers: 0, batchesOk: 0, batchesFailed: 0, workerErrors: 0, lastError: '' }
+  readonly stats = {
+    workers: 0,
+    spawned: 0,
+    maxWorkers: 0,
+    batchesOk: 0,
+    batchesFailed: 0,
+    workerErrors: 0,
+    lastError: '',
+  }
 
-  constructor() {
-    if (typeof Worker === 'undefined') {
-      return
-    }
-    // Each worker compiles its OWN libsodium WASM on first use, so worker count
-    // trades parallelism against fixed per-worker init + structured-clone overhead.
-    // Past a handful, that overhead dominates (a 40-core box spinning 39 workers
-    // made small vaults SLOWER). Cap at 8 — enough to parallelize a big cold-load,
-    // few enough that the startup tax stays small.
-    const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
-    const count = Math.min(8, Math.max(1, (cores || 4) - 1))
-    for (let i = 0; i < count; i++) {
-      const created = this.tryCreateWorker()
-      if (created) {
-        this.workers.push(created)
-      }
-    }
-    this.stats.workers = this.workers.length
+  constructor(config: DecryptionPoolConfig = {}) {
+    this.maxWorkers = this.resolveMaxWorkers(config.maxWorkers)
+    this.stats.maxWorkers = this.maxWorkers
     if (typeof globalThis !== 'undefined') {
       ;(globalThis as unknown as { __srnDecryptPool?: unknown }).__srnDecryptPool = this.stats
     }
+    if (typeof Worker === 'undefined') {
+      return
+    }
+    // Eagerly spawn only a tiny initial set; the rest grow on demand (see decrypt()).
+    this.ensureWorkers(INITIAL_WORKERS)
+    this.warmedUp = true
   }
 
-  /** True only when at least one real worker is alive. */
+  /**
+   * Translate the configured ceiling into an absolute worker count.
+   * - undefined / 0 -> auto: hardwareConcurrency - 1 (min 1).
+   * - > 0           -> min(value, hardwareConcurrency) (the user may use every core).
+   */
+  private resolveMaxWorkers(configured?: number): number {
+    const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
+    const hardware = Math.max(1, cores || 4)
+    if (configured && configured > 0) {
+      return Math.min(configured, hardware)
+    }
+    return Math.max(1, hardware - 1)
+  }
+
+  /**
+   * Update the worker ceiling at runtime (e.g. when the pref loads after launch).
+   * Never tears down existing workers; lowering the cap just stops further growth
+   * and trims rotation down to the new ceiling. Raising it lets the next big batch
+   * spawn more workers lazily.
+   */
+  setMaxWorkers(configured?: number): void {
+    if (this.destroyed) {
+      return
+    }
+    this.maxWorkers = this.resolveMaxWorkers(configured)
+    this.stats.maxWorkers = this.maxWorkers
+    if (this.workers.length > this.maxWorkers) {
+      const surplus = this.workers.splice(this.maxWorkers)
+      for (const entry of surplus) {
+        this.dropWorker(entry, new Error('decryption pool max workers lowered'))
+      }
+      this.stats.spawned = this.workers.length
+      this.stats.workers = this.workers.length
+    }
+  }
+
+  /**
+   * Lazily grow the pool toward `target`, never exceeding `maxWorkers`. Returns the
+   * resulting live-worker count. A no-op when Workers are unavailable.
+   */
+  private ensureWorkers(target: number): number {
+    if (typeof Worker === 'undefined' || this.destroyed) {
+      return this.workers.length
+    }
+    const desired = Math.min(Math.max(target, 0), this.maxWorkers)
+    while (this.workers.length < desired) {
+      const created = this.tryCreateWorker()
+      if (!created) {
+        break
+      }
+      this.workers.push(created)
+    }
+    this.stats.spawned = this.workers.length
+    this.stats.workers = this.workers.length
+    return this.workers.length
+  }
+
+  /** True only when at least one real worker is alive (or can still be spawned). */
   get isAvailable(): boolean {
-    return !this.destroyed && this.workers.length > 0
+    if (this.destroyed || typeof Worker === 'undefined') {
+      return false
+    }
+    // After warm-up a zero count means construction failed (no real worker ever
+    // materialized); before warm-up the constructor handles it.
+    return this.warmedUp ? this.workers.length > 0 : true
   }
 
   private tryCreateWorker(): PoolWorker | null {
@@ -125,6 +215,8 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
     } catch {
       /* already gone */
     }
+    this.stats.spawned = this.workers.length
+    this.stats.workers = this.workers.length
   }
 
   private send(entry: PoolWorker, jobs: PooledDecryptionJob[]): Promise<DecryptionWorkerResponse> {
@@ -144,6 +236,16 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
     }
     if (jobs.length === 0) {
       return []
+    }
+
+    // Grow the pool toward the batch count (capped at maxWorkers) BEFORE dispatch,
+    // so a big cold-load spins up to the full ceiling while a small one — which
+    // produces only a batch or two — never spawns more than the initial workers.
+    const batchCount = Math.ceil(jobs.length / BATCH_SIZE)
+    this.ensureWorkers(batchCount)
+
+    if (this.workers.length === 0) {
+      throw new Error('decryption pool unavailable')
     }
 
     // Split into round-robin batches across the live workers.
@@ -181,5 +283,7 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
       this.dropWorker(entry, new Error('decryption pool destroyed'))
     }
     this.workers = []
+    this.stats.spawned = 0
+    this.stats.workers = 0
   }
 }

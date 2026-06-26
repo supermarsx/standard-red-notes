@@ -9,6 +9,7 @@ import {
   DeinitMode,
   ApplicationEvent,
   PrefKey,
+  PrefDefaults,
   SNTag,
   ContentType,
   DecryptedItemInterface,
@@ -236,23 +237,49 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * ItemsEncryptionService. The pool no-ops (isAvailable === false) when Workers
    * are unavailable, in which case the service keeps using its synchronous path,
    * so this is always safe. Failures here must never block app boot.
+   *
+   * The PrefKey.MaxDecryptionWorkers ceiling (0 == auto) is applied here. Because
+   * the pool spawns workers LAZILY, constructing it before preferences load is
+   * fine: it starts with a couple workers, and we re-apply the persisted pref once
+   * LocalDataLoaded / PreferencesChanged fires (setMaxWorkers only raises/lowers
+   * the lazy-growth ceiling — it never eagerly spins workers).
    */
   private installDecryptionPool(): void {
     if (typeof Worker === 'undefined') {
       return
     }
     try {
-      const pool = new DecryptionPool()
+      const pool = new DecryptionPool({ maxWorkers: this.getMaxDecryptionWorkersPref() })
       if (!pool.isAvailable) {
         pool.destroy()
         return
       }
       this._decryptionPool = pool
       this.itemsEncryption.setDecryptionPool(pool)
+
+      // Re-apply the persisted ceiling once preferences are available (the
+      // constructor ran before LocalDataLoaded), and whenever it changes.
+      const applyMax = () => {
+        this._decryptionPool?.setMaxWorkers(this.getMaxDecryptionWorkersPref())
+      }
+      this.disposers.push(this.addEventObserver(async () => applyMax(), ApplicationEvent.LocalDataLoaded))
+      this.disposers.push(this.addEventObserver(async () => applyMax(), ApplicationEvent.PreferencesChanged))
     } catch (error) {
       // Pool construction is best-effort; on any failure we leave the service on
       // its sync path. Never let this crash app launch.
       console.error('Failed to install decryption pool', error)
+    }
+  }
+
+  /**
+   * The configured decryption-worker ceiling. Returns undefined before preferences
+   * load (DecryptionPool treats undefined the same as 0 == auto).
+   */
+  private getMaxDecryptionWorkersPref(): number | undefined {
+    try {
+      return this.getPreference(PrefKey.MaxDecryptionWorkers, PrefDefaults[PrefKey.MaxDecryptionWorkers])
+    } catch {
+      return undefined
     }
   }
 
