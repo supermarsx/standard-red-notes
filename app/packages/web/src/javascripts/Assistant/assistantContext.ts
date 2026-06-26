@@ -12,8 +12,12 @@
 export type AssistantContextScope =
   /** Just the active note (default). */
   | 'current-note'
+  /** Every note currently open in an editor tab. */
+  | 'open-notes'
   /** A digest of every note in the app ("notebook"). */
   | 'all-notes'
+  /** Notes whose title/preview matches a typed search query ("topic"). */
+  | 'topic'
   /** A specific set: the notes of a chosen tag/folder, or a manual selection. */
   | 'collection'
 
@@ -78,7 +82,7 @@ const normalizeText = (text: string): string => text.replace(/\r\n?/g, '\n').tri
  * Build a bounded context string for the given scope and notes.
  *
  * - `current-note`: the single note gets (almost) the whole budget.
- * - `all-notes` / `collection`: notes share the budget. Each note is allotted an
+ * - `open-notes` / `all-notes` / `topic` / `collection`: notes share the budget. Each note is allotted an
  *   even share (floored at MIN_PER_NOTE_CHARS); within its share a note keeps its
  *   title and as much of its body as fits, truncating with an ellipsis. Once the
  *   budget is exhausted, remaining notes are dropped and reported as omitted.
@@ -175,8 +179,14 @@ function contextHeading(scope: AssistantContextScope, totalNotes: number, collec
   switch (scope) {
     case 'current-note':
       return 'The user is asking about the current note. Its content follows.'
+    case 'open-notes':
+      return `Context: the user's currently open notes (${totalNotes} note${totalNotes === 1 ? '' : 's'}). Content may be truncated.`
     case 'all-notes':
       return `Context: a digest of the user's notes (${totalNotes} note${totalNotes === 1 ? '' : 's'}). Content may be truncated.`
+    case 'topic':
+      return collectionLabel
+        ? `Context: the user's notes matching "${collectionLabel}" (${totalNotes} note${totalNotes === 1 ? '' : 's'}). Content may be truncated.`
+        : `Context: notes matching a topic (${totalNotes} note${totalNotes === 1 ? '' : 's'}). Content may be truncated.`
     case 'collection':
       return collectionLabel
         ? `Context: the user's notes in "${collectionLabel}" (${totalNotes} note${totalNotes === 1 ? '' : 's'}). Content may be truncated.`

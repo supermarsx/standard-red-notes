@@ -60,7 +60,11 @@ const readNoticeDismissed = () => {
 }
 
 const isContextScope = (value: string | null): value is AssistantContextScope =>
-  value === 'current-note' || value === 'all-notes' || value === 'collection'
+  value === 'current-note' ||
+  value === 'open-notes' ||
+  value === 'all-notes' ||
+  value === 'topic' ||
+  value === 'collection'
 
 const readContextScope = (): AssistantContextScope => {
   try {

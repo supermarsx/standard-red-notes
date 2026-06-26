@@ -21,10 +21,16 @@ type Props = {
   disabled?: boolean
 }
 
-const SCOPE_OPTIONS: { value: AssistantContextScope; label: string; icon: 'notes' | 'list-bulleted' | 'folder' }[] = [
+const SCOPE_OPTIONS: {
+  value: AssistantContextScope
+  label: string
+  icon: 'notes' | 'list-bulleted' | 'folder' | 'window' | 'search'
+}[] = [
   { value: 'current-note', label: 'Current note', icon: 'notes' },
+  { value: 'open-notes', label: 'Open notes (tabs)', icon: 'window' },
   { value: 'all-notes', label: 'Notebook (all notes)', icon: 'list-bulleted' },
-  { value: 'collection', label: 'Collection…', icon: 'folder' },
+  { value: 'topic', label: 'Topic / search…', icon: 'search' },
+  { value: 'collection', label: 'Folder / tag / selection…', icon: 'folder' },
 ]
 
 /** Encode a collection selection as a single dropdown value string and back. */
@@ -94,6 +100,8 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
     const scope = value as AssistantContextScope
     if (scope === 'collection') {
       onChange({ scope: 'collection', collection: selection.collection })
+    } else if (scope === 'topic') {
+      onChange({ scope: 'topic', topicQuery: selection.topicQuery ?? '' })
     } else {
       onChange({ scope })
     }
@@ -133,6 +141,18 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
           popoverPlacement="bottom"
         />
       </div>
+
+      {selection.scope === 'topic' && (
+        <input
+          type="text"
+          value={selection.topicQuery ?? ''}
+          onChange={(event) => onChange({ scope: 'topic', topicQuery: event.target.value })}
+          disabled={disabled}
+          placeholder="Search notes by title or preview (e.g. taxes 2025)…"
+          aria-label="Topic search query"
+          className="w-full rounded border border-border bg-default px-2 py-1 text-xs text-text focus:border-info focus:outline-none"
+        />
+      )}
 
       {selection.scope === 'collection' && (
         <div className="flex flex-col gap-2">
