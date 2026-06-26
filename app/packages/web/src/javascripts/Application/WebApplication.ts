@@ -149,10 +149,13 @@ export class WebApplication extends SNApplication implements WebApplicationInter
        */
       apiVersion:
         resolvedPlatform === Platform.Ios || resolvedPlatform === Platform.Android ? ApiVersion.v0 : ApiVersion.v1,
-      loadBatchSize:
-        deviceInterface.environment === Environment.Mobile ? 250 : ApplicationOptionsDefaults.loadBatchSize,
-      sleepBetweenBatches:
-        deviceInterface.environment === Environment.Mobile ? 250 : ApplicationOptionsDefaults.sleepBetweenBatches,
+      // Standard Red Notes: cold-load emits payloads in batches; each batch costs
+      // a full display-controller resort + list reload + React render, so FEWER,
+      // larger batches cut the dominant main-thread cost at scale (the per-batch
+      // overhead, not decryption, bounds large-vault load). Decryption is now
+      // off-thread (worker pool), so large batches don't freeze the UI.
+      loadBatchSize: deviceInterface.environment === Environment.Mobile ? 250 : 5000,
+      sleepBetweenBatches: deviceInterface.environment === Environment.Mobile ? 250 : 5,
       allowMultipleSelection: deviceInterface.environment !== Environment.Mobile,
       allowNoteSelectionStatePersistence: deviceInterface.environment !== Environment.Mobile,
       u2fAuthenticatorRegistrationPromptFunction: startRegistration as unknown as (
