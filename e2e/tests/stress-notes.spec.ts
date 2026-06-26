@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, chromium, type Page, type BrowserContext } from '@playwright/test'
+import path from 'node:path'
 import {
   seedNotes,
   waitForApplicationReady,
@@ -7,6 +8,16 @@ import {
   readJsHeapMB,
   type LoadMeasurement,
 } from '../helpers/stress'
+
+/**
+ * STRESS_REUSE_DIR: when set, each scale runs in a PERSISTENT browser profile
+ * under <dir>/c<count>-s<size>. The first run seeds + persists (slow, once);
+ * every later run finds the notes already in that profile's IndexedDB and SKIPS
+ * seeding — so re-measuring cold-load costs seconds instead of re-paying the
+ * multi-minute seed. Unset == the original ephemeral (fresh-context) behavior.
+ */
+const REUSE_DIR = process.env.STRESS_REUSE_DIR?.trim()
+const APP_BASE_URL = process.env.APP_URL?.trim() || 'http://localhost:3001'
 
 /**
  * SCALING stress-characterization harness for the notes list.
@@ -125,9 +136,18 @@ for (const count of RAMP) {
   const isSmallest = count === SMALLEST
 
   test(`stress: ${count} notes @ ${SIZE_BYTES}B`, async ({ browser }) => {
-    // Fresh, isolated context per scale so IndexedDB doesn't carry over.
-    const context = await browser.newContext()
-    const page = await context.newPage()
+    // Reuse mode: a persistent profile per scale so seeded IndexedDB survives
+    // across runs. Otherwise a fresh, isolated context so data doesn't carry over.
+    let context: BrowserContext
+    if (REUSE_DIR) {
+      context = await chromium.launchPersistentContext(path.join(REUSE_DIR, `c${count}-s${SIZE_BYTES}`), {
+        baseURL: APP_BASE_URL,
+        headless: true,
+      })
+    } else {
+      context = await browser.newContext()
+    }
+    const page = context.pages()[0] ?? (await context.newPage())
 
     const pageErrors: string[] = []
     page.on('pageerror', (e) => pageErrors.push(e.message))
@@ -154,11 +174,29 @@ for (const count of RAMP) {
       await page.locator(APP_SHELL).first().waitFor({ state: 'visible', timeout: 60_000 })
       await waitForApplicationReady(page, 60_000)
 
-      const seed = await seedNotes(page, count, SIZE_BYTES)
-      console.log(
-        `[seed] count=${count} created=${seed.created} seedMs=${Math.round(seed.seedMs)} ` +
-          `syncMs=${Math.round(seed.syncMs)} totalNoteItems=${seed.totalItems}`,
-      )
+      // Reuse mode: if this persistent profile already holds notes (any appear
+      // within a short window of launch), skip the expensive seed+persist.
+      let reused = false
+      if (REUSE_DIR) {
+        const probeStart = Date.now()
+        while (Date.now() - probeStart < 12_000) {
+          if ((await inMemoryNoteCount(page)) > 0) {
+            reused = true
+            break
+          }
+          await page.waitForTimeout(300)
+        }
+      }
+
+      if (reused) {
+        console.log(`[reuse] count=${count} — existing persistent profile, skipped seeding`)
+      } else {
+        const seed = await seedNotes(page, count, SIZE_BYTES)
+        console.log(
+          `[seed] count=${count} created=${seed.created} seedMs=${Math.round(seed.seedMs)} ` +
+            `syncMs=${Math.round(seed.syncMs)} totalNoteItems=${seed.totalItems}`,
+        )
+      }
 
       // 2) Reload FRESH so the app must boot from IndexedDB with all notes —
       // this is the cold-open path whose ceiling we care about.
