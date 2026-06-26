@@ -466,6 +466,114 @@ describe('SyncService local-only exclusion (excludeLocalOnlyItems)', () => {
   })
 })
 
+describe('SyncService cold-load STREAMING (large-vault OOM fix)', () => {
+  let uuidCounter = 0
+  const nextUuid = () => `sync-stream-${uuidCounter++}`
+
+  /**
+   * A minimal already-decrypted, non-note payload so the load loop's decryptSplit
+   * is a pass-through and the lite-strip is a no-op. We only care about WHICH device
+   * reads happen (keyed/per-chunk) vs. an all-at-once read.
+   */
+  const makeEntry = (content_type = ContentType.TYPES.Component) => ({
+    uuid: nextUuid(),
+    content_type,
+    content: { foo: 'bar' },
+    ...PayloadTimestampDefaults(),
+  })
+
+  const createService = (device: Record<string, unknown>, options: Record<string, unknown> = {}): SyncService => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    const encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
+    const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
+    const opStatus = { setDatabaseLoadStatus: jest.fn() }
+    const storageService = { getValue: jest.fn().mockReturnValue([]) }
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      encryptionService as never,
+      storageService as never, // storageService
+      payloadManager as never,
+      {} as never, // apiService
+      {} as never, // historyService
+      device as never,
+      'test-identifier',
+      { loadBatchSize: 2, sleepBetweenBatches: 0, ...options } as never,
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+    ;(service as unknown as { opStatus: unknown }).opStatus = opStatus
+    return service
+  }
+
+  it('STREAMS: never reads the whole DB at once; fetches each chunk by keys on demand', async () => {
+    // Five regular entries spread across keyed chunks (batchSize 2 -> 3 chunks),
+    // plus a single items-key entry that must be available up front.
+    const itemsKeyEntry = makeEntry(ContentType.TYPES.ItemsKey)
+    const regular = [makeEntry(), makeEntry(), makeEntry(), makeEntry(), makeEntry()]
+    const byKey: Record<string, unknown> = {}
+    for (const e of [itemsKeyEntry, ...regular]) {
+      byKey[e.uuid] = e
+    }
+
+    const chunkKeys = [
+      regular.slice(0, 2).map((e) => e.uuid),
+      regular.slice(2, 4).map((e) => e.uuid),
+      regular.slice(4, 5).map((e) => e.uuid),
+    ]
+
+    const getDatabaseEntries = jest
+      .fn()
+      .mockImplementation(async (_id: string, keys: string[]) => keys.map((k) => byKey[k]).filter(Boolean))
+
+    // If the load ever falls back to an all-at-once read, fail loudly.
+    const getAllDatabaseEntries = jest.fn(() => {
+      throw new Error('getAllDatabaseEntries must NOT be called on the streaming cold-load path')
+    })
+
+    const device = {
+      getDatabaseEntries,
+      getAllDatabaseEntries,
+      getDatabaseLoadChunks: jest.fn().mockResolvedValue({
+        keys: {
+          itemsKeys: { keys: [itemsKeyEntry.uuid] },
+          keySystemRootKeys: { keys: [] },
+          keySystemItemsKeys: { keys: [] },
+          remainingChunks: chunkKeys.map((keys) => ({ keys })),
+        },
+        remainingChunksItemCount: regular.length,
+      }),
+    }
+
+    const service = createService(device)
+
+    await service.loadDatabasePayloads()
+
+    expect(getAllDatabaseEntries).not.toHaveBeenCalled()
+    // items-keys fetched up front, then one keyed read per remaining chunk.
+    expect(getDatabaseEntries).toHaveBeenCalledWith('test-identifier', [itemsKeyEntry.uuid])
+    for (const keys of chunkKeys) {
+      expect(getDatabaseEntries).toHaveBeenCalledWith('test-identifier', keys)
+    }
+    // No read ever asked for more than one batch (loadBatchSize) of entry bodies at once.
+    for (const call of getDatabaseEntries.mock.calls) {
+      expect((call[1] as string[]).length).toBeLessThanOrEqual(2)
+    }
+    expect(service.isDatabaseLoaded()).toBe(true)
+  })
+})
+
 describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
   let uuidCounter = 0
   const nextUuid = () => `sync-lite-${uuidCounter++}`

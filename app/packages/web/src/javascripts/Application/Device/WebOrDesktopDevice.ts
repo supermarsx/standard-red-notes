@@ -10,8 +10,8 @@ import {
   FullyFormedTransferPayload,
   DatabaseLoadOptions,
   GetSortedPayloadsByPriority,
-  DatabaseFullEntryLoadChunk,
-  DatabaseFullEntryLoadChunkResponse,
+  DatabaseKeysLoadChunk,
+  DatabaseKeysLoadChunkResponse,
   ApplicationInterface,
   namespacedKey,
   RawStorageKey,
@@ -123,8 +123,19 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
   async getDatabaseLoadChunks(
     options: DatabaseLoadOptions,
     identifier: string,
-  ): Promise<DatabaseFullEntryLoadChunkResponse> {
-    const entries = await this.getAllDatabaseEntries(identifier)
+  ): Promise<DatabaseKeysLoadChunkResponse> {
+    /**
+     * COLD-LOAD STREAMING (large-vault OOM fix): previously this read the ENTIRE
+     * IndexedDB into one in-memory array (getAllDatabaseEntries -> getAllPayloads)
+     * before chunking, so a 50GB vault OOM'd the tab before any decrypt ran. We now
+     * read only lightweight metadata (uuid/content_type/updated_at) to sort+chunk by
+     * priority, and return KEYS (uuids) per chunk. SyncService then fetches each
+     * chunk's actual ciphertext on demand via getDatabaseEntries right before it
+     * decrypts+strips+discards that batch, so peak raw-ciphertext memory is ~one
+     * batch instead of the whole corpus. The IndexedDB store keyPath is 'uuid', so
+     * the entry key is simply the uuid.
+     */
+    const metadata = await this.databaseForIdentifier(identifier).getAllMetadata()
 
     const {
       itemsKeyPayloads,
@@ -132,37 +143,39 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
       keySystemItemsKeyPayloads,
       contentTypePriorityPayloads,
       remainingPayloads,
-    } = GetSortedPayloadsByPriority(entries, options)
+    } = GetSortedPayloadsByPriority(metadata, options)
 
-    const itemsKeysChunk: DatabaseFullEntryLoadChunk = {
-      entries: itemsKeyPayloads,
+    const itemsKeysChunk: DatabaseKeysLoadChunk = {
+      keys: itemsKeyPayloads.map((item) => item.uuid),
     }
 
-    const keySystemRootKeysChunk: DatabaseFullEntryLoadChunk = {
-      entries: keySystemRootKeyPayloads,
+    const keySystemRootKeysChunk: DatabaseKeysLoadChunk = {
+      keys: keySystemRootKeyPayloads.map((item) => item.uuid),
     }
 
-    const keySystemItemsKeysChunk: DatabaseFullEntryLoadChunk = {
-      entries: keySystemItemsKeyPayloads,
+    const keySystemItemsKeysChunk: DatabaseKeysLoadChunk = {
+      keys: keySystemItemsKeyPayloads.map((item) => item.uuid),
     }
 
-    const contentTypePriorityChunk: DatabaseFullEntryLoadChunk = {
-      entries: contentTypePriorityPayloads,
+    const contentTypePriorityChunk: DatabaseKeysLoadChunk = {
+      keys: contentTypePriorityPayloads.map((item) => item.uuid),
     }
 
-    const remainingPayloadsChunks: DatabaseFullEntryLoadChunk[] = []
-    for (let i = 0; i < remainingPayloads.length; i += options.batchSize) {
-      remainingPayloadsChunks.push({
-        entries: remainingPayloads.slice(i, i + options.batchSize),
+    const remainingKeys = remainingPayloads.map((item) => item.uuid)
+
+    const remainingKeysChunks: DatabaseKeysLoadChunk[] = []
+    for (let i = 0; i < remainingKeys.length; i += options.batchSize) {
+      remainingKeysChunks.push({
+        keys: remainingKeys.slice(i, i + options.batchSize),
       })
     }
 
-    const result: DatabaseFullEntryLoadChunkResponse = {
-      fullEntries: {
+    const result: DatabaseKeysLoadChunkResponse = {
+      keys: {
         itemsKeys: itemsKeysChunk,
         keySystemRootKeys: keySystemRootKeysChunk,
         keySystemItemsKeys: keySystemItemsKeysChunk,
-        remainingChunks: [contentTypePriorityChunk, ...remainingPayloadsChunks],
+        remainingChunks: [contentTypePriorityChunk, ...remainingKeysChunks],
       },
       remainingChunksItemCount: contentTypePriorityPayloads.length + remainingPayloads.length,
     }

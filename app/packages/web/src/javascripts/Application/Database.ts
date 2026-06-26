@@ -144,6 +144,38 @@ export class Database {
     })
   }
 
+  /**
+   * Streams the database via a cursor but retains ONLY lightweight per-item
+   * metadata (uuid/content_type/updated_at), never the full ciphertext body.
+   * This lets cold-load sort+chunk by priority without ever holding the entire
+   * corpus resident — the per-chunk bodies are then fetched on demand via
+   * getPayloadsForKeys. At 50GB the full-entry getAllPayloads() OOMs the tab
+   * before decryption; this keeps peak metadata memory tiny (a few fields/item).
+   */
+  public async getAllMetadata(): Promise<{ uuid: string; content_type: string; updated_at: Date }[]> {
+    const db = (await this.openDatabase()) as IDBDatabase
+    return new Promise((resolve) => {
+      const objectStore = db.transaction(STORE_NAME).objectStore(STORE_NAME)
+      const metadata: { uuid: string; content_type: string; updated_at: Date }[] = []
+      const cursorRequest = objectStore.openCursor()
+      cursorRequest.onsuccess = (event) => {
+        const target = event.target as any
+        const cursor = target.result
+        if (cursor) {
+          const value = cursor.value
+          metadata.push({
+            uuid: value.uuid,
+            content_type: value.content_type,
+            updated_at: value.updated_at,
+          })
+          cursor.continue()
+        } else {
+          resolve(metadata)
+        }
+      }
+    })
+  }
+
   public async getPayloadsForKeys(keys: string[]): Promise<any[]> {
     if (keys.length === 0) {
       return []
