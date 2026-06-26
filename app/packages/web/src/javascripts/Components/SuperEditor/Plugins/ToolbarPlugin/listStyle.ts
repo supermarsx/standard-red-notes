@@ -95,6 +95,14 @@ const PRESET_BY_VALUE: ReadonlyMap<string, ListStylePreset> = new Map(
 )
 
 const LIST_STYLE_PROPERTY = 'list-style-type'
+/**
+ * Custom declaration storing the stable preset `value` (e.g. `arrow`, `dash`).
+ * This is the source of truth for the marker: custom-glyph presets have
+ * `listStyleType: null` and are persisted as `list-style-type: none`, so without
+ * this the glyph identity would be lost on reload (the bug where custom markers
+ * silently rendered as nothing). Native presets store their value here too.
+ */
+const MARKER_PROPERTY = '--sn-list-marker'
 /** Custom declaration storing the compact per-level multilevel style map. */
 const LEVELS_PROPERTY = '--sn-list-levels'
 /** All marker classes we may add, so we can clear stale ones before re-stamping. */
@@ -217,15 +225,22 @@ export const $setListStyle = (selection: BaseSelection | null, styleValue: strin
     return null
   }
   const writable = listNode.getWritable()
-  const preset = PRESET_BY_VALUE.get(styleValue)
-  // Persist the native keyword when there is one (so a fresh DOM gets it for
-  // free), and always persist the stable value so the custom-glyph class can be
-  // re-derived on reload. `list-style-type: none` covers custom glyphs (whose
-  // marker is drawn by the class), preventing a doubled native bullet.
-  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
-  writable.setStyle(withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType))
+  persistMarker(writable, styleValue)
   applyListStyleToDOM(writable)
   return writable
+}
+
+/**
+ * Persist a marker style on a writable list node: the native `list-style-type`
+ * (or `none` for custom glyphs) AND the stable preset value under
+ * {@link MARKER_PROPERTY}, so both native and custom-glyph markers round-trip.
+ */
+const persistMarker = (writable: ListNode, styleValue: string): void => {
+  const preset = PRESET_BY_VALUE.get(styleValue)
+  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
+  let css = withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType)
+  css = withProperty(css, MARKER_PROPERTY, styleValue)
+  writable.setStyle(css)
 }
 
 /**
@@ -265,8 +280,8 @@ export const $getMultilevelListStyle = (listNode: ListNode): MultilevelStyleMap 
  * preset `value` when recognisable, else the raw `list-style-type`.
  */
 export const $getListStyle = (listNode: ListNode): string | null => {
-  const cssType = parseCSS(listNode.getStyle()).get(LIST_STYLE_PROPERTY)
-  return cssType === undefined ? null : cssType
+  const declared = parseCSS(listNode.getStyle())
+  return declared.get(MARKER_PROPERTY) ?? declared.get(LIST_STYLE_PROPERTY) ?? null
 }
 
 /** Stamp a single list element with one preset's marker (class + native type). */
@@ -307,21 +322,26 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
     return
   }
 
-  // Single marker for this list (a custom value maps back through the class).
-  const cssType = parseCSS(listNode.getStyle()).get(LIST_STYLE_PROPERTY) ?? null
-  // Re-derive the stable value from the class already on the node if any, so the
-  // glyph class survives; otherwise fall back to the native type.
-  const existingValue =
-    ALL_MARKER_CLASSES.map((cls) => cls.replace('Lexical__listStyle--', '')).find((value) =>
-      element!.classList.contains(`Lexical__listStyle--${value}`),
-    ) ?? cssType
-  stampMarker(element, existingValue)
+  // The stable marker value persisted on the node (custom-glyph identity lives in
+  // MARKER_PROPERTY; fall back to a raw native list-style-type for older nodes).
+  const declared = parseCSS(listNode.getStyle())
+  const markerValue = declared.get(MARKER_PROPERTY) ?? declared.get(LIST_STYLE_PROPERTY) ?? null
 
-  // Multilevel: stamp each descendant list by its depth relative to this top.
   const levels = $getMultilevelListStyle(listNode)
-  if (Object.keys(levels).length === 0) {
+  const hasLevels = Object.keys(levels).length > 0
+
+  // Nothing persisted here — leave the element alone (don't clear a marker a
+  // multilevel ancestor may have stamped on this nested list).
+  if (markerValue === null && !hasLevels) {
     return
   }
+
+  if (!hasLevels) {
+    stampMarker(element, markerValue)
+    return
+  }
+
+  // Multilevel: stamp each descendant list by its depth relative to this top.
   const stampDepth = (node: LexicalNode, depth: number): void => {
     if ($isListNode(node)) {
       try {
@@ -344,7 +364,7 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
     }
   }
   // The top list itself is level 1.
-  stampMarker(element, levels[1] ?? existingValue)
+  stampMarker(element, levels[1] ?? markerValue)
   for (const child of listNode.getChildren()) {
     stampDepth(child, 1)
   }
@@ -381,9 +401,7 @@ export const $setListStyleByKey = (nodeKey: string, styleValue: string): ListNod
     return null
   }
   const writable = node.getWritable()
-  const preset = PRESET_BY_VALUE.get(styleValue)
-  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
-  writable.setStyle(withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType))
+  persistMarker(writable, styleValue)
   applyListStyleToDOM(writable)
   return writable
 }

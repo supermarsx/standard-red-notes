@@ -159,6 +159,36 @@ describe('$setListStyle', () => {
     })
   })
 
+  it('round-trips a custom-glyph marker through --sn-list-marker', () => {
+    // The actual bug: custom glyphs have listStyleType: null and persist as
+    // `list-style-type: none`, so without the --sn-list-marker prop their glyph
+    // identity (e.g. 'arrow') would be lost on read-back/reload.
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setListStyle($getSelection(), 'arrow'), { discrete: true })
+    editor.getEditorState().read(() => {
+      const node = $getListNodeFromSelection($getSelection()) as ListNode
+      // $getListStyle returns the stable preset value, not the raw `none`.
+      expect($getListStyle(node)).toBe('arrow')
+      const style = node.getStyle()
+      // Persisted as `none` natively PLUS the marker value under the custom prop.
+      expect(style).toContain('list-style-type: none')
+      expect(style).toContain('--sn-list-marker: arrow')
+    })
+  })
+
+  it('clears the marker to none', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setListStyle($getSelection(), 'square'), { discrete: true })
+    editor.update(() => $setListStyle($getSelection(), 'none'), { discrete: true })
+    editor.getEditorState().read(() => {
+      const node = $getListNodeFromSelection($getSelection()) as ListNode
+      expect($getListStyle(node)).toBe('none')
+      expect(node.getStyle()).toContain('list-style-type: none')
+    })
+  })
+
   it('overwrites a previously set marker without duplicating the property', () => {
     const editor = makeEditor()
     seedListAndSelect(editor, 'number')

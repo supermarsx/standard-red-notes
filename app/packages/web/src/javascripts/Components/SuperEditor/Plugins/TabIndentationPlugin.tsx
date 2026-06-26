@@ -7,6 +7,8 @@
  */
 
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { $getNearestNodeOfType } from '@lexical/utils'
+import { ListNode } from '@lexical/list'
 import {
   $getSelection,
   $isRangeSelection,
@@ -18,9 +20,10 @@ import {
 import { useEffect } from 'react'
 
 /**
- * This plugin adds the ability to indent content using the tab key. Generally, we don't
- * recommend using this plugin as it could negatively affect acessibility for keyboard
- * users, causing focus to become trapped within the editor.
+ * Standard Red Notes: Tab inserts a real tab character at the caret (the expected
+ * behavior in a document) rather than indenting/outdenting the whole block. The
+ * ONE exception is inside a list, where Tab / Shift+Tab nest / outdent the list
+ * item — the universal, element-appropriate behavior people expect there.
  */
 export function TabIndentationPlugin(): null {
   const [editor] = useLexicalComposerContext()
@@ -35,9 +38,21 @@ export function TabIndentationPlugin(): null {
           return false
         }
 
-        event.preventDefault()
+        // Inside a list, keep nest/outdent (Tab nests, Shift+Tab outdents).
+        const inList = $getNearestNodeOfType(selection.anchor.getNode(), ListNode) !== null
+        if (inList) {
+          event.preventDefault()
+          return editor.dispatchCommand(event.shiftKey ? OUTDENT_CONTENT_COMMAND : INDENT_CONTENT_COMMAND, undefined)
+        }
 
-        return editor.dispatchCommand(event.shiftKey ? OUTDENT_CONTENT_COMMAND : INDENT_CONTENT_COMMAND, undefined)
+        // Everywhere else: a literal tab character. Shift+Tab is a no-op (we don't
+        // change the element), so let the browser/default handle focus if needed.
+        if (event.shiftKey) {
+          return false
+        }
+        event.preventDefault()
+        selection.insertText('\t')
+        return true
       },
       COMMAND_PRIORITY_EDITOR,
     )
