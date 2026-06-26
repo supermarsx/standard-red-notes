@@ -1,5 +1,6 @@
 import { MutationType } from '../Types/MutationType'
 import { PayloadInterface } from '../../Payload'
+import { assertNotLitePayload } from '../../Payload/Lite/LiteSafetyGuard'
 import { ItemInterface } from '../Interfaces/ItemInterface'
 import { TransferPayload } from '../../TransferPayload'
 import { getIncrementedDirtyIndex } from '../../../Runtime/DirtyCounter/DirtyCounter'
@@ -37,6 +38,13 @@ export class ItemMutator<
     if (this.type === MutationType.NonDirtying) {
       return this.immutablePayload.copy()
     }
+
+    /**
+     * SAFETY: a dirtying mutation must never operate on a content-stripped (lite) payload.
+     * Doing so would mark a body-less payload dirty and eventually sync it, overwriting the
+     * real encrypted body. Re-hydrate full content before mutating.
+     */
+    assertNotLitePayload(this.immutablePayload, 'ItemMutator.getResult')
 
     const result = this.immutablePayload.copy({
       dirty: true,

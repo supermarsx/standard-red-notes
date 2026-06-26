@@ -1388,6 +1388,7 @@ export class Dependencies {
         {
           loadBatchSize: this.options.loadBatchSize,
           sleepBetweenBatches: this.options.sleepBetweenBatches,
+          lazyDecryptEnabled: this.options.lazyDecryptEnabled,
         },
         this.get<Logger>(TYPES.Logger),
         this.get<WebSocketsService>(TYPES.WebSocketsService),

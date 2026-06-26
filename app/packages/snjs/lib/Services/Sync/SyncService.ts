@@ -59,6 +59,8 @@ import {
   ItemMutator,
   isDecryptedOrDeletedItem,
   MutationType,
+  assertNoLitePayloads,
+  createLitePayloadFromDecrypted,
 } from '@standardnotes/models'
 import {
   AbstractService,
@@ -638,13 +640,105 @@ export class SyncService
 
     const results = await this.encryptionService.decryptSplit(decryptionSplit)
 
-    await this.payloadManager.emitPayloads([...nonencrypted, ...results], PayloadEmitSource.LocalDatabaseLoaded)
+    /**
+     * LAZY-DECRYPT (flag-gated): on the cold-load path, extract metadata then DISCARD bulky
+     * bodies (note `text`) so resident heap tracks the working set, not the whole corpus. The
+     * resulting "lite" payloads are NEVER dirty and are refused by every mutation/sync seam;
+     * full content is re-hydrated on demand via getFullContent(uuid). With the flag off this is
+     * a pure pass-through (byte-identical behavior).
+     */
+    const emittable = this.maybeStripBodiesForLazyDecrypt(results)
+
+    await this.payloadManager.emitPayloads([...nonencrypted, ...emittable], PayloadEmitSource.LocalDatabaseLoaded)
 
     void this.notifyEvent(SyncEvent.LocalDataIncrementalLoad)
 
     if (currentPosition != undefined && payloadCount != undefined) {
       this.opStatus.setDatabaseLoadStatus(currentPosition, payloadCount, false)
     }
+  }
+
+  /**
+   * Flag-gated lazy-decrypt strip. For each freshly decrypted payload on the cold-load path,
+   * if it is a note (the only content type carrying a bulky body), replace it with a
+   * content-stripped ("lite") payload that retains the metadata projection but discards `text`.
+   * Non-note payloads and already-non-decrypted payloads pass through untouched.
+   *
+   * SAFETY: lite payloads are produced ONLY here, ONLY when the flag is on, and are never
+   * dirty. They are never persisted/ejected/synced; full content is re-hydrated on demand.
+   *
+   * @returns the (possibly stripped) payloads to emit into in-memory state.
+   */
+  private maybeStripBodiesForLazyDecrypt(
+    payloads: (DecryptedPayloadInterface | DeletedPayloadInterface | EncryptedPayloadInterface)[],
+  ): (DecryptedPayloadInterface | DeletedPayloadInterface | EncryptedPayloadInterface)[] {
+    if (!this.options.lazyDecryptEnabled) {
+      return payloads
+    }
+
+    return payloads.map((payload) => {
+      if (!isDecryptedPayload(payload)) {
+        return payload
+      }
+
+      if (payload.content_type !== ContentType.TYPES.Note) {
+        return payload
+      }
+
+      return createLitePayloadFromDecrypted(payload)
+    })
+  }
+
+  /**
+   * RE-HYDRATION ENTRY POINT for lazy-decrypt. Reads the raw encrypted payload for `uuid` from
+   * the local database (IndexedDB via the device interface), decrypts it, and returns the
+   * FULL decrypted payload with its body intact. Used by the consumer points (editor open,
+   * markdown export, search-index build, revisions/links) to obtain `text` on demand.
+   *
+   * Returns undefined if the item is not found on disk or cannot be decrypted (e.g. waiting on
+   * key). Callers should fall back to the in-memory (possibly lite) payload in that case.
+   *
+   * SAFETY: the returned payload is NOT dirty and is intended for read-only consumption. To
+   * mutate, callers must emit it back into state first (so the collection holds full content)
+   * and then mutate, OR mutate via the application's standard change path after re-hydration.
+   */
+  public async getFullContentPayload(uuid: string): Promise<DecryptedPayloadInterface | undefined> {
+    const entries = await this.device.getDatabaseEntries(this.identifier, [uuid])
+    if (!entries || entries.length === 0) {
+      return undefined
+    }
+
+    const rawPayload = (() => {
+      try {
+        return CreatePayload(entries[0], PayloadSource.LocalDatabaseLoaded)
+      } catch (e) {
+        this.logger.error('getFullContentPayload: failed to create payload', String(e))
+        return undefined
+      }
+    })()
+
+    if (!rawPayload) {
+      return undefined
+    }
+
+    if (isDecryptedPayload(rawPayload)) {
+      return rawPayload
+    }
+
+    if (!isEncryptedPayload(rawPayload)) {
+      return undefined
+    }
+
+    const encryptionSplit = SplitPayloadsByEncryptionType([rawPayload])
+    const decryptionSplit = CreateDecryptionSplitWithKeyLookup(encryptionSplit)
+    const results = await this.encryptionService.decryptSplit(decryptionSplit)
+
+    const decrypted = results[0]
+    if (decrypted && isDecryptedPayload(decrypted)) {
+      return decrypted
+    }
+
+    return undefined
   }
 
   private setLastSyncToken(token: string) {
@@ -684,6 +778,17 @@ export class SyncService
 
   private itemsNeedingSync() {
     const dirtyItems = this.itemManager.getDirtyItems()
+
+    /**
+     * SAFETY TRIPWIRE: a content-stripped (lite) item must never be dirty. If one ever appears
+     * in the dirty set it indicates the invariant was broken upstream; refuse rather than risk
+     * syncing a body-less payload. (In normal operation a lite payload is never dirty, so this
+     * never throws.)
+     */
+    assertNoLitePayloads(
+      dirtyItems.map((item) => item.payload),
+      'SyncService.itemsNeedingSync',
+    )
 
     const itemsWithoutBackoffPenalty = dirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
 
@@ -801,6 +906,15 @@ export class SyncService
   private async payloadsByPreparingForServer(
     payloads: (DecryptedPayloadInterface | DeletedPayloadInterface)[],
   ): Promise<ServerSyncPushContextualPayload[]> {
+    /**
+     * FINAL SAFETY SEAM before encryption + server push. A content-stripped (lite) payload must
+     * NEVER reach here: encrypting and uploading a body-less payload would irreversibly
+     * overwrite the real ciphertext on the server. This throws to abort the entire sync rather
+     * than risk data loss. This is intentionally unconditional (independent of the feature
+     * flag) so the invariant holds even if a lite payload is produced unexpectedly.
+     */
+    assertNoLitePayloads(payloads, 'SyncService.payloadsByPreparingForServer')
+
     const payloadSplit = CreatePayloadSplit(payloads)
 
     const encryptionSplit = SplitPayloadsByEncryptionType(payloadSplit.decrypted)

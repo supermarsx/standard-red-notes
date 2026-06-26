@@ -7,6 +7,7 @@ import { AppDataField } from '../Types/AppDataField'
 import { DefaultAppDomain, DomainDataValueType, ItemDomainKey } from '../Types/DefaultAppDomain'
 import { ItemMutator } from './ItemMutator'
 import { DecryptedPayloadInterface } from '../../Payload/Interfaces/DecryptedPayload'
+import { assertNotLitePayload } from '../../Payload/Lite/LiteSafetyGuard'
 import { ItemInterface } from '../Interfaces/ItemInterface'
 import { getIncrementedDirtyIndex } from '../../../Runtime/DirtyCounter/DirtyCounter'
 
@@ -29,6 +30,13 @@ export class DecryptedItemMutator<
         content: this.mutableContent,
       })
     }
+
+    /**
+     * SAFETY: a dirtying mutation must never operate on a content-stripped (lite) payload.
+     * Marking a body-less payload dirty would eventually sync it and overwrite the real
+     * encrypted body. Re-hydrate full content (getFullContent) before mutating.
+     */
+    assertNotLitePayload(this.immutablePayload, 'DecryptedItemMutator.getResult')
 
     if (this.type === MutationType.UpdateUserTimestamps) {
       this.userModifiedDate = new Date()

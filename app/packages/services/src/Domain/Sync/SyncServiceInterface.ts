@@ -1,6 +1,11 @@
 /* istanbul ignore file */
 
-import { DecryptedItemInterface, DeletedItemInterface, FullyFormedPayloadInterface } from '@standardnotes/models'
+import {
+  DecryptedItemInterface,
+  DecryptedPayloadInterface,
+  DeletedItemInterface,
+  FullyFormedPayloadInterface,
+} from '@standardnotes/models'
 import { SyncOptions } from './SyncOptions'
 import { AbstractService } from '../Service/AbstractService'
 import { SyncEvent } from '../Event/SyncEvent'
@@ -14,6 +19,15 @@ export interface SyncServiceInterface extends AbstractService<SyncEvent> {
   ): Promise<HttpRequest | undefined>
 
   isDatabaseLoaded(): boolean
+
+  /**
+   * LAZY-DECRYPT re-hydration entry point. Reads the raw encrypted payload for `uuid` from the
+   * local database and decrypts it, returning the FULL decrypted payload (with body/`text`).
+   * Returns undefined if not found or undecryptable. Used by the four consumer points to obtain
+   * full content on demand when lazy-decrypt is enabled.
+   */
+  getFullContentPayload(uuid: string): Promise<DecryptedPayloadInterface | undefined>
+
   onNewDatabaseCreated(): Promise<void>
   loadDatabasePayloads(): Promise<void>
   beginAutoSyncTimer(): void

@@ -5,6 +5,20 @@ export interface ApplicationSyncOptions {
   loadBatchSize: number
 
   sleepBetweenBatches: number
+
+  /**
+   * LAZY-DECRYPT / METADATA-RETENTION (feature flag, DEFAULT OFF).
+   *
+   * When enabled, cold-load decrypts each item to extract a small metadata projection and then
+   * DISCARDS the bulky body (note `text`), keeping only a content-stripped ("lite") payload
+   * resident in memory. Full content is re-hydrated on demand at the four consumer points
+   * (editor open, markdown export, search-index build, revisions/links). This dramatically
+   * lowers resident heap, enabling ~100k notes without the renderer OOM-crashing.
+   *
+   * With the flag OFF, behavior is byte-identical to today: no lite payloads are ever created
+   * and the entire lazy-decrypt machinery is dormant.
+   */
+  lazyDecryptEnabled: boolean
 }
 
 export interface ApplicationDisplayOptions {

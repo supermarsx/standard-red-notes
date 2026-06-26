@@ -3,9 +3,18 @@ import { SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
 import {
   DecryptedItemInterface,
+  DecryptedPayload,
   DeletedItemInterface,
+  FillItemContent,
   ImmutablePayloadCollection,
+  LitePayloadSafetyError,
+  NoteContent,
+  PayloadSource,
+  PayloadTimestampDefaults,
+  createLitePayloadFromDecrypted,
+  isLitePayload,
 } from '@standardnotes/models'
+import { ContentType } from '@standardnotes/domain-core'
 
 describe('SyncService failure backoff', () => {
   let logger: jest.Mocked<LoggerInterface>
@@ -454,5 +463,142 @@ describe('SyncService local-only exclusion (excludeLocalOnlyItems)', () => {
     const result = SyncService.excludeLocalOnlyItems([deleted])
 
     expect(result).toContain(deleted)
+  })
+})
+
+describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
+  let uuidCounter = 0
+  const nextUuid = () => `sync-lite-${uuidCounter++}`
+
+  const createNotePayload = (overrides: Partial<NoteContent> = {}) =>
+    new DecryptedPayload<NoteContent>(
+      {
+        uuid: nextUuid(),
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'T', text: 'BODY-MUST-NOT-LEAK', ...overrides }),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+
+  const createService = (options: Record<string, unknown>, deps: Record<string, unknown> = {}): SyncService => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    return new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      (deps.encryptionService ?? {}) as never,
+      {} as never, // storageService
+      {} as never, // payloadManager
+      {} as never, // apiService
+      {} as never, // historyService
+      (deps.device ?? {}) as never,
+      'test-identifier',
+      options as never,
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop } as never,
+    )
+  }
+
+  const stripBodies = (service: SyncService, payloads: unknown[]) =>
+    (
+      service as unknown as { maybeStripBodiesForLazyDecrypt: (p: unknown[]) => unknown[] }
+    ).maybeStripBodiesForLazyDecrypt(payloads)
+
+  describe('cold-load body strip (maybeStripBodiesForLazyDecrypt)', () => {
+    it('with the flag OFF, is a byte-identical pass-through (no lite payloads created)', () => {
+      const service = createService({ lazyDecryptEnabled: false })
+      const note = createNotePayload()
+
+      const result = stripBodies(service, [note]) as DecryptedPayload<NoteContent>[]
+
+      expect(result[0]).toBe(note)
+      expect(isLitePayload(result[0])).toBe(false)
+      expect(result[0].content.text).toEqual('BODY-MUST-NOT-LEAK')
+    })
+
+    it('with the flag ON, strips note bodies into lite payloads (text discarded, metadata kept)', () => {
+      const service = createService({ lazyDecryptEnabled: true })
+      const note = createNotePayload({ title: 'Keep Me', preview_plain: 'kept' })
+
+      const result = stripBodies(service, [note]) as DecryptedPayload<NoteContent>[]
+
+      expect(isLitePayload(result[0])).toBe(true)
+      expect(result[0].content.text).toBeUndefined()
+      expect(result[0].content.title).toEqual('Keep Me')
+      expect(result[0].content.preview_plain).toEqual('kept')
+      expect(result[0].dirty).not.toBe(true)
+    })
+  })
+
+  describe('pre-sync push guard (payloadsByPreparingForServer)', () => {
+    const prepareForServer = (service: SyncService, payloads: unknown[]) =>
+      (
+        service as unknown as { payloadsByPreparingForServer: (p: unknown[]) => Promise<unknown> }
+      ).payloadsByPreparingForServer(payloads)
+
+    it('THROWS rather than encrypt/push a lite payload (prevents body-loss on the server)', async () => {
+      const service = createService({ lazyDecryptEnabled: true })
+      const lite = createLitePayloadFromDecrypted(createNotePayload())
+
+      await expect(prepareForServer(service, [lite])).rejects.toBeInstanceOf(LitePayloadSafetyError)
+    })
+
+    it('does not throw for a normal full payload (guard is a no-op for non-lite)', async () => {
+      const encryptionService = { encryptSplit: jest.fn().mockResolvedValue([]) }
+      const service = createService({ lazyDecryptEnabled: true }, { encryptionService })
+      const note = createNotePayload()
+
+      // Should pass the guard and proceed to encryption (which we stub to an empty result).
+      await expect(prepareForServer(service, [note])).resolves.toBeDefined()
+    })
+  })
+
+  describe('re-hydration entry point (getFullContentPayload)', () => {
+    it('returns the full decrypted payload (with body) by reading + decrypting from the device', async () => {
+      const fullEncrypted = {
+        uuid: 'abc',
+        content_type: ContentType.TYPES.Note,
+        content: '004:ciphertext',
+        enc_item_key: 'k',
+        items_key_id: 'ik',
+        ...PayloadTimestampDefaults(),
+      }
+      const decryptedResult = createNotePayload({ title: 'Rehydrated' })
+
+      const device = {
+        getDatabaseEntries: jest.fn().mockResolvedValue([fullEncrypted]),
+      }
+      const encryptionService = {
+        decryptSplit: jest.fn().mockResolvedValue([decryptedResult]),
+      }
+
+      const service = createService({ lazyDecryptEnabled: true }, { device, encryptionService })
+
+      const result = await service.getFullContentPayload('abc')
+
+      expect(device.getDatabaseEntries).toHaveBeenCalledWith('test-identifier', ['abc'])
+      expect(result).toBeDefined()
+      expect((result?.content as NoteContent).text).toEqual('BODY-MUST-NOT-LEAK')
+      expect(isLitePayload(result)).toBe(false)
+    })
+
+    it('returns undefined when the item is not found on disk', async () => {
+      const device = { getDatabaseEntries: jest.fn().mockResolvedValue([]) }
+      const service = createService({ lazyDecryptEnabled: true }, { device })
+
+      const result = await service.getFullContentPayload('missing')
+
+      expect(result).toBeUndefined()
+    })
   })
 })
