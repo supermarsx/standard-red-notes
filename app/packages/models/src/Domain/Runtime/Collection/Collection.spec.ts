@@ -124,4 +124,74 @@ describe('Collection', () => {
     collection.set(testElement2)
     expect(collection.invalidsIndex.has(testElement2.uuid)).toBe(false)
   })
+
+  it('should insert N distinct uuids of one type with no duplicates', () => {
+    const count = 1000
+    const elements: FullyFormedPayloadInterface[] = []
+    for (let i = 0; i < count; i++) {
+      elements.push({
+        uuid: `uuid-${i}`,
+        content_type: 'test-type',
+        content: {},
+        references: [],
+      } as unknown as FullyFormedPayloadInterface)
+    }
+
+    collection.set(elements)
+
+    const typed = collection.all('test-type')
+    expect(typed.length).toBe(count)
+
+    const uuids = typed.map((e) => e.uuid)
+    expect(new Set(uuids).size).toBe(count)
+    expect(uuids).toEqual(elements.map((e) => e.uuid))
+  })
+
+  it('should replace (not duplicate) an existing uuid when re-set', () => {
+    const original = {
+      uuid: 'dup-uuid',
+      content_type: 'test-type',
+      content: { value: 'original' },
+      references: [],
+    } as unknown as FullyFormedPayloadInterface
+
+    const updated = {
+      uuid: 'dup-uuid',
+      content_type: 'test-type',
+      content: { value: 'updated' },
+      references: [],
+    } as unknown as FullyFormedPayloadInterface
+
+    collection.set(original)
+    collection.set(updated)
+
+    const typed = collection.all('test-type')
+    expect(typed.length).toBe(1)
+    expect(typed[0]).toBe(updated)
+  })
+
+  it('should remove a discarded element from the typed map and presence set', () => {
+    const testElement = {
+      uuid: 'discard-uuid',
+      content_type: 'test-type',
+      content: {},
+      references: [],
+    } as unknown as FullyFormedPayloadInterface
+
+    collection.set(testElement)
+    expect(collection.all('test-type').length).toBe(1)
+
+    collection.discard(testElement)
+    expect(collection.all('test-type').length).toBe(0)
+
+    /**
+     * Re-inserting the same uuid after discard must still yield exactly one entry, proving
+     * the presence set was cleared (a leaked presence entry would suppress the re-insert push
+     * or, worse, leave a stale array element).
+     */
+    collection.set(testElement)
+    const typed = collection.all('test-type')
+    expect(typed.length).toBe(1)
+    expect(typed[0]).toBe(testElement)
+  })
 })

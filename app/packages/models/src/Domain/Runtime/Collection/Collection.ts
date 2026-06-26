@@ -34,6 +34,18 @@ export abstract class Collection<
   readonly map: Partial<Record<string, Element>> = {}
   readonly typedMap: Partial<Record<string, Element[]>> = {}
 
+  /**
+   * Tracks, per content_type, the set of uuids currently present in `typedMap[content_type]`.
+   * This lets `setToTypedMap` skip the linear `remove()` pre-scan when inserting a brand-new
+   * uuid (the cold-load case), turning per-insert cost from O(n) into O(1) while keeping the
+   * final `typedMap` array contents and de-dup guarantee identical.
+   *
+   * Built lazily per content_type so it stays consistent when a collection is constructed
+   * from a copied `typedMap` (see copy constructor / ImmutablePayloadCollection) without a
+   * corresponding presence copy.
+   */
+  private readonly typedMapPresence: Partial<Record<string, Set<string>>> = {}
+
   /** An array of uuids of items that are dirty */
   dirtyIndex: Set<string> = new Set()
 
@@ -264,9 +276,36 @@ export abstract class Collection<
     return items.filter((item) => item.content_type === contentType)
   }
 
+  /**
+   * Returns the presence Set for a content_type, lazily deriving it from the existing
+   * `typedMap[content_type]` array on first access (handles collections built from a copied
+   * typedMap without a copied presence Set). After this, membership tracking is O(1).
+   */
+  private presenceSetFor(contentType: string): Set<string> {
+    let presence = this.typedMapPresence[contentType]
+    if (!presence) {
+      presence = new Set<string>()
+      const existing = this.typedMap[contentType]
+      if (existing) {
+        for (const existingElement of existing) {
+          presence.add(existingElement.uuid)
+        }
+      }
+      this.typedMapPresence[contentType] = presence
+    }
+    return presence
+  }
+
   private setToTypedMap(element: Element): void {
     const array = this.typedMap[element.content_type] || []
-    remove(array, { uuid: element.uuid as never })
+    const presence = this.presenceSetFor(element.content_type)
+    if (presence.has(element.uuid)) {
+      /** UPDATE: uuid already present — replace the stale element with the latest reference. */
+      remove(array, { uuid: element.uuid as never })
+    } else {
+      /** INSERT: brand-new uuid — skip the linear pre-scan entirely. */
+      presence.add(element.uuid)
+    }
     array.push(element)
     this.typedMap[element.content_type] = array
   }
@@ -274,6 +313,7 @@ export abstract class Collection<
   private deleteFromTypedMap(element: Element): void {
     const array = this.typedMap[element.content_type] || []
     remove(array, { uuid: element.uuid as never })
+    this.presenceSetFor(element.content_type).delete(element.uuid)
     this.typedMap[element.content_type] = array
   }
 
