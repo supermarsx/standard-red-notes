@@ -32,6 +32,12 @@ import Spinner from '@/Components/Spinner/Spinner'
 import RevisionHistoryModal from '@/Components/RevisionHistoryModal/RevisionHistoryModal'
 import ConfirmSignoutContainer from '@/Components/ConfirmSignoutModal/ConfirmSignoutModal'
 import { addToast, ToastContainer, ToastType } from '@standardnotes/toast'
+import {
+  estimateStorage,
+  formatBytes,
+  isStorageNearlyFull,
+  requestPersistentStorage,
+} from '@/Utils/StorageQuota'
 import FilePreviewModalWrapper from '@/Components/FilePreview/FilePreviewModal'
 import FileContextMenuWrapper from '@/Components/FileContextMenu/FileContextMenu'
 import PermissionsModalWrapper from '@/Components/PermissionsModal/PermissionsModalWrapper'
@@ -54,6 +60,7 @@ import KeyboardShortcutsModal from '../KeyboardShortcutsHelpModal/KeyboardShortc
 import CommandPalette from '../CommandPalette/CommandPalette'
 import SuperExportModal from '../NotesOptions/SuperExportModal'
 import { useConflictWarnings } from '@/Hooks/useConflictWarnings'
+import { useUnsavedChangesWarning } from '@/Hooks/useUnsavedChangesWarning'
 import { usePreferenceSyncToast } from '@/Hooks/usePreferenceSyncToast'
 import { useReminderChecker } from '@/Reminders/useReminderChecker'
 import { useDiaryScheduler } from '@/Diary/useDiaryScheduler'
@@ -132,6 +139,39 @@ const recordAccountAgeAchievement = (application: WebApplication): void => {
   }
 }
 
+/**
+ * Standard Red Notes: large-vault storage robustness. Requests persistent storage
+ * (so the browser won't evict our IndexedDB under pressure) and surfaces the quota,
+ * warning the user via a toast when usage is a high fraction of quota so they can
+ * act before writes start silently failing mid-load. Fully best-effort and
+ * feature-detected — any failure is swallowed and never affects launch.
+ */
+const ensureRobustStorage = async (): Promise<void> => {
+  try {
+    await requestPersistentStorage()
+
+    const estimate = await estimateStorage()
+    if (estimate) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[StorageQuota] Using ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)} ` +
+          `(${Math.round(estimate.usedFraction * 100)}%).`,
+      )
+
+      if (isStorageNearlyFull(estimate)) {
+        addToast({
+          type: ToastType.Error,
+          message:
+            `Storage almost full (${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}). ` +
+            'Free up disk space to avoid local save failures.',
+        })
+      }
+    }
+  } catch (error) {
+    console.error('[StorageQuota] Robust storage setup failed', error)
+  }
+}
+
 const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicationGroup }) => {
   const platformString = getPlatformString()
   const [launched, setLaunched] = useState(false)
@@ -153,6 +193,11 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   // App-wide watcher: show a single debounced "Settings saved and synced" toast
   // when the user changes a preference and that change reaches the server.
   usePreferenceSyncToast(application)
+
+  // App-wide guard: prompt the browser's native "Leave site?" confirmation if
+  // the user closes/reloads the tab while there are un-synced/dirty changes or a
+  // sync/local-save is in progress, preventing data loss. Silent when clean.
+  useUnsavedChangesWarning(application)
 
   // App-wide watcher: periodically scan notes for due reminders and fire a
   // notification + in-app toast (opt-in; nothing fires until the user sets one).
@@ -250,6 +295,12 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     engagePasskeyGateIfRegistered()
     handleDemoSignInFromParamsIfApplicable()
     recordAccountAgeAchievement(application)
+    // Standard Red Notes: make IndexedDB robust for large (multi-GB) vaults.
+    // Request PERSISTENT storage so the browser won't evict our local DB under
+    // storage pressure, then surface quota and warn the user if storage is nearly
+    // full so they don't hit silent write failures mid-load. Best-effort + fully
+    // feature-detected; never blocks launch.
+    void ensureRobustStorage()
   }, [application, engagePasskeyGateIfRegistered, handleDemoSignInFromParamsIfApplicable])
 
   useEffect(() => {
