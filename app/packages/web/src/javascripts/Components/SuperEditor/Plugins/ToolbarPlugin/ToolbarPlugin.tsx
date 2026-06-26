@@ -2146,18 +2146,37 @@ const ToolbarPlugin = () => {
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
-    [ToolbarButtonId.Alignment]: (
+    [ToolbarButtonId.AlignLeft]: (
       <ToolbarButton
-        name={t('alignment')}
-        onSelect={() => {
-          setIsAlignmentMenuOpen(!isAlignmentMenuOpen)
-        }}
-        ref={alignmentAnchorRef}
-        className={isAlignmentMenuOpen ? 'md:bg-default' : ''}
-      >
-        <Icon type="align-left" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
-      </ToolbarButton>
+        name={t('leftAlign')}
+        iconName="align-left"
+        active={elementFormat === 'left'}
+        onSelect={() => LeftAlignBlock.onSelect(activeEditor)}
+      />
+    ),
+    [ToolbarButtonId.AlignCenter]: (
+      <ToolbarButton
+        name={t('centerAlign')}
+        iconName="align-center"
+        active={elementFormat === 'center'}
+        onSelect={() => CenterAlignBlock.onSelect(activeEditor)}
+      />
+    ),
+    [ToolbarButtonId.AlignRight]: (
+      <ToolbarButton
+        name={t('rightAlign')}
+        iconName="align-right"
+        active={elementFormat === 'right'}
+        onSelect={() => RightAlignBlock.onSelect(activeEditor)}
+      />
+    ),
+    [ToolbarButtonId.AlignJustify]: (
+      <ToolbarButton
+        name={t('justify')}
+        iconName="align-justify"
+        active={elementFormat === 'justify'}
+        onSelect={() => JustifyAlignBlock.onSelect(activeEditor)}
+      />
     ),
     [ToolbarButtonId.Indent]: (
       <ToolbarButton
