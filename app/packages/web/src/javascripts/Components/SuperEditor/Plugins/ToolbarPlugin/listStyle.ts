@@ -6,6 +6,14 @@
  * `lower-alpha`, ...). `$`-prefixed functions MUST be called inside
  * `editor.update()`.
  *
+ * MARKER MODEL: every preset carries a stable `value` key plus the CSS needed to
+ * render it. Native CSS `list-style-type` keywords (disc, circle, square,
+ * decimal, lower-alpha, ...) are applied directly as `list-style-type`. Glyph
+ * markers that CSS has no keyword for (dash, arrow, triangle, tickbox, star, ...)
+ * are rendered via a `::marker`/`content` rule keyed by a `Lexical__listStyle--*`
+ * class (see lists.scss). Both the `list-style-type` and the class are written to
+ * the live DOM and persisted on the node so they round-trip + re-render.
+ *
  * WHY TWO WRITES (node + DOM): In this Lexical build (0.45) the reconciler only
  * applies `text-align`/indent for ElementNodes — it never copies an
  * ElementNode's `__style` onto the rendered `<ol>`/`<ul>`, and `ListNode`'s
@@ -15,6 +23,12 @@
  * `__style` (`ElementNode.setStyle`) so it round-trips through
  * `exportJSON`/`importJSON` and is re-applied by `applyPersistedListStyles`
  * after a fresh render where the reconciler rebuilt the DOM from scratch.
+ *
+ * MULTILEVEL: a top-level list can additionally store a per-nesting-level style
+ * map under the custom `--sn-list-levels` declaration in its inline style (a
+ * compact `1=disc,2=circle,3=square` string). `applyListStyleToDOM` reads it and
+ * stamps the matching marker onto each descendant list keyed by its visual depth,
+ * so "Define new multilevel list" choices survive reload.
  */
 import {
   $getEditor,
@@ -29,27 +43,62 @@ import { $isListNode, ListNode } from '@lexical/list'
 
 export interface ListStylePreset {
   label: string
+  /** Stable style key persisted on the node + used to build the CSS class. */
   value: string
+  /**
+   * Native CSS `list-style-type` keyword to set, or `null` for a custom glyph
+   * marker (rendered purely via the `Lexical__listStyle--<value>` class).
+   */
+  listStyleType: string | null
+  /** Short glyph shown in the picker UI as a preview. */
+  preview: string
 }
 
-/** Bullet (`<ul>`) marker presets. `value` is a CSS `list-style-type`. */
+/**
+ * Bullet (`<ul>`) marker presets. Native keywords use their `list-style-type`;
+ * everything else is a custom glyph drawn by the matching CSS class.
+ */
 export const BULLET_STYLES: ReadonlyArray<ListStylePreset> = [
-  { label: 'Disc', value: 'disc' },
-  { label: 'Circle', value: 'circle' },
-  { label: 'Square', value: 'square' },
-  { label: 'None', value: 'none' },
+  { label: 'Disc', value: 'disc', listStyleType: 'disc', preview: '•' },
+  { label: 'Circle', value: 'circle', listStyleType: 'circle', preview: '◦' },
+  { label: 'Square', value: 'square', listStyleType: 'square', preview: '▪' },
+  { label: 'Dash', value: 'dash', listStyleType: null, preview: '–' },
+  { label: 'Arrow', value: 'arrow', listStyleType: null, preview: '▸' },
+  { label: 'Alt arrow', value: 'arrow-alt', listStyleType: null, preview: '→' },
+  { label: 'Triangle', value: 'triangle', listStyleType: null, preview: '‣' },
+  { label: 'Diamond', value: 'diamond', listStyleType: null, preview: '◆' },
+  { label: 'Star', value: 'star', listStyleType: null, preview: '★' },
+  { label: 'Chevron', value: 'chevron', listStyleType: null, preview: '»' },
+  { label: 'Tickbox', value: 'tickbox', listStyleType: null, preview: '☐' },
+  { label: 'Cross', value: 'cross', listStyleType: null, preview: '✗' },
+  { label: 'None', value: 'none', listStyleType: 'none', preview: '—' },
 ]
 
-/** Numbered (`<ol>`) marker presets. `value` is a CSS `list-style-type`. */
+/**
+ * Numbered (`<ol>`) marker presets. `decimal`/alpha/roman map to their native
+ * `list-style-type`; the parenthesized + legal styles are custom (CSS counters).
+ */
 export const NUMBER_STYLES: ReadonlyArray<ListStylePreset> = [
-  { label: '1, 2, 3', value: 'decimal' },
-  { label: 'a, b, c', value: 'lower-alpha' },
-  { label: 'A, B, C', value: 'upper-alpha' },
-  { label: 'i, ii, iii', value: 'lower-roman' },
-  { label: 'I, II, III', value: 'upper-roman' },
+  { label: '1, 2, 3', value: 'decimal', listStyleType: 'decimal', preview: '1.' },
+  { label: 'a, b, c', value: 'lower-alpha', listStyleType: 'lower-alpha', preview: 'a.' },
+  { label: 'A, B, C', value: 'upper-alpha', listStyleType: 'upper-alpha', preview: 'A.' },
+  { label: 'i, ii, iii', value: 'lower-roman', listStyleType: 'lower-roman', preview: 'i.' },
+  { label: 'I, II, III', value: 'upper-roman', listStyleType: 'upper-roman', preview: 'I.' },
+  { label: 'a) b) c)', value: 'lower-alpha-paren', listStyleType: null, preview: 'a)' },
+  { label: '1) 2) 3)', value: 'decimal-paren', listStyleType: null, preview: '1)' },
+  { label: '1.1.1 (legal)', value: 'legal', listStyleType: null, preview: '1.1' },
 ]
+
+/** Every preset keyed by its stable `value`, for fast lookups when applying. */
+const PRESET_BY_VALUE: ReadonlyMap<string, ListStylePreset> = new Map(
+  [...BULLET_STYLES, ...NUMBER_STYLES].map((preset) => [preset.value, preset]),
+)
 
 const LIST_STYLE_PROPERTY = 'list-style-type'
+/** Custom declaration storing the compact per-level multilevel style map. */
+const LEVELS_PROPERTY = '--sn-list-levels'
+/** All marker classes we may add, so we can clear stale ones before re-stamping. */
+const ALL_MARKER_CLASSES = [...BULLET_STYLES, ...NUMBER_STYLES].map((p) => `Lexical__listStyle--${p.value}`)
 
 /**
  * Parse a CSS declaration string (`"a: b; c: d"`) into an ordered map. Keys are
@@ -81,10 +130,36 @@ const serializeCSS = (map: Map<string, string>): string =>
  * Return `existingCSS` with `list-style-type` set to `cssListStyleType`,
  * preserving any other declarations already present on the node.
  */
-const withListStyleType = (existingCSS: string, cssListStyleType: string): string => {
+const withProperty = (existingCSS: string, property: string, value: string): string => {
   const map = parseCSS(existingCSS)
-  map.set(LIST_STYLE_PROPERTY, cssListStyleType)
+  map.set(property, value)
   return serializeCSS(map)
+}
+
+/** Per-level style map: nesting level (1-based) -> preset `value`. */
+export type MultilevelStyleMap = Record<number, string>
+
+/** Serialize a per-level map to the compact `1=disc,2=circle` form. */
+const serializeLevels = (levels: MultilevelStyleMap): string =>
+  Object.entries(levels)
+    .filter(([, value]) => Boolean(value))
+    .map(([level, value]) => `${level}=${value}`)
+    .join(',')
+
+/** Parse the compact `1=disc,2=circle` form back into a per-level map. */
+const parseLevels = (raw: string | undefined): MultilevelStyleMap => {
+  const result: MultilevelStyleMap = {}
+  if (!raw) {
+    return result
+  }
+  for (const pair of raw.split(',')) {
+    const [level, value] = pair.split('=')
+    const levelNum = Number(level)
+    if (Number.isInteger(levelNum) && levelNum > 0 && value && PRESET_BY_VALUE.has(value.trim())) {
+      result[levelNum] = value.trim()
+    }
+  }
+  return result
 }
 
 /**
@@ -109,40 +184,117 @@ export const $getListNodeFromSelection = (selection: BaseSelection | null): List
 }
 
 /**
- * Set the CSS `list-style-type` of the nearest `ListNode` ancestor of the
- * selection. Persists the value on the node (for serialization) and applies it
- * to the live `<ol>`/`<ul>` DOM element so it renders immediately.
+ * Walk up to the OUTERMOST `ListNode` ancestor of the selection (the top of a
+ * possibly-nested list). Used by the multilevel configurator, whose per-level
+ * map is stored on the top list so it governs the whole nesting tree.
+ */
+export const $getTopListNodeFromSelection = (selection: BaseSelection | null): ListNode | null => {
+  let list = $getListNodeFromSelection(selection)
+  if (list === null) {
+    return null
+  }
+  let parent = list.getParent()
+  while (parent !== null) {
+    if ($isListNode(parent)) {
+      list = parent
+    }
+    parent = parent.getParent()
+  }
+  return list
+}
+
+/**
+ * Set the marker style of the nearest `ListNode` ancestor of the selection.
+ * Persists the value on the node (for serialization) and applies it to the live
+ * `<ol>`/`<ul>` DOM element so it renders immediately.
  *
  * Returns the affected `ListNode`, or `null` when the selection is not inside a
  * list. Must be called inside `editor.update()`.
  */
-export const $setListStyle = (selection: BaseSelection | null, cssListStyleType: string): ListNode | null => {
+export const $setListStyle = (selection: BaseSelection | null, styleValue: string): ListNode | null => {
   const listNode = $getListNodeFromSelection(selection)
   if (listNode === null) {
     return null
   }
   const writable = listNode.getWritable()
-  writable.setStyle(withListStyleType(writable.getStyle(), cssListStyleType))
+  const preset = PRESET_BY_VALUE.get(styleValue)
+  // Persist the native keyword when there is one (so a fresh DOM gets it for
+  // free), and always persist the stable value so the custom-glyph class can be
+  // re-derived on reload. `list-style-type: none` covers custom glyphs (whose
+  // marker is drawn by the class), preventing a doubled native bullet.
+  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
+  writable.setStyle(withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType))
   applyListStyleToDOM(writable)
   return writable
 }
 
 /**
- * Read the persisted `list-style-type` off a `ListNode`'s inline style, or
- * `null` when none has been set.
+ * Persist a per-nesting-level style map on the OUTERMOST list owning the
+ * selection and stamp every nested list with its level's marker. Returns the top
+ * list, or `null` when the selection is not inside a list. Must run inside
+ * `editor.update()`.
+ */
+export const $setMultilevelListStyle = (
+  selection: BaseSelection | null,
+  levels: MultilevelStyleMap,
+): ListNode | null => {
+  const top = $getTopListNodeFromSelection(selection)
+  if (top === null) {
+    return null
+  }
+  const writable = top.getWritable()
+  const serialized = serializeLevels(levels)
+  if (serialized) {
+    writable.setStyle(withProperty(writable.getStyle(), LEVELS_PROPERTY, serialized))
+  } else {
+    const map = parseCSS(writable.getStyle())
+    map.delete(LEVELS_PROPERTY)
+    writable.setStyle(serializeCSS(map))
+  }
+  applyListStyleToDOM(writable)
+  return writable
+}
+
+/** Read the persisted per-level multilevel style map off a top `ListNode`. */
+export const $getMultilevelListStyle = (listNode: ListNode): MultilevelStyleMap =>
+  parseLevels(parseCSS(listNode.getStyle()).get(LEVELS_PROPERTY))
+
+/**
+ * Read the persisted marker style off a `ListNode`. Prefers an explicit single
+ * style; returns `null` when none was set. The returned value is the stable
+ * preset `value` when recognisable, else the raw `list-style-type`.
  */
 export const $getListStyle = (listNode: ListNode): string | null => {
-  const value = parseCSS(listNode.getStyle()).get(LIST_STYLE_PROPERTY)
-  return value === undefined ? null : value
+  const cssType = parseCSS(listNode.getStyle()).get(LIST_STYLE_PROPERTY)
+  return cssType === undefined ? null : cssType
+}
+
+/** Stamp a single list element with one preset's marker (class + native type). */
+const stampMarker = (element: HTMLElement, styleValue: string | null): void => {
+  for (const cls of ALL_MARKER_CLASSES) {
+    element.classList.remove(cls)
+  }
+  if (styleValue === null) {
+    element.style.removeProperty(LIST_STYLE_PROPERTY)
+    return
+  }
+  const preset = PRESET_BY_VALUE.get(styleValue)
+  if (preset) {
+    element.classList.add(`Lexical__listStyle--${preset.value}`)
+    element.style.setProperty(LIST_STYLE_PROPERTY, preset.listStyleType ?? 'none')
+  } else {
+    // Unknown value: treat as a raw native list-style-type.
+    element.style.setProperty(LIST_STYLE_PROPERTY, styleValue)
+  }
 }
 
 /**
- * Push a single `ListNode`'s persisted `list-style-type` onto its rendered DOM
- * element. No-op when the node has no live element yet or carries no list style.
- * Must run inside an editor read/update where `$getEditor()` is available.
+ * Push a `ListNode`'s persisted styling onto its rendered DOM element — both the
+ * single marker (`list-style-type`/class) and, when present, the multilevel map
+ * stamped onto each descendant list by depth. No-op when the node has no live
+ * element yet. Must run where `$getEditor()` is available.
  */
 export const applyListStyleToDOM = (listNode: ListNode): void => {
-  const value = $getListStyle(listNode)
   let element: HTMLElement | null
   try {
     // `getElementByKey` is unavailable in headless mode and returns null before
@@ -154,10 +306,47 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
   if (element === null) {
     return
   }
-  if (value === null) {
-    element.style.removeProperty(LIST_STYLE_PROPERTY)
-  } else {
-    element.style.setProperty(LIST_STYLE_PROPERTY, value)
+
+  // Single marker for this list (a custom value maps back through the class).
+  const cssType = parseCSS(listNode.getStyle()).get(LIST_STYLE_PROPERTY) ?? null
+  // Re-derive the stable value from the class already on the node if any, so the
+  // glyph class survives; otherwise fall back to the native type.
+  const existingValue =
+    ALL_MARKER_CLASSES.map((cls) => cls.replace('Lexical__listStyle--', '')).find((value) =>
+      element!.classList.contains(`Lexical__listStyle--${value}`),
+    ) ?? cssType
+  stampMarker(element, existingValue)
+
+  // Multilevel: stamp each descendant list by its depth relative to this top.
+  const levels = $getMultilevelListStyle(listNode)
+  if (Object.keys(levels).length === 0) {
+    return
+  }
+  const stampDepth = (node: LexicalNode, depth: number): void => {
+    if ($isListNode(node)) {
+      try {
+        const el = $getEditor().getElementByKey(node.getKey())
+        if (el) {
+          const value = levels[depth]
+          if (value) {
+            stampMarker(el, value)
+          }
+        }
+      } catch {
+        /* not rendered */
+      }
+    }
+    if ($isElementNode(node)) {
+      const childDepth = $isListNode(node) ? depth + 1 : depth
+      for (const child of node.getChildren()) {
+        stampDepth(child, childDepth)
+      }
+    }
+  }
+  // The top list itself is level 1.
+  stampMarker(element, levels[1] ?? existingValue)
+  for (const child of listNode.getChildren()) {
+    stampDepth(child, 1)
   }
 }
 
@@ -186,13 +375,15 @@ export const applyPersistedListStyles = (): void => {
  * Convenience wrapper used by toolbar UI: apply a list style by the node key the
  * toolbar already resolved, avoiding a re-walk of the selection.
  */
-export const $setListStyleByKey = (nodeKey: string, cssListStyleType: string): ListNode | null => {
+export const $setListStyleByKey = (nodeKey: string, styleValue: string): ListNode | null => {
   const node = $getNodeByKey(nodeKey)
   if (node === null || !$isListNode(node)) {
     return null
   }
   const writable = node.getWritable()
-  writable.setStyle(withListStyleType(writable.getStyle(), cssListStyleType))
+  const preset = PRESET_BY_VALUE.get(styleValue)
+  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
+  writable.setStyle(withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType))
   applyListStyleToDOM(writable)
   return writable
 }

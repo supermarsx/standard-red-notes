@@ -61,13 +61,31 @@ const seedListAndSelect = (editor: ReturnType<typeof makeEditor>, listType: 'bul
 
 describe('presets', () => {
   it('expose bullet and number marker values', () => {
-    expect(BULLET_STYLES.map((s) => s.value)).toEqual(['disc', 'circle', 'square', 'none'])
+    // Native + custom-glyph bullet markers.
+    expect(BULLET_STYLES.map((s) => s.value)).toEqual([
+      'disc',
+      'circle',
+      'square',
+      'dash',
+      'arrow',
+      'arrow-alt',
+      'triangle',
+      'diamond',
+      'star',
+      'chevron',
+      'tickbox',
+      'cross',
+      'none',
+    ])
     expect(NUMBER_STYLES.map((s) => s.value)).toEqual([
       'decimal',
       'lower-alpha',
       'upper-alpha',
       'lower-roman',
       'upper-roman',
+      'lower-alpha-paren',
+      'decimal-paren',
+      'legal',
     ])
   })
 

@@ -195,6 +195,13 @@ const editor = {
   listStyle: 'List style',
   bulleted: 'Bulleted',
   numbered: 'Numbered',
+  bulletedListMarkers: 'Bullet marker style',
+  numberedListMarkers: 'Numbering style',
+  multilevelList: 'Multilevel list',
+  multilevelListHint: 'Choose a marker per nesting level',
+  multilevelLevelDefault: 'Default',
+  level: 'Level',
+  apply: 'Apply',
 
   // Modal titles
   insertTable: 'Insert Table',

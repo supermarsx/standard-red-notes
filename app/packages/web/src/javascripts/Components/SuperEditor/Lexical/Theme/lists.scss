@@ -140,3 +140,84 @@
 .Lexical__nestedListItem:after {
   display: none;
 }
+
+/**
+ * Custom list-marker glyphs (Standard Red Notes). The toolbar's bullet/number
+ * split-button dropdowns and the multilevel configurator stamp a
+ * `Lexical__listStyle--<value>` class onto the rendered `<ul>`/`<ol>` and set
+ * `list-style-type: none`; these rules supply the glyph via `::marker` content.
+ * Keyed by the stable preset `value` so they round-trip through the persisted
+ * inline style + re-applied class. `::marker` content is honored by Chromium and
+ * Firefox; the styles persist regardless of immediate render support.
+ */
+%sn-custom-marker-item > li::marker {
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+}
+@mixin sn-list-marker($glyph) {
+  list-style-type: none;
+  & > li::marker {
+    content: $glyph;
+    unicode-bidi: isolate;
+  }
+}
+.Lexical__listStyle--dash {
+  @include sn-list-marker('"–  "');
+}
+.Lexical__listStyle--arrow {
+  @include sn-list-marker('"▸  "');
+}
+.Lexical__listStyle--arrow-alt {
+  @include sn-list-marker('"→  "');
+}
+.Lexical__listStyle--triangle {
+  @include sn-list-marker('"‣  "');
+}
+.Lexical__listStyle--diamond {
+  @include sn-list-marker('"◆  "');
+}
+.Lexical__listStyle--star {
+  @include sn-list-marker('"★  "');
+}
+.Lexical__listStyle--chevron {
+  @include sn-list-marker('"»  "');
+}
+.Lexical__listStyle--tickbox {
+  @include sn-list-marker('"☐  "');
+}
+.Lexical__listStyle--cross {
+  @include sn-list-marker('"✗  "');
+}
+
+/**
+ * Parenthesized + legal numbering: CSS counters so the suffix renders correctly.
+ * Each list item gets a counter; `list-style: none` hides the native marker.
+ */
+.Lexical__listStyle--lower-alpha-paren,
+.Lexical__listStyle--decimal-paren,
+.Lexical__listStyle--legal {
+  list-style-type: none;
+  counter-reset: sn-list-counter;
+  & > li {
+    counter-increment: sn-list-counter;
+    position: relative;
+  }
+  & > li::marker {
+    content: '';
+  }
+  & > li::before {
+    position: absolute;
+    left: -1.6em;
+    text-align: right;
+    width: 1.4em;
+  }
+}
+.Lexical__listStyle--lower-alpha-paren > li::before {
+  content: counter(sn-list-counter, lower-alpha) ') ';
+}
+.Lexical__listStyle--decimal-paren > li::before {
+  content: counter(sn-list-counter, decimal) ') ';
+}
+.Lexical__listStyle--legal > li::before {
+  content: counters(sn-list-counter, '.', decimal) ' ';
+}

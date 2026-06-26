@@ -104,7 +104,19 @@ export enum ToolbarButtonId {
   PageColumns = 'pageColumns',
   // Toolbar
   CustomizeToolbar = 'customizeToolbar',
+  /**
+   * Layout-only sentinel: a thin vertical rule inside a group `layout` row. It is
+   * NOT a real button (no descriptor, not customizable, not hideable); the row
+   * renderer turns it into a divider. Kept here so `layout` arrays are typed.
+   */
+  Divider = 'divider',
 }
+
+/** Layout-only ids that may appear in a `layout` row but are not real buttons. */
+export const LAYOUT_SENTINEL_IDS: ReadonlySet<ToolbarButtonId> = new Set([ToolbarButtonId.Divider])
+
+/** True when an id is a layout-only sentinel (e.g. a divider), not a button. */
+export const isLayoutSentinel = (id: ToolbarButtonId): boolean => LAYOUT_SENTINEL_IDS.has(id)
 
 export type ToolbarButtonDescriptor = {
   id: ToolbarButtonId
@@ -210,6 +222,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
         ToolbarButtonId.Italic,
         ToolbarButtonId.Underline,
         ToolbarButtonId.Strikethrough,
+        ToolbarButtonId.Divider,
         ToolbarButtonId.Subscript,
         ToolbarButtonId.Superscript,
         ToolbarButtonId.TextColor,

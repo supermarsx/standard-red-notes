@@ -124,6 +124,7 @@ import { useLocalPreference } from '@/Hooks/usePreference'
 import {
   applyToolbarConfig,
   groupsBySuperGroup,
+  isLayoutSentinel,
   ToolbarButtonId,
   ToolbarGroupId,
 } from './ToolbarConfig'
@@ -190,7 +191,16 @@ import {
   $setFirstLineIndent,
   $setTextShading,
 } from './blockFormatting'
-import { BULLET_STYLES, NUMBER_STYLES, $setListStyle } from './listStyle'
+import {
+  BULLET_STYLES,
+  NUMBER_STYLES,
+  $setListStyle,
+  $setMultilevelListStyle,
+  $getMultilevelListStyle,
+  $getTopListNodeFromSelection,
+  MultilevelStyleMap,
+  ListStylePreset,
+} from './listStyle'
 import { useTranslation } from 'react-i18next'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
@@ -447,6 +457,25 @@ const ToolbarMenuItem = ({ name, iconName, active, onClick, ...props }: ToolbarM
   )
 }
 
+/**
+ * A single marker preset cell in the bullet/number split-button dropdowns:
+ * a glyph preview over its label, styled like the other toolbar swatches.
+ */
+const ListMarkerSwatch = ({ preset, onClick }: { preset: ListStylePreset; onClick: () => void }) => (
+  <button
+    type="button"
+    title={preset.label}
+    className="flex flex-col items-center gap-0.5 rounded border border-border px-1 py-1.5 hover:bg-contrast"
+    onClick={onClick}
+    onMouseDown={(e) => e.preventDefault()}
+  >
+    <span className="text-base leading-none">{preset.preview}</span>
+    <span className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-1">
+      {preset.label}
+    </span>
+  </button>
+)
+
 // Pseudo-tab id for the element-specific (contextual) ribbon tab.
 const CONTEXTUAL_TAB_ID = 'contextual'
 
@@ -553,6 +582,18 @@ const ToolbarPlugin = () => {
   const [isListStyleMenuOpen, setIsListStyleMenuOpen] = useState(false)
   const listStyleAnchorRef = useRef<HTMLButtonElement>(null)
 
+  // Split-button marker dropdowns for the Bulleted / Numbered list buttons, plus
+  // the Word-style "Define new multilevel list" configurator popover.
+  const [isBulletStyleMenuOpen, setIsBulletStyleMenuOpen] = useState(false)
+  const bulletStyleAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isNumberStyleMenuOpen, setIsNumberStyleMenuOpen] = useState(false)
+  const numberStyleAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isMultilevelMenuOpen, setIsMultilevelMenuOpen] = useState(false)
+  const multilevelAnchorRef = useRef<HTMLButtonElement>(null)
+  // Draft of the per-level multilevel map while the popover is open; seeded from
+  // the list under the caret when the popover opens.
+  const [multilevelDraft, setMultilevelDraft] = useState<MultilevelStyleMap>({})
+
   // Clipboard split-dropdown popovers (Cut / Copy / Paste variants).
   const [isPasteMenuOpen, setIsPasteMenuOpen] = useState(false)
   const pasteAnchorRef = useRef<HTMLButtonElement>(null)
@@ -611,6 +652,45 @@ const ToolbarPlugin = () => {
       activeEditor.update(() => {
         const selection = $getSelection()
         $setListStyle(selection, value)
+      })
+    },
+    [activeEditor],
+  )
+
+  // Split-button marker pickers: ensure the selection is the right kind of list
+  // (inserting/converting one if needed) before stamping the chosen marker, so
+  // picking a style from the caret in a paragraph still produces a styled list.
+  const applyListStyleEnsuring = useCallback(
+    (listType: 'bullet' | 'number', value: string) => {
+      if (blockType !== listType) {
+        activeEditor.dispatchCommand(
+          listType === 'number' ? INSERT_ORDERED_LIST_COMMAND : INSERT_UNORDERED_LIST_COMMAND,
+          undefined,
+        )
+      }
+      activeEditor.update(() => {
+        $setListStyle($getSelection(), value)
+      })
+    },
+    [activeEditor, blockType],
+  )
+
+  // Seed + open the multilevel configurator from the list under the caret.
+  const openMultilevelConfigurator = useCallback(() => {
+    if (!isMultilevelMenuOpen) {
+      activeEditor.getEditorState().read(() => {
+        const top = $getTopListNodeFromSelection($getSelection())
+        setMultilevelDraft(top ? $getMultilevelListStyle(top) : {})
+      })
+    }
+    setIsMultilevelMenuOpen((open) => !open)
+  }, [activeEditor, isMultilevelMenuOpen])
+
+  // Apply the drafted per-level map to the outermost list owning the selection.
+  const applyMultilevelDraft = useCallback(
+    (draft: MultilevelStyleMap) => {
+      activeEditor.update(() => {
+        $setMultilevelListStyle($getSelection(), draft)
       })
     },
     [activeEditor],
@@ -1989,20 +2069,49 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ),
     [ToolbarButtonId.BulletedList]: (
-      <ToolbarButton
-        name={t('bulletedList')}
-        iconName="list-bulleted"
-        active={blockType === 'bullet'}
-        onSelect={() => toggleList('bullet')}
-      />
+      <div className="flex items-stretch">
+        <ToolbarButton
+          name={t('bulletedList')}
+          iconName="list-bulleted"
+          active={blockType === 'bullet'}
+          onSelect={() => toggleList('bullet')}
+        />
+        <ToolbarButton
+          name={t('bulletedListMarkers')}
+          onSelect={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+          ref={bulletStyleAnchorRef}
+          className={classNames('!p-0', isBulletStyleMenuOpen ? 'md:bg-default' : '')}
+        >
+          <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5 md:h-3 md:w-3" />
+        </ToolbarButton>
+      </div>
     ),
     [ToolbarButtonId.NumberedList]: (
-      <ToolbarButton
-        name={t('numberedList')}
-        iconName="list-numbered"
-        active={blockType === 'number'}
-        onSelect={() => toggleList('number')}
-      />
+      <div className="flex items-stretch">
+        <ToolbarButton
+          name={t('numberedList')}
+          iconName="list-numbered"
+          active={blockType === 'number'}
+          onSelect={() => toggleList('number')}
+        />
+        <ToolbarButton
+          name={t('numberedListMarkers')}
+          onSelect={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
+          ref={numberStyleAnchorRef}
+          className={classNames('!p-0', isNumberStyleMenuOpen ? 'md:bg-default' : '')}
+        >
+          <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5 md:h-3 md:w-3" />
+        </ToolbarButton>
+        <ToolbarButton
+          name={t('multilevelList')}
+          onSelect={openMultilevelConfigurator}
+          ref={multilevelAnchorRef}
+          className={isMultilevelMenuOpen ? 'md:bg-default' : ''}
+        >
+          <Icon type="list-numbered" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <span className="-ml-0.5 text-[0.6rem] font-bold leading-none">+</span>
+        </ToolbarButton>
+      </div>
     ),
     [ToolbarButtonId.Quote]: (
       <ToolbarButton
@@ -2701,9 +2810,14 @@ const ToolbarPlugin = () => {
                   // drop any that were hidden/filtered. Otherwise fall back to the
                   // automatic top-heavy packing.
                   const byId = new Map(group.buttons.map((b) => [b.id, b]))
-                  const buttonRows = group.layout
+                  // Layout rows keep layout-only sentinels (e.g. Divider) inline
+                  // so the row renderer can draw a vertical rule; real ids resolve
+                  // to descriptors and any hidden/unknown ones are dropped.
+                  const buttonRows: { id: ToolbarButtonId }[][] = group.layout
                     ? group.layout.map((row) =>
-                        row.map((id) => byId.get(id)).filter((b): b is NonNullable<typeof b> => Boolean(b)),
+                        row
+                          .map((id) => (isLayoutSentinel(id) ? { id } : byId.get(id)))
+                          .filter((b): b is NonNullable<typeof b> => Boolean(b)),
                       )
                     : splitIntoRows(group.buttons, rows)
                   return (
@@ -2716,9 +2830,18 @@ const ToolbarPlugin = () => {
                       <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
                         {buttonRows.map((rowButtons, rowIndex) => (
                           <div key={rowIndex} className="flex items-center justify-start gap-0.5">
-                            {rowButtons.map((button) => (
-                              <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                            ))}
+                            {rowButtons.map((button, buttonIndex) =>
+                              button.id === ToolbarButtonId.Divider ? (
+                                <div
+                                  key={`divider-${buttonIndex}`}
+                                  aria-hidden
+                                  role="separator"
+                                  className="mx-1 h-6 w-px flex-shrink-0 self-center border-l border-border"
+                                />
+                              ) : (
+                                <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                              ),
+                            )}
                           </div>
                         ))}
                       </div>
@@ -3952,6 +4075,150 @@ const ToolbarPlugin = () => {
                 {preset.label}
               </button>
             ))}
+          </div>
+        </div>
+      </Popover>
+      {/* Bulleted-list split-button marker dropdown: each preset previews its
+          glyph and applies the marker (converting the block to a bullet list
+          first if needed). Persisted on the ListNode so it survives reload. */}
+      <Popover
+        title={t('bulletedListMarkers')}
+        anchorElement={bulletStyleAnchorRef}
+        open={isBulletStyleMenuOpen}
+        togglePopover={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div
+          className="grid w-52 grid-cols-3 gap-1 p-2 text-sm"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {BULLET_STYLES.map((preset) => (
+            <ListMarkerSwatch
+              key={preset.value}
+              preset={preset}
+              onClick={() => {
+                applyListStyleEnsuring('bullet', preset.value)
+                setIsBulletStyleMenuOpen(false)
+              }}
+            />
+          ))}
+        </div>
+      </Popover>
+      {/* Numbered-list split-button numbering dropdown. */}
+      <Popover
+        title={t('numberedListMarkers')}
+        anchorElement={numberStyleAnchorRef}
+        open={isNumberStyleMenuOpen}
+        togglePopover={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div
+          className="grid w-52 grid-cols-2 gap-1 p-2 text-sm"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {NUMBER_STYLES.map((preset) => (
+            <ListMarkerSwatch
+              key={preset.value}
+              preset={preset}
+              onClick={() => {
+                applyListStyleEnsuring('number', preset.value)
+                setIsNumberStyleMenuOpen(false)
+              }}
+            />
+          ))}
+        </div>
+      </Popover>
+      {/* Word-style "Define new multilevel list": choose a marker per nesting
+          level (1–5). The per-level map is persisted on the outermost ListNode
+          and stamped onto each nested list by depth, so it survives reload. */}
+      <Popover
+        title={t('multilevelList')}
+        anchorElement={multilevelAnchorRef}
+        open={isMultilevelMenuOpen}
+        togglePopover={openMultilevelConfigurator}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="flex w-72 flex-col gap-2 p-3 text-sm" onMouseDown={(e) => e.preventDefault()}>
+          <div className="text-xs font-semibold uppercase text-passive-0">{t('multilevelListHint')}</div>
+          {[1, 2, 3, 4, 5].map((level) => {
+            const selected = multilevelDraft[level]
+            return (
+              <div key={level} className="flex items-center gap-2">
+                <span className="w-12 flex-shrink-0 text-xs text-passive-1">{t('level')} {level}</span>
+                <select
+                  className="min-w-0 flex-1 rounded border border-border bg-default px-1.5 py-1 text-xs"
+                  value={selected ?? ''}
+                  onChange={(e) => {
+                    const next = { ...multilevelDraft }
+                    if (e.target.value) {
+                      next[level] = e.target.value
+                    } else {
+                      delete next[level]
+                    }
+                    setMultilevelDraft(next)
+                  }}
+                >
+                  <option value="">{t('multilevelLevelDefault')}</option>
+                  <optgroup label={t('bulleted')}>
+                    {BULLET_STYLES.map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.preview} {preset.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label={t('numbered')}>
+                    {NUMBER_STYLES.map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.preview} {preset.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+            )
+          })}
+          <div className="mt-1 flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-contrast"
+              onClick={() => {
+                setMultilevelDraft({})
+                applyMultilevelDraft({})
+              }}
+            >
+              {t('clear')}
+            </button>
+            <button
+              type="button"
+              className="rounded bg-info px-3 py-1 text-xs text-info-contrast hover:brightness-110"
+              onClick={() => {
+                applyMultilevelDraft(multilevelDraft)
+                setIsMultilevelMenuOpen(false)
+              }}
+            >
+              {t('apply')}
+            </button>
           </div>
         </div>
       </Popover>

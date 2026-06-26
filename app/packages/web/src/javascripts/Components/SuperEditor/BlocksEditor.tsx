@@ -26,6 +26,7 @@ import { MarkdownTransformers } from './MarkdownTransformers'
 import { RemoveBrokenTablesPlugin } from './Plugins/TablePlugin'
 import TableActionMenuPlugin from './Plugins/TableCellActionMenuPlugin'
 import ToolbarPlugin from './Plugins/ToolbarPlugin/ToolbarPlugin'
+import ListStylePlugin from './Plugins/ListStylePlugin/ListStylePlugin'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import RemoteImagePlugin from './Plugins/RemoteImagePlugin/RemoteImagePlugin'
 import CodeOptionsPlugin from './Plugins/CodeOptionsPlugin/CodeOptions'
@@ -127,6 +128,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       </div>
       {isMobile && <ToolbarPlugin />}
       <ListPlugin />
+      <ListStylePlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
       <TablePlugin hasCellMerge />
       <OnChangePlugin onChange={handleChange} ignoreSelectionChange={true} />
