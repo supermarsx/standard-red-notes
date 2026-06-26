@@ -25,6 +25,10 @@ export function contentTypeLabel(contentType: string): string {
   return CONTENT_TYPE_LABELS[contentType] ?? contentType
 }
 
+/** Raw content_type strings, so the pane can match without importing snjs enums. */
+export const NOTE_CONTENT_TYPE = 'Note'
+export const FILE_CONTENT_TYPE = 'SN|File'
+
 /** Percent (0–100) of `bytes` out of `total`, 0 when total is 0. */
 export function percentOf(bytes: number, total: number): number {
   if (total <= 0) {
@@ -59,6 +63,11 @@ export function loadCachedSnapshot(databaseName: string): StorageUsageSnapshot |
     }
     const parsed = JSON.parse(raw) as StorageUsageSnapshot
     if (parsed && typeof parsed.totalBytes === 'number' && Array.isArray(parsed.buckets)) {
+      // Backfill `sources` for snapshots cached by an older pane version so the
+      // breakdown still renders something rather than throwing.
+      if (!Array.isArray(parsed.sources)) {
+        parsed.sources = []
+      }
       return parsed
     }
     return undefined

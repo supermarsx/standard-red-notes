@@ -1,10 +1,14 @@
 // Main-thread client for the storage-usage worker.
 //
-// Spins up storageUsage.worker.ts to cursor the app's IndexedDB read-only and
-// stream progressive snapshots (total bytes, per-content_type buckets, top-N
-// biggest entries) back to a caller callback. The worker keeps the UI thread free
-// during a multi-GB scan; this manager just relays its messages and tears the
-// worker down when finished.
+// Spins up storageUsage.worker.ts to measure the app's IndexedDB items store, the
+// service-worker Cache Storage, and any auxiliary IndexedDB databases off the main
+// thread, then MERGES in the two things the worker can't see itself:
+//
+//   - localStorage usage. localStorage is exposed only on the main thread (not in
+//     workers), so we sum key+value byte lengths here.
+//   - The synthetic "Unaccounted" remainder = origin estimate.usage - everything we
+//     measured, so the breakdown ALWAYS reconciles to the reported total (never
+//     "100MB total but nothing shown").
 //
 // Worker construction MIRRORS DecryptionPool / ThreadedSearchIndex: worker-loader
 // rewrites the `*.worker.ts` import into a Worker constructor at build time (the
@@ -14,9 +18,12 @@
 // runs when `typeof Worker !== 'undefined'`, so jest/jsdom never evaluates it.
 
 import {
+  LOCAL_STORAGE_SOURCE_ID,
+  StorageSource,
   StorageUsageSnapshot,
   StorageUsageWorkerRequest,
   StorageUsageWorkerResponse,
+  UNACCOUNTED_SOURCE_ID,
 } from './storageUsageWorkerProtocol'
 import * as StorageUsageWorkerModule from './storageUsage.worker'
 
@@ -38,9 +45,85 @@ export interface StorageUsageScanHandle {
   cancel: () => void
 }
 
+export interface StorageUsageScanOptions {
+  topN?: number
+  chunkSize?: number
+  /**
+   * Origin usage from navigator.storage.estimate(). When provided, an
+   * "Unaccounted" source is synthesized so the breakdown reconciles to it.
+   */
+  estimatedUsage?: number
+}
+
 /** True when a real scan can be offloaded to a worker that can reach IndexedDB. */
 export function isStorageUsageScanAvailable(): boolean {
   return typeof Worker !== 'undefined' && typeof indexedDB !== 'undefined'
+}
+
+/**
+ * Measure localStorage usage on the main thread (UTF-16: 2 bytes per char for both
+ * key and value). Best-effort — returns 0 if localStorage is unavailable.
+ */
+export function measureLocalStorageBytes(): number {
+  if (typeof localStorage === 'undefined') {
+    return 0
+  }
+  try {
+    let bytes = 0
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key == null) {
+        continue
+      }
+      const value = localStorage.getItem(key) ?? ''
+      bytes += (key.length + value.length) * 2
+    }
+    return bytes
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Merge the main-thread-only sources (localStorage + the Unaccounted remainder)
+ * into a worker snapshot so it reconciles to the origin total. Returns a NEW
+ * snapshot; the input is left untouched.
+ */
+function mergeMainThreadSources(
+  snapshot: StorageUsageSnapshot,
+  localStorageBytes: number,
+  estimatedUsage: number | undefined,
+): StorageUsageSnapshot {
+  const sources: StorageSource[] = snapshot.sources.filter(
+    (source) => source.id !== LOCAL_STORAGE_SOURCE_ID && source.id !== UNACCOUNTED_SOURCE_ID,
+  )
+
+  if (localStorageBytes > 0) {
+    sources.push({
+      id: LOCAL_STORAGE_SOURCE_ID,
+      label: 'Local settings',
+      bytes: localStorageBytes,
+      count: 0,
+    })
+  }
+
+  const measured = sources.reduce((sum, source) => sum + source.bytes, 0)
+
+  if (typeof estimatedUsage === 'number' && estimatedUsage > 0) {
+    const remainder = estimatedUsage - measured
+    // Only show a remainder once everything has been measured (snapshot.done);
+    // during the scan a partial sum would produce a misleadingly huge "Unaccounted".
+    if (snapshot.done && remainder > 0) {
+      sources.push({
+        id: UNACCOUNTED_SOURCE_ID,
+        label: 'Other / unaccounted',
+        bytes: remainder,
+        count: 0,
+      })
+    }
+  }
+
+  return { ...snapshot, sources }
 }
 
 /**
@@ -52,7 +135,7 @@ export function isStorageUsageScanAvailable(): boolean {
 export function scanStorageUsage(
   databaseName: string,
   callbacks: StorageUsageScanCallbacks,
-  options: { topN?: number; chunkSize?: number } = {},
+  options: StorageUsageScanOptions = {},
 ): StorageUsageScanHandle | null {
   if (!isStorageUsageScanAvailable()) {
     return null
@@ -68,6 +151,7 @@ export function scanStorageUsage(
 
   const requestId = 1
   let finished = false
+  const localStorageBytes = measureLocalStorageBytes()
 
   const teardown = (): void => {
     if (finished) {
@@ -77,15 +161,19 @@ export function scanStorageUsage(
     worker.terminate()
   }
 
+  const relay = (snapshot: StorageUsageSnapshot): void => {
+    callbacks.onSnapshot(mergeMainThreadSources(snapshot, localStorageBytes, options.estimatedUsage))
+  }
+
   worker.onmessage = (event: MessageEvent<StorageUsageWorkerResponse>) => {
     const response = event.data
     if (response.requestId !== requestId) {
       return
     }
     if (response.type === 'progress') {
-      callbacks.onSnapshot(response.snapshot)
+      relay(response.snapshot)
     } else if (response.type === 'done') {
-      callbacks.onSnapshot(response.snapshot)
+      relay(response.snapshot)
       teardown()
     } else if (response.type === 'error') {
       callbacks.onError?.(response.message)

@@ -94,14 +94,33 @@ export function bytesToGb(bytes: number): number {
   return bytes / BYTES_PER_GB
 }
 
-/** Human-readable "X.XX GB" (or MB for small values), for user-facing messages. */
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const
+
+/**
+ * Human-readable size that AUTO-SELECTS the unit by magnitude (B / KB / MB / GB /
+ * TB) so every value in the Storage pane — total, breakdown rows, largest items —
+ * reads naturally (e.g. "640 B", "19.4 MB", "1.23 GB"). Whole bytes are shown
+ * without decimals; KB+ get up to two decimals, trimmed of trailing zeros.
+ */
 export function formatBytes(bytes: number): string {
-  const gb = bytesToGb(bytes)
-  if (gb >= 1) {
-    return `${gb.toFixed(2)} GB`
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B'
   }
-  const mb = bytes / (1024 * 1024)
-  return `${mb.toFixed(0)} MB`
+
+  let unitIndex = 0
+  let value = bytes
+  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  if (unitIndex === 0) {
+    return `${Math.round(value)} B`
+  }
+
+  const decimals = value < 10 ? 2 : value < 100 ? 1 : 0
+  const formatted = value.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+  return `${formatted} ${BYTE_UNITS[unitIndex]}`
 }
 
 /**
