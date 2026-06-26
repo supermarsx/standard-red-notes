@@ -74,6 +74,13 @@ const editor = {
   toggleColumnHeader: 'Toggle column header',
   deleteTable: 'Delete table',
 
+  // Contextual ribbon segment captions (Office-style grouping)
+  rows: 'Rows',
+  columns: 'Columns',
+  cells: 'Cells',
+  table: 'Table',
+  block: 'Block',
+
   // Contextual image tools
   alignLeft: 'Align left',
   alignCenter: 'Align center',

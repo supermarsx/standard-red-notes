@@ -2412,10 +2412,99 @@ const ToolbarPlugin = () => {
   // is appended *after* the config-resolved groups (never part of the persisted
   // config), so show/hide/reorder customization is unaffected. Always ends with
   // a "Zoom into block" action (Feature #287) for the active block.
+  //
+  // Standard Red Notes: in the docked ribbon, the contextual tab now mirrors the
+  // Office-style *segmented* layout of the normal super groups — buttons are
+  // partitioned into captioned segments (e.g. Rows / Columns / Cells / Table for
+  // a table) instead of one flat row. `contextualSegments` carries that grouping;
+  // `contextualButtons` keeps the legacy flat list used by the non-ribbon
+  // floating selection toolbar (which has no room for captioned blocks).
+  type ContextualSegment = { key: string; caption: string; buttons: ReactNode[] }
+  const contextualSegments: ContextualSegment[] = []
   const contextualButtons: ReactNode[] = []
   if (contextualWidget) {
     switch (contextualWidget.kind) {
       case ContextualWidgetKind.Table:
+        contextualSegments.push(
+          {
+            key: 'ctx-table-rows',
+            caption: t('rows'),
+            buttons: [
+              <ToolbarButton
+                key="ctx-row-above"
+                name={t('insertRowAbove')}
+                iconName="arrow-up"
+                onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(false))}
+              />,
+              <ToolbarButton
+                key="ctx-row-below"
+                name={t('insertRowBelow')}
+                iconName="arrow-down"
+                onSelect={() => activeEditor.update(() => $insertTableRowAtSelection(true))}
+              />,
+              <ToolbarButton
+                key="ctx-del-row"
+                name={t('deleteRow')}
+                iconName="trash"
+                onSelect={() => activeEditor.update(() => $deleteTableRowAtSelection())}
+              />,
+            ],
+          },
+          {
+            key: 'ctx-table-columns',
+            caption: t('columns'),
+            buttons: [
+              <ToolbarButton
+                key="ctx-col-left"
+                name={t('insertColumnLeft')}
+                iconName="arrow-left"
+                onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(false))}
+              />,
+              <ToolbarButton
+                key="ctx-col-right"
+                name={t('insertColumnRight')}
+                iconName="arrow-right"
+                onSelect={() => activeEditor.update(() => $insertTableColumnAtSelection(true))}
+              />,
+              <ToolbarButton
+                key="ctx-del-col"
+                name={t('deleteColumn')}
+                iconName="trash-sweep"
+                onSelect={() => activeEditor.update(() => $deleteTableColumnAtSelection())}
+              />,
+            ],
+          },
+          {
+            key: 'ctx-table-cells',
+            caption: t('cells'),
+            buttons: [
+              <ToolbarButton
+                key="ctx-row-header"
+                name={t('toggleRowHeader')}
+                iconName="tasks"
+                onSelect={toggleTableRowHeader}
+              />,
+              <ToolbarButton
+                key="ctx-col-header"
+                name={t('toggleColumnHeader')}
+                iconName="select-all"
+                onSelect={toggleTableColumnHeader}
+              />,
+            ],
+          },
+          {
+            key: 'ctx-table-table',
+            caption: t('table'),
+            buttons: [
+              <ToolbarButton
+                key="ctx-del-table"
+                name={t('deleteTable')}
+                iconName="trash-filled"
+                onSelect={deleteTable}
+              />,
+            ],
+          },
+        )
         contextualButtons.push(
           <ToolbarButton
             key="ctx-row-above"
@@ -2513,15 +2602,31 @@ const ToolbarPlugin = () => {
     }
 
     // Every contextual widget gets a "Zoom into block" affordance (Feature #287).
-    contextualButtons.push(
+    const zoomButton = (
       <ToolbarButton
         key="ctx-zoom"
         name={t('zoomIntoBlock')}
         iconName="fullscreen"
         disabled={!activeBlockKey}
         onSelect={enterZoom}
-      />,
+      />
     )
+    contextualButtons.push(zoomButton)
+
+    // Segmented (ribbon) rendering: widgets that did not declare their own
+    // captioned segments above (image/link/code/block) fall back to a single
+    // segment captioned with the widget label so the contextual tab still uses
+    // the Office-style segment+caption blocks consistently. The zoom affordance
+    // always gets its own trailing "Block" segment.
+    if (contextualSegments.length === 0 && contextualButtons.length > 1) {
+      contextualSegments.push({
+        key: 'ctx-actions',
+        caption: contextualWidget.label,
+        // All buttons gathered before the zoom button was appended.
+        buttons: contextualButtons.slice(0, -1),
+      })
+    }
+    contextualSegments.push({ key: 'ctx-block', caption: t('block'), buttons: [zoomButton] })
   }
 
   // Office-ribbon contextual tab: when an element (table/image/link/etc.) is
@@ -2791,11 +2896,33 @@ const ToolbarPlugin = () => {
           <div className="flex w-full">
           {isContextualActive ? (
             <Toolbar
-              className="super-toolbar flex flex-grow flex-wrap items-center gap-0.5 gap-y-1 px-1 pb-1 pt-2"
+              // Mirror the normal super-group layout: spaced, captioned segment
+              // blocks instead of one flat run of buttons.
+              className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pb-1 pt-2"
               store={contextualToolbarStore}
               aria-label={`${contextualWidget?.label ?? ''} tools`}
             >
-              {contextualButtons}
+              {contextualSegments.map((segment) => (
+                // Reuse the exact segment container + caption treatment used by
+                // the normal super groups (see the `activeGroups.map` renderer
+                // below) so the contextual tab is visually consistent.
+                <div
+                  key={segment.key}
+                  role="group"
+                  aria-label={segment.caption}
+                  className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
+                >
+                  <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+                    <div className="flex items-center justify-start gap-0.5">{segment.buttons}</div>
+                  </div>
+                  <span
+                    aria-hidden
+                    className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+                  >
+                    {segment.caption}
+                  </span>
+                </div>
+              ))}
             </Toolbar>
           ) : (
           <Toolbar
