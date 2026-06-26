@@ -80,6 +80,47 @@ export const FONT_CATALOG: FontDefinition[] = [
   // --- Bundled handwriting -------------------------------------------------
   { name: 'Caveat', css: "'Caveat', cursive", category: 'Handwriting', weights: w(400, 700), bundled: true },
   { name: 'Patrick Hand', css: "'Patrick Hand', cursive", category: 'Handwriting', weights: w(400), bundled: true },
+
+  // --- Added Sans-serif ----------------------------------------------
+  { name: 'Roboto', css: "'Roboto', sans-serif", category: 'Sans-serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'Open Sans', css: "'Open Sans', sans-serif", category: 'Sans-serif', weights: w(400, 600, 700), bundled: true },
+  { name: 'Lato', css: "'Lato', sans-serif", category: 'Sans-serif', weights: w(400, 700), bundled: true },
+  { name: 'Montserrat', css: "'Montserrat', sans-serif", category: 'Sans-serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'Poppins', css: "'Poppins', sans-serif", category: 'Sans-serif', weights: w(400, 500, 600), bundled: true },
+  { name: 'Nunito', css: "'Nunito', sans-serif", category: 'Sans-serif', weights: w(400, 600, 700), bundled: true },
+  { name: 'Work Sans', css: "'Work Sans', sans-serif", category: 'Sans-serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'Source Sans 3', css: "'Source Sans 3', sans-serif", category: 'Sans-serif', weights: w(400, 600, 700), bundled: true },
+  { name: 'Raleway', css: "'Raleway', sans-serif", category: 'Sans-serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'DM Sans', css: "'DM Sans', sans-serif", category: 'Sans-serif', weights: w(400, 500, 700), bundled: true },
+
+  // --- Added Serif ---------------------------------------------------
+  { name: 'Merriweather', css: "'Merriweather', serif", category: 'Serif', weights: w(400, 700), bundled: true },
+  { name: 'Playfair Display', css: "'Playfair Display', serif", category: 'Serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'Lora', css: "'Lora', serif", category: 'Serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'PT Serif', css: "'PT Serif', serif", category: 'Serif', weights: w(400, 700), bundled: true },
+  { name: 'Source Serif 4', css: "'Source Serif 4', serif", category: 'Serif', weights: w(400, 600, 700), bundled: true },
+  { name: 'Bitter', css: "'Bitter', serif", category: 'Serif', weights: w(400, 500, 700), bundled: true },
+  { name: 'Crimson Text', css: "'Crimson Text', serif", category: 'Serif', weights: w(400, 600, 700), bundled: true },
+  { name: 'Libre Baskerville', css: "'Libre Baskerville', serif", category: 'Serif', weights: w(400, 700), bundled: true },
+  { name: 'EB Garamond', css: "'EB Garamond', serif", category: 'Serif', weights: w(400, 500, 600), bundled: true },
+  { name: 'Cormorant Garamond', css: "'Cormorant Garamond', serif", category: 'Serif', weights: w(400, 500, 700), bundled: true },
+
+  // --- Added Monospace -----------------------------------------------
+  { name: 'Roboto Mono', css: "'Roboto Mono', monospace", category: 'Monospace', weights: w(400, 500, 700), bundled: true },
+  { name: 'Fira Code', css: "'Fira Code', monospace", category: 'Monospace', weights: w(400, 500, 700), bundled: true },
+  { name: 'IBM Plex Mono', css: "'IBM Plex Mono', monospace", category: 'Monospace', weights: w(400, 500, 700), bundled: true },
+  { name: 'Space Mono', css: "'Space Mono', monospace", category: 'Monospace', weights: w(400, 700), bundled: true },
+  { name: 'Ubuntu Mono', css: "'Ubuntu Mono', monospace", category: 'Monospace', weights: w(400, 700), bundled: true },
+  { name: 'Anonymous Pro', css: "'Anonymous Pro', monospace", category: 'Monospace', weights: w(400, 700), bundled: true },
+  { name: 'Cousine', css: "'Cousine', monospace", category: 'Monospace', weights: w(400, 700), bundled: true },
+  { name: 'Overpass Mono', css: "'Overpass Mono', monospace", category: 'Monospace', weights: w(400, 600, 700), bundled: true },
+  { name: 'Red Hat Mono', css: "'Red Hat Mono', monospace", category: 'Monospace', weights: w(400, 500, 700), bundled: true },
+  { name: 'DM Mono', css: "'DM Mono', monospace", category: 'Monospace', weights: w(400, 500), bundled: true },
+
+  // --- Added Handwriting ---------------------------------------------
+  { name: 'Dancing Script', css: "'Dancing Script', cursive", category: 'Handwriting', weights: w(400, 700), bundled: true },
+  { name: 'Kalam', css: "'Kalam', cursive", category: 'Handwriting', weights: w(400, 700), bundled: true },
+  { name: 'Shadows Into Light', css: "'Shadows Into Light', cursive", category: 'Handwriting', weights: w(400), bundled: true },
 ]
 
 /** Category display order for the grouped picker. */
