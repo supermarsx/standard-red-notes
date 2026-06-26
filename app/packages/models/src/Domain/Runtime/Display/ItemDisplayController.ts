@@ -43,6 +43,20 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   }
 
   public items(): I[] {
+    /**
+     * Standard Red Notes (cold-load O(n^2) fix): sorting can be DEFERRED during the
+     * initial bulk database load (see {@link onCollectionChange}'s `deferSort`). In that
+     * mode each batch only does the cheap filter/insert bookkeeping and leaves
+     * {@link needsSort} set, skipping the per-batch O(n) resort that made cold-load
+     * O(n^2). The sort is then performed lazily here, on first read, so any caller that
+     * observes `items()` mid-load (or at load-end) always sees a fully sorted array.
+     * This makes deferral transparent: the FINAL order is byte-identical to sorting on
+     * every batch (a single O(n log n) sort over the same set yields the same result).
+     */
+    if (this.needsSort) {
+      this.needsSort = false
+      this.resortItems()
+    }
     return this.sortedItems
   }
 
@@ -68,11 +82,19 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
     this.filterThenSortElements(this.collection.all(this.contentTypes) as I[])
   }
 
-  onCollectionChange(delta: ItemDelta): void {
+  /**
+   * @param deferSort Standard Red Notes (cold-load O(n^2) fix): when true (set only
+   * during the INITIAL bulk database load), skip the per-batch resort. The cheap
+   * filter/insert bookkeeping still runs, but the expensive O(n) sort is deferred and
+   * performed once, lazily, on the next {@link items} read. Sorting on every one of N
+   * load batches is O(n^2); deferring collapses it to a single O(n log n) sort with an
+   * identical final order.
+   */
+  onCollectionChange(delta: ItemDelta, deferSort = false): void {
     const items = [...delta.changed, ...delta.inserted, ...delta.discarded].filter((i) =>
       this.contentTypes.includes(i.content_type),
     )
-    this.filterThenSortElements(items as I[])
+    this.filterThenSortElements(items as I[], deferSort)
   }
 
   private passesAllFilters(element: I): boolean {
@@ -98,7 +120,7 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
     return filters.every((f) => f.passes())
   }
 
-  private filterThenSortElements(elements: I[]): void {
+  private filterThenSortElements(elements: I[], deferSort = false): void {
     if (elements.length > 0) {
       this.changeVersion++
     }
@@ -153,6 +175,19 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
           /** Has not yet been inserted */
           this.sortedItems.push(element)
 
+          /**
+           * Standard Red Notes (cold-load fix): record a PROVISIONAL position for this
+           * uuid immediately. Normally `sortMap` is only repopulated inside
+           * `resortItems`, but when sorting is deferred across many batches that resort
+           * doesn't run between batches — so a later batch re-emitting the same uuid
+           * would not find `previousIndex` and would push a DUPLICATE. Tracking the
+           * just-pushed index here makes the re-emit take the "replace in place" branch
+           * instead. (A later `resortItems` overwrites this with the true sorted index;
+           * any stale provisional index for a removed slot is harmless because the slot
+           * is set to undefined and compacted out during resort.)
+           */
+          this.sortMap[element.uuid] = this.sortedItems.length - 1
+
           /** Needs re-sort because we're just pushing the element to the end here */
           this.needsSort = true
         }
@@ -162,7 +197,14 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
       }
     }
 
-    if (this.needsSort) {
+    /**
+     * Standard Red Notes (cold-load O(n^2) fix): when `deferSort` is set (initial bulk
+     * load only) we intentionally LEAVE `needsSort` true and skip the resort. The array
+     * holds the new elements (appended, possibly with undefined holes from removals) and
+     * is sorted lazily on the next `items()` read. Outside the bulk-load window this is
+     * unchanged: we resort immediately so reads are always sorted.
+     */
+    if (this.needsSort && !deferSort) {
       this.needsSort = false
       this.resortItems()
     }

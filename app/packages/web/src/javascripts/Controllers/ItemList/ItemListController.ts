@@ -59,6 +59,7 @@ import {
   FolderContentType,
   NoteType,
   SyncServiceInterface,
+  PayloadEmitSource,
 } from '@standardnotes/snjs'
 import { getFullNoteText } from '@/Utils/Items/rehydrateLazyDecryptedNote'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
@@ -156,6 +157,17 @@ export class ItemListController
     includeProtected: true,
   }
   private keepActiveItemOpenUuid: UuidString | undefined
+
+  /**
+   * Standard Red Notes (cold-load O(n^2) fix): debounced reload used ONLY during the
+   * initial bulk database load, to coalesce the per-batch item-stream events into a few
+   * reloads instead of one per batch. A trailing debounce gives periodic interim updates
+   * (the loading toast already shows progress) while the guaranteed final reload on
+   * ApplicationEvent.LocalDataLoaded ensures the list ends up complete and correct.
+   */
+  private coalescedInitialLoadReload = debounce(() => {
+    void this.reloadItems(ItemsReloadSource.ItemStream)
+  }, 250)
   webDisplayOptions: WebDisplayOptions = {
     hideTags: true,
     hideDate: false,
@@ -326,8 +338,26 @@ export class ItemListController
     this.disposers.push(
       itemManager.streamItems<SNNote>(
         [ContentType.TYPES.Note, ContentType.TYPES.File],
-        ({ changed, inserted, removed }) => {
+        ({ changed, inserted, removed, source }) => {
           this.collectIndexUpdates(changed, inserted, removed)
+
+          /**
+           * Standard Red Notes (cold-load O(n^2) fix): during the INITIAL bulk database
+           * load the item stream fires once per batch (source LocalDatabaseLoaded). Running
+           * the full performReloadItems (which re-derives the entire displayable list and
+           * recomputes selection) on EVERY batch is O(n) per batch x N batches = O(n^2) of
+           * main-thread work. We instead COALESCE these into a debounced reload so the list
+           * updates a handful of times during load (for progress UX) rather than once per
+           * batch. A guaranteed FINAL reload runs when the load completes
+           * (ApplicationEvent.LocalDataLoaded, handled in handleEvent) so the list is
+           * correct and complete. Every other (post-load, per-change) stream event reloads
+           * immediately as before — behavior is unchanged outside the bulk-load window.
+           */
+          if (source === PayloadEmitSource.LocalDatabaseLoaded) {
+            this.coalescedInitialLoadReload()
+            return
+          }
+
           void this.reloadItems(ItemsReloadSource.ItemStream)
         },
       ),
@@ -370,6 +400,9 @@ export class ItemListController
     eventBus.addEventHandler(this, ApplicationEvent.PreferencesChanged)
     eventBus.addEventHandler(this, ApplicationEvent.SignedIn)
     eventBus.addEventHandler(this, ApplicationEvent.CompletedFullSync)
+    // Standard Red Notes (cold-load O(n^2) fix): the guaranteed FINAL reload after the
+    // initial bulk database load completes, since per-batch reloads were coalesced.
+    eventBus.addEventHandler(this, ApplicationEvent.LocalDataLoaded)
     eventBus.addEventHandler(this, WebAppEvent.EditorDidFocus)
 
     this.disposers.push(
@@ -480,6 +513,17 @@ export class ItemListController
 
       case WebAppEvent.EditorDidFocus: {
         this.setShowDisplayOptionsMenu(false)
+        break
+      }
+
+      case ApplicationEvent.LocalDataLoaded: {
+        /**
+         * Standard Red Notes (cold-load O(n^2) fix): the initial bulk database load has
+         * finished. Per-batch reloads were coalesced (debounced) during the load, so run
+         * one final, immediate reload to guarantee the list reflects the complete loaded
+         * set regardless of debounce timing.
+         */
+        void this.reloadItems(ItemsReloadSource.SyncEvent)
         break
       }
 

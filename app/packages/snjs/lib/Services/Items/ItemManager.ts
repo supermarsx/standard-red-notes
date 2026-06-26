@@ -473,10 +473,21 @@ export class ItemManager extends Services.AbstractService implements Services.It
     this.collection.onChange(delta)
     this.itemCounter.onChange(delta)
 
+    /**
+     * Standard Red Notes (cold-load O(n^2) fix): during the INITIAL bulk database load
+     * every batch is emitted with source LocalDatabaseLoaded. Re-sorting each display
+     * controller's whole (growing) array on every batch is O(n) per batch x N batches =
+     * O(n^2) on the main thread — the dominant cold-load cost at scale. We instead defer
+     * the resort during this window; the controller appends each batch cheaply and sorts
+     * once, lazily, on the next items() read. The FINAL order is identical. Outside this
+     * window (normal per-change updates) deferSort is false, so behavior is unchanged.
+     */
+    const deferSort = source === Models.PayloadEmitSource.LocalDatabaseLoaded
+
     const affectedContentTypesArray = Array.from(affectedContentTypes.values())
     for (const controller of this.allDisplayControllers) {
       if (controller.contentTypes.some((ct) => affectedContentTypesArray.includes(ct))) {
-        controller.onCollectionChange(delta)
+        controller.onCollectionChange(delta, deferSort)
       }
     }
 

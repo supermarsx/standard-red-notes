@@ -236,6 +236,75 @@ describe('item display controller', () => {
     expect(controller.items()[1]).toEqual(file)
   })
 
+  it('deferred (batched cold-load) sort produces the same final order as a single sort', () => {
+    // Build a deterministic set of notes whose titles are NOT in sorted order, so a
+    // wrong/missing final sort would be detectable.
+    const titles = ['m', 'c', 'z', 'a', 'q', 'b', 'y', 'd', 'x', 'e', 'n', 'f']
+    const makeNotes = () => titles.map((title) => createNoteWithContent({ title }))
+
+    // Baseline: emit every note in ONE delta with the normal (non-deferred) path.
+    const baselineCollection = new ItemCollection()
+    const baselineNotes = makeNotes()
+    const baselineController = new ItemDisplayController(baselineCollection, [ContentType.TYPES.Note], {
+      sortBy: 'title',
+      sortDirection: 'asc',
+    })
+    const baselineDelta = CreateItemDelta({ inserted: baselineNotes })
+    baselineCollection.onChange(baselineDelta)
+    baselineController.onCollectionChange(baselineDelta)
+    const baselineOrder = baselineController.items().map((note) => note.title)
+
+    // Deferred: emit the SAME notes split across several batches with deferSort=true,
+    // mimicking the incremental cold-load. No resort happens between batches.
+    const deferredCollection = new ItemCollection()
+    const deferredNotes = makeNotes()
+    const deferredController = new ItemDisplayController(deferredCollection, [ContentType.TYPES.Note], {
+      sortBy: 'title',
+      sortDirection: 'asc',
+    })
+
+    const batchSize = 3
+    for (let i = 0; i < deferredNotes.length; i += batchSize) {
+      const batch = deferredNotes.slice(i, i + batchSize)
+      const delta = CreateItemDelta({ inserted: batch })
+      deferredCollection.onChange(delta)
+      deferredController.onCollectionChange(delta, true /* deferSort */)
+    }
+
+    // The lazy sort happens on first items() read; the final order must match the
+    // single-sort baseline exactly (proving deferral changes nothing but timing).
+    const deferredOrder = deferredController.items().map((note) => note.title)
+
+    expect(deferredOrder).toEqual(baselineOrder)
+    expect(deferredOrder).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'm', 'n', 'q', 'x', 'y', 'z'])
+    expect(deferredController.items()).toHaveLength(titles.length)
+  })
+
+  it('deferred batched load with a re-emit of the same uuid does not duplicate the item', () => {
+    const collection = new ItemCollection()
+    const controller = new ItemDisplayController(collection, [ContentType.TYPES.Note], {
+      sortBy: 'title',
+      sortDirection: 'asc',
+    })
+
+    const noteA = createNoteWithContent({ title: 'a' })
+    const noteB = createNoteWithContent({ title: 'b' })
+
+    const firstBatch = CreateItemDelta({ inserted: [noteA, noteB] })
+    collection.onChange(firstBatch)
+    controller.onCollectionChange(firstBatch, true)
+
+    // A later batch re-emits noteA (same uuid) before any resort flush; it must replace
+    // in place rather than push a duplicate.
+    const updatedNoteA = new SNNote(noteA.payload.copy())
+    const secondBatch = CreateItemDelta({ changed: [updatedNoteA] })
+    collection.onChange(secondBatch)
+    controller.onCollectionChange(secondBatch, true)
+
+    expect(controller.items()).toHaveLength(2)
+    expect(controller.items().map((n) => n.title)).toEqual(['a', 'b'])
+  })
+
   it('should hide hidden types', () => {
     const collection = new ItemCollection()
     const note = createNote()
