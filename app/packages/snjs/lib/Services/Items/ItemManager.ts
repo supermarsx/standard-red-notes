@@ -41,6 +41,20 @@ export class ItemManager extends Services.AbstractService implements Services.It
   private fileDisplayController!: Models.ItemDisplayController<Models.FileItem>
   private smartViewDisplayController!: Models.ItemDisplayController<Models.SmartView, Models.TagsAndViewsDisplayOptions>
 
+  /**
+   * Standard Red Notes: memoizes the `filter(isNote)` over the navigation
+   * controller's displayed items. Keyed on both the controller instance (so it
+   * invalidates when `resetState` recreates the controller) and its change
+   * version (bumped on any mutation of the displayed set). getDisplayableNotes
+   * is called repeatedly per reload/scroll, so this avoids re-allocating a
+   * full-length array on every call when nothing changed.
+   */
+  private displayableNotesCache?: {
+    controller: Models.ItemDisplayController<Models.SNNote | Models.FileItem, Models.NotesAndFilesDisplayOptions>
+    version: number
+    notes: Models.SNNote[]
+  }
+
   constructor(
     private payloadManager: PayloadManager,
     protected override internalEventBus: Services.InternalEventBusInterface,
@@ -234,7 +248,16 @@ export class ItemManager extends Services.AbstractService implements Services.It
   public getDisplayableNotes(): Models.SNNote[] {
     assert(this.navigationDisplayController.contentTypes.length === 2)
 
-    return this.navigationDisplayController.items().filter(Models.isNote)
+    const controller = this.navigationDisplayController
+    const version = controller.version
+    const cache = this.displayableNotesCache
+    if (cache && cache.controller === controller && cache.version === version) {
+      return cache.notes
+    }
+
+    const notes = controller.items().filter(Models.isNote)
+    this.displayableNotesCache = { controller, version, notes }
+    return notes
   }
 
   public getDisplayableFiles(): Models.FileItem[] {

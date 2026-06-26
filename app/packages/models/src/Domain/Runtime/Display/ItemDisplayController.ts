@@ -19,6 +19,20 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   private sortedItems: I[] = []
   private needsSort = true
 
+  /**
+   * Standard Red Notes: a monotonic counter bumped whenever {@link sortedItems}
+   * is mutated (this controller is the sole mutator). Lets callers memoize
+   * derived views — e.g. `ItemManager.getDisplayableNotes`'s `filter(isNote)` —
+   * keyed on this version, since `items()` returns the live array (which can be
+   * mutated in place without changing its reference) so reference identity is
+   * not a sound invalidation signal.
+   */
+  private changeVersion = 0
+
+  public get version(): number {
+    return this.changeVersion
+  }
+
   constructor(
     private readonly collection: ReadonlyItemCollection,
     public readonly contentTypes: string[],
@@ -85,6 +99,10 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   }
 
   private filterThenSortElements(elements: I[]): void {
+    if (elements.length > 0) {
+      this.changeVersion++
+    }
+
     for (const element of elements) {
       const previousIndex = this.sortMap[element.uuid]
       const previousElement = previousIndex != undefined ? this.sortedItems[previousIndex] : undefined
