@@ -64,4 +64,8 @@ export const TYPES = {
   ApiGateway_CALDAV_ENABLED: Symbol.for('ApiGateway_CALDAV_ENABLED'),
   ApiGateway_CALDAV_BASE_PATH: Symbol.for('ApiGateway_CALDAV_BASE_PATH'),
   ApiGateway_CaldavService: Symbol.for('ApiGateway_CaldavService'),
+  // Standard Red Notes: server-side reminder DELIVERY of EXPLICITLY published reminders.
+  ApiGateway_REMINDER_DELIVERY_ENABLED: Symbol.for('ApiGateway_REMINDER_DELIVERY_ENABLED'),
+  ApiGateway_ReminderDeliveryService: Symbol.for('ApiGateway_ReminderDeliveryService'),
+  ApiGateway_ReminderDeliveryScheduler: Symbol.for('ApiGateway_ReminderDeliveryScheduler'),
 }

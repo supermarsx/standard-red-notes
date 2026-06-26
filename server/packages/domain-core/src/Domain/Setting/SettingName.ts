@@ -127,6 +127,17 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // unencrypted/unsensitive so the gateway can read it without per-user key
     // material when deciding whether to serve the feed.
     CaldavEnabled: 'CALDAV_ENABLED',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT opt-in for server-side reminder
+    // DELIVERY (Telegram / Email / WhatsApp). When 'true' (and the operator master
+    // switch REMINDER_DELIVERY_ENABLED is on), the server may deliver reminders the
+    // user has EXPLICITLY PUBLISHED into a separate, server-readable store (plaintext
+    // by design — NOT the E2E note content) to the user's configured channel.
+    // Nothing is delivered until the user opts in AND publishes specific reminders
+    // AND configures a channel; the published copy leaves end-to-end encryption by
+    // design, exactly like the CalDAV feed. Default disabled (absent/anything-but-
+    // 'true'). Client-MUTABLE so the user controls it; unencrypted/unsensitive so the
+    // gateway can read it without per-user key material when gating delivery.
+    ReminderDeliveryEnabled: 'REMINDER_DELIVERY_ENABLED',
   }
 
   get value(): string {

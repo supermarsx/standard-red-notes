@@ -7,6 +7,7 @@ import {
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
   registerCaldavRoutes,
+  startReminderDeliveryScheduler,
 } from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
@@ -55,6 +56,11 @@ export class HomeServer implements HomeServerInterface {
         // published reminders + scoped tokens persist with the rest of the
         // instance. The feature stays OFF until CALDAV_ENABLED=true.
         CALDAV_DATA_PATH: `${configuration.dataDirectoryPath}/caldav`,
+        // Standard Red Notes: default the reminder-delivery JSON stores (published
+        // reminders + per-user delivery config) under the data dir so they persist
+        // with the rest of the instance. The feature stays OFF until
+        // REMINDER_DELIVERY_ENABLED=true.
+        REMINDER_DELIVERY_DATA_PATH: `${configuration.dataDirectoryPath}/reminder-delivery`,
         ...configuration.environment,
         MODE: 'home-server',
       }
@@ -292,6 +298,18 @@ export class HomeServer implements HomeServerInterface {
         logger.info('CalDAV router mounted')
       } catch (error) {
         logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+      }
+
+      // Standard Red Notes: start the reminder-delivery scheduler. It gates itself
+      // on the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off) and
+      // only ever delivers reminders the user explicitly published to a configured,
+      // enabled channel.
+      try {
+        if (startReminderDeliveryScheduler(container)) {
+          logger.info('Reminder delivery scheduler started')
+        }
+      } catch (error) {
+        logger.error(`Failed to start reminder delivery scheduler: ${(error as Error).message}`)
       }
 
       const serverInstance = app.listen(port)

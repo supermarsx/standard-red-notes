@@ -41,6 +41,14 @@ import { WebFetchLike, WebService } from '../Service/Web/WebService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
+import { ReminderDeliveryService } from '../Service/ReminderDelivery/ReminderDeliveryService'
+import { ReminderDeliveryScheduler } from '../Service/ReminderDelivery/ReminderDeliveryScheduler'
+import { PublishedRemindersStore } from '../Service/ReminderDelivery/PublishedRemindersStore'
+import { DeliveryConfigStore } from '../Service/ReminderDelivery/DeliveryConfigStore'
+import { ProviderRegistry } from '../Service/ReminderDelivery/Providers/ProviderRegistry'
+import { TelegramProvider } from '../Service/ReminderDelivery/Providers/TelegramProvider'
+import { EmailProvider } from '../Service/ReminderDelivery/Providers/EmailProvider'
+import { WhatsAppProvider } from '../Service/ReminderDelivery/Providers/WhatsAppProvider'
 import * as path from 'path'
 
 export class ContainerConfigLoader {
@@ -268,6 +276,71 @@ export class ContainerConfigLoader {
           caldavEnabled,
           new CaldavTokenStore(path.join(caldavDataPath, 'tokens.json')),
           new PublishedCalendarStore(path.join(caldavDataPath, 'published.json')),
+        ),
+      )
+
+    // Standard Red Notes: OPT-IN server-side reminder DELIVERY (Telegram / Email /
+    // WhatsApp).
+    //
+    // E2E NOTE: notes/reminders are end-to-end encrypted, so the server cannot read
+    // them. This delivers ONLY reminders the user has EXPLICITLY PUBLISHED into a
+    // separate, server-readable store (plaintext by design) to the user's configured
+    // channel, and is OFF by default. Gated by the operator master switch
+    // REMINDER_DELIVERY_ENABLED plus the per-user REMINDER_DELIVERY_ENABLED setting.
+    // The published reminders + per-user delivery config are kept in JSON files under
+    // REMINDER_DELIVERY_DATA_PATH (default ./data/reminder-delivery), keeping the
+    // feature self-contained in the api-gateway, which has no database of its own.
+    // Each provider adapter NO-OPs gracefully when its env credentials are absent.
+    const reminderDeliveryEnabled = ['true', '1', 'yes', 'on'].includes(
+      (env.get('REMINDER_DELIVERY_ENABLED', true) || '').toLowerCase(),
+    )
+    const reminderDeliveryDataPath =
+      env.get('REMINDER_DELIVERY_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'reminder-delivery')
+    container.bind<boolean>(TYPES.ApiGateway_REMINDER_DELIVERY_ENABLED).toConstantValue(reminderDeliveryEnabled)
+
+    const reminderRegistry = new ProviderRegistry([
+      new TelegramProvider(env.get('TELEGRAM_BOT_TOKEN', true) || undefined),
+      new EmailProvider({
+        host: env.get('SMTP_HOST', true) || undefined,
+        port: env.get('SMTP_PORT', true) ? +env.get('SMTP_PORT', true) : undefined,
+        user: env.get('SMTP_USER', true) || undefined,
+        password: env.get('SMTP_PASSWORD', true) || undefined,
+        from: env.get('SMTP_FROM', true) || undefined,
+        secure: ['true', '1', 'yes', 'on'].includes((env.get('SMTP_SECURE', true) || '').toLowerCase()),
+      }),
+      new WhatsAppProvider({
+        meta: {
+          token: env.get('WHATSAPP_TOKEN', true) || undefined,
+          phoneId: env.get('WHATSAPP_PHONE_ID', true) || undefined,
+        },
+        twilio: {
+          accountSid: env.get('TWILIO_ACCOUNT_SID', true) || undefined,
+          authToken: env.get('TWILIO_AUTH_TOKEN', true) || undefined,
+          from: env.get('TWILIO_WHATSAPP_FROM', true) || undefined,
+        },
+      }),
+    ])
+
+    const reminderDeliveryService = new ReminderDeliveryService(
+      reminderDeliveryEnabled,
+      new PublishedRemindersStore(path.join(reminderDeliveryDataPath, 'published-reminders.json')),
+      new DeliveryConfigStore(path.join(reminderDeliveryDataPath, 'delivery-config.json')),
+      reminderRegistry,
+    )
+    container
+      .bind<ReminderDeliveryService>(TYPES.ApiGateway_ReminderDeliveryService)
+      .toConstantValue(reminderDeliveryService)
+
+    const reminderDeliveryIntervalSeconds = env.get('REMINDER_DELIVERY_INTERVAL_SECONDS', true)
+      ? +env.get('REMINDER_DELIVERY_INTERVAL_SECONDS', true)
+      : 60
+    container
+      .bind<ReminderDeliveryScheduler>(TYPES.ApiGateway_ReminderDeliveryScheduler)
+      .toConstantValue(
+        new ReminderDeliveryScheduler(
+          reminderDeliveryService,
+          Math.max(1, reminderDeliveryIntervalSeconds) * 1000,
+          logger,
         ),
       )
 

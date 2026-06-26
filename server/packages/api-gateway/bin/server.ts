@@ -20,6 +20,7 @@ import '../src/Controller/v1/AuthenticatorsController'
 import '../src/Controller/v1/AppPasswordsController'
 import '../src/Controller/v1/McpTokensController'
 import '../src/Controller/v1/CaldavTokensController'
+import '../src/Controller/v1/ReminderDeliveryController'
 import '../src/Controller/v1/SharesController'
 import '../src/Controller/v1/DeadManSwitchesController'
 import '../src/Controller/v1/TrustedDevicesController'
@@ -55,6 +56,7 @@ import {
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
+import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
 const container = new ContainerConfigLoader()
@@ -240,6 +242,16 @@ void container.load().then((container) => {
     logger.info('CalDAV router mounted')
   } catch (error) {
     logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+  }
+
+  // Standard Red Notes: start the reminder-delivery scheduler. It gates itself on
+  // the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off).
+  try {
+    if (startReminderDeliveryScheduler(container)) {
+      logger.info('Reminder delivery scheduler started')
+    }
+  } catch (error) {
+    logger.error(`Failed to start reminder delivery scheduler: ${(error as Error).message}`)
   }
 
   const serverInstance = app.listen(env.get('PORT'))
