@@ -566,7 +566,9 @@ const ToolbarPlugin = () => {
   // Standard Red Notes — per-note page Layout controls (size / orientation /
   // margins / columns). The active note's layout is web-local localStorage keyed
   // by note uuid; it drives print/export. Each dropdown gets its own popover.
-  const activeNoteUuid = application.notesController.firstSelectedNote?.uuid
+  // The note currently being EDITED (the active editor tab/pane), not the list
+  // selection — firstSelectedNote can differ from the open note (e.g. with tabs).
+  const activeNoteUuid = application.itemListController.activeControllerItem?.uuid
   const [noteLayout, setNoteLayout] = useState<NoteLayout>(() => loadNoteLayout(activeNoteUuid))
   useEffect(() => {
     setNoteLayout(loadNoteLayout(activeNoteUuid))
