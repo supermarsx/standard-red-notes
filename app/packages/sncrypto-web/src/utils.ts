@@ -1,7 +1,7 @@
 /* eslint-disable camelcase */
 import { base64_variants, from_base64, from_hex, from_string, to_base64, to_hex, to_string } from './libsodium'
 import { Buffer } from 'buffer'
-import { v4 as uuidv4 } from 'uuid'
+import { v7 as uuidv7 } from 'uuid'
 
 const SN_BASE64_VARIANT = base64_variants.ORIGINAL
 
@@ -55,11 +55,14 @@ export function getSubtleCrypto(): SubtleCrypto {
 }
 
 /**
- * Generates a UUID syncronously
+ * Generates a UUID synchronously. Uses UUID v7 (RFC 9562) — time-ordered, so
+ * newly-created items sort by creation time. v7 is a valid uuid string and is
+ * accepted by the (version-agnostic) server validator; existing v4 item uuids
+ * remain valid, so old and new uuids coexist.
  * @access public
  */
 export function generateUUID(): string {
-  return uuidv4()
+  return uuidv7()
 }
 
 /**
