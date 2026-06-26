@@ -123,6 +123,16 @@ export function SearchPlugin() {
 
   const [shouldHighlightAll, setShouldHighlightAll] = useState(canUseCSSHiglights)
 
+  // Standard Red Notes: the panel is a centered, draggable floating dialog that
+  // can collapse to a movable bubble. `panelPos` null == CSS-centered (the
+  // "pops up neatly centered" initial state); once dragged it becomes an
+  // absolute {x,y}. `dragRef` tracks an in-flight pointer drag (and whether it
+  // actually moved, to tell a bubble click from a bubble drag).
+  const [panelPos, setPanelPos] = useState<{ x: number; y: number } | null>(null)
+  const [isMinimized, setIsMinimized] = useState(false)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
+
   const closeDialog = useCallback(() => {
     selectCurrentResult()
     setIsSearchActive(false)
@@ -135,6 +145,9 @@ export function SearchPlugin() {
     setIsReplaceMode(false)
     setReplaceQuery('')
     setShouldHighlightAll(canUseCSSHiglights)
+    // Reopen centered + expanded next time.
+    setPanelPos(null)
+    setIsMinimized(false)
     editor.update(() => {
       if ($getSelection() !== null) {
         editor.focus()
@@ -381,40 +394,150 @@ export function SearchPlugin() {
     [keyboardService],
   )
 
+  // Combine the lifecycle-animation ref (enter/exit) with our measuring ref.
+  const setContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setElement(node)
+      panelRef.current = node
+    },
+    [setElement],
+  )
+
   if (!isMounted) {
     return null
+  }
+
+  const startDrag = (event: React.PointerEvent) => {
+    const rect = panelRef.current?.getBoundingClientRect()
+    if (!rect) {
+      return
+    }
+    ;(event.target as HTMLElement).setPointerCapture?.(event.pointerId)
+    // Convert the (possibly CSS-centered) current position into absolute coords
+    // so dragging continues seamlessly from where it sits.
+    setPanelPos({ x: rect.left, y: rect.top })
+    dragRef.current = { sx: event.clientX, sy: event.clientY, ox: rect.left, oy: rect.top, moved: false }
+  }
+  const onDrag = (event: React.PointerEvent) => {
+    const drag = dragRef.current
+    if (!drag) {
+      return
+    }
+    const dx = event.clientX - drag.sx
+    const dy = event.clientY - drag.sy
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      drag.moved = true
+    }
+    const rect = panelRef.current?.getBoundingClientRect()
+    const w = rect?.width ?? 320
+    const h = rect?.height ?? 80
+    const x = Math.max(4, Math.min(window.innerWidth - w - 4, drag.ox + dx))
+    const y = Math.max(4, Math.min(window.innerHeight - h - 4, drag.oy + dy))
+    setPanelPos({ x, y })
+  }
+  const endDrag = (event: React.PointerEvent) => {
+    ;(event.target as HTMLElement).releasePointerCapture?.(event.pointerId)
+    dragRef.current = null
+  }
+
+  const isPositioned = panelPos !== null
+  const containerStyle = isPositioned ? { left: panelPos.x, top: panelPos.y } : undefined
+  const containerClassName = classNames(
+    'fixed z-modal select-none font-sans',
+    isPositioned ? '' : 'left-1/2 top-16 -translate-x-1/2',
+  )
+
+  if (isMinimized) {
+    return (
+      <>
+        <div ref={setContainerRef} style={containerStyle} className={containerClassName}>
+          <button
+            type="button"
+            onPointerDown={startDrag}
+            onPointerMove={onDrag}
+            onPointerUp={(event) => {
+              const wasDrag = dragRef.current?.moved
+              endDrag(event)
+              // A click (no real drag) restores the panel.
+              if (!wasDrag) {
+                setIsMinimized(false)
+              }
+            }}
+            title="Find — click to expand, drag to move"
+            className="flex cursor-grab items-center gap-2 rounded-full border border-border bg-default px-3 py-2 shadow-lg active:cursor-grabbing"
+          >
+            <Icon type="search" size="medium" className="text-info" />
+            {query.length > 0 && (
+              <span className="text-sm font-semibold">
+                {getMatchCounter(currentResultIndex, results.length).label}
+              </span>
+            )}
+          </button>
+        </div>
+        {createPortal(
+          <SearchHighlightRenderer shouldHighlightAll={shouldHighlightAll} ref={highlightRendererRef} />,
+          editor.getRootElement()?.parentElement || document.body,
+        )}
+      </>
+    )
   }
 
   return (
     <>
       <div
-        className={classNames(
-          'absolute left-2 right-6 top-2 z-10 flex select-none rounded border border-border bg-default font-sans md:left-auto',
-          editor.isEditable() ? 'md:top-13' : 'md:top-3',
-        )}
-        ref={setElement}
+        ref={setContainerRef}
+        style={containerStyle}
+        className={classNames(containerClassName, 'max-w-[calc(100vw-1rem)]')}
       >
-        {editor.isEditable() && (
-          <button
-            className="focus:ring-none border-r border-border px-1 hover:bg-contrast focus:shadow-inner focus:shadow-info"
-            onClick={toggleReplaceMode}
-            title={`Toggle Replace Mode (${toggleReplaceShortcut})`}
+        <div className="overflow-hidden rounded border border-border bg-default shadow-lg">
+          <div
+            onPointerDown={startDrag}
+            onPointerMove={onDrag}
+            onPointerUp={endDrag}
+            className="flex cursor-grab touch-none items-center justify-between gap-4 border-b border-border px-2 py-1 active:cursor-grabbing"
           >
-            {isReplaceMode ? (
-              <ArrowDownIcon className="h-4 w-4 fill-text" />
-            ) : (
-              <ArrowRightIcon className="h-4 w-4 fill-text" />
+            <span className="text-sm font-semibold">{isReplaceMode ? 'Find & Replace' : 'Find'}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex items-center rounded p-1 hover:bg-contrast"
+                onClick={() => setIsMinimized(true)}
+                title="Minimize to bubble"
+              >
+                <span className="block h-0.5 w-3.5 rounded bg-current" />
+              </button>
+              <button
+                type="button"
+                className="flex items-center rounded p-1 hover:bg-contrast"
+                onClick={closeDialog}
+                title={`Close (${searchToggleShortcut})`}
+              >
+                <CloseIcon className="h-4 w-4 fill-current text-text" />
+              </button>
+            </div>
+          </div>
+          <div className="flex">
+            {editor.isEditable() && (
+              <button
+                className="focus:ring-none border-r border-border px-1 hover:bg-contrast focus:shadow-inner focus:shadow-info"
+                onClick={toggleReplaceMode}
+                title={`Toggle Replace Mode (${toggleReplaceShortcut})`}
+              >
+                {isReplaceMode ? (
+                  <ArrowDownIcon className="h-4 w-4 fill-text" />
+                ) : (
+                  <ArrowRightIcon className="h-4 w-4 fill-text" />
+                )}
+              </button>
             )}
-          </button>
-        )}
-        <div
-          className="flex flex-col gap-2 px-2 py-2"
-          onKeyDown={(event) => {
-            if (event.key === KeyboardKey.Escape) {
-              closeDialog()
-            }
-          }}
-        >
+            <div
+              className="flex flex-col gap-2 px-2 py-2"
+              onKeyDown={(event) => {
+                if (event.key === KeyboardKey.Escape) {
+                  closeDialog()
+                }
+              }}
+            >
           <div className="flex items-center gap-2">
             <DecoratedInput
               placeholder="Search"
@@ -504,15 +627,6 @@ export function SearchPlugin() {
             >
               <ArrowDownIcon className="h-4 w-4 fill-current text-text" />
             </button>
-            <button
-              className="flex items-center rounded border border-border p-1.5 hover:bg-contrast"
-              onClick={() => {
-                closeDialog()
-              }}
-              title={`Close (${searchToggleShortcut})`}
-            >
-              <CloseIcon className="h-4 w-4 fill-current text-text" />
-            </button>
           </div>
           {regexError && (
             <div className="text-sm text-danger" role="alert">
@@ -581,8 +695,10 @@ export function SearchPlugin() {
                 </button>
               </StyledTooltip>
             )}
+            </div>
           </div>
         </div>
+      </div>
       </div>
       {createPortal(
         <SearchHighlightRenderer shouldHighlightAll={shouldHighlightAll} ref={highlightRendererRef} />,

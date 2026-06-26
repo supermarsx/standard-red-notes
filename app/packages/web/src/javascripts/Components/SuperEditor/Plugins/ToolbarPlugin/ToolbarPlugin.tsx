@@ -490,8 +490,6 @@ const ToolbarPlugin = () => {
   const [isTOCOpen, setIsTOCOpen] = useState(false)
   const tocAnchorRef = useRef<HTMLButtonElement>(null)
 
-  const [isTextFormatMenuOpen, setIsTextFormatMenuOpen] = useState(false)
-  const textFormatAnchorRef = useRef<HTMLButtonElement>(null)
 
   const [isTextStyleMenuOpen, setIsTextStyleMenuOpen] = useState(false)
   const textStyleAnchorRef = useRef<HTMLButtonElement>(null)
@@ -1582,6 +1580,10 @@ const ToolbarPlugin = () => {
           editor.update(() => {
             $setSelection(null)
           })
+          // Clearing the Lexical selection alone leaves the browser's native
+          // selection highlight in place (so the text still looks selected and
+          // the button appears to do nothing) — remove the DOM ranges too.
+          window.getSelection()?.removeAllRanges()
         }}
       >
         <Icon type="close" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
@@ -1760,19 +1762,6 @@ const ToolbarPlugin = () => {
           />
           <span className="text-center text-[10px] leading-none md:text-xs">Format painter</span>
         </div>
-      </ToolbarButton>
-    ),
-    [ToolbarButtonId.TextStyleMenu]: (
-      <ToolbarButton
-        name={t('textStyle')}
-        onSelect={() => {
-          setIsTextFormatMenuOpen(!isTextFormatMenuOpen)
-        }}
-        ref={textFormatAnchorRef}
-        className={isTextFormatMenuOpen ? 'md:bg-default' : ''}
-      >
-        <Icon type="text" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
     [ToolbarButtonId.TextColor]: (
@@ -2839,48 +2828,6 @@ const ToolbarPlugin = () => {
             )
           }}
         </TableOfContentsPlugin>
-      </Popover>
-      <Popover
-        title={t('textFormattingOptions')}
-        anchorElement={textFormatAnchorRef}
-        open={isTextFormatMenuOpen}
-        togglePopover={() => setIsTextFormatMenuOpen(!isTextFormatMenuOpen)}
-        side={isMobile ? 'top' : 'bottom'}
-        align="start"
-        className="py-1"
-        disableMobileFullscreenTakeover
-        disableFlip
-        containerClassName="md:!min-w-60 md:!w-auto"
-        portal={false}
-        documentElement={popoverDocumentElement}
-      >
-        <Menu a11yLabel={t('textFormattingOptions')} className="!px-0" onClick={() => setIsTextFormatMenuOpen(false)}>
-          <ToolbarMenuItem
-            name={t('highlight')}
-            iconName="draw"
-            active={isHighlight}
-            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'highlight')}
-          />
-          <ToolbarMenuItem
-            name={t('strikethrough')}
-            iconName="strikethrough"
-            active={isStrikethrough}
-            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough')}
-          />
-          <ToolbarMenuItem
-            name={t('subscript')}
-            iconName="subscript"
-            active={isSubscript}
-            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'subscript')}
-          />
-          <ToolbarMenuItem
-            name={t('superscript')}
-            iconName="superscript"
-            active={isSuperscript}
-            onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'superscript')}
-          />
-          <ToolbarMenuItem name={t('clearFormatting')} iconName="trash" onClick={clearFormatting} />
-        </Menu>
       </Popover>
       <Popover
         title={t('blockStyle')}

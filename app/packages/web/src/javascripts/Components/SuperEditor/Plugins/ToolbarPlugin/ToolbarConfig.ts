@@ -173,11 +173,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     id: ToolbarGroupId.TextStyle,
     label: 'Text style',
     caption: 'Text',
-    buttons: [
-      { id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.TextStyle },
-      { id: ToolbarButtonId.Link, label: 'Link', group: ToolbarGroupId.TextStyle },
-      { id: ToolbarButtonId.TextStyleMenu, label: 'Text style menu', group: ToolbarGroupId.TextStyle },
-    ],
+    buttons: [{ id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.TextStyle }],
   },
   {
     id: ToolbarGroupId.ColorFont,
@@ -253,6 +249,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     caption: 'Insert',
     buttons: [
       { id: ToolbarButtonId.InsertMenu, label: 'Insert menu', group: ToolbarGroupId.Insert },
+      { id: ToolbarButtonId.Link, label: 'Link', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.InsertTable, label: 'Insert table', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.InsertImageFile, label: 'Insert image or file', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.InsertDrawing, label: 'Insert drawing', group: ToolbarGroupId.Insert },
