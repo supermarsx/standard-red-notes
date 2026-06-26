@@ -113,12 +113,66 @@ export async function inMemoryNoteCount(page: Page): Promise<number> {
   })
 }
 
+/**
+ * Wait for the cold-load to actually FINISH, then report the settled count.
+ *
+ * `app.isLaunched()` flips true while `SyncService.loadDatabasePayloads` is still
+ * emitting decrypted notes in sleep-paced batches — so sampling `getItems('Note')`
+ * right after "ready" catches the load mid-flight and UNDER-reports (this is why a
+ * naive measurement showed ~4900/5000: a sampling artifact, not a hard ceiling).
+ *
+ * Here we poll the in-memory note count until it stops growing for
+ * `stableForMs` (the incremental load has drained), or until `timeoutMs`. We
+ * return both the final settled count and the wall-clock from call-start to the
+ * moment the count last increased — i.e. the true cold-load completion time.
+ */
+export async function waitForNoteCountSettled(
+  page: Page,
+  opts: { timeoutMs?: number; pollMs?: number; stableForMs?: number } = {},
+): Promise<{ count: number; loadCompleteMs: number; timedOut: boolean }> {
+  const timeoutMs = opts.timeoutMs ?? 5 * 60_000
+  const pollMs = opts.pollMs ?? 250
+  const stableForMs = opts.stableForMs ?? 2_000
+
+  const start = Date.now()
+  let lastCount = -1
+  let lastIncreaseAt = start
+  let timedOut = false
+
+  for (;;) {
+    const current = await inMemoryNoteCount(page)
+    const now = Date.now()
+
+    if (current > lastCount) {
+      lastCount = current
+      lastIncreaseAt = now
+    }
+
+    // Settled: count hasn't grown for stableForMs and we've actually loaded
+    // something (lastCount > 0 guards against measuring a not-yet-started load).
+    if (lastCount > 0 && now - lastIncreaseAt >= stableForMs) {
+      break
+    }
+
+    if (now - start >= timeoutMs) {
+      timedOut = true
+      break
+    }
+
+    await page.waitForTimeout(pollMs)
+  }
+
+  return { count: lastCount, loadCompleteMs: lastIncreaseAt - start, timedOut }
+}
+
 export type LoadMeasurement = {
   count: number
   openMs: number | null
   rootHasChildren: boolean
   renderedRows: number
   inMemoryNotes: number
+  loadCompleteMs: number | null
+  loadTimedOut: boolean
   scrollResponsive: boolean | null
   scrollProbeMs: number | null
   jsHeapMB: number | null

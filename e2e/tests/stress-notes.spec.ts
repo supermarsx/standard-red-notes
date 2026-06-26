@@ -3,6 +3,7 @@ import {
   seedNotes,
   waitForApplicationReady,
   inMemoryNoteCount,
+  waitForNoteCountSettled,
   readJsHeapMB,
   type LoadMeasurement,
 } from '../helpers/stress'
@@ -62,8 +63,9 @@ const SIZE_BYTES = (() => {
 const RAMP = parseRamp()
 const SMALLEST = Math.min(...RAMP)
 
-// Generous: seeding + cold load at high counts is slow. 10 min per scale.
-test.setTimeout(10 * 60_000)
+// Generous: seeding + cold load at high counts is slow (one-by-one createItem +
+// a full local persist). 25 min per scale so 50k–100k seeds fit.
+test.setTimeout(25 * 60_000)
 
 /** Open the app shell, measuring time-to-visible. Returns ms or null on timeout. */
 async function openAppShell(page: Page, timeoutMs: number): Promise<number | null> {
@@ -136,6 +138,8 @@ for (const count of RAMP) {
       rootHasChildren: false,
       renderedRows: 0,
       inMemoryNotes: -1,
+      loadCompleteMs: null,
+      loadTimedOut: false,
       scrollResponsive: null,
       scrollProbeMs: null,
       jsHeapMB: null,
@@ -175,7 +179,13 @@ for (const count of RAMP) {
         .waitFor({ state: 'visible', timeout: 60_000 })
         .catch(() => {})
       measurement.renderedRows = await page.locator(ROW_SELECTOR).count()
-      measurement.inMemoryNotes = await inMemoryNoteCount(page)
+      // The incremental, sleep-paced DB load is still draining when the app
+      // reports "launched", so a single sample under-reports. Wait for the
+      // in-memory count to settle to get the TRUE loaded count + load time.
+      const settled = await waitForNoteCountSettled(page, { timeoutMs: 5 * 60_000 })
+      measurement.inMemoryNotes = settled.count
+      measurement.loadCompleteMs = settled.loadCompleteMs
+      measurement.loadTimedOut = settled.timedOut
 
       const probe = await scrollProbe(page)
       measurement.scrollResponsive = probe ? probe.responsive : null
@@ -228,6 +238,7 @@ for (const count of RAMP) {
 
       console.log(
         `[measure] count=${count} verdict=${measurement.verdict} openMs=${measurement.openMs} ` +
+          `loadCompleteMs=${measurement.loadCompleteMs}${measurement.loadTimedOut ? '(TIMEOUT)' : ''} ` +
           `rows=${measurement.renderedRows} inMemNotes=${measurement.inMemoryNotes} ` +
           `scrollResponsive=${measurement.scrollResponsive} scrollMs=${measurement.scrollProbeMs} ` +
           `heapMB=${measurement.jsHeapMB} pageErrors=${pageErrors.length}` +
