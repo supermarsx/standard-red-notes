@@ -96,24 +96,39 @@ const isSessionReauthChallenge = (challenge: Challenge): boolean =>
  */
 const MS_PER_YEAR = 1000 * 60 * 60 * 24 * 365
 const recordAccountAgeAchievement = (application: WebApplication): void => {
-  try {
-    const items = application.items.getItems(ContentType.TYPES.Note)
-    let oldest = Number.POSITIVE_INFINITY
-    for (const item of items) {
-      const created = item.created_at?.getTime?.()
-      if (typeof created === 'number' && created > 0 && created < oldest) {
-        oldest = created
+  // This scans EVERY note (O(n)) to find the oldest creation date. Running it
+  // inline during onAppLaunch would block the most latency-sensitive moment of
+  // startup — and that cost grows with the note count. It is a fire-and-forget
+  // achievement metric with no UI dependency, so defer it to browser idle time
+  // (with a setTimeout fallback) to keep launch off the main-thread hot path.
+  const run = () => {
+    try {
+      const items = application.items.getItems(ContentType.TYPES.Note)
+      let oldest = Number.POSITIVE_INFINITY
+      for (const item of items) {
+        const created = item.created_at?.getTime?.()
+        if (typeof created === 'number' && created > 0 && created < oldest) {
+          oldest = created
+        }
       }
+      if (!Number.isFinite(oldest)) {
+        return
+      }
+      const years = Math.floor((Date.now() - oldest) / MS_PER_YEAR)
+      if (years > 0) {
+        achievements.setAtLeast(METRICS.accountAgeYears, years)
+      }
+    } catch {
+      // Fire-and-forget.
     }
-    if (!Number.isFinite(oldest)) {
-      return
-    }
-    const years = Math.floor((Date.now() - oldest) / MS_PER_YEAR)
-    if (years > 0) {
-      achievements.setAtLeast(METRICS.accountAgeYears, years)
-    }
-  } catch {
-    // Fire-and-forget.
+  }
+
+  const ric = (window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void })
+    .requestIdleCallback
+  if (typeof ric === 'function') {
+    ric(run, { timeout: 5000 })
+  } else {
+    setTimeout(run, 2000)
   }
 }
 

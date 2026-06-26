@@ -1,5 +1,5 @@
 import { classNames, sanitizeHtmlString, SNNote } from '@standardnotes/snjs'
-import { FunctionComponent } from 'react'
+import { FunctionComponent, memo, useMemo } from 'react'
 
 type Props = {
   item: SNNote
@@ -8,7 +8,16 @@ type Props = {
 }
 
 const ListItemNotePreviewText: FunctionComponent<Props> = ({ item, hidePreview, lineLimit = 1 }) => {
-  if (item.hidePreview || item.protected || hidePreview) {
+  const hidden = item.hidePreview || item.protected || hidePreview
+
+  // sanitizeHtmlString() runs a full DOMPurify pass; memoize it so it only
+  // re-runs when the preview HTML actually changes, not on every parent re-render.
+  const sanitizedPreviewHtml = useMemo(
+    () => (!hidden && item.preview_html ? sanitizeHtmlString(item.preview_html) : undefined),
+    [hidden, item.preview_html],
+  )
+
+  if (hidden) {
     return null
   }
 
@@ -19,11 +28,11 @@ const ListItemNotePreviewText: FunctionComponent<Props> = ({ item, hidePreview, 
         item.archived ? 'opacity-60' : '',
       )}
     >
-      {item.preview_html && (
+      {item.preview_html && sanitizedPreviewHtml !== undefined && (
         <div
           className="my-0.5"
           dangerouslySetInnerHTML={{
-            __html: sanitizeHtmlString(item.preview_html),
+            __html: sanitizedPreviewHtml,
           }}
         ></div>
       )}
@@ -34,4 +43,4 @@ const ListItemNotePreviewText: FunctionComponent<Props> = ({ item, hidePreview, 
   )
 }
 
-export default ListItemNotePreviewText
+export default memo(ListItemNotePreviewText)
