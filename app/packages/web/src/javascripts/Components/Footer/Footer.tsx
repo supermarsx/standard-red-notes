@@ -34,7 +34,7 @@ import ConnectionStatusIndicator from './ConnectionStatus'
 import NoteStats from './NoteStats'
 import NotesFolderCounter from './NotesFolderCounter'
 import AssistantUsage from './AssistantUsage'
-import { ToastType, addToast } from '@standardnotes/toast'
+import { ToastType, addToast, updateToast, dismissToast } from '@standardnotes/toast'
 import { achievements, METRICS } from '@/Achievements'
 import { getManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
 
@@ -64,6 +64,11 @@ class Footer extends AbstractComponent<Props, State> {
   private didCheckForOffline = false
   private completedInitialSync = false
   private showingDownloadStatus = false
+  private loadingToastId?: string
+  private localDataLoadStartedAt?: number
+  private static readonly LOADING_TOAST_ID = 'database-load-progress'
+  private static readonly LOADING_TOAST_MIN_ITEMS = 300
+  private static readonly LOADING_TOAST_MIN_DURATION_MS = 400
   private webEventListenerDestroyer: () => void
   private removeStatusObserver!: () => void
   private removeManualSyncObserver?: () => void
@@ -123,6 +128,8 @@ class Footer extends AbstractComponent<Props, State> {
   }
 
   override deinit() {
+    this.dismissLoadingToast()
+
     this.removeStatusObserver()
     ;(this.removeStatusObserver as unknown) = undefined
 
@@ -287,11 +294,55 @@ class Footer extends AbstractComponent<Props, State> {
     const encryption = this.application.isEncryptionAvailable()
     if (stats.localDataDone) {
       statusManager.setMessage('')
+      this.dismissLoadingToast()
       return
     }
     const notesString = `${stats.localDataCurrent}/${stats.localDataTotal} items...`
     const loadingStatus = encryption ? `Decrypting ${notesString}` : `Loading ${notesString}`
     statusManager.setMessage(loadingStatus)
+    this.updateLoadingToast(stats.localDataCurrent, stats.localDataTotal, encryption)
+  }
+
+  /**
+   * Surfaces cold database-load progress as a single, in-place-updating toast so users can
+   * see a large vault loading. Suppressed for trivially small/fast loads to avoid a flash.
+   */
+  private updateLoadingToast(current: number, total: number, encryption: boolean) {
+    if (this.localDataLoadStartedAt === undefined) {
+      this.localDataLoadStartedAt = Date.now()
+    }
+
+    const elapsedMs = Date.now() - this.localDataLoadStartedAt
+    const shouldShow =
+      total >= Footer.LOADING_TOAST_MIN_ITEMS && elapsedMs >= Footer.LOADING_TOAST_MIN_DURATION_MS
+
+    if (!shouldShow && this.loadingToastId === undefined) {
+      return
+    }
+
+    const verb = encryption ? 'Decrypting' : 'Loading'
+    const message = `${verb} notes… (${current.toLocaleString()} / ${total.toLocaleString()})`
+    const progress = total > 0 ? Math.min(100, Math.floor((current / total) * 100)) : 0
+
+    if (this.loadingToastId === undefined) {
+      this.loadingToastId = addToast({
+        id: Footer.LOADING_TOAST_ID,
+        type: ToastType.Progress,
+        message,
+        progress,
+        pauseOnWindowBlur: false,
+      })
+    } else {
+      updateToast(this.loadingToastId, { message, progress })
+    }
+  }
+
+  private dismissLoadingToast() {
+    this.localDataLoadStartedAt = undefined
+    if (this.loadingToastId !== undefined) {
+      dismissToast(this.loadingToastId)
+      this.loadingToastId = undefined
+    }
   }
 
   updateOfflineStatus() {
