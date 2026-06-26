@@ -20,9 +20,23 @@ declare global {
 }
 
 /**
- * Returns `window` if available, or `global` if supported in environment.
+ * Returns the global scope for the current environment.
+ *
+ * Standard Red Notes: previously this hard-returned `window`, which is undefined
+ * inside a Web Worker (workers expose `self`/`globalThis`, not `window`). The
+ * decryption worker pool runs this very PureCrypto + libsodium stack off the main
+ * thread, so we must resolve the global generically: prefer `self` (the worker
+ * global, also defined on the main thread), then `globalThis`, then `window`.
+ * All three expose `crypto`/`crypto.subtle` in the environments we run in, so the
+ * WebCrypto helpers below keep working unchanged on the main thread.
  */
 export function getGlobalScope(): Window & typeof globalThis {
+  if (typeof self !== 'undefined') {
+    return self as unknown as Window & typeof globalThis
+  }
+  if (typeof globalThis !== 'undefined') {
+    return globalThis as unknown as Window & typeof globalThis
+  }
   return window
 }
 

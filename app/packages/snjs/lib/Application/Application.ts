@@ -52,6 +52,7 @@ import {
   AppGroupManagedApplication,
   ApplicationInterface,
   EncryptionService,
+  ItemsEncryptionService,
   EncryptionServiceEvent,
   Challenge,
   ErrorAlertStrings,
@@ -1100,6 +1101,15 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
 
   public get encryption(): EncryptionProviderInterface {
     return this.dependencies.get<EncryptionProviderInterface>(TYPES.EncryptionService)
+  }
+
+  /**
+   * The per-item encryption service. Exposed so the web layer can install an
+   * off-main-thread decryption worker pool (setDecryptionPool) — webpack worker
+   * bundling lives in the web package, while the service lives here.
+   */
+  public get itemsEncryption(): ItemsEncryptionService {
+    return this.dependencies.get<ItemsEncryptionService>(TYPES.ItemsEncryptionService)
   }
 
   public get events(): InternalEventBusInterface {

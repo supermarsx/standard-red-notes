@@ -87,6 +87,7 @@ import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFil
 import { RecentActionsState } from './Recents'
 import { RecentNotesState } from '@/Components/Preferences/Panes/RecentNotes/RecentNotesState'
 import { SearchIndexRunner } from '@/Utils/Items/Search/SearchIndexRunner'
+import { DecryptionPool } from '@/Utils/Items/Decryption/DecryptionPool'
 import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 
@@ -116,6 +117,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // createBackgroundServices() so it can react to the first full sync and
   // periodically purge aged trashed notes while the app is open.
   private _autoEmptyTrashService?: AutoEmptyTrashService
+  // Standard Red Notes: off-main-thread decryption worker pool. Installed onto the
+  // ItemsEncryptionService so bulk decrypts (esp. cold-loading a large vault)
+  // parallelize across CPU cores instead of blocking the main thread.
+  private _decryptionPool?: DecryptionPool
 
   constructor(
     deviceInterface: WebOrDesktopDevice,
@@ -219,6 +224,33 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     }
 
     this.wireManualSyncMode()
+
+    this.installDecryptionPool()
+  }
+
+  /**
+   * Standard Red Notes: install the parallel decryption worker pool onto the
+   * ItemsEncryptionService. The pool no-ops (isAvailable === false) when Workers
+   * are unavailable, in which case the service keeps using its synchronous path,
+   * so this is always safe. Failures here must never block app boot.
+   */
+  private installDecryptionPool(): void {
+    if (typeof Worker === 'undefined') {
+      return
+    }
+    try {
+      const pool = new DecryptionPool()
+      if (!pool.isAvailable) {
+        pool.destroy()
+        return
+      }
+      this._decryptionPool = pool
+      this.itemsEncryption.setDecryptionPool(pool)
+    } catch (error) {
+      // Pool construction is best-effort; on any failure we leave the service on
+      // its sync path. Never let this crash app launch.
+      console.error('Failed to install decryption pool', error)
+    }
   }
 
   /**
@@ -270,6 +302,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: tear down the auto-empty-trash service.
     this._autoEmptyTrashService?.deinit()
     this._autoEmptyTrashService = undefined
+
+    // Standard Red Notes: terminate the decryption worker pool.
+    this._decryptionPool?.destroy()
+    this._decryptionPool = undefined
 
     this.deps.deinit()
 

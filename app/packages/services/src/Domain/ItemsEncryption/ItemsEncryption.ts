@@ -8,7 +8,9 @@ import {
   decryptPayload,
   EncryptedOutputParameters,
   EncryptionOperatorsInterface,
+  encryptedInputParametersFromPayload,
 } from '@standardnotes/encryption'
+import { PayloadDecryptionPoolInterface, PooledDecryptionJob } from './PayloadDecryptionPoolInterface'
 import {
   ContentTypeUsesKeySystemRootKeyEncryption,
   DecryptedPayload,
@@ -38,6 +40,15 @@ export class ItemsEncryptionService extends AbstractService {
   private removeItemsObserver!: () => void
   public userVersion?: ProtocolVersion
 
+  /**
+   * Optional off-main-thread decryption pool (installed by the web layer at
+   * launch). When present + available + enabled, bulk decrypts route through it
+   * to parallelize across CPU cores; otherwise we use the original sync path.
+   */
+  private decryptionPool?: PayloadDecryptionPoolInterface
+  /** Master switch for the pool. Default ON; flip off to force the sync path. */
+  public decryptionPoolEnabled = true
+
   constructor(
     private items: ItemManagerInterface,
     private payloads: PayloadManagerInterface,
@@ -64,7 +75,21 @@ export class ItemsEncryptionService extends AbstractService {
     ;(this.keys as unknown) = undefined
     this.removeItemsObserver()
     ;(this.removeItemsObserver as unknown) = undefined
+    if (this.decryptionPool) {
+      this.decryptionPool.destroy()
+      this.decryptionPool = undefined
+    }
     super.deinit()
+  }
+
+  /** Install (or clear) the parallel decryption pool. Called by the web layer. */
+  public setDecryptionPool(pool: PayloadDecryptionPoolInterface | undefined): void {
+    this.decryptionPool = pool
+  }
+
+  /** True only when a pool is installed, available, and not disabled by the flag. */
+  private get canUseDecryptionPool(): boolean {
+    return this.decryptionPoolEnabled && this.decryptionPool !== undefined && this.decryptionPool.isAvailable
   }
 
   /**
@@ -223,6 +248,12 @@ export class ItemsEncryptionService extends AbstractService {
   public async decryptPayloadsWithKeyLookup<C extends ItemContent = ItemContent>(
     payloads: EncryptedPayloadInterface[],
   ): Promise<(DecryptedParameters<C> | ErrorDecryptingParameters)[]> {
+    if (this.canUseDecryptionPool) {
+      // Resolve each payload's key on the MAIN thread (key lookup needs the
+      // keychain), then hand the pool only (params, itemsKeyHex).
+      return this.decryptViaPool<C>(payloads, (payload) => this.keyToUseForDecryptionOfPayload(payload))
+    }
+
     return Promise.all(payloads.map((payload) => this.decryptPayloadWithKeyLookup<C>(payload)))
   }
 
@@ -230,7 +261,95 @@ export class ItemsEncryptionService extends AbstractService {
     payloads: EncryptedPayloadInterface[],
     key: ItemsKeyInterface | KeySystemItemsKeyInterface | KeySystemRootKeyInterface,
   ): Promise<(DecryptedParameters<C> | ErrorDecryptingParameters)[]> {
+    if (this.canUseDecryptionPool) {
+      return this.decryptViaPool<C>(payloads, () => key)
+    }
+
     return Promise.all(payloads.map((payload) => this.decryptPayload<C>(payload, key)))
+  }
+
+  /**
+   * Routes decryption through the off-main-thread pool while preserving exact
+   * sync semantics. For each payload we resolve its key on the main thread; only
+   * V004 payloads that have content AND a resolvable key with an `itemsKey` hex
+   * string are sent to the pool. Anything else (missing key/content, non-V004,
+   * root-key-encrypted) falls back to the original sync per-payload path so
+   * behavior is byte-for-byte identical to today. Results are recombined in the
+   * original payload order; a pool failure for the whole batch degrades to the
+   * sync path so we never lose data.
+   */
+  private async decryptViaPool<C extends ItemContent = ItemContent>(
+    payloads: EncryptedPayloadInterface[],
+    resolveKey: (
+      payload: EncryptedPayloadInterface,
+    ) => ItemsKeyInterface | KeySystemItemsKeyInterface | KeySystemRootKeyInterface | undefined,
+  ): Promise<(DecryptedParameters<C> | ErrorDecryptingParameters)[]> {
+    const pool = this.decryptionPool
+    if (!pool) {
+      return Promise.all(payloads.map((payload) => this.syncDecryptWithResolvedKey<C>(payload, resolveKey(payload))))
+    }
+
+    const results: (DecryptedParameters<C> | ErrorDecryptingParameters)[] = new Array(payloads.length)
+    const poolJobs: PooledDecryptionJob[] = []
+    const poolJobIndexes: number[] = []
+
+    for (let i = 0; i < payloads.length; i++) {
+      const payload = payloads[i]
+      const key = resolveKey(payload)
+
+      const itemsKey = (key as { itemsKey?: string } | undefined)?.itemsKey
+      const isPoolEligible =
+        key !== undefined &&
+        typeof itemsKey === 'string' &&
+        payload.version === ProtocolVersion.V004 &&
+        !!payload.content
+
+      if (isPoolEligible) {
+        poolJobIndexes.push(i)
+        poolJobs.push({ encrypted: encryptedInputParametersFromPayload(payload), itemsKey: itemsKey as string })
+      } else {
+        // Not eligible for the worker (no key, no content, older version, etc.):
+        // use the existing sync path which already returns the right markers.
+        results[i] = await this.syncDecryptWithResolvedKey<C>(payload, key)
+      }
+    }
+
+    if (poolJobs.length === 0) {
+      return results
+    }
+
+    try {
+      const poolResults = await pool.decrypt<C>(poolJobs)
+      for (let j = 0; j < poolJobIndexes.length; j++) {
+        results[poolJobIndexes[j]] = poolResults[j]
+      }
+    } catch {
+      // Whole-batch pool failure: re-run just the pooled items synchronously so
+      // we never drop or corrupt data.
+      for (let j = 0; j < poolJobIndexes.length; j++) {
+        const index = poolJobIndexes[j]
+        const payload = payloads[index]
+        results[index] = await this.syncDecryptWithResolvedKey<C>(payload, resolveKey(payload))
+      }
+    }
+
+    return results
+  }
+
+  /** Sync decrypt of a single payload given an already-resolved key (or undefined). */
+  private async syncDecryptWithResolvedKey<C extends ItemContent = ItemContent>(
+    payload: EncryptedPayloadInterface,
+    key: ItemsKeyInterface | KeySystemItemsKeyInterface | KeySystemRootKeyInterface | undefined,
+  ): Promise<DecryptedParameters<C> | ErrorDecryptingParameters> {
+    if (key === undefined) {
+      return {
+        uuid: payload.uuid,
+        errorDecrypting: true,
+        waitingForKey: true,
+      }
+    }
+
+    return this.decryptPayload<C>(payload, key)
   }
 
   public async decryptErroredItemPayloads(): Promise<void> {

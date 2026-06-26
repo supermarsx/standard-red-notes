@@ -18,6 +18,11 @@ export * from './Operator/002/Operator002'
 export * from './Operator/003/Operator003'
 export * from './Operator/004/Operator004'
 export * from './Operator/004/V004AlgorithmHelpers'
+// Exposed so the off-main-thread decryption worker pool (web package) can run the
+// exact same pure per-payload decrypt as the sync path. Both are pure over
+// (EncryptedInputParameters, { itemsKey }) + a PureCryptoInterface.
+export * from './Operator/004/UseCase/Symmetric/GenerateDecryptedParameters'
+export * from './Operator/004/UseCase/Symmetric/GenerateEncryptedParameters'
 export * from './Operator/EncryptionOperators'
 export * from './Operator/EncryptionOperatorsInterface'
 export * from './Operator/Functions'
