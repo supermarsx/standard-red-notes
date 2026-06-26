@@ -24,7 +24,13 @@ import {
 import { DecryptionWorkerRequest, DecryptionWorkerResponse } from './decryptionWorkerProtocol'
 import * as DecryptionWorkerModule from './decryption.worker'
 
-const DecryptionWorker = DecryptionWorkerModule as unknown as { new (): Worker }
+// worker-loader (esModule: true, the default) emits the Worker constructor as the
+// module's DEFAULT export, so `import * as M` yields `{ default: Ctor }`. Casting
+// the namespace object straight to a constructor — `M as { new(): Worker }` — makes
+// `new M()` throw ("M is not a constructor"), which silently zeroed the pool. Pick
+// `.default` when present, else fall back to the namespace (covers esModule: false).
+const DecryptionWorker = ((DecryptionWorkerModule as { default?: { new (): Worker } }).default ??
+  (DecryptionWorkerModule as unknown as { new (): Worker })) as { new (): Worker }
 
 /**
  * Max payloads per postMessage batch. Large enough to amortize the structured
@@ -46,17 +52,33 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
   private nextRequestId = 1
   private destroyed = false
 
+  /**
+   * Runtime visibility into whether the pool is actually doing work or silently
+   * falling back to the sync path (e.g. libsodium failing to init in the worker).
+   * Exposed on globalThis.__srnDecryptPool so the stress harness can read it.
+   */
+  readonly stats = { workers: 0, batchesOk: 0, batchesFailed: 0, workerErrors: 0, lastError: '' }
+
   constructor() {
     if (typeof Worker === 'undefined') {
       return
     }
+    // Each worker compiles its OWN libsodium WASM on first use, so worker count
+    // trades parallelism against fixed per-worker init + structured-clone overhead.
+    // Past a handful, that overhead dominates (a 40-core box spinning 39 workers
+    // made small vaults SLOWER). Cap at 8 — enough to parallelize a big cold-load,
+    // few enough that the startup tax stays small.
     const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
-    const count = Math.max(1, (cores || 4) - 1)
+    const count = Math.min(8, Math.max(1, (cores || 4) - 1))
     for (let i = 0; i < count; i++) {
       const created = this.tryCreateWorker()
       if (created) {
         this.workers.push(created)
       }
+    }
+    this.stats.workers = this.workers.length
+    if (typeof globalThis !== 'undefined') {
+      ;(globalThis as unknown as { __srnDecryptPool?: unknown }).__srnDecryptPool = this.stats
     }
   }
 
@@ -79,10 +101,12 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
       worker.onerror = () => {
         // A dead worker rejects its in-flight batches; the caller falls back to
         // the sync path for those, and we drop it from rotation.
+        this.stats.workerErrors++
         this.dropWorker(entry, new Error('decryption worker errored'))
       }
       return entry
-    } catch {
+    } catch (error) {
+      this.stats.lastError = error instanceof Error ? error.message : String(error)
       return null
     }
   }
@@ -137,9 +161,11 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
       batches.map(async (batch) => {
         const response = await this.send(batch.entry, batch.jobs)
         if (response.type !== 'decrypted') {
+          this.stats.batchesFailed++
           // Surface so the service-level fallback re-runs the whole call sync.
           throw new Error(response.message || 'decryption worker batch failed')
         }
+        this.stats.batchesOk++
         for (let i = 0; i < response.results.length; i++) {
           results[batch.start + i] = response.results[i] as DecryptedParameters<C> | ErrorDecryptingParameters
         }

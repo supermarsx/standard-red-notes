@@ -19,7 +19,13 @@
 // PureCrypto + libsodium stack runs here unchanged.
 
 import { SNWebCrypto } from '@standardnotes/sncrypto-web'
-import { GenerateDecryptedParametersUseCase } from '@standardnotes/snjs'
+// Import the use-case from the lean @standardnotes/encryption package, NOT the
+// @standardnotes/snjs mega-barrel: worker-loader sub-compiles this file as its
+// own entry, and pulling the whole snjs (which transitively references
+// window/document at module scope) broke that sub-compilation so the worker
+// constructor never materialized — the pool silently fell back to sync for every
+// item. encryption is pure crypto/models and bundles cleanly into the worker.
+import { GenerateDecryptedParametersUseCase } from '@standardnotes/encryption'
 import { DecryptionWorkerRequest, DecryptionWorkerResponse } from './decryptionWorkerProtocol'
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope

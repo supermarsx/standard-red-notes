@@ -225,6 +225,12 @@ for (const count of RAMP) {
       measurement.loadCompleteMs = settled.loadCompleteMs
       measurement.loadTimedOut = settled.timedOut
 
+      // Diagnostic: did the decryption worker pool actually fire, or fall back to sync?
+      const poolStats = await page.evaluate(
+        () => (window as unknown as { __srnDecryptPool?: unknown }).__srnDecryptPool ?? null,
+      )
+      console.log(`[decryptpool] count=${count} stats=${JSON.stringify(poolStats)}`)
+
       const probe = await scrollProbe(page)
       measurement.scrollResponsive = probe ? probe.responsive : null
       measurement.scrollProbeMs = probe ? probe.ms : null
