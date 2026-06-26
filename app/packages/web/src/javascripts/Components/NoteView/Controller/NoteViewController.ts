@@ -8,6 +8,7 @@ import {
   PayloadEmitSource,
   PrefKey,
   PayloadVaultOverrides,
+  isLitePayload,
 } from '@standardnotes/models'
 import {
   AlertService,
@@ -118,6 +119,17 @@ export class NoteViewController implements ItemViewControllerInterface {
 
     this.needsInit = false
 
+    /**
+     * LAZY-DECRYPT (flag-gated) editor-open re-hydration. With the flag on, the
+     * note may be a content-stripped "lite" item (body dropped on cold-load). The
+     * editor must edit/save against the REAL body, and the safety guard refuses to
+     * mutate a lite payload — so re-hydrate the full content from IndexedDB and emit
+     * it back into state BEFORE the editor reads `text`. The streamItems observer
+     * below then picks up the now-full note and updates `this.item`. With the flag
+     * off no item is ever lite, so this is a no-op (byte-identical behavior).
+     */
+    await this.rehydrateLiteNoteIfNeeded()
+
     const shouldAddTagHierarchy = this.preferences.getValue(PrefKey.NoteAddToParentFolders, true)
 
     if (!this.item) {
@@ -155,6 +167,29 @@ export class NoteViewController implements ItemViewControllerInterface {
     }
 
     this.streamItems()
+  }
+
+  /**
+   * If the controller's note is a lazy-decrypt "lite" item (body stripped on
+   * cold-load), re-hydrate its full content from IndexedDB and emit it back into
+   * state so the editor opens against the real body. No-op when the note is full
+   * (always the case with the flag off) or when re-hydration fails (the editor then
+   * opens against the lite note and a later edit would be guarded — but in practice
+   * the on-disk payload is present, so this succeeds).
+   */
+  private async rehydrateLiteNoteIfNeeded(): Promise<void> {
+    if (!this.item || !isLitePayload(this.item.payload)) {
+      return
+    }
+
+    const full = await this.sync.getFullContentPayload(this.item.uuid)
+    if (!full || isLitePayload(full)) {
+      return
+    }
+
+    const emitted = await this.mutator.emitItemFromPayload(full, PayloadEmitSource.LocalDatabaseLoaded)
+    this.item = emitted as SNNote
+    this.syncController.setItem(this.item)
   }
 
   private notifyObservers(note: SNNote, source: PayloadEmitSource): void {

@@ -316,6 +316,7 @@ export class WebDependencies extends DependencyContainer {
         this.get<NavigationController>(Web_TYPES.NavigationController),
         this.get<SearchOptionsController>(Web_TYPES.SearchOptionsController),
         application.items,
+        application.sync,
         application.preferences,
         this.get<ItemGroupController>(Web_TYPES.ItemGroupController),
         this.get<VaultDisplayService>(Web_TYPES.VaultDisplayService),

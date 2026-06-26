@@ -538,6 +538,46 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
       expect(result[0].content.preview_plain).toEqual('kept')
       expect(result[0].dirty).not.toBe(true)
     })
+
+    it('with the flag ON, produces ALL notes in a batch as lite (none dropped or deduped)', () => {
+      const service = createService({ lazyDecryptEnabled: true })
+      const notes = Array.from({ length: 1000 }, (_, i) => createNotePayload({ title: `note-${i}` }))
+
+      const result = stripBodies(service, notes) as DecryptedPayload<NoteContent>[]
+
+      // Every input note must appear in the output exactly once, all lite, in order.
+      expect(result).toHaveLength(notes.length)
+      expect(new Set(result.map((p) => p.uuid)).size).toEqual(notes.length)
+      result.forEach((p, i) => {
+        expect(isLitePayload(p)).toBe(true)
+        expect(p.uuid).toEqual(notes[i].uuid)
+        expect(p.content_type).toEqual(ContentType.TYPES.Note)
+        expect(p.content.text).toBeUndefined()
+      })
+    })
+
+    it('BUG-1: if stripping ONE note throws, that note falls back to FULL and the rest still load', () => {
+      const service = createService({ lazyDecryptEnabled: true })
+
+      const good1 = createNotePayload({ title: 'good-1' })
+      const good2 = createNotePayload({ title: 'good-2' })
+
+      // A payload whose ejected() throws simulates an unexpected content shape that
+      // would otherwise abort the entire batch (and every subsequent batch).
+      const poison = createNotePayload({ title: 'poison' })
+      ;(poison as unknown as { ejected: () => unknown }).ejected = () => {
+        throw new Error('boom')
+      }
+
+      const result = stripBodies(service, [good1, poison, good2]) as DecryptedPayload<NoteContent>[]
+
+      // No item is dropped: all three are emitted.
+      expect(result).toHaveLength(3)
+      expect(isLitePayload(result[0])).toBe(true)
+      // The poison note falls back to the full payload rather than aborting the map.
+      expect(result[1]).toBe(poison)
+      expect(isLitePayload(result[2])).toBe(true)
+    })
   })
 
   describe('pre-sync push guard (payloadsByPreparingForServer)', () => {

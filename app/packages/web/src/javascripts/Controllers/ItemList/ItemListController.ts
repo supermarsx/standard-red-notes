@@ -52,7 +52,9 @@ import {
   KeyboardModifier,
   FolderContentType,
   NoteType,
+  SyncServiceInterface,
 } from '@standardnotes/snjs'
+import { getFullNoteText } from '@/Utils/Items/rehydrateLazyDecryptedNote'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { WebDisplayOptions } from './WebDisplayOptions'
 import { NavigationController } from '../Navigation/NavigationController'
@@ -222,6 +224,12 @@ export class ItemListController
     private navigationController: NavigationController,
     private searchOptionsController: SearchOptionsController,
     private itemManager: ItemManagerInterface,
+    /**
+     * LAZY-DECRYPT: needed to re-hydrate full note bodies on demand when building
+     * the background search index over (possibly body-less) "lite" notes. Unused
+     * when the flag is off (no note is ever lite).
+     */
+    private sync: SyncServiceInterface,
     private preferences: PreferenceServiceInterface,
     private itemControllerGroup: ItemGroupController,
     private vaultDisplayService: VaultDisplayServiceInterface,
@@ -794,6 +802,23 @@ export class ItemListController
     return { uuid: item.uuid, title: item.title ?? '', text }
   }
 
+  /**
+   * LAZY-DECRYPT: build the full set of indexable notes for a FULL (re)build,
+   * re-hydrating the body of any "lite" (body-stripped) note from IndexedDB so the
+   * background search index covers real prose, not empty bodies. With the flag off
+   * no note is lite, so getFullNoteText returns the in-memory text unchanged and
+   * this is equivalent to a plain map(toIndexableNote) (just async).
+   */
+  private async buildIndexableNotes(): Promise<IndexableNote[]> {
+    const notes = this.itemManager.getDisplayableNotes()
+    return Promise.all(
+      notes.map(async (note) => {
+        const text = await getFullNoteText(this.sync, note)
+        return this.toIndexableNote({ uuid: note.uuid, title: note.title, text, noteType: note.noteType })
+      }),
+    )
+  }
+
   /** Buffer item-stream changes for a debounced, coalesced incremental index update. */
   private collectIndexUpdates(
     changed: { uuid: string; title?: string; text?: string; noteType?: NoteType }[],
@@ -831,9 +856,7 @@ export class ItemListController
       this.searchIndex.destroy()
       this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
     }
-    await this.searchIndex.rebuild(
-      this.itemManager.getDisplayableNotes().map((note) => this.toIndexableNote(note)),
-    )
+    await this.searchIndex.rebuild(await this.buildIndexableNotes())
   }
 
   /** Clear the background search index; the next query rebuilds it lazily. */
@@ -1030,15 +1053,18 @@ export class ItemListController
       this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
     }
 
-    // Kick off a lazy build OFF the main thread. ensureBuilt resolves
-    // asynchronously (the heavy tokenization runs in the worker), so this call is
-    // fire-and-forget: until the build completes, search() below returns null and
-    // we fall back to substring ordering. The built index is adopted on the main
-    // thread when ready, and a subsequent reload uses it. Building locally inline
-    // here is the fallback path inside ThreadedSearchIndex when Workers are absent.
-    void this.searchIndex.ensureBuilt(() =>
-      this.itemManager.getDisplayableNotes().map((note) => this.toIndexableNote(note)),
-    )
+    // Kick off a lazy build OFF the main thread. The build is fire-and-forget:
+    // until it completes, search() below returns null and we fall back to substring
+    // ordering. The built index is adopted on the main thread when ready, and a
+    // subsequent reload uses it. The note set is assembled via buildIndexableNotes,
+    // which re-hydrates any lazy-decrypt "lite" bodies first (a no-op with the flag
+    // off), so the index covers real prose. Guarded by isBuilt so we don't rebuild
+    // on every query.
+    if (!this.searchIndex.isBuilt) {
+      void this.buildIndexableNotes()
+        .then((notes) => this.searchIndex.rebuild(notes))
+        .catch(() => undefined)
+    }
 
     const rank = this.preferences.getValue(
       PrefKey.AiPoweredSearchEnabled,

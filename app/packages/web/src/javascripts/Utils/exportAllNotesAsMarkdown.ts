@@ -3,6 +3,7 @@ import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessS
 import { FileItem, NoteType, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
 import { getBase64FromBlob } from './Utils'
+import { getFullNoteText } from './Items/rehydrateLazyDecryptedNote'
 
 const headlessSuperConverter = new HeadlessSuperConverter()
 
@@ -46,7 +47,10 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
 
   const data: { name: string; content: Blob }[] = []
   for (const note of notes) {
-    const markdown = await noteToMarkdown(application, note)
+    // LAZY-DECRYPT: notes may be body-less "lite" projections on cold-load; pull
+    // the full body on demand from IndexedDB (no-op / unchanged with the flag off).
+    const text = await getFullNoteText(application.sync, note)
+    const markdown = await noteToMarkdown(application, { noteType: note.noteType, text, uuid: note.uuid })
     const title = sanitizeFileName(note.title || 'Untitled')
     data.push({
       // Full uuid (not a prefix) guarantees a unique entry per note so two

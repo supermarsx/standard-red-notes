@@ -24,6 +24,9 @@ describe('item list controller', () => {
       items: {
         streamItems: jest.fn(),
       } as unknown as jest.Mocked<ItemManagerInterface>,
+      sync: {
+        getFullContentPayload: jest.fn(),
+      },
     } as unknown as jest.Mocked<WebApplication>
 
     application.addEventObserver = jest.fn()
@@ -38,6 +41,7 @@ describe('item list controller', () => {
       application.navigationController,
       application.searchOptionsController,
       application.items,
+      application.sync,
       application.preferences,
       application.itemControllerGroup,
       application.vaultDisplayService,

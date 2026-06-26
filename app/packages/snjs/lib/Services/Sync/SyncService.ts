@@ -576,7 +576,20 @@ export class SyncService
         })
         .filter(isNotUndefined)
 
-      await this.processPayloadBatch(payloads, totalProcessedCount, payloadCount)
+      /**
+       * BUG-1 FIX (notes silently lost on cold-load): a single batch must never be
+       * able to abort the WHOLE remaining load. Before, an exception anywhere in
+       * processPayloadBatch (decrypt/strip/emit) propagated out of this for-loop and
+       * left every subsequent chunk unprocessed — manifesting as a suffix of notes
+       * never reaching memory (the 20k-of-30k symptom = the first whole batches
+       * loading, then an abort). We isolate each batch so the load always drains all
+       * chunks; a failed batch is logged and skipped rather than killing the rest.
+       */
+      try {
+        await this.processPayloadBatch(payloads, totalProcessedCount, payloadCount)
+      } catch (e) {
+        this.logger.error('loadDatabasePayloads: batch failed, continuing with remaining chunks', String(e))
+      }
 
       const shouldSleepOnlyAfterFirstRegularBatch = chunkIndex > ChunkIndexOfContentTypePriorityItems
       if (shouldSleepOnlyAfterFirstRegularBatch) {
@@ -685,7 +698,21 @@ export class SyncService
         return payload
       }
 
-      return createLitePayloadFromDecrypted(payload)
+      /**
+       * BUG-1 FIX (notes silently lost on cold-load): stripping must be per-item
+       * fault-tolerant. If building the lite projection for ONE note ever throws
+       * (e.g. an unexpected content shape), we must NOT let that exception bubble out
+       * of `.map()` — doing so would abort the whole batch and (combined with an
+       * unguarded load loop) every subsequent batch, leaving a suffix of notes
+       * unloaded. Falling back to the FULL payload for that one note keeps it
+       * loadable (it just forgoes the heap win) and guarantees ALL notes load.
+       */
+      try {
+        return createLitePayloadFromDecrypted(payload)
+      } catch (e) {
+        this.logger.error('maybeStripBodiesForLazyDecrypt: failed to strip note, keeping full payload', String(e))
+        return payload
+      }
     })
   }
 
