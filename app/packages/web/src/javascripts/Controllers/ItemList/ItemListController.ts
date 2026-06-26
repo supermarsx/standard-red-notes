@@ -8,6 +8,12 @@ import {
 } from '@/Assistant/contextualSearchRanking'
 import { IndexableNote } from '@/Utils/Items/Search/SearchIndex'
 import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
+import {
+  DEFAULT_SEARCH_INDEX_SCOPE,
+  filterNotesByScope,
+  isNoteInSearchIndexScope,
+  SearchIndexScope,
+} from '@/Utils/Items/Search/searchIndexSettings'
 import { rankNotesByRelevance } from '@/Utils/Items/Search/RelevanceScore'
 import {
   buildSearchPredicate,
@@ -169,6 +175,12 @@ export class ItemListController
   private searchIndexCacheSize = 50
   /** Current per-note body cap wired into the index (PrefKey.MaxIndexedBodyLength). */
   private searchIndexMaxBodyLength = 50000
+  /**
+   * Inclusion/exclusion scope controlling WHICH notes are indexed. Owned by the
+   * SearchIndexRunner and pushed in via setSearchIndexScope; defaults to "index
+   * all" so behavior is unchanged until the user configures a whitelist/blacklist.
+   */
+  private searchIndexScope: SearchIndexScope = DEFAULT_SEARCH_INDEX_SCOPE
   /** Coalesced buffer of pending incremental index updates from the item stream. */
   private pendingIndexChanges: Map<string, IndexableNote> = new Map()
   private pendingIndexRemovals: Set<string> = new Set()
@@ -812,13 +824,50 @@ export class ItemListController
    * this is equivalent to a plain map(toIndexableNote) (just async).
    */
   private async buildIndexableNotes(): Promise<IndexableNote[]> {
-    const notes = this.itemManager.getDisplayableNotes()
+    const notes = this.getScopedIndexableNotes()
     return Promise.all(
       notes.map(async (note) => {
         const text = await getFullNoteText(this.sync, note)
         return this.toIndexableNote({ uuid: note.uuid, title: note.title, text, noteType: note.noteType })
       }),
     )
+  }
+
+  /**
+   * Standard Red Notes: replace the index inclusion/exclusion scope (whitelist /
+   * blacklist by tag). Called by the SearchIndexRunner when the user edits the
+   * scope in the Search & Indexing pane. The runner then triggers a rebuild so the
+   * new scope is applied; we don't rebuild here to keep this a pure state setter.
+   */
+  setSearchIndexScope = (scope: SearchIndexScope): void => {
+    this.searchIndexScope = scope
+  }
+
+  /**
+   * The displayable notes that pass the current index scope. In the default 'all'
+   * mode this is exactly getDisplayableNotes(); in include/exclude mode it drops
+   * notes by tag membership (resolved via the existing tag/reference API).
+   */
+  private getScopedIndexableNotes(): SNNote[] {
+    return filterNotesByScope(this.itemManager.getDisplayableNotes(), this.searchIndexScope, (note) =>
+      this.itemManager.getSortedTagsForItem(note).map((tag) => tag.uuid),
+    )
+  }
+
+  /** True when a note passes the current index scope (used to gate incremental updates). */
+  private isNoteIndexable(item: { uuid: string }): boolean {
+    const scope = this.searchIndexScope
+    if (scope.mode === 'all' || scope.tagIds.length === 0) {
+      return true
+    }
+    const note = this.itemManager.findItem<SNNote>(item.uuid)
+    if (!note) {
+      // Removals can't be resolved to a note; treat as indexable so the removal is
+      // still forwarded to the index (a no-op if it was never indexed).
+      return true
+    }
+    const noteTagIds = this.itemManager.getSortedTagsForItem(note).map((tag) => tag.uuid)
+    return isNoteInSearchIndexScope(scope, noteTagIds)
   }
 
   /** Buffer item-stream changes for a debounced, coalesced incremental index update. */
@@ -835,8 +884,15 @@ export class ItemListController
       this.pendingIndexRemovals.add(item.uuid)
     }
     for (const item of [...changed, ...inserted]) {
-      this.pendingIndexRemovals.delete(item.uuid)
-      this.pendingIndexChanges.set(item.uuid, this.toIndexableNote(item))
+      if (this.isNoteIndexable(item)) {
+        this.pendingIndexRemovals.delete(item.uuid)
+        this.pendingIndexChanges.set(item.uuid, this.toIndexableNote(item))
+      } else {
+        // A note that has moved OUT of the index scope (e.g. gained a blacklisted
+        // tag) must be evicted from the live index.
+        this.pendingIndexChanges.delete(item.uuid)
+        this.pendingIndexRemovals.add(item.uuid)
+      }
     }
     this.flushIndexUpdates()
   }
@@ -874,7 +930,7 @@ export class ItemListController
    * triggers the OOM-prone build. Tier-1 (substring/preview) search is unaffected.
    */
   private shouldSkipFullIndexBuild(): boolean {
-    return this.itemManager.getDisplayableNotes().length > this.maxIndexedNotes
+    return this.getScopedIndexableNotes().length > this.maxIndexedNotes
   }
 
   /**

@@ -17,6 +17,7 @@ const PREFERENCE_PANE_IDS = [
   'survivor-switch',
   'recent-notes',
   'search-index',
+  'searchIndexing',
   'achievements',
   'sharing',
   'sync',

@@ -60,9 +60,10 @@ export class PreferencesSessionController {
     // Standard Red Notes: recently-opened notes history pane.
     menuItems.push({ id: 'recent-notes', label: 'Recent Notes', icon: 'history', order: 9 })
 
-    // Standard Red Notes: background search-index controls (enable/disable,
-    // start/stop, scheduler).
-    menuItems.push({ id: 'search-index', label: 'Search Index', icon: 'search', order: 9 })
+    // Standard Red Notes: Search & Indexing pane — background indexer controls
+    // (enable/disable, start/stop), scheduler modes (on-change/idle/interval/manual),
+    // manual purge, inclusion/exclusion scope, and index limits + search prefs.
+    menuItems.push({ id: 'searchIndexing', label: 'Search & Indexing', icon: 'search', order: 9 })
 
     // Standard Red Notes: gamified Achievements pane (badges derived from usage).
     menuItems.push({ id: 'achievements', label: 'Achievements', icon: 'star', order: 9 })

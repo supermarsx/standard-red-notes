@@ -137,6 +137,30 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
 
   'recent-notes': ['recent notes', 'history', 'recently opened', 'recently viewed'],
 
+  searchIndexing: [
+    'search',
+    'search index',
+    'indexing',
+    'full text search',
+    'full-text',
+    'rebuild index',
+    'purge index',
+    'reindex',
+    'scheduler',
+    'on change',
+    'idle',
+    'interval',
+    'inclusions',
+    'exclusions',
+    'whitelist',
+    'blacklist',
+    'index scope',
+    'min query length',
+    'query cache',
+    'max indexed notes',
+    'body length',
+  ],
+
   sync: [
     'sync',
     'selective sync',
