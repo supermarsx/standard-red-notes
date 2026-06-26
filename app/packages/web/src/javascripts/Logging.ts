@@ -12,6 +12,7 @@ export enum LoggingDomain {
   Purchasing,
   Panes,
   U2F,
+  Search,
 }
 
 const LoggingStatus: Record<LoggingDomain, boolean> = {
@@ -25,6 +26,7 @@ const LoggingStatus: Record<LoggingDomain, boolean> = {
   [LoggingDomain.Purchasing]: false,
   [LoggingDomain.Panes]: false,
   [LoggingDomain.U2F]: false,
+  [LoggingDomain.Search]: false,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

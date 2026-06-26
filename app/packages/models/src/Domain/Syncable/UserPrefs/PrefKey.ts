@@ -75,6 +75,20 @@ export enum PrefKey {
   SearchIndexEnabled = 'searchIndexEnabled',
   SearchQueryCacheSize = 'searchQueryCacheSize',
   SearchMinQueryLength = 'searchMinQueryLength',
+  // MaxIndexedBodyLength caps how many characters of each note's body are fed into
+  // the Tier-2 BM25 index (wired to SearchIndex's maxTextLengthPerNote) so a huge
+  // 500KB note can't dump enormous token/text into the index. MaxIndexedNotes is a
+  // ceiling on the displayable-note count above which the full Tier-2 index build
+  // is skipped entirely (Tier-1 substring/preview search still works), so a very
+  // large account never triggers the OOM-prone full build.
+  MaxIndexedBodyLength = 'maxIndexedBodyLength',
+  MaxIndexedNotes = 'maxIndexedNotes',
+  // Standard Red Notes: ceiling on the off-main-thread decryption worker pool.
+  // 0 == "auto" (the pool picks hardwareConcurrency - 1, spawning lazily so small
+  // vaults never pay the per-worker libsodium-WASM init tax). A value > 0 caps the
+  // pool at min(value, hardwareConcurrency), letting power users dedicate the full
+  // thread count to cold-loading a large vault.
+  MaxDecryptionWorkers = 'maxDecryptionWorkers',
   // Standard Red Notes: a capped, most-recent-first history of notes the user has
   // opened, persisted as a JSON array of { uuid, openedAt } entries. Surfaced in
   // the "Recent Notes" preferences pane. Stored as a pref so it follows the user
@@ -181,6 +195,9 @@ export type PrefValue = {
   [PrefKey.SearchIndexEnabled]: boolean
   [PrefKey.SearchQueryCacheSize]: number
   [PrefKey.SearchMinQueryLength]: number
+  [PrefKey.MaxIndexedBodyLength]: number
+  [PrefKey.MaxIndexedNotes]: number
+  [PrefKey.MaxDecryptionWorkers]: number
   [PrefKey.RecentNotesHistory]: RecentNoteEntry[]
   [PrefKey.CustomNotesOrder]: string[]
   [PrefKey.CustomFoldersOrder]: string[]

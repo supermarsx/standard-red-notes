@@ -167,6 +167,8 @@ export class ItemListController
    */
   private searchIndex = new ThreadedSearchIndex()
   private searchIndexCacheSize = 50
+  /** Current per-note body cap wired into the index (PrefKey.MaxIndexedBodyLength). */
+  private searchIndexMaxBodyLength = 50000
   /** Coalesced buffer of pending incremental index updates from the item stream. */
   private pendingIndexChanges: Map<string, IndexableNote> = new Map()
   private pendingIndexRemovals: Set<string> = new Set()
@@ -847,16 +849,57 @@ export class ItemListController
    * index has adopted the result.
    */
   async rebuildSearchIndex(): Promise<void> {
+    this.reconcileSearchIndexOptions()
+    if (this.shouldSkipFullIndexBuild()) {
+      // Too many displayable notes to safely build the full Tier-2 index; leave it
+      // off (Tier-1 substring/preview search still works) to avoid OOM.
+      log(
+        LoggingDomain.Search,
+        'Skipping search index rebuild: displayable notes exceed MaxIndexedNotes ceiling',
+        this.maxIndexedNotes,
+      )
+      return
+    }
+    await this.searchIndex.rebuild(await this.buildIndexableNotes())
+  }
+
+  /** Configured ceiling above which the full Tier-2 index build is skipped (OOM guard). */
+  private get maxIndexedNotes(): number {
+    return this.preferences.getValue(PrefKey.MaxIndexedNotes, PrefDefaults[PrefKey.MaxIndexedNotes])
+  }
+
+  /**
+   * True when the displayable-note count exceeds the MaxIndexedNotes ceiling, in
+   * which case the full Tier-2 index build is skipped so a huge account never
+   * triggers the OOM-prone build. Tier-1 (substring/preview) search is unaffected.
+   */
+  private shouldSkipFullIndexBuild(): boolean {
+    return this.itemManager.getDisplayableNotes().length > this.maxIndexedNotes
+  }
+
+  /**
+   * Recreate the background index when either the query-cache size or the per-note
+   * body cap pref changed, so both stay in sync with the user's preferences. The
+   * body cap is wired through as SearchIndex's maxTextLengthPerNote.
+   */
+  private reconcileSearchIndexOptions(): void {
     const cacheSize = this.preferences.getValue(
       PrefKey.SearchQueryCacheSize,
       PrefDefaults[PrefKey.SearchQueryCacheSize],
     )
-    if (cacheSize !== this.searchIndexCacheSize) {
+    const maxBodyLength = this.preferences.getValue(
+      PrefKey.MaxIndexedBodyLength,
+      PrefDefaults[PrefKey.MaxIndexedBodyLength],
+    )
+    if (cacheSize !== this.searchIndexCacheSize || maxBodyLength !== this.searchIndexMaxBodyLength) {
       this.searchIndexCacheSize = cacheSize
+      this.searchIndexMaxBodyLength = maxBodyLength
       this.searchIndex.destroy()
-      this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
+      this.searchIndex = new ThreadedSearchIndex({
+        queryCacheSize: cacheSize,
+        maxTextLengthPerNote: maxBodyLength,
+      })
     }
-    await this.searchIndex.rebuild(await this.buildIndexableNotes())
   }
 
   /** Clear the background search index; the next query rebuilds it lazily. */
@@ -1041,17 +1084,9 @@ export class ItemListController
       return null
     }
 
-    // Honor the configured query-cache size; recreate the index if it changed so
-    // the LRU cap stays in sync with the user's preference.
-    const cacheSize = this.preferences.getValue(
-      PrefKey.SearchQueryCacheSize,
-      PrefDefaults[PrefKey.SearchQueryCacheSize],
-    )
-    if (cacheSize !== this.searchIndexCacheSize) {
-      this.searchIndexCacheSize = cacheSize
-      this.searchIndex.destroy()
-      this.searchIndex = new ThreadedSearchIndex({ queryCacheSize: cacheSize })
-    }
+    // Honor the configured query-cache size and per-note body cap; recreate the
+    // index if either changed so its bounds stay in sync with the user's prefs.
+    this.reconcileSearchIndexOptions()
 
     // Kick off a lazy build OFF the main thread. The build is fire-and-forget:
     // until it completes, search() below returns null and we fall back to substring
@@ -1059,8 +1094,17 @@ export class ItemListController
     // subsequent reload uses it. The note set is assembled via buildIndexableNotes,
     // which re-hydrates any lazy-decrypt "lite" bodies first (a no-op with the flag
     // off), so the index covers real prose. Guarded by isBuilt so we don't rebuild
-    // on every query.
+    // on every query, and by the MaxIndexedNotes ceiling so a huge account never
+    // triggers the OOM-prone full build (Tier-1 substring/preview search still works).
     if (!this.searchIndex.isBuilt) {
+      if (this.shouldSkipFullIndexBuild()) {
+        log(
+          LoggingDomain.Search,
+          'Skipping lazy search index build: displayable notes exceed MaxIndexedNotes ceiling',
+          this.maxIndexedNotes,
+        )
+        return null
+      }
       void this.buildIndexableNotes()
         .then((notes) => this.searchIndex.rebuild(notes))
         .catch(() => undefined)

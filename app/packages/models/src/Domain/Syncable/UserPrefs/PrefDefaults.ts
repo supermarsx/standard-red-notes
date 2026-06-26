@@ -78,6 +78,15 @@ export const PrefDefaults = {
   [PrefKey.SearchIndexEnabled]: true,
   [PrefKey.SearchQueryCacheSize]: 50,
   [PrefKey.SearchMinQueryLength]: 2,
+  // MaxIndexedBodyLength caps indexed characters per note (matches SearchIndex's
+  // internal default). MaxIndexedNotes is the displayable-note ceiling above which
+  // the full Tier-2 index build is skipped to avoid OOM on very large accounts.
+  [PrefKey.MaxIndexedBodyLength]: 50000,
+  [PrefKey.MaxIndexedNotes]: 50000,
+  // Standard Red Notes: 0 == "auto" — the decryption pool derives its ceiling from
+  // hardwareConcurrency - 1 and spawns workers lazily, so the default never spins
+  // more workers than a load actually needs.
+  [PrefKey.MaxDecryptionWorkers]: 0,
   // Standard Red Notes: the recently-opened-notes history starts empty and is
   // populated as the user opens notes.
   [PrefKey.RecentNotesHistory]: [],

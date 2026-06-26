@@ -8,6 +8,7 @@ import { ItemListController } from './ItemListController'
 import { ItemsReloadSource } from './ItemsReloadSource'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { runInAction } from 'mobx'
+import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
 
 describe('item list controller', () => {
   let application: WebApplication
@@ -261,6 +262,56 @@ describe('item list controller', () => {
       controller.clearAiContextualOrder()
       expect(controller.aiContextualOrder).toBeNull()
       expect(controller.aiContextualQuery).toBeNull()
+    })
+  })
+
+  describe('MaxIndexedNotes ceiling (OOM guard)', () => {
+    const setPrefs = (overrides: Record<string, unknown>) => {
+      ;(controller as unknown as { preferences: { getValue: jest.Mock } }).preferences = {
+        getValue: jest.fn((key: string, fallback: unknown) =>
+          key in overrides ? overrides[key] : fallback,
+        ),
+      }
+    }
+
+    const setDisplayableNoteCount = (count: number) => {
+      const notes = Array.from({ length: count }, (_, i) => ({ uuid: `n${i}`, title: 't', noteType: undefined }))
+      ;(controller as unknown as { itemManager: { getDisplayableNotes: jest.Mock } }).itemManager = {
+        getDisplayableNotes: jest.fn().mockReturnValue(notes),
+      }
+    }
+
+    // Spy on the prototype so the spy survives any index re-creation inside
+    // reconcileSearchIndexOptions (which may swap the instance when prefs change).
+    let rebuildSpy: jest.SpyInstance
+    beforeEach(() => {
+      rebuildSpy = jest
+        .spyOn(ThreadedSearchIndex.prototype, 'rebuild')
+        .mockResolvedValue(undefined)
+    })
+    afterEach(() => {
+      rebuildSpy.mockRestore()
+    })
+
+    it('skips the full Tier-2 rebuild when displayable notes exceed MaxIndexedNotes', async () => {
+      setPrefs({ maxIndexedNotes: 3 })
+      setDisplayableNoteCount(5)
+
+      await controller.rebuildSearchIndex()
+
+      expect(rebuildSpy).not.toHaveBeenCalled()
+    })
+
+    it('builds the full Tier-2 index when at/under the MaxIndexedNotes ceiling', async () => {
+      setPrefs({ maxIndexedNotes: 10 })
+      setDisplayableNoteCount(5)
+      ;(controller as unknown as { buildIndexableNotes: () => Promise<unknown[]> }).buildIndexableNotes = jest
+        .fn()
+        .mockResolvedValue([])
+
+      await controller.rebuildSearchIndex()
+
+      expect(rebuildSpy).toHaveBeenCalledTimes(1)
     })
   })
 })

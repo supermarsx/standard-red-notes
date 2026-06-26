@@ -45,7 +45,7 @@ function matchResultForStringQuery(item: SearchableItem, searchString: string): 
   }
 
   const title = item.title?.toLowerCase()
-  const text = item.text?.toLowerCase()
+  const text = bodyForMatching(item)?.toLowerCase()
   const lowercaseText = searchString.toLowerCase()
   const words = lowercaseText.split(' ')
   const quotedText = stringBetweenQuotes(lowercaseText)
@@ -74,6 +74,29 @@ function matchResultForStringQuery(item: SearchableItem, searchString: string): 
     })
 
   return (matchesTitle ? MatchResult.Title : 0) + (matchesBody ? MatchResult.Text : 0)
+}
+
+/**
+ * Standard Red Notes: the body string the substring matcher should search.
+ *
+ * Normally this is the note's decrypted `text`. With lazy-decrypt enabled a cold
+ * "lite" note has `text === ''` (its body was stripped from memory), so we fall
+ * back to the always-resident preview (`preview_plain`, or `preview_html` with
+ * tags stripped) so the note still matches on its preview with zero decrypt.
+ * When `text` is present (flag off, or note already hydrated) behavior is
+ * identical — the full body is matched and the preview fallback is unused.
+ */
+function bodyForMatching(item: SearchableItem): string | undefined {
+  if (item.text && item.text.length > 0) {
+    return item.text
+  }
+  if (item.preview_plain && item.preview_plain.length > 0) {
+    return item.preview_plain
+  }
+  if (item.preview_html && item.preview_html.length > 0) {
+    return item.preview_html.replace(/<[^>]*>/g, ' ')
+  }
+  return item.text
 }
 
 function stringBetweenQuotes(text: string) {
