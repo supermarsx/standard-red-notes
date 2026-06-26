@@ -135,8 +135,6 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
 
   'survivor-switch': ['dead man switch', 'inheritance', 'survivor', 'designate survivor', 'legacy'],
 
-  conflicts: ['sync conflicts', 'conflict', 'merge', 'resolve conflicts', 'duplicates'],
-
   'recent-notes': ['recent notes', 'history', 'recently opened', 'recently viewed'],
 
   sync: [
@@ -150,5 +148,11 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
     "what's synced",
     'exclude from sync',
     'keep on device',
+    // Merged in from the former standalone "Sync Conflicts" pane.
+    'sync conflicts',
+    'conflict',
+    'merge',
+    'resolve conflicts',
+    'duplicates',
   ],
 }

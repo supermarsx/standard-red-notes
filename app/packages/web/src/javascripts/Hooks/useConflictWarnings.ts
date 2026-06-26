@@ -66,12 +66,12 @@ export const useConflictWarnings = (application: WebApplication): void => {
             type: ToastType.Error,
             title: 'Sync conflict',
             message:
-              'A sync conflict occurred — your edit and the server’s version were both kept as separate copies. Review them in Preferences → Conflicts.',
+              'A sync conflict occurred — your edit and the server’s version were both kept as separate copies. Review them in Preferences → Sync.',
             actions: [
               {
                 label: 'Review',
                 handler: (toastId) => {
-                  application.preferencesController.openPreferences('conflicts')
+                  application.preferencesController.openPreferences('sync')
                   dismissToast(toastId)
                 },
               },

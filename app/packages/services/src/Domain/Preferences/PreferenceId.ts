@@ -15,7 +15,6 @@ const PREFERENCE_PANE_IDS = [
   'admin',
   'shares',
   'survivor-switch',
-  'conflicts',
   'recent-notes',
   'search-index',
   'achievements',

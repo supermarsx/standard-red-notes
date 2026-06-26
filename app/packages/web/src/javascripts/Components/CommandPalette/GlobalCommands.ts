@@ -270,7 +270,8 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     title: 'Open Sync Conflicts',
     keywords: ['settings', 'sync', 'duplicate', 'resolve'],
     icon: 'sync',
-    run: openPreferencesPane('conflicts'),
+    // Sync conflicts now live as a section within the unified Sync pane.
+    run: openPreferencesPane('sync'),
   },
   {
     id: 'global-open-pref-achievements',

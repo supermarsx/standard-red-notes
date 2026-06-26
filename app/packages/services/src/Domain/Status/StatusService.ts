@@ -23,7 +23,6 @@ export class StatusService extends AbstractService<StatusServiceEvent, string> i
     'whats-new': 0,
     shares: 0,
     'survivor-switch': 0,
-    conflicts: 0,
     'recent-notes': 0,
     'search-index': 0,
     achievements: 0,

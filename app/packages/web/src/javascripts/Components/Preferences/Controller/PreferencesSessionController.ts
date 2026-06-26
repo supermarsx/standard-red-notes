@@ -51,11 +51,10 @@ export class PreferencesSessionController {
     // Standard Red Notes: survivor switch (dead man's switch) management pane.
     menuItems.push({ id: 'survivor-switch', label: 'Survivor Switch', icon: 'pencil-off', order: 9 })
 
-    // Standard Red Notes: sync conflict review & resolution pane.
-    menuItems.push({ id: 'conflicts', label: 'Sync Conflicts', icon: 'sync', order: 9 })
-
     // Standard Red Notes: Sync control pane — overview of synced vs. local-only
-    // items, the list of what's kept on this device, and selective-sync config.
+    // items, the list of what's kept on this device, selective-sync config, and
+    // sync conflict review & resolution (merged in from the former "Sync Conflicts"
+    // pane so all sync controls live in one section).
     menuItems.push({ id: 'sync', label: 'Sync', icon: 'sync', order: 9 })
 
     // Standard Red Notes: recently-opened notes history pane.

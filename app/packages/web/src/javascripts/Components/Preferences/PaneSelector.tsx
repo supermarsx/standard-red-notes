@@ -16,7 +16,6 @@ import Assistant from './Panes/Assistant/Assistant'
 import Admin from './Panes/Admin/Admin'
 import Shares from './Panes/Shares/Shares'
 import SurvivorSwitch from './Panes/SurvivorSwitch/SurvivorSwitch'
-import Conflicts from './Panes/Conflicts/Conflicts'
 import RecentNotes from './Panes/RecentNotes/RecentNotes'
 import SearchIndexPreferences from './Panes/SearchIndex/SearchIndexPreferences'
 import Achievements from './Panes/Achievements/Achievements'
@@ -44,8 +43,6 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <Shares application={application} />
     case 'survivor-switch':
       return <SurvivorSwitch application={application} />
-    case 'conflicts':
-      return <Conflicts application={application} />
     case 'recent-notes':
       return <RecentNotes application={application} />
     case 'search-index':

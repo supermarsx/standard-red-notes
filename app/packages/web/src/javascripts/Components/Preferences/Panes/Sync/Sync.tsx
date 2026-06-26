@@ -31,6 +31,8 @@ import {
   subscribeManualSyncMode,
 } from '@/Utils/ManualSyncSetting'
 
+import Conflicts from '@/Components/Preferences/Panes/Conflicts/Conflicts'
+
 import { LocalOnlyItem, SyncItemLike, SyncSummary, summarizeSync } from './syncSummary'
 
 type Props = {
@@ -487,6 +489,10 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
           )}
         </PreferencesSegment>
       </PreferencesGroup>
+
+      {/* Sync conflicts — review & resolve conflicted copies. Merged in from the
+          former standalone "Sync Conflicts" pane so all sync controls live here. */}
+      <Conflicts application={application} />
     </PreferencesPane>
   )
 }

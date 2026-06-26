@@ -6,7 +6,6 @@ import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
-import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
@@ -260,10 +259,9 @@ const Conflicts: FunctionComponent<Props> = ({ application }: Props) => {
   }, [])
 
   return (
-    <PreferencesPane>
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Sync Conflicts</Title>
+    <PreferencesGroup>
+      <PreferencesSegment>
+        <Title>Sync Conflicts</Title>
           <Text>
             When the same note is edited on two devices before they sync, Standard Notes keeps both copies and flags the
             divergent one as a "Conflicted Copy". Review each conflict below: see a git-style diff of the two versions
@@ -393,7 +391,6 @@ const Conflicts: FunctionComponent<Props> = ({ application }: Props) => {
           )}
         </PreferencesSegment>
       </PreferencesGroup>
-    </PreferencesPane>
   )
 }
 
