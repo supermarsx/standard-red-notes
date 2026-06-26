@@ -59,16 +59,18 @@ export async function waitForApplicationReady(page: Page, timeoutMs = 60_000): P
 export async function seedNotes(page: Page, count: number, sizeBytes: number): Promise<SeedResult> {
   return page.evaluate(
     async ({ count, sizeBytes }) => {
-      const group = (window as unknown as {
+      const app = (window as unknown as {
         mainApplicationGroup?: {
           primaryApplication?: {
-            mutator: { createItem: (ct: string, content: unknown, needsSync?: boolean) => Promise<unknown> }
+            mutator: {
+              createItem: (ct: string, content: unknown, needsSync?: boolean) => Promise<{ payload: unknown }>
+              emitItemsFromPayloads?: (payloads: unknown[], emitSource: number) => Promise<unknown[]>
+            }
             sync: { sync: (opts?: unknown) => Promise<unknown> }
             items: { getItems: (ct: string) => unknown[] }
           }
         }
-      }).mainApplicationGroup
-      const app = group?.primaryApplication
+      }).mainApplicationGroup?.primaryApplication
       if (!app) {
         throw new Error('window.mainApplicationGroup.primaryApplication not available')
       }
@@ -80,13 +82,41 @@ export async function seedNotes(page: Page, count: number, sizeBytes: number): P
 
       const seedStart = performance.now()
       let created = 0
-      for (let i = 0; i < count; i += 1) {
-        await app.mutator.createItem(
-          'Note',
-          { title: `Stress note ${i + 1}`, text: `${i + 1} ${body}` },
-          true,
-        )
-        created += 1
+
+      // FAST PATH: create one real note to obtain a genuine DecryptedPayload,
+      // then clone it `count` times via payload.copy() (fresh uuid + per-note
+      // content, all dirty) and emit them in ONE batched pass. createItem
+      // one-at-a-time re-sorts the display controller per insert (O(n^2) total,
+      // ~9 min for 15k); a single emitItemsFromPayloads re-sorts once. The base
+      // note is created needsSync=false so it is never persisted and vanishes on
+      // reload, leaving exactly `count` notes loaded from IndexedDB.
+      // PayloadEmitSource.LocalInserted === 3.
+      const LOCAL_INSERTED = 3
+      const base = await app.mutator.createItem('Note', { title: 'seed-base', text: body }, false)
+      const basePayload = base.payload as {
+        copy: (override: Record<string, unknown>) => unknown
+        content: Record<string, unknown>
+      }
+
+      if (typeof app.mutator.emitItemsFromPayloads === 'function') {
+        const payloads: unknown[] = []
+        for (let i = 0; i < count; i += 1) {
+          payloads.push(
+            basePayload.copy({
+              uuid: crypto.randomUUID(),
+              content: { ...basePayload.content, title: `Stress note ${i + 1}`, text: `${i + 1} ${body}` },
+              dirty: true,
+            }),
+          )
+        }
+        await app.mutator.emitItemsFromPayloads(payloads, LOCAL_INSERTED)
+        created = count
+      } else {
+        // Fallback: per-item create (slow, but correct) if the bulk method is absent.
+        for (let i = 0; i < count; i += 1) {
+          await app.mutator.createItem('Note', { title: `Stress note ${i + 1}`, text: `${i + 1} ${body}` }, true)
+          created += 1
+        }
       }
       const seedMs = performance.now() - seedStart
 
