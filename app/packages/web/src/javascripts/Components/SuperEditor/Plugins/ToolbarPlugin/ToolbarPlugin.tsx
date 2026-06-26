@@ -2526,8 +2526,10 @@ const ToolbarPlugin = () => {
 
   // Office-ribbon contextual tab: when an element (table/image/link/etc.) is
   // active in the docked ribbon, surface its tailored actions as an extra,
-  // auto-selected ribbon tab rather than a separate line. (The separate line is
-  // kept only for the non-ribbon floating selection toolbar, further below.)
+  // *available* ribbon tab rather than a separate line. It is made selectable but
+  // is NOT auto-activated — the user stays on whatever tab they were on and may
+  // click into it themselves. (The separate line is kept only for the non-ribbon
+  // floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!contextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
     ...superGroupTabs.map((tab) => ({ id: tab.id as string, label: tab.label })),
@@ -2540,18 +2542,20 @@ const ToolbarPlugin = () => {
     ? []
     : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
 
-  // Auto-select the contextual tab when an element becomes active, and clear it
-  // when the element goes away. Depending on the label (not just presence) means
-  // switching e.g. Table -> Image re-selects the contextual tab, while a stable
-  // label won't re-run — so a user who manually clicks another tab keeps it.
+  // Do NOT auto-select the contextual tab when an element becomes active — the
+  // contextual tab is merely made *available* (rendered in the tab strip), and
+  // the user stays on whatever tab they were on. They can click it themselves.
+  //
+  // We only handle the inverse: if the user is currently ON the contextual tab
+  // and the contextual element goes away, drop the explicit selection so the
+  // ribbon falls back to a sensible default (the first tab, i.e. Home) via the
+  // `effectiveTabId` resolution above, instead of leaving them on a dead tab.
   useEffect(() => {
-    if (hasContextualTab) {
-      setActiveTabId(CONTEXTUAL_TAB_ID)
-    } else {
+    if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasContextualTab, contextualWidget?.label])
+  }, [hasContextualTab])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
