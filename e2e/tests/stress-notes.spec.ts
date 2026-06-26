@@ -2,6 +2,7 @@ import { test, expect, chromium, type Page, type BrowserContext } from '@playwri
 import path from 'node:path'
 import {
   seedNotes,
+  seedNotesViaDevice,
   waitForApplicationReady,
   inMemoryNoteCount,
   waitForNoteCountSettled,
@@ -18,6 +19,23 @@ import {
  */
 const REUSE_DIR = process.env.STRESS_REUSE_DIR?.trim()
 const APP_BASE_URL = process.env.APP_URL?.trim() || 'http://localhost:3001'
+
+/**
+ * STRESS_SEED_VIA_DEVICE: force the device-bypass seed path
+ * (`seedNotesViaDevice` -> `app.storage.savePayloads` -> device
+ * `saveDatabaseEntries`), which encrypts each batch and writes straight to
+ * IndexedDB WITHOUT inserting notes into the live app's in-memory item
+ * collection. This keeps seed memory bounded to ~one batch regardless of total
+ * count, so very large vaults (100k/500k) can seed without OOM. The default
+ * `seedNotes` (emit+sync) path retains every created note in memory and OOMs
+ * past ~100k.
+ *
+ * The device path is also AUTO-SELECTED when a scale's count is large
+ * (>= DEVICE_SEED_AUTO_THRESHOLD), even if the flag is unset, since the
+ * emit+sync path cannot survive those counts.
+ */
+const SEED_VIA_DEVICE = /^(1|true|yes)$/i.test(process.env.STRESS_SEED_VIA_DEVICE?.trim() ?? '')
+const DEVICE_SEED_AUTO_THRESHOLD = 50_000
 
 /**
  * SCALING stress-characterization harness for the notes list.
@@ -191,9 +209,20 @@ for (const count of RAMP) {
       if (reused) {
         console.log(`[reuse] count=${count} — existing persistent profile, skipped seeding`)
       } else {
-        const seed = await seedNotes(page, count, SIZE_BYTES)
+        // Choose the seed path: device-bypass when explicitly toggled OR when
+        // the count is large enough that the in-memory emit+sync path would OOM.
+        const useDevice = SEED_VIA_DEVICE || count >= DEVICE_SEED_AUTO_THRESHOLD
+        const reason = SEED_VIA_DEVICE
+          ? 'STRESS_SEED_VIA_DEVICE'
+          : useDevice
+            ? `count>=${DEVICE_SEED_AUTO_THRESHOLD}`
+            : 'default'
+        const seed = useDevice
+          ? await seedNotesViaDevice(page, count, SIZE_BYTES)
+          : await seedNotes(page, count, SIZE_BYTES)
         console.log(
           `[seed] count=${count} created=${seed.created} batches=${seed.batches} path=${seed.path} ` +
+            `seedSelect=${reason} ` +
             `seedMs=${Math.round(seed.seedMs)} syncMs=${Math.round(seed.syncMs)} ` +
             `totalNoteItems=${seed.totalItems} ` +
             `peakSeedHeapMB=${seed.peakSeedHeapMB ?? 'n/a'}`,
