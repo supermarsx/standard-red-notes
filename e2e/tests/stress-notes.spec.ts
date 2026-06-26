@@ -193,9 +193,17 @@ for (const count of RAMP) {
       } else {
         const seed = await seedNotes(page, count, SIZE_BYTES)
         console.log(
-          `[seed] count=${count} created=${seed.created} seedMs=${Math.round(seed.seedMs)} ` +
-            `syncMs=${Math.round(seed.syncMs)} totalNoteItems=${seed.totalItems}`,
+          `[seed] count=${count} created=${seed.created} batches=${seed.batches} path=${seed.path} ` +
+            `seedMs=${Math.round(seed.seedMs)} syncMs=${Math.round(seed.syncMs)} ` +
+            `totalNoteItems=${seed.totalItems} ` +
+            `peakSeedHeapMB=${seed.peakSeedHeapMB ?? 'n/a'}`,
         )
+        // Prove the SEED itself didn't blow up: peak heap during chunked seeding
+        // should stay ~one batch, NOT the whole corpus (count * SIZE_BYTES).
+        test.info().annotations.push({
+          type: 'stress:peakSeedHeapMB',
+          description: String(seed.peakSeedHeapMB),
+        })
       }
 
       // 2) Reload FRESH so the app must boot from IndexedDB with all notes —
