@@ -185,6 +185,17 @@ export abstract class Collection<
     }
 
     for (const element of elements) {
+      /**
+       * Latent guard: if this uuid already exists under a DIFFERENT content_type, evict it from
+       * its old typed-map bucket first. Otherwise the same uuid could live in two buckets at once
+       * (the new bucket gets the insert while the old bucket keeps the stale entry), corrupting
+       * `all(type)` results. setToTypedMap only de-dups within a single content_type.
+       */
+      const existing = this.map[element.uuid]
+      if (existing && existing.content_type !== element.content_type) {
+        this.deleteFromTypedMap(existing)
+      }
+
       this.map[element.uuid] = element
       this.setToTypedMap(element)
 

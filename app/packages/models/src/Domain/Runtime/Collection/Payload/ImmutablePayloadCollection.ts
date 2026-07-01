@@ -25,14 +25,24 @@ export class ImmutablePayloadCollection<
     collection: PayloadCollection<T>,
   ): ImmutablePayloadCollection<T> {
     const mapCopy = Object.freeze(Object.assign({}, collection.map))
-    const typedMapCopy = Object.freeze(Object.assign({}, collection.typedMap))
+    /**
+     * Deep-copy each per-content_type array. `Object.assign({}, typedMap)` is a SHALLOW copy:
+     * the arrays would be shared by reference with the source, so a later in-place mutation
+     * (setToTypedMap/deleteFromTypedMap push/remove) on the copy would corrupt the source's
+     * arrays — breaking the "immutable" guarantee. Slicing each array makes the copy independent.
+     */
+    const typedMapCopy: Partial<Record<string, T[]>> = {}
+    for (const contentType of Object.keys(collection.typedMap)) {
+      typedMapCopy[contentType] = collection.typedMap[contentType]?.slice()
+    }
+    Object.freeze(typedMapCopy)
     const referenceMapCopy = Object.freeze(collection.referenceMap.makeCopy()) as UuidMap
     const conflictMapCopy = Object.freeze(collection.conflictMap.makeCopy()) as UuidMap
 
     const result = new ImmutablePayloadCollection<T>(
       true,
       mapCopy,
-      typedMapCopy as Partial<Record<string, T[]>>,
+      typedMapCopy,
       referenceMapCopy,
       conflictMapCopy,
     )
@@ -44,7 +54,15 @@ export class ImmutablePayloadCollection<
 
   mutableCopy(): PayloadCollection<P> {
     const mapCopy = Object.assign({}, this.map)
-    const typedMapCopy = Object.assign({}, this.typedMap)
+    /**
+     * Deep-copy each per-content_type array so the mutable copy does not share array references
+     * with this (frozen) immutable source. Without the slice, a push/remove on the copy's typed
+     * arrays would mutate the source in place — corrupting the supposedly immutable original.
+     */
+    const typedMapCopy: Partial<Record<string, P[]>> = {}
+    for (const contentType of Object.keys(this.typedMap)) {
+      typedMapCopy[contentType] = this.typedMap[contentType]?.slice()
+    }
     const referenceMapCopy = this.referenceMap.makeCopy()
     const conflictMapCopy = this.conflictMap.makeCopy()
     const result = new PayloadCollection(true, mapCopy, typedMapCopy, referenceMapCopy, conflictMapCopy)

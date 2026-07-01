@@ -59,14 +59,22 @@ export class ConflictDelta {
        * uploading the changes until after the multi-page request completes, we may have
        * already conflicted this item.
        */
-      const existingConflict = this.baseCollection.conflictsOf(this.applyPayload.uuid)[0]
-      if (
-        existingConflict &&
-        isDecryptedPayload(existingConflict) &&
-        isDecryptedPayload(this.applyPayload) &&
-        PayloadContentsEqual(existingConflict, this.applyPayload)
-      ) {
-        /** Conflict exists and its contents are the same as incoming value, do not make duplicate */
+      const applyPayload = this.applyPayload
+      const existingConflicts = this.baseCollection.conflictsOf(applyPayload.uuid)
+      const incomingAlreadyConflicted =
+        isDecryptedPayload(applyPayload) &&
+        existingConflicts.some(
+          (existingConflict) =>
+            isDecryptedPayload(existingConflict) && PayloadContentsEqual(existingConflict, applyPayload),
+        )
+      if (incomingAlreadyConflicted) {
+        /**
+         * A conflict whose contents equal the incoming value already exists, so do
+         * not make a redundant duplicate. We scan ALL conflictsOf(uuid) (not just
+         * the first): an item may already carry multiple conflict_of duplicates,
+         * and the incoming content can match a NON-first one. The single-conflict
+         * case is a subset of this scan.
+         */
         return ConflictStrategy.KeepBase
       } else {
         const tmpBaseItem = CreateDecryptedItemFromPayload(this.basePayload)

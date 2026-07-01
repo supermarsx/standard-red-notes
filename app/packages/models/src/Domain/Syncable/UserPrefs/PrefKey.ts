@@ -5,6 +5,7 @@ import { NewNoteTitleFormat } from './NewNoteTitleFormat'
 import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
 import { EditorFontSize } from './EditorFontSize'
+import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { AllComponentPreferences } from './ComponentPreferences'
 
 export enum PrefKey {
@@ -43,6 +44,10 @@ export enum PrefKey {
   ComponentPreferences = 'componentPreferences',
   ActiveComponents = 'activeComponents',
   AlwaysShowSuperToolbar = 'alwaysShowSuperToolbar',
+  // Standard Red Notes: size of the Super (Lexical) editor ribbon toolbar icons.
+  // Defaults to the (slightly smaller) Small; Medium restores the previous size
+  // and Large makes them bigger for easier tap targets.
+  SuperToolbarIconSize = 'superToolbarIconSize',
   AssistantProvider = 'assistantProvider',
   AssistantModel = 'assistantModel',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
@@ -176,6 +181,7 @@ export type PrefValue = {
   [PrefKey.ComponentPreferences]: AllComponentPreferences
   [PrefKey.ActiveComponents]: string[]
   [PrefKey.AlwaysShowSuperToolbar]: boolean
+  [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
   [PrefKey.AssistantConfirmBeforeWrite]: boolean

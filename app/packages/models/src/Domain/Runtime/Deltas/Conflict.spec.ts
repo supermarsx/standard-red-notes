@@ -1,5 +1,5 @@
 import { ContentType } from '@standardnotes/domain-core'
-import { FillItemContent } from '../../Abstract/Content/ItemContent'
+import { FillItemContent, ItemContent } from '../../Abstract/Content/ItemContent'
 import { ConflictStrategy } from '../../Abstract/Item'
 import {
   DecryptedPayload,
@@ -98,6 +98,64 @@ describe('conflict delta', () => {
     const delta = new ConflictDelta(baseCollection, basePayload, applyPayload, historyMap)
 
     expect(delta.getConflictStrategy()).toBe(ConflictStrategy.KeepApply)
+  })
+
+  const createDecryptedNote = (uuid: string, title: string, conflictOf?: string, timestamp = 0) => {
+    return new DecryptedPayload({
+      uuid: uuid,
+      content_type: ContentType.TYPES.Note,
+      content: FillItemContent({
+        title,
+        ...(conflictOf ? { conflict_of: conflictOf } : {}),
+      } as Partial<ItemContent>),
+      ...PayloadTimestampDefaults(),
+      updated_at_timestamp: timestamp,
+    })
+  }
+
+  it('dedupes against a NON-first existing conflict (scans all conflictsOf), not just the first', () => {
+    const baseUuid = 'base-uuid'
+    const basePayload = createDecryptedNote(baseUuid, 'base title')
+
+    // Two existing conflict duplicates of the base item. The incoming content
+    // matches the SECOND one; the old code only compared the first and would
+    // have created a redundant duplicate.
+    const firstConflict = createDecryptedNote('conflict-1', 'some other title', baseUuid)
+    const secondConflict = createDecryptedNote('conflict-2', 'incoming title', baseUuid)
+
+    const collection = new PayloadCollection()
+    collection.set(basePayload)
+    collection.set(firstConflict)
+    collection.set(secondConflict)
+    const baseCollection = ImmutablePayloadCollection.FromCollection(collection)
+
+    // Incoming payload for the base uuid whose content matches secondConflict.
+    const applyPayload = createDecryptedNote(baseUuid, 'incoming title', undefined, 5)
+
+    const delta = new ConflictDelta(baseCollection, basePayload, applyPayload, historyMap)
+
+    expect(delta.getConflictStrategy()).toBe(ConflictStrategy.KeepBase)
+  })
+
+  it('still creates a conflict when incoming matches no existing conflict', () => {
+    const baseUuid = 'base-uuid-2'
+    const basePayload = createDecryptedNote(baseUuid, 'base title')
+
+    const firstConflict = createDecryptedNote('conflict-a', 'title a', baseUuid)
+    const secondConflict = createDecryptedNote('conflict-b', 'title b', baseUuid)
+
+    const collection = new PayloadCollection()
+    collection.set(basePayload)
+    collection.set(firstConflict)
+    collection.set(secondConflict)
+    const baseCollection = ImmutablePayloadCollection.FromCollection(collection)
+
+    const applyPayload = createDecryptedNote(baseUuid, 'a brand new conflicting title', undefined, 5)
+
+    const delta = new ConflictDelta(baseCollection, basePayload, applyPayload, historyMap)
+
+    // No existing conflict equals the incoming content => not KeepBase-by-dedupe.
+    expect(delta.getConflictStrategy()).not.toBe(ConflictStrategy.KeepBase)
   })
 
   it('if keep base strategy, always use the apply payloads updated_at_timestamp', () => {

@@ -1,6 +1,7 @@
 import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { CollectionSort } from '../../Runtime/Collection/CollectionSort'
 import { EditorFontSize } from './EditorFontSize'
+import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
 import { PrefKey, PrefValue } from './PrefKey'
@@ -53,6 +54,9 @@ export const PrefDefaults = {
   [PrefKey.DEPRECATED_ActiveThemes]: [],
   [PrefKey.ActiveComponents]: [],
   [PrefKey.AlwaysShowSuperToolbar]: true,
+  // Standard Red Notes: default to the slightly smaller Small toolbar icons;
+  // users can bump this to Medium (previous size) or Large.
+  [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize.Small,
   [PrefKey.AssistantProvider]: '',
   [PrefKey.AssistantModel]: '',
   [PrefKey.AssistantConfirmBeforeWrite]: true,

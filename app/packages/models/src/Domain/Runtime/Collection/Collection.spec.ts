@@ -194,4 +194,31 @@ describe('Collection', () => {
     expect(typed.length).toBe(1)
     expect(typed[0]).toBe(testElement)
   })
+
+  it('should not leave a uuid in two typed buckets when its content_type changes', () => {
+    const original = {
+      uuid: 'morphing-uuid',
+      content_type: 'type-a',
+      content: {},
+      references: [],
+    } as unknown as FullyFormedPayloadInterface
+
+    const reTyped = {
+      uuid: 'morphing-uuid',
+      content_type: 'type-b',
+      content: {},
+      references: [],
+    } as unknown as FullyFormedPayloadInterface
+
+    collection.set(original)
+    expect(collection.all('type-a').length).toBe(1)
+
+    collection.set(reTyped)
+
+    /** The old bucket must be emptied so the uuid does not live in two buckets simultaneously. */
+    expect(collection.all('type-a').length).toBe(0)
+    const typeB = collection.all('type-b')
+    expect(typeB.length).toBe(1)
+    expect(typeB[0]).toBe(reTyped)
+  })
 })
