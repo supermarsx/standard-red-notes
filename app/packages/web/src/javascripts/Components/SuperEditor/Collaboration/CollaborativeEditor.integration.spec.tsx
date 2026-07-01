@@ -45,6 +45,7 @@ class LoopbackHub {
         return () => this.handlers.delete(id)
       },
       send: (f) => this.relay(id, f),
+      authorize: () => Promise.resolve('test-capability'),
     }
   }
   private relay(from: symbol, frame: CollabFrame): void {

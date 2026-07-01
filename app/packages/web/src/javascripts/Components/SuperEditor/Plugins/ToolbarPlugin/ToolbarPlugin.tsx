@@ -67,7 +67,7 @@ import { IndentBlock, OutdentBlock } from '../Blocks/IndentOutdent'
 import { ParagraphBlock } from '../Blocks/Paragraph'
 import { QuoteBlock } from '../Blocks/Quote'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
-import { LocalPrefKey, PrefKey, classNames } from '@standardnotes/snjs'
+import { LocalPrefKey, PrefKey, SuperToolbarIconSize, classNames } from '@standardnotes/snjs'
 import { SUPER_TOGGLE_TOOLBAR } from '@standardnotes/ui-services'
 import {
   OPEN_SUPER_SEARCH_COMMAND,
@@ -128,6 +128,7 @@ import {
   ToolbarButtonId,
   ToolbarGroupId,
 } from './ToolbarConfig'
+import { $selectAllText } from './selectAllText'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
@@ -247,6 +248,19 @@ const COLOR_PRESETS = [
   '#7c3aed',
   '#db2777',
 ]
+
+/**
+ * Standard Red Notes: CSS length applied to `--super-toolbar-icon-size` for each
+ * SuperToolbarIconSize enum value. `Small` (the default) is a modest step down
+ * from the previous 1rem/16px desktop default; `Medium` restores it and `Large`
+ * makes the toolbar icons noticeably bigger. The button padding stays unchanged
+ * so tap targets remain usable at every size.
+ */
+const SUPER_TOOLBAR_ICON_SIZES: Record<SuperToolbarIconSize, string> = {
+  [SuperToolbarIconSize.Small]: '0.875rem',
+  [SuperToolbarIconSize.Medium]: '1rem',
+  [SuperToolbarIconSize.Large]: '1.25rem',
+}
 
 /**
  * Split a group's buttons into up to `rows` near-equal, top-heavy rows so a
@@ -422,7 +436,12 @@ const ToolbarButton = forwardRef(
               <Icon
                 type={iconName}
                 size="custom"
-                className="h-5 w-5 !text-current md:h-4 md:w-4 [&>path]:!text-current"
+                // Icon size is driven by the `.super-toolbar-icon` class, which
+                // resolves `var(--super-toolbar-icon-size, 0.875rem)` (set on the
+                // toolbar root from the SuperToolbarIconSize pref). The class's
+                // fallback guarantees a concrete size even if the var is unset, so
+                // every toolbar icon scales together and can never collapse.
+                className="super-toolbar-icon !text-current [&>path]:!text-current"
               />
             ) : null}
           </div>
@@ -773,6 +792,16 @@ const ToolbarPlugin = () => {
   const [toolbarConfig, setToolbarConfig] = useLocalPreference(LocalPrefKey.SuperToolbarConfig)
 
   const alwaysShowToolbar = usePreference(PrefKey.AlwaysShowSuperToolbar)
+
+  // Standard Red Notes: user-selectable toolbar icon size. We translate the enum
+  // into a CSS length applied as the `--super-toolbar-icon-size` custom property
+  // on the toolbar root, so every toolbar icon (which references that var via the
+  // `.super-toolbar-icon` class — `var(--super-toolbar-icon-size, 0.875rem)`)
+  // scales together. Reading via usePreference makes it reactive — changing the
+  // setting re-renders here and updates the var with no reload. Small is the
+  // (slightly smaller) default; the class fallback covers an unset var.
+  const toolbarIconSizePref = usePreference(PrefKey.SuperToolbarIconSize)
+  const toolbarIconSize = SUPER_TOOLBAR_ICON_SIZES[toolbarIconSizePref] ?? SUPER_TOOLBAR_ICON_SIZES.Small
 
   const [isToolbarFixedToTop, setIsToolbarFixedToTop] = useState(alwaysShowToolbar)
   const isToolbarFixedRef = useStateRef(isToolbarFixedToTop)
@@ -1536,7 +1565,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Cut]: (
       <div className="flex flex-shrink-0 items-center" key="cut">
         <ToolbarButton name={t('cut')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCut}>
-          <Icon type="scissors" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <Icon type="scissors" size="custom" className="super-toolbar-icon" />
           <span className="ml-1.5 text-sm leading-none">{t('cut')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCutOptions')}>
@@ -1559,7 +1588,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Copy]: (
       <div className="flex flex-shrink-0 items-center" key="copy">
         <ToolbarButton name={t('copy')} disabled={!hasNonCollapsedSelection} onSelect={handleClipboardCopy}>
-          <Icon type="copy" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <Icon type="copy" size="custom" className="super-toolbar-icon" />
           <span className="ml-1.5 text-sm leading-none">{t('copy')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('moreCopyOptions')}>
@@ -1582,7 +1611,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.Paste]: (
       <div className="flex flex-shrink-0 items-center" key="paste">
         <ToolbarButton name={t('paste')} onSelect={() => void handleClipboardPaste()}>
-          <Icon type="clipboard" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+          <Icon type="clipboard" size="custom" className="super-toolbar-icon" />
           <span className="ml-1.5 text-sm leading-none">{t('paste')}</span>
         </ToolbarButton>
         <StyledTooltip showOnHover showOnMobile side="top" label={t('morePasteOptions')}>
@@ -1616,7 +1645,7 @@ const ToolbarPlugin = () => {
         name={t('search')}
         onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}
       >
-        <Icon type="search" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="search" size="custom" className="super-toolbar-icon" />
         <span className="ml-1.5 text-sm leading-none">Find</span>
       </ToolbarButton>
     ) : null,
@@ -1625,19 +1654,19 @@ const ToolbarPlugin = () => {
         name="Find &amp; replace in note"
         onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_REPLACE_COMMAND, undefined)}
       >
-        <Icon type="search" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="search" size="custom" className="super-toolbar-icon" />
         <span className="ml-1.5 text-sm leading-none">Find &amp; replace</span>
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.FindNext]: canShowAllItems ? (
       <ToolbarButton name="Find next" onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}>
-        <Icon type="arrow-down" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="arrow-down" size="custom" className="super-toolbar-icon" />
         <span className="ml-1.5 text-sm leading-none">Find next</span>
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.SelectAll]: canShowAllItems ? (
       <ToolbarButton
-        name="Select all"
+        name={t('selectAll')}
         onSelect={() => {
           editor.update(() => {
             const root = $getRoot()
@@ -1649,13 +1678,30 @@ const ToolbarPlugin = () => {
           editor.focus()
         }}
       >
-        <Icon type="select-all" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-        <span className="ml-1.5 text-sm leading-none">Select all</span>
+        <Icon type="select-all" size="custom" className="super-toolbar-icon" />
+        <span className="ml-1.5 text-sm leading-none">{t('selectAll')}</span>
+      </ToolbarButton>
+    ) : null,
+    [ToolbarButtonId.SelectAllText]: canShowAllItems ? (
+      <ToolbarButton
+        name={t('selectAllText')}
+        onSelect={() => {
+          // Select only the TEXT content (first text start → last text end), as
+          // distinct from "Select all" (which selects every root child including
+          // decorator/embed blocks). Safe no-op on an empty/text-less document.
+          editor.update(() => {
+            $selectAllText()
+          })
+          editor.focus()
+        }}
+      >
+        <Icon type="select-all-text" size="custom" className="super-toolbar-icon" />
+        <span className="ml-1.5 text-sm leading-none">{t('selectAllText')}</span>
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.Deselect]: canShowAllItems ? (
       <ToolbarButton
-        name="Deselect all"
+        name={t('deselectAll')}
         onSelect={() => {
           editor.update(() => {
             $setSelection(null)
@@ -1666,8 +1712,8 @@ const ToolbarPlugin = () => {
           window.getSelection()?.removeAllRanges()
         }}
       >
-        <Icon type="close" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-        <span className="ml-1.5 text-sm leading-none">Deselect all</span>
+        <Icon type="close" size="custom" className="super-toolbar-icon" />
+        <span className="ml-1.5 text-sm leading-none">{t('deselectAll')}</span>
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.Undo]: canShowAllItems ? (
@@ -1757,7 +1803,7 @@ const ToolbarPlugin = () => {
         ref={textStyleAnchorRef}
         className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type={blockTypeToIconName[blockType]} size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -1812,7 +1858,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.InlineCode]: (
       <ToolbarButton
         name={t('inlineCode')}
-        iconName="code-tags"
+        iconName="inline-code"
         active={isCode}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
       />
@@ -1864,15 +1910,20 @@ const ToolbarPlugin = () => {
         ref={bgColorAnchorRef}
         className={isBgColorMenuOpen ? 'md:bg-default' : ''}
       >
-        <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-info text-xs font-semibold text-info-contrast md:h-4 md:w-4">
-          H
+        <span className="flex flex-col items-center justify-center leading-none">
+          <Icon
+            type="highlighter"
+            size="custom"
+            className="super-toolbar-icon !text-current [&>path]:!text-current"
+          />
+          <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
         </span>
       </ToolbarButton>
     ),
     [ToolbarButtonId.Emphasis]: (
       <ToolbarButton
         name={t('emphasisMarks')}
-        iconName="sparkle"
+        iconName="emphasis-marks"
         onSelect={() => toggleSelectionStyle('text-emphasis', 'filled dot')}
       />
     ),
@@ -1883,7 +1934,7 @@ const ToolbarPlugin = () => {
       >
         <ToolbarButton
           name={t('outlineTextStroke')}
-          iconName="bold"
+          iconName="outline-text"
           onSelect={() => toggleSelectionStyle('-webkit-text-stroke', '1px currentColor')}
         />
         <button
@@ -1935,7 +1986,7 @@ const ToolbarPlugin = () => {
       >
         <ToolbarButton
           name={t('wordSpacing')}
-          iconName="align-justify"
+          iconName="word-spacing"
           onSelect={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
         />
         <button
@@ -2069,49 +2120,70 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ),
     [ToolbarButtonId.BulletedList]: (
-      <div className="flex items-stretch">
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        key="bulletedListControl"
+      >
         <ToolbarButton
           name={t('bulletedList')}
           iconName="list-bulleted"
           active={blockType === 'bullet'}
           onSelect={() => toggleList('bullet')}
         />
-        <ToolbarButton
-          name={t('bulletedListMarkers')}
-          onSelect={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+        <button
+          type="button"
+          aria-label={t('bulletedListMarkers')}
+          title={t('bulletedListMarkers')}
           ref={bulletStyleAnchorRef}
-          className={classNames('!p-0', isBulletStyleMenuOpen ? 'md:bg-default' : '')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isBulletStyleMenuOpen ? 'bg-contrast' : '',
+          )}
         >
-          <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5 md:h-3 md:w-3" />
-        </ToolbarButton>
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
       </div>
     ),
     [ToolbarButtonId.NumberedList]: (
-      <div className="flex items-stretch">
+      <div
+        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        key="numberedListControl"
+      >
         <ToolbarButton
           name={t('numberedList')}
           iconName="list-numbered"
           active={blockType === 'number'}
           onSelect={() => toggleList('number')}
         />
-        <ToolbarButton
-          name={t('numberedListMarkers')}
-          onSelect={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
+        <button
+          type="button"
+          aria-label={t('numberedListMarkers')}
+          title={t('numberedListMarkers')}
           ref={numberStyleAnchorRef}
-          className={classNames('!p-0', isNumberStyleMenuOpen ? 'md:bg-default' : '')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
+          className={classNames(
+            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            isNumberStyleMenuOpen ? 'bg-contrast' : '',
+          )}
         >
-          <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5 md:h-3 md:w-3" />
-        </ToolbarButton>
-        <ToolbarButton
-          name={t('multilevelList')}
-          onSelect={openMultilevelConfigurator}
-          ref={multilevelAnchorRef}
-          className={isMultilevelMenuOpen ? 'md:bg-default' : ''}
-        >
-          <Icon type="list-numbered" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
-          <span className="-ml-0.5 text-[0.6rem] font-bold leading-none">+</span>
-        </ToolbarButton>
+          <Icon type="chevron-down" size="custom" className="h-4 w-4 md:h-3.5 md:w-3.5" />
+        </button>
       </div>
+    ),
+    [ToolbarButtonId.MultiLevelList]: (
+      <ToolbarButton
+        name={t('multilevelList')}
+        onSelect={openMultilevelConfigurator}
+        ref={multilevelAnchorRef}
+        className={isMultilevelMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="list-numbered" size="custom" className="super-toolbar-icon" />
+        <span className="-ml-0.5 text-[0.6rem] font-bold leading-none">+</span>
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
     ),
     [ToolbarButtonId.Quote]: (
       <ToolbarButton
@@ -2142,7 +2214,7 @@ const ToolbarPlugin = () => {
         ref={sortAnchorRef}
         className={isSortMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="sort-descending" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="sort-descending" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2199,7 +2271,7 @@ const ToolbarPlugin = () => {
         ref={paragraphLayoutAnchorRef}
         className={isParagraphLayoutMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="paragraph" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="paragraph" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2210,7 +2282,7 @@ const ToolbarPlugin = () => {
         ref={listStyleAnchorRef}
         className={isListStyleMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="list-bulleted" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="list-bulleted" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2228,7 +2300,7 @@ const ToolbarPlugin = () => {
         ref={insertAnchorRef}
         className={isInsertMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="add" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="add" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ) : null,
@@ -2684,7 +2756,7 @@ const ToolbarPlugin = () => {
         ref={textStyleAnchorRef}
         className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type={blockTypeToIconName[blockType]} size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type={blockTypeToIconName[blockType]} size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
       <ToolbarSeparator />
@@ -2716,7 +2788,7 @@ const ToolbarPlugin = () => {
       />
       <ToolbarButton
         name={t('inlineCode')}
-        iconName="code-tags"
+        iconName="inline-code"
         active={isCode}
         onSelect={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'code')}
       />
@@ -2795,7 +2867,7 @@ const ToolbarPlugin = () => {
                   : 'align-left'
           }
           size="custom"
-          className="h-5 w-5 md:h-4 md:w-4"
+          className="super-toolbar-icon"
         />
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
@@ -2820,7 +2892,7 @@ const ToolbarPlugin = () => {
         ref={selectionMoreAnchorRef}
         className={isSelectionMoreMenuOpen ? 'md:bg-default' : ''}
       >
-        <Icon type="more" size="custom" className="h-5 w-5 md:h-4 md:w-4" />
+        <Icon type="more" size="custom" className="super-toolbar-icon" />
       </ToolbarButton>
     </>
   )
@@ -2842,6 +2914,15 @@ const ToolbarPlugin = () => {
         )}
         id="super-mobile-toolbar"
         ref={containerRef}
+        // Drive every toolbar icon's size from the user's SuperToolbarIconSize
+        // pref. This node is the single ancestor that wraps the ribbon tab strip
+        // AND every tab's `<Toolbar>` group content (Home/Insert/Tools/AI/Layout
+        // + the contextual/floating toolbars), so the `--super-toolbar-icon-size`
+        // custom property inherits to all of them; icons consume it via the
+        // `.super-toolbar-icon` class (which has a fallback). Other inline styles
+        // on this node (display / transform from floating positioning) use
+        // different keys, so they don't clash with this custom property.
+        style={{ ['--super-toolbar-icon-size' as string]: toolbarIconSize }}
       >
         {linkNode && !isEditingLink && (
           <LinkViewer
@@ -4309,7 +4390,19 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="flex w-72 flex-col gap-2 p-3 text-sm" onMouseDown={(e) => e.preventDefault()}>
+        <div
+          className="flex w-72 flex-col gap-2 p-3 text-sm"
+          onMouseDown={(e) => {
+            // Preserve the editor's text selection when interacting with the
+            // popover, but DON'T swallow mousedown on the native <select>
+            // controls — calling preventDefault there suppresses the browser's
+            // default action of opening the option list, which made the
+            // per-level marker dropdowns impossible to open/select.
+            if (!(e.target instanceof HTMLSelectElement)) {
+              e.preventDefault()
+            }
+          }}
+        >
           <div className="text-xs font-semibold uppercase text-passive-0">{t('multilevelListHint')}</div>
           {[1, 2, 3, 4, 5].map((level) => {
             const selected = multilevelDraft[level]

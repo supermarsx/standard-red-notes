@@ -1,5 +1,17 @@
 @import 'lists';
 
+/* Standard Red Notes: size of every Super-editor ribbon toolbar icon. Driven by
+ * the `--super-toolbar-icon-size` custom property the ToolbarPlugin sets on the
+ * toolbar root from the SuperToolbarIconSize pref, so all toolbar icons scale
+ * together and react to the setting with no reload. The hard fallback (0.875rem,
+ * the Small default) guarantees a concrete pixel size even if the var is ever
+ * unset / out of scope — so an icon can never collapse to its intrinsic SVG size
+ * (giant) or to zero. !important so it always wins over any base SVG sizing. */
+.super-toolbar-icon {
+  width: var(--super-toolbar-icon-size, 0.875rem) !important;
+  height: var(--super-toolbar-icon-size, 0.875rem) !important;
+}
+
 .Lexical__ltr {
   text-align: left;
 }

@@ -6,7 +6,7 @@ import { $createCalendarNode } from '../../Lexical/Nodes/CalendarNode'
 
 export const CalendarBlock = {
   name: 'Calendar',
-  iconName: 'authenticator' as LexicalIconName,
+  iconName: 'calendar' as LexicalIconName,
   keywords: ['calendar', 'month', 'date', 'event', 'schedule', 'agenda', 'day'],
   onSelect: (editor: LexicalEditor) =>
     editor.update(() => {

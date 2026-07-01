@@ -21,6 +21,9 @@ class LoopbackHub {
         return () => this.handlers.delete(id)
       },
       send: (frame) => this.relay(id, frame),
+      // The loopback authorizer always grants (membership is out of scope here);
+      // the gateway-side capability verification is unit-tested separately.
+      authorize: () => Promise.resolve('test-capability'),
     }
   }
 

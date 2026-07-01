@@ -58,6 +58,9 @@ if (typeof (globalThis as { TextEncoder?: unknown }).TextEncoder === 'undefined'
 const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3106'
 const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3106'
 const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws-internal-secret-change-me'
+// Same secret the gateway verifies connection tokens AND room capabilities with.
+const CONNECTION_TOKEN_SECRET =
+  process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
 
 // jsdom's fetch can't reach localhost; use node:http directly.
 function nodeHttp(
@@ -100,7 +103,7 @@ async function mint(userUuid: string, sessionUuid: string): Promise<string> {
   return JSON.parse(res.text).token
 }
 
-function liveChannel(token: string): Promise<CollabChannel & { close: () => void }> {
+function liveChannel(token: string, userUuid: string): Promise<CollabChannel & { close: () => void }> {
   return new Promise((resolve, reject) => {
     const ws = new NodeWebSocket(`${GATEWAY_WS}/?authToken=${token}`)
     const handlers = new Set<(f: CollabFrame) => void>()
@@ -123,6 +126,16 @@ function liveChannel(token: string): Promise<CollabChannel & { close: () => void
           handlers.add(h)
           return () => handlers.delete(h)
         },
+        // The api-gateway is not in this live harness; mint the room capability
+        // directly with the gateway's connection-token secret (the same secret it
+        // verifies with), mirroring what the api-gateway does after an access check.
+        authorize: (room: string) =>
+          Promise.resolve(
+            nodeRequire('jsonwebtoken').sign({ purpose: 'collab-room', userUuid, room }, CONNECTION_TOKEN_SECRET, {
+              algorithm: 'HS256',
+              expiresIn: 300,
+            }) as string,
+          ),
         close: () => ws.close(),
       }),
     )
@@ -196,8 +209,10 @@ describe('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
     const room = 'note-live-' + Date.now()
     const secret = 'shared-vault-secret'
     const [keyA, keyB] = await Promise.all([deriveRoomKey(secret, room), deriveRoomKey(secret, room)])
-    const chA = await liveChannel(await mint('live-a-' + Date.now(), 'sa'))
-    const chB = await liveChannel(await mint('live-b-' + Date.now(), 'sb'))
+    const userA = 'live-a-' + Date.now()
+    const userB = 'live-b-' + Date.now()
+    const chA = await liveChannel(await mint(userA, 'sa'), userA)
+    const chB = await liveChannel(await mint(userB, 'sb'), userB)
 
     const containerA = document.createElement('div')
     const containerB = document.createElement('div')

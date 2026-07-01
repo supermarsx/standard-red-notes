@@ -16,12 +16,16 @@ import {
   $getSelection,
   $setSelection,
 } from 'lexical'
-import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
+import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
 
 import {
   $getListStyle,
   $getListNodeFromSelection,
+  $getMultilevelListStyle,
+  $getTopListNodeFromSelection,
+  applyListStyleToDOM,
   $setListStyle,
+  $setMultilevelListStyle,
   BULLET_STYLES,
   NUMBER_STYLES,
 } from './listStyle'
@@ -251,6 +255,117 @@ describe('$setListStyle', () => {
   })
 })
 
+/** Seed a 3-level nested list (top > nested > deepest) and select the deepest item. */
+const seedNestedListAndSelect = (editor: ReturnType<typeof makeEditor>): string => {
+  let topKey = ''
+  editor.update(
+    () => {
+      const root = $getRoot()
+      root.clear()
+      const top = $createListNode('bullet')
+      const topItem = $createListItemNode()
+      topItem.append($createTextNode('one'))
+      top.append(topItem)
+
+      // A nested list is appended as a child of a ListItemNode of the parent list.
+      const l2 = $createListNode('bullet')
+      const l2Item = $createListItemNode()
+      l2Item.append($createTextNode('two'))
+      l2.append(l2Item)
+      const l2Holder = $createListItemNode()
+      l2Holder.append(l2)
+      top.append(l2Holder)
+
+      const l3 = $createListNode('bullet')
+      const l3Item = $createListItemNode()
+      const deepText = $createTextNode('three')
+      l3Item.append(deepText)
+      l3.append(l3Item)
+      const l3Holder = $createListItemNode()
+      l3Holder.append(l3)
+      l2.append(l3Holder)
+
+      root.append(top)
+      topKey = top.getKey()
+
+      const selection = $createRangeSelection()
+      selection.anchor.set(deepText.getKey(), 0, 'text')
+      selection.focus.set(deepText.getKey(), 5, 'text')
+      $setSelection(selection)
+    },
+    { discrete: true },
+  )
+  return topKey
+}
+
+describe('$setMultilevelListStyle', () => {
+  it('persists a per-level map on the OUTERMOST list, even when selecting a deep item', () => {
+    const editor = makeEditor()
+    const topKey = seedNestedListAndSelect(editor)
+    // Simulate the configurator applying a per-level draft (level 1 + level 2 markers).
+    let returnedKey: string | undefined
+    editor.update(
+      () => {
+        const node = $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: 'square' })
+        returnedKey = node?.getKey()
+      },
+      { discrete: true },
+    )
+    // The map is written to the top list, not the deep one the caret was in.
+    expect(returnedKey).toBe(topKey)
+    editor.getEditorState().read(() => {
+      const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+      expect(top.getKey()).toBe(topKey)
+      const map = $getMultilevelListStyle(top)
+      expect(map).toEqual({ 1: 'disc', 2: 'square' })
+      expect(top.getStyle()).toContain('--sn-list-levels: 1=disc,2=square')
+    })
+  })
+
+  it('updates an individual level marker and round-trips it (select level 3 changes only level 3)', () => {
+    const editor = makeEditor()
+    const topKey = seedNestedListAndSelect(editor)
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: 'circle', 3: 'dash' }), {
+      discrete: true,
+    })
+    // The user re-opens and picks a different marker for level 3 only.
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: 'circle', 3: 'arrow' }), {
+      discrete: true,
+    })
+    editor.getEditorState().read(() => {
+      const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+      expect(top.getKey()).toBe(topKey)
+      expect($getMultilevelListStyle(top)).toEqual({ 1: 'disc', 2: 'circle', 3: 'arrow' })
+      // Exactly one levels declaration — no duplication on re-apply.
+      expect(top.getStyle().match(/--sn-list-levels/g)?.length).toBe(1)
+    })
+  })
+
+  it('clears the per-level map when applied empty', () => {
+    const editor = makeEditor()
+    seedNestedListAndSelect(editor)
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: 'square' }), { discrete: true })
+    editor.update(() => $setMultilevelListStyle($getSelection(), {}), { discrete: true })
+    editor.getEditorState().read(() => {
+      const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+      expect($getMultilevelListStyle(top)).toEqual({})
+      expect(top.getStyle()).not.toContain('--sn-list-levels')
+    })
+  })
+
+  it('ignores empty/falsy level entries when serializing', () => {
+    const editor = makeEditor()
+    seedNestedListAndSelect(editor)
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: '', 3: 'square' }), {
+      discrete: true,
+    })
+    editor.getEditorState().read(() => {
+      const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+      expect($getMultilevelListStyle(top)).toEqual({ 1: 'disc', 3: 'square' })
+    })
+  })
+})
+
 describe('$getListStyle', () => {
   it('returns null when no list style was set', () => {
     const editor = makeEditor()
@@ -259,5 +374,95 @@ describe('$getListStyle', () => {
       const node = $getListNodeFromSelection($getSelection()) as ListNode
       expect($getListStyle(node)).toBeNull()
     })
+  })
+})
+
+describe('applyListStyleToDOM multilevel stale-marker clearing (BUG 3)', () => {
+  /**
+   * Headless Lexical has no rendered DOM, so `getElementByKey` returns null and
+   * `applyListStyleToDOM` is normally a no-op. To exercise the DOM stamping path
+   * we back every list node with a real `<ul>` element via a spy, then assert
+   * that re-applying a multilevel map which DROPS a level clears the stale marker
+   * class on the affected descendant list (the previous bug: the level was
+   * skipped, so the old `Lexical__listStyle--*` class lingered until reload).
+   */
+  const stubListElements = (editor: ReturnType<typeof makeEditor>): Map<string, HTMLElement> => {
+    const elements = new Map<string, HTMLElement>()
+    editor.getEditorState().read(() => {
+      const visit = (node: import('lexical').LexicalNode): void => {
+        if ($isListNode(node)) {
+          elements.set(node.getKey(), document.createElement('ul'))
+        }
+        if ('getChildren' in node && typeof (node as { getChildren?: unknown }).getChildren === 'function') {
+          for (const child of (node as unknown as { getChildren: () => import('lexical').LexicalNode[] }).getChildren()) {
+            visit(child)
+          }
+        }
+      }
+      visit($getRoot())
+    })
+    jest.spyOn(editor, 'getElementByKey').mockImplementation((key: string) => elements.get(key) ?? null)
+    return elements
+  }
+
+  const reapplyTop = (editor: ReturnType<typeof makeEditor>): void => {
+    editor.update(
+      () => {
+        const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+        applyListStyleToDOM(top)
+      },
+      { discrete: true },
+    )
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('clears the stale marker class on a level whose glyph was dropped from the map', () => {
+    const editor = makeEditor()
+    seedNestedListAndSelect(editor)
+    const elements = stubListElements(editor)
+
+    // First definition: stamp level 2 with `square`.
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 2: 'square', 3: 'arrow' }), {
+      discrete: true,
+    })
+    reapplyTop(editor)
+
+    // Find the level-2 list element (the nested list one level under the top).
+    // Mirror production's `stampDepth`: a node's level is `parentLevel + 1` only
+    // when the node ITSELF is a list, so the top list's descendant lists land at
+    // level 2, 3, ...
+    let level2Key = ''
+    editor.getEditorState().read(() => {
+      const top = $getTopListNodeFromSelection($getSelection()) as ListNode
+      const walk = (node: import('lexical').LexicalNode, parentLevel: number) => {
+        let levelHere = parentLevel
+        if ($isListNode(node)) {
+          levelHere = parentLevel + 1
+          if (levelHere === 2) {
+            level2Key = node.getKey()
+          }
+        }
+        if ('getChildren' in node && typeof (node as { getChildren?: unknown }).getChildren === 'function') {
+          for (const child of (node as unknown as { getChildren: () => import('lexical').LexicalNode[] }).getChildren()) {
+            walk(child, levelHere)
+          }
+        }
+      }
+      for (const child of top.getChildren()) {
+        walk(child, 1)
+      }
+    })
+    const level2El = elements.get(level2Key) as HTMLElement
+    expect(level2El.classList.contains('Lexical__listStyle--square')).toBe(true)
+
+    // Redefine the multilevel map DROPPING level 2's glyph.
+    editor.update(() => $setMultilevelListStyle($getSelection(), { 1: 'disc', 3: 'arrow' }), { discrete: true })
+    reapplyTop(editor)
+
+    // The stale `square` marker class must have been cleared (BUG 3 fix).
+    expect(level2El.classList.contains('Lexical__listStyle--square')).toBe(false)
   })
 })

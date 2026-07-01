@@ -14,7 +14,6 @@ export enum ToolbarGroupId {
   Clipboard = 'clipboard',
   History = 'history',
   BlockStyle = 'blockStyle',
-  TextStyle = 'textStyle',
   ColorFont = 'colorFont',
   ParagraphList = 'paragraphList',
   Insert = 'insert',
@@ -42,6 +41,7 @@ export enum ToolbarButtonId {
   FindReplace = 'findReplace',
   FindNext = 'findNext',
   SelectAll = 'selectAll',
+  SelectAllText = 'selectAllText',
   Deselect = 'deselect',
   // Block style
   BlockStyle = 'blockStyle',
@@ -76,6 +76,7 @@ export enum ToolbarButtonId {
   // Paragraph / list
   BulletedList = 'bulletedList',
   NumberedList = 'numberedList',
+  MultiLevelList = 'multiLevelList',
   Quote = 'quote',
   CodeBlock = 'codeBlock',
   ChangeCase = 'changeCase',
@@ -187,12 +188,6 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [{ id: ToolbarButtonId.BlockStyle, label: 'Formatting options', group: ToolbarGroupId.BlockStyle }],
   },
   {
-    id: ToolbarGroupId.TextStyle,
-    label: 'Text style',
-    caption: 'Text',
-    buttons: [{ id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.TextStyle }],
-  },
-  {
     id: ToolbarGroupId.ColorFont,
     label: 'Font',
     caption: 'Font',
@@ -207,9 +202,12 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.Strikethrough, label: 'Strikethrough', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Subscript, label: 'Subscript', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Superscript, label: 'Superscript', group: ToolbarGroupId.ColorFont },
-      { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
+      // Highlight precedes Font color (Word-like ordering).
       { id: ToolbarButtonId.HighlightColor, label: 'Highlight color', group: ToolbarGroupId.ColorFont },
+      { id: ToolbarButtonId.TextColor, label: 'Text color', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Emphasis, label: 'Emphasis marks', group: ToolbarGroupId.ColorFont },
+      // Inline code sits immediately after emphasis marks (its standalone group was dissolved).
+      { id: ToolbarButtonId.InlineCode, label: 'Inline Code', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Outline, label: 'Outline (text stroke)', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.Kerning, label: 'Letter spacing / kerning', group: ToolbarGroupId.ColorFont },
       { id: ToolbarButtonId.WordSpacing, label: 'Word spacing', group: ToolbarGroupId.ColorFont },
@@ -230,11 +228,16 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
         ToolbarButtonId.Divider,
         ToolbarButtonId.Subscript,
         ToolbarButtonId.Superscript,
+        // Visual separator between superscript and the highlighter control.
+        ToolbarButtonId.Divider,
+        // Highlight precedes Font color (Word-like ordering).
+        ToolbarButtonId.HighlightColor,
+        // Font color moved onto the 2nd row, beside its sibling highlight control.
         ToolbarButtonId.TextColor,
       ],
       [
-        ToolbarButtonId.HighlightColor,
         ToolbarButtonId.Emphasis,
+        ToolbarButtonId.InlineCode,
         ToolbarButtonId.Outline,
         ToolbarButtonId.Kerning,
         ToolbarButtonId.WordSpacing,
@@ -249,6 +252,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.BulletedList, label: 'Bulleted List', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.NumberedList, label: 'Numbered List', group: ToolbarGroupId.ParagraphList },
+      { id: ToolbarButtonId.MultiLevelList, label: 'Multilevel List', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.Quote, label: 'Quote', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.CodeBlock, label: 'Code Block', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.ChangeCase, label: 'Change case', group: ToolbarGroupId.ParagraphList },
@@ -267,16 +271,13 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       [
         ToolbarButtonId.BulletedList,
         ToolbarButtonId.NumberedList,
-        ToolbarButtonId.Quote,
-        ToolbarButtonId.CodeBlock,
-        ToolbarButtonId.ChangeCase,
+        ToolbarButtonId.MultiLevelList,
+        ToolbarButtonId.Divider,
         ToolbarButtonId.SortLines,
-        ToolbarButtonId.Indent,
-        ToolbarButtonId.Outdent,
-        ToolbarButtonId.ParagraphLayout,
-        ToolbarButtonId.ListStyle,
+        ToolbarButtonId.Divider,
         ToolbarButtonId.FormattingMarks,
       ],
+      [ToolbarButtonId.Quote, ToolbarButtonId.CodeBlock, ToolbarButtonId.Divider],
       [
         ToolbarButtonId.AlignLeft,
         ToolbarButtonId.AlignCenter,
@@ -330,7 +331,14 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.TableOfContents, label: 'Table of Contents', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.SelectAll, label: 'Select all', group: ToolbarGroupId.Selection },
+      { id: ToolbarButtonId.SelectAllText, label: 'Select all text only', group: ToolbarGroupId.Selection },
       { id: ToolbarButtonId.Deselect, label: 'Deselect all', group: ToolbarGroupId.Selection },
+    ],
+    layout: [
+      // Row 0: the plain "Select all" sits first, beside Table of Contents.
+      [ToolbarButtonId.SelectAll, ToolbarButtonId.TableOfContents],
+      // Row 1: the new text-only select, beside Deselect.
+      [ToolbarButtonId.SelectAllText, ToolbarButtonId.Deselect],
     ],
   },
   {
@@ -384,7 +392,6 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
       ToolbarGroupId.Clipboard,
       ToolbarGroupId.History,
       ToolbarGroupId.BlockStyle,
-      ToolbarGroupId.TextStyle,
       ToolbarGroupId.ColorFont,
       ToolbarGroupId.ParagraphList,
     ],

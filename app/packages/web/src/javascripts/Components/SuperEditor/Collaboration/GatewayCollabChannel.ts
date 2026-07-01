@@ -12,5 +12,7 @@ export function createGatewayCollabChannel(application: WebApplication): CollabC
     send: (frame: CollabFrame) => application.sockets.sendCollaborationFrame(frame),
     subscribe: (handler: (frame: CollabFrame) => void) =>
       application.sockets.onCollaborationFrame(handler as (frame: CollabFrame) => void),
+    // Standard Red Notes: fetch the gateway-required room capability for this note.
+    authorize: (room: string) => application.sockets.authorizeCollaborationRoom(room),
   }
 }

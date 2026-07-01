@@ -200,7 +200,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
   }, [application])
 
   const handleChange = useCallback(
-    async (value: string, preview: string) => {
+    async (value: string, preview: string, bypassDebounce?: boolean) => {
       if (ignoreNextChange.current === true) {
         ignoreNextChange.current = false
         return
@@ -212,6 +212,11 @@ export const SuperEditor: FunctionComponent<Props> = ({
       void controller.saveAndAwaitLocalPropagation({
         text: value,
         isUserModified: true,
+        // Standard Red Notes (last-edit-loss fix): a lifecycle flush
+        // (note-switch/blur/unmount/logout/unload) forwards bypassDebounce=true so the
+        // edit is dirtied + persisted immediately instead of waiting out the 700ms sync
+        // debounce, which a close/logout/clearAllData could otherwise pre-empt.
+        bypassDebouncer: bypassDebounce,
         previews: {
           previewPlain: preview,
           previewHtml: undefined,
@@ -219,6 +224,20 @@ export const SuperEditor: FunctionComponent<Props> = ({
       })
     },
     [controller, isEditorReadonly],
+  )
+
+  /**
+   * Standard Red Notes (last-edit-loss fix): register the editor's debounce control
+   * (flush + hasPending) with the controller so lifecycle code (ItemGroupController
+   * note-switch, ConfirmSignoutModal, beforeunload) can force a pending edit through
+   * the save path before this editor/controller is torn down. Stable identity so the
+   * BlocksEditor effect registers once.
+   */
+  const registerDebounceControl = useCallback(
+    (control: { flush: () => void; hasPending: () => boolean }) => {
+      return controller.registerEditorFlush(control.flush, control.hasPending)
+    },
+    [controller],
   )
 
   const handleBubbleRemove = useCallback(
@@ -321,6 +340,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
                 onBlur={onBlur}
                 application={application}
                 collaboration={collaboration}
+                registerDebounceControl={registerDebounceControl}
               >
                 <ItemSelectionPlugin currentNote={note.current} />
                 <FilePlugin currentNote={note.current} />

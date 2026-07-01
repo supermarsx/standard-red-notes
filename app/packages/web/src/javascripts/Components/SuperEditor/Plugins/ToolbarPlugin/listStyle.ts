@@ -341,25 +341,32 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
     return
   }
 
-  // Multilevel: stamp each descendant list by its depth relative to this top.
-  const stampDepth = (node: LexicalNode, depth: number): void => {
+  // Multilevel: stamp each descendant list by its visual nesting level relative
+  // to this top. `parentLevel` is the level of the nearest list ANCESTOR; a list
+  // found here therefore sits one level deeper, so it must be stamped with
+  // `levels[parentLevel + 1]`. (The top list itself is level 1, stamped below.)
+  const stampDepth = (node: LexicalNode, parentLevel: number): void => {
+    let levelHere = parentLevel
     if ($isListNode(node)) {
+      levelHere = parentLevel + 1
       try {
         const el = $getEditor().getElementByKey(node.getKey())
         if (el) {
-          const value = levels[depth]
-          if (value) {
-            stampMarker(el, value)
-          }
+          // This descendant list is part of THIS multilevel tree being re-applied,
+          // so it is always safe to (re)stamp it. When `levels[levelHere]` is
+          // absent/falsy (e.g. a multilevel map redefined to drop a level's glyph),
+          // clear any stale marker class instead of leaving the previous glyph in
+          // place — mirroring the single-level `stampMarker(el, null)` clear path.
+          const value = levels[levelHere]
+          stampMarker(el, value ?? null)
         }
       } catch {
         /* not rendered */
       }
     }
     if ($isElementNode(node)) {
-      const childDepth = $isListNode(node) ? depth + 1 : depth
       for (const child of node.getChildren()) {
-        stampDepth(child, childDepth)
+        stampDepth(child, levelHere)
       }
     }
   }

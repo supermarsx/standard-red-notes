@@ -72,11 +72,32 @@ export class EncryptedYjsProvider implements Provider {
     this.yAwareness.on('update', this.onLocalAwarenessUpdate)
     this.unsubscribe = this.channel.subscribe(this.onFrame)
 
-    this.channel.send({ t: 'room-join', room: this.room })
-    // Broadcast our current state so peers already in the room merge us in.
+    // The gateway requires a signed capability on room-join. Fetch it, then join.
+    // If authorization fails (no access / offline), we simply never join the relay
+    // room — local editing still works; we just don't receive/send remote frames.
+    void this.joinWithCapability()
+    // Broadcast our current state so peers already in the room merge us in (no-op
+    // until/unless we actually joined; the room-sync handshake recovers state).
     void this.broadcastFullState()
     // The plugin waits for `sync` before it stops showing a loading state.
     queueMicrotask(() => this.emit('sync', true as never))
+  }
+
+  private async joinWithCapability(): Promise<void> {
+    let capability: string | undefined
+    try {
+      capability = await this.channel.authorize(this.room)
+    } catch {
+      capability = undefined
+    }
+    // A concurrent disconnect() may have run while we awaited; don't join if so.
+    if (!this.connected) return
+    if (!capability) {
+      // Denied / unavailable: do not attempt to join. The gateway would reject a
+      // capability-less join anyway; skipping avoids a pointless room-denied round trip.
+      return
+    }
+    this.channel.send({ t: 'room-join', room: this.room, cap: capability })
   }
 
   disconnect(): void {

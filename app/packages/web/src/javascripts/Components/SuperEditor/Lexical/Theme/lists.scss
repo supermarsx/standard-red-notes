@@ -162,31 +162,31 @@
   }
 }
 .Lexical__listStyle--dash {
-  @include sn-list-marker('"–  "');
+  @include sn-list-marker('–  ');
 }
 .Lexical__listStyle--arrow {
-  @include sn-list-marker('"▸  "');
+  @include sn-list-marker('▸  ');
 }
 .Lexical__listStyle--arrow-alt {
-  @include sn-list-marker('"→  "');
+  @include sn-list-marker('→  ');
 }
 .Lexical__listStyle--triangle {
-  @include sn-list-marker('"‣  "');
+  @include sn-list-marker('‣  ');
 }
 .Lexical__listStyle--diamond {
-  @include sn-list-marker('"◆  "');
+  @include sn-list-marker('◆  ');
 }
 .Lexical__listStyle--star {
-  @include sn-list-marker('"★  "');
+  @include sn-list-marker('★  ');
 }
 .Lexical__listStyle--chevron {
-  @include sn-list-marker('"»  "');
+  @include sn-list-marker('»  ');
 }
 .Lexical__listStyle--tickbox {
-  @include sn-list-marker('"☐  "');
+  @include sn-list-marker('☐  ');
 }
 .Lexical__listStyle--cross {
-  @include sn-list-marker('"✗  "');
+  @include sn-list-marker('✗  ');
 }
 
 /**
@@ -212,11 +212,27 @@
     width: 1.4em;
   }
 }
+/**
+ * NESTING SAFETY (the "a) a) a)" / "A A A" bug). `counter-reset: sn-list-counter`
+ * above creates a FRESH counter scoped to every element that carries the class —
+ * so when @lexical/list renders a second-level group as more than one nested
+ * `<ol>` (each nested list lives inside its own `.Lexical__nestedListItem`), the
+ * second nested `<ol>` re-resets the counter and its items RESTART at the first
+ * glyph instead of continuing. Suppress that re-reset on nested paren lists so
+ * sibling nested `<ol>`s of the same level share ONE counter and increment
+ * continuously, and read the value with `counters()` so a nested list still shows
+ * the right glyph. `legal` already uses `counters()` and INTENTIONALLY keeps a
+ * fresh reset per level for its dotted `1.1.1` chain, so it is excluded here.
+ */
+.Lexical__nestedListItem > .Lexical__listStyle--lower-alpha-paren,
+.Lexical__nestedListItem > .Lexical__listStyle--decimal-paren {
+  counter-reset: none;
+}
 .Lexical__listStyle--lower-alpha-paren > li::before {
-  content: counter(sn-list-counter, lower-alpha) ') ';
+  content: counters(sn-list-counter, '', lower-alpha) ') ';
 }
 .Lexical__listStyle--decimal-paren > li::before {
-  content: counter(sn-list-counter, decimal) ') ';
+  content: counters(sn-list-counter, '', decimal) ') ';
 }
 .Lexical__listStyle--legal > li::before {
   content: counters(sn-list-counter, '.', decimal) ' ';

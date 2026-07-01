@@ -12,6 +12,7 @@
 import {
   applyToolbarConfig,
   DEFAULT_TOOLBAR_GROUPS,
+  isLayoutSentinel,
   normalizeToolbarConfig,
   ToolbarButtonId,
   ToolbarGroupId,
@@ -129,7 +130,7 @@ describe('normalizeToolbarConfig', () => {
       hiddenButtonIds: [],
       groupRows: {
         [ToolbarGroupId.ParagraphList]: 9, // clamped to 3
-        [ToolbarGroupId.TextStyle]: 0, // clamped to 1 == default -> dropped
+        [ToolbarGroupId.BlockStyle]: 0, // clamped to 1 == default -> dropped
         [ToolbarGroupId.ColorFont]: 1, // default -> dropped
         [ToolbarGroupId.Insert]: 2, // kept
         __unknownGroup__: 2, // unknown group -> dropped
@@ -156,18 +157,50 @@ describe('applyToolbarConfig with new fields', () => {
     const result = applyToolbarConfig({
       groupOrder: [],
       hiddenButtonIds: [],
-      buttonOrder: { [ToolbarGroupId.TextStyle]: [ToolbarButtonId.Link, ToolbarButtonId.InlineCode] },
+      buttonOrder: { [ToolbarGroupId.ColorFont]: [ToolbarButtonId.InlineCode, ToolbarButtonId.Bold] },
     })
-    const textGroup = result.find((g) => g.id === ToolbarGroupId.TextStyle)
-    expect(textGroup).toBeDefined()
-    const ids = textGroup!.buttons.map((b) => b.id)
-    expect(ids[0]).toBe(ToolbarButtonId.Link)
-    expect(ids[1]).toBe(ToolbarButtonId.InlineCode)
+    const fontGroup = result.find((g) => g.id === ToolbarGroupId.ColorFont)
+    expect(fontGroup).toBeDefined()
+    const ids = fontGroup!.buttons.map((b) => b.id)
+    expect(ids[0]).toBe(ToolbarButtonId.InlineCode)
+    expect(ids[1]).toBe(ToolbarButtonId.Bold)
     // All original buttons still present.
-    const defaultTextIds = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.TextStyle)!.buttons.map(
+    const defaultFontIds = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.ColorFont)!.buttons.map(
       (b) => b.id,
     )
-    expect(new Set(ids)).toEqual(new Set(defaultTextIds))
+    expect(new Set(ids)).toEqual(new Set(defaultFontIds))
+  })
+
+  it('keeps every group layout valid: rows are ToolbarButtonId[][] and every non-sentinel id exists in that group buttons', () => {
+    for (const group of DEFAULT_TOOLBAR_GROUPS) {
+      if (!group.layout) {
+        continue
+      }
+      const ownButtonIds = new Set(group.buttons.map((b) => b.id))
+      expect(Array.isArray(group.layout)).toBe(true)
+      for (const row of group.layout) {
+        expect(Array.isArray(row)).toBe(true)
+        for (const id of row) {
+          if (isLayoutSentinel(id)) {
+            continue
+          }
+          // Every real id placed in a layout row must be a button of that group.
+          expect(ownButtonIds.has(id)).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('places Select all on the first Selection-group layout row and Select-all-text on the second', () => {
+    const selection = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.Selection)
+    expect(selection).toBeDefined()
+    expect(selection!.layout).toBeDefined()
+    const layout = selection!.layout!
+    expect(layout[0]).toContain(ToolbarButtonId.SelectAll)
+    expect(layout[0]).not.toContain(ToolbarButtonId.SelectAllText)
+    expect(layout[1]).toContain(ToolbarButtonId.SelectAllText)
+    // The new button is a real descriptor in the group's buttons.
+    expect(selection!.buttons.map((b) => b.id)).toContain(ToolbarButtonId.SelectAllText)
   })
 
   it('exposes per-group rows when overridden and never on the default config', () => {

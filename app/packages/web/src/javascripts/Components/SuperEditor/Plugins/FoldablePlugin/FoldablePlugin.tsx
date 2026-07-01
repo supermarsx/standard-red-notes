@@ -2,7 +2,7 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { mergeRegister } from '@lexical/utils'
 import { $isListItemNode, $isListNode, ListItemNode } from '@lexical/list'
 import { $isHeadingNode, HeadingNode } from '@lexical/rich-text'
-import { $getNodeByKey, $getRoot, LexicalNode } from 'lexical'
+import { $getNodeByKey, $getRoot, LexicalNode, setDOMUnmanaged } from 'lexical'
 import { useEffect } from 'react'
 
 import { computeHiddenBlockKeys, computeHiddenListItemKeys, FoldBlock, FoldListItem } from './foldRange'
@@ -34,6 +34,34 @@ const FOLDABLE_CLASS = 'Lexical__foldable'
 const TOGGLE_CLASS = 'Lexical__foldToggle'
 const TOGGLE_ATTR = 'data-fold-toggle'
 const KEY_ATTR = 'data-fold-key'
+
+/**
+ * Build the fold-toggle button element, marked Lexical-UNMANAGED.
+ *
+ * Exported so the regression test can assert the unmanaged flag is present
+ * WITHOUT a full editor mount. The unmanaged flag is the load-bearing part of
+ * the no-hang fix (see `ensureToggle`): the toggle is injected into a
+ * Lexical-owned `<li>`/heading, so Lexical's DOM MutationObserver would
+ * otherwise `removeChild` it and revert the selection, scheduling an update that
+ * re-inserts it — an unbounded insert/observe/remove/update loop that froze the
+ * app the instant a list item became foldable (e.g. Tab-nesting a list item).
+ */
+export function createFoldToggle(): HTMLElement {
+  const toggle = document.createElement('span')
+  toggle.setAttribute(TOGGLE_ATTR, 'true')
+  toggle.setAttribute('contenteditable', 'false')
+  toggle.setAttribute('role', 'button')
+  toggle.setAttribute('aria-label', 'Toggle fold')
+  toggle.className = TOGGLE_CLASS
+  // CRITICAL (no-hang fix): mark this externally-injected span as
+  // Lexical-UNMANAGED before it is inserted so Lexical's MutationObserver skips
+  // it instead of removing it and reverting selection (which re-triggers the
+  // update listener -> infinite re-insert loop). Headless Lexical has no
+  // MutationObserver, so the loop is invisible to jest — only a real browser
+  // (the super-tab-no-hang e2e) reproduces it.
+  setDOMUnmanaged(toggle)
+  return toggle
+}
 
 /** Heading tag (h1..h6) -> numeric level. */
 function headingLevel(node: HeadingNode): number {
@@ -113,14 +141,19 @@ export default function FoldablePlugin(): null {
       if (existing) {
         return
       }
-      const toggle = document.createElement('span')
-      toggle.setAttribute(TOGGLE_ATTR, 'true')
-      toggle.setAttribute('contenteditable', 'false')
-      toggle.setAttribute('role', 'button')
-      toggle.setAttribute('aria-label', 'Toggle fold')
-      toggle.className = TOGGLE_CLASS
-      // Insert as first child so CSS can position it in the gutter.
-      el.insertBefore(toggle, el.firstChild)
+      // `createFoldToggle` marks the span Lexical-UNMANAGED — see its doc and the
+      // module-level note: without it, inserting into the Lexical-owned `<li>`
+      // triggers the MutationObserver to remove the span + revert selection,
+      // re-firing this update listener in an unbounded re-insert loop (the freeze).
+      const toggle = createFoldToggle()
+      // APPEND the toggle (rather than inserting it as the first child). The
+      // toggle is absolutely positioned in the left gutter via CSS
+      // (`.Lexical__foldToggle`), so its position in the DOM child order does not
+      // affect its rendered location. But being the element's FIRST inline child
+      // meant clicking column 0 of a foldable heading (or pressing Home) could
+      // seat the caret on/around this non-editable span. Appending it keeps the
+      // caret at the real text start unaffected while preserving the click target.
+      el.appendChild(toggle)
     }
 
     /**
