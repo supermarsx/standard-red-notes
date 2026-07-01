@@ -17,7 +17,7 @@ const getDefaultToastDuration = (type: ToastType) => (type === ToastType.Error ?
 
 export const ToastTimer: FunctionComponent<Props> = ({ toast, index }) => {
   const toastElementRef = useRef<HTMLDivElement>(null)
-  const toastTimerIdRef = useRef<number>()
+  const toastTimerIdRef = useRef<number | undefined>(undefined)
 
   const hasActions = Boolean(toast.actions?.length)
   const shouldAutoClose = toast.autoClose ?? getDefaultForAutoClose(hasActions, toast.type)

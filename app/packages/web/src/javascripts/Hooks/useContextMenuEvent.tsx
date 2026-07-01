@@ -2,7 +2,10 @@ import { RefObject, useCallback, useEffect } from 'react'
 import { useLongPressEvent } from './useLongPress'
 import { isIOS } from '@standardnotes/ui-services'
 
-export const useContextMenuEvent = (elementRef: RefObject<HTMLElement>, listener: (x: number, y: number) => void) => {
+export const useContextMenuEvent = (
+  elementRef: RefObject<HTMLElement | null>,
+  listener: (x: number, y: number) => void,
+) => {
   const { attachEvents, cleanupEvents } = useLongPressEvent(elementRef, listener, true)
 
   const handleContextMenuEvent = useCallback(

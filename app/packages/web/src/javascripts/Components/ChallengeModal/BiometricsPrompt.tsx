@@ -9,7 +9,7 @@ type Props = {
   application: WebApplication
   onValueChange: (value: InputValue['value'], prompt: ChallengePrompt) => void
   prompt: ChallengePrompt
-  buttonRef: RefObject<HTMLButtonElement>
+  buttonRef: RefObject<HTMLButtonElement | null>
 }
 
 const BiometricsPrompt = ({ application, onValueChange, prompt, buttonRef }: Props) => {

@@ -18,6 +18,7 @@ import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
 import { achievements, METRICS } from '@/Achievements'
+import { PremiumFeatureIconName } from '@/Components/Icon/PremiumFeatureIcon'
 
 type Props = {
   application: WebApplication

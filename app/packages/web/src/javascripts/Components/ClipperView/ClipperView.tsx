@@ -174,7 +174,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
   const [clipPayload, setClipPayload] = useState<ClipPayload>()
   useEffect(() => {
     const getClipFromStorage = async () => {
-      const result = await extensionStorage.local.get('clip')
+      const result = (await extensionStorage.local.get('clip')) as { clip?: ClipPayload }
       if (!result.clip) {
         return
       }
