@@ -23,6 +23,11 @@ export interface StorageSource {
   bytes: number
   /** Entry count where meaningful (items / cache entries); 0 otherwise. */
   count: number
+  /**
+   * Optional one-line explanation shown next to the row (as a tooltip + caption).
+   * Used for the synthetic "System / overhead" residual so it isn't opaque.
+   */
+  description?: string
 }
 
 /** One of the largest stored entries (raw ENCRYPTED size — never decrypted). */

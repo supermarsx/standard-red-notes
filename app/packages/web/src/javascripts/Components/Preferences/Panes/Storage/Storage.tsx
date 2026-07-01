@@ -8,11 +8,14 @@ import PreferencesPane from '@/Components/Preferences/PreferencesComponents/Pref
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
+import Icon from '@/Components/Icon/Icon'
+import { getIconForItem } from '@/Utils/Items/Icons/getIconForItem'
 import { estimateStorage, formatBytes, StorageEstimateResult } from '@/Utils/StorageQuota'
 import { isStorageUsageScanAvailable, scanStorageUsage } from '@/Utils/Storage/StorageUsageManager'
 import { StorageLargestItem, StorageUsageSnapshot } from '@/Utils/Storage/storageUsageWorkerProtocol'
 import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
+import { resolveStorageItemLabel, storageItemIconType } from './storageItemLabel'
 
 type Props = {
   application: WebApplication
@@ -244,7 +247,9 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                 return (
                   <div key={source.id}>
                     <div className="flex items-baseline justify-between text-sm lg:text-xs">
-                      <span className="font-medium">{source.label}</span>
+                      <span className="font-medium" title={source.description}>
+                        {source.label}
+                      </span>
                       <span className="text-passive-1">
                         {formatBytes(source.bytes)}
                         {source.count > 0 ? ` · ${source.count} item${source.count === 1 ? '' : 's'}` : ''} ·{' '}
@@ -254,6 +259,9 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                     <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-passive-3">
                       <div className="h-full bg-info" style={{ width: `${pct}%` }} />
                     </div>
+                    {source.description ? (
+                      <div className="mt-1 text-xs text-passive-1">{source.description}</div>
+                    ) : null}
                   </div>
                 )
               })}
@@ -323,37 +331,87 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
             </div>
 
             <div className="mt-2 flex flex-col divide-y divide-border">
-              {largest.map((item) => (
-                <div key={item.uuid} className="flex items-center justify-between gap-3 py-2">
-                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 shrink-0"
-                      checked={selected.has(item.uuid)}
-                      onChange={() => toggleSelected(item.uuid)}
-                    />
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate text-sm font-medium lg:text-xs" title={item.title}>
-                        {item.title}
+              {largest.map((item) => {
+                // Name resolution happens HERE on the main thread: the worker only
+                // knows the uuid/content_type (payloads are encrypted), so look up the
+                // decrypted in-memory item to show a real note title / file name / tag.
+                const found = application.items.findItem(item.uuid)
+                const label = resolveStorageItemLabel(found, item.uuid, item.contentType)
+
+                // Compact rows use a TYPE ICON (text label moves to its tooltip). Reuse
+                // the app's getIconForItem mapping when the item is in memory (editor /
+                // file-mime / custom tag icons); fall back to a content-type icon when
+                // it's absent or a type that helper doesn't handle.
+                const typeText = contentTypeLabel(item.contentType)
+                let iconType = storageItemIconType(item.contentType)
+                let iconClassName = 'text-neutral'
+                if (found) {
+                  try {
+                    const [reusedIcon, reusedClassName] = getIconForItem(found, application)
+                    iconType = reusedIcon
+                    iconClassName = reusedClassName
+                  } catch {
+                    /* content type not handled by getIconForItem — keep the fallback icon */
+                  }
+                }
+
+                return (
+                  <div key={item.uuid} className="flex items-center justify-between gap-3 py-2">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 shrink-0"
+                        checked={selected.has(item.uuid)}
+                        onChange={() => toggleSelected(item.uuid)}
+                      />
+                      <span className="flex shrink-0" title={typeText}>
+                        <Icon type={iconType} ariaLabel={typeText} className={iconClassName} size="medium" />
                       </span>
-                      <span className="truncate text-xs text-passive-1" title={item.uuid}>
-                        {contentTypeLabel(item.contentType)} · {formatBytes(item.bytes)}
+                      <span className="flex min-w-0 flex-col">
+                        <span
+                          className="truncate text-sm font-medium lg:text-xs"
+                          title={label.secondary ?? label.primary}
+                        >
+                          {label.primary}
+                        </span>
+                        <span className="truncate text-xs text-passive-1" title={label.secondary ?? item.uuid}>
+                          {formatBytes(item.bytes)}
+                          {label.secondary ? (
+                            <>
+                              {' · '}
+                              <span className="font-mono">{label.secondary}</span>
+                            </>
+                          ) : null}
+                        </span>
                       </span>
-                    </span>
-                  </label>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <Button small disabled={busy} onClick={() => handleOpen(item.uuid)}>
-                      Open
-                    </Button>
-                    <Button small disabled={busy} onClick={() => handleExport([item])}>
-                      Export
-                    </Button>
-                    <Button small colorStyle="danger" disabled={busy} onClick={() => handleDelete(item)}>
-                      Delete
-                    </Button>
+                    </label>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button small disabled={busy} onClick={() => handleOpen(item.uuid)} title="Open" aria-label="Open">
+                        <Icon type="open-in" size="small" />
+                      </Button>
+                      <Button
+                        small
+                        disabled={busy}
+                        onClick={() => handleExport([item])}
+                        title="Export"
+                        aria-label="Export"
+                      >
+                        <Icon type="download" size="small" />
+                      </Button>
+                      <Button
+                        small
+                        colorStyle="danger"
+                        disabled={busy}
+                        onClick={() => handleDelete(item)}
+                        title="Delete"
+                        aria-label="Delete"
+                      >
+                        <Icon type="trash" size="small" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </PreferencesSegment>
         </PreferencesGroup>

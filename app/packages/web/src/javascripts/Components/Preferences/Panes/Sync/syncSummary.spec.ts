@@ -104,4 +104,46 @@ describe('summarizeSync', () => {
     expect(summary.localOnly).toEqual({ note: 0, tag: 0, file: 0, total: 0 })
     expect(summary.localOnlyItems).toEqual([])
   })
+
+  it('counts a never-synced (not-yet-uploaded) item as local-only, not synced', () => {
+    const summary = summarizeSync([
+      item({ uuid: 'synced', localOnly: false, neverSynced: false }),
+      item({ uuid: 'pending', localOnly: false, neverSynced: true }),
+    ])
+    expect(summary.synced.total).toBe(1)
+    expect(summary.localOnly.total).toBe(1)
+    // The pending item is not flagged local-only, so it is NOT in the actionable
+    // "kept on this device only" list — only the deliberate exclusions are.
+    expect(summary.localOnlyItems).toHaveLength(0)
+  })
+
+  it('counts EVERYTHING as local-only when there is no account (0 synced)', () => {
+    const summary = summarizeSync(
+      [
+        item({ uuid: 'n', content_type: NOTE_CONTENT_TYPE, localOnly: false, neverSynced: false }),
+        item({ uuid: 't', content_type: TAG_CONTENT_TYPE, localOnly: false, neverSynced: false }),
+        item({ uuid: 'f', content_type: FILE_CONTENT_TYPE, localOnly: true }),
+      ],
+      { hasAccount: false },
+    )
+    expect(summary.synced.total).toBe(0)
+    expect(summary.localOnly).toEqual({ note: 1, tag: 1, file: 1, total: 3 })
+    // Only the explicitly-flagged item is in the actionable list.
+    expect(summary.localOnlyItems.map((i) => i.uuid)).toEqual(['f'])
+  })
+
+  it('with an account, a synced-and-not-excluded item counts as synced', () => {
+    const summary = summarizeSync(
+      [item({ uuid: 'n', localOnly: false, neverSynced: false })],
+      { hasAccount: true },
+    )
+    expect(summary.synced.total).toBe(1)
+    expect(summary.localOnly.total).toBe(0)
+  })
+
+  it('defaults to hasAccount=true and neverSynced=false when omitted (back-compat)', () => {
+    const summary = summarizeSync([item({ uuid: 'n', localOnly: false })])
+    expect(summary.synced.total).toBe(1)
+    expect(summary.localOnly.total).toBe(0)
+  })
 })

@@ -33,7 +33,8 @@ import {
 
 import Conflicts from '@/Components/Preferences/Panes/Conflicts/Conflicts'
 
-import { LocalOnlyItem, SyncItemLike, SyncSummary, summarizeSync } from './syncSummary'
+import { LocalOnlyItem, SyncItemLike, summarizeSync } from './syncSummary'
+import { resolveSyncStatus } from './syncStatus'
 
 type Props = {
   application: WebApplication
@@ -64,6 +65,9 @@ function collectSyncItems(application: WebApplication): SyncItemLike[] {
     uuid: item.uuid,
     content_type: item.content_type,
     localOnly: item.localOnly,
+    // `neverSynced` is true until the server stamps a `serverUpdatedAt`, so a
+    // brand-new / never-uploaded item is correctly counted as not-yet-synced.
+    neverSynced: item.neverSynced,
     title: itemTitle(item),
     trashed: (item as unknown as { trashed?: boolean }).trashed === true,
   })
@@ -105,7 +109,18 @@ const StatRow: FunctionComponent<StatRowProps> = ({ icon, label, synced, localOn
 const Sync: FunctionComponent<Props> = ({ application }: Props) => {
   const connection = useConnectionStatus(application)
 
-  const [summary, setSummary] = useState<SyncSummary>(() => summarizeSync(collectSyncItems(application)))
+  // Account-status card, last-sync line, and count gating all derive from one
+  // resolved status so they can never contradict one another.
+  const syncStatus = useMemo(
+    () => resolveSyncStatus({ signedOut: connection.signedOut, connectionKind: connection.kind }),
+    [connection.signedOut, connection.kind],
+  )
+
+  // Hold the raw in-memory item snapshot (throttled). The synced/local-only
+  // partition is derived from it, so it reacts immediately to sign-in/out
+  // (which flips `hasAccount`) without needing to re-scan every item.
+  const [items, setItems] = useState<SyncItemLike[]>(() => collectSyncItems(application))
+  const summary = useMemo(() => summarizeSync(items, { hasAccount: syncStatus.hasAccount }), [items, syncStatus.hasAccount])
   const [busyUuid, setBusyUuid] = useState<string | undefined>(undefined)
 
   // --- Manual sync mode (web-local toggle) -----------------------------------
@@ -159,7 +174,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
 
     const recompute = () => {
       pending = false
-      setSummary(summarizeSync(collectSyncItems(application)))
+      setItems(collectSyncItems(application))
     }
 
     const scheduleRecompute = () => {
@@ -273,20 +288,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
     ? formatDateAndTimeForNote(connection.lastSyncDate)
     : 'No sync yet this session'
 
-  const connectionLabel =
-    connection.signedOut
-      ? 'Offline account (local only)'
-      : connection.kind === 'online'
-        ? 'Connected'
-        : connection.kind === 'reconnecting'
-          ? 'Reconnecting…'
-          : 'Offline'
-
-  const connectionIcon: VectorIconNameOrEmoji = connection.signedOut
-    ? 'cloud-off'
-    : connection.kind === 'online'
-      ? 'sync'
-      : 'cloud-off'
+  const connectionLabel = syncStatus.label
+  const connectionIcon: VectorIconNameOrEmoji = syncStatus.icon
 
   const totalLocalOnly = summary.localOnly.total
 
@@ -310,7 +313,11 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
               <Icon type="clock" size="medium" className="flex-shrink-0 text-info" />
               <div className="min-w-0">
                 <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">Last successful sync</div>
-                <div className="truncate text-sm font-bold text-text">{lastSyncLabel}</div>
+                {/* A last-sync timestamp is only meaningful with an account; a
+                    purely-local install has no server sync to report. */}
+                <div className="truncate text-sm font-bold text-text">
+                  {syncStatus.showLastSync ? lastSyncLabel : 'Not signed in'}
+                </div>
               </div>
             </div>
           </div>
@@ -374,7 +381,11 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
               <Subtitle>Sync now</Subtitle>
               <Text>
                 Push local changes and pull the latest from your account.{' '}
-                {connection.lastSyncDate ? `Last synced ${lastSyncLabel}.` : 'No sync yet this session.'}
+                {!syncStatus.hasAccount
+                  ? 'Sign in to an account to sync.'
+                  : connection.lastSyncDate
+                    ? `Last synced ${lastSyncLabel}.`
+                    : 'No sync yet this session.'}
               </Text>
             </div>
             <Button
@@ -394,7 +405,14 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
           <Subtitle>
             These items are excluded from sync and never leave this device. Switch any of them back to syncing.
           </Subtitle>
-          {summary.localOnlyItems.length === 0 ? (
+          {!syncStatus.hasAccount ? (
+            // No account: everything is on this device because there's nowhere to
+            // sync to — not because individual items were excluded. Say so plainly
+            // so this agrees with the "Local only" status and the all-local counts.
+            <Text className="mt-2">
+              You’re not signed in, so everything is kept on this device. Sign in to an account to start syncing.
+            </Text>
+          ) : summary.localOnlyItems.length === 0 ? (
             <Text className="mt-2">
               Nothing is local-only right now — every note, tag and file is syncing to your account.
             </Text>

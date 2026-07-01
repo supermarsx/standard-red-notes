@@ -3,11 +3,21 @@
  * so the "what is synced vs. local-only" derivation can be unit-tested from plain
  * sample data with no service mocks.
  *
- * Everything here is derived synchronously from already-in-memory items. The flag
- * we partition on is the existing `localOnly` AppData flag (AppDataField.LocalOnly),
- * which is exactly what SyncService.excludeLocalOnlyItems uses to keep an item off
- * the sync upload set. We do NOT reimplement that logic — we only read the same
- * boolean to MIRROR, in the UI, what the sync engine already does.
+ * Everything here is derived synchronously from already-in-memory items. An item
+ * counts as SYNCED only when it has genuinely reached the server, which requires
+ * ALL of:
+ *   - there is an account/session (`hasAccount`) — with no account nothing can be
+ *     on the server, so everything is local-only;
+ *   - it is not excluded via the `localOnly` AppData flag (AppDataField.LocalOnly),
+ *     the exact flag SyncService.excludeLocalOnlyItems uses to keep an item off the
+ *     upload set; and
+ *   - it is not `neverSynced` — i.e. the server has stamped it with a
+ *     `serverUpdatedAt` (GenericItem.neverSynced is `!serverUpdatedAt`). A brand
+ *     new / dirty-never-uploaded item has not reached the server yet and is
+ *     therefore local-only until it does.
+ *
+ * We do NOT reimplement any sync logic — we only READ these existing item fields
+ * to MIRROR, in the UI, what has and hasn't reached the account.
  */
 
 /** The three content-type buckets we surface counts for. */
@@ -28,10 +38,27 @@ export type SyncItemLike = {
   uuid: string
   content_type: string
   localOnly: boolean
+  /**
+   * Whether the item has never reached the server (GenericItem.neverSynced —
+   * `!serverUpdatedAt`). A never-synced item is local-only until it uploads.
+   * Optional so plain test fixtures / already-synced items default to `false`.
+   */
+  neverSynced?: boolean
   /** Best-effort display title (note title / tag name / file name). May be empty. */
   title?: string
   /** Whether this item is in the trash (trashed items are excluded from counts). */
   trashed?: boolean
+}
+
+/** Options controlling the synced/local-only partition. */
+export type SummarizeSyncOptions = {
+  /**
+   * Whether there is an account/session that items can sync TO. When false there
+   * is no server relationship at all, so nothing counts as synced and every item
+   * is local-only. Defaults to `true` so existing callers/fixtures partition on
+   * the per-item fields alone.
+   */
+  hasAccount?: boolean
 }
 
 /** Counts split by content-type bucket. */
@@ -98,8 +125,20 @@ const emptyCounts = (): SyncKindCounts => ({ note: 0, tag: 0, file: 0, total: 0 
  * count). Only Note / Tag / File content types contribute to the counts; other
  * content types (vault listings, key items, user prefs, ...) are ignored so the
  * numbers match what a user thinks of as "their stuff".
+ *
+ * An item is counted as SYNCED only when it has reached the server:
+ * `hasAccount && !localOnly && !neverSynced`. Everything else — no account, an
+ * item excluded via the local-only flag, or one that hasn't uploaded yet — is
+ * counted as local-only, so the numbers can never claim something is synced that
+ * isn't actually on the account.
+ *
+ * The `localOnlyItems` display list is intentionally the DELIBERATELY excluded
+ * set (the `localOnly` flag) — the actionable "switch back to syncing" items —
+ * not the wider local-only COUNT (which also includes not-yet-uploaded items).
+ * The pane hides that list entirely when there is no account.
  */
-export function summarizeSync(items: SyncItemLike[]): SyncSummary {
+export function summarizeSync(items: SyncItemLike[], options: SummarizeSyncOptions = {}): SyncSummary {
+  const hasAccount = options.hasAccount ?? true
   const synced = emptyCounts()
   const localOnly = emptyCounts()
   const localOnlyItems: LocalOnlyItem[] = []
@@ -114,10 +153,15 @@ export function summarizeSync(items: SyncItemLike[]): SyncSummary {
       continue
     }
 
-    const bucket = item.localOnly ? localOnly : synced
+    // Reached the server iff there is an account, the item isn't excluded, and
+    // the server has stamped it (not never-synced).
+    const isSynced = hasAccount && !item.localOnly && !item.neverSynced
+    const bucket = isSynced ? synced : localOnly
     bucket[kind] += 1
     bucket.total += 1
 
+    // The actionable "kept on this device only" list tracks the explicit
+    // local-only FLAG (what the user can toggle back on), regardless of account.
     if (item.localOnly) {
       localOnlyItems.push({
         uuid: item.uuid,

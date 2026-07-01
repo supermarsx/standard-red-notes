@@ -24,9 +24,7 @@
 // sources are measured.
 
 import {
-  CACHE_SOURCE_ID,
   ITEMS_SOURCE_ID,
-  OTHER_DB_SOURCE_ID,
   StorageLargestItem,
   StorageSource,
   StorageTypeBucket,
@@ -113,98 +111,156 @@ function buildSnapshot(state: ScanState, done: boolean): StorageUsageSnapshot {
 }
 
 /**
- * Sum every entry across every Cache Storage cache. The Cache API IS available in
- * workers. We prefer the Content-Length header (cheap) and fall back to reading the
- * response body as a blob (`response.clone().blob()).size`) when it's missing —
- * e.g. opaque or chunked responses. Best-effort: any failure yields 0 bytes for the
- * affected entry rather than aborting the whole scan.
+ * Friendly label for a Cache Storage cache name, so the breakdown says WHAT is
+ * cached (app shell / fonts / images / runtime) instead of an opaque cache key.
+ * Unknown names pass through so nothing is hidden.
  */
-async function measureCacheStorage(): Promise<StorageSource | undefined> {
-  if (typeof caches === 'undefined' || typeof caches.keys !== 'function') {
-    return undefined
+function friendlyCacheLabel(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower.startsWith('srn-shell') || lower.includes('shell') || lower.includes('precache')) {
+    return 'Cache — app shell (offline)'
   }
+  if (lower.includes('font')) {
+    return 'Cache — fonts'
+  }
+  if (lower.includes('image') || lower.includes('img')) {
+    return 'Cache — images'
+  }
+  if (lower.includes('workbox') || lower.includes('runtime')) {
+    return 'Cache — runtime assets'
+  }
+  return `Cache — ${name}`
+}
 
+/** Sum the on-disk body size of one cache's entries (Content-Length, blob fallback). */
+async function measureOneCache(cacheName: string): Promise<{ bytes: number; count: number }> {
   let bytes = 0
   let count = 0
-  try {
-    const cacheNames = await caches.keys()
-    for (const cacheName of cacheNames) {
-      const cache = await caches.open(cacheName)
-      const requests = await cache.keys()
-      for (const request of requests) {
-        count += 1
-        try {
-          const response = await cache.match(request)
-          if (!response) {
-            continue
-          }
-          const contentLength = response.headers.get('content-length')
-          if (contentLength) {
-            const parsed = Number(contentLength)
-            if (Number.isFinite(parsed) && parsed > 0) {
-              bytes += parsed
-              continue
-            }
-          }
-          const blob = await response.clone().blob()
-          bytes += blob.size
-        } catch {
-          /* one bad cache entry shouldn't abort the scan */
+  const cache = await caches.open(cacheName)
+  const requests = await cache.keys()
+  for (const request of requests) {
+    count += 1
+    try {
+      const response = await cache.match(request)
+      if (!response) {
+        continue
+      }
+      const contentLength = response.headers.get('content-length')
+      if (contentLength) {
+        const parsed = Number(contentLength)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          bytes += parsed
+          continue
         }
       }
+      const blob = await response.clone().blob()
+      bytes += blob.size
+    } catch {
+      /* one bad cache entry shouldn't abort the scan */
     }
-  } catch {
-    return undefined
   }
-
-  return { id: CACHE_SOURCE_ID, label: 'App cache (offline assets)', bytes, count }
+  return { bytes, count }
 }
 
 /**
- * Coarsely measure any OTHER IndexedDB databases besides the items DB so they show
- * up in the breakdown instead of falling into "Unaccounted". indexedDB.databases()
- * is not universally supported and doesn't expose sizes, so we open each extra DB
- * and sum the stringified weight of every record. Best-effort and bounded by the
- * fact that auxiliary DBs are small; returns undefined when unsupported.
+ * Produce ONE source PER named Cache Storage cache (a per-cache breakdown), rather
+ * than a single "App cache" lump — so the user sees the app-shell cache vs fonts vs
+ * runtime caches separately. The Cache API IS available in workers. We prefer the
+ * Content-Length header (cheap) and fall back to reading the response body as a blob
+ * (`response.clone().blob().size`) when it's missing (opaque/chunked responses).
+ * Best-effort: any failure yields 0 bytes for the affected entry/cache rather than
+ * aborting the whole scan. Empty caches are omitted from the breakdown.
  */
-async function measureOtherDatabases(itemsDbName: string): Promise<StorageSource | undefined> {
+async function measureCacheStorages(): Promise<StorageSource[]> {
+  if (typeof caches === 'undefined' || typeof caches.keys !== 'function') {
+    return []
+  }
+
+  const sources: StorageSource[] = []
+  try {
+    const cacheNames = await caches.keys()
+    for (const cacheName of cacheNames) {
+      try {
+        const { bytes, count } = await measureOneCache(cacheName)
+        if (bytes === 0 && count === 0) {
+          continue
+        }
+        sources.push({ id: `cache:${cacheName}`, label: friendlyCacheLabel(cacheName), bytes, count })
+      } catch {
+        /* skip a cache we can't open */
+      }
+    }
+  } catch {
+    return sources
+  }
+
+  return sources
+}
+
+/**
+ * Friendly label for an auxiliary IndexedDB database name, so known stores are named
+ * (cached files, encryption keychain, search index) instead of appearing as raw db
+ * keys. Unknown databases pass through under a generic "Database — <name>" label so
+ * nothing is hidden. The items DB name is passed so its `<id>-local-files` sibling is
+ * recognized regardless of workspace identifier.
+ */
+function friendlyDatabaseLabel(name: string, itemsDbName: string): string {
+  const lower = name.toLowerCase()
+  if (name === `${itemsDbName}-local-files` || lower.endsWith('-local-files') || lower.includes('local-files')) {
+    return 'Cached files (downloaded)'
+  }
+  if (lower.includes('keychain')) {
+    return 'Encryption keychain'
+  }
+  if (lower.includes('search') || lower.includes('index')) {
+    return 'Search index'
+  }
+  return `Database — ${name}`
+}
+
+/**
+ * Measure any OTHER IndexedDB databases besides the items DB, emitting ONE source
+ * PER database (an itemized breakdown) rather than a single "Other local databases"
+ * lump — so cached files, the encryption keychain and any search index are each
+ * named. indexedDB.databases() is not universally supported and doesn't expose
+ * sizes, so we open each extra DB and sum the stringified weight of every record.
+ * Best-effort and bounded by the fact that auxiliary DBs are small; returns [] when
+ * unsupported. Empty databases are omitted.
+ */
+async function measureOtherDatabases(itemsDbName: string): Promise<StorageSource[]> {
   const idbAny = indexedDB as IDBFactory & { databases?: () => Promise<{ name?: string }[]> }
   if (typeof idbAny.databases !== 'function') {
-    return undefined
+    return []
   }
 
   let infos: { name?: string }[]
   try {
     infos = await idbAny.databases()
   } catch {
-    return undefined
+    return []
   }
 
   const otherNames = infos
     .map((info) => info.name)
     .filter((name): name is string => typeof name === 'string' && name.length > 0 && name !== itemsDbName)
 
-  if (otherNames.length === 0) {
-    return undefined
-  }
-
-  let bytes = 0
-  let count = 0
+  const sources: StorageSource[] = []
   for (const name of otherNames) {
     try {
-      bytes += await sumDatabaseBytes(name, (entries) => {
-        count += entries
+      let entryCount = 0
+      const bytes = await sumDatabaseBytes(name, (entries) => {
+        entryCount = entries
       })
+      if (bytes === 0 && entryCount === 0) {
+        continue
+      }
+      sources.push({ id: `db:${name}`, label: friendlyDatabaseLabel(name, itemsDbName), bytes, count: entryCount })
     } catch {
       /* skip databases we can't open */
     }
   }
 
-  if (bytes === 0 && count === 0) {
-    return undefined
-  }
-
-  return { id: OTHER_DB_SOURCE_ID, label: 'Other local databases', bytes, count }
+  return sources
 }
 
 /** Open `name` read-only and sum the stringified byte weight of every record in every store. */
@@ -364,17 +420,19 @@ async function scan(request: Extract<StorageUsageWorkerRequest, { type: 'scan' }
   await scanItemsStore(request, state)
   post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
 
-  // Cache Storage is usually the biggest consumer (JS bundles/fonts/assets).
-  const cacheSource = await measureCacheStorage()
-  if (cacheSource) {
-    state.extraSources.push(cacheSource)
+  // Cache Storage is usually the biggest consumer (JS bundles/fonts/assets) — one
+  // source per named cache so the user sees WHAT is cached, not just a lump.
+  const cacheSources = await measureCacheStorages()
+  if (cacheSources.length > 0) {
+    state.extraSources.push(...cacheSources)
     post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
   }
 
-  // Any auxiliary IndexedDB databases beyond the items DB.
-  const otherDbSource = await measureOtherDatabases(databaseName)
-  if (otherDbSource) {
-    state.extraSources.push(otherDbSource)
+  // Any auxiliary IndexedDB databases beyond the items DB — one named source each
+  // (cached files, encryption keychain, search index, ...).
+  const otherDbSources = await measureOtherDatabases(databaseName)
+  if (otherDbSources.length > 0) {
+    state.extraSources.push(...otherDbSources)
     post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
   }
 

@@ -25,6 +25,7 @@ import {
   StorageUsageWorkerResponse,
   UNACCOUNTED_SOURCE_ID,
 } from './storageUsageWorkerProtocol'
+import { buildResidualSource } from './reconcileStorageSources'
 import * as StorageUsageWorkerModule from './storageUsage.worker'
 
 const StorageUsageWorker = ((StorageUsageWorkerModule as { default?: { new (): Worker } }).default ??
@@ -107,19 +108,14 @@ function mergeMainThreadSources(
     })
   }
 
-  const measured = sources.reduce((sum, source) => sum + source.bytes, 0)
-
-  if (typeof estimatedUsage === 'number' && estimatedUsage > 0) {
-    const remainder = estimatedUsage - measured
-    // Only show a remainder once everything has been measured (snapshot.done);
-    // during the scan a partial sum would produce a misleadingly huge "Unaccounted".
-    if (snapshot.done && remainder > 0) {
-      sources.push({
-        id: UNACCOUNTED_SOURCE_ID,
-        label: 'Other / unaccounted',
-        bytes: remainder,
-        count: 0,
-      })
+  // Only reconcile once everything has been measured (snapshot.done); during the
+  // scan a partial sum would produce a misleadingly huge residual. The residual is
+  // surfaced as a named "System / overhead" row (with an explanatory tooltip) rather
+  // than an opaque "Other / unaccounted" bucket — see reconcileStorageSources.
+  if (snapshot.done) {
+    const residual = buildResidualSource(sources, estimatedUsage)
+    if (residual) {
+      sources.push(residual)
     }
   }
 
