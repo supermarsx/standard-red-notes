@@ -15,6 +15,9 @@ const editor = {
 
   // History / navigation
   tableOfContents: 'Table of Contents',
+  selectAll: 'Select all',
+  selectAllText: 'Select all text only',
+  deselectAll: 'Deselect all',
   search: 'Search',
   undo: 'Undo',
   redo: 'Redo',

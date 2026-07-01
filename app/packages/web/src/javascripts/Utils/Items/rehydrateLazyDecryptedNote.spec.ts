@@ -8,15 +8,20 @@ import {
   SNNote,
   createLitePayloadFromDecrypted,
 } from '@standardnotes/snjs'
-import { getFullNoteText, isLiteNote, rehydrateNoteForEditing } from './rehydrateLazyDecryptedNote'
+import {
+  getFullNoteText,
+  isLiteNote,
+  isRehydrateEmitStillSafe,
+  rehydrateNoteForEditing,
+} from './rehydrateLazyDecryptedNote'
 
 let uuidCounter = 0
 const nextUuid = () => `rehydrate-${uuidCounter++}`
 
-const createFullNote = (text = 'FULL-BODY'): SNNote => {
+const createFullNote = (text = 'FULL-BODY', uuid = nextUuid()): SNNote => {
   const payload = new DecryptedPayload<NoteContent>(
     {
-      uuid: nextUuid(),
+      uuid,
       content_type: ContentType.TYPES.Note,
       content: FillItemContent<NoteContent>({ title: 'T', text }),
       ...PayloadTimestampDefaults(),
@@ -26,10 +31,15 @@ const createFullNote = (text = 'FULL-BODY'): SNNote => {
   return new SNNote(payload)
 }
 
-const createLiteNote = (text = 'FULL-BODY'): SNNote => {
-  const full = createFullNote(text).payload
+const createLiteNote = (text = 'FULL-BODY', uuid = nextUuid()): SNNote => {
+  const full = createFullNote(text, uuid).payload
   return new SNNote(createLitePayloadFromDecrypted(full))
 }
+
+/** An `items` slice that reports the given note as the LIVE item for its uuid (still lite + clean). */
+const stableItems = (note: SNNote) => ({
+  findItem: jest.fn().mockReturnValue({ payload: note.payload, dirty: note.dirty }),
+})
 
 describe('rehydrateLazyDecryptedNote', () => {
   describe('isLiteNote', () => {
@@ -82,6 +92,7 @@ describe('rehydrateLazyDecryptedNote', () => {
       const note = createFullNote()
       const app = {
         sync: { getFullContentPayload: jest.fn() },
+        items: stableItems(note),
         mutator: { emitItemFromPayload: jest.fn() },
       }
 
@@ -97,6 +108,7 @@ describe('rehydrateLazyDecryptedNote', () => {
       const fullPayload = createFullNote('EDITABLE-BODY').payload
       const app = {
         sync: { getFullContentPayload: jest.fn().mockResolvedValue(fullPayload) },
+        items: stableItems(lite),
         mutator: { emitItemFromPayload: jest.fn().mockResolvedValue(undefined) },
       }
 
@@ -112,6 +124,7 @@ describe('rehydrateLazyDecryptedNote', () => {
       const lite = createLiteNote()
       const app = {
         sync: { getFullContentPayload: jest.fn().mockResolvedValue(undefined) },
+        items: stableItems(lite),
         mutator: { emitItemFromPayload: jest.fn() },
       }
 
@@ -119,6 +132,81 @@ describe('rehydrateLazyDecryptedNote', () => {
 
       expect(result).toBe(lite)
       expect(app.mutator.emitItemFromPayload).not.toHaveBeenCalled()
+    })
+
+    /**
+     * FIX 1 (rehydrate-clobber race / silent edit loss): if the live item is no longer lite/clean
+     * by the time the async disk read returns (the user typed, or a sync wrote the uuid), emitting
+     * the STALE on-disk body would silently overwrite the fresh edit. The guard must ABORT the emit.
+     */
+    it('does NOT emit (clobber) when the live item became DIRTY mid-rehydrate', async () => {
+      const lite = createLiteNote('STALE-DISK-BODY')
+      const staleDiskPayload = createFullNote('STALE-DISK-BODY', lite.uuid).payload
+      // The live item the user just typed into: a FULL, dirty payload (no longer lite).
+      const dirtyEditedPayload = createFullNote('FRESH-USER-EDIT', lite.uuid).payload
+
+      const app = {
+        // Disk read returns the stale (pre-edit) body.
+        sync: { getFullContentPayload: jest.fn().mockResolvedValue(staleDiskPayload) },
+        // Re-reading the live item AFTER the await reflects the fresh dirty edit.
+        items: { findItem: jest.fn().mockReturnValue({ payload: dirtyEditedPayload, dirty: true }) },
+        mutator: { emitItemFromPayload: jest.fn().mockResolvedValue(undefined) },
+      }
+
+      const result = await rehydrateNoteForEditing(app, lite)
+
+      // The rehydrate emit must be aborted so the fresh edit is preserved.
+      expect(app.mutator.emitItemFromPayload).not.toHaveBeenCalled()
+      expect(result).toBe(lite)
+    })
+
+    it('does NOT emit when the live item is no longer lite (a sync wrote a full payload mid-rehydrate)', async () => {
+      const lite = createLiteNote('STALE-DISK-BODY')
+      const staleDiskPayload = createFullNote('STALE-DISK-BODY', lite.uuid).payload
+      const syncedFullPayload = createFullNote('SYNCED-FROM-SERVER', lite.uuid).payload
+
+      const app = {
+        sync: { getFullContentPayload: jest.fn().mockResolvedValue(staleDiskPayload) },
+        items: { findItem: jest.fn().mockReturnValue({ payload: syncedFullPayload, dirty: false }) },
+        mutator: { emitItemFromPayload: jest.fn().mockResolvedValue(undefined) },
+      }
+
+      await rehydrateNoteForEditing(app, lite)
+
+      expect(app.mutator.emitItemFromPayload).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('isRehydrateEmitStillSafe (FIX 1 guard predicate)', () => {
+    it('is true when the live item is still lite AND still clean', () => {
+      const lite = createLiteNote()
+      const items = { findItem: jest.fn().mockReturnValue({ payload: lite.payload, dirty: false }) }
+      expect(isRehydrateEmitStillSafe(items, lite.uuid, undefined)).toBe(true)
+    })
+
+    it('is false when the live item is now dirty', () => {
+      const lite = createLiteNote()
+      const items = { findItem: jest.fn().mockReturnValue({ payload: lite.payload, dirty: true }) }
+      expect(isRehydrateEmitStillSafe(items, lite.uuid, undefined)).toBe(false)
+    })
+
+    it('is false when the live item is no longer lite', () => {
+      const full = createFullNote()
+      const items = { findItem: jest.fn().mockReturnValue({ payload: full.payload, dirty: false }) }
+      expect(isRehydrateEmitStillSafe(items, full.uuid, undefined)).toBe(false)
+    })
+
+    it('is false when the live item is gone', () => {
+      const items = { findItem: jest.fn().mockReturnValue(undefined) }
+      expect(isRehydrateEmitStillSafe(items, 'missing', undefined)).toBe(false)
+    })
+
+    it('is false when the dirtyIndex advanced past the start snapshot', () => {
+      const lite = createLiteNote()
+      const items = {
+        findItem: jest.fn().mockReturnValue({ payload: { ...lite.payload, dirtyIndex: 10 }, dirty: false }),
+      }
+      expect(isRehydrateEmitStillSafe(items, lite.uuid, 5)).toBe(false)
     })
   })
 })

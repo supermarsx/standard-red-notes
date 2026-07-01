@@ -104,6 +104,20 @@ describe('DecryptionPool lazy spawn', () => {
     pool.destroy()
   })
 
+  it('fans a mid-size bulk load across all cores, not just ceil(jobs / BATCH_SIZE) workers', async () => {
+    const pool = new DecryptionPool()
+    // 5000 jobs = only 10 BATCH_SIZE batches, but it is a bulk cold-load batch:
+    // it must saturate up to maxWorkers (39) rather than idle 29 cores.
+    const results = await pool.decrypt(makeJobs(5000))
+    expect(results).toHaveLength(5000)
+    expect(pool.stats.spawned).toBe(39)
+    expect(constructedWorkers).toBe(39)
+    // No item is lost and every batch succeeded.
+    expect(pool.stats.batchesFailed).toBe(0)
+    expect(pool.stats.batchesOk).toBeGreaterThanOrEqual(39)
+    pool.destroy()
+  })
+
   it('respects an explicit maxWorkers ceiling, clamped to hardwareConcurrency', async () => {
     const pool = new DecryptionPool({ maxWorkers: 4 })
     expect(pool.stats.maxWorkers).toBe(4)

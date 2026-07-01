@@ -16,10 +16,9 @@ type Props = {
   application: WebApplication
   items: ListableContentItem[]
   selectedUuids: ItemListController['selectedUuids']
-  paginate: () => void
 }
 
-const ContentList: FunctionComponent<Props> = ({ application, items, selectedUuids, paginate }) => {
+const ContentList: FunctionComponent<Props> = ({ application, items, selectedUuids }) => {
   const { filesController, itemListController, navigationController, notesController } = application
 
   const { selectPreviousItem, selectNextItem } = itemListController
@@ -139,12 +138,19 @@ const ContentList: FunctionComponent<Props> = ({ application, items, selectedUui
       onKeyDown={onKeyDown}
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
     >
+      {/*
+        Standard Red Notes: the list is fully windowed and already receives the
+        ENTIRE item set via `items`, so scroll-driven pagination (onNearEnd) is
+        pure churn — every near-end scroll rebuilt `this.items` (a new array
+        reference) and forced an O(N) offsets re-sum + O(N) selection scans on
+        500k notes. The pagination apparatus (notesToDisplay/paginate/renderedItems)
+        has been removed entirely; we deliberately do NOT forward onNearEnd.
+      */}
       <VirtualizedList
         ref={virtualListRef}
         items={items}
         scrollContainerRef={scrollContainerRef}
         renderItem={renderItem}
-        onNearEnd={paginate}
       />
     </div>
   )

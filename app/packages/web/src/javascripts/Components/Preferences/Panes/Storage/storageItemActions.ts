@@ -68,13 +68,35 @@ export async function deleteLargestItem(application: WebApplication, row: Storag
   return true
 }
 
+/**
+ * Standard Red Notes (FIX 2 — OOM guard): the export decrypts every selected
+ * file to an in-memory Blob and holds them ALL in `data[]` before zip.js writes
+ * the (also in-memory) zip. A handful of large local files therefore pins
+ * multiple GB of resident memory and OOMs the tab. We bound the export by the
+ * total RAW (encrypted) bytes of the selected rows — a close proxy for the
+ * decrypted size — and require an explicit confirm above this threshold so a
+ * runaway selection can't silently blow up the tab.
+ */
+const ExportTotalBytesWarnThreshold = 1.5 * 1024 * 1024 * 1024 // ~1.5 GB
+
+function formatBytesForExport(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round(bytes / (1024 * 1024))} MB`
+  }
+  return `${Math.round(bytes / 1024)} KB`
+}
+
 /** Resolve largest-list rows to live note/file items, dropping anything no longer present. */
 function resolveExportableItems(
   application: WebApplication,
   rows: StorageLargestItem[],
-): { notes: SNNote[]; files: FileItem[] } {
+): { notes: SNNote[]; files: FileItem[]; totalBytes: number } {
   const notes: SNNote[] = []
   const files: FileItem[] = []
+  let totalBytes = 0
   for (const row of rows) {
     const item = application.items.findItem(row.uuid)
     if (!item) {
@@ -82,11 +104,13 @@ function resolveExportableItems(
     }
     if (isNote(item)) {
       notes.push(item)
+      totalBytes += row.bytes
     } else if (isFile(item)) {
       files.push(item)
+      totalBytes += row.bytes
     }
   }
-  return { notes, files }
+  return { notes, files, totalBytes }
 }
 
 /**
@@ -100,10 +124,27 @@ function resolveExportableItems(
  * downloaded).
  */
 export async function exportLargestItems(application: WebApplication, rows: StorageLargestItem[]): Promise<number> {
-  const { notes, files } = resolveExportableItems(application, rows)
+  const { notes, files, totalBytes } = resolveExportableItems(application, rows)
   if (notes.length === 0 && files.length === 0) {
     addToast({ type: ToastType.Regular, message: 'Selected items can’t be exported (only notes and files).' })
     return 0
+  }
+
+  // OOM guard: a large selection decrypts every file fully into memory (and the
+  // zip is assembled in memory too), so warn + require confirmation before a
+  // selection big enough to crash the tab proceeds.
+  if (totalBytes > ExportTotalBytesWarnThreshold) {
+    const proceed = await confirmDialog({
+      title: 'Large export',
+      text:
+        `This export is about ${formatBytesForExport(totalBytes)}. It must be fully decrypted and zipped in ` +
+        'memory, which can use several gigabytes of RAM and may crash this tab. Continue anyway?',
+      confirmButtonStyle: 'danger',
+      confirmButtonText: 'Export anyway',
+    })
+    if (!proceed) {
+      return 0
+    }
   }
 
   const toastId = addToast({ type: ToastType.Loading, message: 'Preparing export…' })

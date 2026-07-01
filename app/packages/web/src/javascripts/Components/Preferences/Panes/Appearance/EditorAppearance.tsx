@@ -10,6 +10,7 @@ import {
   EditorLineWidth,
   LocalPrefKey,
   PrefKey,
+  SuperToolbarIconSize,
 } from '@standardnotes/snjs'
 import { ChangeEventHandler, useCallback, useEffect, useMemo, useState } from 'react'
 import { Subtitle, Title, Text } from '../../PreferencesComponents/Content'
@@ -268,6 +269,23 @@ const EditorDefaults = ({ application }: Props) => {
 
   const [editorWidth] = useLocalPreference(LocalPrefKey.EditorLineWidth)
 
+  const toolbarIconSize = usePreference(PrefKey.SuperToolbarIconSize)
+  const handleToolbarIconSizeChange = useCallback(
+    (value: string) => {
+      void application.setPreference(PrefKey.SuperToolbarIconSize, value as SuperToolbarIconSize)
+    },
+    [application],
+  )
+
+  const toolbarIconSizeDropdownOptions = useMemo(
+    () =>
+      Object.values(SuperToolbarIconSize).map((size) => ({
+        label: size,
+        value: size,
+      })),
+    [],
+  )
+
   const toggleEditorWidthModal = useCallback(() => {
     application.keyboardService.triggerCommand(CHANGE_EDITOR_WIDTH_COMMAND, true)
   }, [application.keyboardService])
@@ -335,6 +353,19 @@ const EditorDefaults = ({ application }: Props) => {
                   {editorWidth === EditorLineWidth.FullWidth ? 'Full width' : editorWidth}
                   <Icon type="chevron-down" size="normal" />
                 </button>
+              </div>
+            </div>
+            <HorizontalSeparator classes="my-4" />
+            <div>
+              <Subtitle>Toolbar icon size</Subtitle>
+              <Text>Sets the size of the icons in the Super note editor toolbar</Text>
+              <div className="mt-2">
+                <Dropdown
+                  label="Select the Super editor toolbar icon size"
+                  items={toolbarIconSizeDropdownOptions}
+                  value={toolbarIconSize}
+                  onChange={handleToolbarIconSizeChange}
+                />
               </div>
             </div>
           </div>

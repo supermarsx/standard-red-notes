@@ -1,5 +1,19 @@
 $heading-height: 75px;
 
+/* Standard Red Notes — hide the native number-input spinner arrows on the
+   custom column-count field in the Columns dropdown (matched by its stable
+   aria-label so we don't need to touch the toolbar component). */
+input[type='number'][aria-label='Custom column count'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
 #editor-column {
   .locked {
     opacity: 0.8;

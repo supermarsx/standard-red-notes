@@ -1,4 +1,9 @@
 import { ListableContentItem } from '@/Components/ContentListView/Types/ListableContentItem'
+import {
+  FilesFolderFilter,
+  FilesFolderFilterAll,
+} from '@/Components/ContentListView/FilesFolderBar'
+import { FilesSortBy, FilesSortDirection } from '@/Utils/Items/sortFiles'
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
 import {
@@ -91,8 +96,6 @@ import { requestCloseAllOpenModalsAndPopovers } from '@/Utils/CloseOpenModalsAnd
 import { PaneLayout } from '../PaneController/PaneLayout'
 import { RecentActionsState } from '../../Application/Recents'
 
-const MinNoteCellHeight = 51.0
-const DefaultListNumNotes = 20
 const ElementIdScrollContainer = 'notes-scrollable'
 
 /**
@@ -111,10 +114,15 @@ export class ItemListController
   noteFilterText = ''
   notes: SNNote[] = []
   items: ListableContentItem[] = []
-  notesToDisplay = 0
-  pageSize = 0
   panelTitle = 'Notes'
-  renderedItems: ListableContentItem[] = []
+  /**
+   * Standard Red Notes: uuid -> index map over `this.items`, rebuilt once each
+   * time `this.items` is reassigned in performReloadItems. Selection helpers
+   * previously did O(N) `.find`/`.findIndex` scans over `this.items`; at 500k
+   * notes those scans add up. This map turns them into O(1) lookups. It is a
+   * plain (non-observable) internal cache derived from `this.items`.
+   */
+  private itemsIndexByUuid: Map<string, number> = new Map()
   searchSubmitted = false
   showDisplayOptionsMenu = false
 
@@ -148,6 +156,31 @@ export class ItemListController
    */
   searchCaseSensitive = false
 
+  /**
+   * Standard Red Notes: the active Files smart-view folder filter ('all' | 'none'
+   * | a folder uuid). Lifted out of ContentListView's local React state into this
+   * app-scoped controller so it SURVIVES ContentListView unmount/remount. Opening
+   * a view tab on narrow/tablet layouts switches visible panes and remounts the
+   * items column; with the value living here it no longer resets to "all" (which
+   * previously re-flipped the empty-state branches and made the files view look
+   * broken).
+   */
+  filesFolderFilter: FilesFolderFilter = FilesFolderFilterAll
+
+  /**
+   * Standard Red Notes: the full-column FilesView gallery's sort + multi-selection
+   * state, lifted out of the component's local React state into this app-scoped
+   * controller (mirroring the filesFolderFilter lift above) so they SURVIVE the
+   * FilesView remount that happens when switching panes/tabs. Previously these lived
+   * in useState inside FilesView, so a tab switch dropped an in-progress multi-select
+   * and reset the sort — inconsistent with the already-lifted folder filter. Selection
+   * is keyed by file uuid; pruning of stale uuids happens when the files list refreshes
+   * (pruneFilesViewSelection).
+   */
+  filesViewSortBy: FilesSortBy = 'date'
+  filesViewSortDirection: FilesSortDirection = 'dsc'
+  filesViewSelectedUuids: Set<UuidString> = observable(new Set<UuidString>())
+
   displayOptions: NotesAndFilesDisplayControllerOptions = {
     sortBy: CollectionSort.CreatedAt,
     sortDirection: 'dsc',
@@ -159,15 +192,47 @@ export class ItemListController
   private keepActiveItemOpenUuid: UuidString | undefined
 
   /**
-   * Standard Red Notes (cold-load O(n^2) fix): debounced reload used ONLY during the
-   * initial bulk database load, to coalesce the per-batch item-stream events into a few
-   * reloads instead of one per batch. A trailing debounce gives periodic interim updates
-   * (the loading toast already shows progress) while the guaranteed final reload on
-   * ApplicationEvent.LocalDataLoaded ensures the list ends up complete and correct.
+   * Standard Red Notes (cold-load scroll-stall fix): a THROTTLED interim reload used ONLY
+   * during the initial bulk database load. Unlike the previous 250ms trailing debounce
+   * (which still fired several times per second at 5000-item batches and reassigned
+   * `this.items` each time), this performs the heavy reload WORK at most once per second.
+   * Because each reload re-derives + re-sorts the whole corpus and reassigns `this.items`
+   * (forcing VirtualizedList's Fenwick rebuild + height-cache loss), capping it to ~1/s
+   * frees the main thread so all database chunks can drain, while the guaranteed final
+   * reload on ApplicationEvent.LocalDataLoaded still yields the complete, correct list.
+   *
+   * `.cancel()` clears any pending trailing run. It is called on the final
+   * LocalDataLoaded reload and in deinit so a stale, redundant interim reload can't
+   * fire ~1s AFTER the guaranteed final reload (or after the controller is torn down).
    */
-  private coalescedInitialLoadReload = debounce(() => {
-    void this.reloadItems(ItemsReloadSource.ItemStream)
-  }, 250)
+  private coalescedInitialLoadReload = this.createColdLoadThrottle(1000)
+
+  private createColdLoadThrottle(intervalMs: number): (() => void) & { cancel: () => void } {
+    let lastRun = 0
+    let trailingTimeout: ReturnType<typeof setTimeout> | undefined
+    const run = () => {
+      lastRun = Date.now()
+      trailingTimeout = undefined
+      void this.reloadItems(ItemsReloadSource.ItemStream)
+    }
+    const throttled = () => {
+      const elapsed = Date.now() - lastRun
+      if (elapsed >= intervalMs) {
+        run()
+      } else if (!trailingTimeout) {
+        // Schedule a single trailing run so the final pre-LocalDataLoaded batch is not lost
+        // if it arrives inside the throttle window.
+        trailingTimeout = setTimeout(run, intervalMs - elapsed)
+      }
+    }
+    throttled.cancel = () => {
+      if (trailingTimeout) {
+        clearTimeout(trailingTimeout)
+        trailingTimeout = undefined
+      }
+    }
+    return throttled
+  }
   webDisplayOptions: WebDisplayOptions = {
     hideTags: true,
     hideDate: false,
@@ -232,12 +297,13 @@ export class ItemListController
     if (this.recentlyCreatedNoteTimeout) {
       clearTimeout(this.recentlyCreatedNoteTimeout)
     }
+    // Cancel any pending cold-load trailing reload so it can't fire after teardown.
+    this.coalescedInitialLoadReload.cancel()
     ;(this.noteFilterText as unknown) = undefined
     ;(this.notes as unknown) = undefined
-    ;(this.renderedItems as unknown) = undefined
+    ;(this.itemsIndexByUuid as unknown) = undefined
     ;(this.navigationController as unknown) = undefined
     ;(this.searchOptionsController as unknown) = undefined
-    ;(window.onresize as unknown) = undefined
     // Release the background indexer's Web Worker (if any) so it doesn't leak.
     this.searchIndex.destroy()
 
@@ -275,18 +341,27 @@ export class ItemListController
       webDisplayOptions: observable.struct,
       noteFilterText: observable,
       notes: observable,
-      notesToDisplay: observable,
       panelTitle: observable,
       items: observable,
-      renderedItems: observable,
       showDisplayOptionsMenu: observable,
       relevanceSortActive: observable,
       aiContextualOrder: observable,
       aiContextualQuery: observable,
       aiContextualLoading: observable,
       searchCaseSensitive: observable,
+      filesFolderFilter: observable,
+      filesViewSortBy: observable,
+      filesViewSortDirection: observable,
+      filesViewSelectedUuids: observable,
 
       reloadItems: action,
+      setFilesFolderFilter: action,
+      setFilesViewSortBy: action,
+      toggleFilesViewSortDirection: action,
+      toggleFilesViewSelection: action,
+      selectAllFilesViewFiles: action,
+      clearFilesViewSelection: action,
+      pruneFilesViewSelection: action,
       setRelevanceSortActive: action,
       setAiContextualOrder: action,
       clearAiContextualOrder: action,
@@ -294,7 +369,6 @@ export class ItemListController
       setSearchCaseSensitive: action,
       reloadPanelTitle: action,
       reloadDisplayPreferences: action,
-      resetPagination: action,
       setCompletedFullSync: action,
       setNoteFilterText: action,
       setShowDisplayOptionsMenu: action,
@@ -333,8 +407,6 @@ export class ItemListController
     eventBus.addEventHandler(this, CrossControllerEvent.ActiveEditorChanged)
     eventBus.addEventHandler(this, VaultDisplayServiceEvent.VaultDisplayOptionsChanged)
 
-    this.resetPagination()
-
     this.disposers.push(
       itemManager.streamItems<SNNote>(
         [ContentType.TYPES.Note, ContentType.TYPES.File],
@@ -354,6 +426,8 @@ export class ItemListController
            * immediately as before — behavior is unchanged outside the bulk-load window.
            */
           if (source === PayloadEmitSource.LocalDatabaseLoaded) {
+            // Bulk cold-load batches are throttled (and the list identity is preserved)
+            // while steady-state reloads below stay immediate.
             this.coalescedInitialLoadReload()
             return
           }
@@ -462,9 +536,6 @@ export class ItemListController
       ),
     )
 
-    window.onresize = debounce(() => {
-      this.resetPagination(true)
-    }, 100)
   }
 
   getPersistableValue = (): SelectionControllerPersistableValue => {
@@ -518,11 +589,14 @@ export class ItemListController
 
       case ApplicationEvent.LocalDataLoaded: {
         /**
-         * Standard Red Notes (cold-load O(n^2) fix): the initial bulk database load has
-         * finished. Per-batch reloads were coalesced (debounced) during the load, so run
-         * one final, immediate reload to guarantee the list reflects the complete loaded
-         * set regardless of debounce timing.
+         * Standard Red Notes (cold-load scroll-stall fix): the initial bulk database load
+         * has finished. Per-batch reloads were THROTTLED during the load so VirtualizedList
+         * kept a stable `items` identity. Cancel any pending trailing interim reload so it
+         * can't fire ~1s AFTER this guaranteed final reload, then run one final, immediate,
+         * full reload so the list reflects the complete loaded set regardless of throttle
+         * timing.
          */
+        this.coalescedInitialLoadReload.cancel()
         void this.reloadItems(ItemsReloadSource.SyncEvent)
         break
       }
@@ -555,7 +629,7 @@ export class ItemListController
   }
 
   public get listLength() {
-    return this.renderedItems.length
+    return this.items.length
   }
 
   public getActiveItemController(): NoteViewController | FileViewController | undefined {
@@ -679,6 +753,68 @@ export class ItemListController
     return this.parsedSearchQuery.freeText
   }
 
+  setFilesFolderFilter = (filter: FilesFolderFilter): void => {
+    this.filesFolderFilter = filter
+  }
+
+  /**
+   * Standard Red Notes: FilesView gallery sort + selection mutators. Live on the
+   * controller so they survive the FilesView remount on pane/tab switches. Selection
+   * is additive-aware: `toggleFilesViewSelection(uuid, additive)` mirrors a
+   * Ctrl/Cmd+click — when `additive` is false and the file is not already the sole
+   * selection, the previous selection is replaced; otherwise the file is toggled into
+   * the existing set.
+   */
+  setFilesViewSortBy = (sortBy: FilesSortBy): void => {
+    this.filesViewSortBy = sortBy
+  }
+
+  toggleFilesViewSortDirection = (): void => {
+    this.filesViewSortDirection = this.filesViewSortDirection === 'asc' ? 'dsc' : 'asc'
+  }
+
+  toggleFilesViewSelection = (uuid: UuidString, additive: boolean): void => {
+    const next = new Set(this.filesViewSelectedUuids)
+    const alreadySelected = next.has(uuid)
+    if (!additive && !alreadySelected && next.size > 0) {
+      // Plain click while a selection exists: replace it with just this file.
+      next.clear()
+      next.add(uuid)
+    } else if (alreadySelected) {
+      next.delete(uuid)
+    } else {
+      next.add(uuid)
+    }
+    this.filesViewSelectedUuids = next
+  }
+
+  selectAllFilesViewFiles = (uuids: UuidString[]): void => {
+    this.filesViewSelectedUuids = new Set(uuids)
+  }
+
+  clearFilesViewSelection = (): void => {
+    if (this.filesViewSelectedUuids.size === 0) {
+      return
+    }
+    this.filesViewSelectedUuids = new Set()
+  }
+
+  /** Drop any selected uuids whose file no longer exists in the given set. */
+  pruneFilesViewSelection = (existingUuids: Set<UuidString>): void => {
+    let changed = false
+    const next = new Set<UuidString>()
+    for (const uuid of this.filesViewSelectedUuids) {
+      if (existingUuids.has(uuid)) {
+        next.add(uuid)
+      } else {
+        changed = true
+      }
+    }
+    if (changed) {
+      this.filesViewSelectedUuids = next
+    }
+  }
+
   setSearchCaseSensitive = (caseSensitive: boolean): void => {
     if (this.searchCaseSensitive === caseSensitive) {
       return
@@ -790,12 +926,15 @@ export class ItemListController
       this.applyOperatorFilter(this.itemManager.getDisplayableNotesAndFiles()),
     )
 
-    const renderedItems = items.slice(0, this.notesToDisplay)
+    const itemsIndexByUuid = new Map<string, number>()
+    for (let i = 0; i < items.length; i++) {
+      itemsIndexByUuid.set(items[i].uuid, i)
+    }
 
     runInAction(() => {
       this.notes = notes
       this.items = items
-      this.renderedItems = renderedItems
+      this.itemsIndexByUuid = itemsIndexByUuid
     })
 
     await this.recomputeSelectionAfterItemsReload(source)
@@ -1248,7 +1387,7 @@ export class ItemListController
       return true
     }
 
-    const activeItemExistsInUpdatedResults = this.items.find((item) => item.uuid === activeItem?.uuid)
+    const activeItemExistsInUpdatedResults = activeItem !== undefined && this.itemsIndexByUuid.has(activeItem.uuid)
 
     const closeBecauseActiveItemIsFileAndDoesntExistInUpdatedResults =
       activeItem && isFile(activeItem) && !activeItemExistsInUpdatedResults
@@ -1367,7 +1506,10 @@ export class ItemListController
       this.deselectItem(activeItem)
 
       if (this.shouldSelectFirstItem(itemsReloadSource)) {
-        if (this.isTableViewEnabled && !isMobileScreen()) {
+        // The Files smart view always renders as a table (never a single-selection
+        // list), so — like an explicit table view — it must NOT auto-advance to the
+        // next item when the active item closes (e.g. when a view tab takes focus).
+        if ((this.isTableViewEnabled || this.navigationController.isInFilesView) && !isMobileScreen()) {
           return
         }
 
@@ -1741,28 +1883,6 @@ export class ItemListController
     return undefined
   }
 
-  paginate = () => {
-    this.notesToDisplay += this.pageSize
-
-    void this.reloadItems(ItemsReloadSource.Pagination)
-
-    if (this.searchSubmitted) {
-      this.desktopManager?.searchText(this.noteFilterText)
-    }
-  }
-
-  resetPagination = (keepCurrentIfLarger = false) => {
-    const clientHeight = document.documentElement.clientHeight
-    this.pageSize = Math.ceil(clientHeight / MinNoteCellHeight)
-    if (this.pageSize === 0) {
-      this.pageSize = DefaultListNumNotes
-    }
-    if (keepCurrentIfLarger && this.notesToDisplay > this.pageSize) {
-      return
-    }
-    this.notesToDisplay = this.pageSize
-  }
-
   getFirstNonProtectedItem = () => {
     return this.items.find((item) => !item.protected)
   }
@@ -1929,8 +2049,6 @@ export class ItemListController
 
     this.desktopManager?.searchText()
 
-    this.resetPagination()
-
     const { didReloadItems } = await this.reloadDisplayPreferences({ userTriggered })
 
     if (!didReloadItems) {
@@ -1986,7 +2104,6 @@ export class ItemListController
     this.setNoteFilterText('')
     this.onFilterEnter()
     this.handleFilterTextChanged()
-    this.resetPagination()
   }
 
   get selectedItemsCount(): number {
@@ -2054,7 +2171,7 @@ export class ItemListController
     startingIndex?: number
     endingIndex?: number
   }): Promise<void> => {
-    const items = this.renderedItems
+    const items = this.items
 
     const lastSelectedItemIndex = startingIndex ?? items.findIndex((item) => item.uuid == this.lastSelectedItem?.uuid)
     const selectedItemIndex = endingIndex ?? items.findIndex((item) => item.uuid == selectedItem?.uuid)
@@ -2265,9 +2382,10 @@ export class ItemListController
   selectNextItem = ({ userTriggered } = { userTriggered: true }) => {
     const displayableItems = this.items
 
-    const currentIndex = displayableItems.findIndex((candidate) => {
-      return candidate.uuid === this.lastSelectedItem?.uuid
-    })
+    const lastSelectedUuid = this.lastSelectedItem?.uuid
+    // O(1) lookup via the uuid->index cache; falls back to -1 (matching the old
+    // findIndex "not found") so an unselected/absent item starts from index 0.
+    const currentIndex = lastSelectedUuid !== undefined ? (this.itemsIndexByUuid.get(lastSelectedUuid) ?? -1) : -1
 
     let nextIndex = currentIndex + 1
 
@@ -2359,7 +2477,9 @@ export class ItemListController
       return
     }
 
-    const currentIndex = displayableItems.indexOf(this.lastSelectedItem)
+    // O(1) lookup via the uuid->index cache; falls back to -1 (matching the old
+    // indexOf "not found").
+    const currentIndex = this.itemsIndexByUuid.get(this.lastSelectedItem.uuid) ?? -1
 
     let previousIndex = currentIndex - 1
 

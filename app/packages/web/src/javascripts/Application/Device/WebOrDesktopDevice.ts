@@ -16,7 +16,7 @@ import {
   namespacedKey,
   RawStorageKey,
 } from '@standardnotes/snjs'
-import { Database } from '../Database'
+import { Database, DatabaseCrossTabHooks } from '../Database'
 
 export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface {
   platform?: Platform
@@ -31,6 +31,19 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
     const database = new Database(application.identifier, application.alerts)
 
     this.databases.push(database)
+  }
+
+  /**
+   * Standard Red Notes: wire cross-tab coordination hooks into the per-identifier
+   * Database (save-broadcast + keychain-lock write veto). Called from the web bootstrap
+   * (WebApplication) which holds the CrossTabCoordinator(s); the base device just forwards
+   * the hooks to the matching Database so the low-level store stays snjs-free.
+   */
+  setDatabaseCrossTabHooks(identifier: ApplicationIdentifier, hooks: DatabaseCrossTabHooks): void {
+    const database = this.databaseForIdentifier(identifier)
+    if (database) {
+      database.setCrossTabHooks(hooks)
+    }
   }
 
   removeApplication(application: ApplicationInterface): void {

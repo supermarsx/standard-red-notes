@@ -26,12 +26,62 @@ export interface LazyRehydrationSync {
   getFullContentPayload(uuid: string): Promise<DecryptedPayloadInterface | undefined>
 }
 
+/** The minimal live-item shape the rehydrate guard inspects. */
+export interface LazyRehydrationLiveItem {
+  payload: SNNote['payload']
+  dirty: boolean
+}
+
+/** The (read-only) items slice used to re-read the LIVE item before emitting. */
+export interface LazyRehydrationItems {
+  findItem(uuid: string): LazyRehydrationLiveItem | undefined
+}
+
 /** The slice of the snjs application the editing re-hydration helper needs. */
 export interface LazyRehydrationApp {
   sync: LazyRehydrationSync
+  items: LazyRehydrationItems
   mutator: {
     emitItemFromPayload(payload: DecryptedPayloadInterface, source: PayloadEmitSource): Promise<unknown>
   }
+}
+
+/**
+ * DATA-LOSS GUARD (rehydrate-clobber race): a lite→full re-hydrate emits a NON-dirty full payload
+ * sourced from disk. Between the moment we decide to re-hydrate (and `await` the async disk read)
+ * and the moment we emit, the live item may have changed: the user may have typed (making it a
+ * dirty FULL payload) or a sync/delta may have written the same uuid. Emitting the stale on-disk
+ * body then would silently clobber that fresh edit.
+ *
+ * This predicate re-reads the LIVE item immediately before emitting and returns true ONLY when the
+ * item is STILL lite AND STILL clean (and its dirtyIndex has not advanced past the snapshot taken
+ * when we started). Any other state means a newer write is in flight, so the rehydrate emit must be
+ * ABORTED. When the flag is off, no item is ever lite, so this never runs.
+ */
+export function isRehydrateEmitStillSafe(
+  items: LazyRehydrationItems,
+  uuid: string,
+  dirtyIndexAtStart: number | undefined,
+): boolean {
+  const live = items.findItem(uuid)
+  if (!live) {
+    return false
+  }
+
+  if (!isLitePayload(live.payload)) {
+    return false
+  }
+
+  if (live.dirty) {
+    return false
+  }
+
+  const liveDirtyIndex = (live.payload as { dirtyIndex?: number }).dirtyIndex
+  if (liveDirtyIndex !== undefined && dirtyIndexAtStart !== undefined && liveDirtyIndex > dirtyIndexAtStart) {
+    return false
+  }
+
+  return true
 }
 
 /**
@@ -78,8 +128,19 @@ export async function rehydrateNoteForEditing(app: LazyRehydrationApp, note: SNN
     return note
   }
 
+  const dirtyIndexAtStart = (note.payload as { dirtyIndex?: number }).dirtyIndex
+
   const full = await app.sync.getFullContentPayload(note.uuid)
   if (!full || isLitePayload(full)) {
+    return note
+  }
+
+  /**
+   * DATA-LOSS GUARD: re-read the LIVE item AFTER the async disk read above. If it is no longer
+   * lite/clean (the user typed, or a sync wrote it) the re-hydrated on-disk body is stale — emitting
+   * it would silently clobber the fresh edit. Abort the emit and keep the (now-full) live item.
+   */
+  if (!isRehydrateEmitStillSafe(app.items, note.uuid, dirtyIndexAtStart)) {
     return note
   }
 

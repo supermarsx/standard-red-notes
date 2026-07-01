@@ -18,6 +18,7 @@ import MagicLinkView from './TwoFactorAuth/MagicLink/MagicLinkView'
 import AppPasswords from './AppPasswords/AppPasswords'
 import TrustedDevices from './TrustedDevices/TrustedDevices'
 import McpTokens from './McpTokens/McpTokens'
+import Webhooks from './Webhooks/Webhooks'
 import ServerAccessKey from './ServerAccessKey/ServerAccessKey'
 import AccountRecovery from './AccountRecovery/AccountRecovery'
 
@@ -68,6 +69,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
       {props.application.sessions.getUser() && <TrustedDevices application={props.application} />}
       {props.application.sessions.getUser() && <AppPasswords application={props.application} />}
       {props.application.sessions.getUser() && <McpTokens application={props.application} />}
+      {props.application.sessions.getUser() && <Webhooks application={props.application} />}
       {props.application.sessions.getUser() && <AccountRecovery application={props.application} />}
       {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
       <PasscodeLock application={props.application} />

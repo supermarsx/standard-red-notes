@@ -128,6 +128,78 @@ describe('note view controller', () => {
     expect(application.mutator.addTagToNote).toHaveBeenCalledWith(expect.anything(), tag, expect.anything())
   })
 
+  /**
+   * Standard Red Notes (last-edit-loss fix — dealloced guard): a lifecycle flush can
+   * fire AFTER the controller is deinited (the <SuperEditor> unmounts after the
+   * controller is closed on note-switch). A post-deinit save must be a safe NO-OP, not
+   * a throw that loses the edit / crashes the unmount.
+   */
+  it('saveAndAwaitLocalPropagation is a safe no-op after deinit (does not throw)', async () => {
+    const note = { uuid: 'note-uuid', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    application.mutator.changeItem = jest.fn().mockResolvedValue(undefined)
+
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+    controller.deinit()
+    expect(controller.dealloced).toEqual(true)
+
+    await expect(controller.saveAndAwaitLocalPropagation({ text: 'late edit', isUserModified: true })).resolves.toBeUndefined()
+    expect(application.mutator.changeItem).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Standard Red Notes (last-edit-loss fix): the active editor registers a flush +
+   * hasPending with the controller; flushAndAwaitPendingSave invokes the flush, and a
+   * post-deinit flush is a no-op (the editorHasPendingChanges/flushEditorSerialize
+   * guards short-circuit on dealloced).
+   */
+  it('flushAndAwaitPendingSave invokes the registered editor flush; both are no-ops after deinit', async () => {
+    const note = { uuid: 'note-uuid', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+
+    const flush = jest.fn()
+    const hasPending = jest.fn().mockReturnValue(true)
+    controller.registerEditorFlush(flush, hasPending)
+
+    expect(controller.editorHasPendingChanges()).toBe(true)
+
+    await controller.flushAndAwaitPendingSave()
+    expect(flush).toHaveBeenCalledTimes(1)
+
+    controller.deinit()
+    flush.mockClear()
+
+    // After deinit the flush + hasPending guards short-circuit (no throw, no call).
+    expect(controller.editorHasPendingChanges()).toBe(false)
+    controller.flushEditorSerialize()
+    await controller.flushAndAwaitPendingSave()
+    expect(flush).not.toHaveBeenCalled()
+  })
+
   it('should wait until item finishes saving locally before deiniting', async () => {
     const note = {
       uuid: 'note-uuid',

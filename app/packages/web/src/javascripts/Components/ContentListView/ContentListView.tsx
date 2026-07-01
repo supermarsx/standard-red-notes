@@ -11,7 +11,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { PANEL_NAME_NOTES } from '@/Constants/Constants'
 import { FileItem, Platform, PrefKey, WebAppEvent } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import ContentList from '@/Components/ContentListView/ContentList'
 import { ElementIds } from '@/Constants/ElementIDs'
@@ -35,11 +35,7 @@ import { mergeRefs } from '@/Hooks/mergeRefs'
 import Icon from '../Icon/Icon'
 import MobileMultiSelectionToolbar from './MobileMultiSelectionToolbar'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
-import FilesFolderBar, {
-  FilesFolderFilter,
-  FilesFolderFilterAll,
-  filterItemsByFolder,
-} from './FilesFolderBar'
+import FilesFolderBar, { FilesFolderFilterAll, filterItemsByFolder } from './FilesFolderBar'
 import QuickActionsBar from '../QuickActions/QuickActionsBar'
 import { selectDirectoryFiles } from '@/Utils/DirectoryPicker'
 import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
@@ -72,15 +68,15 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       completedFullSync,
       createNewNote,
       optionsSubtitle,
-      paginate,
       panelTitle,
-      renderedItems,
       items,
       isCurrentNoteTemplate,
       isTableViewEnabled,
       selectedUuids,
       selectNextItem,
       selectPreviousItem,
+      filesFolderFilter,
+      setFilesFolderFilter,
     } = itemListController
 
     const innerRef = useRef<HTMLDivElement | null>(null)
@@ -109,8 +105,18 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       }
     }, [selectedTag, application, onPanelWidthLoad])
 
+    const isFilesSmartView = useMemo(() => navigationController.isInFilesView, [navigationController.isInFilesView])
+
     const fileDropCallback = useCallback(
       async (file: FileItem) => {
+        // In the Files smart view, dropped files are uploaded standalone (no
+        // tag-linking) — mirroring the upload button / addNewItem path. The drag
+        // provider has already performed the upload by the time this runs, so
+        // there's nothing further to do here.
+        if (navigationController.isInFilesView) {
+          return
+        }
+
         const currentTag = navigationController.selected
 
         if (!currentTag) {
@@ -130,11 +136,17 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
     useEffect(() => {
       const target = innerRef.current
       const currentTag = navigationController.selected
-      const shouldAddDropTarget = !navigationController.isInAnySystemView() && !navigationController.isInSmartView()
+      // Normal tags (and folders) accept tag-linking drops. The Files smart view
+      // additionally accepts drops, but routes them to a plain upload (no linking).
+      const shouldAddTagLinkingDropTarget =
+        !navigationController.isInAnySystemView() && !navigationController.isInSmartView() && Boolean(currentTag)
+      const shouldAddDropTarget = shouldAddTagLinkingDropTarget || navigationController.isInFilesView
 
-      if (target && shouldAddDropTarget && currentTag) {
+      if (target && shouldAddDropTarget) {
         addDragTarget(target, {
-          tooltipText: t('dropFilesToUpload', { title: currentTag.title }),
+          tooltipText: navigationController.isInFilesView
+            ? t('uploadFiles')
+            : t('dropFilesToUpload', { title: currentTag?.title ?? '' }),
           callback: fileDropCallback,
         })
       }
@@ -149,6 +161,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       fileDropCallback,
       navigationController,
       navigationController.selected,
+      navigationController.isInFilesView,
       removeDragTarget,
       innerRef,
       t,
@@ -156,21 +169,9 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
 
     const icon = selectedTag?.iconString
 
-    const isFilesSmartView = useMemo(() => navigationController.isInFilesView, [navigationController.isInFilesView])
-
-    const [filesFolderFilter, setFilesFolderFilter] = useState<FilesFolderFilter>(FilesFolderFilterAll)
-
     const filteredItems = useMemo(
       () => (isFilesSmartView ? (filterItemsByFolder(items, filesFolderFilter, navigationController) as typeof items) : items),
       [isFilesSmartView, items, filesFolderFilter, navigationController, navigationController.folders],
-    )
-
-    const filteredRenderedItems = useMemo(
-      () =>
-        isFilesSmartView
-          ? (filterItemsByFolder(renderedItems, filesFolderFilter, navigationController) as typeof renderedItems)
-          : renderedItems,
-      [isFilesSmartView, renderedItems, filesFolderFilter, navigationController, navigationController.folders],
     )
 
     const addNewItem = useCallback(async () => {
@@ -333,7 +334,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       if (!hasEditorPane) {
         innerRef.current?.style.removeProperty('width')
       }
-    }, [selectedUuids, innerRef, isCurrentNoteTemplate, renderedItems, panes])
+    }, [selectedUuids, innerRef, isCurrentNoteTemplate, filteredItems, panes])
 
     const [setElement] = usePaneSwipeGesture('right', () => setPaneLayout(PaneLayout.TagSelection), {
       requiresStartFromEdge: application.platform !== Platform.Android,
@@ -368,12 +369,12 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
                 paneController={paneController}
               />
             )}
-            {(!shouldUseTableView || isMobileScreen) && (
+            {(!shouldUseTableView || isMobileScreen || isFilesSmartView) && (
               <SearchBar
                 application={application}
                 itemListController={itemListController}
                 searchOptionsController={searchOptionsController}
-                hideOptions={shouldUseTableView}
+                hideOptions={shouldUseTableView && !isFilesSmartView}
               />
             )}
           </div>
@@ -424,7 +425,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             onSelect={handleDailyListSelection}
           />
         )}
-        {!dailyMode && completedFullSync && !filteredRenderedItems.length ? (
+        {!dailyMode && completedFullSync && !filteredItems.length ? (
           isFilesSmartView ? (
             filesFolderFilter === FilesFolderFilterAll ? (
               <EmptyFilesView addNewItem={addNewItem} />
@@ -435,19 +436,14 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             <p className="empty-items-list opacity-50">{t('noItems')}</p>
           )
         ) : null}
-        {!dailyMode && !completedFullSync && !filteredRenderedItems.length ? (
+        {!dailyMode && !completedFullSync && !filteredItems.length ? (
           <p className="empty-items-list opacity-50">{t('loading')}</p>
         ) : null}
-        {!dailyMode && filteredRenderedItems.length ? (
+        {!dailyMode && filteredItems.length ? (
           shouldUseTableView ? (
             <ContentTableView items={filteredItems} application={application} />
           ) : (
-            <ContentList
-              items={filteredItems}
-              selectedUuids={selectedUuids}
-              application={application}
-              paginate={paginate}
-            />
+            <ContentList items={filteredItems} selectedUuids={selectedUuids} application={application} />
           )
         ) : null}
         {isMobileScreen && itemListController.isMultipleSelectionMode && (

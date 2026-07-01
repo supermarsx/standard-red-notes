@@ -4,6 +4,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { observer } from 'mobx-react-lite'
 import { WebApplicationGroup } from '@/Application/WebApplicationGroup'
 import { isDesktopApplication } from '@/Utils'
+import { NoteViewController } from '../NoteView/Controller/NoteViewController'
 import Button from '@/Components/Button/Button'
 import Icon from '../Icon/Icon'
 import AlertDialog from '../AlertDialog/AlertDialog'
@@ -29,11 +30,35 @@ const ConfirmSignoutModal: FunctionComponent<Props> = ({ application, applicatio
   const workspaces = applicationGroup.getDescriptors()
   const showWorkspaceWarning = workspaces.length > 1 && isDesktopApplication()
 
-  const confirm = useCallback(() => {
-    application.user.signOut().catch(console.error)
+  /**
+   * Standard Red Notes (last-edit-loss fix — logout): an edit typed within the Super
+   * editor's ~1s debounce window is not yet dirty, so signOut()'s clearAllData would
+   * wipe it before it ever reached IndexedDB (and signOut's own getDirtyItems warning
+   * would not see it). FLUSH every open note editor's pending serialize and AWAIT local
+   * propagation BEFORE calling signOut, so the edit becomes dirty + persisted and is
+   * correctly included in signOut's unsaved-changes accounting.
+   */
+  const flushPendingEditorSaves = useCallback(async () => {
+    try {
+      const controllers = application.itemControllerGroup.itemControllers
+      await Promise.all(
+        controllers.map((controller) =>
+          controller instanceof NoteViewController ? controller.flushAndAwaitPendingSave() : Promise.resolve(),
+        ),
+      )
+    } catch (error) {
+      console.error(error)
+    }
+  }, [application])
 
+  const confirm = useCallback(() => {
     closeDialog()
-  }, [application, closeDialog])
+
+    void (async () => {
+      await flushPendingEditorSaves()
+      application.user.signOut().catch(console.error)
+    })()
+  }, [application, closeDialog, flushPendingEditorSaves])
 
   return (
     <AlertDialog closeDialog={closeDialog}>

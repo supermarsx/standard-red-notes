@@ -23,6 +23,7 @@ jest.mock('./NoteViewController', () => {
     initialize = jest.fn().mockResolvedValue(undefined)
     deinit = jest.fn()
     syncOnlyIfLargeNote = jest.fn()
+    flushAndAwaitPendingSave = jest.fn().mockResolvedValue(undefined)
   }
   return { NoteViewController: MockNoteViewController }
 })
@@ -84,6 +85,35 @@ describe('ItemGroupController tabs/tiles', () => {
 
     expect(group.itemControllers).toHaveLength(1)
     expect(group.activeItemViewController).toBe(replacement)
+  })
+
+  /**
+   * Standard Red Notes (last-edit-loss fix — note-switch): switching notes (the
+   * non-tile replace path) MUST flush the outgoing editor's pending serialize and
+   * await local propagation BEFORE deiniting it, otherwise an edit typed within the
+   * ~1s debounce window is dropped when <SuperEditor> later unmounts onto a deinited
+   * controller. Assert flushAndAwaitPendingSave is called, and called BEFORE deinit.
+   */
+  it('note-switch flushes + awaits the outgoing editor save BEFORE deiniting it', async () => {
+    const outgoing = (await addTab()) as unknown as {
+      flushAndAwaitPendingSave: jest.Mock
+      deinit: jest.Mock
+    }
+
+    const order: string[] = []
+    outgoing.flushAndAwaitPendingSave.mockImplementation(async () => {
+      order.push('flush')
+    })
+    outgoing.deinit.mockImplementation(() => {
+      order.push('deinit')
+    })
+
+    // Replace the active controller (note-switch / single-note behavior).
+    await group.createItemController({ templateOptions: {} })
+
+    expect(outgoing.flushAndAwaitPendingSave).toHaveBeenCalledTimes(1)
+    expect(outgoing.deinit).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['flush', 'deinit'])
   })
 
   it('notifies change observers when a tab is added', async () => {

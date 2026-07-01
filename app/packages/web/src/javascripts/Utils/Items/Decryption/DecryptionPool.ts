@@ -41,11 +41,30 @@ const DecryptionWorker = ((DecryptionWorkerModule as { default?: { new (): Worke
   (DecryptionWorkerModule as unknown as { new (): Worker })) as { new (): Worker }
 
 /**
- * Max payloads per postMessage batch. Large enough to amortize the structured
+ * Max payloads per postMessage batch, and the small/medium-load ramp granularity
+ * (one worker spun per BATCH_SIZE jobs). Large enough to amortize the structured
  * clone + round-trip cost, small enough that batches spread evenly across workers
- * and the first results stream back quickly.
+ * and the first results stream back quickly. We never send a bigger message than
+ * this, so peak per-message clone size is bounded regardless of pool width.
  */
 const BATCH_SIZE = 500
+
+/**
+ * Floor on the per-message slice when a big load is spread across many workers, so
+ * saturating a high-core box doesn't degenerate into a flood of trivially small
+ * postMessages (each still carries fixed per-round-trip overhead).
+ */
+const MIN_BATCH_SIZE = 64
+
+/**
+ * At/above this job count a decrypt call is treated as a bulk cold-load and is
+ * fanned across EVERY available worker (up to maxWorkers), slicing finer than
+ * BATCH_SIZE so no core sits idle. Below it we keep the original conservative
+ * ramp (one worker per BATCH_SIZE jobs) so small/medium vaults never pay an
+ * N-worker WASM-init stampede. Chosen comfortably above the couple-of-batches
+ * small-load range and below the web cold-load batch size (loadBatchSize 5000).
+ */
+const SATURATE_THRESHOLD = 2000
 
 /**
  * Workers spawned eagerly at construction. Kept tiny (a couple) so a small vault
@@ -238,20 +257,32 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
       return []
     }
 
-    // Grow the pool toward the batch count (capped at maxWorkers) BEFORE dispatch,
-    // so a big cold-load spins up to the full ceiling while a small one — which
-    // produces only a batch or two — never spawns more than the initial workers.
-    const batchCount = Math.ceil(jobs.length / BATCH_SIZE)
-    this.ensureWorkers(batchCount)
+    // Decide how wide to grow the pool BEFORE dispatch.
+    //  - Bulk cold-load (>= SATURATE_THRESHOLD jobs): use every core up to
+    //    maxWorkers, but never assign a worker fewer than MIN_BATCH_SIZE jobs.
+    //  - Small/medium: original conservative ramp — one worker per BATCH_SIZE jobs
+    //    — so a couple-batch load never spawns more than the initial workers.
+    const workerTarget =
+      jobs.length >= SATURATE_THRESHOLD
+        ? Math.min(this.maxWorkers, Math.max(1, Math.ceil(jobs.length / MIN_BATCH_SIZE)))
+        : Math.ceil(jobs.length / BATCH_SIZE)
+    const workerCount = this.ensureWorkers(workerTarget)
 
-    if (this.workers.length === 0) {
+    if (workerCount === 0) {
       throw new Error('decryption pool unavailable')
     }
 
+    // Slice size: spread evenly across the live workers so none idles, capped at
+    // BATCH_SIZE (never a bigger message/clone than the original path) and floored
+    // at MIN_BATCH_SIZE. For small/medium loads perWorker >= BATCH_SIZE, so this
+    // collapses to the original fixed BATCH_SIZE slicing — behavior is identical.
+    const perWorker = Math.ceil(jobs.length / workerCount)
+    const batchSize = Math.min(BATCH_SIZE, Math.max(MIN_BATCH_SIZE, perWorker))
+
     // Split into round-robin batches across the live workers.
     const batches: { start: number; jobs: PooledDecryptionJob[]; entry: PoolWorker }[] = []
-    for (let start = 0; start < jobs.length; start += BATCH_SIZE) {
-      const slice = jobs.slice(start, start + BATCH_SIZE)
+    for (let start = 0; start < jobs.length; start += batchSize) {
+      const slice = jobs.slice(start, start + batchSize)
       const entry = this.workers[this.nextWorker % this.workers.length]
       this.nextWorker++
       batches.push({ start, jobs: slice, entry })

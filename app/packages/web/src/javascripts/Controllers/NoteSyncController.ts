@@ -138,6 +138,18 @@ export class NoteSyncController {
   }
 
   public async saveAndAwaitLocalPropagation(params: NoteSaveFunctionParams): Promise<void> {
+    /**
+     * Standard Red Notes (last-edit-loss fix — dealloced guard): a lifecycle flush
+     * (note-switch/unmount/logout/beforeunload) can arrive AFTER deinit() has nulled
+     * `this.item`. Without this guard the subsequent `this.item.text`/changeItem
+     * access throws and the in-flight edit is silently lost. After deinit, `item` is
+     * undefined — treat a post-deinit save as a safe NO-OP instead of throwing.
+     */
+    if ((this.item as unknown) === undefined) {
+      params.onLocalPropagationComplete?.()
+      return
+    }
+
     this.savingLocallyPromise = Deferred<void>()
 
     if (this.syncTimeout) {

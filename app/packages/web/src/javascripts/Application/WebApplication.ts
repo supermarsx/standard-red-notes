@@ -91,6 +91,8 @@ import { SearchIndexRunner } from '@/Utils/Items/Search/SearchIndexRunner'
 import { DecryptionPool } from '@/Utils/Items/Decryption/DecryptionPool'
 import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
 import { CommandService } from '../Components/CommandPalette/CommandService'
+import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
+import { WebDevice } from './Device/WebDevice'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
 
@@ -122,6 +124,13 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // ItemsEncryptionService so bulk decrypts (esp. cold-loading a large vault)
   // parallelize across CPU cores instead of blocking the main thread.
   private _decryptionPool?: DecryptionPool
+
+  // Standard Red Notes: per-workspace cross-tab coordinator for SAVE INVALIDATION. Emits
+  // the uuids this tab saves to the shared IndexedDB and, on a peer's save broadcast,
+  // triggers a coalesced sync so the in-memory collection reconciles against disk/server
+  // instead of later overwriting the peer's newer write. (The KEYCHAIN coordinator lives
+  // on WebDevice because the keychain is a single global blob, not per-workspace.)
+  private _saveCrossTabCoordinator?: CrossTabCoordinator
 
   constructor(
     deviceInterface: WebOrDesktopDevice,
@@ -157,6 +166,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       // off-thread (worker pool), so large batches don't freeze the UI.
       loadBatchSize: deviceInterface.environment === Environment.Mobile ? 250 : 5000,
       sleepBetweenBatches: deviceInterface.environment === Environment.Mobile ? 250 : 5,
+      // Standard Red Notes: INTENDED production default for web. The shared
+      // framework default is `false` ("zero-risk"), but web deliberately overrides
+      // to `true` for the memory benefit at scale — items decrypt on demand and
+      // re-hydrate when accessed. Do NOT "fix" this back to the framework default.
+      lazyDecryptEnabled: true,
       allowMultipleSelection: deviceInterface.environment !== Environment.Mobile,
       allowNoteSelectionStatePersistence: deviceInterface.environment !== Environment.Mobile,
       u2fAuthenticatorRegistrationPromptFunction: startRegistration as unknown as (
@@ -203,6 +217,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
     if (!this.isNativeMobileWeb()) {
       this.webOrDesktopDevice.setApplication(this)
+      this.wireCrossTabCoordination()
     }
 
     const appEventObserver = this.deps.get<ApplicationEventObserver>(Web_TYPES.ApplicationEventObserver)
@@ -230,6 +245,53 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this.wireManualSyncMode()
 
     this.installDecryptionPool()
+  }
+
+  /**
+   * Standard Red Notes: BOOTSTRAP WIRING for cross-tab coordination.
+   *
+   * Two coordinators cooperate:
+   *  - The KEYCHAIN coordinator (owned by WebDevice, global namespace) already installed
+   *    its window 'storage' listener via getKeychainValue/setKeychainValue. We re-read its
+   *    lock here to veto IndexedDB writes the instant another tab clears/rotates the key.
+   *  - A per-workspace SAVE coordinator (created here, namespaced by this.identifier) that
+   *    broadcasts the uuids we save and, on a peer's save, triggers a coalesced sync.
+   *
+   * We then forward both into the per-identifier Database as DatabaseCrossTabHooks. Only
+   * runs on a real WebDevice (desktop/mobile use a different device with no keychain
+   * coordinator); the whole thing degrades to a no-op if BroadcastChannel is unavailable
+   * (the keychain storage-event safety net still works).
+   */
+  private wireCrossTabCoordination(): void {
+    const device = this.device
+    if (!(device instanceof WebDevice)) {
+      return
+    }
+
+    const keychainCoordinator = device.getCrossTabCoordinator()
+
+    this._saveCrossTabCoordinator = new CrossTabCoordinator({
+      namespace: this.identifier,
+      callbacks: {
+        onForeignSave: () => {
+          // SAFE SUBSET (see report): the low-level Database/device layer has no hook to
+          // push specific uuids back into the in-memory collection without a SyncService
+          // method we don't own. The publicly-callable, conservative reconciliation is a
+          // sync, which reloads/merges changed items. It's already coalesced/debounced by
+          // the coordinator, so this can't create a reload storm.
+          try {
+            void this.sync.sync()
+          } catch {
+            // SyncService not ready yet / app tearing down; the next sync will reconcile.
+          }
+        },
+      },
+    })
+
+    device.setDatabaseCrossTabHooks(this.identifier, {
+      emitSaved: (uuids: string[]) => this._saveCrossTabCoordinator?.emitPayloadsSaved(uuids),
+      isWriteBlocked: () => keychainCoordinator.isLocked(),
+    })
   }
 
   /**
@@ -336,6 +398,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: terminate the decryption worker pool.
     this._decryptionPool?.destroy()
     this._decryptionPool = undefined
+
+    // Standard Red Notes: close the per-workspace save coordination channel. (The keychain
+    // coordinator is closed by WebDevice.deinit via removeApplication above.)
+    this._saveCrossTabCoordinator?.deinit()
+    this._saveCrossTabCoordinator = undefined
 
     this.deps.deinit()
 

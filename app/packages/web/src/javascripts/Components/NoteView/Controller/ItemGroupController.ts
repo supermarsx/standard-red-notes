@@ -75,7 +75,15 @@ export class ItemGroupController {
      * is set we keep the existing controllers open and simply add a new one.
      */
     if (!context.openInNewTile && this.activeItemViewController) {
-      this.closeItemController(this.activeItemViewController, { notify: false })
+      /**
+       * Standard Red Notes (last-edit-loss fix — note-switch): the outgoing controller
+       * is closed/deinited SYNCHRONOUSLY here, BEFORE React unmounts its
+       * <SuperEditor key={uuid}>. The editor's unmount-flush would then fire on a
+       * deinited controller (item nulled) and the edit would be lost. So FLUSH the
+       * outgoing editor's pending debounced serialize AND await local propagation
+       * (also inserts a brand-new template note) BEFORE closing it.
+       */
+      await this.flushAndCloseItemController(this.activeItemViewController)
     }
 
     let controller!: NoteViewController | FileViewController
@@ -120,6 +128,25 @@ export class ItemGroupController {
     this.notifyObservers()
 
     return controller
+  }
+
+  /**
+   * Standard Red Notes (last-edit-loss fix — note-switch): flush the outgoing note
+   * editor's pending debounced serialize and AWAIT local propagation before deiniting,
+   * so an edit typed within the ~1s debounce window (not yet dirty) is persisted rather
+   * than dropped when its <SuperEditor> later unmounts onto a deinited controller. For
+   * a template note the flush goes through saveAndAwaitLocalPropagation, which inserts
+   * the template first. File controllers have no editor debounce, so this just closes.
+   */
+  private async flushAndCloseItemController(controller: NoteViewController | FileViewController): Promise<void> {
+    if (controller instanceof NoteViewController) {
+      try {
+        await controller.flushAndAwaitPendingSave()
+      } catch (error) {
+        console.error(error)
+      }
+    }
+    this.closeItemController(controller, { notify: false })
   }
 
   public closeItemController(

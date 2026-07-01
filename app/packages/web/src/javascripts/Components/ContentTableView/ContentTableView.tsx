@@ -36,7 +36,7 @@ import { useItemLinks } from '@/Hooks/useItemLinks'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
 import ListItemVaultInfo from '../ContentListView/ListItemVaultInfo'
 
-const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) => {
+export const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) => {
   const [contextMenuVisible, setContextMenuVisible] = useState(false)
   const anchorElementRef = useRef<HTMLButtonElement>(null)
 
@@ -101,7 +101,7 @@ const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) => {
   )
 }
 
-const ItemLinksCell = ({ item }: { item: DecryptedItemInterface }) => {
+export const ItemLinksCell = ({ item }: { item: DecryptedItemInterface }) => {
   const [contextMenuVisible, setContextMenuVisible] = useState(false)
   const anchorElementRef = useRef<HTMLButtonElement>(null)
 
