@@ -9,7 +9,7 @@ import { Logger } from 'winston'
 import { CrossServiceTokenCacheInterface } from '../Service/Cache/CrossServiceTokenCacheInterface'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
 import { ResponseLocals } from './ResponseLocals'
-import { RoleName } from '@standardnotes/domain-core'
+import { RoleName, SettingName } from '@standardnotes/domain-core'
 
 export abstract class AuthMiddleware extends BaseMiddleware {
   constructor(
@@ -103,6 +103,12 @@ export abstract class AuthMiddleware extends BaseMiddleware {
         isFreeUser: decodedToken.roles.length === 1 && decodedToken.roles[0].name === RoleName.NAMES.CoreUser,
         belongsToSharedVaults: decodedToken.belongs_to_shared_vaults ?? [],
         authTokenVersion: decodedToken.version,
+        // Standard Red Notes: project per-user feature settings carried by the
+        // cross-service token onto response.locals.settings so feature controllers
+        // (AssistantController, OcrController) can enforce per-user gates/limits.
+        // Only defined keys are set so an absent flag stays "unresolved" (which the
+        // AI/OCR gates treat as their respective default).
+        settings: this.projectSettings(decodedToken),
       } as ResponseLocals)
     } catch (error) {
       let detailedErrorMessage = (error as Error).message
@@ -157,6 +163,33 @@ export abstract class AuthMiddleware extends BaseMiddleware {
     response: Response,
     next: NextFunction,
   ): boolean
+
+  /**
+   * Standard Red Notes: project the per-user feature settings the cross-service
+   * token carries onto a flat `{ SETTING_NAME: value }` map, matching the shape
+   * the feature controllers read from `response.locals.settings`.
+   *
+   * AI_ENABLED is default-on (absent flag => enabled), but we only emit the key
+   * when the token explicitly carries `ai_enabled === false`, so the
+   * AssistantController can FAIL CLOSED on an explicit admin disable while still
+   * allowing access when the token predates this field. AI_REQUEST_LIMIT is only
+   * emitted when a positive per-user override exists.
+   */
+  private projectSettings(decodedToken: CrossServiceTokenData): Record<string, unknown> {
+    const settings: Record<string, unknown> = {}
+
+    if (decodedToken.ai_enabled === false) {
+      settings[SettingName.NAMES.AiEnabled] = 'false'
+    } else if (decodedToken.ai_enabled === true) {
+      settings[SettingName.NAMES.AiEnabled] = 'true'
+    }
+
+    if (typeof decodedToken.ai_request_limit === 'number' && decodedToken.ai_request_limit > 0) {
+      settings[SettingName.NAMES.AiRequestLimit] = decodedToken.ai_request_limit
+    }
+
+    return settings
+  }
 
   private clientIpFromRequest(request: Request): string {
     const forwardedFor = request.headers['x-forwarded-for']

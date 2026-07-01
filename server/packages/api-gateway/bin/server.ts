@@ -32,6 +32,7 @@ import '../src/Controller/v1/SharedVaultInvitesController'
 import '../src/Controller/v1/SharedVaultUsersController'
 import '../src/Controller/v1/AssistantController'
 import '../src/Controller/v1/OcrController'
+import '../src/Controller/v1/CollaborationController'
 import '../src/Controller/v1/WebController'
 import '../src/Controller/v1/IntegrationsController'
 

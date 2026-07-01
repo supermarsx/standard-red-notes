@@ -243,6 +243,13 @@ export class AssistantController extends BaseHttpController {
     if (limits.perUserLimit !== undefined && limits.perUserLimit > 0) {
       return limits.perUserLimit
     }
+    // IMPORTANT: a return value of 0 means UNLIMITED (no daily cap is enforced).
+    // The global ceiling comes from the ASSISTANT_DAILY_REQUEST_LIMIT env var,
+    // which defaults to 0 when unset/empty (see Bootstrap/Container.ts). So out of
+    // the box, AI usage is UNLIMITED. Operators who want to cap usage MUST set
+    // ASSISTANT_DAILY_REQUEST_LIMIT to a POSITIVE value (a per-user override via
+    // the AI_REQUEST_LIMIT setting takes precedence above). Any value <= 0 is
+    // intentionally treated as unlimited — do not "fix" this to a default cap.
     return this.globalDailyLimit > 0 ? this.globalDailyLimit : 0
   }
 
@@ -255,16 +262,20 @@ export class AssistantController extends BaseHttpController {
   /**
    * Resolves per-user AI settings (AI_ENABLED / AI_REQUEST_LIMIT).
    *
-   * The cross-service token validated by RequiredCrossServiceTokenMiddleware does
-   * NOT currently carry user setting values, so these are read opportunistically
-   * from response.locals only if some upstream populates them there. When absent,
-   * we fall back to the GLOBAL env ceiling (ASSISTANT_DAILY_REQUEST_LIMIT) and
-   * allow access.
+   * These ride along inside the cross-service token: CreateCrossServiceToken (auth
+   * service) reads AI_ENABLED / AI_REQUEST_LIMIT from the auth settings store at
+   * token-mint time and embeds them as `ai_enabled` / `ai_request_limit`, and
+   * RequiredCrossServiceTokenMiddleware projects them onto `response.locals.settings`
+   * (the same channel the OCR gate uses). So no extra cross-service round trip is
+   * needed here.
    *
-   * TODO: For true per-user enforcement, fetch AI_ENABLED / AI_REQUEST_LIMIT from
-   * the auth service (e.g. via the existing ServiceProxy settings endpoint keyed
-   * on response.locals.user.uuid) and cache them alongside the cross-service
-   * token, then resolve them here instead of relying on response.locals.
+   * Resolution rules:
+   *  - `aiEnabled` is set to `false` ONLY when an admin has explicitly disabled AI
+   *    for the user (the token carries AI_ENABLED='false'). `streamCompletion`
+   *    then FAILS CLOSED with 403 before proxying. An absent flag (older token /
+   *    never-set setting) leaves `aiEnabled` undefined => default-on.
+   *  - `perUserLimit` is the positive per-user daily override; when absent the
+   *    GLOBAL env ceiling (ASSISTANT_DAILY_REQUEST_LIMIT) applies.
    */
   private resolveUserLimits(response: Response): ResolvedUserLimits {
     const settings = (response.locals as { settings?: Record<string, unknown> }).settings

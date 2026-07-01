@@ -28,4 +28,11 @@ export interface ResponseLocals {
   }
   hasContentLimit: boolean
   authTokenVersion?: number
+  /**
+   * Standard Red Notes: per-user feature settings projected from the cross-service
+   * token (e.g. AI_ENABLED / AI_REQUEST_LIMIT / OCR_SERVER_ALLOWED). Populated by
+   * AuthMiddleware so feature controllers (AssistantController, OcrController) can
+   * enforce per-user gates/limits without a second cross-service round trip.
+   */
+  settings?: Record<string, unknown>
 }

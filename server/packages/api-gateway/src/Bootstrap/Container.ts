@@ -151,6 +151,20 @@ export class ContainerConfigLoader {
     container.bind(TYPES.ApiGateway_FILES_SERVER_URL).toConstantValue(env.get('FILES_SERVER_URL', true))
     container.bind(TYPES.ApiGateway_WEB_SOCKET_SERVER_URL).toConstantValue(env.get('WEB_SOCKET_SERVER_URL', true))
     container.bind(TYPES.ApiGateway_AUTH_JWT_SECRET).toConstantValue(env.get('AUTH_JWT_SECRET'))
+    // Standard Red Notes: collaboration-room capability signing. Reuses the
+    // websocket-gateway connection-token secret so the gateway verifies the
+    // capability with the SAME secret it already holds. Empty when the realtime
+    // gateway is not configured -> the CollaborationController fails closed.
+    container
+      .bind<string>(TYPES.ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET)
+      .toConstantValue(env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || '')
+    container
+      .bind<number>(TYPES.ApiGateway_COLLABORATION_CAPABILITY_TTL)
+      .toConstantValue(
+        env.get('COLLABORATION_CAPABILITY_TTL_SECONDS', true)
+          ? +env.get('COLLABORATION_CAPABILITY_TTL_SECONDS', true)
+          : 300,
+      )
     container
       .bind(TYPES.ApiGateway_HTTP_CALL_TIMEOUT)
       .toConstantValue(env.get('HTTP_CALL_TIMEOUT', true) ? +env.get('HTTP_CALL_TIMEOUT', true) : 60_000)

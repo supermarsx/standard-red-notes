@@ -18,6 +18,11 @@ export const TYPES = {
   ApiGateway_EMAIL_SERVER_URL: Symbol.for('ApiGateway_EMAIL_SERVER_URL'),
   ApiGateway_WEB_SOCKET_SERVER_URL: Symbol.for('ApiGateway_WEB_SOCKET_SERVER_URL'),
   ApiGateway_AUTH_JWT_SECRET: Symbol.for('ApiGateway_AUTH_JWT_SECRET'),
+  // Standard Red Notes: secret + TTL used to mint short-lived collaboration-room
+  // capabilities (same HS256 secret the websocket-gateway verifies connection
+  // tokens with, so the gateway can verify a capability locally).
+  ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET: Symbol.for('ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET'),
+  ApiGateway_COLLABORATION_CAPABILITY_TTL: Symbol.for('ApiGateway_COLLABORATION_CAPABILITY_TTL'),
   ApiGateway_HTTP_CALL_TIMEOUT: Symbol.for('ApiGateway_HTTP_CALL_TIMEOUT'),
   ApiGateway_VERSION: Symbol.for('ApiGateway_VERSION'),
   ApiGateway_CROSS_SERVICE_TOKEN_CACHE_TTL: Symbol.for('ApiGateway_CROSS_SERVICE_TOKEN_CACHE_TTL'),
