@@ -1,5 +1,5 @@
 import * as bcrypt from 'bcryptjs'
-import { RoleName, SubscriptionPlanName, Username } from '@standardnotes/domain-core'
+import { RoleName, SettingName, SubscriptionPlanName, Username } from '@standardnotes/domain-core'
 import { v4 as uuidv4 } from 'uuid'
 import { TimerInterface } from '@standardnotes/time'
 
@@ -14,6 +14,7 @@ import { AuthResponseFactory20200115 } from '../Auth/AuthResponseFactory20200115
 import { ApiVersion } from '../Api/ApiVersion'
 import { ApplyDefaultSettings } from './ApplyDefaultSettings/ApplyDefaultSettings'
 import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremiumFeatures'
+import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
 
 export class Register implements UseCaseInterface {
   constructor(
@@ -33,15 +34,20 @@ export class Register implements UseCaseInterface {
     // keep their exact behavior). When OFF, the workspace concept is invisible:
     // the duplicate check stays email-only and no workspace property is set.
     private workspacesPerEmailEnabled = false,
+    // Standard Red Notes: setting store used to consult the admin-panel-persisted
+    // REGISTRATION_DISABLED flag at runtime. Trailing optional param so existing
+    // call sites / specs keep compiling; when absent, only the boot-time
+    // DISABLE_USER_REGISTRATION env governs registration (legacy behavior).
+    private settingRepository?: SettingRepositoryInterface,
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
-    // TODO(standard-red-notes): the in-app admin panel persists a
-    // REGISTRATION_DISABLED setting (see BaseAdminController.setRegistrationFlag).
-    // To make that toggle take effect at runtime without a redeploy, this check
-    // should also consult that persisted flag here (via a GetSetting lookup)
-    // instead of relying solely on the boot-time DISABLE_USER_REGISTRATION env.
-    if (this.disableUserRegistration) {
+    // Registration is blocked when EITHER the boot-time DISABLE_USER_REGISTRATION
+    // env is set (a hard override) OR the admin panel has persisted the
+    // REGISTRATION_DISABLED flag at runtime (see BaseAdminController.setRegistrationFlag).
+    // The env is checked first so it stays a hard override even if the setting
+    // store is unreachable.
+    if (this.disableUserRegistration || (await this.registrationDisabledBySetting())) {
       return {
         success: false,
         errorMessage: 'User registration is currently not allowed.',
@@ -186,6 +192,33 @@ export class Register implements UseCaseInterface {
       success: true,
       result,
     }
+  }
+
+  /**
+   * Standard Red Notes: consult the admin-panel-persisted REGISTRATION_DISABLED
+   * flag at runtime. The flag is stored as a setting on the admin's OWN user
+   * record (see BaseAdminController.setRegistrationFlag), so we can't key the
+   * lookup on the registering user. Instead we count, across all users, settings
+   * named REGISTRATION_DISABLED whose value is 'true': a single such row means an
+   * admin has turned registration off instance-wide. Fails OPEN (returns false)
+   * when no setting store is wired, so the env behavior is preserved.
+   */
+  private async registrationDisabledBySetting(): Promise<boolean> {
+    if (this.settingRepository === undefined) {
+      return false
+    }
+
+    const nameOrError = SettingName.create(SettingName.NAMES.RegistrationDisabled)
+    if (nameOrError.isFailed()) {
+      return false
+    }
+
+    const count = await this.settingRepository.countAllByNameAndValue({
+      name: nameOrError.getValue(),
+      value: 'true',
+    })
+
+    return count > 0
   }
 
   /**

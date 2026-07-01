@@ -26,6 +26,8 @@ import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
 import { AuditLogEntryHttpProjection } from '../../Http/Projection/AuditLogEntryHttpProjection'
 import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
+import { WebhookDispatcherInterface } from '../../../Domain/Webhook/WebhookDispatcherInterface'
+import { WebhookEvent } from '../../../Domain/Webhook/WebhookEvent'
 import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/settings'
 
 /**
@@ -86,6 +88,13 @@ export class BaseAdminController extends BaseHttpController {
     protected auditLogEntryHttpMapper?: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
     protected auditLogWriter?: AuditLogWriterInterface,
     private controllerContainer?: ControllerContainerInterface,
+    // Standard Red Notes: optional outbound-webhook dispatcher. When wired, the
+    // admin mutation endpoints fire the `admin.action` webhook alongside their
+    // audit-log write. Best-effort so it can never fail the admin operation.
+    // Placed here (right after controllerContainer, before the group deps) so the
+    // home-server container binding — which stops at controllerContainer and omits
+    // the trailing group params — can still provide it.
+    protected webhookDispatcher?: WebhookDispatcherInterface,
     // Standard Red Notes: RBAC groups / effective-permissions dependencies.
     // Optional so existing tests that construct this controller with the original
     // arity keep compiling; the group endpoints fail gracefully when absent.
@@ -385,6 +394,14 @@ export class BaseAdminController extends BaseHttpController {
       metadata: { name },
     })
 
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SettingChanged,
+      targetUuid: userUuid,
+      // E2E-safe: setting NAME only, never its value.
+      metadata: { name },
+    })
+
     return this.json({ success: true, userUuid, name, value: value ?? null })
   }
 
@@ -454,6 +471,13 @@ export class BaseAdminController extends BaseHttpController {
       metadata: { banned, banReason: banReason ?? null },
     })
 
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.BanChanged,
+      targetUuid: userUuid,
+      metadata: { banned, banReason: banReason ?? null },
+    })
+
     return this.json({
       success: true,
       uuid: user.uuid,
@@ -510,6 +534,45 @@ export class BaseAdminController extends BaseHttpController {
 
   private clientIp(request: Request): string | null {
     return (request.headers['x-forwarded-for'] as string | undefined) ?? request.ip ?? null
+  }
+
+  /**
+   * Standard Red Notes: best-effort `admin.action` outbound webhook, fired
+   * alongside the admin audit-log write. There is no admin domain event on the
+   * internal event bus, so the dispatch is colocated with the audit write (the
+   * canonical record of an admin mutation). The payload is E2E-safe: it carries
+   * the acting admin uuid, the affected user uuid and non-sensitive metadata
+   * (action name, setting name, ban flag) — never tokens, passwords or setting
+   * values. The affected user is used as the webhook `userUuid` so a user-scoped
+   * webhook of that user is notified of admin actions on their account, while
+   * global webhooks receive every admin action. Failures are swallowed so an
+   * admin operation can never be broken by a webhook delivery problem.
+   */
+  private async dispatchAdminActionWebhook(params: {
+    actorUuid: string | null
+    action: string
+    targetUuid: string
+    metadata?: Record<string, unknown>
+  }): Promise<void> {
+    if (this.webhookDispatcher === undefined) {
+      return
+    }
+
+    try {
+      await this.webhookDispatcher.dispatch(WebhookEvent.AdminAction, {
+        userUuid: params.targetUuid,
+        metadata: {
+          action: params.action,
+          actorUuid: params.actorUuid,
+          targetType: 'user',
+          targetUuid: params.targetUuid,
+          performedAt: new Date().toISOString(),
+          ...(params.metadata ?? {}),
+        },
+      })
+    } catch {
+      // Best-effort: the dispatcher already logs its own delivery failures.
+    }
   }
 
   /**

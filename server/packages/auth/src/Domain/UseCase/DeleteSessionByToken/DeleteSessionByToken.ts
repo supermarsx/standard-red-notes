@@ -6,6 +6,8 @@ import { EphemeralSessionRepositoryInterface } from '../../Session/EphemeralSess
 import { Session } from '../../Session/Session'
 import { AuditLogWriterInterface } from '../../AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../../AuditLog/AuditAction'
+import { WebhookDispatcherInterface } from '../../Webhook/WebhookDispatcherInterface'
+import { WebhookEvent } from '../../Webhook/WebhookEvent'
 
 export class DeleteSessionByToken implements UseCaseInterface<Session> {
   constructor(
@@ -15,6 +17,10 @@ export class DeleteSessionByToken implements UseCaseInterface<Session> {
     // Standard Red Notes: optional audit hook (trailing optional param so
     // existing call sites/specs are unchanged). Records logout when present.
     private auditLogWriter?: AuditLogWriterInterface,
+    // Standard Red Notes: optional webhook hook (trailing optional param). Fires
+    // the `session.revoked` outbound webhook when present; best-effort so it can
+    // never fail the logout/revocation.
+    private webhookDispatcher?: WebhookDispatcherInterface,
   ) {}
 
   async execute(dto: DeleteSessionByTokenDTO): Promise<Result<Session>> {
@@ -37,6 +43,23 @@ export class DeleteSessionByToken implements UseCaseInterface<Session> {
         targetType: 'session',
         targetUuid: result.session.uuid,
       })
+    }
+
+    if (this.webhookDispatcher !== undefined) {
+      try {
+        await this.webhookDispatcher.dispatch(WebhookEvent.SessionRevoked, {
+          userUuid: result.session.userUuid,
+          // E2E-safe payload: uuids + timestamp only, never tokens/secrets.
+          metadata: {
+            sessionUuid: result.session.uuid,
+            reason: 'logout',
+            revokedAt: new Date().toISOString(),
+          },
+        })
+      } catch {
+        // Best-effort: a webhook delivery failure must never fail logout.
+        // The dispatcher already logs its own failures internally.
+      }
     }
 
     return Result.ok(result.session)

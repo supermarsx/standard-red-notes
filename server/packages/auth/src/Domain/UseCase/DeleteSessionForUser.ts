@@ -10,6 +10,8 @@ import { DeleteSessionForUserResponse } from './DeleteSessionForUserResponse'
 import { UseCaseInterface } from './UseCaseInterface'
 import { AuditLogWriterInterface } from '../AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../AuditLog/AuditAction'
+import { WebhookDispatcherInterface } from '../Webhook/WebhookDispatcherInterface'
+import { WebhookEvent } from '../Webhook/WebhookEvent'
 
 @injectable()
 export class DeleteSessionForUser implements UseCaseInterface {
@@ -21,6 +23,9 @@ export class DeleteSessionForUser implements UseCaseInterface {
     // Standard Red Notes: optional audit hook. Records a session revocation when
     // wired (home-server binds it; specs may omit it).
     @inject(TYPES.Auth_AuditLogWriter) @optional() private auditLogWriter?: AuditLogWriterInterface,
+    // Standard Red Notes: optional webhook hook. Fires the `session.revoked`
+    // outbound webhook when wired; best-effort so it can never fail revocation.
+    @inject(TYPES.Auth_WebhookDispatcher) @optional() private webhookDispatcher?: WebhookDispatcherInterface,
   ) {}
 
   async execute(dto: DeleteSessionForUserDTO): Promise<DeleteSessionForUserResponse> {
@@ -51,6 +56,19 @@ export class DeleteSessionForUser implements UseCaseInterface {
         targetType: 'session',
         targetUuid: dto.sessionUuid,
       })
+    }
+
+    if (this.webhookDispatcher !== undefined) {
+      try {
+        await this.webhookDispatcher.dispatch(WebhookEvent.SessionRevoked, {
+          userUuid: dto.userUuid,
+          // E2E-safe payload: uuids + timestamp only, never tokens/secrets.
+          metadata: { sessionUuid: dto.sessionUuid, revokedAt: new Date().toISOString() },
+        })
+      } catch {
+        // Best-effort: a webhook delivery failure must never fail revocation.
+        // The dispatcher already logs its own failures internally.
+      }
     }
 
     return { success: true }

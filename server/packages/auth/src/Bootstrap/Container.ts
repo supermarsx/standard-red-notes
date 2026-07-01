@@ -1293,6 +1293,7 @@ export class ContainerConfigLoader {
           container.get<SessionRepositoryInterface>(TYPES.Auth_SessionRepository),
           container.get<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository),
           container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
+          container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
         ),
       )
     container
@@ -1945,6 +1946,9 @@ export class ContainerConfigLoader {
             ? +env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
             : -1,
           container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
+          // Standard Red Notes: lets Register consult the admin-panel-persisted
+          // REGISTRATION_DISABLED flag at runtime (in addition to the env override).
+          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
@@ -2884,6 +2888,7 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_AuditLogEntryHttpMapper),
             container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
+            container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
           ),
         )
       container

@@ -13,6 +13,7 @@ import { QueryAuditLog } from '../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { AuditLogEntry } from '../../Domain/AuditLog/AuditLogEntry'
 import { AuditLogEntryHttpProjection } from '../Http/Projection/AuditLogEntryHttpProjection'
 import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInterface'
+import { WebhookDispatcherInterface } from '../../Domain/Webhook/WebhookDispatcherInterface'
 import { MapperInterface } from '@standardnotes/domain-core'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 import { Group } from '../../Domain/Group/Group'
@@ -41,6 +42,7 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_AuditLogEntryHttpMapper)
     override auditLogEntryHttpMapper: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
     @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
+    @inject(TYPES.Auth_WebhookDispatcher) override webhookDispatcher: WebhookDispatcherInterface,
     @inject(TYPES.Auth_CreateGroup) override doCreateGroup: CreateGroup,
     @inject(TYPES.Auth_ListGroups) override doListGroups: ListGroups,
     @inject(TYPES.Auth_DeleteGroup) override doDeleteGroup: DeleteGroup,
@@ -64,6 +66,7 @@ export class AnnotatedAdminController extends BaseAdminController {
       auditLogEntryHttpMapper,
       auditLogWriter,
       undefined,
+      webhookDispatcher,
       doCreateGroup,
       doListGroups,
       doDeleteGroup,

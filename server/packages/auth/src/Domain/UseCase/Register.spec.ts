@@ -13,6 +13,7 @@ import { Session } from '../Session/Session'
 import { Result, RoleName } from '@standardnotes/domain-core'
 import { ApplyDefaultSettings } from './ApplyDefaultSettings/ApplyDefaultSettings'
 import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremiumFeatures'
+import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
 
 describe('Register', () => {
   let userRepository: UserRepositoryInterface
@@ -336,6 +337,98 @@ describe('Register', () => {
     })
 
     expect(userRepository.save).not.toHaveBeenCalled()
+  })
+
+  describe('Standard Red Notes: admin-panel persisted REGISTRATION_DISABLED flag', () => {
+    const createUseCaseWithSettingRepository = (settingRepository: SettingRepositoryInterface) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        // env override is OFF; only the persisted flag should govern here.
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        settingRepository,
+      )
+
+    const dto = {
+      email: 'test@test.te',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      pwCost: 11,
+      pwSalt: 'qweqwe',
+      pwNonce: undefined,
+    }
+
+    it('blocks registration when the persisted flag is set even though the env override is OFF', async () => {
+      const settingRepository = {
+        countAllByNameAndValue: jest.fn().mockResolvedValue(1),
+      } as unknown as SettingRepositoryInterface
+
+      const result = await createUseCaseWithSettingRepository(settingRepository).execute(dto)
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'User registration is currently not allowed.',
+      })
+      expect(settingRepository.countAllByNameAndValue).toHaveBeenCalledWith({
+        name: expect.objectContaining({ props: { value: 'REGISTRATION_DISABLED' } }),
+        value: 'true',
+      })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('allows registration when the persisted flag is NOT set', async () => {
+      const settingRepository = {
+        countAllByNameAndValue: jest.fn().mockResolvedValue(0),
+      } as unknown as SettingRepositoryInterface
+
+      const result = await createUseCaseWithSettingRepository(settingRepository).execute(dto)
+
+      expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalled()
+    })
+
+    it('keeps the env override as a hard block regardless of the persisted flag', async () => {
+      const settingRepository = {
+        countAllByNameAndValue: jest.fn().mockResolvedValue(0),
+      } as unknown as SettingRepositoryInterface
+
+      const result = await new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        // env override ON.
+        true,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        settingRepository,
+      ).execute(dto)
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'User registration is currently not allowed.',
+      })
+      // Env short-circuits before the setting store is consulted.
+      expect(settingRepository.countAllByNameAndValue).not.toHaveBeenCalled()
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
   })
 
   it('should fail to register if api version is invalid', async () => {

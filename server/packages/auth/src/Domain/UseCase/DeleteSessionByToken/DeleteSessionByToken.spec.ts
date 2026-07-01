@@ -7,16 +7,27 @@ import { Session } from '../../Session/Session'
 import { ApiVersion } from '../../Api/ApiVersion'
 import { SessionService } from '../../Session/SessionService'
 import { EphemeralSession } from '../../Session/EphemeralSession'
+import { AuditLogWriterInterface } from '../../AuditLog/AuditLogWriterInterface'
+import { WebhookDispatcherInterface } from '../../Webhook/WebhookDispatcherInterface'
+import { WebhookEvent } from '../../Webhook/WebhookEvent'
 
 describe('DeleteSessionByToken', () => {
   let getSessionFromToken: GetSessionFromToken
   let sessionRepository: SessionRepositoryInterface
   let ephemeralSessionRepository: EphemeralSessionRepositoryInterface
+  let auditLogWriter: AuditLogWriterInterface
+  let webhookDispatcher: WebhookDispatcherInterface
   let existingSession: Session
   let existingEphemeralSession: EphemeralSession
 
   const createUseCase = () =>
-    new DeleteSessionByToken(getSessionFromToken, sessionRepository, ephemeralSessionRepository)
+    new DeleteSessionByToken(
+      getSessionFromToken,
+      sessionRepository,
+      ephemeralSessionRepository,
+      auditLogWriter,
+      webhookDispatcher,
+    )
 
   beforeEach(() => {
     existingSession = {} as jest.Mocked<Session>
@@ -45,6 +56,12 @@ describe('DeleteSessionByToken', () => {
 
     sessionRepository = {} as jest.Mocked<SessionRepositoryInterface>
     sessionRepository.deleteOneByUuid = jest.fn()
+
+    auditLogWriter = {} as jest.Mocked<AuditLogWriterInterface>
+    auditLogWriter.write = jest.fn()
+
+    webhookDispatcher = {} as jest.Mocked<WebhookDispatcherInterface>
+    webhookDispatcher.dispatch = jest.fn()
   })
 
   it('should delete a session by token', async () => {
@@ -57,6 +74,42 @@ describe('DeleteSessionByToken', () => {
 
     expect(sessionRepository.deleteOneByUuid).toHaveBeenCalledWith('2e1e43')
     expect(ephemeralSessionRepository.deleteOne).not.toHaveBeenCalled()
+  })
+
+  it('should dispatch the session.revoked webhook after deleting a session', async () => {
+    await createUseCase().execute({
+      authTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(webhookDispatcher.dispatch).toHaveBeenCalledWith(WebhookEvent.SessionRevoked, {
+      userUuid: '1-2-3',
+      metadata: expect.objectContaining({ sessionUuid: '2e1e43', reason: 'logout' }),
+    })
+  })
+
+  it('should not fail logout when the webhook dispatch throws', async () => {
+    webhookDispatcher.dispatch = jest.fn().mockRejectedValue(new Error('network down'))
+
+    const result = await createUseCase().execute({
+      authTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(sessionRepository.deleteOneByUuid).toHaveBeenCalledWith('2e1e43')
+  })
+
+  it('should work without the optional audit/webhook hooks', async () => {
+    auditLogWriter = undefined as unknown as AuditLogWriterInterface
+    webhookDispatcher = undefined as unknown as WebhookDispatcherInterface
+
+    const result = await createUseCase().execute({
+      authTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(result.isFailed()).toBeFalsy()
   })
 
   it('should delete an ephemeral session by token', async () => {

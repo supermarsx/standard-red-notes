@@ -46,6 +46,23 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     return (setting.props.value as string | null) !== 'false'
   }
 
+  /**
+   * Standard Red Notes: read a per-user numeric setting (e.g. AI_REQUEST_LIMIT)
+   * at token-mint time. Returns undefined when unset/non-positive/unparseable so
+   * the api-gateway falls back to the global cap.
+   */
+  private async readNumericSetting(userUuid: string, settingName: string): Promise<number | undefined> {
+    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
+    if (setting === null) {
+      return undefined
+    }
+    const parsed = parseInt(`${setting.props.value as string | null}`, 10)
+    if (Number.isNaN(parsed) || parsed <= 0) {
+      return undefined
+    }
+    return parsed
+  }
+
   async execute(dto: CreateCrossServiceTokenDTO): Promise<Result<string>> {
     let user: User | undefined | null = dto.user
     if (user === undefined && dto.userUuid !== undefined) {
@@ -90,6 +107,11 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       version: this.determineTokenVersion(applicationVersionThresholds, dto.applicationVersion),
       collaboration_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.CollaborationEnabled),
       live_sync_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.LiveSyncEnabled),
+      // Standard Red Notes: per-user AI gating + metering (default-on; an admin
+      // disabling AI_ENABLED for an abusive user rides along here so the
+      // api-gateway can FAIL CLOSED before spending the provider key).
+      ai_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.AiEnabled),
+      ai_request_limit: await this.readNumericSetting(user.uuid, SettingName.NAMES.AiRequestLimit),
     }
 
     if (dto.sharedVaultOwnerContext !== undefined) {
