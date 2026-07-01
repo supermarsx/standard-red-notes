@@ -12,6 +12,8 @@
  * call no-ops gracefully and never throws into the boot path.
  */
 
+import { log, LoggingDomain } from '../Logging'
+
 const BYTES_PER_GB = 1024 * 1024 * 1024
 
 /** Fraction of quota at/above which we consider storage "almost full". */
@@ -50,14 +52,13 @@ export async function requestPersistentStorage(): Promise<boolean | undefined> {
   try {
     const alreadyPersisted = await navigator.storage.persisted()
     if (alreadyPersisted) {
-      // eslint-disable-next-line no-console
-      console.log('[StorageQuota] Persistent storage already granted; IndexedDB is safe from eviction.')
+      log(LoggingDomain.Storage, '[StorageQuota] Persistent storage already granted; IndexedDB is safe from eviction.')
       return true
     }
 
     const granted = await navigator.storage.persist()
-    // eslint-disable-next-line no-console
-    console.log(
+    log(
+      LoggingDomain.Storage,
       granted
         ? '[StorageQuota] Persistent storage granted; IndexedDB is now safe from eviction.'
         : '[StorageQuota] Persistent storage request denied; IndexedDB may be evicted under storage pressure.',

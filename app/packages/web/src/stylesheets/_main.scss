@@ -89,6 +89,21 @@ textarea {
   line-height: normal;
 }
 
+/* Standard Red Notes — single, app-wide source of truth for removing the
+   native `<input type='number'>` spinner arrows. They are poorly styled and
+   mostly useless; inputs stay fully numeric (min/max/step still honored by
+   validation logic, users type values). Applies to light + dark themes. */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 a {
   text-decoration: none;
 

@@ -8,7 +8,11 @@ const getBoundingClientRect = () => {
 }
 
 export const useDocumentRect = (): DOMRect => {
-  const [documentRect, setDocumentRect] = useState<DOMRect>(getBoundingClientRect())
+  // Lazy initializer: run the layout-forcing getBoundingClientRect() ONCE on
+  // mount instead of on every render. Passing the value directly
+  // (useState(getBoundingClientRect())) re-invokes it — and forces a synchronous
+  // reflow — on each render even though React only uses it the first time.
+  const [documentRect, setDocumentRect] = useState<DOMRect>(() => getBoundingClientRect())
 
   useEffect(() => {
     let debounceTimeout: number | undefined

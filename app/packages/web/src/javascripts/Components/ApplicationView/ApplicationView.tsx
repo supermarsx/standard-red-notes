@@ -38,6 +38,7 @@ import {
   isStorageNearlyFull,
   requestPersistentStorage,
 } from '@/Utils/StorageQuota'
+import { log, LoggingDomain } from '@/Logging'
 import FilePreviewModalWrapper from '@/Components/FilePreview/FilePreviewModal'
 import FileContextMenuWrapper from '@/Components/FileContextMenu/FileContextMenu'
 import PermissionsModalWrapper from '@/Components/PermissionsModal/PermissionsModalWrapper'
@@ -152,8 +153,8 @@ const ensureRobustStorage = async (): Promise<void> => {
 
     const estimate = await estimateStorage()
     if (estimate) {
-      // eslint-disable-next-line no-console
-      console.log(
+      log(
+        LoggingDomain.Storage,
         `[StorageQuota] Using ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)} ` +
           `(${Math.round(estimate.usedFraction * 100)}%).`,
       )
