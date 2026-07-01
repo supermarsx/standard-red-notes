@@ -1,9 +1,15 @@
 import { Component, ErrorInfo, ReactNode } from 'react'
 import { addToast, ToastType } from '@standardnotes/toast'
 import Button from '@/Components/Button/Button'
+import { isDev } from '@/Utils'
 
 type Props = {
   /** Human-readable name of the subtree being guarded (used in messages + logs). */
+  regionName?: string
+  /**
+   * Back-compat alias for {@link Props.regionName}. Older callers pass `label`;
+   * `regionName` takes precedence when both are supplied.
+   */
   label?: string
   /** Optional custom fallback. Receives the error and a reset callback. */
   fallback?: (error: Error, reset: () => void) => ReactNode
@@ -14,6 +20,8 @@ type Props = {
 
 type State = {
   error?: Error
+  /** Captured from `componentDidCatch` so the fallback can surface it. */
+  componentStack?: string
 }
 
 /**
@@ -32,6 +40,11 @@ function isChunkLoadError(error: Error): boolean {
  * (resets boundary state so the subtree — and any lazy import — is re-attempted),
  * surfaces a one-time toast, logs the error + component stack, and special-cases
  * chunk-load failures with a "Reload" affordance.
+ *
+ * The default fallback also includes a collapsible "Details" section exposing the
+ * error message, stack, and React component stack. It is expanded in development
+ * (`isDev`) and collapsed-but-present in production so support/power users can
+ * still inspect a failure — the boundary NEVER renders a blank screen.
  */
 export class ComponentErrorBoundary extends Component<Props, State> {
   private toastShownForError = false
@@ -41,12 +54,20 @@ export class ComponentErrorBoundary extends Component<Props, State> {
     this.state = {}
   }
 
+  private get regionLabel(): string {
+    return this.props.regionName ?? this.props.label ?? 'this part of the app'
+  }
+
   static getDerivedStateFromError(error: Error): State {
     return { error }
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    const context = this.props.label ?? 'a component'
+    const context = this.regionLabel
+
+    // Keep the component stack around so the fallback can display it; React only
+    // provides it here (not in getDerivedStateFromError).
+    this.setState({ error, componentStack: errorInfo.componentStack ?? undefined })
 
     // eslint-disable-next-line no-console
     console.error(`[ComponentErrorBoundary] Error rendering ${context}:`, error, errorInfo.componentStack)
@@ -62,7 +83,7 @@ export class ComponentErrorBoundary extends Component<Props, State> {
 
   reset = () => {
     this.toastShownForError = false
-    this.setState({ error: undefined })
+    this.setState({ error: undefined, componentStack: undefined })
     this.props.onReset?.()
   }
 
@@ -71,7 +92,7 @@ export class ComponentErrorBoundary extends Component<Props, State> {
   }
 
   render() {
-    const { error } = this.state
+    const { error, componentStack } = this.state
 
     if (!error) {
       return this.props.children
@@ -81,13 +102,15 @@ export class ComponentErrorBoundary extends Component<Props, State> {
       return this.props.fallback(error, this.reset)
     }
 
-    const context = this.props.label ?? 'This part of the app'
+    const context = this.regionLabel
     const chunkError = isChunkLoadError(error)
+
+    const details = [error.message, error.stack, componentStack].filter(Boolean).join('\n\n')
 
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
         <div className="text-base font-bold text-foreground">
-          {chunkError ? `${context} couldn't load` : `${context} ran into a problem`}
+          {chunkError ? `${context} couldn't load` : `Something went wrong in ${context}`}
         </div>
         <div className="max-w-[40ch] text-sm text-passive-0">
           {chunkError
@@ -104,10 +127,14 @@ export class ComponentErrorBoundary extends Component<Props, State> {
               Try again
             </Button>
           )}
-          {chunkError && (
-            <Button onClick={this.reset}>Try again</Button>
-          )}
+          {chunkError && <Button onClick={this.reset}>Try again</Button>}
         </div>
+        <details open={isDev} className="mt-2 w-full max-w-[60ch] text-left">
+          <summary className="cursor-pointer select-none text-sm text-passive-0">Details</summary>
+          <pre className="mt-2 max-h-64 w-full overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-contrast p-2 text-left font-mono text-xs text-passive-0">
+            {details}
+          </pre>
+        </details>
       </div>
     )
   }

@@ -57,3 +57,76 @@
     transform: translateY(0%);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Skeleton loaders + reusable motion tokens (t13)
+   --------------------------------------------------------------------------- */
+
+/**
+ * Alternative shimmer keyframe for skeleton placeholders. The Skeleton
+ * primitives (Components/Skeleton/Skeleton.tsx) use Tailwind's built-in
+ * `animate-pulse` to stay consistent with the existing editor placeholder, so
+ * `.sn-shimmer` is provided as an optional sweep effect for consumers that want
+ * a moving highlight instead of an opacity pulse. Both are gated by the
+ * reduced-motion safety net below.
+ */
+@keyframes sn-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.sn-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--sn-stylekit-passive-color-3) 25%,
+    var(--sn-stylekit-passive-color-4) 37%,
+    var(--sn-stylekit-passive-color-3) 63%
+  );
+  background-size: 200% 100%;
+  animation: sn-shimmer 1.4s ease-in-out infinite;
+}
+
+/**
+ * Short, consistent transition/fade tokens for consumers (e2–e5). Durations
+ * kept in the 120–250ms range with a single easing curve so micro-interactions
+ * feel uniform across the app.
+ */
+.sn-transition {
+  transition: all 0.15s ease;
+}
+
+@keyframes sn-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sn-fade-in {
+  animation: sn-fade-in 0.2s ease-out;
+}
+
+/**
+ * GLOBAL reduced-motion safety net. The app previously handled reduced motion
+ * only per-component in JS (useLifecycleAnimation, Toast); pure CSS/Tailwind
+ * animations (animate-pulse, .slide-*-animation, .sn-shimmer, …) were not
+ * gated. This collapses ALL CSS-driven motion for users who ask for reduced
+ * motion, without freezing essential feedback (durations collapse rather than
+ * stop, so spinners still resolve).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

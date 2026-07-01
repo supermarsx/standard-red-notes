@@ -2,6 +2,9 @@ import React from 'react'
 import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 
 type Props = {
+  /** Preferred label for the guarded region (forwarded to ComponentErrorBoundary). */
+  regionName?: string
+  /** Back-compat alias kept for existing callers; `regionName` takes precedence. */
   label?: string
   children: React.ReactNode
 }
@@ -14,6 +17,8 @@ type Props = {
  * graceful, retryable fallback (with chunk-load detection, a one-time toast,
  * and logging) for free.
  */
-export const ErrorBoundary: React.FC<Props> = ({ label, children }) => (
-  <ComponentErrorBoundary label={label}>{children}</ComponentErrorBoundary>
+export const ErrorBoundary: React.FC<Props> = ({ regionName, label, children }) => (
+  <ComponentErrorBoundary regionName={regionName} label={label}>
+    {children}
+  </ComponentErrorBoundary>
 )
