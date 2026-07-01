@@ -12,6 +12,8 @@ export interface SendableSocket {
  */
 export interface Conn<S extends SendableSocket = SendableSocket> {
   socket: S
+  /** Owner of this connection; the room-join authorizer checks membership for it. */
+  userUuid: string
   sessionUuid: string
   connectionId: string
 }

@@ -13,10 +13,21 @@
  * Usage: node e2e/collab.e2e.mjs   (requires the gateway up)
  */
 import { WebSocket } from 'ws'
+import jwt from 'jsonwebtoken'
 
 const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3106'
 const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3106'
 const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws-internal-secret-change-me'
+// The gateway now requires a signed room capability on join (fail closed); mint it
+// directly with the connection-token secret the gateway verifies with (no
+// api-gateway in this harness).
+const CONNECTION_TOKEN_SECRET =
+  process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
+const roomCapability = (userUuid, room) =>
+  jwt.sign({ purpose: 'collab-room', userUuid, room }, CONNECTION_TOKEN_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: 300,
+  })
 
 let failures = 0
 function check(name, cond) {
@@ -58,20 +69,23 @@ async function main() {
 
   // Two collaborators (different users) editing the same note, plus a bystander
   // in another room.
-  const ta = await mint('collab-a-' + Date.now(), 'sa')
-  const tb = await mint('collab-b-' + Date.now(), 'sb')
-  const tc = await mint('collab-c-' + Date.now(), 'sc')
+  const userA = 'collab-a-' + Date.now()
+  const userB = 'collab-b-' + Date.now()
+  const userC = 'collab-c-' + Date.now()
+  const ta = await mint(userA, 'sa')
+  const tb = await mint(userB, 'sb')
+  const tc = await mint(userC, 'sc')
   const A = await connect(ta)
   const B = await connect(tb)
   const C = await connect(tc)
   await wait(300)
 
   const ROOM = 'note-' + Date.now()
-  A.ws.send(JSON.stringify({ t: 'room-join', room: ROOM }))
+  A.ws.send(JSON.stringify({ t: 'room-join', room: ROOM, cap: roomCapability(userA, ROOM) }))
   await wait(150)
-  B.ws.send(JSON.stringify({ t: 'room-join', room: ROOM }))
+  B.ws.send(JSON.stringify({ t: 'room-join', room: ROOM, cap: roomCapability(userB, ROOM) }))
   await wait(250)
-  C.ws.send(JSON.stringify({ t: 'room-join', room: 'other-room' }))
+  C.ws.send(JSON.stringify({ t: 'room-join', room: 'other-room', cap: roomCapability(userC, 'other-room') }))
   await wait(250)
 
   // 5. B joining should have prompted A to re-sync.

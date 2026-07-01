@@ -1,9 +1,9 @@
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken } from './auth.js'
+import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken, verifyRoomCapability } from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
-import { RoomRegistry, parseRelayFrame, handleRelayFrame } from './rooms.js'
+import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startSqsConsumer } from './sqsConsumer.js'
 
@@ -86,6 +86,21 @@ export interface AttachOptions {
    * the returned `handleMintToken` into its own http server instead.
    */
   app?: RouteRegistrar
+  /**
+   * Collaborative-room membership gate. Decides whether `userUuid` may join the
+   * note-room `room` (room id === note uuid), given the signed capability the
+   * client presents on the join frame. Without a gate, ANY authenticated socket
+   * could `room-join` an arbitrary note uuid and receive/inject every yjs/awareness
+   * frame for it (presence/edit-timing metadata leak + junk injection; note
+   * content stays E2E-encrypted).
+   *
+   * SECURITY DEFAULT: when this is omitted, the gateway does NOT fall back to
+   * allow-all. It installs a built-in authorizer that verifies the room
+   * capability against `config.connectionTokenSecret` (see verifyRoomCapability)
+   * and FAILS CLOSED on anything missing/invalid/expired/mismatched. Pass a custom
+   * authorizer only to override that (e.g. tests).
+   */
+  authorizeRoomJoin?: RoomJoinAuthorizer
 }
 
 export interface AttachedGateway {
@@ -198,14 +213,31 @@ function mintFromBody(
  * Fails CLOSED: an empty connection-token secret means tokens are signed with an
  * empty HS256 key (trivially forgeable), so it throws rather than run an open relay.
  */
+/**
+ * The default, fail-closed room-join authorizer used when a caller does NOT
+ * supply its own. It requires a valid signed room capability (verified against
+ * the connection-token secret) for the exact user + room; everything else is
+ * denied. Exported so the production wiring can be asserted in tests (proving the
+ * default is NOT allow-all).
+ */
+export function defaultRoomJoinAuthorizer(connectionTokenSecret: string): RoomJoinAuthorizer {
+  return (userUuid: string, room: string, capability?: string): boolean =>
+    verifyRoomCapability(capability, connectionTokenSecret, userUuid, room)
+}
+
 export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
-  const { httpServer, config, logger, app } = opts
+  const { httpServer, config, logger, app, authorizeRoomJoin } = opts
 
   if (!config.connectionTokenSecret) {
     throw new Error(
       'WEB_SOCKET_CONNECTION_TOKEN_SECRET is required (refusing to attach with an empty signing secret).',
     )
   }
+
+  // SECURITY: default to a capability-verifying authorizer (fail closed). A caller
+  // may override (tests), but production never gets allow-all: an absent override
+  // still requires a valid, matching, unexpired room capability on every join.
+  const roomAuthorizer: RoomJoinAuthorizer = authorizeRoomJoin ?? defaultRoomJoinAuthorizer(config.connectionTokenSecret)
 
   const registry = new ConnectionRegistry<WebSocket>()
   const rooms = new RoomRegistry<WebSocket>()
@@ -240,6 +272,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
     const conn: Conn<WebSocket> = {
       socket,
+      userUuid: identity.userUuid,
       sessionUuid: identity.sessionUuid,
       connectionId: randomUUID(),
     }
@@ -277,7 +310,12 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
       const frame = parseRelayFrame(raw)
       if (frame) {
-        handleRelayFrame(rooms, conn, frame)
+        // handleRelayFrame is async (room-join may consult the membership
+        // authorizer). Swallow rejections so a failing authorizer can never crash
+        // the message handler / gateway; the authorizer itself already fails closed.
+        void handleRelayFrame(rooms, conn, frame, roomAuthorizer).catch((err) => {
+          logger.warn('[ws] relay frame handling failed', err instanceof Error ? err.message : err)
+        })
       }
     })
   })

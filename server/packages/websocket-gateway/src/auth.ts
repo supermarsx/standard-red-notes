@@ -83,3 +83,61 @@ export function mintConnectionToken(
     expiresIn: ttl as jwt.SignOptions['expiresIn'],
   })
 }
+
+/**
+ * Standard Red Notes: verify a collaboration-room capability minted by the
+ * api-gateway (`POST /v1/collaboration/authorize`) and presented by the client on
+ * `room-join`. The capability is an HS256 JWT signed with the SAME secret the
+ * connection token uses, with payload `{ purpose: 'collab-room', userUuid, room }`.
+ *
+ * Returns true ONLY when the capability:
+ *   - is a non-empty string,
+ *   - verifies under `secret` with alg HS256 (signature + not-expired),
+ *   - has purpose === 'collab-room',
+ *   - was issued for THIS user (payload.userUuid === expectedUserUuid), and
+ *   - was issued for THIS room (payload.room === expectedRoom).
+ *
+ * ANY deviation (missing/empty, bad signature, expired, wrong alg, wrong purpose,
+ * wrong user, wrong room, malformed payload, thrown error) returns false. There
+ * is NO branch that returns true on uncertainty — this is the fail-closed core.
+ */
+export function verifyRoomCapability(
+  capability: string | undefined,
+  secret: string,
+  expectedUserUuid: string,
+  expectedRoom: string,
+): boolean {
+  if (typeof capability !== 'string' || capability.length === 0) {
+    return false
+  }
+  if (typeof secret !== 'string' || secret.length === 0) {
+    // No secret configured => cannot verify => deny.
+    return false
+  }
+  if (typeof expectedUserUuid !== 'string' || expectedUserUuid.length === 0) {
+    return false
+  }
+  if (typeof expectedRoom !== 'string' || expectedRoom.length === 0) {
+    return false
+  }
+
+  try {
+    const decoded = jwt.verify(capability, secret, { algorithms: ['HS256'], clockTolerance: 10 })
+    if (typeof decoded !== 'object' || decoded === null) {
+      return false
+    }
+    const payload = decoded as Record<string, unknown>
+    if (payload.purpose !== 'collab-room') {
+      return false
+    }
+    if (payload.userUuid !== expectedUserUuid) {
+      return false
+    }
+    if (payload.room !== expectedRoom) {
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}

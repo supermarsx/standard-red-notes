@@ -21,7 +21,11 @@ import type { Conn, SendableSocket } from './registry.js'
 // ---------------------------------------------------------------------------
 
 export type RelayFrame =
-  | { t: 'room-join'; room: string }
+  // `cap` is the short-lived signed capability the client obtained from the
+  // api-gateway proving it may join this room. Optional at the parse layer (so a
+  // malformed/legacy frame still parses), but the production authorizer REQUIRES
+  // a valid one and denies otherwise.
+  | { t: 'room-join'; room: string; cap?: string }
   | { t: 'room-leave'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
@@ -29,6 +33,9 @@ export type RelayFrame =
 const RELAY_TYPES = new Set(['room-join', 'room-leave', 'yjs', 'awareness'])
 const MAX_ROOM_ID = 200
 const MAX_PAYLOAD = 512 * 1024 // 512 KiB per frame; a yjs update is normally tiny.
+// A signed JWT capability is small; cap the field so a junk frame can't blow up
+// memory and so verification stays cheap.
+const MAX_CAP = 4096
 
 /**
  * Parse a raw text frame into a RelayFrame, or return null if it is not a
@@ -47,8 +54,21 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
   const room = obj.room
   if (typeof room !== 'string' || room.length === 0 || room.length > MAX_ROOM_ID) return null
 
-  if (t === 'room-join' || t === 'room-leave') {
+  if (t === 'room-leave') {
     return { t, room }
+  }
+  if (t === 'room-join') {
+    const cap = obj.cap
+    if (cap === undefined || cap === null) {
+      return { t, room }
+    }
+    if (typeof cap !== 'string' || cap.length === 0 || cap.length > MAX_CAP) {
+      // A present-but-malformed capability is itself suspicious: drop the whole
+      // frame so it can't be treated as a capability-less (and thus, under the
+      // production authorizer, denied) join with side effects.
+      return null
+    }
+    return { t, room, cap }
   }
   const payload = obj.payload
   if (typeof payload !== 'string' || payload.length === 0 || payload.length > MAX_PAYLOAD) return null
@@ -151,23 +171,65 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 }
 
 /**
+ * Async predicate deciding whether `userUuid` may join the note-room `room`
+ * (room id === note uuid), given the optional signed `capability` the client
+ * presented on the join frame. Returns true to allow, false to reject. The
+ * gateway treats a thrown error / rejected promise as a DENY (fail closed).
+ * Wired by the caller to a real capability check; when omitted, joins are allowed
+ * (standalone / test default — see gateway.ts for the production authorizer).
+ */
+export type RoomJoinAuthorizer = (
+  userUuid: string,
+  room: string,
+  capability?: string,
+) => boolean | Promise<boolean>
+
+/**
  * Handle one parsed relay frame against the room registry on behalf of `conn`.
  * Pure w.r.t. I/O except for `socket.send` via the registry, so it is unit
  * testable with fake sockets. Returns the number of peers the frame reached
  * (0 for join/leave control frames).
+ *
+ * AUTHORIZATION: `room-join` is gated on `authorize(userUuid, room)` so an
+ * authenticated socket cannot join (and therefore cannot receive OR inject
+ * yjs/awareness frames for) an arbitrary note it has no membership in. Because
+ * yjs/awareness frames only ever broadcast to `members(room)` — and you only
+ * become a member via an authorized join — gating the join is sufficient to stop
+ * both the metadata leak and the junk-injection vector. The authorizer FAILS
+ * CLOSED: a thrown/rejected check rejects the join.
  */
-export function handleRelayFrame<S extends SendableSocket>(
+export async function handleRelayFrame<S extends SendableSocket>(
   rooms: RoomRegistry<S>,
   conn: Conn<S>,
   frame: RelayFrame,
-): number {
+  authorize?: RoomJoinAuthorizer,
+): Promise<number> {
   switch (frame.t) {
-    case 'room-join':
+    case 'room-join': {
+      if (authorize !== undefined) {
+        let allowed = false
+        try {
+          allowed = await authorize(conn.userUuid, frame.room, frame.cap)
+        } catch {
+          allowed = false // fail closed on authorizer error
+        }
+        if (!allowed) {
+          // Tell the client its join was refused (so it can stop the provider)
+          // and do NOT add it to the room.
+          try {
+            conn.socket.send(JSON.stringify({ t: 'room-denied', room: frame.room }))
+          } catch {
+            /* socket unwritable; nothing else to do */
+          }
+          return 0
+        }
+      }
       if (!rooms.join(frame.room, conn)) {
         return 0 // room cap reached for this connection; ignore the join
       }
       // Ask existing members to re-broadcast their state so the newcomer syncs.
       return rooms.broadcast(frame.room, JSON.stringify({ t: 'room-sync', room: frame.room }), conn)
+    }
     case 'room-leave':
       rooms.leave(frame.room, conn)
       return 0

@@ -13,7 +13,7 @@ function fakeSocket(): { socket: SendableSocket; send: ReturnType<typeof vi.fn> 
 }
 
 function conn(sessionUuid: string, socket: SendableSocket): Conn {
-  return { socket, sessionUuid, connectionId: `conn-${sessionUuid}` }
+  return { socket, userUuid: `user-${sessionUuid}`, sessionUuid, connectionId: `conn-${sessionUuid}` }
 }
 
 const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () => {} }

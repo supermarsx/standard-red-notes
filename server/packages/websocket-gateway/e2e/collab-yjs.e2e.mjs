@@ -12,11 +12,22 @@
  */
 import { WebSocket } from 'ws'
 import { webcrypto as crypto } from 'node:crypto'
+import jwt from 'jsonwebtoken'
 import * as Y from 'yjs'
 
 const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3106'
 const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3106'
 const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws-internal-secret-change-me'
+// The gateway now requires a signed room capability on join (fail closed). The
+// api-gateway mints it after an access check; this harness has no api-gateway, so
+// it mints directly with the connection-token secret the gateway verifies with.
+const CONNECTION_TOKEN_SECRET =
+  process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
+const roomCapability = (userUuid, room) =>
+  jwt.sign({ purpose: 'collab-room', userUuid, room }, CONNECTION_TOKEN_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: 300,
+  })
 
 let failures = 0
 const check = (name, cond) => {
@@ -64,7 +75,7 @@ async function mint(userUuid, sessionUuid) {
 }
 
 // A minimal provider mirroring EncryptedYjsProvider over a real socket.
-function makeProvider(ws, doc, room, key, seenCiphertexts) {
+function makeProvider(ws, doc, room, key, seenCiphertexts, userUuid) {
   doc.on('update', async (update, origin) => {
     if (origin === 'remote') return
     const payload = await encrypt(key, update)
@@ -87,7 +98,7 @@ function makeProvider(ws, doc, room, key, seenCiphertexts) {
       Y.applyUpdate(doc, await decrypt(key, frame.payload), 'remote')
     }
   })
-  ws.send(JSON.stringify({ t: 'room-join', room }))
+  ws.send(JSON.stringify({ t: 'room-join', room, cap: roomCapability(userUuid, room) }))
 }
 
 function open(token) {
@@ -111,20 +122,22 @@ async function main() {
   const keyA = await deriveRoomKey(secret, room)
   const keyB = await deriveRoomKey(secret, room)
 
-  const wsA = await open(await mint('yjs-a-' + Date.now(), 'sa'))
+  const userA = 'yjs-a-' + Date.now()
+  const wsA = await open(await mint(userA, 'sa'))
   const docA = new Y.Doc()
   const seenA = []
-  makeProvider(wsA, docA, room, keyA, seenA)
+  makeProvider(wsA, docA, room, keyA, seenA, userA)
   await wait(300)
 
   // B joins after A already has content -> must converge via room-sync.
   docA.getText('content').insert(0, 'Alice was here. ')
   await wait(300)
 
-  const wsB = await open(await mint('yjs-b-' + Date.now(), 'sb'))
+  const userB = 'yjs-b-' + Date.now()
+  const wsB = await open(await mint(userB, 'sb'))
   const docB = new Y.Doc()
   const seenB = []
-  makeProvider(wsB, docB, room, keyB, seenB)
+  makeProvider(wsB, docB, room, keyB, seenB, userB)
   await wait(700)
 
   check('late joiner converged to existing content', docB.getText('content').toString() === 'Alice was here. ')

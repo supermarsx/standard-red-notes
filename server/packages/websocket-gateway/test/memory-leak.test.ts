@@ -8,7 +8,7 @@ import { ConnectionRegistry, type Conn } from '../src/registry.js'
 // the full lifecycle and assert the structures return to EMPTY.
 
 function fakeConn(id: string): Conn {
-  return { socket: { send: () => {} }, sessionUuid: id, connectionId: id }
+  return { socket: { send: () => {} }, userUuid: id, sessionUuid: id, connectionId: id }
 }
 
 describe('ConnectionRegistry — no leak', () => {
@@ -89,11 +89,11 @@ describe('RoomRegistry — no leak', () => {
     expect(rooms.roomCountForConn(b)).toBe(0)
   })
 
-  it('stays bounded across many join/leaveAll cycles (simulated reconnect churn)', () => {
+  it('stays bounded across many join/leaveAll cycles (simulated reconnect churn)', async () => {
     const rooms = new RoomRegistry()
     for (let cycle = 0; cycle < 5000; cycle++) {
       const c = fakeConn(`c${cycle}`)
-      handleRelayFrame(rooms, c, { t: 'room-join', room: `note-${cycle % 20}` })
+      await handleRelayFrame(rooms, c, { t: 'room-join', room: `note-${cycle % 20}` })
       rooms.leaveAll(c) // socket closed
     }
     expect(rooms.roomCount()).toBe(0)
