@@ -1285,6 +1285,32 @@ export class ContainerConfigLoader {
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
+    const httpAgentKeepAliveTimeout = env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
+      ? +env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
+      : 4_000
+
+    container.bind<AxiosInstance>(TYPES.Auth_HTTPClient).toConstantValue(
+      axios.create({
+        httpAgent: new AgentKeepAlive({
+          keepAlive: true,
+          timeout: 2 * httpAgentKeepAliveTimeout,
+          freeSocketTimeout: httpAgentKeepAliveTimeout,
+        }),
+      }),
+    )
+
+    // Standard Red Notes: webhook dispatcher needs the shared Axios HTTP client,
+    // so it is bound here, after Auth_HTTPClient. It must precede the session-deletion
+    // use-cases (e.g. DeleteSessionByToken) that eagerly resolve it at bind time.
+    container
+      .bind<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher)
+      .toConstantValue(
+        new WebhookDispatcher(
+          container.get(TYPES.Auth_WebhookRepository),
+          container.get<AxiosInstance>(TYPES.Auth_HTTPClient),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
     container
       .bind<DeleteSessionByToken>(TYPES.Auth_DeleteSessionByToken)
       .toConstantValue(
@@ -1383,32 +1409,6 @@ export class ContainerConfigLoader {
     container
       .bind<SelectorInterface<boolean>>(TYPES.Auth_BooleanSelector)
       .toConstantValue(new DeterministicSelector<boolean>())
-
-    const httpAgentKeepAliveTimeout = env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
-      ? +env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
-      : 4_000
-
-    container.bind<AxiosInstance>(TYPES.Auth_HTTPClient).toConstantValue(
-      axios.create({
-        httpAgent: new AgentKeepAlive({
-          keepAlive: true,
-          timeout: 2 * httpAgentKeepAliveTimeout,
-          freeSocketTimeout: httpAgentKeepAliveTimeout,
-        }),
-      }),
-    )
-
-    // Standard Red Notes: webhook dispatcher needs the shared Axios HTTP client,
-    // so it is bound here, after Auth_HTTPClient.
-    container
-      .bind<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher)
-      .toConstantValue(
-        new WebhookDispatcher(
-          container.get(TYPES.Auth_WebhookRepository),
-          container.get<AxiosInstance>(TYPES.Auth_HTTPClient),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-        ),
-      )
 
     container
       .bind<CaptchaServerInterface>(TYPES.Auth_CaptchaServer)
