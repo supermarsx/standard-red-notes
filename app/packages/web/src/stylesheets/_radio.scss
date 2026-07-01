@@ -1,0 +1,86 @@
+/* Standard Red Notes — single, app-wide source of truth for theming native
+   `<input type='radio'>` controls so every raw radio matches the design system
+   (same tokens the Checkbox `CheckIndicator` / `Switch` / `RadioIndicator` use).
+   DRY: this replaces the browser default globally; call-sites need no changes.
+
+   Layering note: these visual rules live in `@layer base` on purpose. Tailwind
+   v4 declares the cascade order `theme, base, components, utilities`, so any
+   Tailwind sizing/visibility utility a call-site (or a hide-the-native-input
+   component) puts on the element wins over the defaults here:
+     - `StyledRadioInput` hides its real input with `h-0 w-0 opacity-0`
+       (utilities layer) — those still collapse it to 0×0 and opacity 0.
+     - `RadioButtonGroup` (Ariakit `Radio` inside `VisuallyHidden`) and any
+       `sr-only` input are clipped by inline / utility styles.
+     - `MenuRadioButtonItem` renders a `<button role="menuitemradio">` with a
+       `RadioIndicator` div — no native input at all, so it is untouched.
+   The border below would otherwise still paint a ~4px box on a 0-width
+   border-box input, so `.w-0/.h-0/.sr-only` radios get the border/background
+   stripped to keep those hidden inputs truly invisible and take no layout box. */
+
+@layer base {
+  input[type='radio'] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+
+    display: inline-block;
+    box-sizing: border-box;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    padding: 0;
+    flex-shrink: 0;
+    vertical-align: middle;
+
+    border: 2px solid var(--sn-stylekit-passive-color-1);
+    border-radius: 50%;
+    background-color: transparent;
+    background-repeat: no-repeat;
+    background-position: center;
+
+    transition:
+      border-color 0.1s ease,
+      background-color 0.1s ease,
+      background-image 0.1s ease;
+  }
+
+  /* Checked: accent border + centred filled inner dot. Rendered via a
+     radial-gradient (reliable with `appearance: none`, unlike `::before` on a
+     replaced input element). Dot radius is a % of the control so it scales with
+     the box, matching `RadioIndicator`'s ~50% inner dot at any font-size. */
+  input[type='radio']:checked {
+    border-color: var(--sn-stylekit-info-color);
+    background-image: radial-gradient(
+      circle at center,
+      var(--sn-stylekit-info-color) 0,
+      var(--sn-stylekit-info-color) 45%,
+      transparent 50%
+    );
+  }
+
+  input[type='radio']:disabled {
+    opacity: 0.5;
+    cursor: not-allowed; /* also set globally in _cursors.scss */
+  }
+
+  /* Radios deliberately hidden by components/call-sites keep no themed box. */
+  input[type='radio'].w-0,
+  input[type='radio'].h-0,
+  input[type='radio'].sr-only {
+    border: 0;
+    background: none;
+  }
+}
+
+/* Focus ring. Unlayered on purpose so it beats the global unlayered
+   `input:focus { box-shadow: 0 0 0 1px … }` in _stylekit-sub.scss for keyboard
+   focus: `input[type='radio']:focus-visible` (0,2,1) outranks `input:focus`
+   (0,1,1), so only this stronger, intentional ring shows — no double ring.
+   Mouse focus still falls back to the subtle 1px global ring. Mirrors the
+   button focus treatment (background gap + accent ring). */
+input[type='radio']:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--sn-stylekit-background-color),
+    0 0 0 4px var(--sn-stylekit-info-color);
+}
