@@ -24,7 +24,25 @@ export class CompoundPredicateBuilderController {
       setPredicate: action,
       addPredicate: action,
       removePredicate: action,
+      loadFromJson: action,
     })
+  }
+
+  /**
+   * Replaces the current builder state from a predicate JSON object (e.g. a
+   * quick-start template). Compound "and"/"or" predicates fan out to one row
+   * per sub-predicate; any other shape is treated as a single simple row.
+   * Only builder-compatible predicates should be passed here (see
+   * isBuilderCompatiblePredicate).
+   */
+  loadFromJson = (json: PredicateJsonForm) => {
+    if ((json.operator === 'and' || json.operator === 'or') && Array.isArray(json.value)) {
+      this.operator = json.operator
+      this.predicates = (json.value as PredicateJsonForm[]).map((predicate) => ({ ...predicate }))
+    } else {
+      this.operator = 'and'
+      this.predicates = [{ ...json }]
+    }
   }
 
   setOperator = (operator: PredicateCompoundOperator) => {

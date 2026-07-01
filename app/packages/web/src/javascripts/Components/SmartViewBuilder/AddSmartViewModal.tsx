@@ -8,6 +8,8 @@ import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AddSmartViewModalController } from './AddSmartViewModalController'
 import { getPredicatePresets } from './PredicateGuidance'
+import QuickStartTemplates from './QuickStartTemplates'
+import LiveMatchPreview from './LiveMatchPreview'
 import TabPanel from '../Tabs/TabPanel'
 import { useTabState } from '../Tabs/useTabState'
 import TabsContainer from '../Tabs/TabsContainer'
@@ -207,7 +209,9 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
               state={tabState}
             >
               <TabPanel state={tabState} id="builder" className="flex flex-col gap-2.5 p-4">
+                <QuickStartTemplates controller={controller} />
                 <CompoundPredicateBuilder controller={predicateController} />
+                <LiveMatchPreview controller={controller} />
               </TabPanel>
               <TabPanel state={tabState} id="custom" className="flex flex-grow flex-col">
                 <textarea

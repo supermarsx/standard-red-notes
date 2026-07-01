@@ -9,6 +9,11 @@ export type PredicatePreset = {
   label: string
   description: string
   predicate: PredicateJsonForm
+  /**
+   * Optional smart-view title suggested when this preset is applied as a
+   * quick-start template. Defaults to `label` when omitted.
+   */
+  title?: string
 }
 
 /**
@@ -104,6 +109,24 @@ export const getPredicatePresets = (exampleTagTitle = 'todo'): PredicatePreset[]
       keypath: 'protected',
       operator: '=',
       value: true,
+    },
+  },
+  {
+    label: 'Archived notes',
+    description: 'Matches notes that have been archived.',
+    predicate: {
+      keypath: 'archived',
+      operator: '=',
+      value: true,
+    },
+  },
+  {
+    label: 'Notes edited today',
+    description: 'Matches notes you have edited within the last day.',
+    predicate: {
+      keypath: 'userModifiedDate',
+      operator: '>',
+      value: '1.days.ago',
     },
   },
 ]

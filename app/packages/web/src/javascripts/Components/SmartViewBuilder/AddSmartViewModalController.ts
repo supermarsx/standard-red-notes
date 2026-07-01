@@ -1,9 +1,12 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { CompoundPredicateBuilderController } from '@/Components/SmartViewBuilder/CompoundPredicateBuilderController'
 import {
+  DecryptedItemInterface,
+  ItemContent,
   predicateFromJson,
   PredicateJsonForm,
   SmartViewDefaultIconName,
+  SNTag,
   VectorIconNameOrEmoji,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable } from 'mobx'
@@ -41,10 +44,33 @@ export class AddSmartViewModalController {
       setCustomPredicateJson: action,
       setIsCustomJsonValidPredicate: action,
       insertPreset: action,
+      applyTemplate: action,
 
       customPredicateValidationError: computed,
     })
   }
+
+  /**
+   * Apply a quick-start template into the guided builder: loads its predicate
+   * into the builder rows and, when the user hasn't named the view yet,
+   * suggests a title. Only builder-compatible presets should be passed.
+   */
+  applyTemplate = (preset: PredicatePreset) => {
+    this.predicateController.loadFromJson(preset.predicate)
+    if (!this.title.trim()) {
+      this.setTitle(preset.title ?? preset.label)
+    }
+  }
+
+  /**
+   * The current in-memory notes and files, used to compute the live match
+   * preview. Reading through the item manager keeps the modal decoupled from
+   * how items are stored.
+   */
+  getPreviewItems = (): DecryptedItemInterface[] => this.application.items.getDisplayableNotesAndFiles()
+
+  getTagsForItem = (item: DecryptedItemInterface): SNTag[] =>
+    this.application.items.getSortedTagsForItem(item as DecryptedItemInterface<ItemContent>)
 
   /**
    * Live validation of the custom JSON the user is typing. Returns the

@@ -1,13 +1,151 @@
-import { AllNonCompoundPredicateOperators, PredicateCompoundOperator, PredicateOperator } from '@standardnotes/snjs'
+import { PredicateCompoundOperator, PredicateJsonForm, PredicateOperator } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import Button from '../Button/Button'
 import Icon from '../Icon/Icon'
 import { CompoundPredicateBuilderController } from './CompoundPredicateBuilderController'
-import { PredicateKeypath, PredicateKeypathLabels, PredicateKeypathTypes } from './PredicateKeypaths'
+import { PredicateKeypath, PredicateKeypathTypes } from './PredicateKeypaths'
 import PredicateValue from './PredicateValue'
+import {
+  booleanStatementLabel,
+  booleanValueIsTrue,
+  dateModeFromPredicate,
+  DateMode,
+  friendlyOperatorsForType,
+  getFieldDescription,
+  getFieldGroups,
+  isRelativeDateValue,
+  predicatePartsForDateMode,
+  RelativeDateOptions,
+  DEFAULT_RELATIVE_DATE_VALUE,
+} from './friendlyPredicate'
 
 type Props = {
   controller: CompoundPredicateBuilderController
+}
+
+const selectClasses =
+  'rounded border border-border bg-default px-2 py-1.5 focus:outline focus:outline-1 focus:outline-info'
+
+const FieldSelect = ({
+  value,
+  onChange,
+}: {
+  value: PredicateKeypath
+  onChange: (keypath: PredicateKeypath) => void
+}) => (
+  <select
+    className={`flex-grow ${selectClasses}`}
+    aria-label="Field"
+    value={value}
+    onChange={(event) => {
+      onChange(event.target.value as PredicateKeypath)
+    }}
+  >
+    {getFieldGroups().map((group) => (
+      <optgroup key={group.label} label={group.label}>
+        {group.fields.map((field) => (
+          <option key={field.keypath} value={field.keypath}>
+            {field.label}
+          </option>
+        ))}
+      </optgroup>
+    ))}
+  </select>
+)
+
+/** Yes/No segmented control for boolean fields, e.g. "Is pinned  [Yes|No]". */
+const BooleanStatement = ({
+  keypath,
+  value,
+  onChange,
+}: {
+  keypath: PredicateKeypath
+  value: boolean
+  onChange: (next: boolean) => void
+}) => (
+  <div className="flex flex-grow items-center gap-2.5">
+    <span className="text-sm font-medium">{booleanStatementLabel(keypath)}</span>
+    <div className="inline-flex overflow-hidden rounded border border-border" role="group" aria-label="Yes or no">
+      {[
+        { label: 'Yes', on: true },
+        { label: 'No', on: false },
+      ].map((option) => {
+        const selected = value === option.on
+        return (
+          <button
+            key={option.label}
+            type="button"
+            aria-pressed={selected}
+            className={`px-3 py-1 text-sm focus:outline-none ${
+              selected ? 'bg-info text-info-contrast' : 'bg-default hover:bg-contrast'
+            }`}
+            onClick={() => {
+              onChange(option.on)
+            }}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
+  </div>
+)
+
+const DateCondition = ({
+  operator,
+  value,
+  onChange,
+}: {
+  operator: PredicateOperator
+  value: PredicateJsonForm['value']
+  onChange: (parts: { operator: PredicateOperator; value: string }) => void
+}) => {
+  const mode = dateModeFromPredicate(operator, value)
+  const stringValue = typeof value === 'string' ? value : ''
+
+  return (
+    <div className="flex flex-grow flex-col gap-2 md:flex-row md:items-center">
+      <select
+        className={selectClasses}
+        aria-label="Date comparison"
+        value={mode}
+        onChange={(event) => {
+          onChange(predicatePartsForDateMode(event.target.value as DateMode))
+        }}
+      >
+        <option value="inLast">in the last…</option>
+        <option value="after">is after</option>
+        <option value="before">is before</option>
+      </select>
+
+      {mode === 'inLast' ? (
+        <select
+          className={`flex-grow ${selectClasses}`}
+          aria-label="Relative time range"
+          value={isRelativeDateValue(value) ? stringValue : DEFAULT_RELATIVE_DATE_VALUE}
+          onChange={(event) => {
+            onChange({ operator: '>', value: event.target.value })
+          }}
+        >
+          {RelativeDateOptions.map((option) => (
+            <option key={option.id} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type="date"
+          className={`flex-grow ${selectClasses}`}
+          aria-label="Date"
+          value={isRelativeDateValue(value) ? '' : stringValue}
+          onChange={(event) => {
+            onChange({ operator: mode === 'before' ? '<' : '>', value: event.target.value })
+          }}
+        />
+      )}
+    </div>
+  )
 }
 
 const CompoundPredicateBuilder = ({ controller }: Props) => {
@@ -27,7 +165,7 @@ const CompoundPredicateBuilder = ({ controller }: Props) => {
               setOperator(event.target.value as PredicateCompoundOperator)
             }}
           />
-          Should match ALL conditions
+          Match <span className="font-semibold">all</span> of the conditions below
         </label>
         <label className="flex items-center gap-2">
           <input
@@ -39,87 +177,98 @@ const CompoundPredicateBuilder = ({ controller }: Props) => {
               setOperator(event.target.value as PredicateCompoundOperator)
             }}
           />
-          Should match ANY conditions
+          Match <span className="font-semibold">any</span> of the conditions below
         </label>
       </div>
-      {predicates.map((predicate, index) => (
-        <div className="flex flex-col gap-2.5" key={index}>
-          <div className="flex w-full flex-col gap-2 md:flex-row md:items-center">
-            {index !== 0 && <div className="mr-2 text-sm font-semibold">{operator === 'and' ? 'AND' : 'OR'}</div>}
-            <select
-              className="flex-grow rounded border border-border bg-default px-2 py-1.5 focus:outline focus:outline-1 focus:outline-info"
-              value={predicate.keypath}
-              onChange={(event) => {
-                changePredicateKeypath(index, event.target.value as PredicateKeypath)
-              }}
-            >
-              {Object.entries(PredicateKeypathLabels).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              className="rounded border border-border bg-default px-2 py-1.5 focus:outline focus:outline-1 focus:outline-info"
-              value={predicate.operator}
-              onChange={(event) => {
-                setPredicate(index, { operator: event.target.value as PredicateOperator })
-              }}
-            >
-              {AllNonCompoundPredicateOperators.map((operator) => (
-                <option key={operator} value={operator}>
-                  {operator}
-                </option>
-              ))}
-            </select>
-            {predicate.keypath && (
-              <PredicateValue
-                keypath={predicate.keypath as PredicateKeypath}
-                value={typeof predicate.value !== 'string' ? JSON.stringify(predicate.value) : predicate.value}
-                setValue={(value: string) => {
-                  setPredicate(index, { value })
+
+      {predicates.map((predicate, index) => {
+        const keypath = predicate.keypath as PredicateKeypath
+        const type = PredicateKeypathTypes[keypath]
+
+        return (
+          <div className="flex flex-col gap-1" key={index}>
+            <div className="flex w-full flex-col gap-2 md:flex-row md:items-center">
+              {index !== 0 && (
+                <div className="mr-2 text-sm font-semibold text-passive-1">{operator === 'and' ? 'AND' : 'OR'}</div>
+              )}
+
+              <FieldSelect
+                value={keypath}
+                onChange={(newKeypath) => {
+                  changePredicateKeypath(index, newKeypath)
                 }}
               />
-            )}
-            {index !== 0 && (
-              <button
-                className="rounded border border-border p-1 text-danger"
-                aria-label="Remove condition"
+
+              {type === 'boolean' ? (
+                <BooleanStatement
+                  keypath={keypath}
+                  value={booleanValueIsTrue(predicate.value)}
+                  onChange={(next) => {
+                    setPredicate(index, { operator: '=', value: next })
+                  }}
+                />
+              ) : type === 'date' ? (
+                <DateCondition
+                  operator={predicate.operator}
+                  value={predicate.value}
+                  onChange={(parts) => {
+                    setPredicate(index, parts)
+                  }}
+                />
+              ) : (
+                <>
+                  <select
+                    className={selectClasses}
+                    aria-label="Condition"
+                    value={predicate.operator}
+                    onChange={(event) => {
+                      setPredicate(index, { operator: event.target.value as PredicateOperator })
+                    }}
+                  >
+                    {friendlyOperatorsForType(type).map((friendly) => (
+                      <option key={friendly.operator} value={friendly.operator} title={friendly.hint}>
+                        {friendly.label}
+                      </option>
+                    ))}
+                  </select>
+                  <PredicateValue
+                    keypath={keypath}
+                    value={typeof predicate.value !== 'string' ? JSON.stringify(predicate.value) : predicate.value}
+                    setValue={(value: string) => {
+                      setPredicate(index, { value })
+                    }}
+                  />
+                </>
+              )}
+
+              {index !== 0 && (
+                <button
+                  className="rounded border border-border p-1 text-danger"
+                  aria-label="Remove condition"
+                  onClick={() => {
+                    removePredicate(index)
+                  }}
+                >
+                  <Icon type="trash" />
+                </button>
+              )}
+            </div>
+
+            {type !== undefined && <div className="text-xs text-passive-1">{getFieldDescription(keypath)}</div>}
+
+            {index === predicates.length - 1 && (
+              <Button
+                className="mt-1 flex items-center gap-2"
                 onClick={() => {
-                  removePredicate(index)
+                  addPredicate()
                 }}
               >
-                <Icon type="trash" />
-              </button>
+                Add another condition
+              </Button>
             )}
           </div>
-          {index === predicates.length - 1 && (
-            <Button
-              className="flex items-center gap-2"
-              onClick={() => {
-                addPredicate()
-              }}
-            >
-              Add another condition
-            </Button>
-          )}
-        </div>
-      ))}
-      {predicates.some((predicate) => PredicateKeypathTypes[predicate.keypath as PredicateKeypath] === 'date') && (
-        <div className="flex flex-col gap-2 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3 [&_code]:rounded [&_code]:bg-default [&_code]:px-1.5 [&_code]:py-1">
-          <div className="text-sm font-semibold">Date Examples:</div>
-          <ul className="space-y-2 pl-4">
-            <li>
-              To get all the items modified within the last 7 days, you can use <code>User Modified Date</code>{' '}
-              <code>&gt;</code> <code>7.days.ago</code>
-            </li>
-            <li>
-              To get all the items created before June 2022, you can use <code>Created At</code> <code>&lt;</code>{' '}
-              <code>06/01/2022</code>
-            </li>
-          </ul>
-        </div>
-      )}
+        )
+      })}
     </>
   )
 }
