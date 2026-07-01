@@ -164,12 +164,38 @@ const en = {
 type CoreNamespace = 'common' | 'navigation' | 'account' | 'preferences'
 
 /**
+ * The full set of CLDR plural categories. English only ever declares the two it
+ * uses (`_one`/`_other`), but other languages need more (`_few`/`_many` for
+ * Polish/Ukrainian, `_many` for the Romance locales, etc.). i18next selects the
+ * right one at runtime, so the type must accept every category for a plural key.
+ */
+type CldrPluralCategory = 'zero' | 'one' | 'two' | 'few' | 'many' | 'other'
+
+/**
+ * The base name of a plural key, e.g. `dayWithCount_one` → `dayWithCount`. Keys
+ * without a CLDR plural suffix resolve to `never`, so they contribute nothing.
+ */
+type PluralBase<Key extends string> = Key extends `${infer Base}_${CldrPluralCategory}` ? Base : never
+
+/**
+ * Given a namespace's declared English keys, the full set of CLDR plural
+ * variants for every plural base found among them (e.g. `dayWithCount_zero |
+ * dayWithCount_one | … | dayWithCount_other`). Empty (`never`) when the
+ * namespace has no plural keys, so nothing extra is permitted.
+ */
+type CldrPluralKeys<Keys extends PropertyKey> = `${PluralBase<Extract<Keys, string>>}_${CldrPluralCategory}`
+
+/**
  * The shape every locale must satisfy.
  *  - Core namespaces: required, every key required (strict parity).
  *  - Surface namespaces (editor, notes, …): OPTIONAL, and their keys optional,
  *    so a locale may translate them incrementally while i18next falls back to
  *    English for anything not yet provided. Object-literal excess-property
  *    checks still flag misspelled keys, so typo protection is preserved.
+ *    Additionally, for any plural base English declares (`dayWithCount_one/…`),
+ *    every CLDR plural-category variant is accepted (still optional), so locales
+ *    with richer plural rules can supply `_few`/`_many`/… without English having
+ *    to fake categories it does not use.
  */
 export type LocaleResource = {
   [Namespace in CoreNamespace]: {
@@ -178,6 +204,8 @@ export type LocaleResource = {
 } & {
   [Namespace in Exclude<keyof typeof en, CoreNamespace>]?: {
     [Key in keyof (typeof en)[Namespace]]?: string
+  } & {
+    [Key in CldrPluralKeys<keyof (typeof en)[Namespace]>]?: string
   }
 }
 
