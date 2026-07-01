@@ -47,7 +47,9 @@ export class ImportData implements UseCaseInterface<ImportDataResult> {
       return Result.fail(decryptedPayloadsOrError.getError())
     }
 
-    const valid = this.getValidPayloadsToImportFromDecryptedResult(decryptedPayloadsOrError.getValue())
+    const { valid, encryptedItemUuids } = this.getValidPayloadsToImportFromDecryptedResult(
+      decryptedPayloadsOrError.getValue(),
+    )
 
     if (!(await this.protections.authorizeFileImport())) {
       return Result.fail('Import aborted')
@@ -64,7 +66,10 @@ export class ImportData implements UseCaseInterface<ImportDataResult> {
 
     return Result.ok({
       affectedItems: affectedItems,
-      errorCount: decryptedPayloadsOrError.getValue().length - valid.length,
+      // PERSIST-H2: nothing is silently dropped anymore. Un-decryptable items are
+      // imported as encrypted, so there is no decrypt-failure loss to report here.
+      errorCount: 0,
+      encryptedItemUuids,
     })
   }
 
@@ -103,15 +108,30 @@ export class ImportData implements UseCaseInterface<ImportDataResult> {
 
   private getValidPayloadsToImportFromDecryptedResult(
     results: (DecryptedPayloadInterface | EncryptedPayloadInterface)[],
-  ): (EncryptedPayloadInterface | DecryptedPayloadInterface)[] {
+  ): {
+    valid: (EncryptedPayloadInterface | DecryptedPayloadInterface)[]
+    encryptedItemUuids: string[]
+  } {
     const decrypted = results.filter(isDecryptedPayload)
     const encrypted = results.filter(isEncryptedPayload)
-    const vaulted = encrypted.filter((payload) => {
-      return payload.key_system_identifier !== undefined
-    })
 
-    const valid = [...decrypted, ...vaulted]
-    return valid
+    /**
+     * PERSIST-H2: previously only vault-scoped (key_system_identifier !== undefined)
+     * encrypted payloads were kept; any encrypted payload that failed to decrypt and
+     * was NOT vault-scoped (e.g. a regular note under an items-key that didn't decrypt)
+     * was filtered out and only counted in errorCount — i.e. silently dropped on restore.
+     *
+     * We now import ALL encrypted payloads, preserving their ciphertext, so they land in
+     * the database and can be decrypted later when the right key becomes available. This
+     * mirrors how vault-scoped encrypted payloads were already kept, and is safe: an
+     * encrypted payload stays encrypted at rest and is decrypted on the next key
+     * availability (e.g. items-key sync, passcode/account key entry), without violating
+     * the lite/persist invariants. We surface the still-encrypted uuids to the caller.
+     */
+    const valid = [...decrypted, ...encrypted]
+    const encryptedItemUuids = encrypted.map((payload) => payload.uuid)
+
+    return { valid, encryptedItemUuids }
   }
 
   private cleanImportData(data: BackupFile): void {

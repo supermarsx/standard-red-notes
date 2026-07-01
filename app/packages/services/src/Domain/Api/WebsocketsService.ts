@@ -14,18 +14,30 @@ import { Result } from '@standardnotes/domain-core'
  * are end-to-end-encrypted yjs sync/awareness blobs the gateway cannot read.
  */
 export type CollaborationFrame =
-  | { t: 'room-join'; room: string }
+  // `cap` is the short-lived signed capability proving this user may join the
+  // room; obtained via authorizeCollaborationRoom() and required by the gateway.
+  | { t: 'room-join'; room: string; cap?: string }
   | { t: 'room-leave'; room: string }
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
+  // Gateway -> client: the join was refused (no/invalid capability or no access).
+  | { t: 'room-denied'; room: string }
   // Standard Red Notes: an end-to-end-encrypted note-comment event. `payload` is
   // a base64(iv ‖ ciphertext) blob encrypted with the same per-room key as the
   // yjs frames, so the gateway never sees comment text. Used to push new/edited
   // comments live to collaborators who have the same note open.
   | { t: 'comment'; room: string; payload: string }
 
-const COLLABORATION_FRAME_TYPES = new Set(['room-join', 'room-leave', 'room-sync', 'yjs', 'awareness', 'comment'])
+const COLLABORATION_FRAME_TYPES = new Set([
+  'room-join',
+  'room-leave',
+  'room-sync',
+  'yjs',
+  'awareness',
+  'comment',
+  'room-denied',
+])
 
 /**
  * Standard Red Notes (Phase 1A): payload carried by a SYNC_ITEMS_PUSHED message.
@@ -229,6 +241,27 @@ export class WebSocketsService extends AbstractService<
   sendCollaborationFrame(frame: CollaborationFrame): void {
     if (this.webSocket?.readyState === WebSocket.OPEN) {
       this.webSocket.send(JSON.stringify(frame))
+    }
+  }
+
+  /**
+   * Standard Red Notes: obtain a short-lived signed capability authorizing this
+   * user to join the realtime collaboration room for `noteUuid`. The gateway
+   * requires it on `room-join` and rejects joins without a valid one. Returns the
+   * capability string, or undefined if the server denied access / the call failed
+   * (callers must NOT join without a capability).
+   */
+  async authorizeCollaborationRoom(noteUuid: string): Promise<string | undefined> {
+    try {
+      const response = await this.webSocketApiService.authorizeCollaboration(noteUuid)
+      if (isErrorResponse(response)) {
+        return undefined
+      }
+      const capability = response.data?.capability
+      return typeof capability === 'string' && capability.length > 0 ? capability : undefined
+    } catch (error) {
+      console.error('Failed to authorize collaboration room:', (error as Error).message)
+      return undefined
     }
   }
 
