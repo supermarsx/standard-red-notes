@@ -7,6 +7,8 @@ import {
   inMemoryNoteCount,
   waitForNoteCountSettled,
   readJsHeapMB,
+  readDecryptPoolStats,
+  throughputItemsPerSecond,
   type LoadMeasurement,
 } from '../helpers/stress'
 
@@ -173,14 +175,19 @@ for (const count of RAMP) {
     const measurement: LoadMeasurement = {
       count,
       openMs: null,
+      appReadyMs: null,
       rootHasChildren: false,
       renderedRows: 0,
       inMemoryNotes: -1,
       loadCompleteMs: null,
+      firstItemMs: null,
+      loadDrainMs: null,
+      itemsPerSecond: null,
       loadTimedOut: false,
       scrollResponsive: null,
       scrollProbeMs: null,
       jsHeapMB: null,
+      decryptPoolStats: null,
       pageErrors,
       verdict: 'failed',
       notes: '',
@@ -236,10 +243,15 @@ for (const count of RAMP) {
       }
 
       // 2) Reload FRESH so the app must boot from IndexedDB with all notes —
-      // this is the cold-open path whose ceiling we care about.
+      // this is the cold-open path whose ceiling we care about. `coldOpenAnchor`
+      // is the single timing origin: every phase mark (shell open, app ready,
+      // first item, load complete) is measured from here so the per-phase numbers
+      // compose into one honest reload->fully-loaded wall time.
       await page.reload({ waitUntil: 'domcontentloaded' })
+      const coldOpenAnchor = Date.now()
       measurement.openMs = await openAppShell(page, 5 * 60_000)
       await waitForApplicationReady(page, 5 * 60_000).catch(() => {})
+      measurement.appReadyMs = Date.now() - coldOpenAnchor
 
       // 3) Measure render + memory + responsiveness.
       measurement.rootHasChildren = await page.evaluate(() => {
@@ -257,16 +269,36 @@ for (const count of RAMP) {
       // The incremental, sleep-paced DB load is still draining when the app
       // reports "launched", so a single sample under-reports. Wait for the
       // in-memory count to settle to get the TRUE loaded count + load time.
-      const settled = await waitForNoteCountSettled(page, { timeoutMs: 5 * 60_000 })
+      // Anchor the settle marks at the reload origin so loadCompleteMs / firstItemMs
+      // are true reload-relative wall times (not settle-call-relative).
+      const settled = await waitForNoteCountSettled(page, { timeoutMs: 5 * 60_000, anchorMs: coldOpenAnchor })
       measurement.inMemoryNotes = settled.count
       measurement.loadCompleteMs = settled.loadCompleteMs
+      measurement.firstItemMs = settled.firstItemMs
+      measurement.loadDrainMs = settled.loadDrainMs
       measurement.loadTimedOut = settled.timedOut
+      // HEADLINE: items/second throughput over the pure drain window. This is the
+      // number e2 (storage loop) and e3 (decrypt pool) compare across runs.
+      measurement.itemsPerSecond = throughputItemsPerSecond(
+        settled.count,
+        settled.loadDrainMs,
+        settled.loadCompleteMs,
+      )
 
       // Diagnostic: did the decryption worker pool actually fire, or fall back to sync?
-      const poolStats = await page.evaluate(
-        () => (window as unknown as { __srnDecryptPool?: unknown }).__srnDecryptPool ?? null,
+      measurement.decryptPoolStats = await readDecryptPoolStats(page)
+      console.log(`[decryptpool] count=${count} stats=${JSON.stringify(measurement.decryptPoolStats)}`)
+
+      // Per-phase timing + throughput readout. Read as: reload -> appReady -> first
+      // item -> drain -> complete; itemsPerSec = inMemNotes / drainSec.
+      const drainSec = settled.loadDrainMs !== null ? (settled.loadDrainMs / 1000).toFixed(1) : 'n/a'
+      console.log(
+        `[throughput] count=${count} itemsPerSec=${measurement.itemsPerSecond ?? 'n/a'} ` +
+          `inMemNotes=${settled.count} drainMs=${settled.loadDrainMs ?? 'n/a'} (${drainSec}s) ` +
+          `firstItemMs=${settled.firstItemMs ?? 'n/a'} appReadyMs=${measurement.appReadyMs} ` +
+          `openMs=${measurement.openMs} loadCompleteMs=${settled.loadCompleteMs}` +
+          `${settled.timedOut ? ' (TIMEOUT)' : ''} samples=${settled.samples}`,
       )
-      console.log(`[decryptpool] count=${count} stats=${JSON.stringify(poolStats)}`)
 
       const probe = await scrollProbe(page)
       measurement.scrollResponsive = probe ? probe.responsive : null
@@ -309,17 +341,25 @@ for (const count of RAMP) {
       test.info().annotations.push(
         { type: `stress:count`, description: String(count) },
         { type: `stress:openMs`, description: String(measurement.openMs) },
+        { type: `stress:appReadyMs`, description: String(measurement.appReadyMs) },
+        { type: `stress:firstItemMs`, description: String(measurement.firstItemMs) },
+        { type: `stress:loadDrainMs`, description: String(measurement.loadDrainMs) },
+        { type: `stress:loadCompleteMs`, description: String(measurement.loadCompleteMs) },
+        { type: `stress:itemsPerSecond`, description: String(measurement.itemsPerSecond) },
         { type: `stress:renderedRows`, description: String(measurement.renderedRows) },
         { type: `stress:inMemoryNotes`, description: String(measurement.inMemoryNotes) },
         { type: `stress:scrollResponsive`, description: String(measurement.scrollResponsive) },
         { type: `stress:jsHeapMB`, description: String(measurement.jsHeapMB) },
+        { type: `stress:decryptPoolStats`, description: JSON.stringify(measurement.decryptPoolStats) },
         { type: `stress:pageErrors`, description: String(pageErrors.length) },
         { type: `stress:verdict`, description: `${measurement.verdict} ${measurement.notes}`.trim() },
       )
 
       console.log(
-        `[measure] count=${count} verdict=${measurement.verdict} openMs=${measurement.openMs} ` +
-          `loadCompleteMs=${measurement.loadCompleteMs}${measurement.loadTimedOut ? '(TIMEOUT)' : ''} ` +
+        `[measure] count=${count} verdict=${measurement.verdict} itemsPerSec=${measurement.itemsPerSecond ?? 'n/a'} ` +
+          `openMs=${measurement.openMs} appReadyMs=${measurement.appReadyMs} firstItemMs=${measurement.firstItemMs} ` +
+          `drainMs=${measurement.loadDrainMs} loadCompleteMs=${measurement.loadCompleteMs}` +
+          `${measurement.loadTimedOut ? '(TIMEOUT)' : ''} ` +
           `rows=${measurement.renderedRows} inMemNotes=${measurement.inMemoryNotes} ` +
           `scrollResponsive=${measurement.scrollResponsive} scrollMs=${measurement.scrollProbeMs} ` +
           `heapMB=${measurement.jsHeapMB} pageErrors=${pageErrors.length}` +
@@ -347,19 +387,22 @@ for (const count of RAMP) {
 test.afterAll(() => {
   // Clear summary table (count -> open ms, rows, errors, verdict).
   const header = '\n================ STRESS CHARACTERIZATION SUMMARY ================'
-  const cols = `${'count'.padStart(8)} | ${'openMs'.padStart(8)} | ${'rows'.padStart(6)} | ${'inMemNotes'.padStart(
+  const cols = `${'count'.padStart(8)} | ${'items/s'.padStart(8)} | ${'drainMs'.padStart(8)} | ${'completeMs'.padStart(
     10,
-  )} | ${'heapMB'.padStart(7)} | ${'scroll'.padStart(8)} | ${'errs'.padStart(4)} | verdict`
+  )} | ${'inMemNotes'.padStart(10)} | ${'heapMB'.padStart(7)} | ${'scroll'.padStart(8)} | ${'errs'.padStart(
+    4,
+  )} | verdict`
   const lines = results
     .sort((a, b) => a.count - b.count)
     .map((r) => {
       const scroll = r.scrollResponsive === null ? 'n/a' : r.scrollResponsive ? 'ok' : 'STUCK'
       return (
-        `${String(r.count).padStart(8)} | ${String(r.openMs ?? 'TIMEOUT').padStart(8)} | ` +
-        `${String(r.renderedRows).padStart(6)} | ${String(r.inMemoryNotes).padStart(10)} | ` +
-        `${String(r.jsHeapMB ?? 'n/a').padStart(7)} | ${scroll.padStart(8)} | ` +
-        `${String(r.pageErrors.length).padStart(4)} | ${r.verdict}${r.notes ? ` (${r.notes})` : ''}`
+        `${String(r.count).padStart(8)} | ${String(r.itemsPerSecond ?? 'n/a').padStart(8)} | ` +
+        `${String(r.loadDrainMs ?? 'n/a').padStart(8)} | ${String(r.loadCompleteMs ?? 'n/a').padStart(10)} | ` +
+        `${String(r.inMemoryNotes).padStart(10)} | ${String(r.jsHeapMB ?? 'n/a').padStart(7)} | ` +
+        `${scroll.padStart(8)} | ${String(r.pageErrors.length).padStart(4)} | ` +
+        `${r.verdict}${r.notes ? ` (${r.notes})` : ''}`
       )
     })
-  console.log([header, cols, '-'.repeat(cols.length), ...lines, '='.repeat(64)].join('\n'))
+  console.log([header, cols, '-'.repeat(cols.length), ...lines, '='.repeat(cols.length)].join('\n'))
 })

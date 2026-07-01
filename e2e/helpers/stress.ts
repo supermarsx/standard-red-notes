@@ -359,8 +359,38 @@ export async function inMemoryNoteCount(page: Page): Promise<number> {
   })
 }
 
+export type SettleResult = {
+  /** Final settled in-memory note count (the true loaded total). */
+  count: number
+  /**
+   * Wall-clock (ms) from the timing anchor to the moment the count LAST increased
+   * — i.e. cold-load completion time. Anchor defaults to this call's start; pass
+   * `opts.anchorMs` (an absolute Date.now() epoch captured at reload) to make this
+   * a true reload->fully-loaded wall time instead of a call-relative one.
+   */
+  loadCompleteMs: number
+  /**
+   * Wall-clock (ms) from the anchor to the FIRST moment a note appeared in memory
+   * — the incremental DB load's "first item emitted" mark. null if nothing loaded.
+   * Everything before this is shell-boot + app-launch + priority-set decrypt, not
+   * the bulk drain, so subtracting it isolates the drain window (see loadDrainMs).
+   */
+  firstItemMs: number | null
+  /**
+   * Pure incremental-drain window (ms): firstItem -> lastIncrease. This is the
+   * span the storage/decrypt/emit loop actually spent draining the vault, with
+   * constant shell/app-ready overhead removed — the honest denominator for an
+   * items/second throughput number. null if nothing loaded.
+   */
+  loadDrainMs: number | null
+  /** Number of count samples taken (poll iterations). */
+  samples: number
+  timedOut: boolean
+}
+
 /**
- * Wait for the cold-load to actually FINISH, then report the settled count.
+ * Wait for the cold-load to actually FINISH, then report the settled count plus
+ * per-phase load timing.
  *
  * `app.isLaunched()` flips true while `SyncService.loadDatabasePayloads` is still
  * emitting decrypted notes in sleep-paced batches — so sampling `getItems('Note')`
@@ -369,29 +399,46 @@ export async function inMemoryNoteCount(page: Page): Promise<number> {
  *
  * Here we poll the in-memory note count until it stops growing for
  * `stableForMs` (the incremental load has drained), or until `timeoutMs`. We
- * return both the final settled count and the wall-clock from call-start to the
- * moment the count last increased — i.e. the true cold-load completion time.
+ * capture two marks relative to the timing anchor: `firstItemMs` (first note in
+ * memory -> load actually started) and `loadCompleteMs` (last increase -> load
+ * finished). Their difference (`loadDrainMs`) is the pure drain window used for
+ * the items/second throughput metric so the storage (e2) and decrypt (e3) tuning
+ * executors can attribute their gains to the loop, not to constant boot overhead.
+ *
+ * NOTE: this NEVER stops early on a count target and never caps the total; it
+ * simply observes the load to completion, so it cannot mask a partial load — the
+ * settled `count` is whatever actually drained, and the caller/completeness guard
+ * decide if that is short.
  */
 export async function waitForNoteCountSettled(
   page: Page,
-  opts: { timeoutMs?: number; pollMs?: number; stableForMs?: number } = {},
-): Promise<{ count: number; loadCompleteMs: number; timedOut: boolean }> {
+  opts: { timeoutMs?: number; pollMs?: number; stableForMs?: number; anchorMs?: number } = {},
+): Promise<SettleResult> {
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000
   const pollMs = opts.pollMs ?? 250
   const stableForMs = opts.stableForMs ?? 2_000
 
   const start = Date.now()
+  // Anchor for the reported millisecond marks. Defaults to call-start (backwards
+  // compatible); callers pass the reload epoch for true cold-load wall time.
+  const anchor = opts.anchorMs ?? start
   let lastCount = -1
   let lastIncreaseAt = start
+  let firstIncreaseAt: number | null = null
+  let samples = 0
   let timedOut = false
 
   for (;;) {
     const current = await inMemoryNoteCount(page)
     const now = Date.now()
+    samples += 1
 
     if (current > lastCount) {
       lastCount = current
       lastIncreaseAt = now
+      if (firstIncreaseAt === null && current > 0) {
+        firstIncreaseAt = now
+      }
     }
 
     // Settled: count hasn't grown for stableForMs and we've actually loaded
@@ -408,23 +455,90 @@ export async function waitForNoteCountSettled(
     await page.waitForTimeout(pollMs)
   }
 
-  return { count: lastCount, loadCompleteMs: lastIncreaseAt - start, timedOut }
+  return {
+    count: lastCount,
+    loadCompleteMs: lastIncreaseAt - anchor,
+    firstItemMs: firstIncreaseAt === null ? null : firstIncreaseAt - anchor,
+    loadDrainMs: firstIncreaseAt === null ? null : lastIncreaseAt - firstIncreaseAt,
+    samples,
+    timedOut,
+  }
 }
 
 export type LoadMeasurement = {
   count: number
   openMs: number | null
+  /** reload -> snjs app.isLaunched() (shell boot + app-ready overhead), ms. */
+  appReadyMs: number | null
   rootHasChildren: boolean
   renderedRows: number
   inMemoryNotes: number
+  /** reload -> fully loaded (last note emitted), ms. */
   loadCompleteMs: number | null
+  /** reload -> first note in memory (bulk drain start), ms. */
+  firstItemMs: number | null
+  /** pure incremental-drain window firstItem -> lastItem, ms. */
+  loadDrainMs: number | null
+  /**
+   * THE HEADLINE THROUGHPUT METRIC: notes loaded per second over the drain
+   * window (inMemoryNotes / (loadDrainMs / 1000)). This is the number e2/e3 watch
+   * to attribute storage-loop / decrypt-pool gains. null when unmeasurable.
+   */
+  itemsPerSecond: number | null
   loadTimedOut: boolean
   scrollResponsive: boolean | null
   scrollProbeMs: number | null
   jsHeapMB: number | null
+  /** Snapshot of window.__srnDecryptPool after load (decrypt attribution for e3). */
+  decryptPoolStats: DecryptPoolStats | null
   pageErrors: string[]
   verdict: 'ok' | 'degraded' | 'failed'
   notes: string
+}
+
+/** Shape of the decrypt worker-pool telemetry exposed on window.__srnDecryptPool. */
+export type DecryptPoolStats = {
+  workers: number
+  spawned: number
+  maxWorkers: number
+  batchesOk: number
+  batchesFailed: number
+  workerErrors: number
+  lastError: string
+}
+
+/**
+ * Compute the headline throughput: items loaded per second over the pure drain
+ * window. Prefers `loadDrainMs` (constant boot overhead removed); falls back to
+ * `loadCompleteMs` when the drain window is unavailable/zero (e.g. tiny scales
+ * where the whole load lands inside a single poll). Returns null if neither is a
+ * positive window. Rounded to whole items/s.
+ */
+export function throughputItemsPerSecond(
+  count: number,
+  loadDrainMs: number | null,
+  loadCompleteMs: number | null,
+): number | null {
+  if (count <= 0) {
+    return null
+  }
+  const windowMs = loadDrainMs && loadDrainMs > 0 ? loadDrainMs : loadCompleteMs && loadCompleteMs > 0 ? loadCompleteMs : null
+  if (windowMs === null) {
+    return null
+  }
+  return Math.round(count / (windowMs / 1000))
+}
+
+/**
+ * Read the decrypt worker-pool telemetry (window.__srnDecryptPool). Lets a run
+ * PROVE decrypt stayed off the main thread (batchesOk climbs, batchesFailed /
+ * workerErrors stay 0) so e3's pool tuning is attributable. null if absent.
+ */
+export async function readDecryptPoolStats(page: Page): Promise<DecryptPoolStats | null> {
+  return page.evaluate(() => {
+    const s = (window as unknown as { __srnDecryptPool?: DecryptPoolStats }).__srnDecryptPool
+    return s ? { ...s } : null
+  })
 }
 
 /** Read JS heap (Chromium only) in MB, or null where unavailable. */
