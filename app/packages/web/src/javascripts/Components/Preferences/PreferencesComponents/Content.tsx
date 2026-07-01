@@ -8,7 +8,7 @@ type Props = {
 }
 
 export const Title: FunctionComponent<Props> = ({ children, className }) => (
-  <h2 className={classNames('m-0 mb-1 text-lg font-bold text-info md:text-base', className)}>{children}</h2>
+  <h2 className={classNames('m-0 mb-2 text-lg font-bold text-info md:text-base', className)}>{children}</h2>
 )
 
 export const Subtitle: FunctionComponent<Props> = ({ children, className }) => (
@@ -20,7 +20,7 @@ export const SubtitleLight: FunctionComponent<Props> = ({ children, className })
 )
 
 export const Text: FunctionComponent<Props> = ({ children, className }) => (
-  <p className={classNames('text-base lg:text-xs', className)}>{children}</p>
+  <p className={classNames('text-base leading-relaxed lg:text-xs', className)}>{children}</p>
 )
 
 export const SmallText: FunctionComponent<Props> = ({ children, className }) => (

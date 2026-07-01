@@ -77,6 +77,20 @@ export function isAcceptedHeroImageType(type: string | undefined | null): boolea
 }
 
 /**
+ * Case-insensitive substring filter of image files by filename. An empty or
+ * whitespace-only query returns all files unchanged (same reference and order),
+ * so the picker shows everything until the user actually types. Kept generic and
+ * pure so it can be unit-tested without constructing a real `FileItem`.
+ */
+export function filterImageFilesByQuery<T extends { name: string }>(files: T[], query: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (q.length === 0) {
+    return files
+  }
+  return files.filter((file) => file.name.toLowerCase().includes(q))
+}
+
+/**
  * Validate a picked source file's type/size BEFORE any DOM work. Returns an error
  * string to surface to the user, or null when the file is acceptable.
  */

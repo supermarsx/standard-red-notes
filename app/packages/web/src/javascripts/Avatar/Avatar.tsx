@@ -19,9 +19,11 @@ type Props = {
  *  2. the user's initials derived from their email, or
  *  3. the existing account icon when there's no email to derive initials from.
  *
- * Theme-consistent: uses the app's `info`/`default` palette and inherits sizing
- * from the `size` prop so it fits both the compact footer button and the larger
- * Account-pane preview.
+ * Theme-consistent: uses the app's neutral `passive`/`default` surface palette so
+ * the badge stays subtle in both light and dark themes (matching the footer's other
+ * monochrome icons rather than standing out as a saturated accent), and inherits
+ * sizing from the `size` prop so it fits both the compact footer button and the
+ * larger Account-pane preview.
  */
 const Avatar: FunctionComponent<Props> = ({ email, size = 24, className }) => {
   const application = useApplication()
@@ -46,7 +48,7 @@ const Avatar: FunctionComponent<Props> = ({ email, size = 24, className }) => {
   if (initials !== '?') {
     return (
       <span
-        className={classNames(wrapperClasses, 'bg-info font-semibold uppercase text-info-contrast')}
+        className={classNames(wrapperClasses, 'bg-passive-2 font-semibold uppercase text-foreground')}
         style={{ ...dimension, fontSize: Math.max(10, Math.round(size * 0.42)) }}
         aria-label="Profile initials"
       >

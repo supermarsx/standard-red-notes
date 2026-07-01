@@ -148,14 +148,13 @@ const HomeView: FunctionComponent<{ onNavigate: (id: string) => void }> = ({ onN
             <h3 className="m-0 text-base font-bold text-text">{category.title}</h3>
           </div>
           <p className="mb-2 text-sm text-neutral">{category.description}</p>
-          <ul className="space-y-0.5">
+          <ul className="list-disc space-y-0.5 pl-5 marker:text-neutral">
             {category.pages.map((page) => (
               <li key={page.id}>
                 <button
                   onClick={() => onNavigate(page.id)}
-                  className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-sm text-info hover:bg-contrast hover:underline"
+                  className="w-full rounded px-1 py-0.5 text-left text-sm text-info hover:bg-contrast hover:underline"
                 >
-                  <Icon type="caret-right" size="small" className="flex-shrink-0 text-neutral" />
                   {page.title}
                 </button>
               </li>
@@ -180,7 +179,7 @@ const SearchResultsView: FunctionComponent<{ query: string; onNavigate: (id: str
       {results.length === 0 ? (
         <p className="text-foreground">No matching articles. Try a different term.</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="list-none space-y-2">
           {results.map(({ page, category }) => (
             <li key={page.id}>
               <button
@@ -257,7 +256,7 @@ const Documentation: FunctionComponent = () => {
               <Icon type={category.icon as VectorIconNameOrEmoji} size="small" />
               {category.title}
             </div>
-            <ul>
+            <ul className="list-none">
               {category.pages.map((page) => (
                 <li key={page.id}>
                   <button

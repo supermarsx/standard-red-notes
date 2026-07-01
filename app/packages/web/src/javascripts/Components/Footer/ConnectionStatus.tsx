@@ -12,6 +12,9 @@ const DOT_CLASS: Record<ConnectionStatusKind, string> = {
   reconnecting: 'bg-warning',
   offline: 'bg-neutral',
   'login-needed': 'bg-warning',
+  // Neutral (not success/warning): signed-out local-only is an expected resting
+  // state, not a connection error and not a false "Connected".
+  'local-only': 'bg-neutral',
 }
 
 const LABEL: Record<ConnectionStatusKind, string> = {
@@ -19,9 +22,15 @@ const LABEL: Record<ConnectionStatusKind, string> = {
   reconnecting: 'Reconnecting',
   offline: 'Offline',
   'login-needed': 'Login needed',
+  'local-only': 'Local',
 }
 
 const LOGIN_NEEDED_TOOLTIP = "You're signed out — click to sign in and resume syncing."
+
+// The footer labels/tooltips are hardcoded strings (no i18n layer here), so this
+// matches the existing convention rather than introducing an i18n key.
+const LOCAL_ONLY_TOOLTIP =
+  'Working offline — your notes are saved on this device only, with no account or server sync. Sign in to sync across devices.'
 
 function formatRelative(date?: Date): string | undefined {
   if (!date) {
@@ -49,17 +58,18 @@ const ConnectionStatusIndicator: FunctionComponent<Props> = ({ application }) =>
       tooltip = 'Offline — changes are saved locally and will sync when you reconnect.'
       break
     case 'reconnecting':
-      tooltip = 'Reconnecting — attempting to sync with the server.'
+      tooltip = 'Reconnecting — attempting to reach the server.'
       break
     case 'login-needed':
       tooltip = LOGIN_NEEDED_TOOLTIP
       break
+    case 'local-only':
+      tooltip = LOCAL_ONLY_TOOLTIP
+      break
     default:
-      tooltip = status.signedOut
-        ? 'Connected — working offline with local data.'
-        : lastSynced
-          ? `Connected — last synced ${lastSynced}.`
-          : 'Connected to the server.'
+      // `online` means signed in AND recently reached the server, so this is a
+      // genuine connection (the signed-out case is now `local-only`, above).
+      tooltip = lastSynced ? `Connected — last synced ${lastSynced}.` : 'Connected to the server.'
       break
   }
 

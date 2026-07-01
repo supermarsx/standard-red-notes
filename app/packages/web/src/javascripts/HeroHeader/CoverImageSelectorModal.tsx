@@ -1,13 +1,20 @@
-import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FunctionComponent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { FileItem, SNNote } from '@standardnotes/snjs'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import Modal from '@/Components/Modal/Modal'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import Icon from '@/Components/Icon/Icon'
+import DecoratedInput from '@/Components/Input/DecoratedInput'
+import ClearInputButton from '@/Components/ClearInputButton/ClearInputButton'
 import { FilesController } from '@/Controllers/FilesController'
 import { NotesController } from '@/Controllers/NotesController/NotesController'
-import { ACCEPTED_HERO_IMAGE_TYPES, isAcceptedHeroImageType, validateHeroSourceFile } from './heroHeader'
+import {
+  ACCEPTED_HERO_IMAGE_TYPES,
+  filterImageFilesByQuery,
+  isAcceptedHeroImageType,
+  validateHeroSourceFile,
+} from './heroHeader'
 import { processCoverImageFile } from './heroHeaderService'
 
 /**
@@ -120,13 +127,28 @@ const ExistingImageRow: FunctionComponent<{
 const CoverImageSelectorContent = observer(
   ({ note, filesController, notesController, close, onError }: Omit<Props, 'isOpen'>) => {
     const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const searchInputRef = useRef<HTMLInputElement | null>(null)
     const [busy, setBusy] = useState(false)
     const [dragActive, setDragActive] = useState(false)
+    const [query, setQuery] = useState('')
 
     const imageFiles = useMemo(
       () => filesController.allFiles.filter((file) => isAcceptedHeroImageType(file.mimeType)),
       [filesController.allFiles],
     )
+
+    // Client-side view filter over the already-computed image list. `useDeferredValue`
+    // is a light debounce so typing stays responsive on large notebooks.
+    const deferredQuery = useDeferredValue(query)
+    const visibleImageFiles = useMemo(
+      () => filterImageFilesByQuery(imageFiles, deferredQuery),
+      [imageFiles, deferredQuery],
+    )
+
+    const clearQuery = useCallback(() => {
+      setQuery('')
+      searchInputRef.current?.focus()
+    }, [])
 
     // Shared pipeline: any input route resolves to a Blob, which is validated,
     // downsized + compressed into a bounded data URL, then persisted on the note.
@@ -251,17 +273,41 @@ const CoverImageSelectorContent = observer(
                 You don&rsquo;t have any image files yet. Upload or drop one above to use it as a cover.
               </p>
             ) : (
-              <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
-                {imageFiles.map((file) => (
-                  <ExistingImageRow
-                    key={file.uuid}
-                    file={file}
-                    filesController={filesController}
-                    busy={busy}
-                    onChoose={(f) => void onChooseExisting(f)}
-                  />
-                ))}
-              </div>
+              <>
+                <label htmlFor="cover-image-search" className="sr-only">
+                  Search your images
+                </label>
+                <DecoratedInput
+                  ref={searchInputRef}
+                  id="cover-image-search"
+                  autocomplete={false}
+                  value={query}
+                  onChange={setQuery}
+                  placeholder="Search your images…"
+                  title="Search your images"
+                  left={[<Icon type="search" className="mr-1 h-4.5 w-4.5 flex-shrink-0 text-passive-1" />]}
+                  right={[
+                    query && <ClearInputButton onClick={clearQuery} aria-label="Clear search" title="Clear search" />,
+                  ]}
+                />
+                {visibleImageFiles.length === 0 ? (
+                  <p className="rounded border border-border px-3 py-6 text-center text-xs text-passive-0">
+                    No images match your search.
+                  </p>
+                ) : (
+                  <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
+                    {visibleImageFiles.map((file) => (
+                      <ExistingImageRow
+                        key={file.uuid}
+                        file={file}
+                        filesController={filesController}
+                        busy={busy}
+                        onChoose={(f) => void onChooseExisting(f)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

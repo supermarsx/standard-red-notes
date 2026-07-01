@@ -6,6 +6,7 @@ import {
   MAX_HERO_SOURCE_BYTES,
   clampHeroFocalY,
   clampHeroHeight,
+  filterImageFilesByQuery,
   isAcceptedHeroImageType,
   normalizeHeroHeader,
   normalizeHeroImageDataUrl,
@@ -29,6 +30,41 @@ describe('isAcceptedHeroImageType', () => {
     expect(isAcceptedHeroImageType('')).toBe(false)
     expect(isAcceptedHeroImageType(undefined)).toBe(false)
     expect(isAcceptedHeroImageType(null)).toBe(false)
+  })
+})
+
+describe('filterImageFilesByQuery', () => {
+  const files = [
+    { name: 'Sunset.png' },
+    { name: 'mountain-view.jpg' },
+    { name: 'Beach Holiday.webp' },
+    { name: 'diagram.gif' },
+  ]
+
+  it('returns all files for an empty query (same reference)', () => {
+    expect(filterImageFilesByQuery(files, '')).toBe(files)
+  })
+
+  it('returns all files for a whitespace-only query', () => {
+    expect(filterImageFilesByQuery(files, '   ')).toBe(files)
+  })
+
+  it('matches case-insensitively, returning the expected subset', () => {
+    expect(filterImageFilesByQuery(files, 'SUNSET')).toEqual([{ name: 'Sunset.png' }])
+    expect(filterImageFilesByQuery(files, 'beach')).toEqual([{ name: 'Beach Holiday.webp' }])
+  })
+
+  it('matches a substring in the middle of a name', () => {
+    expect(filterImageFilesByQuery(files, 'view')).toEqual([{ name: 'mountain-view.jpg' }])
+    expect(filterImageFilesByQuery(files, 'holiday')).toEqual([{ name: 'Beach Holiday.webp' }])
+  })
+
+  it('trims surrounding whitespace before matching', () => {
+    expect(filterImageFilesByQuery(files, '  gif  ')).toEqual([{ name: 'diagram.gif' }])
+  })
+
+  it('returns an empty array when nothing matches', () => {
+    expect(filterImageFilesByQuery(files, 'nonexistent')).toEqual([])
   })
 })
 
