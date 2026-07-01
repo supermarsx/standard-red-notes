@@ -55,13 +55,21 @@ COPY packages/web/package.json packages/web/
 # Install only the web workspace's dependency closure. A full `yarn install` also
 # packs the desktop (`decrypt` → node-sass) and mobile (react-native forks) git
 # deps, whose native builds don't compile on Node 24; focusing skips them.
-RUN yarn workspaces focus @standardnotes/web
+RUN --mount=type=cache,target=/opt/standard-red-notes/app/.yarn/cache,sharing=locked \
+  yarn workspaces focus @standardnotes/web
 
 # --- Source + build layer -----------------------------------------------------
 # Now bring in the source and build. Only this layer rebuilds on a code change;
 # the dependency layer above stays cached.
 COPY . .
-RUN yarn build:web
+# Persist the webpack filesystem cache (and any other node_modules/.cache tool
+# state) across image builds via a BuildKit cache mount. `COPY . .` invalidates
+# this layer on ANY source change, so without the mount every rebuild ran webpack
+# from a COLD cache — the dominant recurring cost. With it, webpack recompiles
+# only the changed modules. Cache location is pinned in web.webpack.config.js
+# (cacheDirectory) to match this mount target.
+RUN --mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache \
+  yarn build:web
 
 # Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
 # image is a drop-in for nginx:alpine that runs the master process as the

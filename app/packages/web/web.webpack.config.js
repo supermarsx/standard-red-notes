@@ -61,6 +61,15 @@ module.exports = (env) => {
     // Docker, mount node_modules/.cache to persist it across image builds.
     cache: {
       type: 'filesystem',
+      // Pin the cache dir to the workspace-root node_modules/.cache so a Docker
+      // build can persist it across image builds via a BuildKit cache mount
+      // (`--mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache`
+      // in app/Dockerfile). Without an explicit path webpack resolves the nearest
+      // node_modules from the compiler context, which may land in
+      // packages/web/node_modules and silently miss the mounted directory —
+      // making the persistent cache a no-op inside Docker. __dirname is
+      // .../app/packages/web, so ../../node_modules is the hoisted app root.
+      cacheDirectory: path.resolve(__dirname, '../../node_modules/.cache/webpack'),
       buildDependencies: {
         config: [__filename],
       },
