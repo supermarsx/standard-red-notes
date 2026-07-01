@@ -60,7 +60,10 @@ import {
   isDecryptedOrDeletedItem,
   MutationType,
   assertNoLitePayloads,
+  isLitePayload,
   createLitePayloadFromDecrypted,
+  LiteContentMarkerKey,
+  LiteStrippedContentFields,
 } from '@standardnotes/models'
 import {
   AbstractService,
@@ -592,10 +595,59 @@ export class SyncService
     const failedChunkKeys: string[] = []
     const ChunkIndexOfContentTypePriorityItems = 0
 
-    for (const chunk of remainingChunks) {
-      const dbEntries = isChunkFullEntry(chunk)
-        ? chunk.entries
-        : await this.device.getDatabaseEntries(this.identifier, chunk.keys)
+    /**
+     * PIPELINE PREFETCH (perf, ordering-preserving). The drain loop used to run
+     * strictly serially per chunk: read the chunk's ciphertext from IndexedDB,
+     * THEN decrypt+emit it, THEN sleep. As a result the decryption worker pool sat
+     * idle during every IndexedDB read, and the reader/main thread sat idle during
+     * every decrypt+emit. We now keep exactly ONE chunk of read-ahead: right before
+     * processing chunk i we kick off the IndexedDB read for chunk i+1, so that read
+     * overlaps chunk i's decrypt+emit (roughly overlapping the two dominant phases).
+     *
+     * Invariants preserved (do not regress):
+     *  - Ordering: chunks are still PROCESSED strictly in index order — we await
+     *    each processPayloadBatch before starting the next — and the itemsKeys /
+     *    keySystemRootKeys / keySystemItemsKeys priority sets were already emitted
+     *    above, before this loop runs.
+     *  - Per-batch failure isolation (the BUG-1 fix — notes silently lost on
+     *    cold-load): a single batch must never abort the WHOLE remaining load, so
+     *    each batch's decrypt/emit stays wrapped in its own try/catch. A failed
+     *    read is likewise isolated: its keys are recorded for the completeness
+     *    re-attempt rather than propagating out and killing every later chunk.
+     *  - Bounded memory: at most one EXTRA chunk of raw ciphertext is resident (the
+     *    prefetched i+1 while i is being processed), never the whole corpus.
+     *  - Completeness: successfullyEmittedCount / failedChunkKeys accounting is
+     *    unchanged, so verifyColdLoadCompleteness still catches any shortfall.
+     */
+    const readChunkEntries = (chunk: (typeof remainingChunks)[number]): Promise<FullyFormedTransferPayload[]> => {
+      if (isChunkFullEntry(chunk)) {
+        return Promise.resolve(chunk.entries)
+      }
+      return this.device.getDatabaseEntries(this.identifier, chunk.keys)
+    }
+
+    let prefetchedEntries: Promise<FullyFormedTransferPayload[]> | undefined =
+      remainingChunks.length > 0 ? readChunkEntries(remainingChunks[0]) : undefined
+
+    for (let i = 0; i < remainingChunks.length; i++) {
+      const chunk = remainingChunks[i]
+      const entriesPromise = prefetchedEntries as Promise<FullyFormedTransferPayload[]>
+
+      // Kick off the NEXT chunk's IndexedDB read now so it overlaps this chunk's decrypt+emit.
+      prefetchedEntries = i + 1 < remainingChunks.length ? readChunkEntries(remainingChunks[i + 1]) : undefined
+
+      let dbEntries: FullyFormedTransferPayload[]
+      try {
+        dbEntries = await entriesPromise
+      } catch (e) {
+        this.logger.error('loadDatabasePayloads: chunk read failed, continuing with remaining chunks', String(e))
+        if (!isChunkFullEntry(chunk)) {
+          extendArray(failedChunkKeys, chunk.keys)
+        }
+        chunkIndex++
+        continue
+      }
+
       const payloads = dbEntries
         .map((entry) => {
           try {
@@ -607,15 +659,6 @@ export class SyncService
         })
         .filter(isNotUndefined)
 
-      /**
-       * BUG-1 FIX (notes silently lost on cold-load): a single batch must never be
-       * able to abort the WHOLE remaining load. Before, an exception anywhere in
-       * processPayloadBatch (decrypt/strip/emit) propagated out of this for-loop and
-       * left every subsequent chunk unprocessed — manifesting as a suffix of notes
-       * never reaching memory (the 20k-of-30k symptom = the first whole batches
-       * loading, then an abort). We isolate each batch so the load always drains all
-       * chunks; a failed batch is logged and skipped rather than killing the rest.
-       */
       try {
         await this.processPayloadBatch(payloads, totalProcessedCount, payloadCount)
         successfullyEmittedCount += payloads.length
@@ -944,19 +987,76 @@ export class SyncService
     const dirtyItems = this.itemManager.getDirtyItems()
 
     /**
-     * SAFETY TRIPWIRE: a content-stripped (lite) item must never be dirty. If one ever appears
-     * in the dirty set it indicates the invariant was broken upstream; refuse rather than risk
-     * syncing a body-less payload. (In normal operation a lite payload is never dirty, so this
-     * never throws.)
+     * SAFETY (lazy-decrypt): a content-stripped (lite) item must never be dirty/synced. If one ever
+     * appears in the dirty set the invariant was broken upstream. Previously this THREW, which hard-
+     * halted the ENTIRE sync on a single stray lite item. Instead we EXCLUDE such items from the sync
+     * set here (and log), so one stray item cannot stall all syncing. The item's body is preserved
+     * intact on disk; prepareForSync separately re-hydrates and persists dirty lite items so their
+     * real content still reaches storage and, on the next pass, the server.
      */
-    assertNoLitePayloads(
-      dirtyItems.map((item) => item.payload),
-      'SyncService.itemsNeedingSync',
-    )
+    const nonLiteDirtyItems = dirtyItems.filter((item) => {
+      if (isLitePayload(item.payload)) {
+        this.logger.error(
+          'itemsNeedingSync: excluding dirty lite item from sync set to avoid body-stripped push',
+          item.uuid,
+        )
+        return false
+      }
+      return true
+    })
 
-    const itemsWithoutBackoffPenalty = dirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
+    const itemsWithoutBackoffPenalty = nonLiteDirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
 
     return SyncService.excludeLocalOnlyItems(itemsWithoutBackoffPenalty)
+  }
+
+  /**
+   * Returns dirty items whose in-memory payload is content-stripped (lite). These are excluded from
+   * the normal sync/persist set (a body-less payload must never overwrite the real on-disk
+   * ciphertext). prepareForSync re-hydrates each one's full body from disk and persists THAT so the
+   * edit is not lost. Empty in normal operation (and always empty with the flag off).
+   */
+  private dirtyLiteItems(): DecryptedItemInterface[] {
+    return this.itemManager
+      .getDirtyItems()
+      .filter((item) => isLitePayload(item.payload)) as DecryptedItemInterface[]
+  }
+
+  /**
+   * Builds the FULL, dirty payload that must be both persisted AND uploaded for a dirty lite item.
+   *
+   * WHERE THE EDIT LIVES: a dirty lite item arises ONLY from a metadata-only mutation (title, refs,
+   * pinned, trashed, …) applied directly to a content-stripped item — a `text` edit goes through the
+   * editor-open path which re-hydrates the note to FULL first, so a text edit never leaves an item
+   * lite. Therefore the LATEST edit lives in the IN-MEMORY lite payload's metadata; only the bulky
+   * body field(s) (note `text`) were stripped and survive (stale-but-correct, since unchanged) ON
+   * DISK. We must upload the USER'S EDIT, not the stale on-disk body's metadata — so we MERGE the
+   * in-memory lite content (latest edit) with the on-disk stripped field(s) and drop the lite marker.
+   *
+   * Returns a NON-lite, dirty DecryptedPayload that carries BOTH the latest edit and a real body, or
+   * undefined when the on-disk body cannot be re-hydrated (caller then SKIPs to avoid a stripped push).
+   */
+  private rehydrateDirtyLiteItemForUpload(
+    liteItem: DecryptedItemInterface,
+    full: DecryptedPayloadInterface,
+  ): DecryptedPayloadInterface {
+    const liteContent = liteItem.payload.content as unknown as Record<string, unknown>
+    const fullContent = full.content as unknown as Record<string, unknown>
+
+    /** Start from the in-memory metadata edit, restore only the stripped body field(s) from disk. */
+    const mergedContent: Record<string, unknown> = { ...liteContent }
+    for (const field of LiteStrippedContentFields) {
+      mergedContent[field] = fullContent[field]
+    }
+    /** Drop the in-memory-only lite marker so the result is a normal full payload. */
+    delete mergedContent[LiteContentMarkerKey]
+
+    return new DecryptedPayload({
+      ...liteItem.payload.ejected(),
+      content: mergedContent as unknown as ItemContent,
+      dirty: true,
+      dirtyIndex: liteItem.payload.dirtyIndex ?? getIncrementedDirtyIndex(),
+    })
   }
 
   /**
@@ -989,13 +1089,48 @@ export class SyncService
     this.logger.debug('Marking all items as needing sync')
 
     const items = this.itemManager.items
-    const payloads = items.map((item) => {
-      return new DecryptedPayload({
-        ...item.payload.ejected(),
-        dirty: true,
-        dirtyIndex: getIncrementedDirtyIndex(),
-      })
-    })
+    const payloads: DecryptedPayloadInterface[] = []
+    for (const item of items) {
+      let sourcePayload = item.payload
+
+      /**
+       * SAFETY (lazy-decrypt): an in-memory item may be a content-stripped (lite) payload whose
+       * body (note `text`) was discarded on cold-load. Marking it dirty and persisting it here
+       * would write a body-less payload over the real on-disk ciphertext = irreversible data
+       * loss, and would also leave a lite payload dirty (tripping assertNoLitePayloads on sync).
+       * Re-hydrate the full on-disk content first. If a full payload cannot be obtained, SKIP the
+       * item rather than persist a stripped version — never overwrite full content with nothing.
+       */
+      if (isLitePayload(sourcePayload)) {
+        const full = await this.getFullContentPayload(item.uuid)
+
+        /**
+         * DATA-LOSS GUARD (rehydrate-clobber race): the disk read above is async. Re-read the LIVE
+         * item afterwards — if it is no longer lite (the user typed, or a sync wrote it) its CURRENT
+         * in-memory payload is the freshest full body, so use that instead of the stale on-disk read.
+         */
+        const live = this.itemManager.findItem(item.uuid)
+        if (live && !isLitePayload(live.payload)) {
+          sourcePayload = live.payload
+        } else if (!full || isLitePayload(full)) {
+          this.logger.error(
+            'markAllItemsAsNeedingSyncAndPersist: could not re-hydrate full content for lite item, skipping to avoid body-stripped persist',
+            item.uuid,
+          )
+          continue
+        } else {
+          sourcePayload = full
+        }
+      }
+
+      payloads.push(
+        new DecryptedPayload({
+          ...sourcePayload.ejected(),
+          dirty: true,
+          dirtyIndex: getIncrementedDirtyIndex(),
+        }),
+      )
+    }
 
     await this.payloadManager.emitPayloads(payloads, PayloadEmitSource.LocalChanged)
 
@@ -1184,7 +1319,65 @@ export class SyncService
       return item.payloadRepresentation()
     })
 
-    const payloadsNeedingSave = this.popPayloadsNeedingPreSyncSave(decryptedPayloads)
+    /**
+     * DATA-LOSS / SYNC-REGRESSION GUARD (lazy-decrypt): any dirty item whose in-memory payload is
+     * still lite was excluded from `items` above (itemsNeedingSync), because a body-stripped payload
+     * must never overwrite the real on-disk/server ciphertext. But a dirty lite item carries a real
+     * USER EDIT (metadata only — a `text` edit re-hydrates the note to full first), so it MUST still
+     * reach the server, not merely disk. The earlier fix only PERSISTED the body, which left the edit
+     * stuck locally forever (the in-memory item stayed lite+dirty, so every subsequent pass excluded
+     * it again — it survived reload but NEVER synced).
+     *
+     * For each dirty lite item we therefore build a FULL, dirty payload that MERGES the in-memory
+     * latest edit with the on-disk body (see rehydrateDirtyLiteItemForUpload), EMIT it into the
+     * collection so it REPLACES the lite item in memory (LocalChanged keeps it dirty — not
+     * LocalDatabaseLoaded, which is treated as clean), and add the now-full live item to BOTH the
+     * persist set AND the upload set (`items`). After a successful upload+save it is marked synced
+     * like any other dirty item. If re-hydration is impossible we SKIP+log (never push a stripped
+     * payload) rather than stall the whole sync.
+     */
+    for (const liteItem of this.dirtyLiteItems()) {
+      const full = await this.getFullContentPayload(liteItem.uuid)
+      if (!full || isLitePayload(full)) {
+        this.logger.error(
+          'prepareForSync: could not re-hydrate full content for dirty lite item, skipping persist/upload to avoid body-stripped write',
+          liteItem.uuid,
+        )
+        continue
+      }
+
+      const rehydrated = this.rehydrateDirtyLiteItemForUpload(liteItem, full)
+
+      /**
+       * Replace the lite item in memory with the full, dirty payload (LocalChanged = a local
+       * mutation, so it remains dirty and will be marked synced after upload). This clears the
+       * lite marker, so the next itemsNeedingSync no longer excludes it.
+       */
+      await this.payloadManager.emitPayloads([rehydrated], PayloadEmitSource.LocalChanged)
+
+      /** Persist the full body so a pre-upload reload doesn't lose it. */
+      decryptedPayloads.push(rehydrated)
+
+      /** Include the now-full live item in the upload set so the edit reaches the SERVER. */
+      const live = this.itemManager.findItem(liteItem.uuid)
+      if (live && !isLitePayload(live.payload)) {
+        items.push(live)
+      }
+    }
+
+    /**
+     * Final defensive filter: never hand a lite payload to persistPayloads (its tripwire would throw
+     * and halt all syncing). In normal operation this removes nothing.
+     */
+    const safeDecryptedPayloads = decryptedPayloads.filter((payload) => {
+      if (isLitePayload(payload)) {
+        this.logger.error('prepareForSync: filtered stray lite payload from persist set', payload.uuid)
+        return false
+      }
+      return true
+    })
+
+    const payloadsNeedingSave = this.popPayloadsNeedingPreSyncSave(safeDecryptedPayloads)
 
     const hidePersistErrorDueToWaitingOnKeyDownload = options.mode === SyncMode.DownloadFirst
     await this.persistPayloads(payloadsNeedingSave, { throwError: !hidePersistErrorDueToWaitingOnKeyDownload })
@@ -2049,12 +2242,65 @@ export class SyncService
       return
     }
 
+    /**
+     * SAFETY TRIPWIRE: a content-stripped (lite) payload must never be written to disk. Persisting
+     * one would overwrite the real on-disk ciphertext with a body-less payload = irreversible data
+     * loss. Every upstream path is expected to re-hydrate full content before persisting; this
+     * unconditional guard ensures any future path that fails to do so aborts loudly instead of
+     * silently losing data. (In normal operation no lite payload reaches here, so it never throws.)
+     */
+    assertNoLitePayloads(payloads, 'SyncService.persistPayloads')
+
     return this.storageService.savePayloads(payloads).catch((error) => {
-      if (options.throwError) {
+      /**
+       * DATA-LOSS GUARD: `throwError:false` is used to suppress the EXPECTED, transient
+       * key-not-found error when signing into an 003/non-latest account (the temporary items key
+       * doesn't yet match the account version; it self-heals after download-first sync). It must NOT
+       * also swallow a genuine WRITE failure — e.g. a QuotaExceededError during a full-vault
+       * re-persist — which would silently leave dirtied-in-memory items unwritten to disk. Surface
+       * any non-key (write/quota/IO) failure even when throwError is false, so the UI can react and
+       * the user isn't left with unsaved data they believe is saved.
+       */
+      const isSuppressibleKeyError = SyncService.isSuppressibleKeyLookupError(error)
+      if (options.throwError || !isSuppressibleKeyError) {
         void this.notifyEvent(SyncEvent.DatabaseWriteError, error)
         SNLog.error(error)
       }
     })
+  }
+
+  /**
+   * Classifies a persist error as the EXPECTED, transient "key not found" case (signing into an
+   * 003/non-latest account before the correct items key is downloaded) — the only case the
+   * `throwError:false` callers intend to suppress. Everything else (write/quota/IO failures) is a
+   * genuine persistence failure that must be surfaced. Pure + static for unit-testing.
+   */
+  static isSuppressibleKeyLookupError(error: unknown): boolean {
+    if (!error) {
+      return false
+    }
+
+    /** QuotaExceeded (and any DOMException) is a real write failure — never suppress it. */
+    const name = (error as { name?: string }).name
+    if (name === 'QuotaExceededError') {
+      return false
+    }
+
+    const message = typeof error === 'string' ? error : (error as { message?: string }).message
+    if (typeof message !== 'string') {
+      return false
+    }
+
+    const normalized = message.toLowerCase()
+    const isKeyLookupFailure =
+      (normalized.includes('key') &&
+        (normalized.includes('cannot find') ||
+          normalized.includes('find') ||
+          normalized.includes('no root key') ||
+          normalized.includes('not found'))) ||
+      normalized.includes('no root key')
+
+    return isKeyLookupFailure
   }
 
   setInSync(isInSync: boolean): void {

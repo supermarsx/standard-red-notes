@@ -68,6 +68,16 @@ export class DiskStorageService
 
   private values!: StorageValuesObject
 
+  /**
+   * Serializes on-disk payload WRITES (savePayloads / deletePayloadsWithUuids /
+   * deletePayloadWithUuid / clearAllPayloads / clearAllData) so that they never
+   * interleave. Without this, a delete could race a save re-adding the same uuid,
+   * or clearAllData could race a save leaving resurrected entries, producing a
+   * nondeterministic / half-written on-disk state. Reads are intentionally NOT
+   * routed through this queue because IDB isolates reads.
+   */
+  private storageWriteQueue: Promise<unknown> = Promise.resolve()
+
   constructor(
     private device: DeviceInterface,
     private identifier: string,
@@ -384,6 +394,33 @@ export class DiskStorageService
     await this.immediatelyPersistValuesToDisk()
   }
 
+  /**
+   * Runs `operation` strictly after any previously-enqueued storage write has
+   * settled, by chaining onto a single promise that represents the tail of the
+   * write queue. The chained tail swallows the previous result/rejection so a
+   * failure in one operation does not poison subsequent ones, while the returned
+   * promise still surfaces this operation's own result/rejection to the caller.
+   *
+   * This cannot deadlock: the operation never awaits the queue from within
+   * itself — `storageWriteQueue` is reassigned to the tail BEFORE `operation`
+   * runs, so the operation only ever depends on writes that were enqueued
+   * before it, not on itself. The queue is always advanced (it resolves whether
+   * `operation` fulfills or rejects), so a rejection releases the queue for the
+   * next write.
+   */
+  private enqueueStorageWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.storageWriteQueue.then(operation, operation)
+
+    // Advance the tail regardless of success/failure so the next write is not
+    // blocked by, nor sees the rejection of, this one.
+    this.storageWriteQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+
+    return run
+  }
+
   public async getAllRawPayloads(): Promise<FullyFormedTransferPayload[]> {
     return this.device.getAllDatabaseEntries(this.identifier)
   }
@@ -443,12 +480,14 @@ export class DiskStorageService
 
     const exportedDeleted = deleted.map(CreateDeletedLocalStorageContextPayload)
 
-    return this.executeCriticalFunction(async () => {
-      return this.device?.saveDatabaseEntries(
-        [...exportedEncrypted, ...exportedDecrypted, ...exportedDeleted],
-        this.identifier,
-      )
-    })
+    return this.enqueueStorageWrite(() =>
+      this.executeCriticalFunction(async () => {
+        return this.device?.saveDatabaseEntries(
+          [...exportedEncrypted, ...exportedDecrypted, ...exportedDeleted],
+          this.identifier,
+        )
+      }),
+    )
   }
 
   public async deletePayloads(payloads: DeletedPayloadInterface[]) {
@@ -456,31 +495,53 @@ export class DiskStorageService
   }
 
   public async deletePayloadsWithUuids(uuids: string[]): Promise<void> {
-    await this.executeCriticalFunction(async () => {
-      await Promise.all(uuids.map((uuid) => this.device.removeDatabaseEntry(uuid, this.identifier)))
-    })
+    await this.enqueueStorageWrite(() =>
+      this.executeCriticalFunction(async () => {
+        await Promise.all(uuids.map((uuid) => this.device.removeDatabaseEntry(uuid, this.identifier)))
+      }),
+    )
   }
 
   public async deletePayloadWithUuid(uuid: string) {
-    return this.executeCriticalFunction(async () => {
-      await this.device.removeDatabaseEntry(uuid, this.identifier)
-    })
+    return this.enqueueStorageWrite(() =>
+      this.executeCriticalFunction(async () => {
+        await this.device.removeDatabaseEntry(uuid, this.identifier)
+      }),
+    )
   }
 
   public async clearAllPayloads() {
-    return this.executeCriticalFunction(async () => {
-      return this.device.removeAllDatabaseEntries(this.identifier)
-    })
+    return this.enqueueStorageWrite(() =>
+      this.executeCriticalFunction(async () => {
+        return this.device.removeAllDatabaseEntries(this.identifier)
+      }),
+    )
   }
 
   public clearAllData(): Promise<void> {
-    return this.executeCriticalFunction(async () => {
-      await this.clearValues()
-      await this.clearAllPayloads()
+    return this.enqueueStorageWrite(() =>
+      this.executeCriticalFunction(async () => {
+        await this.clearValues()
+        await this.clearAllPayloadsWithoutQueue()
 
-      await this.device.removeRawStorageValue(namespacedKey(this.identifier, RawStorageKey.SnjsVersion))
+        await this.device.removeRawStorageValue(namespacedKey(this.identifier, RawStorageKey.SnjsVersion))
 
-      await this.device.removeRawStorageValue(this.getPersistenceKey())
+        await this.device.removeRawStorageValue(this.getPersistenceKey())
+      }),
+    )
+  }
+
+  /**
+   * The unqueued body of clearAllPayloads, for use by callers that are already
+   * running inside the storage write queue (e.g. clearAllData). Calling the
+   * public clearAllPayloads from within a queued op would enqueue a NEW write
+   * that waits for the current op's tail to settle — but the current op cannot
+   * settle until that nested write finishes, which is a deadlock. This method
+   * performs the device call directly without touching the queue.
+   */
+  private async clearAllPayloadsWithoutQueue(): Promise<void> {
+    await this.executeCriticalFunction(async () => {
+      return this.device.removeAllDatabaseEntries(this.identifier)
     })
   }
 }

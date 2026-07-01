@@ -1029,6 +1029,42 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: outbound webhooks. These hit the gateway /v1/webhooks
+   * routes (cross-service-token protected) and let a signed-in user manage the
+   * HTTP endpoints that Standard Red Notes calls when subscribed events occur.
+   * `listWebhooks` also returns the catalogue of subscribable event names
+   * (`availableEvents`). `createWebhook` returns the HMAC signing secret exactly
+   * once — it is never retrievable again. Only admins may set `global`.
+   */
+  async listWebhooks(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.webhooks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list webhooks.',
+    })
+  }
+
+  async createWebhook(body: { targetUrl: string; events: string[]; global?: boolean }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.webhooks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create webhook.',
+      params: body,
+    })
+  }
+
+  async deleteWebhook(webhookId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.webhook(webhookId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete webhook.',
+    })
+  }
+
+  /**
    * Standard Red Notes: public share links. These authed routes let a signed-in
    * user create, list, and revoke read-only share links. The server only ever
    * stores the ciphertext (`encryptedPayload`); the decryption key lives in the

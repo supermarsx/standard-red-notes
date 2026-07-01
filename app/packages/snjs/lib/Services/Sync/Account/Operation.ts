@@ -81,6 +81,23 @@ export class AccountSyncOperation {
      */
     await this.receiver(SyncSignal.Response, response)
 
+    /**
+     * DATA-LOSS fix (mid-batch upload failure): for a large dirty set the upload
+     * paginates, and popPayloads() removes each batch BEFORE its request. A
+     * RETURNED error response (network/server failure handled by
+     * handleErrorServerResponse) leaves this batch's items dirty — good — but
+     * carries no paginationToken, so `done` stays FALSE while later batches remain
+     * pending. Recursing here would upload the next batch against a now-stale
+     * syncToken; a later batch could commit while this one failed, and the failed
+     * batch's items can be re-pulled as the server's older copy and clobber the
+     * still-dirty local edit. Stop paginating on the FIRST failed batch; the dirty
+     * items remain dirty and re-upload cleanly on the next sync. The normal
+     * multi-page SUCCESS path is unaffected (hasError is false there).
+     */
+    if (response.hasError) {
+      return
+    }
+
     if (!this.done) {
       return this.run()
     }

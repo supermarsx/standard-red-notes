@@ -95,6 +95,16 @@ const McpTokenPaths = {
   mcpToken: (mcpTokenId: string) => `/v1/mcp-tokens/${mcpTokenId}`,
 }
 
+// Standard Red Notes: outbound webhooks. These hit the gateway /v1/webhooks
+// routes (cross-service-token protected), which proxy to the auth server's
+// WebhooksController. A signed-in user lists/creates/deletes their own webhooks;
+// the HMAC secret is returned exactly once on create. Admins (InternalTeamUser)
+// may additionally register global webhooks that fire for all users.
+const WebhookPaths = {
+  webhooks: '/v1/webhooks',
+  webhook: (webhookId: string) => `/v1/webhooks/${webhookId}`,
+}
+
 // Standard Red Notes: public share links. The authed routes let a signed-in user
 // create, list, and revoke shares (the server only ever stores ciphertext keyed
 // by a shareId). The public read (GET /v1/shares/:shareId) is intentionally NOT a
@@ -148,6 +158,7 @@ export const Paths = {
     ...AppPasswordPaths,
     ...TrustedDevicePaths,
     ...McpTokenPaths,
+    ...WebhookPaths,
     ...SharePaths,
     ...DeadManSwitchPaths,
     ...EmailReminderPaths,

@@ -1,6 +1,7 @@
 import { LoggerInterface } from '@standardnotes/utils'
-import { SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
+import { SyncEvent, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
+import { SNLog } from '../../Log'
 import {
   DecryptedItemInterface,
   DecryptedPayload,
@@ -599,11 +600,11 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
     const noop = () => undefined
 
     return new SyncService(
-      {} as never, // itemManager
+      (deps.itemManager ?? {}) as never, // itemManager
       {} as never, // sessionManager
       (deps.encryptionService ?? {}) as never,
-      {} as never, // storageService
-      {} as never, // payloadManager
+      (deps.storageService ?? {}) as never, // storageService
+      (deps.payloadManager ?? {}) as never, // payloadManager
       {} as never, // apiService
       {} as never, // historyService
       (deps.device ?? {}) as never,
@@ -747,6 +748,330 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
       const result = await service.getFullContentPayload('missing')
 
       expect(result).toBeUndefined()
+    })
+  })
+
+  describe('persistPayloads tripwire (never write a lite payload to disk)', () => {
+    const persistPayloads = (service: SyncService, payloads: unknown[]) =>
+      (
+        service as unknown as { persistPayloads: (p: unknown[]) => Promise<unknown> }
+      ).persistPayloads(payloads)
+
+    it('THROWS rather than save a lite payload (would overwrite real ciphertext with nothing)', async () => {
+      const savePayloads = jest.fn().mockResolvedValue(undefined)
+      const service = createService({ lazyDecryptEnabled: true }, { storageService: { savePayloads } })
+      const lite = createLitePayloadFromDecrypted(createNotePayload())
+
+      await expect(persistPayloads(service, [lite])).rejects.toBeInstanceOf(LitePayloadSafetyError)
+      expect(savePayloads).not.toHaveBeenCalled()
+    })
+
+    it('saves a normal full payload (guard is a no-op for non-lite)', async () => {
+      const savePayloads = jest.fn().mockResolvedValue(undefined)
+      const service = createService({ lazyDecryptEnabled: true }, { storageService: { savePayloads } })
+      const note = createNotePayload()
+
+      await persistPayloads(service, [note])
+
+      expect(savePayloads).toHaveBeenCalledTimes(1)
+      expect(isLitePayload((savePayloads.mock.calls[0][0] as DecryptedPayload<NoteContent>[])[0])).toBe(false)
+    })
+  })
+
+  describe('markAllItemsAsNeedingSyncAndPersist re-hydrates lite items (sign-in mergeLocal path)', () => {
+    const callMarkAll = (service: SyncService) => service.markAllItemsAsNeedingSyncAndPersist()
+
+    it('re-hydrates a lite note to FULL content before persisting (no body-stripped write)', async () => {
+      const fullNote = createNotePayload({ title: 'Keep Me' })
+      const liteNote = createLitePayloadFromDecrypted(fullNote)
+      // sanity: the in-memory item really is body-stripped
+      expect(isLitePayload(liteNote)).toBe(true)
+      expect((liteNote.content as NoteContent).text).toBeUndefined()
+
+      const emittedPayloads: DecryptedPayload<NoteContent>[] = []
+      const savedPayloads: DecryptedPayload<NoteContent>[] = []
+
+      const liteItem = { uuid: liteNote.uuid, payload: liteNote, dirty: false }
+      const itemManager = {
+        items: [liteItem],
+        findItem: jest.fn().mockImplementation((uuid: string) => (uuid === liteNote.uuid ? liteItem : undefined)),
+      }
+      const payloadManager = {
+        emitPayloads: jest.fn().mockImplementation((p: DecryptedPayload<NoteContent>[]) => {
+          emittedPayloads.push(...p)
+          return Promise.resolve(undefined)
+        }),
+      }
+      const savePayloads = jest.fn().mockImplementation((p: DecryptedPayload<NoteContent>[]) => {
+        savedPayloads.push(...p)
+        return Promise.resolve(undefined)
+      })
+
+      const service = createService(
+        { lazyDecryptEnabled: true },
+        { itemManager, payloadManager, storageService: { savePayloads } },
+      )
+      // Stub the on-disk re-hydration to return the full payload for the lite item's uuid.
+      jest
+        .spyOn(service, 'getFullContentPayload')
+        .mockImplementation((uuid: string) =>
+          Promise.resolve(uuid === fullNote.uuid ? fullNote : undefined),
+        )
+
+      await callMarkAll(service)
+
+      // No lite payload is ever emitted or persisted.
+      for (const p of [...emittedPayloads, ...savedPayloads]) {
+        expect(isLitePayload(p)).toBe(false)
+      }
+      // The persisted payload carries the FULL body, not the stripped one.
+      expect(savedPayloads).toHaveLength(1)
+      expect((savedPayloads[0].content as NoteContent).text).toEqual('BODY-MUST-NOT-LEAK')
+      expect(savedPayloads[0].dirty).toBe(true)
+    })
+
+    it('SKIPS (does not persist) a lite item whose full content cannot be re-hydrated', async () => {
+      const liteNote = createLitePayloadFromDecrypted(createNotePayload())
+
+      const liteItem = { uuid: liteNote.uuid, payload: liteNote, dirty: false }
+      const itemManager = {
+        items: [liteItem],
+        findItem: jest.fn().mockImplementation((uuid: string) => (uuid === liteNote.uuid ? liteItem : undefined)),
+      }
+      const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
+      const savePayloads = jest.fn().mockResolvedValue(undefined)
+
+      const service = createService(
+        { lazyDecryptEnabled: true },
+        { itemManager, payloadManager, storageService: { savePayloads } },
+      )
+      // Re-hydration fails (e.g. waiting on key download): return undefined.
+      jest.spyOn(service, 'getFullContentPayload').mockResolvedValue(undefined)
+
+      await callMarkAll(service)
+
+      // Nothing persisted: we must NEVER overwrite full on-disk ciphertext with a stripped payload.
+      expect(savePayloads).not.toHaveBeenCalled()
+      expect(payloadManager.emitPayloads).toHaveBeenCalledWith([], expect.anything())
+    })
+  })
+
+  describe('prepareForSync: a stray dirty LITE item must not halt all syncing (FIX 2)', () => {
+    const callPrepareForSync = (service: SyncService, options: Record<string, unknown> = {}) =>
+      (service as unknown as { prepareForSync: (o: unknown) => Promise<unknown> }).prepareForSync(options)
+
+    const buildService = (deps: {
+      dirtyItems: unknown[]
+      savePayloads: jest.Mock
+      getFullContentPayload?: (uuid: string) => Promise<unknown>
+    }) => {
+      const itemManager = {
+        getDirtyItems: jest.fn().mockReturnValue(deps.dirtyItems),
+        findItem: jest.fn(),
+      }
+      const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
+      const syncBackoffService = { isItemInBackoff: jest.fn().mockReturnValue(false) }
+      const service = createService(
+        { lazyDecryptEnabled: true },
+        { itemManager, payloadManager, syncBackoffService, storageService: { savePayloads: deps.savePayloads } },
+      )
+      // popPayloadsNeedingPreSyncSave returns the input as-is when no prior pre-sync save recorded.
+      ;(service as unknown as { dirtyIndexAtLastPresyncSave: number | undefined }).dirtyIndexAtLastPresyncSave =
+        undefined
+      if (deps.getFullContentPayload) {
+        jest.spyOn(service, 'getFullContentPayload').mockImplementation(deps.getFullContentPayload as never)
+      }
+      return service
+    }
+
+    it('does NOT throw/halt when a dirty lite item is present; re-hydrates its full body to persist', async () => {
+      const fullNote = createNotePayload({ title: 'Edited Lite' })
+      const liteNote = createLitePayloadFromDecrypted(fullNote)
+      const dirtyLiteItem = {
+        uuid: liteNote.uuid,
+        payload: liteNote,
+        dirty: true,
+        neverSynced: false,
+        payloadRepresentation: () => liteNote,
+      }
+
+      const savedPayloads: DecryptedPayload<NoteContent>[] = []
+      const savePayloads = jest.fn().mockImplementation((p: DecryptedPayload<NoteContent>[]) => {
+        savedPayloads.push(...p)
+        return Promise.resolve(undefined)
+      })
+
+      const service = buildService({
+        dirtyItems: [dirtyLiteItem],
+        savePayloads,
+        getFullContentPayload: (uuid) => Promise.resolve(uuid === fullNote.uuid ? fullNote : undefined),
+      })
+
+      // Must resolve (not throw) — one stray lite item cannot stall all syncing.
+      await expect(callPrepareForSync(service)).resolves.toBeDefined()
+
+      // The dirty lite item's FULL body was re-hydrated and persisted, never a stripped payload.
+      expect(savedPayloads).toHaveLength(1)
+      expect(isLitePayload(savedPayloads[0])).toBe(false)
+      expect((savedPayloads[0].content as NoteContent).text).toEqual('BODY-MUST-NOT-LEAK')
+    })
+
+    it('does NOT throw/halt and SKIPS the persist when a dirty lite item cannot be re-hydrated', async () => {
+      const liteNote = createLitePayloadFromDecrypted(createNotePayload())
+      const dirtyLiteItem = {
+        uuid: liteNote.uuid,
+        payload: liteNote,
+        dirty: true,
+        neverSynced: false,
+        payloadRepresentation: () => liteNote,
+      }
+
+      const savePayloads = jest.fn().mockResolvedValue(undefined)
+      const service = buildService({
+        dirtyItems: [dirtyLiteItem],
+        savePayloads,
+        getFullContentPayload: () => Promise.resolve(undefined),
+      })
+
+      await expect(callPrepareForSync(service)).resolves.toBeDefined()
+
+      // No lite payload reaches persist (which would otherwise throw the tripwire and halt sync).
+      expect(savePayloads).not.toHaveBeenCalled()
+    })
+
+    it('SYNC-S1: a dirty lite item reaches the UPLOAD set (server), carrying the body AND the dirty edit', async () => {
+      /**
+       * WHERE THE EDIT LIVES: a dirty lite item is a metadata-only edit applied to a body-stripped
+       * item. The LATEST edit (here a new title) is in the IN-MEMORY lite payload; only `text` was
+       * stripped and survives (unchanged) ON DISK. The uploaded payload must merge the in-memory
+       * edit with the on-disk body — NOT just push the stale on-disk full payload.
+       */
+      const onDiskFull = createNotePayload({ title: 'STALE-ON-DISK-TITLE', text: 'BODY-MUST-NOT-LEAK' })
+      // The in-memory lite payload: same uuid, body stripped, but carrying the latest metadata edit.
+      const liteBase = createLitePayloadFromDecrypted(onDiskFull)
+      const editedLite = new DecryptedPayload<NoteContent>(
+        {
+          ...liteBase.ejected(),
+          content: { ...(liteBase.content as NoteContent), title: 'EDITED-IN-MEMORY' },
+          dirty: true,
+          dirtyIndex: 42,
+        },
+        liteBase.source,
+      )
+      expect(isLitePayload(editedLite)).toBe(true)
+      expect((editedLite.content as NoteContent).text).toBeUndefined()
+
+      const dirtyLiteItem = {
+        uuid: editedLite.uuid,
+        payload: editedLite,
+        dirty: true,
+        neverSynced: false,
+        payloadRepresentation: () => editedLite,
+      }
+
+      // emitPayloads replaces the in-memory item; findItem then returns the emitted FULL item.
+      let liveItem: { uuid: string; payload: DecryptedPayload<NoteContent>; payloadRepresentation: () => unknown } =
+        dirtyLiteItem as never
+      const emittedPayloads: DecryptedPayload<NoteContent>[] = []
+      const payloadManager = {
+        emitPayloads: jest.fn().mockImplementation((p: DecryptedPayload<NoteContent>[]) => {
+          emittedPayloads.push(...p)
+          liveItem = { uuid: p[0].uuid, payload: p[0], payloadRepresentation: () => p[0] }
+          return Promise.resolve(undefined)
+        }),
+      }
+
+      const savedPayloads: DecryptedPayload<NoteContent>[] = []
+      const savePayloads = jest.fn().mockImplementation((p: DecryptedPayload<NoteContent>[]) => {
+        savedPayloads.push(...p)
+        return Promise.resolve(undefined)
+      })
+
+      const itemManager = {
+        getDirtyItems: jest.fn().mockReturnValue([dirtyLiteItem]),
+        findItem: jest.fn().mockImplementation((uuid: string) => (uuid === editedLite.uuid ? liveItem : undefined)),
+      }
+      const syncBackoffService = { isItemInBackoff: jest.fn().mockReturnValue(false) }
+      const service = createService(
+        { lazyDecryptEnabled: true },
+        { itemManager, payloadManager, syncBackoffService, storageService: { savePayloads } },
+      )
+      ;(service as unknown as { dirtyIndexAtLastPresyncSave: number | undefined }).dirtyIndexAtLastPresyncSave =
+        undefined
+      jest
+        .spyOn(service, 'getFullContentPayload')
+        .mockImplementation((uuid: string) => Promise.resolve(uuid === onDiskFull.uuid ? onDiskFull : undefined))
+
+      const result = (await callPrepareForSync(service)) as {
+        items: { uuid: string; payloadRepresentation: () => DecryptedPayload<NoteContent> }[]
+      }
+
+      // CRUX: the dirty lite item must be in the UPLOAD set (returned `items`), not merely persisted.
+      const uploaded = result.items.find((i) => i.uuid === editedLite.uuid)
+      expect(uploaded).toBeDefined()
+      const uploadedPayload = (uploaded as { payloadRepresentation: () => DecryptedPayload<NoteContent> })
+        .payloadRepresentation()
+      // The uploaded payload carries the FULL body AND the user's dirty edit (not the stale disk title).
+      expect(isLitePayload(uploadedPayload)).toBe(false)
+      expect((uploadedPayload.content as NoteContent).text).toEqual('BODY-MUST-NOT-LEAK')
+      expect((uploadedPayload.content as NoteContent).title).toEqual('EDITED-IN-MEMORY')
+      expect(uploadedPayload.dirty).toBe(true)
+
+      // The full payload was emitted into the collection (replacing the lite item) and persisted.
+      expect(emittedPayloads).toHaveLength(1)
+      expect(isLitePayload(emittedPayloads[0])).toBe(false)
+      expect(isLitePayload(savedPayloads[0])).toBe(false)
+      expect((savedPayloads[0].content as NoteContent).title).toEqual('EDITED-IN-MEMORY')
+    })
+  })
+
+  describe('persistPayloads error classification (FIX 3: surface write/quota, suppress legacy-key)', () => {
+    const persistPayloads = (service: SyncService, payloads: unknown[], options: { throwError: boolean }) =>
+      (
+        service as unknown as { persistPayloads: (p: unknown[], o: { throwError: boolean }) => Promise<unknown> }
+      ).persistPayloads(payloads, options)
+
+    beforeAll(() => {
+      // persistPayloads routes surfaced errors through SNLog.error, whose sink is unset in tests.
+      SNLog.onError = jest.fn()
+    })
+
+    const buildService = (rejection: unknown) => {
+      const savePayloads = jest.fn().mockRejectedValue(rejection)
+      const notifyEvent = jest.fn().mockResolvedValue(undefined)
+      const service = createService({ lazyDecryptEnabled: true }, { storageService: { savePayloads } })
+      ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
+      return { service, notifyEvent, savePayloads }
+    }
+
+    it('SURFACES a QuotaExceededError even when throwError:false (must not silently drop unsaved data)', async () => {
+      const quota = new Error('The quota has been exceeded.')
+      quota.name = 'QuotaExceededError'
+      const { service, notifyEvent } = buildService(quota)
+      const note = createNotePayload()
+
+      await persistPayloads(service, [note], { throwError: false })
+
+      expect(notifyEvent).toHaveBeenCalledTimes(1)
+      const [event] = notifyEvent.mock.calls[0]
+      expect(event).toEqual(SyncEvent.DatabaseWriteError)
+    })
+
+    it('SUPPRESSES the expected legacy key-not-found error when throwError:false (003 sign-in path)', async () => {
+      const keyError = new Error('Cannot find items key to use for encryption')
+      const { service, notifyEvent } = buildService(keyError)
+      const note = createNotePayload()
+
+      await persistPayloads(service, [note], { throwError: false })
+
+      expect(notifyEvent).not.toHaveBeenCalled()
+    })
+
+    it('classifier surfaces a generic write failure and suppresses a no-root-key failure', () => {
+      expect(SyncService.isSuppressibleKeyLookupError(new Error('disk write failed'))).toBe(false)
+      expect(SyncService.isSuppressibleKeyLookupError(new Error('Attempting root key encryption with no root key'))).toBe(
+        true,
+      )
     })
   })
 })

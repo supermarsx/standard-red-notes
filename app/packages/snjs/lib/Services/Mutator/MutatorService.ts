@@ -5,6 +5,8 @@ import {
   ItemRelationshipDirection,
   AlertService,
 } from '@standardnotes/services'
+import { FilesClientInterface } from '@standardnotes/files'
+import { isClientDisplayableError } from '@standardnotes/responses'
 import { ItemsKeyMutator, SNItemsKey } from '@standardnotes/encryption'
 import { ContentType } from '@standardnotes/domain-core'
 import { ItemManager } from '../Items'
@@ -53,6 +55,21 @@ import {
 import { UuidGenerator, Uuids } from '@standardnotes/utils'
 
 export class MutatorService extends AbstractService implements MutatorClientInterface {
+  /**
+   * Late-bound to avoid a constructor circular dependency: FileService depends on the
+   * MutatorClientInterface, so FileService cannot be injected here at construction time.
+   * Wired via {@link setFileService} once both services exist.
+   */
+  private fileService?: FilesClientInterface
+
+  /**
+   * UUIDs of file items whose deletion is currently being driven by FileService.deleteFile.
+   * FileService.deleteFile itself calls back into setItemToBeDeleted to remove the item record;
+   * this guard ensures that re-entrant call performs the raw item deletion instead of recursing
+   * back into FileService.deleteFile.
+   */
+  private filesBeingDeletedViaFileService = new Set<string>()
+
   constructor(
     private itemManager: ItemManager,
     private payloadManager: PayloadManager,
@@ -66,6 +83,17 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     super.deinit()
     ;(this.itemManager as unknown) = undefined
     ;(this.payloadManager as unknown) = undefined
+    ;(this.fileService as unknown) = undefined
+  }
+
+  /**
+   * Wires the FileService used to clean up a file's encrypted backing blob (remote + local cache)
+   * when a file item is deleted through generic deletion paths (empty-trash, bulk delete, deleting
+   * a note path that includes files). Without this, those paths would emit a DeletedPayload for the
+   * file item but orphan its blob forever.
+   */
+  public setFileService(fileService: FilesClientInterface): void {
+    this.fileService = fileService
   }
 
   /**
@@ -413,6 +441,69 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     itemToLookupUuidFor: DecryptedItemInterface | EncryptedItemInterface,
     source: PayloadEmitSource = PayloadEmitSource.LocalChanged,
   ): Promise<void> {
+    const isFileItem = itemToLookupUuidFor.content_type === ContentType.TYPES.File
+
+    /**
+     * File items carry a remote (and possibly local-cached) encrypted backing blob. Deleting only
+     * the item record would orphan that blob forever (storage/cost leak + lingering encrypted data).
+     * Route file deletions through FileService.deleteFile so the ValetTokenOperation.Delete +
+     * api.deleteFile + local-cache removal happen. The `filesBeingDeletedViaFileService` guard
+     * prevents infinite recursion, since FileService.deleteFile itself calls back into this method
+     * to remove the item record.
+     */
+    if (isFileItem && this.fileService && !this.filesBeingDeletedViaFileService.has(itemToLookupUuidFor.uuid)) {
+      await this.deleteFileWithBlobCleanup(itemToLookupUuidFor as unknown as FileItem, source)
+      return
+    }
+
+    return this.removeItemLocally(itemToLookupUuidFor, source)
+  }
+
+  /**
+   * Drives FileService.deleteFile to clean up a file's backing blob, then ensures the item record
+   * is removed. FileService.deleteFile removes the item record itself on success; if blob deletion
+   * fails (e.g. offline, or the user declined "delete anyway"), we DO NOT silently swallow it: we
+   * surface an alert so the user/next sync can retry, and we still remove the item record so the
+   * deletion the caller requested completes (avoiding an inconsistent half-state).
+   */
+  private async deleteFileWithBlobCleanup(file: FileItem, source: PayloadEmitSource): Promise<void> {
+    this.filesBeingDeletedViaFileService.add(file.uuid)
+
+    let blobDeletionError: unknown
+
+    try {
+      const result = await this.fileService?.deleteFile(file)
+      if (isClientDisplayableError(result)) {
+        blobDeletionError = result
+      }
+    } catch (error) {
+      blobDeletionError = error
+    } finally {
+      this.filesBeingDeletedViaFileService.delete(file.uuid)
+    }
+
+    if (blobDeletionError) {
+      const message =
+        isClientDisplayableError(blobDeletionError) && blobDeletionError.text
+          ? blobDeletionError.text
+          : 'unknown error'
+      void this.alerts.alert(
+        `The file "${file.name}" was removed, but its stored data could not be deleted from the server (${message}). ` +
+          'It will be retried on your next sync.',
+      )
+
+      /**
+       * deleteFile returned/threw before removing the item record. Remove it now so the requested
+       * deletion still completes; the surfaced alert ensures the orphaned blob is not silently lost.
+       */
+      await this.removeItemLocally(file, source)
+    }
+  }
+
+  private async removeItemLocally(
+    itemToLookupUuidFor: DecryptedItemInterface | EncryptedItemInterface,
+    source: PayloadEmitSource = PayloadEmitSource.LocalChanged,
+  ): Promise<void> {
     const referencingIdsCapturedBeforeChanges = this.itemManager
       .getCollection()
       .uuidsThatReferenceUuid(itemToLookupUuidFor.uuid)
@@ -569,10 +660,13 @@ export class MutatorService extends AbstractService implements MutatorClientInte
 
   /**
    * Permanently deletes any items currently in the trash. Consumer must manually call sync.
+   * Includes trashed FILE items (not just notes) so their encrypted backing blobs are cleaned up
+   * via FileService.deleteFile rather than orphaned.
    */
   public async emptyTrash(): Promise<void> {
-    const notes = this.itemManager.trashedItems
-    await this.setItemsToBeDeleted(notes)
+    const trashedNotes = this.itemManager.trashedItems
+    const trashedFiles = this.itemManager.getItems<FileItem>(ContentType.TYPES.File).filter((file) => file.trashed)
+    await this.setItemsToBeDeleted([...trashedNotes, ...trashedFiles])
   }
 
   public async migrateTagsToFolders(): Promise<void> {

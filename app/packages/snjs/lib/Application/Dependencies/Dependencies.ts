@@ -1164,7 +1164,7 @@ export class Dependencies {
     })
 
     this.factory.set(TYPES.FileService, () => {
-      return new FileService(
+      const fileService = new FileService(
         this.get<LegacyApiService>(TYPES.LegacyApiService),
         this.get<MutatorService>(TYPES.MutatorService),
         this.get<SyncService>(TYPES.SyncService),
@@ -1177,6 +1177,15 @@ export class Dependencies {
         this.get<Logger>(TYPES.Logger),
         this.get<FilesBackupService>(TYPES.FilesBackupService),
       )
+
+      /**
+       * Late-bind FileService onto MutatorService so generic deletion paths (empty-trash, bulk
+       * delete, deleting a note path that includes files) clean up file backing blobs instead of
+       * orphaning them. Done here, post-construction, to avoid a constructor circular dependency.
+       */
+      this.get<MutatorService>(TYPES.MutatorService).setFileService(fileService)
+
+      return fileService
     })
 
     this.factory.set(TYPES.MigrationService, () => {
