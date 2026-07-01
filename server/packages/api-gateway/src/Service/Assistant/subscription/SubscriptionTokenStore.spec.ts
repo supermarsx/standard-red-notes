@@ -1,0 +1,126 @@
+import * as crypto from 'crypto'
+import { promises as fs } from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+
+import { SubscriptionTokenRecord, SubscriptionTokenStore } from './SubscriptionTokenStore'
+
+function keyHex(): string {
+  return crypto.randomBytes(32).toString('hex')
+}
+
+function sampleRecord(overrides: Partial<SubscriptionTokenRecord> = {}): SubscriptionTokenRecord {
+  return {
+    accessToken: 'access-secret-token',
+    refreshToken: 'refresh-secret-token',
+    idToken: 'id.token.jwt',
+    expiresAt: Date.now() + 3600 * 1000,
+    accountId: 'acct-123',
+    accountLabel: 'user@example.test',
+    pairedAt: Date.now(),
+    ...overrides,
+  }
+}
+
+describe('SubscriptionTokenStore', () => {
+  let dir: string
+  let filePath: string
+  const key = keyHex()
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subscription-store-'))
+    filePath = path.join(dir, 'assistant-subscription.json')
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('round-trips a record through encrypt + decrypt', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    const record = sampleRecord()
+    await store.save(record)
+
+    const loaded = await store.load()
+    expect(loaded).toEqual(record)
+  })
+
+  it('returns null when nothing is stored', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    expect(await store.load()).toBeNull()
+  })
+
+  it('never writes the token material in plaintext', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    await store.save(sampleRecord())
+
+    const raw = await fs.readFile(filePath, 'utf8')
+    expect(raw).not.toContain('access-secret-token')
+    expect(raw).not.toContain('refresh-secret-token')
+    // Only the encrypted envelope fields are on disk.
+    const parsed = JSON.parse(raw)
+    expect(parsed).toMatchObject({ v: 1, iv: expect.any(String), tag: expect.any(String), data: expect.any(String) })
+  })
+
+  it('fails closed when saving without an encryption key (nothing persisted)', async () => {
+    const store = new SubscriptionTokenStore(filePath, undefined)
+    await expect(store.save(sampleRecord())).rejects.toThrow(/ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY/)
+    await expect(fs.readFile(filePath, 'utf8')).rejects.toThrow(/ENOENT/)
+  })
+
+  it('rejects a malformed (non 32-byte hex) key', async () => {
+    const store = new SubscriptionTokenStore(filePath, 'too-short')
+    await expect(store.save(sampleRecord())).rejects.toThrow(/32 bytes/)
+  })
+
+  it('fails closed on load with the wrong key (does not return the record)', async () => {
+    await new SubscriptionTokenStore(filePath, key).save(sampleRecord())
+
+    const wrongKeyStore = new SubscriptionTokenStore(filePath, keyHex())
+    await expect(wrongKeyStore.load()).rejects.toThrow(/Could not decrypt/)
+  })
+
+  it('clears the stored credential', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    await store.save(sampleRecord())
+    await store.clear()
+    expect(await store.load()).toBeNull()
+  })
+
+  it('clear is a no-op when nothing is stored', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    await expect(store.clear()).resolves.toBeUndefined()
+  })
+
+  describe('getStatus', () => {
+    it('reports unpaired when empty', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      expect(await store.getStatus()).toEqual({ paired: false })
+    })
+
+    it('reports paired metadata without any token', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      const record = sampleRecord()
+      await store.save(record)
+
+      const status = await store.getStatus()
+      expect(status.paired).toBe(true)
+      expect(status.accountId).toBe('acct-123')
+      expect(status.accountLabel).toBe('user@example.test')
+      expect(status.expiresAt).toBe(record.expiresAt)
+      expect(JSON.stringify(status)).not.toContain('access-secret-token')
+    })
+
+    it('reports needsRepair when the store cannot be decrypted', async () => {
+      await new SubscriptionTokenStore(filePath, key).save(sampleRecord())
+      const wrongKeyStore = new SubscriptionTokenStore(filePath, keyHex())
+      expect(await wrongKeyStore.getStatus()).toEqual({ paired: true, needsRepair: true })
+    })
+
+    it('surfaces a persisted needsRepair flag', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await store.save(sampleRecord({ needsRepair: true }))
+      expect((await store.getStatus()).needsRepair).toBe(true)
+    })
+  })
+})

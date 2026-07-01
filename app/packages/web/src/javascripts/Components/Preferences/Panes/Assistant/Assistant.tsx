@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { isErrorResponse, PrefKey } from '@standardnotes/snjs'
-import { WebApplication } from '@/Application/WebApplication'
+import { AssistantSubscriptionStatus, WebApplication } from '@/Application/WebApplication'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
@@ -74,6 +74,243 @@ const PRESETS: { label: string; baseURL: string }[] = [
   { label: 'OpenRouter', baseURL: 'https://openrouter.ai/api/v1' },
   { label: 'OpenAI', baseURL: 'https://api.openai.com/v1' },
 ]
+
+// Poll cadence + ceiling for the pairing popup. Polling /status is the PRIMARY
+// signal that the OAuth round-trip finished; the callback postMessage below is a
+// best-effort enhancement (the popup may be cross-origin and unable to reach us).
+const PAIR_POLL_INTERVAL_MS = 2000
+const PAIR_POLL_TIMEOUT_MS = 120000
+
+// The server returns expiry either as epoch seconds/millis or an ISO string. Show
+// something human-readable, tolerating any of those without throwing.
+const formatExpiry = (expiresAt?: number | string): string | null => {
+  if (expiresAt === undefined || expiresAt === null || expiresAt === '') {
+    return null
+  }
+  const ms = typeof expiresAt === 'number' ? (expiresAt < 1e12 ? expiresAt * 1000 : expiresAt) : Date.parse(expiresAt)
+  if (!Number.isFinite(ms)) {
+    return typeof expiresAt === 'string' ? expiresAt : null
+  }
+  return new Date(ms).toLocaleString()
+}
+
+/**
+ * Admin-only "Pair ChatGPT / Codex subscription" section. Kept as a self-contained
+ * component (own hooks/state) so it drops into exactly one <PreferencesGroup> and is
+ * trivial to merge. Talks only to the server /v1/assistant/subscription/* endpoints;
+ * the OAuth tokens live server-side and are never seen here.
+ */
+const SubscriptionPairing = ({ application }: { application: WebApplication }) => {
+  const [status, setStatus] = useState<AssistantSubscriptionStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [pairing, setPairing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const pollRef = useRef<number | null>(null)
+  const timeoutRef = useRef<number | null>(null)
+  const popupRef = useRef<Window | null>(null)
+  const mountedRef = useRef(true)
+
+  const refreshStatus = useCallback(async () => {
+    const result = await application.assistantSubscriptionStatus()
+    if (mountedRef.current) {
+      setStatus(result)
+    }
+    return result
+  }, [application])
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+    if (mountedRef.current) {
+      setPairing(false)
+    }
+  }, [])
+
+  // Initial status load + teardown of any live interval/timeout on unmount.
+  useEffect(() => {
+    mountedRef.current = true
+    setLoading(true)
+    void refreshStatus().finally(() => {
+      if (mountedRef.current) {
+        setLoading(false)
+      }
+    })
+    return () => {
+      mountedRef.current = false
+      if (pollRef.current !== null) {
+        window.clearInterval(pollRef.current)
+      }
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current)
+      }
+    }
+  }, [refreshStatus])
+
+  // Enhancement: the callback page may postMessage the opener when pairing lands.
+  // Polling is the source of truth; this just makes success feel instant when it
+  // works. We don't trust the payload beyond its shape — we re-fetch /status.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | undefined
+      if (data && data.type === 'chatgpt-paired') {
+        void refreshStatus().then((result) => {
+          if (result.paired) {
+            stopPolling()
+          }
+        })
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [refreshStatus, stopPolling])
+
+  const handlePair = useCallback(async () => {
+    setError(null)
+    setPairing(true)
+    try {
+      const { ok, data } = await application.assistantSubscriptionStart()
+      if (!ok || !data?.authorizeUrl) {
+        throw new Error(
+          'The server did not return an authorization URL. Check that pairing is configured on the server.',
+        )
+      }
+      // Named popup so repeated attempts reuse one window. Kept without `noopener`
+      // so the callback page can postMessage us; the primary signal is polling.
+      popupRef.current = window.open(data.authorizeUrl, 'chatgpt-pairing', 'width=520,height=720')
+      pollRef.current = window.setInterval(() => {
+        void refreshStatus().then((result) => {
+          if (result.paired) {
+            stopPolling()
+            popupRef.current?.close?.()
+          }
+        })
+      }, PAIR_POLL_INTERVAL_MS)
+      timeoutRef.current = window.setTimeout(() => {
+        stopPolling()
+        if (mountedRef.current) {
+          setError(
+            'Timed out waiting for pairing to complete. If you finished the ChatGPT login, click Refresh status; otherwise try again.',
+          )
+        }
+      }, PAIR_POLL_TIMEOUT_MS)
+    } catch (e) {
+      stopPolling()
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    }
+  }, [application, refreshStatus, stopPolling])
+
+  const handleUnpair = useCallback(async () => {
+    setError(null)
+    setLoading(true)
+    try {
+      const { ok } = await application.assistantSubscriptionUnpair()
+      if (!ok) {
+        throw new Error('The server rejected the unpair request.')
+      }
+      await refreshStatus()
+    } catch (e) {
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      if (mountedRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [application, refreshStatus])
+
+  const paired = status?.paired === true
+  const expiry = formatExpiry(status?.expiresAt)
+  const accountSuffix = status?.accountLabel
+    ? ` as ${status.accountLabel}`
+    : status?.accountId
+      ? ` (${status.accountId})`
+      : ''
+
+  return (
+    <PreferencesGroup>
+      <PreferencesSegment>
+        <Title>Pair ChatGPT / Codex subscription</Title>
+        <Text>
+          Log in with your ChatGPT account once so the server can use your Codex/ChatGPT subscription for the assistant
+          (server-proxy, subscription auth mode) without you pasting and manually refreshing an access token. The paired
+          token is held and refreshed on the server and is never shown here.
+        </Text>
+
+        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <Subtitle className="text-warning">Best-effort, unverified integration</Subtitle>
+          <Text className="mt-1">
+            The ChatGPT/Codex OAuth flow used here is not a stable public API. The endpoints, client id, and scopes are
+            best-effort defaults and are fully overridable with server environment variables. It may stop working if
+            OpenAI changes the flow.
+          </Text>
+          <Text className="mt-1">
+            OpenAI&rsquo;s Codex client historically only permits a <code>localhost</code> redirect, so this
+            server-hosted redirect may be rejected until the operator registers their own OAuth client / redirect URI
+            (via the <code>ASSISTANT_CHATGPT_OAUTH_CLIENT_ID</code> and <code>…_REDIRECT_URI</code> env vars). If
+            pairing fails immediately after the OpenAI login, that is the most likely cause.
+          </Text>
+        </div>
+
+        <HorizontalSeparator classes="my-4" />
+
+        <Subtitle>Status</Subtitle>
+        {loading && !status ? (
+          <Text>Loading pairing status…</Text>
+        ) : paired ? (
+          <>
+            <Text>Paired{accountSuffix}.</Text>
+            {expiry && <Text className="mt-1 text-passive-1">Access token expires: {expiry}</Text>}
+            {status?.needsRepair && (
+              <Text className="mt-1 text-warning">
+                The stored token could not be refreshed and needs re-pairing. Click Pair with ChatGPT again.
+              </Text>
+            )}
+            {status?.usingEnvFallback && (
+              <Text className="mt-1 text-passive-1">
+                The server is currently falling back to its environment-configured token.
+              </Text>
+            )}
+          </>
+        ) : (
+          <>
+            <Text>Not paired.</Text>
+            {status?.usingEnvFallback && (
+              <Text className="mt-1 text-passive-1">
+                The server is using an environment-configured subscription token as a fallback. Pairing here takes
+                precedence over that token.
+              </Text>
+            )}
+            {status?.reason && <Text className="mt-1 text-passive-1">{status.reason}</Text>}
+          </>
+        )}
+
+        {error && <Text className="mt-2 text-danger">{error}</Text>}
+
+        <HorizontalSeparator classes="my-4" />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            label={pairing ? 'Waiting for ChatGPT…' : paired ? 'Re-pair with ChatGPT' : 'Pair with ChatGPT'}
+            onClick={() => void handlePair()}
+            disabled={pairing || loading}
+          />
+          <Button label="Refresh status" onClick={() => void refreshStatus()} disabled={loading} />
+          {paired && <Button label="Unpair" onClick={() => void handleUnpair()} disabled={loading || pairing} />}
+        </div>
+      </PreferencesSegment>
+    </PreferencesGroup>
+  )
+}
 
 const Assistant = ({ application }: { application: WebApplication }) => {
   const [config, setConfig] = useState<AssistantConfig | null>(null)
@@ -731,6 +968,8 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           </PreferencesSegment>
         </PreferencesGroup>
       )}
+
+      {application.featuresController.isAdminUser() && <SubscriptionPairing application={application} />}
 
       <PreferencesGroup>
         <PreferencesSegment>

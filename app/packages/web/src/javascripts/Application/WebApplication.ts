@@ -1036,6 +1036,72 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
     return { status: response.status, ok: response.ok, data }
   }
+
+  /**
+   * Read the server-held ChatGPT/Codex subscription pairing status
+   * (admin-gated on the server, GET /v1/assistant/subscription/status).
+   *
+   * The paired OAuth tokens are held server-side and are NEVER returned by the
+   * server — this carries only non-secret metadata (paired flag, account label,
+   * expiry, whether the env-token fallback is in use, whether re-pairing is
+   * needed). Returns `paired: false` on any error so the UI degrades gracefully.
+   */
+  public async assistantSubscriptionStatus(): Promise<AssistantSubscriptionStatus> {
+    try {
+      return await this.assistantConfigRequest<AssistantSubscriptionStatus>('/v1/assistant/subscription/status')
+    } catch (error) {
+      return { paired: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * Begin a ChatGPT/Codex subscription pairing (admin-gated,
+   * POST /v1/assistant/subscription/start). The server generates the PKCE
+   * verifier/challenge/state server-side and returns only the browser
+   * `authorizeUrl` (containing the challenge + state) plus the opaque `state`.
+   * The PKCE verifier never leaves the server.
+   */
+  public async assistantSubscriptionStart(): Promise<{
+    status: number
+    ok: boolean
+    data: AssistantSubscriptionStart
+  }> {
+    return this.serverJsonRequest<AssistantSubscriptionStart>('/v1/assistant/subscription/start', {})
+  }
+
+  /**
+   * Clear the server-held subscription pairing (admin-gated,
+   * POST /v1/assistant/subscription/unpair). Best-effort token revoke happens
+   * server-side; this returns `{ ok }`.
+   */
+  public async assistantSubscriptionUnpair(): Promise<{
+    status: number
+    ok: boolean
+    data: { ok?: boolean }
+  }> {
+    return this.serverJsonRequest<{ ok?: boolean }>('/v1/assistant/subscription/unpair', {})
+  }
+}
+
+/**
+ * Non-secret status for the ChatGPT/Codex subscription pairing. Mirrors the
+ * frozen /v1/assistant/subscription/status contract — it NEVER carries a token.
+ */
+export type AssistantSubscriptionStatus = {
+  paired: boolean
+  mode?: string
+  accountId?: string
+  accountLabel?: string
+  expiresAt?: number | string
+  usingEnvFallback?: boolean
+  needsRepair?: boolean
+  reason?: string
+}
+
+/** Response of POST /v1/assistant/subscription/start. */
+export type AssistantSubscriptionStart = {
+  authorizeUrl?: string
+  state?: string
 }
 
 function extractAccessToken(session: unknown): string | undefined {
