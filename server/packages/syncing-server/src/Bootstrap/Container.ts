@@ -34,6 +34,7 @@ import { SyncResponseFactoryResolver } from '../Domain/Item/SyncResponse/SyncRes
 import { SyncResponseFactoryResolverInterface } from '../Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { CheckIntegrity } from '../Domain/UseCase/Syncing/CheckIntegrity/CheckIntegrity'
 import { GetItem } from '../Domain/UseCase/Syncing/GetItem/GetItem'
+import { AuthorizeCollaborationAccess } from '../Domain/UseCase/Syncing/AuthorizeCollaborationAccess/AuthorizeCollaborationAccess'
 import { SyncItems } from '../Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { InversifyExpressAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/InversifyExpressAuthMiddleware'
 import { S3Client } from '@aws-sdk/client-s3'
@@ -778,6 +779,14 @@ export class ContainerConfigLoader {
       return new GetItem(context.get(TYPES.Sync_SQLItemRepository))
     })
     container
+      .bind<AuthorizeCollaborationAccess>(TYPES.Sync_AuthorizeCollaborationAccess)
+      .toDynamicValue((context: ResolutionContext) => {
+        return new AuthorizeCollaborationAccess(
+          context.get(TYPES.Sync_SQLItemRepository),
+          context.get(TYPES.Sync_SharedVaultUserRepository),
+        )
+      })
+    container
       .bind<InviteUserToSharedVault>(TYPES.Sync_InviteUserToSharedVault)
       .toConstantValue(
         new InviteUserToSharedVault(
@@ -1253,6 +1262,7 @@ export class ContainerConfigLoader {
             container.get<number>(TYPES.Sync_FREE_USERS_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
             container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
             container.get<ControllerContainerInterface>(TYPES.Sync_ControllerContainer),
+            container.get<AuthorizeCollaborationAccess>(TYPES.Sync_AuthorizeCollaborationAccess),
           ),
         )
       container

@@ -7,6 +7,7 @@ import { Item } from '../../Domain/Item/Item'
 import { SyncResponseFactoryResolverInterface } from '../../Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { CheckIntegrity } from '../../Domain/UseCase/Syncing/CheckIntegrity/CheckIntegrity'
 import { GetItem } from '../../Domain/UseCase/Syncing/GetItem/GetItem'
+import { AuthorizeCollaborationAccess } from '../../Domain/UseCase/Syncing/AuthorizeCollaborationAccess/AuthorizeCollaborationAccess'
 import { SyncItems } from '../../Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { BaseItemsController } from './Base/BaseItemsController'
 import { MapperInterface } from '@standardnotes/domain-core'
@@ -35,6 +36,8 @@ export class AnnotatedItemsController extends BaseItemsController {
     @inject(TYPES.Sync_FREE_USERS_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD) override freeUsersPayloadSizeAbuseThreshold: number,
     @inject(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES)
     override payloadSizeAbuseTimeframeLengthInMinutes: number,
+    @inject(TYPES.Sync_AuthorizeCollaborationAccess)
+    override authorizeCollaborationAccess: AuthorizeCollaborationAccess,
   ) {
     super(
       checkForTrafficAbuse,
@@ -51,6 +54,8 @@ export class AnnotatedItemsController extends BaseItemsController {
       payloadSizeAbuseThreshold,
       freeUsersPayloadSizeAbuseThreshold,
       payloadSizeAbuseTimeframeLengthInMinutes,
+      undefined,
+      authorizeCollaborationAccess,
     )
   }
 
@@ -67,5 +72,13 @@ export class AnnotatedItemsController extends BaseItemsController {
   @httpGet('/:uuid')
   override async getSingleItem(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getSingleItem(request, response)
+  }
+
+  // Standard Red Notes: realtime-collaboration access check (owner OR shared-vault
+  // member). Authenticated by Sync_AuthMiddleware (the user's cross-service token),
+  // consumed by the api-gateway to mint a collaboration-room capability.
+  @httpPost('/collaboration-authorization')
+  override async authorizeCollaboration(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.authorizeCollaboration(request, response)
   }
 }

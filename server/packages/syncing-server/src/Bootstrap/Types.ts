@@ -58,6 +58,7 @@ const TYPES = {
   Sync_SyncItems: Symbol.for('Sync_SyncItems'),
   Sync_CheckIntegrity: Symbol.for('Sync_CheckIntegrity'),
   Sync_GetItem: Symbol.for('Sync_GetItem'),
+  Sync_AuthorizeCollaborationAccess: Symbol.for('Sync_AuthorizeCollaborationAccess'),
   Sync_GetSharedVaults: Symbol.for('Sync_GetSharedVaults'),
   Sync_CreateSharedVault: Symbol.for('Sync_CreateSharedVault'),
   Sync_DeleteSharedVault: Symbol.for('Sync_DeleteSharedVault'),

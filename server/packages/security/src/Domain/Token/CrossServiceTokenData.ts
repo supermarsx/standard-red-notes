@@ -43,4 +43,18 @@ export type CrossServiceTokenData = {
    */
   collaboration_enabled?: boolean
   live_sync_enabled?: boolean
+  /**
+   * Standard Red Notes: per-user AI assistant gating + metering, read from the
+   * auth settings store at token-mint time so the api-gateway can enforce them
+   * WITHOUT a second cross-service round trip (mirrors collaboration_enabled).
+   *
+   * `ai_enabled` is OPT-IN-DISABLE: absent/unset MUST be treated as enabled
+   * (default-on); only an explicit disable turns AI off for the user. The
+   * api-gateway, however, FAILS CLOSED when an admin has explicitly disabled it.
+   *
+   * `ai_request_limit` is the per-user daily request cap (>0). Absent/0 means
+   * "no per-user override" and the global ASSISTANT_DAILY_REQUEST_LIMIT applies.
+   */
+  ai_enabled?: boolean
+  ai_request_limit?: number
 }
