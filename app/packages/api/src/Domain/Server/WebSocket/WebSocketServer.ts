@@ -2,6 +2,7 @@ import { HttpServiceInterface } from '../../Http/HttpServiceInterface'
 import { WebSocketConnectionTokenRequestParams } from '../../Request/WebSocket/WebSocketConnectionTokenRequestParams'
 import { HttpResponse } from '@standardnotes/responses'
 import { WebSocketConnectionTokenResponseBody } from '../../Response/WebSocket/WebSocketConnectionTokenResponseBody'
+import { CollaborationAuthorizationResponseBody } from '../../Response/WebSocket/CollaborationAuthorizationResponseBody'
 import { Paths } from './Paths'
 import { WebSocketServerInterface } from './WebSocketServerInterface'
 
@@ -12,5 +13,11 @@ export class WebSocketServer implements WebSocketServerInterface {
     params: WebSocketConnectionTokenRequestParams,
   ): Promise<HttpResponse<WebSocketConnectionTokenResponseBody>> {
     return this.httpService.post(Paths.v1.createConnectionToken, params)
+  }
+
+  async authorizeCollaboration(params: {
+    noteUuid: string
+  }): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
+    return this.httpService.post(Paths.v1.authorizeCollaboration, params)
   }
 }

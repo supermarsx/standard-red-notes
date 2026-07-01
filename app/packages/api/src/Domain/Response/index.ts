@@ -22,3 +22,4 @@ export * from './User/UserRegistrationResponseBody'
 
 export * from './UserRequest/UserRequestResponseBody'
 export * from './WebSocket/WebSocketConnectionTokenResponseBody'
+export * from './WebSocket/CollaborationAuthorizationResponseBody'

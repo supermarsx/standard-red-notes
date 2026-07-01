@@ -1,6 +1,6 @@
 import { Environment } from '@standardnotes/models'
-import { HttpVerb } from '@standardnotes/responses'
-import { FetchRequestHandler } from './FetchRequestHandler'
+import { HttpStatusCode, HttpVerb } from '@standardnotes/responses'
+import { FetchRequestHandler, FETCH_REQUEST_TIMEOUT_MS } from './FetchRequestHandler'
 import { HttpErrorResponseBody, HttpRequest } from '@standardnotes/responses'
 
 import { ErrorMessage } from '../Error'
@@ -122,6 +122,70 @@ describe('FetchRequestHandler', () => {
     expect(response.headers).toEqual(new Map<string, string | null>([['content-type', 'text/plain']]))
     expect((response.data as HttpErrorResponseBody).error).toEqual({
       message: ErrorMessage.RateLimited,
+    })
+  })
+
+  describe('hung-socket timeout (wedge fix)', () => {
+    const realFetch = global.fetch
+
+    afterEach(() => {
+      global.fetch = realFetch
+      jest.useRealTimers()
+    })
+
+    it('aborts a request that never resolves and returns the network-failure result', async () => {
+      jest.useFakeTimers()
+
+      // Simulate a half-open socket: fetch never resolves on its own, only
+      // rejecting (like the browser/runtime) once the AbortController fires.
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal
+          signal?.addEventListener('abort', () => {
+            const abortError = new Error('The operation was aborted')
+            abortError.name = 'AbortError'
+            reject(abortError)
+          })
+        })
+      }) as unknown as typeof global.fetch
+
+      const handler = new FetchRequestHandler(snjsVersion, appVersion, environment, logger)
+
+      const responsePromise = handler['runRequest'](new Request('http://localhost:3000/sync'))
+
+      // Advance past the timeout so the AbortController fires.
+      jest.advanceTimersByTime(FETCH_REQUEST_TIMEOUT_MS + 1)
+
+      const response = await responsePromise
+
+      expect(response.status).toBe(HttpStatusCode.InternalServerError)
+      const data = response.data as HttpErrorResponseBody & { networkFailure?: boolean; timedOut?: boolean }
+      expect(data.networkFailure).toBe(true)
+      expect(data.timedOut).toBe(true)
+      expect(data.error?.message).toBe('Request timed out')
+    })
+
+    it('does not abort and clears the timer when fetch resolves before the timeout', async () => {
+      jest.useFakeTimers()
+      const clearSpy = jest.spyOn(global, 'clearTimeout')
+
+      global.fetch = jest.fn(
+        async () =>
+          new Response('{"key":"value"}', {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+      ) as unknown as typeof global.fetch
+
+      const handler = new FetchRequestHandler(snjsVersion, appVersion, environment, logger)
+
+      const response = await handler['runRequest'](new Request('http://localhost:3000/sync'))
+
+      expect(response.status).toBe(200)
+      expect((response.data as { key?: string }).key).toBe('value')
+      // Timer cleared so a finished request can never trip a late abort.
+      expect(clearSpy).toHaveBeenCalled()
+      clearSpy.mockRestore()
     })
   })
 

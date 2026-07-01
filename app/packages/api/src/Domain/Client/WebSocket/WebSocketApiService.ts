@@ -5,7 +5,7 @@ import { WebSocketApiServiceInterface } from './WebSocketApiServiceInterface'
 import { WebSocketApiOperations } from './WebSocketApiOperations'
 import { WebSocketServerInterface } from '../../Server'
 import { HttpResponse } from '@standardnotes/responses'
-import { WebSocketConnectionTokenResponseBody } from '../../Response'
+import { WebSocketConnectionTokenResponseBody, CollaborationAuthorizationResponseBody } from '../../Response'
 
 export class WebSocketApiService implements WebSocketApiServiceInterface {
   private operationsInProgress: Map<WebSocketApiOperations, boolean>
@@ -28,6 +28,25 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
 
       return response
     } catch (error) {
+      throw new ApiCallError(ErrorMessage.GenericFail)
+    }
+  }
+
+  async authorizeCollaboration(noteUuid: string): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
+    if (this.operationsInProgress.get(WebSocketApiOperations.AuthorizingCollaboration)) {
+      throw new ApiCallError(ErrorMessage.GenericInProgress)
+    }
+
+    this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, true)
+
+    try {
+      const response = await this.webSocketServer.authorizeCollaboration({ noteUuid })
+
+      this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
+
+      return response
+    } catch (error) {
+      this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
       throw new ApiCallError(ErrorMessage.GenericFail)
     }
   }

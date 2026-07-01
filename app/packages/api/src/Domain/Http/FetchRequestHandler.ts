@@ -14,6 +14,18 @@ import { ErrorMessage } from '../Error'
 import { LoggerInterface } from '@standardnotes/utils'
 import { readSharedServerAccessKey, SHARED_SERVER_ACCESS_KEY_HEADER } from './SharedServerAccessKey'
 
+/**
+ * WEDGE fix: a half-open socket (e.g. the server vanished but the TCP connection
+ * was never reset) makes `fetch` hang indefinitely, which blocks sync forever with
+ * no error to trigger the existing backoff/retry. We abort the request after this
+ * timeout and return the same network-failure result, so the sync's existing
+ * backoff/retry kicks in. The timeout is deliberately generous so it does NOT
+ * prematurely abort a legitimately slow-but-progressing large upload; it only
+ * fires when NOTHING has resolved within the window. The timer is cleared on
+ * completion so a finished request never trips a late abort.
+ */
+export const FETCH_REQUEST_TIMEOUT_MS = 30_000
+
 export class FetchRequestHandler implements RequestHandlerInterface {
   constructor(
     protected readonly snjsVersion: string,
@@ -80,9 +92,17 @@ export class FetchRequestHandler implements RequestHandlerInterface {
   }
 
   private async runRequest<T>(request: Request, body?: string | Uint8Array | undefined): Promise<HttpResponse<T>> {
+    const abortController = new AbortController()
+    let didTimeout = false
+    const timeoutId = setTimeout(() => {
+      didTimeout = true
+      abortController.abort()
+    }, FETCH_REQUEST_TIMEOUT_MS)
+
     try {
       const fetchResponse = await fetch(request, {
         body: body as BodyInit | undefined,
+        signal: abortController.signal,
       })
 
       const response = await this.handleFetchResponse<T>(fetchResponse)
@@ -92,13 +112,25 @@ export class FetchRequestHandler implements RequestHandlerInterface {
       return {
         status: HttpStatusCode.InternalServerError,
         headers: new Map<string, string | null>(),
+        // `networkFailure` lets callers/telemetry distinguish an offline/timeout
+        // failure from a real server-side 500. `timedOut` is set only when WE
+        // aborted the request because it exceeded FETCH_REQUEST_TIMEOUT_MS. These
+        // are additive, non-typed hints (HttpErrorResponseBody only declares
+        // `error`), so the shape stays a valid HttpErrorResponse.
         data: {
+          networkFailure: true,
+          timedOut: didTimeout,
           error: {
-            message:
-              'message' in (error as { message: string }) ? (error as { message: string }).message : 'Unknown error',
+            message: didTimeout
+              ? 'Request timed out'
+              : 'message' in (error as { message: string })
+                ? (error as { message: string }).message
+                : 'Unknown error',
           },
-        },
+        } as HttpErrorResponse['data'] & { networkFailure: boolean; timedOut: boolean },
       }
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 
