@@ -66,6 +66,13 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   // to the admin; only a read-only "configured?" status is surfaced (see
   // getUserFeatureFlags).
   SettingName.NAMES.NextcloudBackupFrequency,
+  // Standard Red Notes: admin gate for the WORKFLOWS (n8n automation) feature
+  // ('true' to allow this user to pair with and reach the workflows engine
+  // through the api-gateway; anything else disables). Mirrors OcrServerAllowed:
+  // OFF by default, composed with the operator master switch WORKFLOWS_ENABLED
+  // env at the api-gateway. Reuses the same get/set feature-flag endpoints;
+  // value is validated below.
+  SettingName.NAMES.WorkflowsEnabled,
 ]
 
 /**
@@ -288,7 +295,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async lookupUser(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     return this.getUser(request)
@@ -301,7 +308,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getUserFeatureFlags(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const { userUuid } = request.params as Record<string, string>
@@ -385,7 +392,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async setUserFeatureFlag(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const { userUuid } = request.params as Record<string, string>
@@ -428,6 +435,16 @@ export class BaseAdminController extends BaseHttpController {
     if (name === SettingName.NAMES.NextcloudBackupAllowed && value != null && value !== 'true' && value !== 'false') {
       return this.json(
         { error: { message: `Invalid Nextcloud backup-allowed value '${value}'. Use 'true' or 'false'.` } },
+        400,
+      )
+    }
+
+    // Standard Red Notes: the workflows admin gate is likewise a strict boolean
+    // flag; only 'true' or 'false' are accepted so the api-gateway gate (and the
+    // cross-service token minting) reads an unambiguous value.
+    if (name === SettingName.NAMES.WorkflowsEnabled && value != null && value !== 'true' && value !== 'false') {
+      return this.json(
+        { error: { message: `Invalid workflows-enabled value '${value}'. Use 'true' or 'false'.` } },
         400,
       )
     }
@@ -555,7 +572,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getUserBanStatus(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const usernameOrError = Username.create((request.params.email as string) ?? '', { skipValidation: true })
@@ -585,7 +602,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async setUserBanStatusEndpoint(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const { userUuid } = request.params as Record<string, string>
@@ -640,7 +657,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getAuditLog(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     if (this.queryAuditLog === undefined || this.auditLogEntryHttpMapper === undefined) {
@@ -734,7 +751,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getRegistrationFlag(_request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const adminUuid = (response?.locals as { user?: { uuid: string } } | undefined)?.user?.uuid
@@ -760,7 +777,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async setRegistrationFlag(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     const adminUuid = (response?.locals as { user?: { uuid: string } } | undefined)?.user?.uuid
@@ -791,7 +808,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getAvailableRoles(_request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
     return this.json({ roleNames: Object.values(RoleName.NAMES) })
@@ -802,7 +819,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async listGroups(_request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doListGroups === undefined || this.groupHttpMapper === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -823,7 +840,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async createGroup(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doCreateGroup === undefined || this.groupHttpMapper === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -852,7 +869,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async deleteGroup(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doDeleteGroup === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -874,7 +891,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async setGroupRoles(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doSetGroupRoles === undefined || this.groupHttpMapper === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -896,7 +913,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async listGroupMembers(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doListGroupMembers === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -917,7 +934,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async addUserToGroup(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doAddUserToGroup === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -939,7 +956,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async removeUserFromGroup(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doRemoveUserFromGroup === undefined) {
       return this.json({ error: { message: 'Groups are not available.' } }, 500)
@@ -962,7 +979,7 @@ export class BaseAdminController extends BaseHttpController {
    */
   async getUserEffectivePermissions(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
-      return this.json({ error: { message: 'Operation not allowed.' } }, 401)
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
     if (this.doGetUserEffectivePermissions === undefined) {
       return this.json({ error: { message: 'Effective permissions are not available.' } }, 500)

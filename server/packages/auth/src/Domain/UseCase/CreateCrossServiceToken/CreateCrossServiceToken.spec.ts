@@ -392,6 +392,84 @@ describe('CreateCrossServiceToken', () => {
     )
   })
 
+  describe('RBAC group-conferred roles', () => {
+    it('should union roles conferred by the user groups into the token roles', async () => {
+      const groupRepository = {
+        findByUserUuid: jest.fn().mockResolvedValue([
+          { props: { roleNames: ['INTERNAL_TEAM_USER'] } },
+          // A duplicate of a direct role must not be added twice.
+          { props: { roleNames: ['role1'] } },
+        ]),
+      }
+
+      const useCase = new CreateCrossServiceToken(
+        userProjector,
+        sessionProjector,
+        roleProjector,
+        tokenEncoder,
+        userRepository,
+        jwtTTL,
+        getRegularSubscription,
+        getSubscriptionSetting,
+        sharedVaultUserRepository,
+        getActiveSessionsForUser,
+        undefined,
+        undefined,
+        settingRepository,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        groupRepository as any,
+      )
+
+      await useCase.execute({
+        user,
+        session,
+      })
+
+      const encoded = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(encoded.roles).toEqual([
+        { name: 'role1', uuid: '1-3-4' },
+        { name: 'PRO_USER', uuid: 'singletier-PRO_USER' },
+        { name: 'INTERNAL_TEAM_USER', uuid: 'group-INTERNAL_TEAM_USER' },
+      ])
+    })
+
+    it('should mint a token with direct roles only if the group lookup fails', async () => {
+      const groupRepository = {
+        findByUserUuid: jest.fn().mockRejectedValue(new Error('boom')),
+      }
+
+      const useCase = new CreateCrossServiceToken(
+        userProjector,
+        sessionProjector,
+        roleProjector,
+        tokenEncoder,
+        userRepository,
+        jwtTTL,
+        getRegularSubscription,
+        getSubscriptionSetting,
+        sharedVaultUserRepository,
+        getActiveSessionsForUser,
+        undefined,
+        undefined,
+        settingRepository,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        groupRepository as any,
+      )
+
+      const result = await useCase.execute({
+        user,
+        session,
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+      const encoded = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(encoded.roles).toEqual([
+        { name: 'role1', uuid: '1-3-4' },
+        { name: 'PRO_USER', uuid: 'singletier-PRO_USER' },
+      ])
+    })
+  })
+
   it('should throw an error if user does not exist', async () => {
     userRepository.findOneByUuid = jest.fn().mockReturnValue(null)
 

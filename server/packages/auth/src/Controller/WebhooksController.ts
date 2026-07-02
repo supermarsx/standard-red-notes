@@ -51,10 +51,12 @@ export class WebhooksController {
     global?: boolean
     ip?: string
   }): Promise<HttpResponse> {
-    // Only an admin may register a global webhook.
+    // Only an admin may register a global webhook. 403 (not 401): the requester
+    // is authenticated but lacks the admin role — a 401 would make clients treat
+    // the session as invalid and prompt for re-authentication.
     if (params.global === true && !params.isAdmin) {
       return {
-        status: HttpStatusCode.Unauthorized,
+        status: HttpStatusCode.Forbidden,
         data: { error: { message: 'Only an administrator may register a global webhook.' } },
       }
     }

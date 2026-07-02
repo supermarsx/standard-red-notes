@@ -9,6 +9,7 @@ import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 
 import { CreateCrossServiceTokenDTO } from './CreateCrossServiceTokenDTO'
+import { GroupRepositoryInterface } from '../../Group/GroupRepositoryInterface'
 import { SharedVaultUserRepositoryInterface } from '../../SharedVault/SharedVaultUserRepositoryInterface'
 import { GetSubscriptionSetting } from '../GetSubscriptionSetting/GetSubscriptionSetting'
 import { GetRegularSubscriptionForUser } from '../GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
@@ -30,6 +31,11 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     private applicationVersionThresholdForTokenVersion2: string | undefined,
     private applicationVersionThresholdForTokenVersion3: string | undefined,
     private settingRepository: SettingRepositoryInterface,
+    // Standard Red Notes: RBAC group repository so tokens carry GROUP-CONFERRED
+    // roles too (a user's effective roles are direct ∪ group roles). Optional so
+    // existing tests that construct this use case with the original arity keep
+    // compiling; when absent, tokens carry direct roles only (previous behavior).
+    private groupRepository?: GroupRepositoryInterface,
   ) {}
 
   /**
@@ -44,6 +50,20 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       return true
     }
     return (setting.props.value as string | null) !== 'false'
+  }
+
+  /**
+   * Standard Red Notes: OPT-IN (default-off) per-user gate, the inverse of
+   * readGatingFlag. Returns true ONLY when the setting is literally 'true'.
+   * Used for admin-managed flags that must FAIL CLOSED when never set (e.g.
+   * WORKFLOWS_ENABLED — the n8n workflows feature).
+   */
+  private async readOptInGatingFlag(userUuid: string, settingName: string): Promise<boolean> {
+    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
+    if (setting === null) {
+      return false
+    }
+    return (setting.props.value as string | null) === 'true'
   }
 
   /**
@@ -97,7 +117,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
 
     const authTokenData: CrossServiceTokenData = {
       user: this.projectUser(user),
-      roles: this.projectRoles(roles, user.email),
+      roles: this.projectRoles(roles, user.email, await this.groupConferredRoleNames(user.uuid)),
       shared_vault_owner_context: undefined,
       belongs_to_shared_vaults: sharedVaultAssociations.map((association) => ({
         shared_vault_uuid: association.props.sharedVaultUuid.value,
@@ -112,6 +132,14 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       // api-gateway can FAIL CLOSED before spending the provider key).
       ai_enabled: await this.readGatingFlag(user.uuid, SettingName.NAMES.AiEnabled),
       ai_request_limit: await this.readNumericSetting(user.uuid, SettingName.NAMES.AiRequestLimit),
+    }
+
+    // Standard Red Notes: WORKFLOWS is OPT-IN (default-off) — the field is
+    // emitted ONLY when the admin-managed WorkflowsEnabled setting is literally
+    // 'true'. Absent means disabled, so pre-existing tokens (and the spec'd
+    // payload shape) stay byte-identical for non-entitled users.
+    if (await this.readOptInGatingFlag(user.uuid, SettingName.NAMES.WorkflowsEnabled)) {
+      authTokenData.workflows_enabled = true
     }
 
     if (dto.sharedVaultOwnerContext !== undefined) {
@@ -220,7 +248,40 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     }
   }
 
-  private projectRoles(roles: Array<Role>, email?: string): Array<{ uuid: string; name: string }> {
+  /**
+   * Standard Red Notes: resolve the role names conferred by the RBAC groups the
+   * user belongs to. These are unioned into the token's roles at MINT time so
+   * a role granted via a group (e.g. INTERNAL_TEAM_USER through an "admins"
+   * group) is honored by role-gated endpoints exactly like a directly-assigned
+   * role — without it, effective roles and token roles diverge forever and a
+   * genuine admin is denied (403) no matter how often the session refreshes.
+   * Best-effort: a group-lookup failure must never block token minting.
+   */
+  private async groupConferredRoleNames(userUuid: string): Promise<string[]> {
+    if (this.groupRepository === undefined) {
+      return []
+    }
+
+    try {
+      const groups = await this.groupRepository.findByUserUuid(Uuid.create(userUuid).getValue())
+      const roleNames = new Set<string>()
+      for (const group of groups) {
+        for (const roleName of group.props.roleNames) {
+          roleNames.add(roleName)
+        }
+      }
+
+      return Array.from(roleNames)
+    } catch {
+      return []
+    }
+  }
+
+  private projectRoles(
+    roles: Array<Role>,
+    email?: string,
+    groupConferredRoleNames: string[] = [],
+  ): Array<{ uuid: string; name: string }> {
     const projected = roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
     // Single-tier, fully-free instance: guarantee every user carries the Pro role
     // so role-gated server features (revision history beyond 30/365 days,
@@ -238,6 +299,14 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     if (email && adminEmails.includes(email.toLowerCase())) {
       if (!projected.some((role) => role.name === RoleName.NAMES.InternalTeamUser)) {
         projected.push({ uuid: `admin-${RoleName.NAMES.InternalTeamUser}`, name: RoleName.NAMES.InternalTeamUser })
+      }
+    }
+    // Standard Red Notes: union in RBAC group-conferred role names so the token
+    // reflects the user's EFFECTIVE roles (direct ∪ group). Synthetic uuids,
+    // mirroring the Pro/admin injections above — consumers key off `name`.
+    for (const roleName of groupConferredRoleNames) {
+      if (!projected.some((role) => role.name === roleName)) {
+        projected.push({ uuid: `group-${roleName}`, name: roleName })
       }
     }
     return projected

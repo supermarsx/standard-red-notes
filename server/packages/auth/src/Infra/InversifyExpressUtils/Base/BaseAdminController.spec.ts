@@ -76,10 +76,11 @@ describe('BaseAdminController ban endpoints', () => {
     } as unknown as Response
   })
 
-  it('setUserBanStatusEndpoint should reject a non-admin requestor', async () => {
+  it('setUserBanStatusEndpoint should reject a non-admin requestor with 403 — NOT 401, which clients treat as an invalid session and answer with a password re-auth prompt', async () => {
     const result = await createController().setUserBanStatusEndpoint(request, nonAdminResponse)
 
-    expect(result.statusCode).toEqual(401)
+    expect(result.statusCode).toEqual(403)
+    expect(result.statusCode).not.toEqual(401)
     expect(setUserBanStatus.execute).not.toHaveBeenCalled()
   })
 
@@ -110,7 +111,7 @@ describe('BaseAdminController ban endpoints', () => {
   it('getUserBanStatus should reject a non-admin requestor', async () => {
     const result = await createController().getUserBanStatus(request, nonAdminResponse)
 
-    expect(result.statusCode).toEqual(401)
+    expect(result.statusCode).toEqual(403)
   })
 
   it('getUserBanStatus should return the ban status for an admin requestor', async () => {
@@ -200,7 +201,7 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
       nonAdminResponse,
     )
 
-    expect(result.statusCode).toEqual(401)
+    expect(result.statusCode).toEqual(403)
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
@@ -290,7 +291,7 @@ describe('BaseAdminController Nextcloud backup-allowed flag (admin-manageable)',
       nonAdminResponse,
     )
 
-    expect(result.statusCode).toEqual(401)
+    expect(result.statusCode).toEqual(403)
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
@@ -328,5 +329,91 @@ describe('BaseAdminController Nextcloud backup-allowed flag (admin-manageable)',
     expect(json.nextcloudAppPasswordConfigured).toBe(false)
     // The app password is never surfaced as a flag value.
     expect(json.flags).not.toHaveProperty(SettingName.NAMES.NextcloudBackupAppPassword)
+  })
+})
+
+describe('BaseAdminController workflows-enabled flag (admin-manageable)', () => {
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let adminResponse: Response
+  let nonAdminResponse: Response
+
+  const createController = () =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+    )
+
+  const flagRequest = (name?: string, value?: string | null) =>
+    ({ params: { userUuid: '1-2-3' }, body: { name, value } }) as unknown as Request
+
+  beforeEach(() => {
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    doGetSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'true' }))
+
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
+
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
+  })
+
+  it('classifies WORKFLOWS_ENABLED as admin-manageable and persists a valid value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.WorkflowsEnabled, 'true'),
+      adminResponse,
+    )
+
+    expect(setSettingValue.execute).toHaveBeenCalledWith({
+      settingName: SettingName.NAMES.WorkflowsEnabled,
+      value: 'true',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(result.json).toMatchObject({ success: true, name: SettingName.NAMES.WorkflowsEnabled, value: 'true' })
+  })
+
+  it('rejects a non-boolean WORKFLOWS_ENABLED value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.WorkflowsEnabled, 'maybe'),
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-admin requestor for the workflows flag', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.WorkflowsEnabled, 'true'),
+      nonAdminResponse,
+    )
+
+    expect(result.statusCode).toEqual(403)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('includes WORKFLOWS_ENABLED in the admin-readable feature flags', async () => {
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    expect((result.json as { flags: Record<string, string | null> }).flags).toHaveProperty(
+      SettingName.NAMES.WorkflowsEnabled,
+    )
   })
 })

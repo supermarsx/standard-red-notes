@@ -90,6 +90,17 @@ const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
 
+  // True when an admin endpoint answered 403: the client believes this user is
+  // an admin, but the session's server-side role claims don't carry the admin
+  // role (yet). Surfaced as an inline notice instead of failing silently.
+  const [adminRoleMissingOnServer, setAdminRoleMissingOnServer] = useState(false)
+
+  const noteIfForbidden = useCallback((response: { status?: number }) => {
+    if (response.status === 403) {
+      setAdminRoleMissingOnServer(true)
+    }
+  }, [])
+
   const [email, setEmail] = useState('')
   const [lookingUp, setLookingUp] = useState(false)
   const [user, setUser] = useState<LookedUpUser | undefined>(undefined)
@@ -149,17 +160,21 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       if (!isErrorResponse(rolesResponse)) {
         const data = (rolesResponse as { data?: { roleNames?: string[] } }).data
         setAvailableRoles(data?.roleNames ?? [])
+      } else {
+        noteIfForbidden(rolesResponse)
       }
       if (!isErrorResponse(groupsResponse)) {
         const data = (groupsResponse as { data?: { groups?: AdminGroup[] } }).data
         setGroups(data?.groups ?? [])
+      } else {
+        noteIfForbidden(groupsResponse)
       }
     } catch (error) {
       console.error(error)
     } finally {
       setGroupsLoading(false)
     }
-  }, [application, isAdmin])
+  }, [application, isAdmin, noteIfForbidden])
 
   useEffect(() => {
     void loadGroups()
@@ -313,13 +328,15 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       if (!isErrorResponse(response)) {
         const data = (response as { data?: { registrationDisabled?: boolean } }).data
         setRegistrationDisabled(Boolean(data?.registrationDisabled))
+      } else {
+        noteIfForbidden(response)
       }
     } catch (error) {
       console.error(error)
     } finally {
       setRegistrationLoading(false)
     }
-  }, [application, isAdmin])
+  }, [application, isAdmin, noteIfForbidden])
 
   useEffect(() => {
     void loadRegistrationFlag()
@@ -402,6 +419,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
     try {
       const response = await application.legacyApi.adminLookupUser(email.trim())
       if (isErrorResponse(response)) {
+        noteIfForbidden(response)
         addToast({ type: ToastType.Error, message: 'No user found with that email.' })
         return
       }
@@ -419,7 +437,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
     } finally {
       setLookingUp(false)
     }
-  }, [application, email, loadFlags, loadBanStatus])
+  }, [application, email, loadFlags, loadBanStatus, noteIfForbidden])
 
   const toggleAiEnabled = useCallback(
     async (nextValue: boolean) => {
@@ -625,6 +643,17 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
 
   return (
     <PreferencesPane>
+      {adminRoleMissingOnServer && (
+        <PreferencesGroup>
+          <PreferencesSegment>
+            <Title>Admin access not active on the server yet</Title>
+            <Text>
+              Your session doesn&apos;t carry the admin role yet &mdash; sign out and back in, or wait for the session
+              to refresh, then reopen this pane.
+            </Text>
+          </PreferencesSegment>
+        </PreferencesGroup>
+      )}
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Administrator</Title>

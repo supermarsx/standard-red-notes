@@ -2162,6 +2162,9 @@ export class ContainerConfigLoader {
           env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
           env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
           container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+          // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
+          // (direct ∪ group) so e.g. admin granted via a group works.
+          container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
         ),
       )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
