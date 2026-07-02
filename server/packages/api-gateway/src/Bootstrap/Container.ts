@@ -39,6 +39,7 @@ import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubP
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 import { WebFetchLike, WebService } from '../Service/Web/WebService'
 import { resolveOwnPackageVersion, UpdateCheckFetchLike, UpdateCheckService } from '../Service/Updates/UpdateCheckService'
+import { AdminLogsService } from '../Service/AdminLogs/AdminLogsService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
@@ -301,6 +302,16 @@ export class ContainerConfigLoader {
         timeoutMs: env.get('UPDATE_CHECK_TIMEOUT_MS', true) ? +env.get('UPDATE_CHECK_TIMEOUT_MS', true) : undefined,
       }),
     )
+
+    // Standard Red Notes: admin-panel server-log tailing. Reads the container's
+    // supervisord per-service log directory (SERVER_LOGS_PATH, default
+    // /var/lib/server/logs — see docker/supervisord.conf). Always bound; if the
+    // directory is absent at runtime the service degrades to an empty result.
+    const serverLogsPath = env.get('SERVER_LOGS_PATH', true) || '/var/lib/server/logs'
+    container.bind<string>(TYPES.ApiGateway_SERVER_LOGS_PATH).toConstantValue(serverLogsPath)
+    container
+      .bind<AdminLogsService>(TYPES.ApiGateway_AdminLogsService)
+      .toConstantValue(new AdminLogsService(serverLogsPath))
 
     // Standard Red Notes: OPT-IN read-only CalDAV feed.
     //

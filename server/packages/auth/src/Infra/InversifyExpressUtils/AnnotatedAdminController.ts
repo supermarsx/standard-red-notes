@@ -176,6 +176,12 @@ export class AnnotatedAdminController extends BaseAdminController {
     return super.getAuditLog(request, response)
   }
 
+  // NOTE: exact '/users' — distinct from the '/users/:userUuid/...' sub-routes.
+  @httpGet('/users')
+  override async getUsers(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getUsers(request, response)
+  }
+
   @httpGet('/roles')
   override async getAvailableRoles(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getAvailableRoles(request, response)

@@ -3,7 +3,64 @@ import { Email, Username, Uuid } from '@standardnotes/domain-core'
 import { ReadStream } from 'fs'
 import { User } from './User'
 
+/**
+ * Standard Red Notes: sort key for the admin user-list finder. Direction is
+ * fixed per key (date keys newest-first, email A→Z) so the API surface stays a
+ * single `sort` param, mirroring the admin panel's needs.
+ */
+export type AdminUserSort = 'createdAt' | 'email' | 'updatedAt'
+
+/**
+ * Standard Red Notes: filters/pagination for the admin user-list finder. All
+ * filters are optional and AND-combined. `createdAfter`/`createdBefore` are
+ * epoch-ms. The finder never loads all users into memory: it runs a COUNT + a
+ * LIMIT/OFFSET page query, then enriches only the returned page.
+ */
+export interface AdminUserListQuery {
+  limit: number
+  offset: number
+  sort: AdminUserSort
+  email?: string
+  createdAfter?: number
+  createdBefore?: number
+  role?: string
+  banned?: boolean
+  subscription?: 'active' | 'inactive' | 'none'
+}
+
+/**
+ * Standard Red Notes: one row of the admin user list. `createdAt`/`updatedAt`
+ * are ISO-8601 strings. `storageUsedBytes`/`storageLimitBytes` come from the
+ * user's regular subscription settings (null when the user has no subscription
+ * or the setting was never written; -1 limit means unlimited).
+ */
+export interface AdminUserRow {
+  uuid: string
+  email: string
+  createdAt: string
+  updatedAt: string
+  roles: string[]
+  subscription: { plan: string | null; active: boolean } | null
+  banned: boolean
+  mfaEnabled: boolean
+  storageUsedBytes: number | null
+  storageLimitBytes: number | null
+}
+
+export interface AdminUserListResult {
+  rows: AdminUserRow[]
+  total: number
+}
+
 export interface UserRepositoryInterface {
+  /**
+   * Standard Red Notes: paginated + filtered user list for the admin panel.
+   * Efficient by design — a COUNT and a single LIMIT/OFFSET page query, then a
+   * fixed number of batched IN(...) enrichment queries for the page (roles,
+   * subscription, MFA, storage) regardless of page size, so it stays bounded
+   * even at the MAX 1500 page limit (never an N+1 per row).
+   */
+  findUsersForAdmin(query: AdminUserListQuery): Promise<AdminUserListResult>
   streamAll(): Promise<ReadStream>
   streamTeam(memberEmail?: Email): Promise<ReadStream>
   findOneByUuid(uuid: Uuid): Promise<User | null>

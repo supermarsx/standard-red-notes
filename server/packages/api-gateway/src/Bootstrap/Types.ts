@@ -79,4 +79,8 @@ export const TYPES = {
   // pairing state + editor-proxy gate service.
   ApiGateway_WORKFLOWS_ENABLED: Symbol.for('ApiGateway_WORKFLOWS_ENABLED'),
   ApiGateway_WorkflowsService: Symbol.for('ApiGateway_WorkflowsService'),
+  // Standard Red Notes: admin-panel server-log tailing (reads the container's
+  // supervisord log directory). SERVER_LOGS_PATH configures the directory.
+  ApiGateway_SERVER_LOGS_PATH: Symbol.for('ApiGateway_SERVER_LOGS_PATH'),
+  ApiGateway_AdminLogsService: Symbol.for('ApiGateway_AdminLogsService'),
 }

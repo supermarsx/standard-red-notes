@@ -101,6 +101,7 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
     ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
     ['[GET]:admin/audit-log', 'admin.getAuditLog'],
+    ['[GET]:admin/users', 'admin.getUsers'],
     ['[GET]:admin/roles', 'admin.getAvailableRoles'],
     ['[GET]:admin/groups', 'admin.listGroups'],
     ['[POST]:admin/groups', 'admin.createGroup'],

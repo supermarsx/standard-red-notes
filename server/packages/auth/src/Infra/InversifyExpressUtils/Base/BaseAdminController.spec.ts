@@ -738,3 +738,134 @@ describe('BaseAdminController registration flag env read-out', () => {
     })
   })
 })
+
+describe('BaseAdminController user list', () => {
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let adminResponse: Response
+  let nonAdminResponse: Response
+
+  const createController = () =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+    )
+
+  const requestWith = (query: Record<string, string>) => ({ query, params: {}, body: {} }) as unknown as Request
+
+  beforeEach(() => {
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+    userRepository.findUsersForAdmin = jest.fn().mockResolvedValue({
+      rows: [
+        {
+          uuid: '1-2-3',
+          email: 'a@test.com',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+          roles: ['CORE_USER'],
+          subscription: { plan: 'PRO_PLAN', active: true },
+          banned: false,
+          mfaEnabled: true,
+          storageUsedBytes: 10,
+          storageLimitBytes: -1,
+        },
+      ],
+      total: 1,
+    })
+
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
+  })
+
+  it('rejects a non-admin requestor with 403 and never queries the repository', async () => {
+    const result = await createController().getUsers(requestWith({}), nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(userRepository.findUsersForAdmin).not.toHaveBeenCalled()
+  })
+
+  it('applies defaults (limit 100, offset 0, createdAt sort) when no query params are given', async () => {
+    await createController().getUsers(requestWith({}), adminResponse)
+
+    expect(userRepository.findUsersForAdmin).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, offset: 0, sort: 'createdAt' }),
+    )
+  })
+
+  it('clamps the limit to the 1500 max and parses the filters', async () => {
+    await createController().getUsers(
+      requestWith({
+        limit: '99999',
+        offset: '20',
+        sort: 'email',
+        email: '  Foo  ',
+        createdAfter: '1000',
+        createdBefore: '2000',
+        role: 'INTERNAL_TEAM_USER',
+        banned: 'true',
+        subscription: 'active',
+      }),
+      adminResponse,
+    )
+
+    expect(userRepository.findUsersForAdmin).toHaveBeenCalledWith({
+      limit: 1500,
+      offset: 20,
+      sort: 'email',
+      email: 'Foo',
+      createdAfter: 1000,
+      createdBefore: 2000,
+      role: 'INTERNAL_TEAM_USER',
+      banned: true,
+      subscription: 'active',
+    })
+  })
+
+  it('ignores an unknown sort/subscription value and an empty email, falling back to defaults', async () => {
+    await createController().getUsers(
+      requestWith({ sort: 'bogus', subscription: 'weird', email: '   ', banned: 'nope' }),
+      adminResponse,
+    )
+
+    expect(userRepository.findUsersForAdmin).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'createdAt', subscription: undefined, email: undefined, banned: undefined }),
+    )
+  })
+
+  it('shapes the response as { users, total, limit, offset }', async () => {
+    const result = await createController().getUsers(requestWith({ limit: '50', offset: '5' }), adminResponse)
+
+    expect(result.json).toMatchObject({
+      total: 1,
+      limit: 50,
+      offset: 5,
+      users: [
+        expect.objectContaining({
+          uuid: '1-2-3',
+          email: 'a@test.com',
+          roles: ['CORE_USER'],
+          subscription: { plan: 'PRO_PLAN', active: true },
+          mfaEnabled: true,
+          storageLimitBytes: -1,
+        }),
+      ],
+    })
+  })
+})

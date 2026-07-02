@@ -8,6 +8,22 @@ import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
+import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
+
+/**
+ * Standard Red Notes: one entry of the server-status `services` array — a
+ * per-service readiness summary. `status` degrades per field so the endpoint
+ * itself never 5xxs: 'ok' (readiness 200), 'degraded' (readiness 503 / partial),
+ * 'down' (unreachable / unexpected), 'unknown' (service URL not configured).
+ */
+export type ServiceStatusEntry = {
+  name: string
+  reachable: boolean
+  status: 'ok' | 'degraded' | 'down' | 'unknown'
+  detail?: string
+}
+
+type AuthReadiness = { reachable: boolean; status?: string; checks?: Record<string, boolean> }
 
 /**
  * Standard Red Notes: minimal fetch shape used by the server-status endpoint to
@@ -46,6 +62,17 @@ export class AdminController extends BaseHttpController {
     // Redis is only bound when a Redis cache is configured; its absence is
     // reported as "not configured" (null) rather than unhealthy.
     @inject(TYPES.ApiGateway_Redis) @optional() private redis?: { ping(): Promise<string> },
+    // Standard Red Notes: internal URLs of the other backend services, probed by
+    // the extended server-status endpoint for their /healthcheck/readiness.
+    // Optional so the controller constructs in tests and degrades to 'unknown'
+    // (not configured) when a URL is absent.
+    @inject(TYPES.ApiGateway_SYNCING_SERVER_JS_URL) @optional() private syncingServerUrl?: string,
+    @inject(TYPES.ApiGateway_FILES_SERVER_URL) @optional() private filesServerUrl?: string,
+    @inject(TYPES.ApiGateway_REVISIONS_SERVER_URL) @optional() private revisionsServerUrl?: string,
+    @inject(TYPES.ApiGateway_WEB_SOCKET_SERVER_URL) @optional() private webSocketServerUrl?: string,
+    // Standard Red Notes: server-log tailing for the admin Logs tab. Optional so
+    // the endpoint degrades to an empty result when logs are not file-based.
+    @inject(TYPES.ApiGateway_AdminLogsService) @optional() private adminLogsService?: AdminLogsService,
   ) {
     super()
   }
@@ -158,6 +185,19 @@ export class AdminController extends BaseHttpController {
       request,
       response,
       this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/audit-log'),
+      request.body,
+    )
+  }
+
+  // Standard Red Notes: paginated + filtered admin user list. Pure pass-through
+  // to the auth admin controller (which enforces the admin role); query params
+  // (limit/offset/sort/filters) ride along via the proxy's `params: query`.
+  @httpGet('/users', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async listUsers(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/users'),
       request.body,
     )
   }
@@ -356,6 +396,11 @@ export class AdminController extends BaseHttpController {
 
     const auth = await this.probeAuthReadiness()
 
+    // Standard Red Notes: per-service readiness for EVERY backend service, probed
+    // in parallel over the internal network under a short timeout. Degrades per
+    // field (never 5xx).
+    const services = await this.probeServices(auth)
+
     response.json({
       masterSwitches: {
         ocrServerEnabled: this.ocrServerEnabled ?? false,
@@ -369,7 +414,117 @@ export class AdminController extends BaseHttpController {
         gateway: { redis: gatewayRedis },
         auth,
       },
+      services,
     })
+  }
+
+  /**
+   * Standard Red Notes: tail recent server logs for the admin panel's Logs tab.
+   * Admin-gated HARD (403 for non-admins). Read-only, so no audit entry. Reads
+   * the container's supervisord per-service log files through AdminLogsService;
+   * when logs are not file-based/available it degrades to an empty result.
+   * Query params: limit (default 200, MAX 500), service (filter), level (filter).
+   */
+  @httpGet('/logs', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getLogs(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    if (!this.adminLogsService) {
+      response.json({ entries: [], truncated: false })
+
+      return
+    }
+
+    const query = request.query as Record<string, string | undefined>
+
+    const MAX_LIMIT = 500
+    let limit = query.limit !== undefined ? Number.parseInt(query.limit, 10) : 200
+    if (!Number.isFinite(limit) || limit <= 0) {
+      limit = 200
+    }
+    limit = Math.min(limit, MAX_LIMIT)
+
+    const result = await this.adminLogsService.tail({
+      limit,
+      service: query.service !== undefined && query.service.trim() !== '' ? query.service.trim() : undefined,
+      level: query.level !== undefined && query.level.trim() !== '' ? query.level.trim() : undefined,
+    })
+
+    response.json(result)
+  }
+
+  /**
+   * Standard Red Notes: build the server-status `services` array — the gateway
+   * itself, the auth server (from the readiness probe already taken), and each
+   * of the other backend services probed for /healthcheck/readiness in parallel.
+   */
+  private async probeServices(auth: AuthReadiness): Promise<ServiceStatusEntry[]> {
+    const targets: Array<[string, string | undefined]> = [
+      ['syncing-server', this.syncingServerUrl],
+      ['files', this.filesServerUrl],
+      ['revisions', this.revisionsServerUrl],
+      ['websocket-gateway', this.webSocketServerUrl],
+    ]
+
+    const probed = await Promise.all(targets.map(([name, url]) => this.probeServiceReadiness(name, url)))
+
+    return [{ name: 'api-gateway', reachable: true, status: 'ok' }, this.authServiceEntry(auth), ...probed]
+  }
+
+  /**
+   * Map the auth readiness probe (already taken for the `health` block) onto a
+   * services-array entry so the array is a complete view of every service.
+   */
+  private authServiceEntry(auth: AuthReadiness): ServiceStatusEntry {
+    if (!auth.reachable) {
+      return { name: 'auth', reachable: false, status: 'down', detail: 'unreachable' }
+    }
+
+    const checks = auth.checks ?? {}
+    const allChecksOk = Object.values(checks).every(Boolean)
+    const ready = auth.status === undefined || auth.status === 'ready'
+
+    return { name: 'auth', reachable: true, status: ready && allChecksOk ? 'ok' : 'degraded' }
+  }
+
+  /**
+   * Probe a single backend service's /healthcheck/readiness under a short (2.5s)
+   * timeout. Never throws — every failure mode degrades to a status value.
+   */
+  private async probeServiceReadiness(
+    name: string,
+    url: string | undefined,
+    fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
+  ): Promise<ServiceStatusEntry> {
+    if (!url) {
+      return { name, reachable: false, status: 'unknown', detail: 'not configured' }
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 2500)
+    try {
+      const readinessResponse = await fetchFn(`${url}/healthcheck/readiness`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      if (readinessResponse.status === 200) {
+        return { name, reachable: true, status: 'ok' }
+      }
+      if (readinessResponse.status === 503) {
+        return { name, reachable: true, status: 'degraded', detail: 'readiness reported unavailable' }
+      }
+
+      return { name, reachable: true, status: 'down', detail: `unexpected status ${readinessResponse.status}` }
+    } catch {
+      return { name, reachable: false, status: 'down', detail: 'unreachable' }
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /**

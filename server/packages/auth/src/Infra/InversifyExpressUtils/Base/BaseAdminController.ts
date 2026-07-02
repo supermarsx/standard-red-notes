@@ -26,7 +26,7 @@ import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscript
 import { GetSetting } from './../../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
-import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
+import { AdminUserSort, UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { QueryAuditLog } from '../../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
@@ -166,6 +166,7 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.getUserBanStatus', this.getUserBanStatus.bind(this))
       this.controllerContainer.register('admin.setUserBanStatus', this.setUserBanStatusEndpoint.bind(this))
       this.controllerContainer.register('admin.getAuditLog', this.getAuditLog.bind(this))
+      this.controllerContainer.register('admin.getUsers', this.getUsers.bind(this))
       this.controllerContainer.register('admin.listGroups', this.listGroups.bind(this))
       this.controllerContainer.register('admin.createGroup', this.createGroup.bind(this))
       this.controllerContainer.register('admin.deleteGroup', this.deleteGroup.bind(this))
@@ -882,6 +883,74 @@ export class BaseAdminController extends BaseHttpController {
     return this.json({
       entries: entries.map((entry) => auditLogEntryHttpMapper.toProjection(entry)),
       total,
+      limit,
+      offset,
+    })
+  }
+
+  /**
+   * Standard Red Notes: admin-only paginated + filtered user list for the admin
+   * panel's Users tab. Read-only, so no audit entry. Delegates the heavy lifting
+   * to the User repository's findUsersForAdmin (COUNT + LIMIT/OFFSET + batched
+   * enrichment — never loads all users). Query params:
+   *   - limit (default 100, MAX 1500), offset (default 0)
+   *   - sort: createdAt | email | updatedAt (default createdAt, desc)
+   *   - email (contains, case-insensitive), createdAfter/createdBefore (epoch ms)
+   *   - role (has role), banned (true|false), subscription (active|inactive|none)
+   */
+  async getUsers(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+
+    const query = request.query as Record<string, string | undefined>
+
+    const MAX_LIMIT = 1500
+    let limit = query.limit !== undefined ? Number.parseInt(query.limit, 10) : 100
+    if (!Number.isFinite(limit) || limit <= 0) {
+      limit = 100
+    }
+    limit = Math.min(limit, MAX_LIMIT)
+
+    let offset = query.offset !== undefined ? Number.parseInt(query.offset, 10) : 0
+    if (!Number.isFinite(offset) || offset < 0) {
+      offset = 0
+    }
+
+    const sort: AdminUserSort =
+      query.sort === 'email' || query.sort === 'updatedAt' || query.sort === 'createdAt' ? query.sort : 'createdAt'
+
+    const parseEpoch = (value: string | undefined): number | undefined => {
+      if (value === undefined || value === '') {
+        return undefined
+      }
+      const parsed = Number.parseInt(value, 10)
+
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+
+    const subscription =
+      query.subscription === 'active' || query.subscription === 'inactive' || query.subscription === 'none'
+        ? query.subscription
+        : undefined
+
+    const banned = query.banned === 'true' ? true : query.banned === 'false' ? false : undefined
+
+    const result = await this.userRepository.findUsersForAdmin({
+      limit,
+      offset,
+      sort,
+      email: query.email !== undefined && query.email.trim() !== '' ? query.email.trim() : undefined,
+      createdAfter: parseEpoch(query.createdAfter),
+      createdBefore: parseEpoch(query.createdBefore),
+      role: query.role !== undefined && query.role.trim() !== '' ? query.role.trim() : undefined,
+      banned,
+      subscription,
+    })
+
+    return this.json({
+      users: result.rows,
+      total: result.total,
       limit,
       offset,
     })
