@@ -101,6 +101,18 @@ export function destinationPlaceholder(channel: DeliveryChannel): string {
   }
 }
 
+/** One-line helper text explaining what to enter for the channel. */
+export function destinationHint(channel: DeliveryChannel): string {
+  switch (channel) {
+    case 'whatsapp':
+      return 'Your phone number in international format, with country code (e.g. +15551234567).'
+    case 'telegram':
+      return 'The numeric chat ID of your chat with the server’s Telegram bot (message the bot, then use a tool like @userinfobot to find your ID).'
+    case 'email':
+      return 'The email address reminders should be sent to. It does not have to be your account email.'
+  }
+}
+
 /**
  * Light client-side validation of a destination for a channel. Returns an error
  * message when invalid, or null when acceptable. The server is authoritative;
@@ -159,6 +171,9 @@ export async function getReminderDeliveryOptIn(application: WebApplication): Pro
 export async function setReminderDeliveryOptIn(application: WebApplication, enabled: boolean): Promise<boolean> {
   try {
     await application.settings.updateSetting(reminderDeliveryEnabledSettingName, enabled ? 'true' : 'false', false)
+    // The opt-in gates the delivery-config routes server-side; drop the cached
+    // gate decision so the next reminder save re-evaluates against the server.
+    deliveryStateCache = null
     return true
   } catch (error) {
     console.error(error)
@@ -225,7 +240,10 @@ export async function setDeliveryConfig(
       return null
     }
     const data = (response as { data?: { config?: DeliveryConfig } }).data
-    return data?.config ?? config
+    const saved = data?.config ?? config
+    // Keep the automatic publish gate below in sync immediately (no TTL wait).
+    deliveryStateCache = { config: saved, fetchedAt: Date.now() }
+    return saved
   } catch (error) {
     console.error(error)
     return null

@@ -13,12 +13,15 @@ import DecoratedInput from '@/Components/Input/DecoratedInput'
 import {
   DELIVERY_CHANNELS,
   DeliveryChannel,
+  PublishedReminder,
   channelLabel,
+  destinationHint,
   destinationLabel,
   destinationPlaceholder,
   getDeliveryConfig,
   getReminderDeliveryConfig,
   getReminderDeliveryOptIn,
+  listPublishedReminders,
   setDeliveryConfig,
   setReminderDeliveryOptIn,
   validateDestination,
@@ -26,6 +29,11 @@ import {
 
 type Props = {
   application: WebApplication
+}
+
+const formatDateTime = (iso: string): string => {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString()
 }
 
 const ReminderDelivery = ({ application }: Props) => {
@@ -37,8 +45,13 @@ const ReminderDelivery = ({ application }: Props) => {
 
   const [channel, setChannel] = useState<DeliveryChannel>('whatsapp')
   const [destination, setDestination] = useState('')
+  const [destinationTouched, setDestinationTouched] = useState(false)
   const [deliveryEnabled, setDeliveryEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [published, setPublished] = useState<PublishedReminder[]>([])
+
+  const destinationError =
+    destination.trim().length > 0 || destinationTouched ? validateDestination(channel, destination) : null
 
   const load = useCallback(async () => {
     if (!hasAccount) {
@@ -54,12 +67,16 @@ const ReminderDelivery = ({ application }: Props) => {
       setOptIn(optInValue || config.allowed)
 
       if (config.available) {
-        const delivery = await getDeliveryConfig(application)
+        const [delivery, publishedList] = await Promise.all([
+          getDeliveryConfig(application),
+          listPublishedReminders(application),
+        ])
         if (delivery) {
           setChannel(delivery.channel)
           setDestination(delivery.destination)
           setDeliveryEnabled(delivery.enabled)
         }
+        setPublished(publishedList)
       }
     } finally {
       setIsLoading(false)
@@ -116,6 +133,7 @@ const ReminderDelivery = ({ application }: Props) => {
       setDestination(saved.destination)
       setDeliveryEnabled(saved.enabled)
       addToast({ type: ToastType.Success, message: 'Reminder delivery settings saved.' })
+      setPublished(await listPublishedReminders(application))
     } finally {
       setSaving(false)
     }
@@ -130,11 +148,13 @@ const ReminderDelivery = ({ application }: Props) => {
       <PreferencesSegment>
         <Title>Reminder delivery</Title>
         <Text className="mb-3">
-          When a reminder you have opted in is due, the server can deliver it over WhatsApp, Telegram, or
-          email. Unlike in-app reminders &mdash; which stay end-to-end encrypted in your note &mdash; a
-          reminder delivered this way has its time, text, and destination sent to the server in plaintext
-          (it leaves end-to-end encryption) so it can be delivered. Only reminders you explicitly opt in
-          are shared.
+          When a reminder is due, the server can deliver it over WhatsApp, Telegram, or email. Unlike
+          in-app reminders &mdash; which stay end-to-end encrypted in your note &mdash; a reminder
+          delivered this way has its time and text sent to the server in plaintext (it leaves end-to-end
+          encryption) so it can be delivered. While delivery is enabled below, every reminder you set or
+          update is published to the server for delivery; turn delivery off to stop sharing new
+          reminders. Your notes themselves always stay encrypted. Delivery also requires your server
+          operator to have enabled and configured this feature.
         </Text>
 
         {isLoading ? (
@@ -178,9 +198,14 @@ const ReminderDelivery = ({ application }: Props) => {
                     className={{ container: 'mt-1' }}
                     placeholder={destinationPlaceholder(channel)}
                     value={destination}
-                    onChange={(value) => setDestination(value)}
+                    onChange={(value) => {
+                      setDestination(value)
+                      setDestinationTouched(true)
+                    }}
                     disabled={saving}
                   />
+                  <Text className="mt-1 text-passive-0">{destinationHint(channel)}</Text>
+                  {destinationError && <Text className="mt-1 text-danger">{destinationError}</Text>}
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -197,6 +222,33 @@ const ReminderDelivery = ({ application }: Props) => {
 
                 <div>
                   <Button label="Save" primary disabled={saving} onClick={handleSave} />
+                </div>
+
+                <div className="mt-2">
+                  <Subtitle>Reminders published for delivery</Subtitle>
+                  <Text className="mb-1 text-passive-0">
+                    These are the reminders currently shared with the server for delivery.
+                  </Text>
+                  {published.length === 0 ? (
+                    <Text className="mt-1">No reminders have been published for delivery.</Text>
+                  ) : (
+                    published.map((reminder) => (
+                      <div
+                        key={reminder.id}
+                        className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+                      >
+                        <div className="flex min-w-0 flex-col">
+                          <span className="break-words text-base font-medium lg:text-sm">{reminder.message}</span>
+                          <span className="break-words text-sm text-passive-0 lg:text-xs">
+                            Due: {formatDateTime(reminder.dueAtUtc)}
+                          </span>
+                          <span className="break-words text-sm text-passive-0 lg:text-xs">
+                            {reminder.sent ? 'Delivered' : reminder.error ? `Pending — ${reminder.error}` : 'Pending'}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}

@@ -48,7 +48,7 @@ const formatDate = (value: number | string | null): string => {
   return isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString()
 }
 
-const CalDav: FunctionComponent<Props> = ({ application }: Props) => {
+const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
   const [isLoading, setIsLoading] = useState(false)
   const [serverEnabled, setServerEnabled] = useState(false)
   const [optIn, setOptIn] = useState(false)
@@ -242,6 +242,26 @@ const CalDav: FunctionComponent<Props> = ({ application }: Props) => {
             )}
           </PreferencesSegment>
 
+          {subscriptionUrl && (
+            <>
+              <HorizontalSeparator classes="my-4" />
+
+              <PreferencesSegment>
+                <Subtitle>Calendar subscription URL</Subtitle>
+                <Text className="mb-2">
+                  Add a CalDAV account in your calendar app with this URL &mdash; use any username and a
+                  CalDAV token as the password.
+                </Text>
+                <div className="flex flex-row items-center gap-2">
+                  <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">
+                    {subscriptionUrl}
+                  </code>
+                  <CopyButton copyValue={subscriptionUrl} successMessage="Subscription URL copied to clipboard" />
+                </div>
+              </PreferencesSegment>
+            </>
+          )}
+
           <HorizontalSeparator classes="my-4" />
 
           <PreferencesSegment>
@@ -268,4 +288,4 @@ const CalDav: FunctionComponent<Props> = ({ application }: Props) => {
   )
 }
 
-export default observer(CalDav)
+export default observer(CalDavTokens)

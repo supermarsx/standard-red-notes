@@ -620,21 +620,47 @@ export class NotesController
     this.application.sync.sync().catch(console.error)
   }
 
-  /** Add or replace a reminder on a note (matched by id). */
+  /**
+   * Add or replace a reminder on a note (matched by id).
+   *
+   * Standard Red Notes: when the user has server-side reminder DELIVERY enabled
+   * (Preferences › Backups › Reminder delivery), the reminder is additionally
+   * mirrored (published) to the server in PLAINTEXT so it can be sent over the
+   * configured channel. Best-effort and fire-and-forget: the gate + publish
+   * degrade silently when the feature is off, not opted in, or absent. This is
+   * the single choke point every save path uses (SetReminderModal, the Assistant
+   * reminder tool, and the recurring-reminder advance), so they are all covered.
+   */
   async upsertNoteReminder(note: SNNote, reminder: Reminder) {
     const next = upsertReminderInList(getNoteReminders(note), reminder)
     await this.writeNoteReminders(note, next)
+    void import('../../Reminders/reminderDelivery')
+      .then(({ maybePublishReminderForDelivery }) => maybePublishReminderForDelivery(this.application, reminder))
+      .catch(console.error)
   }
 
-  /** Remove a single reminder (by id) from a note. */
+  /** Remove a single reminder (by id) from a note. Best-effort unpublish. */
   async removeNoteReminder(note: SNNote, reminderId: string) {
     const next = removeReminderFromList(getNoteReminders(note), reminderId)
     await this.writeNoteReminders(note, next)
+    void import('../../Reminders/reminderDelivery')
+      .then(({ maybeUnpublishReminderForDelivery }) => maybeUnpublishReminderForDelivery(this.application, reminderId))
+      .catch(console.error)
   }
 
-  /** Clear all reminders from a note. */
+  /** Clear all reminders from a note. Best-effort unpublish of each. */
   async clearNoteReminders(note: SNNote) {
+    const existingIds = getNoteReminders(note).map((reminder) => reminder.id)
     await this.writeNoteReminders(note, [])
+    if (existingIds.length > 0) {
+      void import('../../Reminders/reminderDelivery')
+        .then(async ({ maybeUnpublishReminderForDelivery }) => {
+          for (const id of existingIds) {
+            await maybeUnpublishReminderForDelivery(this.application, id)
+          }
+        })
+        .catch(console.error)
+    }
   }
 
   /**
