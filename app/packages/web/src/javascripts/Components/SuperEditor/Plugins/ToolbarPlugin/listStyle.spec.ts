@@ -21,11 +21,15 @@ import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNo
 import {
   $getListStyle,
   $getListNodeFromSelection,
+  $getCustomListGlyph,
   $getMultilevelListStyle,
   $getTopListNodeFromSelection,
   applyListStyleToDOM,
   $setListStyle,
+  $setCustomListStyle,
   $setMultilevelListStyle,
+  sanitizeCustomGlyph,
+  CUSTOM_MARKER_VALUE,
   BULLET_STYLES,
   NUMBER_STYLES,
 } from './listStyle'
@@ -363,6 +367,109 @@ describe('$setMultilevelListStyle', () => {
       const top = $getTopListNodeFromSelection($getSelection()) as ListNode
       expect($getMultilevelListStyle(top)).toEqual({ 1: 'disc', 3: 'square' })
     })
+  })
+})
+
+describe('sanitizeCustomGlyph', () => {
+  it('returns empty for empty/whitespace/all-stripped input', () => {
+    expect(sanitizeCustomGlyph('')).toBe('')
+    expect(sanitizeCustomGlyph('   ')).toBe('')
+    expect(sanitizeCustomGlyph('\n\t')).toBe('')
+    // Only forbidden CSS/inline-style-breaking chars -> nothing survives.
+    expect(sanitizeCustomGlyph(';:"\'\\{}')).toBe('')
+  })
+
+  it('keeps a simple character or emoji', () => {
+    expect(sanitizeCustomGlyph('✦')).toBe('✦')
+    expect(sanitizeCustomGlyph('→')).toBe('→')
+    expect(sanitizeCustomGlyph('x')).toBe('x')
+  })
+
+  it('strips newlines and CSS/inline-style-breaking characters', () => {
+    expect(sanitizeCustomGlyph('a\nb')).toBe('ab')
+    expect(sanitizeCustomGlyph('a;b:c')).toBe('abc')
+    expect(sanitizeCustomGlyph('"ab"')).toBe('ab')
+    expect(sanitizeCustomGlyph('a\\b')).toBe('ab')
+  })
+
+  it('caps the glyph to a small number of grapheme clusters', () => {
+    // 10 chars -> capped to 4.
+    expect(sanitizeCustomGlyph('abcdefghij')).toBe('abcd')
+    // A single ZWJ emoji sequence counts as one grapheme where supported.
+    const family = '👨‍👩‍👧'
+    const out = sanitizeCustomGlyph(family)
+    expect(out.length).toBeGreaterThan(0)
+  })
+})
+
+describe('$setCustomListStyle', () => {
+  it('persists a custom glyph that round-trips through the node style', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setCustomListStyle($getSelection(), '✦'), { discrete: true })
+    editor.getEditorState().read(() => {
+      const node = $getListNodeFromSelection($getSelection()) as ListNode
+      // Marker identity is the stable 'custom' value; native type collapses to none.
+      expect($getListStyle(node)).toBe(CUSTOM_MARKER_VALUE)
+      expect($getCustomListGlyph(node)).toBe('✦')
+      const style = node.getStyle()
+      expect(style).toContain('list-style-type: none')
+      expect(style).toContain(`--sn-list-marker: ${CUSTOM_MARKER_VALUE}`)
+      // Glyph is stored as a CSS string literal so `content: var(...)` resolves.
+      expect(style).toContain('--sn-list-marker-custom: "✦"')
+    })
+  })
+
+  it('ignores empty/all-stripped glyphs (keeps the previous marker)', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setCustomListStyle($getSelection(), '★'), { discrete: true })
+    let result: ListNode | null = {} as ListNode
+    editor.update(() => {
+      result = $setCustomListStyle($getSelection(), '   \n')
+    }, { discrete: true })
+    expect(result).toBeNull()
+    editor.getEditorState().read(() => {
+      const node = $getListNodeFromSelection($getSelection()) as ListNode
+      // Previous custom glyph is untouched.
+      expect($getCustomListGlyph(node)).toBe('★')
+    })
+  })
+
+  it('sanitizes the glyph on the way in and does not duplicate declarations', () => {
+    const editor = makeEditor()
+    seedListAndSelect(editor)
+    editor.update(() => $setCustomListStyle($getSelection(), 'a;b'), { discrete: true })
+    editor.update(() => $setCustomListStyle($getSelection(), '→'), { discrete: true })
+    editor.getEditorState().read(() => {
+      const node = $getListNodeFromSelection($getSelection()) as ListNode
+      expect($getCustomListGlyph(node)).toBe('→')
+      expect(node.getStyle().match(/--sn-list-marker-custom/g)?.length).toBe(1)
+    })
+  })
+
+  it('returns null when the selection is not in a list', () => {
+    const editor = makeEditor()
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const paragraph = $createParagraphNode()
+        const text = $createTextNode('plain')
+        paragraph.append(text)
+        root.append(paragraph)
+        const selection = $createRangeSelection()
+        selection.anchor.set(text.getKey(), 0, 'text')
+        selection.focus.set(text.getKey(), 5, 'text')
+        $setSelection(selection)
+      },
+      { discrete: true },
+    )
+    let result: ListNode | null = {} as ListNode
+    editor.update(() => {
+      result = $setCustomListStyle($getSelection(), '✦')
+    }, { discrete: true })
+    expect(result).toBeNull()
   })
 })
 

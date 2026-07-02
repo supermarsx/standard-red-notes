@@ -212,6 +212,8 @@ const editor = {
   multilevelLevelDefault: 'Default',
   level: 'Level',
   apply: 'Apply',
+  customMarker: 'Custom marker',
+  customMarkerPlaceholder: 'Character or emoji, e.g. ✦',
 
   // Modal titles
   insertTable: 'Insert Table',

@@ -105,8 +105,91 @@ const LIST_STYLE_PROPERTY = 'list-style-type'
 const MARKER_PROPERTY = '--sn-list-marker'
 /** Custom declaration storing the compact per-level multilevel style map. */
 const LEVELS_PROPERTY = '--sn-list-levels'
+
+/**
+ * Stable marker value for the user-defined CUSTOM glyph marker. Unlike the
+ * presets, its glyph is not baked into a CSS class; instead the glyph is stored
+ * per-node under {@link CUSTOM_GLYPH_PROPERTY} and read by the
+ * `.Lexical__listStyle--custom > li::marker { content: var(--sn-list-marker-custom) }`
+ * rule in lists.scss, so an arbitrary character/emoji round-trips through save.
+ */
+export const CUSTOM_MARKER_VALUE = 'custom'
+/** Inline custom property holding the user's marker glyph, as a CSS string. */
+const CUSTOM_GLYPH_PROPERTY = '--sn-list-marker-custom'
+/** Cap the custom glyph to a few grapheme clusters so the marker stays sane. */
+const MAX_CUSTOM_GLYPH_LENGTH = 4
+
 /** All marker classes we may add, so we can clear stale ones before re-stamping. */
-const ALL_MARKER_CLASSES = [...BULLET_STYLES, ...NUMBER_STYLES].map((p) => `Lexical__listStyle--${p.value}`)
+const ALL_MARKER_CLASSES = [
+  ...[...BULLET_STYLES, ...NUMBER_STYLES].map((p) => `Lexical__listStyle--${p.value}`),
+  `Lexical__listStyle--${CUSTOM_MARKER_VALUE}`,
+]
+
+/** Minimal structural type for `Intl.Segmenter` (not in the ES2022 TS lib). */
+type GraphemeSegmenter = {
+  segment: (input: string) => Iterable<{ segment: string }>
+}
+type SegmenterCtor = new (
+  locales?: string | string[],
+  options?: { granularity?: 'grapheme' | 'word' | 'sentence' },
+) => GraphemeSegmenter
+
+/** Split a string into grapheme clusters (keeps emoji/ZWJ sequences intact). */
+const splitGraphemes = (value: string): string[] => {
+  const Segmenter = (Intl as unknown as { Segmenter?: SegmenterCtor }).Segmenter
+  if (typeof Segmenter === 'function') {
+    const segmenter = new Segmenter(undefined, { granularity: 'grapheme' })
+    return Array.from(segmenter.segment(value), (part) => part.segment)
+  }
+  return Array.from(value)
+}
+
+/**
+ * Normalize a user-entered marker glyph: drop newlines / control chars and any
+ * characters that would break the inline-style serialization (`;`, `:`, quotes,
+ * braces, backslash), then cap to a few grapheme clusters. Returns `''` for
+ * empty/all-stripped input (callers treat that as "keep the previous marker").
+ * Pure — safe to unit test in isolation.
+ */
+export const sanitizeCustomGlyph = (raw: string): string => {
+  if (!raw) {
+    return ''
+  }
+  const forbidden = '{};:"\'\\'
+  const cleaned = Array.from(raw)
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0
+      if (code < 0x20 || code === 0x7f) {
+        return false
+      }
+      return !forbidden.includes(ch)
+    })
+    .join('')
+    .trim()
+  if (!cleaned) {
+    return ''
+  }
+  return splitGraphemes(cleaned).slice(0, MAX_CUSTOM_GLYPH_LENGTH).join('')
+}
+
+/** Wrap a (pre-sanitized) glyph as a CSS string literal for `content`/vars. */
+const toCssString = (glyph: string): string => `"${glyph}"`
+
+/** Strip surrounding CSS quotes to recover the raw glyph from a stored value. */
+const stripCssQuotes = (value: string | undefined): string => {
+  if (!value) {
+    return ''
+  }
+  const trimmed = value.trim()
+  if (
+    trimmed.length >= 2 &&
+    (trimmed[0] === '"' || trimmed[0] === "'") &&
+    trimmed[trimmed.length - 1] === trimmed[0]
+  ) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
 
 /**
  * Parse a CSS declaration string (`"a: b; c: d"`) into an ordered map. Keys are
@@ -231,15 +314,53 @@ export const $setListStyle = (selection: BaseSelection | null, styleValue: strin
 }
 
 /**
+ * Apply a user-defined CUSTOM glyph marker (character/emoji) to the nearest list
+ * owning the selection. The sanitized glyph is persisted on the node (as a CSS
+ * string under {@link CUSTOM_GLYPH_PROPERTY}) alongside the `custom` marker
+ * value, so it round-trips through save/reload exactly like the presets.
+ *
+ * Returns the affected `ListNode`, or `null` when the selection is not in a list
+ * OR the glyph sanitizes to empty (caller keeps the previous marker). Must run
+ * inside `editor.update()`.
+ */
+export const $setCustomListStyle = (selection: BaseSelection | null, rawGlyph: string): ListNode | null => {
+  const listNode = $getListNodeFromSelection(selection)
+  if (listNode === null) {
+    return null
+  }
+  // Empty/all-stripped input: keep the previous marker rather than blanking it.
+  if (sanitizeCustomGlyph(rawGlyph) === '') {
+    return null
+  }
+  const writable = listNode.getWritable()
+  persistMarker(writable, CUSTOM_MARKER_VALUE, rawGlyph)
+  applyListStyleToDOM(writable)
+  return writable
+}
+
+/** Read the persisted custom glyph off a `ListNode` (`''` when none). */
+export const $getCustomListGlyph = (listNode: ListNode): string =>
+  stripCssQuotes(parseCSS(listNode.getStyle()).get(CUSTOM_GLYPH_PROPERTY))
+
+/**
  * Persist a marker style on a writable list node: the native `list-style-type`
  * (or `none` for custom glyphs) AND the stable preset value under
  * {@link MARKER_PROPERTY}, so both native and custom-glyph markers round-trip.
  */
-const persistMarker = (writable: ListNode, styleValue: string): void => {
+const persistMarker = (writable: ListNode, styleValue: string, customGlyph?: string): void => {
   const preset = PRESET_BY_VALUE.get(styleValue)
-  const cssType = preset ? preset.listStyleType ?? 'none' : styleValue
+  const isCustom = styleValue === CUSTOM_MARKER_VALUE
+  const cssType = isCustom ? 'none' : preset ? preset.listStyleType ?? 'none' : styleValue
   let css = withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType)
   css = withProperty(css, MARKER_PROPERTY, styleValue)
+  if (isCustom) {
+    // Prefer the newly-entered glyph; fall back to whatever this node already
+    // stored (so re-stamping 'custom' without a glyph keeps it), else a bullet.
+    const sanitized = sanitizeCustomGlyph(customGlyph ?? '')
+    const previous = stripCssQuotes(parseCSS(writable.getStyle()).get(CUSTOM_GLYPH_PROPERTY))
+    const glyph = sanitized || previous || '•'
+    css = withProperty(css, CUSTOM_GLYPH_PROPERTY, toCssString(glyph))
+  }
   writable.setStyle(css)
 }
 
@@ -285,12 +406,23 @@ export const $getListStyle = (listNode: ListNode): string | null => {
 }
 
 /** Stamp a single list element with one preset's marker (class + native type). */
-const stampMarker = (element: HTMLElement, styleValue: string | null): void => {
+const stampMarker = (element: HTMLElement, styleValue: string | null, customGlyph?: string): void => {
   for (const cls of ALL_MARKER_CLASSES) {
     element.classList.remove(cls)
   }
+  // Always clear any stale custom glyph var before (re)stamping.
+  element.style.removeProperty(CUSTOM_GLYPH_PROPERTY)
   if (styleValue === null) {
     element.style.removeProperty(LIST_STYLE_PROPERTY)
+    return
+  }
+  if (styleValue === CUSTOM_MARKER_VALUE) {
+    element.classList.add(`Lexical__listStyle--${CUSTOM_MARKER_VALUE}`)
+    element.style.setProperty(LIST_STYLE_PROPERTY, 'none')
+    const glyph = sanitizeCustomGlyph(customGlyph ?? '')
+    if (glyph) {
+      element.style.setProperty(CUSTOM_GLYPH_PROPERTY, toCssString(glyph))
+    }
     return
   }
   const preset = PRESET_BY_VALUE.get(styleValue)
@@ -326,6 +458,9 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
   // MARKER_PROPERTY; fall back to a raw native list-style-type for older nodes).
   const declared = parseCSS(listNode.getStyle())
   const markerValue = declared.get(MARKER_PROPERTY) ?? declared.get(LIST_STYLE_PROPERTY) ?? null
+  // The user's custom glyph (if this list uses the CUSTOM marker), recovered
+  // from its persisted CSS string so it re-renders after a cold reload.
+  const customGlyph = stripCssQuotes(declared.get(CUSTOM_GLYPH_PROPERTY))
 
   const levels = $getMultilevelListStyle(listNode)
   const hasLevels = Object.keys(levels).length > 0
@@ -337,7 +472,7 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
   }
 
   if (!hasLevels) {
-    stampMarker(element, markerValue)
+    stampMarker(element, markerValue, customGlyph)
     return
   }
 
@@ -358,7 +493,7 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
           // clear any stale marker class instead of leaving the previous glyph in
           // place — mirroring the single-level `stampMarker(el, null)` clear path.
           const value = levels[levelHere]
-          stampMarker(el, value ?? null)
+          stampMarker(el, value ?? null, customGlyph)
         }
       } catch {
         /* not rendered */
@@ -371,7 +506,7 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
     }
   }
   // The top list itself is level 1.
-  stampMarker(element, levels[1] ?? markerValue)
+  stampMarker(element, levels[1] ?? markerValue, customGlyph)
   for (const child of listNode.getChildren()) {
     stampDepth(child, 1)
   }

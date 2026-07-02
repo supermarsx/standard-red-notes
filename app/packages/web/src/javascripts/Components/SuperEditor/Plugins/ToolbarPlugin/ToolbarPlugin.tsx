@@ -196,6 +196,10 @@ import {
   BULLET_STYLES,
   NUMBER_STYLES,
   $setListStyle,
+  $setCustomListStyle,
+  $getCustomListGlyph,
+  $getListNodeFromSelection,
+  sanitizeCustomGlyph,
   $setMultilevelListStyle,
   $getMultilevelListStyle,
   $getTopListNodeFromSelection,
@@ -605,6 +609,9 @@ const ToolbarPlugin = () => {
   // the Word-style "Define new multilevel list" configurator popover.
   const [isBulletStyleMenuOpen, setIsBulletStyleMenuOpen] = useState(false)
   const bulletStyleAnchorRef = useRef<HTMLButtonElement>(null)
+  // Draft glyph for the "Custom…" bullet marker input; seeded from the list under
+  // the caret when the bullet marker popover opens.
+  const [customBulletGlyph, setCustomBulletGlyph] = useState('')
   const [isNumberStyleMenuOpen, setIsNumberStyleMenuOpen] = useState(false)
   const numberStyleAnchorRef = useRef<HTMLButtonElement>(null)
   const [isMultilevelMenuOpen, setIsMultilevelMenuOpen] = useState(false)
@@ -693,6 +700,40 @@ const ToolbarPlugin = () => {
     },
     [activeEditor, blockType],
   )
+
+  // Apply a user-entered custom glyph as the bullet marker. Sanitizes first;
+  // empty/all-stripped input is ignored (keeps the previous marker). Converts the
+  // block to a bullet list first if needed, then stamps the custom glyph.
+  const applyCustomBulletMarker = useCallback(
+    (rawGlyph: string) => {
+      if (sanitizeCustomGlyph(rawGlyph) === '') {
+        return
+      }
+      if (blockType !== 'bullet') {
+        activeEditor.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined)
+      }
+      activeEditor.update(() => {
+        $setCustomListStyle($getSelection(), rawGlyph)
+      })
+      setIsBulletStyleMenuOpen(false)
+    },
+    [activeEditor, blockType],
+  )
+
+  // Toggle the bullet marker popover, seeding the custom-glyph input from the
+  // list under the caret when it opens (so an existing custom marker is shown).
+  const toggleBulletStyleMenu = useCallback(() => {
+    setIsBulletStyleMenuOpen((open) => {
+      const next = !open
+      if (next) {
+        activeEditor.getEditorState().read(() => {
+          const list = $getListNodeFromSelection($getSelection())
+          setCustomBulletGlyph(list ? $getCustomListGlyph(list) : '')
+        })
+      }
+      return next
+    })
+  }, [activeEditor])
 
   // Seed + open the multilevel configurator from the list under the caret.
   const openMultilevelConfigurator = useCallback(() => {
@@ -2136,7 +2177,7 @@ const ToolbarPlugin = () => {
           title={t('bulletedListMarkers')}
           ref={bulletStyleAnchorRef}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+          onClick={toggleBulletStyleMenu}
           className={classNames(
             'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
             isBulletStyleMenuOpen ? 'bg-contrast' : '',
@@ -4316,7 +4357,7 @@ const ToolbarPlugin = () => {
         title={t('bulletedListMarkers')}
         anchorElement={bulletStyleAnchorRef}
         open={isBulletStyleMenuOpen}
-        togglePopover={() => setIsBulletStyleMenuOpen(!isBulletStyleMenuOpen)}
+        togglePopover={toggleBulletStyleMenu}
         side={isMobile ? 'top' : 'bottom'}
         align="start"
         className="py-1"
@@ -4340,6 +4381,40 @@ const ToolbarPlugin = () => {
               }}
             />
           ))}
+          {/* Custom marker: type any character/emoji to use as the bullet glyph. */}
+          <div className="col-span-3 mt-1 border-t border-border pt-2">
+            <div className="mb-1 px-0.5 text-[0.65rem] font-semibold uppercase text-passive-1">
+              {t('customMarker')}
+            </div>
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={customBulletGlyph}
+                onChange={(event) => setCustomBulletGlyph(event.target.value)}
+                onMouseDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  event.stopPropagation()
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    applyCustomBulletMarker(customBulletGlyph)
+                  }
+                }}
+                maxLength={16}
+                placeholder={t('customMarkerPlaceholder')}
+                aria-label={t('customMarker')}
+                className="min-w-0 flex-1 rounded border border-border bg-default px-1.5 py-1 text-sm text-text placeholder:text-passive-1 focus:outline-none"
+              />
+              <button
+                type="button"
+                className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-contrast disabled:opacity-50"
+                disabled={sanitizeCustomGlyph(customBulletGlyph) === ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyCustomBulletMarker(customBulletGlyph)}
+              >
+                {t('apply')}
+              </button>
+            </div>
+          </div>
         </div>
       </Popover>
       {/* Numbered-list split-button numbering dropdown. */}

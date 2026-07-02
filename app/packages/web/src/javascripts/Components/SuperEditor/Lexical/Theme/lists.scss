@@ -190,6 +190,21 @@
 }
 
 /**
+ * User-defined CUSTOM glyph marker. Unlike the presets above (whose glyph is
+ * baked into the rule), the glyph is supplied per-list at runtime via the
+ * `--sn-list-marker-custom` custom property, which `$setCustomListStyle` stamps
+ * inline on the `<ul>`/`<ol>` and persists on the node so it survives reload.
+ * Falls back to a bullet if the property is somehow absent.
+ */
+.Lexical__listStyle--custom {
+  list-style-type: none;
+  & > li::marker {
+    content: var(--sn-list-marker-custom, '•');
+    unicode-bidi: isolate;
+  }
+}
+
+/**
  * Parenthesized + legal numbering: CSS counters so the suffix renders correctly.
  * Each list item gets a counter; `list-style: none` hides the native marker.
  */
