@@ -257,7 +257,13 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
       waitingForKey: false,
     })
 
-    this.storage.setValue(StorageKey.WrappedRootKey, wrappedKeyPayload.ejected(), StorageValueModes.Nonwrapped)
+    /** D2 CRITICAL-KEY ROUTING: await the disk flush — a silently-dropped wrapped-root-key
+     * write would leave the account unable to unwrap on next launch (unrecoverable auth loss). */
+    await this.storage.setValueAndAwaitPersist(
+      StorageKey.WrappedRootKey,
+      wrappedKeyPayload.ejected(),
+      StorageValueModes.Nonwrapped,
+    )
   }
 
   public async unwrapRootKey(wrappingKey: RootKeyInterface): Promise<void> {
@@ -311,7 +317,8 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
         await this.wrapAndPersistRootKey(wrappingKey)
       }
 
-      this.storage.setValue(
+      /** D2 CRITICAL-KEY ROUTING: await the disk flush (wrapper key params). */
+      await this.storage.setValueAndAwaitPersist(
         StorageKey.RootKeyWrapperKeyParams,
         wrappingKey.keyParams.getPortableValue(),
         StorageValueModes.Nonwrapped,
@@ -370,7 +377,12 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
 
     this.setRootKeyInstance(key)
 
-    this.storage.setValue(StorageKey.RootKeyParams, key.keyParams.getPortableValue(), StorageValueModes.Nonwrapped)
+    /** D2 CRITICAL-KEY ROUTING: await the disk flush (root key params). */
+    await this.storage.setValueAndAwaitPersist(
+      StorageKey.RootKeyParams,
+      key.keyParams.getPortableValue(),
+      StorageValueModes.Nonwrapped,
+    )
 
     if (this.keyMode === KeyMode.RootKeyOnly) {
       await this.saveRootKeyToKeychain()

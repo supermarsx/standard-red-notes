@@ -15,6 +15,12 @@ export interface StorageServiceInterface {
   getValue<T>(key: string, mode?: StorageValueModes, defaultValue?: T): T
   canDecryptWithKey(key: RootKeyInterface): Promise<boolean>
   setValue<T>(key: string, value: T, mode?: StorageValueModes): void
+  /**
+   * Like {@link setValue} but resolves only after the value has been flushed to disk.
+   * Use for CRITICAL keys (sync/pagination token, root key + key params) where a
+   * silently-dropped write would cause data loss or an unrecoverable auth state.
+   */
+  setValueAndAwaitPersist<T>(key: string, value: T, mode?: StorageValueModes): Promise<void>
   removeValue(key: string, mode?: StorageValueModes): Promise<void>
   setPersistencePolicy(persistencePolicy: StoragePersistencePolicies): Promise<void>
   clearAllData(): Promise<void>

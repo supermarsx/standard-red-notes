@@ -1,5 +1,7 @@
 import { DiskStorageService } from './DiskStorageService'
 import { InternalEventBus, DeviceInterface, InternalEventBusInterface } from '@standardnotes/services'
+import { UuidGenerator } from '@standardnotes/utils'
+import { SNLog } from '../../Log'
 
 describe('diskStorageService', () => {
   let storageService: DiskStorageService
@@ -146,6 +148,59 @@ describe('diskStorageService', () => {
 
       pending[1].resolve()
       await expect(deletePromise).resolves.toBeUndefined()
+    })
+  })
+
+  /**
+   * D2 (P0/P1 data-loss regression) for the key-value persist path:
+   *  1. POISON: persistValuesToDisk awaits currentPersistPromise before reassigning it.
+   *     If a prior write rejected, that promise stayed rejected and re-threw out of EVERY
+   *     subsequent KV persist for the whole session (sync/session/root-key writes blocked).
+   *  2. SWALLOW: setValue did `void persistValuesToDisk()`, dropping any rejection on the
+   *     floor — a failed write left disk silently stale with no retry.
+   */
+  describe('D2: key-value persist must not poison or silently swallow', () => {
+    const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+    beforeEach(() => {
+      // generatePersistableValues() mints a UUID for the wrapped storage payload.
+      UuidGenerator.SetGenerator(() => 'd2-test-uuid')
+      storageService.provideEncryptionProvider({
+        hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+        encryptSplit: jest.fn().mockResolvedValue([]),
+      } as never)
+      storageService['values'] = DiskStorageService.DefaultValuesObject()
+      storageService['storagePersistable'] = true
+      device.setRawStorageValue = jest.fn().mockResolvedValue(undefined)
+      device.removeRawStorageValue = jest.fn().mockResolvedValue(undefined)
+      SNLog.onError = jest.fn()
+    })
+
+    it('a rejected persist does NOT poison subsequent key-value persists (de-poison currentPersistPromise)', async () => {
+      device.setRawStorageValue = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('quota exceeded'))
+        .mockResolvedValue(undefined)
+
+      // First critical write fails at the disk layer.
+      await expect(storageService.setValueAndAwaitPersist('k1', 'v1')).rejects.toThrow('quota exceeded')
+
+      // Before the fix, currentPersistPromise stayed a rejected promise and every later
+      // persist re-threw it for the whole session. It must now proceed and succeed.
+      await expect(storageService.setValueAndAwaitPersist('k2', 'v2')).resolves.toBeUndefined()
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(2)
+    })
+
+    it('setValue no longer silently swallows a persist failure — it flags a retry and logs', async () => {
+      device.setRawStorageValue = jest.fn().mockRejectedValueOnce(new Error('quota exceeded'))
+      storageService['needsPersist'] = false
+
+      storageService.setValue('k', 'v')
+      await flush()
+
+      // needsPersist drives a retry on the next persist / Launched_10 stage handler.
+      expect(storageService['needsPersist']).toBe(true)
+      expect(SNLog.onError).toHaveBeenCalled()
     })
   })
 })

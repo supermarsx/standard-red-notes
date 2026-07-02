@@ -227,7 +227,15 @@ export class DiskStorageService
       return
     }
 
-    await this.currentPersistPromise
+    /**
+     * D2 POISON FIX: still serialize behind the previous persist, but neutralize its
+     * rejection first. Previously a single rejected `currentPersistPromise` (e.g. one
+     * failed disk write) would propagate out of EVERY subsequent persist for the rest
+     * of the session, silently blocking all future key-value writes (sync/session/root
+     * keys). Swallowing only the PRIOR op's rejection here keeps ordering intact while
+     * letting this write proceed and set its own fresh promise.
+     */
+    await this.currentPersistPromise?.catch(() => undefined)
 
     this.needsPersist = false
 
@@ -295,10 +303,20 @@ export class DiskStorageService
   public setValue<T>(key: string, value: T, mode = StorageValueModes.Default): void {
     this.setValueWithNoPersist(key, value, mode)
 
-    void this.persistValuesToDisk()
+    /**
+     * D2 SWALLOW FIX: the in-memory value is already updated; the disk write is async.
+     * Previously `void`-ing this dropped any rejection on the floor, so a failed write
+     * left disk silently stale with no retry. Instead, flag `needsPersist` so the next
+     * persist (or the Launched_10 stage handler) re-attempts the write, and log the
+     * failure. Callers needing a guaranteed durable write use setValueAndAwaitPersist.
+     */
+    this.persistValuesToDisk().catch((error) => {
+      this.needsPersist = true
+      SNLog.error(error as Error)
+    })
   }
 
-  public async setValueAndAwaitPersist(key: string, value: unknown, mode = StorageValueModes.Default): Promise<void> {
+  public async setValueAndAwaitPersist<T>(key: string, value: T, mode = StorageValueModes.Default): Promise<void> {
     this.setValueWithNoPersist(key, value, mode)
 
     await this.persistValuesToDisk()

@@ -147,7 +147,12 @@ describe('SyncService failure backoff', () => {
 
 describe('SyncService websocket push apply (Phase 1A)', () => {
   let logger: jest.Mocked<LoggerInterface>
-  let storage: { values: Record<string, string>; getValue: jest.Mock; setValue: jest.Mock }
+  let storage: {
+    values: Record<string, string>
+    getValue: jest.Mock
+    setValue: jest.Mock
+    setValueAndAwaitPersist: jest.Mock
+  }
   let payloadManager: { getMasterCollection: jest.Mock; emitDeltaEmit: jest.Mock }
   let historyService: { getHistoryMapCopy: jest.Mock }
   let encryptionService: { decryptSplit: jest.Mock }
@@ -168,9 +173,14 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
       values: currentToken ? { [StorageKeyLastSyncToken]: currentToken } : {},
       getValue: jest.fn(),
       setValue: jest.fn(),
+      setValueAndAwaitPersist: jest.fn(),
     }
     storage.getValue.mockImplementation((key: string) => storage.values[key])
     storage.setValue.mockImplementation((key: string, value: string) => {
+      storage.values[key] = value
+    })
+    // setLastSyncToken now routes through the awaited-persist API (D2 critical-key routing).
+    storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
       storage.values[key] = value
     })
 
@@ -1464,5 +1474,137 @@ describe('SyncService cold-load COMPLETENESS (no silent partial loads)', () => {
     expect(recovered).toHaveLength(1)
 
     expect(service.isDatabaseLoaded()).toBe(true)
+  })
+})
+
+/**
+ * D4 (P0 data-loss regression): during paginated download, handleSuccessServerResponse
+ * persists a page's retrieved items and THEN advances the persisted sync/pagination
+ * token. If the persist silently fails (old behavior: savePayloads().catch swallowed the
+ * error) the token advanced anyway, so the server never re-sends the failed page ->
+ * permanent local loss. The fix makes the download-persist REJECT on a genuine
+ * (non-suppressible) write failure so the token advance is skipped and the existing
+ * sync() backoff re-pulls the page. A SUPPRESSIBLE legacy key-lookup error must still
+ * NOT abort (003 sign-in self-heals after download-first sync).
+ */
+describe('SyncService D4: download-page persist failure must not advance the sync token', () => {
+  let uuidCounter = 0
+  const nextUuid = () => `sync-d4-${uuidCounter++}`
+
+  const createNote = () =>
+    new DecryptedPayload<NoteContent>(
+      {
+        uuid: nextUuid(),
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'D4', text: 'body' }),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+
+  beforeAll(() => {
+    // persistPayloads routes surfaced errors through SNLog.error, whose sink is unset in tests.
+    SNLog.onError = jest.fn()
+  })
+
+  const buildService = (savePayloadsRejection: unknown) => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    const savePayloads = jest.fn().mockRejectedValue(savePayloadsRejection)
+    const emitDeltaEmit = jest.fn().mockResolvedValue([createNote()])
+    const getMasterCollection = jest.fn().mockReturnValue(ImmutablePayloadCollection.WithPayloads([]))
+    const getHistoryMapCopy = jest.fn().mockReturnValue({})
+
+    const service = new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      {} as never, // encryptionService
+      { savePayloads } as never, // storageService
+      { getMasterCollection, emitDeltaEmit } as never, // payloadManager
+      {} as never, // apiService
+      { getHistoryMapCopy } as never, // historyService
+      {} as never, // device
+      'test-identifier',
+      {} as never, // options
+      logger,
+      {} as never, // sockets
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop } as never,
+    )
+
+    ;(service as unknown as { opStatus: unknown }).opStatus = {
+      clearError: jest.fn(),
+      setError: jest.fn(),
+      setDownloadStatus: jest.fn(),
+      setUploadStatus: jest.fn(),
+    }
+    const notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
+    ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+
+    // Spy the token setters so we can assert whether the PERSISTED token advanced,
+    // independent of the real storage backend (setValueAndAwaitPersist).
+    const setLastSyncToken = jest
+      .spyOn(service as unknown as { setLastSyncToken: () => Promise<void> }, 'setLastSyncToken')
+      .mockResolvedValue(undefined)
+    const setPaginationToken = jest
+      .spyOn(service as unknown as { setPaginationToken: () => Promise<void> }, 'setPaginationToken')
+      .mockResolvedValue(undefined)
+
+    return { service, savePayloads, setLastSyncToken, setPaginationToken, notifyEvent }
+  }
+
+  const buildResponse = () => ({
+    retrievedPayloads: [],
+    savedPayloads: [],
+    conflicts: {},
+    userEvents: [],
+    asymmetricMessages: [],
+    vaults: [],
+    vaultInvites: [],
+    lastSyncToken: 'server-token-NEXT',
+    paginationToken: undefined,
+    rawResponse: { data: {} },
+  })
+
+  const buildOperation = () => ({
+    id: 'op-d4',
+    payloadsSavedOrSaving: [],
+    options: { sharedVaultUuids: undefined },
+    payloads: [],
+  })
+
+  const invoke = (service: SyncService, operation: unknown, response: unknown) =>
+    (
+      service as unknown as { handleSuccessServerResponse: (o: unknown, r: unknown) => Promise<void> }
+    ).handleSuccessServerResponse(operation, response)
+
+  it('a genuine write failure (QuotaExceeded) REJECTS and does NOT advance the sync/pagination token', async () => {
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    const { service, setLastSyncToken, setPaginationToken } = buildService(quota)
+
+    await expect(invoke(service, buildOperation(), buildResponse())).rejects.toBe(quota)
+
+    // The whole point: the persisted token must stay at its pre-failure position so the
+    // failed page is re-pulled on the next sync. Before the fix, both were called.
+    expect(setLastSyncToken).not.toHaveBeenCalled()
+    expect(setPaginationToken).not.toHaveBeenCalled()
+  })
+
+  it('a SUPPRESSIBLE legacy key-lookup failure does NOT abort — the token still advances', async () => {
+    const keyError = new Error('Cannot find items key to use for encryption')
+    const { service, setLastSyncToken } = buildService(keyError)
+
+    await expect(invoke(service, buildOperation(), buildResponse())).resolves.toBeUndefined()
+
+    expect(setLastSyncToken).toHaveBeenCalledWith('server-token-NEXT')
   })
 })

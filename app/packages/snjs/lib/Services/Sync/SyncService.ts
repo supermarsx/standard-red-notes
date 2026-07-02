@@ -950,13 +950,21 @@ export class SyncService
 
   private setLastSyncToken(token: string) {
     this.syncToken = token
-    return this.storageService.setValue(StorageKey.LastSyncToken, token)
+    /**
+     * D2 CRITICAL-KEY ROUTING: await the disk flush. This token gates what a future
+     * sync re-pulls; a silently-dropped write (old fire-and-forget setValue) could
+     * leave disk behind memory, so a restart re-pulls already-applied pages or, worse,
+     * pairs a stale token with freshly-persisted items. Awaiting durability keeps the
+     * on-disk token consistent with the items persisted just before it (see D4).
+     */
+    return this.storageService.setValueAndAwaitPersist(StorageKey.LastSyncToken, token)
   }
 
   private async setPaginationToken(token: string) {
     this.cursorToken = token
     if (token) {
-      return this.storageService.setValue(StorageKey.PaginationToken, token)
+      /** D2 CRITICAL-KEY ROUTING: await durability (see setLastSyncToken). */
+      return this.storageService.setValueAndAwaitPersist(StorageKey.PaginationToken, token)
     } else {
       return this.storageService.removeValue(StorageKey.PaginationToken)
     }
@@ -1901,7 +1909,12 @@ export class SyncService
     for (const emit of emits) {
       const payloadsToPersist = await this.payloadManager.emitDeltaEmit(emit)
 
-      await this.persistPayloads(payloadsToPersist)
+      /**
+       * D4: a genuine write failure here MUST abort before the token advance below,
+       * so the failed page is re-pulled on the backoff retry (Operation.run rethrows
+       * this out to the sync() catch). Suppressible legacy-key lookups do not abort.
+       */
+      await this.persistPayloads(payloadsToPersist, { throwError: true, rethrowGenuineWriteFailure: true })
     }
 
     if (!operation.options.sharedVaultUuids) {
@@ -2236,7 +2249,7 @@ export class SyncService
 
   public async persistPayloads(
     payloads: FullyFormedPayloadInterface[],
-    options: { throwError: boolean } = { throwError: true },
+    options: { throwError: boolean; rethrowGenuineWriteFailure?: boolean } = { throwError: true },
   ) {
     if (payloads.length === 0 || this.dealloced) {
       return
@@ -2265,6 +2278,21 @@ export class SyncService
       if (options.throwError || !isSuppressibleKeyError) {
         void this.notifyEvent(SyncEvent.DatabaseWriteError, error)
         SNLog.error(error)
+      }
+      /**
+       * D4 DATA-LOSS FIX (scoped to the paginated download-persist call in
+       * handleSuccessServerResponse): when the caller opts in via
+       * `rethrowGenuineWriteFailure`, a GENUINE (non-suppressible) write failure —
+       * e.g. QuotaExceeded/IDB IO — must PROPAGATE instead of resolving cleanly.
+       * Resolving would let the caller advance the persisted sync/pagination token
+       * PAST a page that never reached disk, permanently dropping those items. The
+       * throw routes out through AccountSyncOperation.run -> the sync() backoff-retry
+       * catch, which re-pulls the un-persisted page. Suppressible legacy-key lookups
+       * (sign-in self-heal) still resolve cleanly, so they never abort a sync.
+       * Callers that don't set the flag keep the exact prior behavior (never rejects).
+       */
+      if (options.rethrowGenuineWriteFailure && !isSuppressibleKeyError) {
+        throw error
       }
     })
   }
