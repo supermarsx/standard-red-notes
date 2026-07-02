@@ -277,10 +277,22 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     }
 
     const status = application.status.addMessage('Preparing demo...')
-    void application.user.populateSessionFromDemoShareToken(token).then(() => {
-      application.status.removeMessage(status)
-      application.hideAccountMenu()
-    })
+    void application.user
+      .populateSessionFromDemoShareToken(token)
+      .then(() => {
+        application.status.removeMessage(status)
+        application.hideAccountMenu()
+      })
+      .catch((error) => {
+        // A bad/expired demo token rejects here; without this the "Preparing
+        // demo..." status would hang forever. Clear it and tell the user.
+        application.status.removeMessage(status)
+        console.error('[ApplicationView] Failed to prepare demo session', error)
+        addToast({
+          type: ToastType.Error,
+          message: 'Could not prepare the demo. The demo link may be invalid or expired.',
+        })
+      })
   }, [application])
 
   // Engage the local passkey gate iff a passkey is registered on this device.
@@ -314,6 +326,7 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     }
 
     const removeAppObserver = application.addEventObserver(async (eventName) => {
+      try {
       if (eventName === ApplicationEvent.Started) {
         onAppStart()
       } else if (eventName === ApplicationEvent.Launched) {
@@ -357,6 +370,17 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         if (application.accountMenuController.reloginPromptDismissed) {
           application.accountMenuController.setReloginPromptDismissed(false)
         }
+      }
+      } catch (error) {
+        // Never let a throw inside an event handler kill the observer (which
+        // would silently stop all subsequent app-lifecycle handling). Log with
+        // the event for context and surface a toast so a failed
+        // start/launch/challenge step isn't invisible to the user.
+        console.error('[ApplicationView] Error handling application event', eventName, error)
+        addToast({
+          type: ToastType.Error,
+          message: 'Something went wrong handling an app event. Please restart the app if problems persist.',
+        })
       }
     })
 

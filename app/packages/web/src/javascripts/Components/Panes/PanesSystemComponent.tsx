@@ -2,6 +2,8 @@ import { PANEL_NAME_NAVIGATION, PANEL_NAME_NOTES } from '@/Constants/Constants'
 import { ElementIds } from '@/Constants/ElementIDs'
 import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
+import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
+import { addToast, ToastType } from '@standardnotes/toast'
 import { ApplicationEvent, classNames, PrefKey } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useState } from 'react'
@@ -72,19 +74,34 @@ const PanesSystemComponent = () => {
       let latest = startWidth
 
       const onMove = (moveEvent: MouseEvent) => {
-        // The assistant is the rightmost pane, so dragging its left edge LEFT
-        // (clientX decreases) should widen it.
-        const delta = startX - moveEvent.clientX
-        const maxWidth = Math.min(900, window.innerWidth - 400)
-        latest = Math.max(ASSISTANT_PANEL_MIN_WIDTH, Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)))
-        setAssistantPanelWidth(latest)
+        try {
+          // The assistant is the rightmost pane, so dragging its left edge LEFT
+          // (clientX decreases) should widen it.
+          const delta = startX - moveEvent.clientX
+          const maxWidth = Math.min(900, window.innerWidth - 400)
+          latest = Math.max(ASSISTANT_PANEL_MIN_WIDTH, Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)))
+          setAssistantPanelWidth(latest)
+        } catch (error) {
+          // If the move handler throws, the mouseup that removes these listeners
+          // and body classes might never fire — leaking a live drag. Run the same
+          // cleanup (onUp) so the app can't get wedged, then swallow (this is a
+          // mousemove handler; rethrowing has nowhere useful to go).
+          console.error('Assistant panel resize failed', error)
+          onUp()
+        }
       }
 
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         document.body.classList.remove('select-none', 'cursor-col-resize')
-        void application.setPreference(PrefKey.AssistantPanelWidth, latest).catch(console.error)
+        void application.setPreference(PrefKey.AssistantPanelWidth, latest).catch((error) => {
+          console.error(error)
+          addToast({
+            type: ToastType.Error,
+            message: 'Could not save the assistant panel size.',
+          })
+        })
       }
 
       document.body.classList.add('select-none', 'cursor-col-resize')
@@ -363,13 +380,21 @@ const PanesSystemComponent = () => {
 
         if (pane === AppPaneId.Navigation) {
           return (
-            <Navigation
-              id={ElementIds.NavigationColumn}
-              ref={setNavigationRef}
-              className={classNames(className, isTabletOrMobile ? 'w-full' : '')}
+            <ComponentErrorBoundary
               key="navigation-pane"
-              application={application}
+              regionName="Navigation"
+              fallback={() => (
+                <div className={classNames(className, 'flex items-center justify-center text-passive-0')}>
+                  Navigation unavailable
+                </div>
+              )}
             >
+              <Navigation
+                id={ElementIds.NavigationColumn}
+                ref={setNavigationRef}
+                className={classNames(className, isTabletOrMobile ? 'w-full' : '')}
+                application={application}
+              >
               {showPanelResizers && navigationRef && (
                 <PanelResizer
                   collapsable={true}
@@ -386,18 +411,27 @@ const PanesSystemComponent = () => {
                   widthEventCallback={navigationPanelResizeWidthChangeCallback}
                 />
               )}
-            </Navigation>
+              </Navigation>
+            </ComponentErrorBoundary>
           )
         } else if (pane === AppPaneId.Items) {
           return (
-            <ContentListView
-              id={ElementIds.ItemsColumn}
-              className={className}
-              ref={setListRef}
-              key={'content-list-view'}
-              application={application}
-              onPanelWidthLoad={handleInitialItemsListPanelWidthLoad}
+            <ComponentErrorBoundary
+              key="content-list-view"
+              regionName="Note list"
+              fallback={() => (
+                <div className={classNames(className, 'flex items-center justify-center text-passive-0')}>
+                  List unavailable
+                </div>
+              )}
             >
+              <ContentListView
+                id={ElementIds.ItemsColumn}
+                className={className}
+                ref={setListRef}
+                application={application}
+                onPanelWidthLoad={handleInitialItemsListPanelWidthLoad}
+              >
               {showPanelResizers && listRef && (
                 <PanelResizer
                   collapsable={true}
@@ -414,7 +448,8 @@ const PanesSystemComponent = () => {
                   widthEventCallback={itemsPanelResizeWidthChangeCallback}
                 />
               )}
-            </ContentListView>
+              </ContentListView>
+            </ComponentErrorBoundary>
           )
         } else if (pane === AppPaneId.Editor) {
           return (
