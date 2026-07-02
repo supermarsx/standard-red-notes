@@ -37,6 +37,7 @@ USAGE
   srn-admin <command> [args]
 
   A <user> may be an email address or a user uuid.
+  A <group> may be a group name or a group uuid.
 
 USERS / ROLES
   whois <user>                       Show a user's uuid, email, direct roles
@@ -49,11 +50,11 @@ USERS / ROLES
 RBAC GROUPS
   group list                         List all groups
   group create <name> [roles]        Create a group ([roles] = comma-separated role names)
-  group delete <groupUuid>           Delete a group
-  group set-roles <groupUuid> <r,r>  Set a group's roles (comma-separated)
-  group members <groupUuid>          List a group's members
-  group add-user <groupUuid> <user>  Add a user to a group
-  group remove-user <groupUuid> <user>  Remove a user from a group
+  group delete <group>               Delete a group
+  group set-roles <group> <r,r>      Set a group's roles (comma-separated)
+  group members <group>              List a group's members
+  group add-user <group> <user>      Add a user to a group
+  group remove-user <group> <user>   Remove a user from a group
 `,
   )
 }
@@ -71,6 +72,49 @@ async function resolveUser(userRepository: UserRepositoryInterface, identifier: 
     return userRepository.findOneByUsernameOrEmail(asEmail.getValue())
   }
   return null
+}
+
+// Minimal shape of a group as returned by Auth_ListGroups.
+type GroupLike = { id?: { toString(): string }; props?: { name?: string } }
+
+/**
+ * Pure matcher: given the full group list and an identifier (a group uuid or a
+ * group name), return the matching group's uuid. Kept free of DI/IO so it can be
+ * unit-tested. A uuid match is preferred (only when the identifier is a valid
+ * uuid); otherwise an exact NAME match is used — case-sensitive first, falling
+ * back to a UNIQUE case-insensitive match. Ambiguous names and no-match both
+ * throw a helpful error.
+ */
+export function matchGroupUuidInList(groups: GroupLike[], identifier: string, identifierIsUuid: boolean): string {
+  const entries = groups.map((group) => ({
+    uuid: group.id?.toString() ?? '',
+    name: group.props?.name ?? '',
+  }))
+
+  if (identifierIsUuid) {
+    const byUuid = entries.find((entry) => entry.uuid === identifier)
+    if (byUuid) {
+      return byUuid.uuid
+    }
+  }
+
+  const caseSensitive = entries.filter((entry) => entry.name === identifier)
+  const matches =
+    caseSensitive.length > 0
+      ? caseSensitive
+      : entries.filter((entry) => entry.name.toLowerCase() === identifier.toLowerCase())
+
+  if (matches.length === 1) {
+    return matches[0].uuid
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `"${identifier}" is ambiguous — it matches ${matches.length} groups: ${matches
+        .map((entry) => entry.uuid)
+        .join(', ')}. Pass the group uuid instead.`,
+    )
+  }
+  throw new Error(`no group found for "${identifier}"`)
 }
 
 async function directRoleNames(user: User): Promise<string[]> {
@@ -197,6 +241,15 @@ async function runGroup(container: any, args: string[]): Promise<number> {
     return user.uuid
   }
 
+  // Resolve a <group> argument (a group name OR a group uuid) to a group uuid.
+  // Fetches the group list once per invocation via Auth_ListGroups.
+  const resolveGroupUuid = async (identifier: string): Promise<string> => {
+    const listGroups = container.get(TYPES.Auth_ListGroups) as UseCase<undefined>
+    const groups = requireResult(await listGroups.execute(undefined)) as GroupLike[]
+    const identifierIsUuid = !Uuid.create(identifier).isFailed()
+    return matchGroupUuidInList(groups, identifier, identifierIsUuid)
+  }
+
   switch (sub) {
     case 'list': {
       const listGroups = container.get(TYPES.Auth_ListGroups) as UseCase<undefined>
@@ -230,10 +283,11 @@ async function runGroup(container: any, args: string[]): Promise<number> {
     }
 
     case 'delete': {
-      const groupUuid = rest[0]
-      if (!groupUuid) {
-        throw new Error('group delete <groupUuid>')
+      const groupArg = rest[0]
+      if (!groupArg) {
+        throw new Error('group delete <group>')
       }
+      const groupUuid = await resolveGroupUuid(groupArg)
       const deleteGroup = container.get(TYPES.Auth_DeleteGroup) as UseCase<{ groupUuid: string }>
       requireResult(await deleteGroup.execute({ groupUuid }))
       process.stdout.write(`Deleted group ${groupUuid}\n`)
@@ -241,10 +295,11 @@ async function runGroup(container: any, args: string[]): Promise<number> {
     }
 
     case 'set-roles': {
-      const [groupUuid, rolesCsv] = rest
-      if (!groupUuid || !rolesCsv) {
-        throw new Error('group set-roles <groupUuid> <role1,role2>')
+      const [groupArg, rolesCsv] = rest
+      if (!groupArg || !rolesCsv) {
+        throw new Error('group set-roles <group> <role1,role2>')
       }
+      const groupUuid = await resolveGroupUuid(groupArg)
       const setRoles = container.get(TYPES.Auth_SetGroupRoles) as UseCase<{ groupUuid: string; roleNames: string[] }>
       requireResult(
         await setRoles.execute({
@@ -257,10 +312,11 @@ async function runGroup(container: any, args: string[]): Promise<number> {
     }
 
     case 'members': {
-      const groupUuid = rest[0]
-      if (!groupUuid) {
-        throw new Error('group members <groupUuid>')
+      const groupArg = rest[0]
+      if (!groupArg) {
+        throw new Error('group members <group>')
       }
+      const groupUuid = await resolveGroupUuid(groupArg)
       const listMembers = container.get(TYPES.Auth_ListGroupMembers) as UseCase<{ groupUuid: string }>
       const members = requireResult(await listMembers.execute({ groupUuid })) as Array<{
         uuid: string
@@ -277,10 +333,11 @@ async function runGroup(container: any, args: string[]): Promise<number> {
 
     case 'add-user':
     case 'remove-user': {
-      const [groupUuid, identifier] = rest
-      if (!groupUuid || !identifier) {
-        throw new Error(`group ${sub} <groupUuid> <user>`)
+      const [groupArg, identifier] = rest
+      if (!groupArg || !identifier) {
+        throw new Error(`group ${sub} <group> <user>`)
       }
+      const groupUuid = await resolveGroupUuid(groupArg)
       const userUuid = await resolveUserUuid(identifier)
       const symbol = sub === 'add-user' ? TYPES.Auth_AddUserToGroup : TYPES.Auth_RemoveUserFromGroup
       const useCase = container.get(symbol) as UseCase<{ groupUuid: string; userUuid: string }>
