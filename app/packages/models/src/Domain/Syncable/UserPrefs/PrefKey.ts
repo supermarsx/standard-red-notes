@@ -120,6 +120,11 @@ export enum PrefKey {
   // in device-local storage so each device checks independently.
   UpdateCheckAutoEnabled = 'updateCheckAutoEnabled',
   UpdateCheckInterval = 'updateCheckInterval',
+  // Standard Red Notes: whether the "What's New" entry (release notes/changelog)
+  // is shown in the Preferences menu. Defaults OFF — the section stays hidden
+  // (including its unread-changelog badge and auto-open behavior) until the user
+  // enables it via Preferences → General → Updates.
+  ShowWhatsNewSection = 'showWhatsNewSection',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -244,6 +249,7 @@ export type PrefValue = {
   [PrefKey.StorageMaxUsageBytes]: number
   [PrefKey.UpdateCheckAutoEnabled]: boolean
   [PrefKey.UpdateCheckInterval]: UpdateCheckIntervalValue
+  [PrefKey.ShowWhatsNewSection]: boolean
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.

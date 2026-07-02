@@ -34,6 +34,7 @@ const Updates: FunctionComponent = () => {
 
   const autoEnabled = usePreference(PrefKey.UpdateCheckAutoEnabled)
   const interval = usePreference(PrefKey.UpdateCheckInterval)
+  const showWhatsNew = usePreference(PrefKey.ShowWhatsNewSection)
 
   const [snapshot, setSnapshot] = useState<UpdateCheckSnapshot | undefined>(() => readLastStatusSnapshot())
   const [isChecking, setIsChecking] = useState(false)
@@ -58,6 +59,10 @@ const Updates: FunctionComponent = () => {
   const toggleAutoCheck = useCallback(() => {
     void application.setPreference(PrefKey.UpdateCheckAutoEnabled, !autoEnabled)
   }, [application, autoEnabled])
+
+  const toggleShowWhatsNew = useCallback(() => {
+    void application.setPreference(PrefKey.ShowWhatsNewSection, !showWhatsNew)
+  }, [application, showWhatsNew])
 
   const changeInterval = useCallback(
     (value: string) => {
@@ -161,6 +166,19 @@ const Updates: FunctionComponent = () => {
               disabled={!autoEnabled}
             />
           </div>
+        </div>
+
+        <HorizontalSeparator classes="my-4" />
+
+        <div className="flex justify-between gap-2 md:items-center">
+          <div className="flex flex-col">
+            <Subtitle>Show What&apos;s New in preferences</Subtitle>
+            <Text>
+              Show the What&apos;s New section (release notes) in the preferences menu. When hidden, its unread badge
+              is hidden too.
+            </Text>
+          </div>
+          <Switch onChange={toggleShowWhatsNew} checked={showWhatsNew} />
         </div>
       </PreferencesSegment>
     </PreferencesGroup>

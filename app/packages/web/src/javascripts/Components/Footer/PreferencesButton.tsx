@@ -1,4 +1,4 @@
-import { compareSemVersions, StatusServiceEvent } from '@standardnotes/snjs'
+import { compareSemVersions, PrefKey, StatusServiceEvent } from '@standardnotes/snjs'
 import { keyboardStringForShortcut, OPEN_PREFERENCES_COMMAND } from '@standardnotes/ui-services'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useApplication } from '../ApplicationProvider'
@@ -8,6 +8,7 @@ import StyledTooltip from '../StyledTooltip/StyledTooltip'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import RoundIconButton from '../Button/RoundIconButton'
 import CountBubble from '../Preferences/PreferencesComponents/CountBubble'
+import usePreference from '@/Hooks/usePreference'
 
 type Props = {
   openPreferences: (openWhatsNew: boolean) => void
@@ -22,14 +23,19 @@ const PreferencesButton = ({ openPreferences }: Props) => {
     [keyboardService],
   )
 
+  // Standard Red Notes: the What's New section is opt-in (hidden by default).
+  // While hidden, the unread-changelog dot and the "open preferences straight to
+  // What's New" behavior are suppressed as well.
+  const showWhatsNewSection = usePreference(PrefKey.ShowWhatsNewSection)
+
   const [changelogLastReadVersion, setChangelogLastReadVersion] = useState(() =>
     application.changelogService.getLastReadVersion(),
   )
   const isChangelogUnread = useMemo(() => {
-    return changelogLastReadVersion && !application.isNativeMobileWeb()
+    return showWhatsNewSection && changelogLastReadVersion && !application.isNativeMobileWeb()
       ? compareSemVersions(application.version, changelogLastReadVersion) > 0
       : false
-  }, [application, changelogLastReadVersion])
+  }, [application, changelogLastReadVersion, showWhatsNewSection])
   useEffect(
     () => application.changelogService.addLastReadChangeListener(setChangelogLastReadVersion),
     [application.changelogService],

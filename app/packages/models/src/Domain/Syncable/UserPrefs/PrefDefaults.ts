@@ -108,6 +108,10 @@ export const PrefDefaults = {
   // automatic checks. Last-checked time is device-local, not a synced pref.
   [PrefKey.UpdateCheckAutoEnabled]: true,
   [PrefKey.UpdateCheckInterval]: 'every-week',
+  // Standard Red Notes: the "What's New" section in Preferences is hidden by
+  // default; users opt in via Preferences → General → Updates. Hiding it also
+  // suppresses the unread-changelog dot and the open-to-What's-New behavior.
+  [PrefKey.ShowWhatsNewSection]: false,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

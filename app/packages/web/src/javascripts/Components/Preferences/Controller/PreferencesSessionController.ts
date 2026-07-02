@@ -3,6 +3,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { PackageProvider } from '../Panes/Plugins/PackageProvider'
 import { securityPrefsHasBubble } from '../Panes/Security/securityPrefsHasBubble'
 import { PreferencePaneId, StatusServiceEvent } from '@standardnotes/services'
+import { ApplicationEvent, PrefKey, PrefDefaults } from '@standardnotes/snjs'
 import { isDesktopApplication } from '@/Utils'
 import { PreferencesMenuItem } from './PreferencesMenuItem'
 import { SelectableMenuItem } from './SelectableMenuItem'
@@ -16,6 +17,11 @@ export class PreferencesSessionController {
   private _selectedPane: PreferencePaneId = 'account'
   private _menu: PreferencesMenuItem[]
   private _extensionLatestVersions: PackageProvider = new PackageProvider(new Map())
+
+  // Standard Red Notes: the "What's New" entry is hidden unless the user opts in
+  // (Preferences → General → Updates). Kept as an observable mirror of the pref
+  // so toggling it while Preferences is open adds/removes the entry immediately.
+  private _showWhatsNew: boolean
 
   constructor(
     private application: WebApplication,
@@ -74,6 +80,11 @@ export class PreferencesSessionController {
 
     this._menu = menuItems.sort((a, b) => a.order - b.order)
 
+    this._showWhatsNew = application.getPreference(
+      PrefKey.ShowWhatsNewSection,
+      PrefDefaults[PrefKey.ShowWhatsNewSection],
+    )
+
     this.loadLatestVersions()
 
     makeAutoObservable<
@@ -82,15 +93,19 @@ export class PreferencesSessionController {
       | '_twoFactorAuth'
       | '_extensionPanes'
       | '_extensionLatestVersions'
+      | '_showWhatsNew'
       | 'loadLatestVersions'
       | 'updateMenuBubbleCounts'
+      | 'updateShowWhatsNew'
     >(this, {
       _twoFactorAuth: observable,
       _selectedPane: observable,
       _extensionPanes: observable.ref,
       _extensionLatestVersions: observable.ref,
+      _showWhatsNew: observable,
       loadLatestVersions: action,
       updateMenuBubbleCounts: action,
+      updateShowWhatsNew: action,
     })
 
     this.application.status.addEventObserver((event) => {
@@ -98,6 +113,28 @@ export class PreferencesSessionController {
         this.updateMenuBubbleCounts()
       }
     })
+
+    // React to the ShowWhatsNewSection pref changing while Preferences is open
+    // (the toggle lives inside General → Updates), so the menu entry appears or
+    // disappears without a reload.
+    this.application.addEventObserver(async () => {
+      this.updateShowWhatsNew()
+    }, ApplicationEvent.PreferencesChanged)
+  }
+
+  private updateShowWhatsNew(): void {
+    this._showWhatsNew = this.application.getPreference(
+      PrefKey.ShowWhatsNewSection,
+      PrefDefaults[PrefKey.ShowWhatsNewSection],
+    )
+  }
+
+  /** The menu with opt-in entries (currently only "What's New") filtered out when hidden. */
+  private get visibleMenu(): PreferencesMenuItem[] {
+    if (this._showWhatsNew) {
+      return this._menu
+    }
+    return this._menu.filter((item) => item.id !== 'whats-new')
   }
 
   private updateMenuBubbleCounts(): void {
@@ -124,7 +161,7 @@ export class PreferencesSessionController {
   }
 
   get menuItems(): SelectableMenuItem[] {
-    const menuItems = this._menu.map((preference) => {
+    const menuItems = this.visibleMenu.map((preference) => {
       const item: SelectableMenuItem = {
         ...preference,
         selected: preference.id === this._selectedPane,
@@ -138,7 +175,10 @@ export class PreferencesSessionController {
   }
 
   get selectedMenuItem(): PreferencesMenuItem | undefined {
-    return this._menu.find((item) => item.id === this._selectedPane)
+    // Looks up against the VISIBLE menu so that a hidden pane (e.g. 'whats-new'
+    // while its opt-in pref is off) can never be selected — selectedPaneId then
+    // falls back to 'account', which also gates any programmatic deep-link.
+    return this.visibleMenu.find((item) => item.id === this._selectedPane)
   }
 
   get selectedPaneId(): PreferencePaneId {
