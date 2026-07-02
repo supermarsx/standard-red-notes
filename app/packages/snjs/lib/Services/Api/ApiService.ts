@@ -792,6 +792,83 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: paginated admin audit log (newest first). All filters
+   * are optional; the server clamps `limit` to its own maximum (200).
+   */
+  async adminGetAuditLog(options: {
+    limit?: number
+    offset?: number
+    actorUuid?: string
+    action?: string
+  }): Promise<HttpResponse> {
+    const params: Record<string, string> = {}
+    if (options.limit !== undefined) {
+      params.limit = String(options.limit)
+    }
+    if (options.offset !== undefined) {
+      params.offset = String(options.offset)
+    }
+    if (options.actorUuid) {
+      params.actorUuid = options.actorUuid
+    }
+    if (options.action) {
+      params.action = options.action
+    }
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.auditLog),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load the audit log.',
+      params,
+    })
+  }
+
+  /**
+   * Standard Red Notes: read-only gateway server status for the admin panel's
+   * Server tab (env master switches + gateway/auth health). Admin-gated at the
+   * gateway.
+   */
+  async adminGetServerStatus(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.serverStatus),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load server status.',
+    })
+  }
+
+  /** Standard Red Notes: grant or revoke the admin (internal team) role. */
+  async adminSetUserAdminRole(userUuid: string, granted: boolean): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.userAdminRole(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to update admin role.',
+      params: { granted },
+    })
+  }
+
+  /** Standard Red Notes: clear a user's 2FA secret (and recovery requirement). */
+  async adminResetUserMFA(userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.userMfaSecret(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to reset 2FA.',
+    })
+  }
+
+  /** Standard Red Notes: trigger a storage-quota recalculation for a user. */
+  async adminFixUserQuota(userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.userFixQuota(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to fix storage quota.',
+    })
+  }
+
+  /**
    * Standard Red Notes: RBAC groups & granular permissions admin API. All routes
    * hit the gateway /v1/admin/* endpoints, which the auth server re-gates on the
    * INTERNAL_TEAM_USER role.

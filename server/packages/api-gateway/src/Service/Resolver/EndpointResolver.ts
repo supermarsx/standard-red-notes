@@ -110,6 +110,9 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[POST]:admin/groups/:groupUuid/members', 'admin.addUserToGroup'],
     ['[DELETE]:admin/groups/:groupUuid/members/:userUuid', 'admin.removeUserFromGroup'],
     ['[GET]:admin/users/:userUuid/effective-permissions', 'admin.getUserEffectivePermissions'],
+    ['[PUT]:admin/users/:userUuid/admin-role', 'admin.setUserAdminRole'],
+    ['[DELETE]:admin/users/:userUuid/mfa-secret', 'admin.resetUserMFA'],
+    ['[POST]:admin/users/:userUuid/fix-quota', 'admin.fixUserQuota'],
     // Syncing Server
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],

@@ -12,6 +12,7 @@ import { useTabState } from '@/Components/Tabs/useTabState'
 import AdminUsersTab, { LookedUpUser } from './AdminUsersTab'
 import AdminGroupsTab from './AdminGroupsTab'
 import AdminServerTab from './AdminServerTab'
+import AdminAuditTab from './AdminAuditTab'
 
 type Props = {
   application: WebApplication
@@ -19,7 +20,8 @@ type Props = {
 
 /**
  * Admin pane shell: role gate + the "admin role missing on the server" notice,
- * with the actual tooling split into sub-tabs (Users / Groups & roles / Server).
+ * with the actual tooling split into sub-tabs (Users / Groups & roles / Server /
+ * Audit log).
  * Each tab's content lives in its own component and loads its data when the tab
  * is opened; only cross-tab state (the looked-up user and the 403 notice) is
  * kept here so it survives tab switches within a session.
@@ -92,6 +94,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           { id: 'users', title: 'Users' },
           { id: 'groups', title: 'Groups & roles' },
           { id: 'server', title: 'Server' },
+          { id: 'audit', title: 'Audit log' },
         ]}
         state={tabState}
       >
@@ -110,6 +113,9 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         </TabPanel>
         <TabPanel state={tabState} id="server" className="p-6">
           <AdminServerTab application={application} noteIfForbidden={noteIfForbidden} />
+        </TabPanel>
+        <TabPanel state={tabState} id="audit" className="p-6">
+          <AdminAuditTab application={application} noteIfForbidden={noteIfForbidden} />
         </TabPanel>
       </TabsContainer>
     </PreferencesPane>

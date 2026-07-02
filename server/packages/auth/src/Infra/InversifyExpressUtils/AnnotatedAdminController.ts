@@ -29,6 +29,8 @@ import { GetUserEffectivePermissions } from '../../Domain/UseCase/GetUserEffecti
 import { GetRegularSubscriptionForUser } from '../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSubscriptionSetting } from '../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
+import { RoleServiceInterface } from '../../Domain/Role/RoleServiceInterface'
+import { FixStorageQuotaForUser } from '../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
 
 @controller('/admin')
 export class AnnotatedAdminController extends BaseAdminController {
@@ -53,6 +55,12 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_GetSubscriptionSetting) override doGetSubscriptionSetting: GetSubscriptionSetting,
     @inject(TYPES.Auth_SetSubscriptionSettingValue)
     override doSetSubscriptionSettingValue: SetSubscriptionSettingValue,
+    // Standard Red Notes: admin-role grant/revoke + reset-mfa/fix-quota panel ops.
+    @inject(TYPES.Auth_RoleService) override roleService: RoleServiceInterface,
+    @inject(TYPES.Auth_FixStorageQuotaForUser) override doFixStorageQuota: FixStorageQuotaForUser,
+    // Standard Red Notes: read-only env master switches for the admin panel.
+    @inject(TYPES.Auth_DISABLE_USER_REGISTRATION) override registrationDisabledByEnv: boolean,
+    @inject(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED) override nextcloudBackupsEnabledByEnv: boolean,
     @inject(TYPES.Auth_CreateGroup) override doCreateGroup: CreateGroup,
     @inject(TYPES.Auth_ListGroups) override doListGroups: ListGroups,
     @inject(TYPES.Auth_DeleteGroup) override doDeleteGroup: DeleteGroup,
@@ -80,6 +88,10 @@ export class AnnotatedAdminController extends BaseAdminController {
       doGetRegularSubscription,
       doGetSubscriptionSetting,
       doSetSubscriptionSettingValue,
+      roleService,
+      doFixStorageQuota,
+      registrationDisabledByEnv,
+      nextcloudBackupsEnabledByEnv,
       doCreateGroup,
       doListGroups,
       doDeleteGroup,
@@ -207,5 +219,22 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpGet('/users/:userUuid/effective-permissions')
   override async getUserEffectivePermissions(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getUserEffectivePermissions(request, response)
+  }
+
+  @httpPut('/users/:userUuid/admin-role')
+  override async setUserAdminRole(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setUserAdminRole(request, response)
+  }
+
+  // NOTE: '/users/:userUuid/mfa-secret', not '/users/:userUuid/mfa' — the latter
+  // is the pre-existing internal (ungated) deleteMFASetting route above.
+  @httpDelete('/users/:userUuid/mfa-secret')
+  override async resetUserMFA(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.resetUserMFA(request, response)
+  }
+
+  @httpPost('/users/:userUuid/fix-quota')
+  override async fixUserQuota(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.fixUserQuota(request, response)
   }
 }

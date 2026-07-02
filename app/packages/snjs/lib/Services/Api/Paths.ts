@@ -54,6 +54,14 @@ const AdminPaths = {
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
   registration: '/v1/admin/registration',
+  // Standard Red Notes: admin audit log (paginated, newest-first).
+  auditLog: '/v1/admin/audit-log',
+  // Standard Red Notes: read-only gateway server status (master switches + health).
+  serverStatus: '/v1/admin/server-status',
+  // Standard Red Notes: grant/revoke the admin role, reset 2FA, fix quota.
+  userAdminRole: (userUuid: string) => `/v1/admin/users/${userUuid}/admin-role`,
+  userMfaSecret: (userUuid: string) => `/v1/admin/users/${userUuid}/mfa-secret`,
+  userFixQuota: (userUuid: string) => `/v1/admin/users/${userUuid}/fix-quota`,
   // Standard Red Notes: RBAC groups & granular permissions.
   roles: '/v1/admin/roles',
   groups: '/v1/admin/groups',

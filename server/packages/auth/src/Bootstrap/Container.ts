@@ -2908,6 +2908,14 @@ export class ContainerConfigLoader {
             container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
             container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
             container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
+            // Standard Red Notes: admin-role grant/revoke + reset-mfa/fix-quota
+            // panel ops, and the read-only env master switches (see
+            // BaseAdminController). The trailing RBAC group deps remain omitted
+            // here, mirroring the pre-existing home-server behaviour.
+            container.get<RoleServiceInterface>(TYPES.Auth_RoleService),
+            container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser),
+            container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
+            container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
           ),
         )
       container

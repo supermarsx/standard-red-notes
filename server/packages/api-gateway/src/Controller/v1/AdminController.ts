@@ -1,9 +1,23 @@
 import { Request, Response } from 'express'
-import { inject } from 'inversify'
+import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
+import { RoleName } from '@standardnotes/domain-core'
+import { Role } from '@standardnotes/security'
 import { TYPES } from '../../Bootstrap/Types'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
+import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
+import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
+
+/**
+ * Standard Red Notes: minimal fetch shape used by the server-status endpoint to
+ * probe the auth server's readiness. Injected-free — the controller uses the
+ * runtime's global fetch; the type keeps the handler unit-testable.
+ */
+export type ReadinessFetchLike = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; signal?: AbortSignal },
+) => Promise<{ status: number; json: () => Promise<unknown> }>
 
 /**
  * Standard Red Notes: gateway routes for the in-app admin panel. These proxy to
@@ -19,8 +33,33 @@ export class AdminController extends BaseHttpController {
   constructor(
     @inject(TYPES.ApiGateway_ServiceProxy) private serviceProxy: ServiceProxyInterface,
     @inject(TYPES.ApiGateway_EndpointResolver) private endpointResolver: EndpointResolverInterface,
+    // Standard Red Notes: read-only server-status dependencies (all pre-existing
+    // bindings). Optional so tests can construct the controller without them and
+    // the endpoint degrades field-by-field when one is absent.
+    @inject(TYPES.ApiGateway_OCR_SERVER_ENABLED) @optional() private ocrServerEnabled?: boolean,
+    @inject(TYPES.ApiGateway_WORKFLOWS_ENABLED) @optional() private workflowsEnabled?: boolean,
+    @inject(TYPES.ApiGateway_UpdateCheckService) @optional() private updateCheckService?: UpdateCheckService,
+    @inject(TYPES.ApiGateway_ASSISTANT_PROVIDER_CONFIG)
+    @optional()
+    private assistantProviderConfig?: AssistantProviderConfig,
+    @inject(TYPES.ApiGateway_AUTH_SERVER_URL) @optional() private authServerUrl?: string,
+    // Redis is only bound when a Redis cache is configured; its absence is
+    // reported as "not configured" (null) rather than unhealthy.
+    @inject(TYPES.ApiGateway_Redis) @optional() private redis?: { ping(): Promise<string> },
   ) {
     super()
+  }
+
+  /**
+   * Standard Red Notes: same admin gate the auth server enforces, applied at the
+   * gateway for the gateway-LOCAL server-status endpoint (which never reaches
+   * the auth admin controller). The roles come from the verified cross-service
+   * token that the required auth middleware placed on response.locals.
+   */
+  private requestorIsAdmin(response: Response): boolean {
+    const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
+
+    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
   }
 
   @httpGet('/lookup-user/:email', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
@@ -236,5 +275,150 @@ export class AdminController extends BaseHttpController {
       ),
       request.body,
     )
+  }
+
+  @httpPut('/users/:userUuid/admin-role', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async setUserAdminRole(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'PUT',
+        'admin/users/:userUuid/admin-role',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpDelete('/users/:userUuid/mfa-secret', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async resetUserMFA(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'admin/users/:userUuid/mfa-secret',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpPost('/users/:userUuid/fix-quota', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async fixUserQuota(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'POST',
+        'admin/users/:userUuid/fix-quota',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  /**
+   * Standard Red Notes: gateway-LOCAL read-only server status for the admin
+   * panel's Server tab. Admin-gated (403 for non-admins, mirroring the auth
+   * admin controller) because it reveals deployment/topology detail. Returns:
+   *   - masterSwitches: which env-gated operator features are on at the gateway
+   *     (server OCR, workflows, assistant providers, update check). The
+   *     auth-held switches (NEXTCLOUD_BACKUPS_ENABLED, DISABLE_USER_REGISTRATION)
+   *     ride along on GET /v1/admin/registration instead.
+   *   - health: the gateway's own Redis reachability (null = no Redis
+   *     configured) plus the auth server's /healthcheck/readiness (DB + Redis),
+   *     probed server-side under a short timeout. Every failure degrades to a
+   *     field value — this endpoint itself always answers 200 for admins.
+   */
+  @httpGet('/server-status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getServerStatus(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    const assistantProviders = this.assistantProviderConfig ? configuredProviders(this.assistantProviderConfig) : []
+    // Never throws; unset UPDATE_CHECK_URL reports { configured: false }.
+    const updateCheck = this.updateCheckService ? await this.updateCheckService.getStatus(false) : null
+
+    let gatewayRedis: boolean | null = null
+    if (this.redis) {
+      try {
+        await this.withTimeout(this.redis.ping(), 2000)
+        gatewayRedis = true
+      } catch {
+        gatewayRedis = false
+      }
+    }
+
+    const auth = await this.probeAuthReadiness()
+
+    response.json({
+      masterSwitches: {
+        ocrServerEnabled: this.ocrServerEnabled ?? false,
+        workflowsEnabled: this.workflowsEnabled ?? false,
+        assistantConfigured: assistantProviders.length > 0,
+        assistantProviders,
+        updateCheckConfigured: updateCheck?.configured ?? false,
+        currentVersion: updateCheck?.currentVersion ?? null,
+      },
+      health: {
+        gateway: { redis: gatewayRedis },
+        auth,
+      },
+    })
+  }
+
+  /**
+   * Probe the auth server's /healthcheck/readiness (DB `SELECT 1` + Redis PING)
+   * server-side. A 503 from the endpoint still carries the per-check states, so
+   * both 200 and 503 bodies are surfaced; anything else degrades to
+   * { reachable: false }.
+   */
+  private async probeAuthReadiness(
+    fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
+  ): Promise<{ reachable: boolean; status?: string; checks?: Record<string, boolean> }> {
+    if (!this.authServerUrl) {
+      return { reachable: false }
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3000)
+    try {
+      const readinessResponse = await fetchFn(`${this.authServerUrl}/healthcheck/readiness`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      if (readinessResponse.status !== 200 && readinessResponse.status !== 503) {
+        return { reachable: false }
+      }
+      const body = (await readinessResponse.json()) as { status?: string; checks?: Record<string, boolean> }
+
+      return { reachable: true, status: body.status, checks: body.checks }
+    } catch {
+      return { reachable: false }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('health check timed out')), timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer) {
+        clearTimeout(timer)
+      }
+    }
   }
 }

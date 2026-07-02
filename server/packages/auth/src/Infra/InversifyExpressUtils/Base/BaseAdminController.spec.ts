@@ -11,6 +11,10 @@ import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscript
 import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { User } from '../../../Domain/User/User'
+import { RoleServiceInterface } from '../../../Domain/Role/RoleServiceInterface'
+import { FixStorageQuotaForUser } from '../../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
+import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
+import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
 import { BaseAdminController } from './BaseAdminController'
 
 describe('BaseAdminController ban endpoints', () => {
@@ -415,5 +419,322 @@ describe('BaseAdminController workflows-enabled flag (admin-manageable)', () => 
     expect((result.json as { flags: Record<string, string | null> }).flags).toHaveProperty(
       SettingName.NAMES.WorkflowsEnabled,
     )
+  })
+})
+
+describe('BaseAdminController admin-role / reset-MFA / fix-quota endpoints', () => {
+  const targetUuid = '84c0f8e8-544a-4c7e-9adf-26209303bc1d'
+  const actorUuid = '00000000-0000-4000-8000-000000000001'
+
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let auditLogWriter: AuditLogWriterInterface
+  let roleService: RoleServiceInterface
+  let doFixStorageQuota: FixStorageQuotaForUser
+  let request: Request
+  let adminResponse: Response
+  let nonAdminResponse: Response
+
+  const createController = (options: { withRoleService?: boolean; withFixQuota?: boolean } = {}) =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+      undefined,
+      undefined,
+      auditLogWriter,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.withRoleService === false ? undefined : roleService,
+      options.withFixQuota === false ? undefined : doFixStorageQuota,
+    )
+
+  beforeEach(() => {
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    doDeleteSetting.execute = jest.fn().mockResolvedValue({ success: true })
+
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue({
+      uuid: targetUuid,
+      email: 'target@test.com',
+    } as unknown as User)
+
+    auditLogWriter = {} as jest.Mocked<AuditLogWriterInterface>
+    auditLogWriter.write = jest.fn().mockResolvedValue(undefined)
+
+    roleService = {} as jest.Mocked<RoleServiceInterface>
+    roleService.addRoleToUser = jest.fn().mockResolvedValue(undefined)
+    roleService.removeRoleFromUser = jest.fn().mockResolvedValue(undefined)
+
+    doFixStorageQuota = {} as jest.Mocked<FixStorageQuotaForUser>
+    doFixStorageQuota.execute = jest.fn().mockResolvedValue(Result.ok(undefined))
+
+    request = {
+      params: { userUuid: targetUuid },
+      body: { granted: true },
+      headers: {},
+    } as unknown as Request
+
+    adminResponse = {
+      locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }], user: { uuid: actorUuid } },
+    } as unknown as Response
+
+    nonAdminResponse = {
+      locals: { roles: [{ name: RoleName.NAMES.CoreUser }], user: { uuid: actorUuid } },
+    } as unknown as Response
+  })
+
+  it('setUserAdminRole should reject a non-admin requestor with 403', async () => {
+    const result = await createController().setUserAdminRole(request, nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(roleService.addRoleToUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserAdminRole should require a boolean granted flag', async () => {
+    request.body = {}
+
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(roleService.addRoleToUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserAdminRole should reject an invalid user uuid', async () => {
+    request.params = { userUuid: 'not-a-uuid' } as unknown as Request['params']
+
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(roleService.addRoleToUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserAdminRole should reject an unknown user', async () => {
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue(null)
+
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(roleService.addRoleToUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserAdminRole should refuse self-revocation', async () => {
+    request.params = { userUuid: actorUuid } as unknown as Request['params']
+    request.body = { granted: false }
+    userRepository.findOneByUuid = jest
+      .fn()
+      .mockResolvedValue({ uuid: actorUuid, email: 'admin@test.com' } as unknown as User)
+
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(roleService.removeRoleFromUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserAdminRole should grant the admin role and write an audit entry', async () => {
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(roleService.addRoleToUser).toHaveBeenCalled()
+    const [calledUuid, calledRole] = (roleService.addRoleToUser as jest.Mock).mock.calls[0]
+    expect(calledUuid.value).toEqual(targetUuid)
+    expect(calledRole.value).toEqual(RoleName.NAMES.InternalTeamUser)
+    expect(auditLogWriter.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUuid,
+        action: AuditAction.RoleChanged,
+        targetUuid,
+        metadata: { role: RoleName.NAMES.InternalTeamUser, granted: true },
+      }),
+    )
+    expect(result.json).toMatchObject({ success: true, userUuid: targetUuid, granted: true })
+  })
+
+  it('setUserAdminRole should revoke the admin role from another user', async () => {
+    request.body = { granted: false }
+
+    const result = await createController().setUserAdminRole(request, adminResponse)
+
+    expect(roleService.removeRoleFromUser).toHaveBeenCalled()
+    expect(roleService.addRoleToUser).not.toHaveBeenCalled()
+    expect(result.json).toMatchObject({ success: true, userUuid: targetUuid, granted: false })
+  })
+
+  it('setUserAdminRole should answer 500 when role management is not wired', async () => {
+    const result = await createController({ withRoleService: false }).setUserAdminRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(500)
+  })
+
+  it('resetUserMFA should reject a non-admin requestor with 403', async () => {
+    const result = await createController().resetUserMFA(request, nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(doDeleteSetting.execute).not.toHaveBeenCalled()
+  })
+
+  it('resetUserMFA should soft-delete the MFA secret and write an audit entry', async () => {
+    const result = await createController().resetUserMFA(request, adminResponse)
+
+    expect(doDeleteSetting.execute).toHaveBeenCalledWith({
+      userUuid: targetUuid,
+      settingName: SettingName.NAMES.MfaSecret,
+      softDelete: true,
+    })
+    expect(auditLogWriter.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUuid,
+        action: AuditAction.MfaReset,
+        targetUuid,
+        metadata: { name: SettingName.NAMES.MfaSecret },
+      }),
+    )
+    expect(result.json).toMatchObject({ success: true, userUuid: targetUuid })
+  })
+
+  it('resetUserMFA should answer 400 when the user has no 2FA configured', async () => {
+    doDeleteSetting.execute = jest.fn().mockResolvedValue({ success: false })
+
+    const result = await createController().resetUserMFA(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(auditLogWriter.write).not.toHaveBeenCalled()
+  })
+
+  it('fixUserQuota should reject a non-admin requestor with 403', async () => {
+    const result = await createController().fixUserQuota(request, nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(doFixStorageQuota.execute).not.toHaveBeenCalled()
+  })
+
+  it('fixUserQuota should answer 500 when quota recalculation is not wired', async () => {
+    const result = await createController({ withFixQuota: false }).fixUserQuota(request, adminResponse)
+
+    expect(result.statusCode).toEqual(500)
+  })
+
+  it('fixUserQuota should reject an unknown user', async () => {
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue(null)
+
+    const result = await createController().fixUserQuota(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(doFixStorageQuota.execute).not.toHaveBeenCalled()
+  })
+
+  it('fixUserQuota should recalculate by the resolved email and write an audit entry', async () => {
+    const result = await createController().fixUserQuota(request, adminResponse)
+
+    expect(doFixStorageQuota.execute).toHaveBeenCalledWith({ userEmail: 'target@test.com' })
+    expect(auditLogWriter.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUuid,
+        action: AuditAction.QuotaRecalculated,
+        targetUuid,
+      }),
+    )
+    expect(result.json).toMatchObject({ success: true, userUuid: targetUuid })
+  })
+
+  it('fixUserQuota should surface a use case failure as a 400', async () => {
+    doFixStorageQuota.execute = jest.fn().mockResolvedValue(Result.fail('boom'))
+
+    const result = await createController().fixUserQuota(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(auditLogWriter.write).not.toHaveBeenCalled()
+  })
+})
+
+describe('BaseAdminController registration flag env read-out', () => {
+  let doDeleteSetting: DeleteSetting
+  let doGetSetting: GetSetting
+  let userRepository: UserRepositoryInterface
+  let createSubscriptionToken: CreateSubscriptionToken
+  let createOfflineSubscriptionToken: CreateOfflineSubscriptionToken
+  let setSettingValue: SetSettingValue
+  let setUserBanStatus: SetUserBanStatus
+  let request: Request
+  let adminResponse: Response
+
+  const createController = (envFlags?: { registrationDisabledByEnv: boolean; nextcloudBackupsEnabledByEnv: boolean }) =>
+    new BaseAdminController(
+      doDeleteSetting,
+      doGetSetting,
+      userRepository,
+      createSubscriptionToken,
+      createOfflineSubscriptionToken,
+      setSettingValue,
+      setUserBanStatus,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      envFlags?.registrationDisabledByEnv,
+      envFlags?.nextcloudBackupsEnabledByEnv,
+    )
+
+  beforeEach(() => {
+    doDeleteSetting = {} as jest.Mocked<DeleteSetting>
+    createSubscriptionToken = {} as jest.Mocked<CreateSubscriptionToken>
+    createOfflineSubscriptionToken = {} as jest.Mocked<CreateOfflineSubscriptionToken>
+    setSettingValue = {} as jest.Mocked<SetSettingValue>
+    setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
+
+    doGetSetting = {} as jest.Mocked<GetSetting>
+    doGetSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'true' }))
+
+    request = { params: {}, body: {}, headers: {} } as unknown as Request
+    adminResponse = {
+      locals: {
+        roles: [{ name: RoleName.NAMES.InternalTeamUser }],
+        user: { uuid: '00000000-0000-4000-8000-000000000001' },
+      },
+    } as unknown as Response
+  })
+
+  it('surfaces the wired env master switches alongside the persisted flag', async () => {
+    const result = await createController({
+      registrationDisabledByEnv: true,
+      nextcloudBackupsEnabledByEnv: false,
+    }).getRegistrationFlag(request, adminResponse)
+
+    expect(result.json).toMatchObject({
+      registrationDisabled: true,
+      env: { registrationDisabled: true, nextcloudBackupsEnabled: false },
+    })
+  })
+
+  it('reports null (unknown) env switches when they are not wired', async () => {
+    const result = await createController().getRegistrationFlag(request, adminResponse)
+
+    expect(result.json).toMatchObject({
+      env: { registrationDisabled: null, nextcloudBackupsEnabled: null },
+    })
   })
 })

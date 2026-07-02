@@ -1,4 +1,11 @@
-import { ControllerContainerInterface, MapperInterface, RoleName, SettingName, Username } from '@standardnotes/domain-core'
+import {
+  ControllerContainerInterface,
+  MapperInterface,
+  RoleName,
+  SettingName,
+  Username,
+  Uuid,
+} from '@standardnotes/domain-core'
 import { BaseHttpController, results } from 'inversify-express-utils'
 import { Request, Response } from 'express'
 import { Role } from '@standardnotes/security'
@@ -32,6 +39,8 @@ import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/se
 import { GetRegularSubscriptionForUser } from '../../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSubscriptionSetting } from '../../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
+import { RoleServiceInterface } from '../../../Domain/Role/RoleServiceInterface'
+import { FixStorageQuotaForUser } from '../../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
 
 /**
  * Standard Red Notes: settings an admin (INTERNAL_TEAM_USER) is allowed to set
@@ -115,6 +124,19 @@ export class BaseAdminController extends BaseHttpController {
     protected doGetRegularSubscription?: GetRegularSubscriptionForUser,
     protected doGetSubscriptionSetting?: GetSubscriptionSetting,
     protected doSetSubscriptionSettingValue?: SetSubscriptionSettingValue,
+    // Standard Red Notes: direct admin-role grant/revoke + panel equivalents of
+    // the srn-admin CLI's reset-mfa and fix-quota commands. Optional so existing
+    // tests that construct this controller with the original arity keep
+    // compiling; the endpoints fail gracefully when absent. Placed before the
+    // group deps for the same home-server container-binding reason as
+    // webhookDispatcher above.
+    protected roleService?: RoleServiceInterface,
+    protected doFixStorageQuota?: FixStorageQuotaForUser,
+    // Standard Red Notes: read-only env master switches surfaced to the admin
+    // panel (through getRegistrationFlag). `undefined` means "not wired" and is
+    // reported as null so the client can render an "unknown" state.
+    protected registrationDisabledByEnv?: boolean,
+    protected nextcloudBackupsEnabledByEnv?: boolean,
     // Standard Red Notes: RBAC groups / effective-permissions dependencies.
     // Optional so existing tests that construct this controller with the original
     // arity keep compiling; the group endpoints fail gracefully when absent.
@@ -156,6 +178,9 @@ export class BaseAdminController extends BaseHttpController {
         'admin.getUserEffectivePermissions',
         this.getUserEffectivePermissions.bind(this),
       )
+      this.controllerContainer.register('admin.setUserAdminRole', this.setUserAdminRole.bind(this))
+      this.controllerContainer.register('admin.resetUserMFA', this.resetUserMFA.bind(this))
+      this.controllerContainer.register('admin.fixUserQuota', this.fixUserQuota.bind(this))
     }
   }
 
@@ -650,6 +675,178 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   /**
+   * Standard Red Notes: grant or revoke the admin role (INTERNAL_TEAM_USER) on a
+   * user, the HTTP surface of the srn-admin CLI's grant-admin / revoke-admin.
+   * Body: { granted: boolean }. Self-revocation is refused so an admin cannot
+   * accidentally lock the panel for themselves (and potentially the instance —
+   * the CLI remains the recovery path either way).
+   */
+  async setUserAdminRole(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.roleService === undefined) {
+      return this.json({ error: { message: 'Role management is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { granted } = request.body as { granted?: boolean }
+
+    if (typeof granted !== 'boolean') {
+      return this.json({ error: { message: 'A boolean `granted` flag is required.' } }, 400)
+    }
+
+    const uuidOrError = Uuid.create(userUuid)
+    if (uuidOrError.isFailed()) {
+      return this.json({ error: { message: 'Invalid user uuid.' } }, 400)
+    }
+    const uuid = uuidOrError.getValue()
+
+    const user = await this.userRepository.findOneByUuid(uuid)
+    if (!user) {
+      return this.json({ error: { message: `No user with uuid '${userUuid}'.` } }, 400)
+    }
+
+    if (!granted && this.actorUuid(response) === userUuid) {
+      return this.json(
+        {
+          error: {
+            message:
+              'You cannot revoke your own admin role from the panel. Ask another admin, or use the srn-admin CLI.',
+          },
+        },
+        400,
+      )
+    }
+
+    const roleNameOrError = RoleName.create(RoleName.NAMES.InternalTeamUser)
+    /* istanbul ignore if -- the canonical role name always parses */
+    if (roleNameOrError.isFailed()) {
+      return this.json({ error: { message: roleNameOrError.getError() } }, 500)
+    }
+    const roleName = roleNameOrError.getValue()
+
+    if (granted) {
+      await this.roleService.addRoleToUser(uuid, roleName)
+    } else {
+      await this.roleService.removeRoleFromUser(uuid, roleName)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      metadata: { role: RoleName.NAMES.InternalTeamUser, granted },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetUuid: userUuid,
+      metadata: { role: RoleName.NAMES.InternalTeamUser, granted },
+    })
+
+    return this.json({ success: true, userUuid, role: RoleName.NAMES.InternalTeamUser, granted })
+  }
+
+  /**
+   * Standard Red Notes: admin-gated "reset 2FA" — clears the user's MFA secret
+   * (and thereby the recovery-code requirement), mirroring the srn-admin CLI's
+   * reset-mfa. Unlike the internal (ungated) deleteMFASetting route, this
+   * enforces the admin role, writes an audit entry and fires the admin webhook.
+   */
+  async resetUserMFA(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+
+    const result = await this.doDeleteSetting.execute({
+      userUuid,
+      settingName: SettingName.NAMES.MfaSecret,
+      softDelete: true,
+    })
+
+    if (!result.success) {
+      return this.json({ error: { message: 'No 2FA configuration found for this user.' } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.MfaReset,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      // Setting NAME only, never a value (the secret is sensitive).
+      metadata: { name: SettingName.NAMES.MfaSecret },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.MfaReset,
+      targetUuid: userUuid,
+      metadata: { name: SettingName.NAMES.MfaSecret },
+    })
+
+    return this.json({ success: true, userUuid })
+  }
+
+  /**
+   * Standard Red Notes: admin-gated "fix quota" — recalculates the user's
+   * FILE_UPLOAD_BYTES_USED from their actual stored files, mirroring the
+   * srn-admin CLI's fix-quota. The recalculation is asynchronous (the use case
+   * zeroes the counter and publishes a FileQuotaRecalculationRequested event the
+   * files worker answers), so the fresh value appears on a later
+   * feature-flags read once processing completes.
+   */
+  async fixUserQuota(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doFixStorageQuota === undefined) {
+      return this.json({ error: { message: 'Quota recalculation is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+
+    const uuidOrError = Uuid.create(userUuid)
+    if (uuidOrError.isFailed()) {
+      return this.json({ error: { message: 'Invalid user uuid.' } }, 400)
+    }
+
+    const user = await this.userRepository.findOneByUuid(uuidOrError.getValue())
+    if (!user) {
+      return this.json({ error: { message: `No user with uuid '${userUuid}'.` } }, 400)
+    }
+
+    const result = await this.doFixStorageQuota.execute({ userEmail: user.email })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.QuotaRecalculated,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      metadata: { name: SettingName.NAMES.FileUploadBytesUsed },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.QuotaRecalculated,
+      targetUuid: userUuid,
+      metadata: { name: SettingName.NAMES.FileUploadBytesUsed },
+    })
+
+    return this.json({ success: true, userUuid })
+  }
+
+  /**
    * Standard Red Notes: admin-only query over the audit log. Supports filtering
    * by actor uuid, action, and an inclusive created_at date range (ISO-8601),
    * plus limit/offset pagination. Returns the matching page newest-first along
@@ -768,7 +965,20 @@ export class BaseAdminController extends BaseHttpController {
 
     const registrationDisabled = result.isFailed() ? false : result.getValue().decryptedValue === 'true'
 
-    return this.json({ registrationDisabled })
+    return this.json({
+      registrationDisabled,
+      // Standard Red Notes: read-only env master switches for the admin panel's
+      // Server tab. `null` means the value was not wired into this deployment
+      // (older binding) and the client renders an "unknown" state.
+      //   - registrationDisabledByEnv: the boot-time DISABLE_USER_REGISTRATION
+      //     env (signup is blocked when EITHER it or the persisted flag is set).
+      //   - nextcloudBackupsEnabledByEnv: the NEXTCLOUD_BACKUPS_ENABLED operator
+      //     master switch gating scheduled Nextcloud backups instance-wide.
+      env: {
+        registrationDisabled: this.registrationDisabledByEnv ?? null,
+        nextcloudBackupsEnabled: this.nextcloudBackupsEnabledByEnv ?? null,
+      },
+    })
   }
 
   /**

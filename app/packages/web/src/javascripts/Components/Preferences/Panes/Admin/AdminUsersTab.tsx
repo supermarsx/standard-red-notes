@@ -50,10 +50,21 @@ const FILE_UPLOAD_BYTES_LIMIT = 'FILE_UPLOAD_BYTES_LIMIT'
 const BYTES_IN_ONE_MEGABYTE = 1_048_576
 const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
 
+// The admin (internal team) role name — must match the server's
+// RoleName.NAMES.InternalTeamUser value.
+const INTERNAL_TEAM_USER = 'INTERNAL_TEAM_USER'
+
 type StorageInfo = {
   hasSubscription: boolean
   uploadBytesLimit: number | null
   uploadBytesUsed: number | null
+}
+
+type EffectivePermissions = {
+  directRoleNames: string[]
+  groupRoleNames: string[]
+  effectiveRoleNames: string[]
+  effectivePermissionNames: string[]
 }
 
 const describeStorageLimit = (storage: StorageInfo | null): string => {
@@ -108,6 +119,14 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
   const [banned, setBanned] = useState(false)
   const [banningInProgress, setBanningInProgress] = useState(false)
+
+  // Effective roles/permissions readout + the direct admin-role toggle.
+  const [permissions, setPermissions] = useState<EffectivePermissions | null>(null)
+  const [permissionsVisible, setPermissionsVisible] = useState(false)
+  const [adminRoleInProgress, setAdminRoleInProgress] = useState(false)
+  // Panel equivalents of the srn-admin CLI's reset-mfa / fix-quota commands.
+  const [resettingMfa, setResettingMfa] = useState(false)
+  const [fixingQuota, setFixingQuota] = useState(false)
 
   const loadFlags = useCallback(
     async (userUuid: string) => {
@@ -178,16 +197,46 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     [application],
   )
 
-  // Load (or reload) the looked-up user's flags and ban status whenever the
-  // user changes — including on remount, so switching back to this tab
-  // restores fresh data for the user that stayed in the shell.
+  const loadPermissions = useCallback(
+    async (userUuid: string) => {
+      try {
+        const response = await application.legacyApi.adminGetUserEffectivePermissions(userUuid)
+        if (isErrorResponse(response)) {
+          setPermissions(null)
+          return
+        }
+        const data = (response as { data?: EffectivePermissions }).data
+        setPermissions(
+          data
+            ? {
+                directRoleNames: data.directRoleNames ?? [],
+                groupRoleNames: data.groupRoleNames ?? [],
+                effectiveRoleNames: data.effectiveRoleNames ?? [],
+                effectivePermissionNames: data.effectivePermissionNames ?? [],
+              }
+            : null,
+        )
+      } catch (error) {
+        console.error(error)
+        setPermissions(null)
+      }
+    },
+    [application],
+  )
+
+  // Load (or reload) the looked-up user's flags, ban status and effective
+  // roles/permissions whenever the user changes — including on remount, so
+  // switching back to this tab restores fresh data for the user that stayed in
+  // the shell.
   useEffect(() => {
     if (!user) {
       return
     }
     setBanned(false)
-    void Promise.all([loadFlags(user.uuid), loadBanStatus(user.email)])
-  }, [user, loadFlags, loadBanStatus])
+    setPermissions(null)
+    setPermissionsVisible(false)
+    void Promise.all([loadFlags(user.uuid), loadBanStatus(user.email), loadPermissions(user.uuid)])
+  }, [user, loadFlags, loadBanStatus, loadPermissions])
 
   const lookupUser = useCallback(async () => {
     if (!email.trim()) {
@@ -385,6 +434,116 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     },
     [application, user, banned],
   )
+
+  const userIsAdmin = permissions?.directRoleNames.includes(INTERNAL_TEAM_USER) ?? false
+
+  const toggleAdminRole = useCallback(async () => {
+    if (!user || !permissions) {
+      return
+    }
+    const granting = !userIsAdmin
+
+    const confirmed = await confirmDialog({
+      title: granting ? 'Grant admin role' : 'Revoke admin role',
+      text: granting
+        ? `Grant the admin (internal team) role to ${user.email}? They will gain FULL administrative access to this instance: managing users, bans, groups, server settings and the audit log.`
+        : `Revoke the admin (internal team) role from ${user.email}? They will lose access to this admin panel. (Revoking your own admin role is refused by the server.)`,
+      confirmButtonText: granting ? 'Grant admin' : 'Revoke admin',
+      confirmButtonStyle: 'danger',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setAdminRoleInProgress(true)
+    try {
+      const response = await application.legacyApi.adminSetUserAdminRole(user.uuid, granting)
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to update admin role.' })
+        return
+      }
+      addToast({
+        type: ToastType.Success,
+        message: granting
+          ? 'Admin role granted. It takes effect when their session refreshes.'
+          : 'Admin role revoked. It takes effect when their session refreshes.',
+      })
+      await loadPermissions(user.uuid)
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update admin role.' })
+    } finally {
+      setAdminRoleInProgress(false)
+    }
+  }, [application, user, permissions, userIsAdmin, loadPermissions])
+
+  const resetMfa = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Reset two-factor authentication',
+      text: `Reset 2FA for ${user.email}? Their authenticator secret and recovery requirement are cleared, so anyone with their account password can sign in until they re-enroll. Only do this after verifying the request out-of-band.`,
+      confirmButtonText: 'Reset 2FA',
+      confirmButtonStyle: 'danger',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setResettingMfa(true)
+    try {
+      const response = await application.legacyApi.adminResetUserMFA(user.uuid)
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to reset 2FA.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: '2FA has been reset for this user.' })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to reset 2FA.' })
+    } finally {
+      setResettingMfa(false)
+    }
+  }, [application, user])
+
+  const fixQuota = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Recalculate storage quota',
+      text: `Recalculate the storage usage counter for ${user.email} from their actually stored files? Useful when the displayed usage has drifted (e.g. after failed uploads).`,
+      confirmButtonText: 'Recalculate',
+      confirmButtonStyle: 'info',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setFixingQuota(true)
+    try {
+      const response = await application.legacyApi.adminFixUserQuota(user.uuid)
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to fix storage quota.' })
+        return
+      }
+      addToast({
+        type: ToastType.Success,
+        message: 'Quota recalculation requested. The refreshed usage appears here once the server finishes.',
+      })
+      // Re-read so the usage display picks up the (asynchronously) fresh value.
+      await loadFlags(user.uuid)
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to fix storage quota.' })
+    } finally {
+      setFixingQuota(false)
+    }
+  }, [application, user, loadFlags])
 
   return (
     <PreferencesSegment>
@@ -632,6 +791,90 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   </Text>
                 </div>
                 <Switch checked={banned} disabled={banningInProgress} onChange={(checked) => void toggleBan(checked)} />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex flex-col gap-2">
+                <Subtitle>Roles &amp; permissions</Subtitle>
+                {permissions ? (
+                  <>
+                    <Text>
+                      Direct roles: <strong>{permissions.directRoleNames.join(', ') || '(none)'}</strong>
+                    </Text>
+                    {permissions.groupRoleNames.length > 0 && (
+                      <Text>
+                        Via groups: <strong>{permissions.groupRoleNames.join(', ')}</strong>
+                      </Text>
+                    )}
+                    <Text>
+                      Effective permissions: <strong>{permissions.effectivePermissionNames.length}</strong>{' '}
+                      <button
+                        className="cursor-pointer border-0 bg-transparent p-0 text-info underline"
+                        onClick={() => setPermissionsVisible((current) => !current)}
+                      >
+                        {permissionsVisible ? 'hide' : 'show'}
+                      </button>
+                    </Text>
+                    {permissionsVisible && (
+                      <Text className="text-xs">
+                        {permissions.effectivePermissionNames.length > 0
+                          ? permissions.effectivePermissionNames.join(', ')
+                          : '(none)'}
+                      </Text>
+                    )}
+                  </>
+                ) : (
+                  <Text>Effective roles/permissions could not be loaded for this user.</Text>
+                )}
+
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="flex flex-col">
+                    <Subtitle>Administrator access</Subtitle>
+                    <Text>
+                      {userIsAdmin
+                        ? 'This user holds the admin (internal team) role and has full administrative access.'
+                        : 'Grant the admin (internal team) role to give this user full administrative access, including this panel.'}
+                    </Text>
+                  </div>
+                  <Button
+                    label={userIsAdmin ? 'Revoke admin' : 'Grant admin'}
+                    colorStyle={userIsAdmin ? 'danger' : 'default'}
+                    onClick={() => void toggleAdminRole()}
+                    disabled={adminRoleInProgress || !permissions}
+                  />
+                </div>
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Reset two-factor authentication</Subtitle>
+                  <Text>
+                    Clears this user's authenticator secret (and recovery requirement) so they can sign in with their
+                    password alone and re-enroll 2FA. Verify a reset request out-of-band before using this.
+                  </Text>
+                </div>
+                <Button
+                  label="Reset 2FA"
+                  colorStyle="danger"
+                  onClick={() => void resetMfa()}
+                  disabled={resettingMfa}
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Recalculate storage quota</Subtitle>
+                  <Text>
+                    Recomputes the "storage used" counter from this user's actually stored files. Use when the usage
+                    shown above looks wrong (e.g. after interrupted uploads). Runs asynchronously on the server.
+                  </Text>
+                </div>
+                <Button label="Fix quota" onClick={() => void fixQuota()} disabled={fixingQuota} />
               </div>
             </>
           )}

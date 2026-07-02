@@ -10,6 +10,10 @@ export const AuditAction = {
   RoleChanged: 'role.changed',
   BanChanged: 'ban.changed',
   SettingChanged: 'setting.changed',
+  // Standard Red Notes: admin panel "reset 2FA" (clears the user's MFA secret
+  // and recovery codes) and "fix quota" (recalculates FILE_UPLOAD_BYTES_USED).
+  MfaReset: 'mfa.reset',
+  QuotaRecalculated: 'quota.recalculated',
   WebhookCreated: 'webhook.created',
   WebhookDeleted: 'webhook.deleted',
 } as const
