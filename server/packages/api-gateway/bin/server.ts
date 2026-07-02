@@ -36,6 +36,7 @@ import '../src/Controller/v1/CollaborationController'
 import '../src/Controller/v1/WebController'
 import '../src/Controller/v1/IntegrationsController'
 import '../src/Controller/v1/WorkflowsController'
+import '../src/Controller/v1/UpdatesController'
 
 import '../src/Controller/v2/PaymentsControllerV2'
 import '../src/Controller/v2/ActionsControllerV2'

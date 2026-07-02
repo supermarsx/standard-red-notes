@@ -111,6 +111,17 @@ x-server-env: &server-env
   # can take seconds). Defaults: 50 pages, 12 MB per page image.
   OCR_SERVER_MAX_PAGES: ${OCR_SERVER_MAX_PAGES:-50}
   OCR_SERVER_MAX_IMAGE_BYTES: ${OCR_SERVER_MAX_IMAGE_BYTES:-12582912}
+  # Self-hosted "Check for updates" (/v1/updates/status). UNSET BY DEFAULT — the
+  # feature then reports "not configured" and the client shows that state
+  # gracefully. Point it at a GitHub releases API URL (list or /releases/latest)
+  # or any JSON endpoint returning { "version": "...", "url": "..." }. The
+  # gateway fetches it SERVER-SIDE (no client CORS/privacy leak) with a short
+  # timeout and caches the result in-memory (default 15 min); the manual
+  # "Check for updates" button bypasses the cache.
+  # UPDATE_CHECK_URL: https://api.github.com/repos/<owner>/<repo>/releases/latest
+  # The version this deployment reports as "current" defaults to the api-gateway
+  # package version; override when your release tags track the whole fork.
+  # UPDATE_CHECK_CURRENT_VERSION: "1.0.0"
   # OPT-IN Workflows (n8n-backed automation engine, /v1/workflows + the embedded
   # editor at /workflows-ui). Two gates apply, both fail-closed: this operator
   # master switch AND a per-user, admin-managed WORKFLOWS_ENABLED setting

@@ -113,6 +113,13 @@ export enum PrefKey {
   // instead). This is a SOFT, advisory limit surfaced in the Storage preferences
   // pane and via a warning toast — saving and syncing are never blocked by it.
   StorageMaxUsageBytes = 'storageMaxUsageBytes',
+  // Standard Red Notes: self-hosted "Check for updates". UpdateCheckAutoEnabled
+  // gates ALL automatic checks; UpdateCheckInterval selects how often they run
+  // ('never' has the same effect as the toggle being off). These two prefs sync
+  // across devices; the LAST-CHECKED timestamp deliberately does NOT — it lives
+  // in device-local storage so each device checks independently.
+  UpdateCheckAutoEnabled = 'updateCheckAutoEnabled',
+  UpdateCheckInterval = 'updateCheckInterval',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -140,6 +147,27 @@ export type RecentNoteEntry = {
   uuid: string
   openedAt: number
 }
+
+/**
+ * Standard Red Notes: how often the client automatically checks the
+ * self-hosted server's /v1/updates/status endpoint. 'every-load' checks on
+ * every app launch; 'never' disables automatic checks (equivalent to turning
+ * the UpdateCheckAutoEnabled toggle off — both are honored).
+ */
+export type UpdateCheckIntervalValue =
+  | 'every-load'
+  | 'every-hour'
+  | 'every-6-hours'
+  | 'every-12-hours'
+  | 'every-day'
+  | 'every-3-days'
+  | 'every-week'
+  | 'every-2-weeks'
+  | 'every-month'
+  | 'every-3-months'
+  | 'every-6-months'
+  | 'every-year'
+  | 'never'
 
 export type PrefValue = {
   [PrefKey.TagsPanelWidth]: number
@@ -214,6 +242,8 @@ export type PrefValue = {
   [PrefKey.CustomFoldersOrder]: string[]
   [PrefKey.CustomTagsOrder]: string[]
   [PrefKey.StorageMaxUsageBytes]: number
+  [PrefKey.UpdateCheckAutoEnabled]: boolean
+  [PrefKey.UpdateCheckInterval]: UpdateCheckIntervalValue
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.

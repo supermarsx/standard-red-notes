@@ -90,6 +90,7 @@ import { RecentNotesState } from '@/Components/Preferences/Panes/RecentNotes/Rec
 import { SearchIndexRunner } from '@/Utils/Items/Search/SearchIndexRunner'
 import { DecryptionPool } from '@/Utils/Items/Decryption/DecryptionPool'
 import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
+import { UpdateCheckService } from '@/Services/UpdateCheck/UpdateCheckService'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { WebDevice } from './Device/WebDevice'
@@ -120,6 +121,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // createBackgroundServices() so it can react to the first full sync and
   // periodically purge aged trashed notes while the app is open.
   private _autoEmptyTrashService?: AutoEmptyTrashService
+  // Standard Red Notes: self-hosted "Check for updates" scheduler. Created in
+  // createBackgroundServices() so the launch-time auto check and the in-session
+  // re-evaluation timer run from app start; torn down (timer cleared) in deinit.
+  private _updateCheckService?: UpdateCheckService
   // Standard Red Notes: off-main-thread decryption worker pool. Installed onto the
   // ItemsEncryptionService so bulk decrypts (esp. cold-loading a large vault)
   // parallelize across CPU cores instead of blocking the main thread.
@@ -210,6 +215,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: eagerly create the auto-empty-trash service so it
     // subscribes to sync events from app start.
     void this.autoEmptyTrashService
+    // Standard Red Notes: eagerly create the update-check scheduler so the
+    // launch-time auto check observes ApplicationEvent.Launched.
+    void this.updateCheckService
 
     if (isDev) {
       this.devMode = new DevMode(this)
@@ -394,6 +402,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: tear down the auto-empty-trash service.
     this._autoEmptyTrashService?.deinit()
     this._autoEmptyTrashService = undefined
+
+    // Standard Red Notes: tear down the update-check scheduler (clears its timer).
+    this._updateCheckService?.deinit()
+    this._updateCheckService = undefined
 
     // Standard Red Notes: terminate the decryption worker pool.
     this._decryptionPool?.destroy()
@@ -920,6 +932,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       this._autoEmptyTrashService = new AutoEmptyTrashService(this)
     }
     return this._autoEmptyTrashService
+  }
+
+  // Standard Red Notes: the self-hosted "Check for updates" scheduler + client.
+  // Lazily instantiated and cached.
+  get updateCheckService(): UpdateCheckService {
+    if (!this._updateCheckService) {
+      this._updateCheckService = new UpdateCheckService(this)
+    }
+    return this._updateCheckService
   }
 
   get isNativeMobileWebUseCase(): IsNativeMobileWeb {

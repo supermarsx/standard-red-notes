@@ -14,6 +14,7 @@ import AutoEmptyTrash from './AutoEmptyTrash'
 import DiaryMode from './DiaryMode'
 import TimezonePreference from './TimezonePreference'
 import FileUploadPrivacy from './FileUploadPrivacy'
+import Updates from './Updates'
 import { useApplication } from '@/Components/ApplicationProvider'
 
 const General: FunctionComponent = () => {
@@ -33,6 +34,7 @@ const General: FunctionComponent = () => {
       <Tools application={application} />
       <SmartViews application={application} featuresController={application.featuresController} />
       <Moments application={application} />
+      <Updates />
       <LabsPane application={application} />
     </PreferencesPane>
   )

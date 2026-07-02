@@ -38,6 +38,7 @@ import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 import { WebFetchLike, WebService } from '../Service/Web/WebService'
+import { resolveOwnPackageVersion, UpdateCheckFetchLike, UpdateCheckService } from '../Service/Updates/UpdateCheckService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
@@ -278,6 +279,26 @@ export class ContainerConfigLoader {
         searchApiKey: env.get('SEARCH_API_KEY', true) || undefined,
         maxContentChars: env.get('WEB_FETCH_MAX_CHARS', true) ? +env.get('WEB_FETCH_MAX_CHARS', true) : undefined,
         fetchTimeoutMs: env.get('WEB_FETCH_TIMEOUT_MS', true) ? +env.get('WEB_FETCH_TIMEOUT_MS', true) : undefined,
+      }),
+    )
+
+    // Standard Red Notes: self-hosted "Check for updates".
+    //
+    // The gateway (never the browser) fetches the operator-configured
+    // UPDATE_CHECK_URL — a GitHub releases/latest API URL or any endpoint
+    // returning `{ version, url }` — with a short timeout, caching the result
+    // in-memory (UPDATE_CHECK_CACHE_TTL_MS, default 15 min) so client checks
+    // can't hammer the remote. Unset URL => the feature reports "not
+    // configured" and the client renders that state gracefully. The version
+    // this deployment reports as "current" defaults to the api-gateway package
+    // version and can be overridden via UPDATE_CHECK_CURRENT_VERSION (useful
+    // when release tags track the whole fork rather than this package).
+    container.bind<UpdateCheckService>(TYPES.ApiGateway_UpdateCheckService).toConstantValue(
+      new UpdateCheckService(globalThis.fetch.bind(globalThis) as unknown as UpdateCheckFetchLike, {
+        url: env.get('UPDATE_CHECK_URL', true) || undefined,
+        currentVersion: env.get('UPDATE_CHECK_CURRENT_VERSION', true) || resolveOwnPackageVersion(),
+        cacheTtlMs: env.get('UPDATE_CHECK_CACHE_TTL_MS', true) ? +env.get('UPDATE_CHECK_CACHE_TTL_MS', true) : undefined,
+        timeoutMs: env.get('UPDATE_CHECK_TIMEOUT_MS', true) ? +env.get('UPDATE_CHECK_TIMEOUT_MS', true) : undefined,
       }),
     )
 

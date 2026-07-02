@@ -103,6 +103,11 @@ export const PrefDefaults = {
   // Storage pane measures against the browser quota estimate instead. Any value
   // > 0 is an advisory (soft) cap in bytes; it never blocks saving or syncing.
   [PrefKey.StorageMaxUsageBytes]: 0,
+  // Standard Red Notes: automatic update checks default ON, once a week. The
+  // toggle and the 'never' interval overlap deliberately — either disables
+  // automatic checks. Last-checked time is device-local, not a synced pref.
+  [PrefKey.UpdateCheckAutoEnabled]: true,
+  [PrefKey.UpdateCheckInterval]: 'every-week',
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }
