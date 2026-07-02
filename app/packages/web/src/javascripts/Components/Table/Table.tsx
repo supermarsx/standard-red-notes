@@ -93,15 +93,41 @@ function TableRow<Data>({
 
 const MinTableRowHeight = 50
 const MinRowsToDisplay = 20
-const PageSize = Math.ceil(document.documentElement.clientHeight / MinTableRowHeight) || MinRowsToDisplay
 const PageScrollThreshold = 200
+
+/**
+ * Page size derived from the viewport height. This must NOT be computed at
+ * module scope: this module is part of the eagerly-evaluated entry bundle
+ * (ContentListView statically imports ContentTableView), so a top-level
+ * `document.documentElement.clientHeight` read executes at bundle-eval time —
+ * before the app even mounts and before the window `load` event — forcing a
+ * synchronous layout flush while stylesheets/fonts may still be loading
+ * (Firefox's "Layout was forced before the page was fully loaded" warning).
+ *
+ * Instead we compute it lazily on first use. Before the page has fully loaded
+ * we return the minimum-rows fallback WITHOUT touching layout (and without
+ * caching, so the first post-load call still measures the real viewport);
+ * once loaded, the measured value is cached, preserving the previous
+ * computed-once module-constant semantics.
+ */
+let cachedPageSize: number | undefined
+const getPageSize = (): number => {
+  if (cachedPageSize !== undefined) {
+    return cachedPageSize
+  }
+  if (document.readyState !== 'complete') {
+    return MinRowsToDisplay
+  }
+  cachedPageSize = Math.ceil(document.documentElement.clientHeight / MinTableRowHeight) || MinRowsToDisplay
+  return cachedPageSize
+}
 
 function Table<Data>({ table }: { table: TableType<Data> }) {
   const application = useApplication()
 
-  const [rowsToDisplay, setRowsToDisplay] = useState<number>(PageSize)
+  const [rowsToDisplay, setRowsToDisplay] = useState<number>(getPageSize)
   const paginate = useCallback(() => {
-    setRowsToDisplay((cellsToDisplay) => cellsToDisplay + PageSize)
+    setRowsToDisplay((cellsToDisplay) => cellsToDisplay + getPageSize())
   }, [])
   const onScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement, UIEvent>) => {

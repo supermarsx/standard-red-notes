@@ -2041,6 +2041,20 @@ export class ItemListController
   }
 
   resetScrollPosition = () => {
+    /**
+     * Writing scrollTop/scrollLeft forces a synchronous layout flush (the
+     * browser must lay out to clamp the scroll offset). The app mounts at
+     * DOMContentLoaded, and during boot this runs pre-`load` (initial tag
+     * restore fires TagChanged → handleTagChange, and the first items reload
+     * can call selectFirstItem) — triggering Firefox's "Layout was forced
+     * before the page was fully loaded" warning. Pre-load the list container
+     * has only just been mounted and is already at (0, 0), so the reset is a
+     * behavioral no-op and can be safely skipped. Post-load behavior
+     * (resetting scroll on tag change / first-item selection) is unchanged.
+     */
+    if (document.readyState !== 'complete') {
+      return
+    }
     if (this.notesListScrollContainer) {
       this.notesListScrollContainer.scrollTop = 0
       this.notesListScrollContainer.scrollLeft = 0
@@ -2370,6 +2384,21 @@ export class ItemListController
   }
 
   scrollToItem = (item: { uuid: ListableContentItem['uuid'] }, animated = true): void => {
+    /**
+     * Both scroll paths force a synchronous layout flush: the windowed-list
+     * handler reads the container's clientHeight/scrollTop to compute the
+     * target offset, and the fallback calls scrollIntoView. During boot this
+     * can run BEFORE the window `load` event (e.g. the empty-vault placeholder
+     * note created on CompletedFullSync selects + scrolls), which is exactly
+     * the pre-load forced-layout condition Firefox warns about — and measures
+     * against possibly not-yet-final styling. Defer the scroll to the `load`
+     * event: the outcome (target row scrolled into view) is preserved, just
+     * performed once layout is final. Post-load calls are unaffected.
+     */
+    if (document.readyState !== 'complete') {
+      window.addEventListener('load', () => this.scrollToItem(item, animated), { once: true })
+      return
+    }
     if (this.scrollToUuidHandler?.(item.uuid, animated)) {
       return
     }
