@@ -271,8 +271,24 @@ function VirtualizedListInner<T extends { uuid: string }>(
 
     const measureViewport = () => setViewportHeight(container.clientHeight)
 
-    measureViewport()
-    setScrollTop(container.scrollTop)
+    // Reading clientHeight/scrollTop forces a synchronous layout flush. The
+    // app mounts on DOMContentLoaded, so during boot this effect can run
+    // BEFORE the page has fully loaded — a pre-load flush triggers Firefox's
+    // "Layout was forced before the page was fully loaded" FOUC warning and
+    // would measure against possibly not-yet-final styling. Until the load
+    // event, rows render from the height ESTIMATE (the list's designed
+    // fallback for unmeasured rows); the load-triggered measure below then
+    // updates state, re-rendering with real measurements. On every later
+    // mount (readyState === 'complete') we measure immediately, as before.
+    const initialMeasure = () => {
+      measureViewport()
+      setScrollTop(container.scrollTop)
+    }
+    if (document.readyState === 'complete') {
+      initialMeasure()
+    } else {
+      window.addEventListener('load', initialMeasure, { once: true })
+    }
 
     container.addEventListener('scroll', onScroll, { passive: true })
 
@@ -286,6 +302,7 @@ function VirtualizedListInner<T extends { uuid: string }>(
 
     return () => {
       container.removeEventListener('scroll', onScroll)
+      window.removeEventListener('load', initialMeasure)
       if (resizeObserver) {
         resizeObserver.disconnect()
       } else {
@@ -301,6 +318,15 @@ function VirtualizedListInner<T extends { uuid: string }>(
   // index for the point update.
   const sliceRef = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
+    // Skip measuring while the page is still loading: offsetHeight forces a
+    // synchronous layout flush (pre-load, that is exactly the forced-layout /
+    // FOUC condition Firefox warns about) and could cache heights measured
+    // against not-yet-final styling. Rows keep their estimates until the
+    // load-triggered viewport measure (above) re-renders, which re-runs this
+    // effect with readyState === 'complete' and full styling in place.
+    if (document.readyState !== 'complete') {
+      return
+    }
     const sliceEl = sliceRef.current
     if (!sliceEl) {
       return

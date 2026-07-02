@@ -63,15 +63,35 @@ class PanelResizer extends Component<Props, State> {
     }
 
     this.minWidth = props.minWidth || 5
-    this.startLeft = props.panel.offsetLeft
-    this.startWidth = props.panel.scrollWidth
+    // Do NOT read panel.offsetLeft/scrollWidth here. This constructor runs
+    // during the app's very first desktop render — typically before the page
+    // has fully loaded — and those reads force a synchronous layout flush
+    // (Firefox: "Layout was forced before the page was fully loaded"). The
+    // values are dead at this point anyway: lastLeft/lastWidth are immediately
+    // overwritten by setLeft/setWidth below, and startLeft/startWidth are
+    // re-seeded from the live panel on every interaction start (onMouseDown /
+    // handleResize) before they are ever used.
+    this.startLeft = props.left
+    this.startWidth = props.width
     this.lastDownX = 0
-    this.lastLeft = props.panel.offsetLeft
-    this.lastWidth = props.panel.scrollWidth
+    this.lastLeft = props.left
+    this.lastWidth = props.width
     this.widthBeforeLastDblClick = 0
 
-    this.setWidth(this.props.width)
     this.setLeft(this.props.left)
+
+    // setWidth clamps the requested width against the parent/app rects, which
+    // reads getBoundingClientRect and therefore forces layout. Run it now only
+    // if the page has already fully loaded (every later mount, e.g. toggling
+    // panes); during boot defer the initial clamp to the window load event so
+    // startup never forces a pre-load layout flush. Until then lastWidth
+    // tracks props.width — the exact width the parent grid renders the panel
+    // at — so behavior is unchanged.
+    if (document.readyState === 'complete') {
+      this.setWidth(this.props.width)
+    } else {
+      window.addEventListener('load', this.clampInitialWidthOnLoad, { once: true })
+    }
 
     document.addEventListener('mouseup', this.onMouseUp)
     document.addEventListener('mousemove', this.onMouseMove)
@@ -85,8 +105,24 @@ class PanelResizer extends Component<Props, State> {
     this.resizerElementRef.current?.addEventListener('dblclick', this.onDblClick)
   }
 
+  /**
+   * Deferred initial clamp (see constructor): applies the same setWidth the
+   * constructor would have run, once the page has fully loaded and reading
+   * layout no longer risks a pre-load forced reflow / FOUC.
+   */
+  clampInitialWidthOnLoad = () => {
+    this.setWidth(this.props.width)
+    this.finishSettingWidth()
+  }
+
   override componentDidUpdate(prevProps: Props) {
-    this.lastWidth = this.props.panel.scrollWidth
+    // Reading scrollWidth forces layout. Before the page has fully loaded no
+    // user interaction can have resized the panel, so lastWidth still tracks
+    // the prop/grid-driven width exactly — skip the sync read until load to
+    // keep boot free of forced layout flushes.
+    if (document.readyState === 'complete') {
+      this.lastWidth = this.props.panel.scrollWidth
+    }
 
     if (this.props.width != prevProps.width) {
       this.setWidth(this.props.width)
@@ -108,6 +144,7 @@ class PanelResizer extends Component<Props, State> {
     document.removeEventListener('mouseup', this.onMouseUp)
     document.removeEventListener('mousemove', this.onMouseMove)
     window.removeEventListener('resize', this.debouncedResizeHandler)
+    window.removeEventListener('load', this.clampInitialWidthOnLoad)
   }
 
   get appFrame() {
