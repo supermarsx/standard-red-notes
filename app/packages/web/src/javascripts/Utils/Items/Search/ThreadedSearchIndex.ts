@@ -23,7 +23,14 @@ import { SearchIndexWorkerRequest, SearchIndexWorkerResponse } from './searchInd
 // Worker) never evaluates it and always takes the inline main-thread fallback.
 import * as SearchIndexWorkerModule from './searchIndex.worker'
 
-const SearchIndexWorker = SearchIndexWorkerModule as unknown as { new (): Worker }
+// worker-loader (esModule: true, the default) emits the Worker constructor as the
+// module's DEFAULT export, so `import * as M` yields `{ default: Ctor }`. Casting
+// the namespace object straight to a constructor — `M as { new(): Worker }` — makes
+// `new M()` throw ("M is not a constructor"), which silently disabled the worker and
+// pinned this index to the main-thread fallback. Pick `.default` when present, else
+// fall back to the namespace (covers esModule: false). Mirrors DecryptionPool.
+const SearchIndexWorker = ((SearchIndexWorkerModule as { default?: { new (): Worker } }).default ??
+  (SearchIndexWorkerModule as unknown as { new (): Worker })) as { new (): Worker }
 
 /**
  * Per-request response deadline. A worker that HANGS mid-rebuild never fires onerror,

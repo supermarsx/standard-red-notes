@@ -8,9 +8,10 @@
 // The fake worker is defined INSIDE the mock factory (jest hoists jest.mock above the
 // imports, so a top-level class wouldn't exist yet when the factory runs). It responds
 // to `configure` so the worker stays "alive", but HANGS on `rebuild` when the global
-// flag is set — exactly the freeze scenario. ThreadedSearchIndex casts the imported
-// namespace straight to a constructor, so we tag the class with `__esModule: true` and
-// return it as the module itself (so `new (namespace)()` constructs the fake).
+// flag is set — exactly the freeze scenario. worker-loader emits the Worker constructor
+// as the module's DEFAULT export, so we return it as `{ __esModule: true, default: Ctor }`
+// — the real shape. ThreadedSearchIndex must unwrap `.default` to construct it; the
+// "offloads to a real worker" test below fails if it casts the namespace directly.
 jest.mock('./searchIndex.worker', () => {
   class MockSearchIndexWorker {
     public onmessage: ((event: { data: unknown }) => void) | null = null
@@ -41,7 +42,7 @@ jest.mock('./searchIndex.worker', () => {
     }
   }
 
-  return Object.assign(MockSearchIndexWorker, { __esModule: true })
+  return { __esModule: true, default: MockSearchIndexWorker }
 })
 
 describe('ThreadedSearchIndex hung-worker hardening', () => {
