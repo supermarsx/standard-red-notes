@@ -106,7 +106,7 @@
   right: 0;
 }
 .Lexical__listItemUnchecked:before {
-  border: 1px solid #999;
+  border: 1px solid var(--sn-stylekit-passive-color-1);
   border-radius: 2px;
 }
 .Lexical__listItemChecked:before {

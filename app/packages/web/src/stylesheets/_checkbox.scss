@@ -1,0 +1,100 @@
+/* Standard Red Notes — single, app-wide source of truth for theming native
+   `<input type='checkbox']>` controls so every raw checkbox matches the design
+   system (same tokens the `Checkbox` / `CheckIndicator` component uses:
+   `border-passive-1` when unchecked, `border-info bg-info` + a check glyph in
+   `text-info-contrast` when checked, `rounded` square corners — NOT a circle).
+   DRY: this replaces the browser default globally; call-sites need no changes.
+   Mirrors `_radio.scss`.
+
+   Layering note: these visual rules live in `@layer base` on purpose. Tailwind
+   v4 declares the cascade order `theme, base, components, utilities`, so any
+   Tailwind sizing/visibility utility a call-site (or a hide-the-native-input
+   component) puts on the element wins over the defaults here. The `Checkbox`
+   component (`Components/Checkbox/Checkbox.tsx`) renders a REAL, visible native
+   `<input type='checkbox'>`, so this global theme is exactly what styles it;
+   `CheckIndicator` is a standalone `<div>` (no paired hidden input), so it is
+   untouched. As with radios, any checkbox a component/call-site deliberately
+   hides with `w-0 h-0` / `sr-only` gets its border/background stripped below so
+   a 0-width border-box input never paints a stray box. */
+
+@layer base {
+  input[type='checkbox'] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+
+    display: inline-block;
+    box-sizing: border-box;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    padding: 0;
+    flex-shrink: 0;
+    vertical-align: middle;
+
+    /* Square with the app's small `rounded` radius (~0.25rem), NOT a circle. */
+    border: 2px solid var(--sn-stylekit-passive-color-1);
+    border-radius: 0.25rem;
+    background-color: transparent;
+    background-repeat: no-repeat;
+    background-position: center;
+
+    transition:
+      border-color 0.1s ease,
+      background-color 0.1s ease,
+      background-image 0.1s ease;
+  }
+
+  /* Checked: accent border + fill and a white checkmark. The glyph is the same
+     check SVG the editor checklist uses (see `lists.scss`
+     `Lexical__listItemChecked:after`), filled `#ffffff` — the resolved value of
+     `--sn-stylekit-info-contrast-color`. Drawn as a `background-image` layered
+     over the info `background-color`, which renders reliably on a replaced input
+     with `appearance: none` (unlike `::before`/`::after`). */
+  input[type='checkbox']:checked {
+    border-color: var(--sn-stylekit-info-color);
+    background-color: var(--sn-stylekit-info-color);
+    background-image: url('data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22white%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M17.5001%205.83345L7.50008%2015.8334L2.91675%2011.2501L4.09175%2010.0751L7.50008%2013.4751L16.3251%204.65845L17.5001%205.83345Z%22%2F%3E%3C%2Fsvg%3E%0A');
+    background-size: 0.8rem 0.8rem;
+    background-position: center;
+  }
+
+  /* Indeterminate: info fill with a centred horizontal dash, drawn as a solid
+     `info-contrast` gradient bar so it renders with `appearance: none`. */
+  input[type='checkbox']:indeterminate {
+    border-color: var(--sn-stylekit-info-color);
+    background-color: var(--sn-stylekit-info-color);
+    background-image: linear-gradient(
+      var(--sn-stylekit-info-contrast-color),
+      var(--sn-stylekit-info-contrast-color)
+    );
+    background-size: 0.55rem 2px;
+    background-position: center;
+  }
+
+  input[type='checkbox']:disabled {
+    opacity: 0.5;
+    cursor: not-allowed; /* also set globally in _cursors.scss */
+  }
+
+  /* Checkboxes deliberately hidden by components/call-sites keep no themed box. */
+  input[type='checkbox'].w-0,
+  input[type='checkbox'].h-0,
+  input[type='checkbox'].sr-only {
+    border: 0;
+    background: none;
+  }
+}
+
+/* Focus ring. Unlayered on purpose so it beats the global unlayered
+   `input:focus { box-shadow: 0 0 0 1px … }` in _stylekit-sub.scss for keyboard
+   focus: `input[type='checkbox']:focus-visible` (0,2,1) outranks `input:focus`
+   (0,1,1), so only this stronger, intentional ring shows — no double ring.
+   Mouse focus still falls back to the subtle 1px global ring. Matches the radio
+   + button focus treatment (background gap + accent ring). */
+input[type='checkbox']:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--sn-stylekit-background-color),
+    0 0 0 4px var(--sn-stylekit-info-color);
+}
