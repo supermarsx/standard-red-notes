@@ -4,6 +4,7 @@ import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   AdminUserRow,
   AdminUsersFilterState,
+  adminUsersFiltersAreEmpty,
   buildAdminListUsersParams,
   emptyAdminUsersFilterState,
   formatAdminUserDate,
@@ -11,6 +12,7 @@ import {
   formatAdminUserStorage,
   formatAdminUserSubscription,
 } from './adminHelpers'
+import { describeAdminUsersActiveFilters } from './adminUsersUi'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -20,6 +22,7 @@ import Button from '@/Components/Button/Button'
 import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Dropdown from '@/Components/Dropdown/Dropdown'
+import Icon from '@/Components/Icon/Icon'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
@@ -366,6 +369,18 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     [],
   )
 
+  // One-click reset of every list filter (the debounced search box included).
+  // Clearing the box while filters.email is already '' leaves the debounce
+  // effect a no-op, so this causes exactly one reload.
+  const clearFilters = useCallback(() => {
+    setEmailSearchInput('')
+    setFilters(emptyAdminUsersFilterState())
+    setPage(0)
+  }, [])
+
+  const activeFilterChips = describeAdminUsersActiveFilters(filters)
+  const filtersActive = !adminUsersFiltersAreEmpty(filters)
+
   const selectRow = useCallback(
     (row: AdminUserRow) => {
       // Reuse the existing lookup->manage flow: setting the user (and email)
@@ -666,74 +681,127 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         lookup underneath is a quick path to a single known account.
       </Subtitle>
 
-      <div className="mt-3 flex flex-wrap items-end gap-3">
-        <div className="flex flex-col">
-          <Text className="mb-1 text-xs">Email search</Text>
-          <DecoratedInput
-            className={{ container: 'w-56' }}
-            placeholder="Search by email…"
-            value={emailSearchInput}
-            onChange={setEmailSearchInput}
-            type="email"
-          />
-        </div>
-        <div className="flex flex-col">
-          <Text className="mb-1 text-xs">Created after</Text>
-          <DecoratedInput
-            className={{ container: 'w-40' }}
-            value={filters.createdAfter}
-            onChange={(value) => setFilterField('createdAfter', value)}
-            type="date"
-          />
-        </div>
-        <div className="flex flex-col">
-          <Text className="mb-1 text-xs">Created before</Text>
-          <DecoratedInput
-            className={{ container: 'w-40' }}
-            value={filters.createdBefore}
-            onChange={(value) => setFilterField('createdBefore', value)}
-            type="date"
-          />
-        </div>
-        <div className="flex flex-col">
-          <Text className="mb-1 text-xs">Subscription</Text>
-          <Dropdown
-            label="Subscription filter"
-            items={[
-              { label: 'Any', value: 'any' },
-              { label: 'Active', value: 'active' },
-              { label: 'Inactive', value: 'inactive' },
-              { label: 'None', value: 'none' },
-            ]}
-            value={filters.subscription}
-            onChange={(value) => setFilterField('subscription', value as AdminUsersFilterState['subscription'])}
-          />
-        </div>
-        <div className="flex flex-col">
-          <Text className="mb-1 text-xs">Banned</Text>
-          <Dropdown
-            label="Banned filter"
-            items={[
-              { label: 'Any', value: 'any' },
-              { label: 'Banned', value: 'yes' },
-              { label: 'Not banned', value: 'no' },
-            ]}
-            value={filters.banned}
-            onChange={(value) => setFilterField('banned', value as AdminUsersFilterState['banned'])}
-          />
-        </div>
-        {availableRoles.length > 0 && (
-          <div className="flex flex-col">
-            <Text className="mb-1 text-xs">Role</Text>
-            <Dropdown
-              label="Role filter"
-              items={[{ label: 'Any', value: '' }, ...availableRoles.map((role) => ({ label: role, value: role }))]}
-              value={filters.role}
-              onChange={(value) => setFilterField('role', value)}
+      {/* Filter bar: search + the quick dropdowns on one airy row, the date
+          range and page size on a lighter second row, and an active-filters
+          summary with one-click clear when anything is narrowing the list. */}
+      <div className="mt-3 rounded-md border border-border p-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex min-w-[280px] flex-grow flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Search</Text>
+            <DecoratedInput
+              className={{ container: 'w-full' }}
+              left={[<Icon type="search" size="small" className="flex-shrink-0 text-passive-1" />]}
+              placeholder="Search by email…"
+              value={emailSearchInput}
+              onChange={setEmailSearchInput}
+              type="email"
             />
           </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Subscription</Text>
+            <Dropdown
+              label="Subscription filter"
+              items={[
+                { label: 'Any', value: 'any' },
+                { label: 'Active', value: 'active' },
+                { label: 'Inactive', value: 'inactive' },
+                { label: 'None', value: 'none' },
+              ]}
+              value={filters.subscription}
+              onChange={(value) => setFilterField('subscription', value as AdminUsersFilterState['subscription'])}
+            />
+          </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Banned</Text>
+            <Dropdown
+              label="Banned filter"
+              items={[
+                { label: 'Any', value: 'any' },
+                { label: 'Banned', value: 'yes' },
+                { label: 'Not banned', value: 'no' },
+              ]}
+              value={filters.banned}
+              onChange={(value) => setFilterField('banned', value as AdminUsersFilterState['banned'])}
+            />
+          </div>
+          {availableRoles.length > 0 && (
+            <div className="flex flex-col">
+              <Text className="mb-1 text-xs font-medium text-passive-1">Role</Text>
+              <Dropdown
+                label="Role filter"
+                items={[{ label: 'Any', value: '' }, ...availableRoles.map((role) => ({ label: role, value: role }))]}
+                value={filters.role}
+                onChange={(value) => setFilterField('role', value)}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Created after</Text>
+            <DecoratedInput
+              className={{ container: 'w-40' }}
+              value={filters.createdAfter}
+              onChange={(value) => setFilterField('createdAfter', value)}
+              type="date"
+            />
+          </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Created before</Text>
+            <DecoratedInput
+              className={{ container: 'w-40' }}
+              value={filters.createdBefore}
+              onChange={(value) => setFilterField('createdBefore', value)}
+              type="date"
+            />
+          </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Per page</Text>
+            <Dropdown
+              label="Users per page"
+              items={[
+                { label: '100', value: '100' },
+                { label: '250', value: '250' },
+                { label: '500', value: '500' },
+                { label: '1000', value: '1000' },
+                { label: '1500', value: '1500' },
+              ]}
+              value={String(pageSize)}
+              onChange={(value) => {
+                setPageSize(Number(value))
+                setPage(0)
+              }}
+            />
+          </div>
+          <Button small label="Refresh" onClick={() => void loadUsers()} disabled={listLoading} />
+          {!listLoading && !listError && (
+            <Text className="ml-auto pb-1.5 text-xs text-passive-1">
+              {total.toLocaleString()} {filtersActive ? 'matching ' : ''}
+              {total === 1 ? 'user' : 'users'}
+            </Text>
+          )}
+        </div>
+
+        {activeFilterChips.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            <Text className="text-xs text-passive-1">Filtering:</Text>
+            {activeFilterChips.map((chip) => (
+              <span
+                key={chip.key}
+                className="rounded-full bg-info-backdrop px-2.5 py-0.5 text-xs font-medium text-foreground"
+              >
+                {chip.label}
+              </span>
+            ))}
+            <button
+              className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline"
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+          </div>
         )}
-        <Button label="Refresh" onClick={() => void loadUsers()} disabled={listLoading} />
       </div>
 
       <div className="mt-3">
@@ -742,38 +810,64 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         ) : listError ? (
           <Text className="text-danger">{listError}</Text>
         ) : rows.length === 0 ? (
-          <Text>No users match these filters.</Text>
+          <div className="flex flex-col items-start gap-2 rounded-md border border-border p-4">
+            <Text>{filtersActive ? 'No users match these filters.' : 'No users yet.'}</Text>
+            {filtersActive && (
+              <button
+                className="cursor-pointer border-0 bg-transparent p-0 text-sm text-info underline"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         ) : (
           <>
-            <div className="overflow-x-auto rounded border border-border">
+            {/* Vertical max-height makes the sticky header useful on tall
+                pages; horizontal overflow keeps narrow widths scrollable. */}
+            <div className="max-h-[32rem] overflow-auto rounded-md border border-border">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
-                  <tr className="border-b border-border bg-contrast">
-                    <th className="p-2 font-bold">Email</th>
-                    <th className="p-2 font-bold">Created</th>
-                    <th className="p-2 font-bold">Roles</th>
-                    <th className="p-2 font-bold">Subscription</th>
-                    <th className="p-2 font-bold">Banned</th>
-                    <th className="p-2 font-bold">MFA</th>
-                    <th className="p-2 font-bold">Storage</th>
+                  <tr>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      Email
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      Created
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      Roles
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      Subscription
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      Banned
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                      MFA
+                    </th>
+                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 text-right font-semibold">
+                      Storage
+                    </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-border">
                   {rows.map((row) => (
                     <tr
                       key={row.uuid}
                       onClick={() => selectRow(row)}
-                      className={`cursor-pointer border-b border-border last:border-b-0 hover:bg-info-backdrop ${
+                      className={`cursor-pointer hover:bg-info-backdrop ${
                         user?.uuid === row.uuid ? 'bg-info-backdrop' : ''
                       }`}
                     >
-                      <td className="p-2">{row.email}</td>
-                      <td className="whitespace-nowrap p-2">{formatAdminUserDate(row.createdAt)}</td>
-                      <td className="p-2">{formatAdminUserRoles(row.roles)}</td>
-                      <td className="p-2">{formatAdminUserSubscription(row.subscription)}</td>
-                      <td className="p-2">{row.banned ? 'Yes' : 'No'}</td>
-                      <td className="p-2">{row.mfaEnabled ? 'On' : 'Off'}</td>
-                      <td className="whitespace-nowrap p-2">
+                      <td className="px-3 py-2.5">{row.email}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{formatAdminUserDate(row.createdAt)}</td>
+                      <td className="px-3 py-2.5">{formatAdminUserRoles(row.roles)}</td>
+                      <td className="px-3 py-2.5">{formatAdminUserSubscription(row.subscription)}</td>
+                      <td className="px-3 py-2.5">{row.banned ? 'Yes' : 'No'}</td>
+                      <td className="px-3 py-2.5">{row.mfaEnabled ? 'On' : 'Off'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
                         {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
                       </td>
                     </tr>
@@ -782,42 +876,27 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               </table>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Text>
-                {total > 0 ? (
-                  <>
-                    Showing {firstShown}&ndash;{lastShown} of {total}
-                  </>
-                ) : (
-                  'No users'
-                )}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <Text className="text-xs text-passive-1">
+                Showing {firstShown}&ndash;{lastShown} of {total.toLocaleString()}
               </Text>
               <div className="flex items-center gap-2">
-                <Button label="Previous" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} />
-                <Text>
+                <Button
+                  small
+                  label="Previous"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                />
+                <Text className="text-xs">
                   Page {page + 1} of {pageCount}
                 </Text>
                 <Button
+                  small
                   label="Next"
                   onClick={() => setPage((p) => p + 1)}
                   disabled={page + 1 >= pageCount || lastShown >= total}
                 />
               </div>
-              <Dropdown
-                label="Users per page"
-                items={[
-                  { label: '100 / page', value: '100' },
-                  { label: '250 / page', value: '250' },
-                  { label: '500 / page', value: '500' },
-                  { label: '1000 / page', value: '1000' },
-                  { label: '1500 / page', value: '1500' },
-                ]}
-                value={String(pageSize)}
-                onChange={(value) => {
-                  setPageSize(Number(value))
-                  setPage(0)
-                }}
-              />
             </div>
           </>
         )}
@@ -1134,12 +1213,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     password alone and re-enroll 2FA. Verify a reset request out-of-band before using this.
                   </Text>
                 </div>
-                <Button
-                  label="Reset 2FA"
-                  colorStyle="danger"
-                  onClick={() => void resetMfa()}
-                  disabled={resettingMfa}
-                />
+                <Button label="Reset 2FA" colorStyle="danger" onClick={() => void resetMfa()} disabled={resettingMfa} />
               </div>
 
               <HorizontalSeparator classes="my-3" />

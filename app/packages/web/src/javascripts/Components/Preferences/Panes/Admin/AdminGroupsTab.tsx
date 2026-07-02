@@ -6,11 +6,11 @@ import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesCompo
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
-import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
+import { rolePickerOptions, toggleRoleName } from './adminGroupsUi'
 
 type AdminGroup = {
   uuid: string
@@ -23,6 +23,31 @@ type GroupMember = {
   uuid: string
   email: string | null
 }
+
+/** Always-visible badge for a role a group currently confers. */
+const RoleChip: FunctionComponent<{ name: string }> = ({ name }) => (
+  <span className="whitespace-nowrap rounded-full bg-info-backdrop px-2.5 py-0.5 text-xs font-medium text-foreground">
+    {name}
+  </span>
+)
+
+/** Clickable on/off chip used by the role pickers (create form + group editor). */
+const RoleToggleChip: FunctionComponent<{ name: string; selected: boolean; onToggle: () => void }> = ({
+  name,
+  selected,
+  onToggle,
+}) => (
+  <button
+    type="button"
+    aria-pressed={selected}
+    onClick={onToggle}
+    className={`cursor-pointer whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+      selected ? 'border-info bg-info text-info-contrast' : 'border-border bg-transparent text-text hover:bg-contrast'
+    }`}
+  >
+    {name}
+  </button>
+)
 
 type Props = {
   application: WebApplication
@@ -37,7 +62,11 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [groupsLoading, setGroupsLoading] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupDescription, setNewGroupDescription] = useState('')
+  const [newGroupRoles, setNewGroupRoles] = useState<string[]>([])
   const [creatingGroup, setCreatingGroup] = useState(false)
+  // Which group's role picker is expanded (the conferred-role CHIPS are always
+  // visible on every row; this only gates the editor).
+  const [editingRolesUuid, setEditingRolesUuid] = useState<string | null>(null)
   const [selectedGroupUuid, setSelectedGroupUuid] = useState<string | null>(null)
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([])
   const [membersLoading, setMembersLoading] = useState(false)
@@ -82,7 +111,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       const response = await application.legacyApi.adminCreateGroup(
         newGroupName.trim(),
         newGroupDescription.trim() === '' ? null : newGroupDescription.trim(),
-        [],
+        newGroupRoles,
       )
       if (isErrorResponse(response)) {
         addToast({ type: ToastType.Error, message: 'Failed to create group.' })
@@ -90,6 +119,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       }
       setNewGroupName('')
       setNewGroupDescription('')
+      setNewGroupRoles([])
       addToast({ type: ToastType.Success, message: 'Group created.' })
       await loadGroups()
     } catch (error) {
@@ -98,7 +128,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     } finally {
       setCreatingGroup(false)
     }
-  }, [application, newGroupName, newGroupDescription, loadGroups])
+  }, [application, newGroupName, newGroupDescription, newGroupRoles, loadGroups])
 
   const deleteGroup = useCallback(
     async (group: AdminGroup) => {
@@ -121,20 +151,21 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           setSelectedGroupUuid(null)
           setGroupMembers([])
         }
+        if (editingRolesUuid === group.uuid) {
+          setEditingRolesUuid(null)
+        }
         await loadGroups()
       } catch (error) {
         console.error(error)
         addToast({ type: ToastType.Error, message: 'Failed to delete group.' })
       }
     },
-    [application, loadGroups, selectedGroupUuid],
+    [application, loadGroups, selectedGroupUuid, editingRolesUuid],
   )
 
   const toggleGroupRole = useCallback(
     async (group: AdminGroup, roleName: string, enabled: boolean) => {
-      const nextRoles = enabled
-        ? Array.from(new Set([...group.roleNames, roleName]))
-        : group.roleNames.filter((name) => name !== roleName)
+      const nextRoles = toggleRoleName(group.roleNames, roleName, enabled)
       // Optimistic update of the local group list.
       setGroups((current) => current.map((g) => (g.uuid === group.uuid ? { ...g, roleNames: nextRoles } : g)))
       try {
@@ -219,17 +250,47 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         roles and the roles granted by their groups. Users in no groups behave exactly as before.
       </Text>
 
-      <div className="mt-3 flex flex-col gap-2">
+      {/* Create-group form: name + description + Create on one aligned row,
+          with an optional role picker underneath so a group can be born with
+          its conferred roles. */}
+      <div className="mt-3 rounded-md border border-border p-3">
         <Subtitle>Create a group</Subtitle>
-        <DecoratedInput placeholder="Group name" value={newGroupName} onChange={setNewGroupName} />
-        <DecoratedInput
-          placeholder="Description (optional)"
-          value={newGroupDescription}
-          onChange={setNewGroupDescription}
-        />
-        <div>
-          <Button label="Create group" onClick={() => void createGroup()} disabled={creatingGroup} />
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <DecoratedInput
+            className={{ container: 'min-w-[220px] flex-grow' }}
+            placeholder="Group name"
+            value={newGroupName}
+            onChange={setNewGroupName}
+            onEnter={() => void createGroup()}
+          />
+          <DecoratedInput
+            className={{ container: 'min-w-[220px] flex-grow' }}
+            placeholder="Description (optional)"
+            value={newGroupDescription}
+            onChange={setNewGroupDescription}
+            onEnter={() => void createGroup()}
+          />
+          <Button
+            label="Create group"
+            onClick={() => void createGroup()}
+            disabled={creatingGroup || newGroupName.trim() === ''}
+          />
         </div>
+        {availableRoles.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <Text className="mr-1 text-xs text-passive-1">Confer roles:</Text>
+            {availableRoles.map((roleName) => (
+              <RoleToggleChip
+                key={roleName}
+                name={roleName}
+                selected={newGroupRoles.includes(roleName)}
+                onToggle={() =>
+                  setNewGroupRoles((current) => toggleRoleName(current, roleName, !current.includes(roleName)))
+                }
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       <HorizontalSeparator classes="my-4" />
@@ -239,81 +300,115 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       ) : groups.length === 0 ? (
         <Text>No groups yet.</Text>
       ) : (
-        <div className="flex flex-col gap-4">
-          {groups.map((group) => (
-            <div key={group.uuid} className="rounded border border-border p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex flex-col">
-                  <Subtitle>{group.name}</Subtitle>
-                  {group.description && <Text>{group.description}</Text>}
-                  <Text className="mt-1 text-xs">{group.uuid}</Text>
-                </div>
-                <Button label="Delete" onClick={() => void deleteGroup(group)} />
-              </div>
-
-              <div className="mt-3">
-                <Subtitle>Conferred roles</Subtitle>
-                <div className="mt-2 flex flex-col gap-1">
-                  {availableRoles.map((roleName) => (
-                    <div key={roleName} className="flex items-center justify-between gap-2">
-                      <Text>{roleName}</Text>
-                      <Switch
-                        checked={group.roleNames.includes(roleName)}
-                        onChange={(checked) => void toggleGroupRole(group, roleName, checked)}
-                      />
+        <div className="flex flex-col gap-3">
+          {groups.map((group) => {
+            const pickerOptions = rolePickerOptions(availableRoles, group.roleNames)
+            const isEditingRoles = editingRolesUuid === group.uuid
+            const isShowingMembers = selectedGroupUuid === group.uuid
+            return (
+              <div key={group.uuid} className="rounded-md border border-border p-3">
+                {/* Header: name + description + always-visible role chips on
+                    the left, actions right-aligned. */}
+                <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+                  <div className="flex min-w-0 flex-grow flex-col">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <Subtitle>{group.name}</Subtitle>
+                      {group.description && <Text className="text-passive-1">{group.description}</Text>}
                     </div>
-                  ))}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {group.roleNames.length > 0 ? (
+                        group.roleNames.map((roleName) => <RoleChip key={roleName} name={roleName} />)
+                      ) : (
+                        <Text className="text-xs italic text-passive-1">No roles conferred</Text>
+                      )}
+                    </div>
+                    <Text className="mt-1 text-xs text-passive-1">{group.uuid}</Text>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    <Button
+                      small
+                      label={isEditingRoles ? 'Done' : 'Edit roles'}
+                      onClick={() => setEditingRolesUuid(isEditingRoles ? null : group.uuid)}
+                    />
+                    <Button
+                      small
+                      label={isShowingMembers ? 'Hide members' : 'Members'}
+                      onClick={() => {
+                        if (isShowingMembers) {
+                          setSelectedGroupUuid(null)
+                        } else {
+                          void loadGroupMembers(group.uuid)
+                        }
+                      }}
+                    />
+                    <Button small colorStyle="danger" label="Delete" onClick={() => void deleteGroup(group)} />
+                  </div>
                 </div>
-              </div>
 
-              <HorizontalSeparator classes="my-3" />
+                {/* Role picker: every role the server offers (plus any the
+                    group already confers), current ones pre-selected. Each
+                    toggle saves immediately via the set-group-roles endpoint. */}
+                {isEditingRoles && (
+                  <div className="mt-3 rounded border border-border p-3">
+                    <Text className="text-xs text-passive-1">
+                      Toggle the roles this group confers on every member. Changes are saved immediately.
+                    </Text>
+                    {pickerOptions.length === 0 ? (
+                      <Text className="mt-2">This server does not report any assignable roles.</Text>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {pickerOptions.map((roleName) => {
+                          const conferred = group.roleNames.includes(roleName)
+                          return (
+                            <RoleToggleChip
+                              key={roleName}
+                              name={roleName}
+                              selected={conferred}
+                              onToggle={() => void toggleGroupRole(group, roleName, !conferred)}
+                            />
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
-              <Button
-                label={selectedGroupUuid === group.uuid ? 'Hide members' : 'Manage members'}
-                onClick={() => {
-                  if (selectedGroupUuid === group.uuid) {
-                    setSelectedGroupUuid(null)
-                  } else {
-                    void loadGroupMembers(group.uuid)
-                  }
-                }}
-              />
-
-              {selectedGroupUuid === group.uuid && (
-                <div className="mt-3">
-                  <Subtitle>Members</Subtitle>
-                  {membersLoading ? (
-                    <Spinner className="mt-2 h-5 w-5" />
-                  ) : (
-                    <>
-                      <div className="mt-2 flex flex-col gap-1">
+                {isShowingMembers && (
+                  <div className="mt-3 rounded border border-border p-3">
+                    <Subtitle>Members{membersLoading ? '' : ` (${groupMembers.length})`}</Subtitle>
+                    {membersLoading ? (
+                      <Spinner className="mt-2 h-5 w-5" />
+                    ) : (
+                      <>
                         {groupMembers.length === 0 ? (
-                          <Text>No members.</Text>
+                          <Text className="mt-2 italic text-passive-1">No members yet.</Text>
                         ) : (
-                          groupMembers.map((member) => (
-                            <div key={member.uuid} className="flex items-center justify-between gap-2">
-                              <Text>{member.email ?? member.uuid}</Text>
-                              <Button label="Remove" onClick={() => void removeMember(member.uuid)} />
-                            </div>
-                          ))
+                          <div className="mt-2 divide-y divide-border">
+                            {groupMembers.map((member) => (
+                              <div key={member.uuid} className="flex items-center justify-between gap-2 py-1.5">
+                                <Text>{member.email ?? member.uuid}</Text>
+                                <Button small label="Remove" onClick={() => void removeMember(member.uuid)} />
+                              </div>
+                            ))}
+                          </div>
                         )}
-                      </div>
-                      <div className="mt-3 flex items-center gap-2">
-                        <DecoratedInput
-                          className={{ container: 'flex-grow' }}
-                          placeholder="User UUID to add"
-                          value={newMemberUuid}
-                          onChange={setNewMemberUuid}
-                          onEnter={() => void addMember()}
-                        />
-                        <Button label="Add" onClick={() => void addMember()} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                        <div className="mt-3 flex items-center gap-2">
+                          <DecoratedInput
+                            className={{ container: 'flex-grow' }}
+                            placeholder="User UUID to add"
+                            value={newMemberUuid}
+                            onChange={setNewMemberUuid}
+                            onEnter={() => void addMember()}
+                          />
+                          <Button small label="Add" onClick={() => void addMember()} />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </PreferencesSegment>
