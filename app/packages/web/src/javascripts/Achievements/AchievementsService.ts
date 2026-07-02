@@ -21,6 +21,7 @@ import {
   METRICS,
   definitionsForMetric,
 } from './achievementDefinitions'
+import { achievementUnlockToastIcon } from './AchievementTrophy'
 
 const STATE_STORAGE_KEY = 'sn_achievements_state'
 const CONFIG_STORAGE_KEY = 'sn_achievements_config'
@@ -170,7 +171,12 @@ class AchievementsServiceImpl {
     // Only when the master switch AND the per-feature toast flag are both on.
     if (this.config.enabled && this.config.showUnlockToasts) {
       try {
-        addToast({ type: ToastType.Success, message: `Achievement unlocked: ${def.name}` })
+        // Tier-colored trophy instead of the generic success tick-circle.
+        addToast({
+          type: ToastType.Success,
+          message: `Achievement unlocked: ${def.name}`,
+          icon: achievementUnlockToastIcon(def),
+        })
       } catch {
         // Fire-and-forget: a toast failure must never break instrumentation.
       }

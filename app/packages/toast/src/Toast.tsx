@@ -40,7 +40,7 @@ type Props = {
 }
 
 export const Toast = forwardRef(({ toast, index }: Props, ref: ForwardedRef<HTMLDivElement>) => {
-  const icon = iconForToastType(toast.type)
+  const icon = toast.icon ?? iconForToastType(toast.type)
   const hasActions = toast.actions && toast.actions.length > 0
   const hasProgress = toast.type === ToastType.Progress && toast.progress !== undefined && toast.progress > -1
 

@@ -25,3 +25,12 @@ export {
 } from './achievementDefinitions'
 
 export { useAchievements, type UseAchievementsResult } from './useAchievements'
+
+export {
+  tierForAchievement,
+  type AchievementTier,
+  type AchievementTierInfo,
+  type AchievementTierSource,
+} from './achievementTier'
+
+export { TrophyIcon, achievementUnlockToastIcon } from './AchievementTrophy'

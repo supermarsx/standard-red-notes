@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ToastType } from './enums'
 
 export type ToastAction = {
@@ -9,6 +10,11 @@ type CommonToastProperties = {
   type: ToastType
   title?: string
   message: string
+  /**
+   * Optional custom icon rendered in place of the default type-derived icon.
+   * Additive: when omitted, the toast keeps its standard icon for `type`.
+   */
+  icon?: ReactNode
   actions?: ToastAction[]
   progress?: number
   autoClose?: boolean
