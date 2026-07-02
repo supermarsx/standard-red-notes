@@ -11,9 +11,11 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
+import Dropdown from '@/Components/Dropdown/Dropdown'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
+import { formatSizeToReadableString } from '@standardnotes/filepicker'
 
 type Props = {
   application: WebApplication
@@ -53,6 +55,33 @@ const NEXTCLOUD_BACKUP_ALLOWED = 'NEXTCLOUD_BACKUP_ALLOWED'
 // READ-ONLY view of the user's Nextcloud backup cadence (disabled|daily|weekly|
 // monthly). Surfaced so the admin can SEE the user's backup state.
 const NEXTCLOUD_BACKUP_FREQUENCY = 'NEXTCLOUD_BACKUP_FREQUENCY'
+// Per-user SERVER storage limit in bytes. On the server this is a SUBSCRIPTION
+// setting (not a plain user setting); -1 means unlimited — the only value the
+// files server treats as unlimited. Managed via the same feature-flags endpoints.
+const FILE_UPLOAD_BYTES_LIMIT = 'FILE_UPLOAD_BYTES_LIMIT'
+
+// Match @standardnotes/filepicker's binary units so the displayed current value
+// (formatSizeToReadableString) round-trips with what the admin enters here.
+const BYTES_IN_ONE_MEGABYTE = 1_048_576
+const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
+
+type StorageInfo = {
+  hasSubscription: boolean
+  uploadBytesLimit: number | null
+  uploadBytesUsed: number | null
+}
+
+const describeStorageLimit = (storage: StorageInfo | null): string => {
+  if (!storage || !storage.hasSubscription || storage.uploadBytesLimit === -1) {
+    return 'Unlimited'
+  }
+  if (storage.uploadBytesLimit === null) {
+    return 'Not set (server default)'
+  }
+  return formatSizeToReadableString(storage.uploadBytesLimit)
+}
+
+const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) ? String(amount) : amount.toFixed(2))
 
 const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const isAdmin = application.featuresController.isAdminUser()
@@ -74,6 +103,12 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const [nextcloudBackupAllowed, setNextcloudBackupAllowed] = useState(false)
   const [nextcloudBackupFrequency, setNextcloudBackupFrequency] = useState<string | null>(null)
   const [nextcloudAppPasswordConfigured, setNextcloudAppPasswordConfigured] = useState(false)
+  // Per-user SERVER storage limit (bytes; -1 = unlimited). Read from and written
+  // to the user's subscription settings via the admin feature-flags endpoints.
+  const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
+  const [storageLimitValue, setStorageLimitValue] = useState('')
+  const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
+  const [savingStorageLimit, setSavingStorageLimit] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
   const [savingLimit, setSavingLimit] = useState(false)
 
@@ -294,7 +329,11 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           return
         }
         const data = (response as {
-          data?: { flags?: Record<string, string | null>; nextcloudAppPasswordConfigured?: boolean }
+          data?: {
+            flags?: Record<string, string | null>
+            nextcloudAppPasswordConfigured?: boolean
+            storage?: StorageInfo | null
+          }
         }).data
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] === 'true')
@@ -305,6 +344,22 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         setNextcloudBackupAllowed(flags[NEXTCLOUD_BACKUP_ALLOWED] === 'true')
         setNextcloudBackupFrequency(flags[NEXTCLOUD_BACKUP_FREQUENCY] ?? null)
         setNextcloudAppPasswordConfigured(Boolean(data?.nextcloudAppPasswordConfigured))
+
+        const storage = data?.storage ?? null
+        setStorageInfo(storage)
+        // Seed the editor with the user's current limit so "Save" without edits
+        // is a no-op. No explicit setting and -1 both surface as Unlimited.
+        const currentLimit = storage?.uploadBytesLimit ?? null
+        if (currentLimit === null || currentLimit === -1) {
+          setStorageLimitUnit('unlimited')
+          setStorageLimitValue('')
+        } else if (currentLimit >= BYTES_IN_ONE_GIGABYTE) {
+          setStorageLimitUnit('GB')
+          setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_GIGABYTE))
+        } else {
+          setStorageLimitUnit('MB')
+          setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_MEGABYTE))
+        }
       } catch (error) {
         console.error(error)
       } finally {
@@ -441,6 +496,48 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       setSavingLimit(false)
     }
   }, [application, user, aiRequestLimit])
+
+  const saveStorageLimit = useCallback(async () => {
+    if (!user) {
+      return
+    }
+
+    let bytesValue: string
+    if (storageLimitUnit === 'unlimited') {
+      // -1 is the server/files-service sentinel for unlimited storage.
+      bytesValue = '-1'
+    } else {
+      const amount = Number(storageLimitValue)
+      if (!Number.isFinite(amount) || amount <= 0) {
+        addToast({ type: ToastType.Error, message: 'Enter a storage limit greater than zero, or choose Unlimited.' })
+        return
+      }
+      bytesValue = String(
+        Math.round(amount * (storageLimitUnit === 'GB' ? BYTES_IN_ONE_GIGABYTE : BYTES_IN_ONE_MEGABYTE)),
+      )
+    }
+
+    setSavingStorageLimit(true)
+    try {
+      const response = await application.legacyApi.adminSetUserFeatureFlag(
+        user.uuid,
+        FILE_UPLOAD_BYTES_LIMIT,
+        bytesValue,
+      )
+      if (isErrorResponse(response)) {
+        addToast({ type: ToastType.Error, message: 'Failed to update storage limit.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'Storage limit saved. It applies to new uploads.' })
+      // Re-read so the display reflects the canonical stored value.
+      await loadFlags(user.uuid)
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update storage limit.' })
+    } finally {
+      setSavingStorageLimit(false)
+    }
+  }, [application, user, storageLimitUnit, storageLimitValue, loadFlags])
 
   const toggleBan = useCallback(
     async (nextBanned: boolean) => {
@@ -687,6 +784,54 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                         )
                       }
                     />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex flex-col gap-2">
+                    <Subtitle>Server storage limit</Subtitle>
+                    <Text>
+                      Maximum total size of this user's files stored on the server. Current usage:{' '}
+                      <strong>
+                        {storageInfo?.uploadBytesUsed != null
+                          ? formatSizeToReadableString(storageInfo.uploadBytesUsed)
+                          : 'unknown'}
+                      </strong>
+                      , limit: <strong>{describeStorageLimit(storageInfo)}</strong>. A new limit applies to new
+                      uploads; upload tokens issued before the change keep the previous limit until they expire.
+                    </Text>
+                    {storageInfo && !storageInfo.hasSubscription ? (
+                      <Text>
+                        This account has no subscription record, so the server treats its storage as unlimited and the
+                        limit cannot be changed here.
+                      </Text>
+                    ) : (
+                      <div className="mt-1 flex items-center gap-3">
+                        <DecoratedInput
+                          className={{ container: 'w-28' }}
+                          placeholder="e.g. 5"
+                          value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
+                          onChange={setStorageLimitValue}
+                          type="number"
+                          disabled={storageLimitUnit === 'unlimited'}
+                        />
+                        <Dropdown
+                          label="Storage limit unit"
+                          items={[
+                            { label: 'MB', value: 'MB' },
+                            { label: 'GB', value: 'GB' },
+                            { label: 'Unlimited', value: 'unlimited' },
+                          ]}
+                          value={storageLimitUnit}
+                          onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
+                        />
+                        <Button
+                          label="Save limit"
+                          onClick={() => void saveStorageLimit()}
+                          disabled={savingStorageLimit || flagsLoading}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <HorizontalSeparator classes="my-3" />

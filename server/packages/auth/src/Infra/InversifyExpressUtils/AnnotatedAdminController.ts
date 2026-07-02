@@ -26,6 +26,9 @@ import { RemoveUserFromGroup } from '../../Domain/UseCase/RemoveUserFromGroup/Re
 import { SetGroupRoles } from '../../Domain/UseCase/SetGroupRoles/SetGroupRoles'
 import { ListGroupMembers } from '../../Domain/UseCase/ListGroupMembers/ListGroupMembers'
 import { GetUserEffectivePermissions } from '../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
+import { GetRegularSubscriptionForUser } from '../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
+import { GetSubscriptionSetting } from '../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
+import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 
 @controller('/admin')
 export class AnnotatedAdminController extends BaseAdminController {
@@ -43,6 +46,13 @@ export class AnnotatedAdminController extends BaseAdminController {
     override auditLogEntryHttpMapper: MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>,
     @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
     @inject(TYPES.Auth_WebhookDispatcher) override webhookDispatcher: WebhookDispatcherInterface,
+    // Standard Red Notes: per-user SERVER storage-limit dependencies (the upload
+    // limit is a subscription setting; see BaseAdminController).
+    @inject(TYPES.Auth_GetRegularSubscriptionForUser)
+    override doGetRegularSubscription: GetRegularSubscriptionForUser,
+    @inject(TYPES.Auth_GetSubscriptionSetting) override doGetSubscriptionSetting: GetSubscriptionSetting,
+    @inject(TYPES.Auth_SetSubscriptionSettingValue)
+    override doSetSubscriptionSettingValue: SetSubscriptionSettingValue,
     @inject(TYPES.Auth_CreateGroup) override doCreateGroup: CreateGroup,
     @inject(TYPES.Auth_ListGroups) override doListGroups: ListGroups,
     @inject(TYPES.Auth_DeleteGroup) override doDeleteGroup: DeleteGroup,
@@ -67,6 +77,9 @@ export class AnnotatedAdminController extends BaseAdminController {
       auditLogWriter,
       undefined,
       webhookDispatcher,
+      doGetRegularSubscription,
+      doGetSubscriptionSetting,
+      doSetSubscriptionSettingValue,
       doCreateGroup,
       doListGroups,
       doDeleteGroup,

@@ -2900,6 +2900,11 @@ export class ContainerConfigLoader {
             container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
             container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
+            // Standard Red Notes: per-user SERVER storage-limit dependencies (the
+            // upload limit is a subscription setting; see BaseAdminController).
+            container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
+            container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
+            container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
           ),
         )
       container

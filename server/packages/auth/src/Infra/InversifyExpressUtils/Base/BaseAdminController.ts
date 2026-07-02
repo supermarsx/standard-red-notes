@@ -29,6 +29,9 @@ import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
 import { WebhookDispatcherInterface } from '../../../Domain/Webhook/WebhookDispatcherInterface'
 import { WebhookEvent } from '../../../Domain/Webhook/WebhookEvent'
 import { EmailBackupFrequency, ListedAuthorSecretsData } from '@standardnotes/settings'
+import { GetRegularSubscriptionForUser } from '../../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
+import { GetSubscriptionSetting } from '../../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
+import { SetSubscriptionSettingValue } from '../../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 
 /**
  * Standard Red Notes: settings an admin (INTERNAL_TEAM_USER) is allowed to set
@@ -95,6 +98,16 @@ export class BaseAdminController extends BaseHttpController {
     // home-server container binding — which stops at controllerContainer and omits
     // the trailing group params — can still provide it.
     protected webhookDispatcher?: WebhookDispatcherInterface,
+    // Standard Red Notes: per-user SERVER storage-limit dependencies. The upload
+    // limit (FILE_UPLOAD_BYTES_LIMIT) is a SUBSCRIPTION setting — GetSetting/
+    // SetSettingValue reject it — so it needs its own read/write path against the
+    // user's regular subscription. Optional so existing tests that construct this
+    // controller with the original arity keep compiling; the storage-limit
+    // endpoints fail gracefully when absent. Placed before the group deps for the
+    // same home-server container-binding reason as webhookDispatcher above.
+    protected doGetRegularSubscription?: GetRegularSubscriptionForUser,
+    protected doGetSubscriptionSetting?: GetSubscriptionSetting,
+    protected doSetSubscriptionSettingValue?: SetSubscriptionSettingValue,
     // Standard Red Notes: RBAC groups / effective-permissions dependencies.
     // Optional so existing tests that construct this controller with the original
     // arity keep compiling; the group endpoints fail gracefully when absent.
@@ -318,10 +331,49 @@ export class BaseAdminController extends BaseHttpController {
     })
     const nextcloudAppPasswordConfigured = !appPasswordResult.isFailed()
 
+    // Standard Red Notes: per-user SERVER storage limit/usage. FILE_UPLOAD_BYTES_LIMIT
+    // and FILE_UPLOAD_BYTES_USED are SUBSCRIPTION settings, so they are read from the
+    // user's regular subscription rather than through GetSetting. Semantics:
+    //   - uploadBytesLimit -1 means unlimited (the files server skips the space check
+    //     for -1; the limit is embedded into valet tokens at token-creation time).
+    //   - uploadBytesLimit null means the setting was never written; the plan default
+    //     applies (in this fork registration always seeds it via ActivatePremiumFeatures).
+    //   - hasSubscription false means no regular subscription record exists; such
+    //     accounts get an unlimited (-1) valet token and the limit cannot be managed.
+    let storage: {
+      hasSubscription: boolean
+      uploadBytesLimit: number | null
+      uploadBytesUsed: number | null
+    } | null = null
+    if (this.doGetRegularSubscription !== undefined && this.doGetSubscriptionSetting !== undefined) {
+      storage = { hasSubscription: false, uploadBytesLimit: null, uploadBytesUsed: null }
+      const regularSubscriptionOrError = await this.doGetRegularSubscription.execute({ userUuid })
+      if (!regularSubscriptionOrError.isFailed()) {
+        const regularSubscription = regularSubscriptionOrError.getValue()
+        storage.hasSubscription = true
+        for (const [key, settingName] of [
+          ['uploadBytesLimit', SettingName.NAMES.FileUploadBytesLimit],
+          ['uploadBytesUsed', SettingName.NAMES.FileUploadBytesUsed],
+        ] as const) {
+          const settingOrError = await this.doGetSubscriptionSetting.execute({
+            userSubscriptionUuid: regularSubscription.uuid,
+            settingName,
+            allowSensitiveRetrieval: false,
+          })
+          if (!settingOrError.isFailed()) {
+            const rawValue = settingOrError.getValue().setting.props.value
+            const parsedValue = rawValue === null ? Number.NaN : Number(rawValue)
+            storage[key] = Number.isFinite(parsedValue) ? parsedValue : null
+          }
+        }
+      }
+    }
+
     return this.json({
       userUuid,
       flags,
       nextcloudAppPasswordConfigured,
+      storage,
     })
   }
 
@@ -338,6 +390,14 @@ export class BaseAdminController extends BaseHttpController {
 
     const { userUuid } = request.params as Record<string, string>
     const { name, value } = request.body as { name?: string; value?: string | null }
+
+    // Standard Red Notes: the per-user SERVER storage limit is a SUBSCRIPTION
+    // setting and takes a dedicated write path (SetSettingValue rejects
+    // subscription settings). It is deliberately NOT in ADMIN_MANAGEABLE_SETTINGS
+    // because that list is read/written through the plain-setting use cases.
+    if (name === SettingName.NAMES.FileUploadBytesLimit) {
+      return this.setUserStorageLimit(request, response)
+    }
 
     if (!name || !ADMIN_MANAGEABLE_SETTINGS.includes(name)) {
       return this.json({ error: { message: `Setting ${name} is not admin-manageable.` } }, 400)
@@ -403,6 +463,91 @@ export class BaseAdminController extends BaseHttpController {
     })
 
     return this.json({ success: true, userUuid, name, value: value ?? null })
+  }
+
+  /**
+   * Standard Red Notes: set a user's SERVER storage limit (FILE_UPLOAD_BYTES_LIMIT,
+   * integer bytes; -1 = unlimited — the only value the files server treats as
+   * unlimited). Reached through setUserFeatureFlag, so the admin role has already
+   * been verified. The value is written as a subscription setting on the user's
+   * regular subscription; CreateValetToken reads it fresh from the database on
+   * every valet-token creation (no cache), so the new limit is honored by every
+   * NEW upload valet token. Tokens issued before the change keep the old embedded
+   * limit until they expire (valet-token TTL). No quota recalculation is needed:
+   * FILE_UPLOAD_BYTES_USED tracking is independent of the limit.
+   */
+  private async setUserStorageLimit(request: Request, response?: Response): Promise<results.JsonResult> {
+    const { userUuid } = request.params as Record<string, string>
+    const { value } = request.body as { value?: string | null }
+
+    if (this.doGetRegularSubscription === undefined || this.doSetSubscriptionSettingValue === undefined) {
+      return this.json({ error: { message: 'Storage limit management is not available.' } }, 500)
+    }
+
+    const trimmedValue = typeof value === 'string' ? value.trim() : value
+    if (
+      typeof trimmedValue !== 'string' ||
+      !/^-?\d+$/.test(trimmedValue) ||
+      !Number.isSafeInteger(Number(trimmedValue)) ||
+      Number(trimmedValue) < -1
+    ) {
+      return this.json(
+        {
+          error: {
+            message: `Invalid storage limit '${value}'. Provide an integer number of bytes, or -1 for unlimited.`,
+          },
+        },
+        400,
+      )
+    }
+    const normalizedValue = `${Number(trimmedValue)}`
+
+    const regularSubscriptionOrError = await this.doGetRegularSubscription.execute({ userUuid })
+    if (regularSubscriptionOrError.isFailed()) {
+      return this.json(
+        {
+          error: {
+            message:
+              'User has no regular subscription record. Accounts without one are already treated as unlimited by the files server.',
+          },
+        },
+        400,
+      )
+    }
+    const regularSubscription = regularSubscriptionOrError.getValue()
+
+    const result = await this.doSetSubscriptionSettingValue.execute({
+      userSubscriptionUuid: regularSubscription.uuid,
+      settingName: SettingName.NAMES.FileUploadBytesLimit,
+      value: normalizedValue,
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SettingChanged,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      // Setting name only, mirroring setUserFeatureFlag's audit policy.
+      metadata: { name: SettingName.NAMES.FileUploadBytesLimit },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SettingChanged,
+      targetUuid: userUuid,
+      metadata: { name: SettingName.NAMES.FileUploadBytesLimit },
+    })
+
+    return this.json({
+      success: true,
+      userUuid,
+      name: SettingName.NAMES.FileUploadBytesLimit,
+      value: normalizedValue,
+    })
   }
 
   /**
