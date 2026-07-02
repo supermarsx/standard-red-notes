@@ -96,6 +96,8 @@ export const SignInStrings = {
   PasscodeRequired: 'Your passcode is required in order to sign in to your account.',
   IncorrectMfa: 'Incorrect two-factor authentication code. Please try again.',
   SignInCanceledMissingMfa: 'Your sign in request has been canceled.',
+  // Standard Red Notes: push-MFA. A trusted session denied this sign-in attempt.
+  SignInDeniedFromTrustedDevice: 'This sign-in was denied from one of your trusted devices.',
 }
 
 export const ProtocolUpgradeStrings = {
@@ -120,6 +122,15 @@ export const SessionStrings = {
   },
   SessionRestored: 'Your session has been successfully restored.',
   EnterMfa: 'Please enter your two-factor authentication code.',
+  // Standard Red Notes: push-MFA. Shown under the interactive code prompt while
+  // the client is also polling for a push approval from a trusted device.
+  MfaPushApprovalHint:
+    'Or approve this sign-in from one of your other signed-in devices (Preferences → Security → Trusted Devices). Waiting for approval…',
+  // Standard Red Notes: push-MFA. A trusted device approved the sign-in, but the
+  // server build does not (yet) consume approvals at the second-factor gate, so
+  // the interactive code remains required.
+  MfaPushApprovedButCodeStillRequired:
+    'The sign-in was approved on your other device, but this server also requires your authentication code.',
   InputU2FDevice: 'Please authenticate with your hardware security key.',
   MfaInputPlaceholder: 'Two-factor authentication code',
   EmailInputPlaceholder: 'Email',

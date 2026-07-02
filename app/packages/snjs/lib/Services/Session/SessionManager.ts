@@ -37,6 +37,7 @@ import {
   WebSocketsService,
 } from '@standardnotes/services'
 import { Base64String, PureCryptoInterface } from '@standardnotes/sncrypto-common'
+import { sleep } from '@standardnotes/utils'
 import {
   SessionBody,
   ErrorTag,
@@ -401,10 +402,34 @@ export class SessionManager
     }
   }
 
-  private async promptForMfaValue(onScreenCode?: string): Promise<string | undefined> {
-    const heading = onScreenCode
-      ? `${SessionStrings.EnterMfa} Your verification code is: ${onScreenCode}`
+  /**
+   * Standard Red Notes: push-MFA aware second-factor prompt.
+   *
+   * Presents the interactive TOTP/magic-link code prompt exactly as before.
+   * When the server's MFA error additionally carried a pending push-approval
+   * challenge id (`mfa_approval_challenge_id`, see auth BaseAuthController
+   * pkceParams), we CONCURRENTLY poll the unauthenticated status endpoint while
+   * the prompt is open:
+   *  - 'approved' -> the prompt is dismissed; the caller re-attempts sign-in.
+   *  - 'denied'   -> the prompt is dismissed; the caller aborts the sign-in.
+   *  - 'expired' (or the endpoint becoming unreachable) -> polling stops
+   *    silently and the interactive code prompt remains fully usable.
+   * Push approval is strictly ADDITIVE — the interactive code path is never
+   * removed, mirroring the server's contract.
+   */
+  private async promptForMfaValue(options?: {
+    onScreenCode?: string
+    approvalChallengeId?: string
+    approvedElsewhereButCodeStillRequired?: boolean
+  }): Promise<{ mfaCode?: string; pushApprovalStatus?: 'approved' | 'denied' } | undefined> {
+    let heading = options?.onScreenCode
+      ? `${SessionStrings.EnterMfa} Your verification code is: ${options.onScreenCode}`
       : SessionStrings.EnterMfa
+    if (options?.approvedElsewhereButCodeStillRequired) {
+      heading = `${SessionStrings.MfaPushApprovedButCodeStillRequired} ${heading}`
+    }
+
+    const subheading = options?.approvalChallengeId ? SessionStrings.MfaPushApprovalHint : undefined
 
     const challenge = new Challenge(
       [
@@ -419,16 +444,95 @@ export class SessionManager
       ChallengeReason.Custom,
       true,
       heading,
+      subheading,
     )
 
-    const response = await this.challengeService.promptForChallengeResponse(challenge)
+    type PromptOutcome =
+      | { kind: 'prompt'; response: ChallengeResponse | undefined }
+      | { kind: 'poll'; status: 'approved' | 'denied' | 'expired' | 'unavailable' }
 
-    if (response) {
+    const promptPromise = this.challengeService.promptForChallengeResponse(challenge)
+
+    let pollingStopped = false
+    const racers: Promise<PromptOutcome>[] = [
+      promptPromise.then((response): PromptOutcome => ({ kind: 'prompt', response })),
+    ]
+    if (options?.approvalChallengeId) {
+      racers.push(
+        this.pollPendingMfaApprovalStatus(options.approvalChallengeId, () => pollingStopped).then(
+          (status): PromptOutcome => ({ kind: 'poll', status }),
+        ),
+      )
+    }
+
+    let outcome = await Promise.race(racers)
+
+    if (outcome.kind === 'poll') {
+      if (outcome.status === 'approved' || outcome.status === 'denied') {
+        try {
+          this.challengeService.cancelChallenge(challenge)
+        } catch (error) {
+          void error
+        }
+        return { pushApprovalStatus: outcome.status }
+      }
+      /** Approval expired / endpoint unreachable: the code prompt is the only remaining path. */
+      outcome = { kind: 'prompt', response: await promptPromise }
+    }
+
+    pollingStopped = true
+
+    if (outcome.response) {
       this.challengeService.completeChallenge(challenge)
-      return response.values[0].value as string
+      return { mfaCode: outcome.response.values[0].value as string }
     }
 
     return undefined
+  }
+
+  /**
+   * Standard Red Notes: poll the UNAUTHENTICATED push-approval status endpoint
+   * with the high-entropy challenge id (the only credential the not-yet-signed-in
+   * device holds). Resolves on any terminal status; resolves 'unavailable' when
+   * asked to stop or after repeated request failures (never blocks the sign-in).
+   */
+  private async pollPendingMfaApprovalStatus(
+    challengeId: string,
+    isStopped: () => boolean,
+  ): Promise<'approved' | 'denied' | 'expired' | 'unavailable'> {
+    const PollIntervalMs = 3000
+    const MaxConsecutiveFailures = 5
+
+    let consecutiveFailures = 0
+
+    while (!isStopped()) {
+      await sleep(PollIntervalMs, false)
+      if (isStopped()) {
+        break
+      }
+
+      try {
+        const response = await this.apiService.getPendingMfaApprovalStatus(challengeId)
+        if (isErrorResponse(response)) {
+          consecutiveFailures += 1
+        } else {
+          consecutiveFailures = 0
+          const status = (response as { data?: { status?: string } }).data?.status
+          if (status === 'approved' || status === 'denied' || status === 'expired') {
+            return status
+          }
+        }
+      } catch (error) {
+        void error
+        consecutiveFailures += 1
+      }
+
+      if (consecutiveFailures >= MaxConsecutiveFailures) {
+        return 'unavailable'
+      }
+    }
+
+    return 'unavailable'
   }
 
   async register(
@@ -491,6 +595,14 @@ export class SessionManager
     authenticatorResponse?: Record<string, unknown>
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string
+    /**
+     * Standard Red Notes: push-MFA. Set on the re-attempt that follows an
+     * 'approved' push approval, so a server build that does not (yet) consume
+     * approvals at the second-factor gate cannot send us into an
+     * approve -> retry -> approve loop: the retry falls back to the interactive
+     * code prompt (with an explanatory heading) instead of polling again.
+     */
+    disallowPushApproval?: boolean
   }): Promise<{
     keyParams?: SNRootKeyParams
     response: HttpResponse<KeyParamsResponse>
@@ -508,6 +620,25 @@ export class SessionManager
       if (response.data && [ErrorTag.U2FRequired, ErrorTag.MfaRequired].includes(error?.tag as ErrorTag)) {
         const isU2FRequired = error?.tag === ErrorTag.U2FRequired
 
+        if (isU2FRequired) {
+          const result = await this.promptForU2FVerification(dto.email)
+          if (!result) {
+            return {
+              response: this.apiService.createErrorResponse(
+                SignInStrings.SignInCanceledMissingMfa,
+                undefined,
+                ErrorTag.ClientCanceledMfa,
+              ),
+            }
+          }
+
+          return this.retrieveKeyParams({
+            email: dto.email,
+            authenticatorResponse: result,
+            workspaceIdentifier: dto.workspaceIdentifier,
+          })
+        }
+
         let onScreenMagicLinkCode: string | undefined
         const isMagicLinkRequired =
           error?.tag === ErrorTag.MfaRequired && /email/i.test(error?.message ?? '') && !dto.mfaCode
@@ -515,10 +646,26 @@ export class SessionManager
           onScreenMagicLinkCode = await this.requestMagicLinkCode(dto.email)
         }
 
-        const result = isU2FRequired
-          ? await this.promptForU2FVerification(dto.email)
-          : await this.promptForMfaValue(onScreenMagicLinkCode)
-        if (!result) {
+        /**
+         * Standard Red Notes: push-MFA. The MFA error may carry the id of a
+         * pending approval the server just created and pushed to the user's
+         * other authenticated sessions (as an MFA_APPROVAL_REQUESTED websocket
+         * frame + the pending-approvals inbox). While the code prompt is open
+         * we also poll that approval, so an approve/deny on a trusted device
+         * resolves this sign-in without typing a code.
+         */
+        const rawApprovalChallengeId = error?.payload?.['mfa_approval_challenge_id']
+        const approvalChallengeId =
+          !dto.disallowPushApproval && typeof rawApprovalChallengeId === 'string' && rawApprovalChallengeId.length > 0
+            ? rawApprovalChallengeId
+            : undefined
+
+        const mfaResult = await this.promptForMfaValue({
+          onScreenCode: onScreenMagicLinkCode,
+          approvalChallengeId,
+          approvedElsewhereButCodeStillRequired: dto.disallowPushApproval,
+        })
+        if (!mfaResult) {
           return {
             response: this.apiService.createErrorResponse(
               SignInStrings.SignInCanceledMissingMfa,
@@ -528,10 +675,35 @@ export class SessionManager
           }
         }
 
+        if (mfaResult.pushApprovalStatus === 'denied') {
+          return {
+            response: this.apiService.createErrorResponse(
+              SignInStrings.SignInDeniedFromTrustedDevice,
+              undefined,
+              ErrorTag.ClientCanceledMfa,
+            ),
+          }
+        }
+
+        if (mfaResult.pushApprovalStatus === 'approved') {
+          /**
+           * The server's documented continuation: an approved (and, via the
+           * status poll, consumed) challenge means the second factor is
+           * satisfied and the client re-attempts the normal sign-in. If this
+           * server build does not consume approvals at the MFA gate yet, the
+           * retry lands back on the interactive code prompt (guarded by
+           * disallowPushApproval above).
+           */
+          return this.retrieveKeyParams({
+            email: dto.email,
+            workspaceIdentifier: dto.workspaceIdentifier,
+            disallowPushApproval: true,
+          })
+        }
+
         return this.retrieveKeyParams({
           email: dto.email,
-          mfaCode: isU2FRequired ? undefined : (result as string),
-          authenticatorResponse: isU2FRequired ? (result as Record<string, unknown>) : undefined,
+          mfaCode: mfaResult.mfaCode,
           workspaceIdentifier: dto.workspaceIdentifier,
         })
       } else {
