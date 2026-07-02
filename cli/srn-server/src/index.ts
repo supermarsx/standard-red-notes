@@ -233,7 +233,7 @@ async function probe(p: Probe, sharedKey: string | undefined, timeoutMs: number)
 // --- commands ----------------------------------------------------------------
 
 async function cmdHealth(args: ParsedArgs): Promise<number> {
-  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3000'
+  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3001'
   const sharedKey = flagStr(args.flags, 'server-key') ?? process.env.SHARED_SERVER_ACCESS_KEY
   const timeoutMs = Number(flagStr(args.flags, 'timeout') ?? '5000')
   process.stdout.write(`Health probe against ${baseUrl}\n`)
@@ -378,7 +378,7 @@ async function cmdConfig(args: ParsedArgs): Promise<number> {
 
 async function cmdVersion(args: ParsedArgs): Promise<number> {
   process.stdout.write(`srn-server ${CLI_VERSION}\n`)
-  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3000'
+  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3001'
   const sharedKey = flagStr(args.flags, 'server-key') ?? process.env.SHARED_SERVER_ACCESS_KEY
   try {
     const headers: Record<string, string> = {}
@@ -416,7 +416,7 @@ GLOBAL OPTIONS
   -h, --help          Show help
 
 health / version OPTIONS
-  --url <url>         Server base URL (default http://localhost:3000 / $SRN_SERVER_URL)
+  --url <url>         Server base URL (default http://localhost:3001 / $SRN_SERVER_URL)
   --server-key <key>  X-Shared-Server-Key header value (or $SHARED_SERVER_ACCESS_KEY)
   --timeout <ms>      Per-probe timeout (default 5000)
 
@@ -436,7 +436,7 @@ config OPTIONS
   --compose-config    Also print the resolved \`docker compose config\`
 
 EXAMPLES
-  srn-server health --url http://localhost:3000
+  srn-server health --url http://localhost:3001
   srn-server config
   srn-server status
   srn-server logs server --tail 100

@@ -22,7 +22,7 @@ import { expect, test } from '@playwright/test'
  * sign-in helper to the harness's test fixture as needed.
  */
 
-const BASE_URL = process.env.SN_E2E_BASE_URL ?? 'http://localhost:3000'
+const BASE_URL = process.env.SN_E2E_BASE_URL ?? 'http://localhost:3001'
 
 const SUPER_EDITOR_SELECTOR = '#blocks-editor [contenteditable="true"]'
 const NOTE_TITLE_INPUT = '#note-title-editor'

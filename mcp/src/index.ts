@@ -19,8 +19,12 @@ const httpPort = process.env.MCP_HTTP_PORT
   : 3010;
 const httpToken = process.env.MCP_HTTP_TOKEN;
 
+// Default for a bridge running ON THE HOST: the compose stack's single front
+// door (app nginx on :3001), which proxies /v1|/v2|/auth to the api-gateway —
+// the gateway itself publishes no host port. Inside compose this is overridden
+// to the internal URL (http://server:3000) via docker-compose.yml.
 const serverUrl =
-  process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3000";
+  process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3001";
 // MCP scoped token: when set, the bridge authenticates with this token INSTEAD
 // of email/password/MFA. Its scope (read vs read-write) is enforced below.
 const mcpToken = process.env.STANDARD_RED_NOTES_MCP_TOKEN;

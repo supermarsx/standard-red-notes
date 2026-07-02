@@ -152,13 +152,11 @@ if [ -n "$DOMAIN" ]; then
   COOKIE_DOMAIN="$DOMAIN"
 fi
 
-title "2) Host ports"
-info "These are the ports published on the host machine."
+title "2) Host port"
+info "The single port published on the host machine. The app's nginx front door"
+info "proxies the API (/v1), files (/files/) and realtime websocket (/sockets)"
+info "same-origin, so the API gateway and files service publish no host ports."
 prompt APP_PORT       "Web app port:"            "3001"
-prompt SERVER_PORT    "API gateway port:"        "3000"
-prompt FILES_PORT     "Files service port:"      "3125"
-# The realtime websocket gateway runs in-process on the API gateway port (no
-# separate host port), so it is not prompted for here.
 
 title "3) Database"
 prompt MYSQL_DATABASE "Database name:" "standard_notes_db"
@@ -168,14 +166,16 @@ title "4) Admin"
 info "Comma-separated emails granted the in-app Admin panel (optional)."
 prompt ADMIN_EMAILS "Admin email(s):" ""
 
-# Derive URLs / origins from the answers
+# Derive URLs / origins from the answers. Files are served through the app
+# front door's /files/ proxy, so the files URL is the app origin + /files.
 if [ -n "$DOMAIN" ]; then
   SCHEME="http"; [ "$USE_HTTPS" = "true" ] && SCHEME="https"
-  PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}:${FILES_PORT}"
+  PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}:${APP_PORT}/files"
+  [ "$USE_HTTPS" = "true" ] && PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}/files"
   U2F_RP_ID="$DOMAIN"
   U2F_EXPECTED_ORIGIN="${SCHEME}://${DOMAIN}:${APP_PORT},${SCHEME}://${DOMAIN}"
 else
-  PUBLIC_FILES_SERVER_URL="http://localhost:${FILES_PORT}"
+  PUBLIC_FILES_SERVER_URL="http://localhost:${APP_PORT}/files"
   U2F_RP_ID="localhost"
   U2F_EXPECTED_ORIGIN="http://localhost:${APP_PORT},http://localhost"
 fi
@@ -208,10 +208,10 @@ cat > "$ENV_FILE" <<EOF
 # exist will lock people out, so keep this file safe and backed up.
 # =============================================================================
 
-# ----- Host ports (published on the host machine) ----------------------------
+# ----- Host port (the ONLY port published on the host machine) ---------------
+# The app's nginx front door proxies the API, files and websocket same-origin;
+# the API gateway and files service are internal-only (no host ports).
 APP_PORT=${APP_PORT}
-SERVER_PORT=${SERVER_PORT}
-FILES_PORT=${FILES_PORT}
 
 # ----- Database (MariaDB) ----------------------------------------------------
 MYSQL_DATABASE=${MYSQL_DATABASE}

@@ -48,7 +48,7 @@ validates the `.env` file.
 ### health / version options
 
 ```
---url <url>         Server base URL (default http://localhost:3000 / $SRN_SERVER_URL)
+--url <url>         Server base URL (default http://localhost:3001 / $SRN_SERVER_URL)
 --server-key <key>  X-Shared-Server-Key header value (or $SHARED_SERVER_ACCESS_KEY)
 --timeout <ms>      Per-probe timeout (default 5000)
 ```
@@ -68,7 +68,7 @@ config:  --env <path>      Path to the .env file (default <repo>/.env)
 ## Examples
 
 ```bash
-srn-server health --url http://localhost:3000
+srn-server health --url http://localhost:3001
 srn-server config
 srn-server status
 srn-server logs server --tail 100 -f

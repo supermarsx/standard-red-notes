@@ -461,6 +461,12 @@ export API_GATEWAY_SYNCING_SERVER_GRPC_URL=0.0.0.0:$SYNCING_SERVER_GRPC_PORT
 export API_GATEWAY_AUTH_SERVER_URL=http://localhost:$AUTH_SERVER_PORT
 export API_GATEWAY_AUTH_SERVER_GRPC_URL=0.0.0.0:$AUTH_SERVER_GRPC_PORT
 export API_GATEWAY_REVISIONS_SERVER_URL=http://localhost:$REVISIONS_SERVER_PORT
+# Public files URL the gateway advertises to clients (meta.server.filesServerUrl).
+# docker-compose.yml always sets this (default http://localhost:3001/files — the
+# app front door's /files/ prefix-strip proxy; the files service publishes no
+# host port there). The fallback below only applies when this image is run BARE
+# (no compose / no app nginx), where publishing 3125:3104 yourself is the
+# simplest way to reach the files service directly.
 if [ -z "$PUBLIC_FILES_SERVER_URL" ]; then
   export PUBLIC_FILES_SERVER_URL=http://localhost:3125
 fi

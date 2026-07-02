@@ -47,14 +47,17 @@ Notes** server. It is generated from the source of truth in this repository:
 
 ## Base URL and versioning
 
-All requests go to the **API gateway**. In the bundled Docker stack the gateway
-listens on `http://localhost:3000`; the static web client is served separately
-(`http://localhost:3001`) and the files service on `http://localhost:3125`. In a
-production deployment you put a reverse proxy in front of the gateway and use
-your own domain. The examples below use `$SERVER` for the gateway origin:
+All requests go to the **API gateway**. In the bundled Docker stack everything
+enters through the single app front door on `http://localhost:3001`: its nginx
+serves the web client and proxies `/v1`, `/v2`, `/auth`, `/subscription`, and
+`/healthcheck` to the gateway, `/files/` to the files service (prefix-stripped),
+and `/sockets` to the realtime websocket - the gateway and files service publish
+no host ports of their own. In a production deployment you put a reverse proxy
+in front of that one port and use your own domain. The examples below use
+`$SERVER` for the gateway origin:
 
 ```bash
-export SERVER="http://localhost:3000"
+export SERVER="http://localhost:3001"
 ```
 
 Paths are versioned by a leading `/v1` or `/v2` segment. The clients send a
@@ -123,7 +126,7 @@ shapes; replace the derivation step with the snjs/`srn-client` logic for a real
 call.
 
 ```bash
-SERVER="http://localhost:3000"
+SERVER="http://localhost:3001"
 EMAIL="me@example.com"
 
 # 1) Get key params (PKCE). Generate a code_verifier and its SHA-256 challenge.
@@ -242,10 +245,11 @@ browser sessions, the session cookies).
 
 | Method | Path | Resolver id | Notes |
 | --- | --- | --- | --- |
-| POST | `/v1/files/valet-tokens` | `auth.valet-tokens.create` | Mint a valet token authorizing an upload/download/delete against the files service. The actual chunked transfer happens against the files service host. |
+| POST | `/v1/files/valet-tokens` | `auth.valet-tokens.create` | Mint a valet token authorizing an upload/download/delete against the files service. The actual chunked transfer happens against the files host the gateway advertises in `meta.server.filesServerUrl` (`PUBLIC_FILES_SERVER_URL`, default `http://localhost:3001/files` — the app front door's prefix-strip proxy). |
 
 File chunk operations (handled by the files service, authorized with the valet
-token from above; client paths in `snjs/.../Paths.ts`):
+token from above; client paths in `snjs/.../Paths.ts`, joined onto the files
+host above, e.g. `http://localhost:3001/files/v1/files/upload/chunk`):
 `POST /v1/files/upload/create-session`, `POST /v1/files/upload/chunk`,
 `POST /v1/files/upload/close-session`, `GET`/`DELETE /v1/files`, plus the
 shared-vault variants under `/v1/shared-vault/files/*`.

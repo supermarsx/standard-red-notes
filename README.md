@@ -192,8 +192,10 @@ docker compose pull && docker compose up -d    # update and restart
 docker compose --profile mcp run --rm mcp      # optional MCP stdio bridge
 ```
 
-Other endpoints: API gateway <http://localhost:3000>, files
-<http://localhost:3125>.
+Everything is served through the single app port: the API gateway at
+<http://localhost:3001/v1>, files at <http://localhost:3001/files>, and the
+realtime websocket at `ws://localhost:3001/sockets` (the API gateway and files
+service publish no host ports of their own).
 </details>
 
 For production — every environment variable, **reverse proxy (nginx / Traefik)**,

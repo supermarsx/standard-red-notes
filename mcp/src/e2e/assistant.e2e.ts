@@ -6,7 +6,7 @@
 // helpers/polyfill (loading libsodium then process.exit trips a libuv assertion
 // on Windows). Keep it dependency-free.
 
-const SERVER = process.env.STANDARD_RED_NOTES_SERVER_URL ?? 'http://localhost:3000'
+const SERVER = process.env.STANDARD_RED_NOTES_SERVER_URL ?? 'http://localhost:3001'
 
 let failures = 0
 function check(name: string, cond: boolean): void {

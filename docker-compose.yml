@@ -54,11 +54,21 @@ x-server-env: &server-env
   # N most-recent revisions per item.
   REVISIONS_RETENTION_DAYS: ${REVISIONS_RETENTION_DAYS:-0}
   REVISIONS_MAX_COUNT_PER_ITEM: ${REVISIONS_MAX_COUNT_PER_ITEM:-0}
-  PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:3125}
+  # Public base URL clients use to reach the files service (chunk uploads /
+  # downloads with valet tokens). The api-gateway advertises it to clients in
+  # every response's meta.server.filesServerUrl — it is NEVER called
+  # server-side, so it must be a URL the BROWSER can reach. It points at the
+  # app front door's /files/ proxy (app/docker/nginx.conf), which strips the
+  # /files prefix and forwards to the files service on the internal network —
+  # the files service publishes no host port. Override for real deployments,
+  # e.g. PUBLIC_FILES_SERVER_URL=https://notes.example.com/files.
+  PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-3001}/files}
   # Self-hosted realtime WebSocket gateway. It now runs IN-PROCESS inside the
   # api-gateway on the SAME port (:3000) — no separate listener/process. The
   # api-gateway POSTs to its own /sockets/tokens to mint connection tokens, so
-  # this URL points at the api-gateway itself (localhost:3000).
+  # this URL points at the api-gateway itself. It is CONTAINER-INTERNAL
+  # (localhost inside the server container) — browsers never see it; they dial
+  # the same-origin ws(s)://<app-host>/sockets path proxied by the app's nginx.
   WEB_SOCKET_SERVER_URL: ${WEB_SOCKET_SERVER_URL:-http://localhost:3000}
   WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-dev-ws-internal-secret-change-me}
   # Connection-token signing for the in-process WebSocket gateway. The api-gateway
@@ -183,9 +193,12 @@ services:
     networks:
       - standard-red-notes
       # - proxy
-    # Example Traefik labels (uncomment with the `proxy` network). The web UI,
-    # the /v1 API and the realtime websocket can all be served under ONE host;
-    # the routers below split by path. Adjust the host rule and TLS resolver.
+    # Example Traefik labels (uncomment with the `proxy` network). This nginx
+    # is the SINGLE front door: it serves the web UI and proxies the /v1 API,
+    # /files/, the realtime websocket (/sockets) and /workflows-ui/ same-origin,
+    # so ONE router to this service covers the whole stack. Adjust the host
+    # rule and TLS resolver, and set PUBLIC_FILES_SERVER_URL to
+    # https://<your-host>/files.
     # labels:
     #   - "traefik.enable=true"
     #   - "traefik.docker.network=proxy"
@@ -225,11 +238,14 @@ services:
         condition: service_healthy
       localstack:
         condition: service_healthy
-    ports:
-      - "${SERVER_PORT:-3000}:3000"
-      - "${FILES_PORT:-3125}:3104"
-      # The realtime WebSocket gateway runs in-process on the api-gateway's :3000
-      # listener (see SERVER_PORT above), so it no longer needs its own port.
+    # Internal-only: NO host ports. ALL client traffic (API /v1|/v2|/auth,
+    # files /files/, realtime /sockets, workflows /workflows-ui/) enters
+    # through the app front door (nginx on APP_PORT, default 3001), which
+    # reaches this container by service name on the compose network
+    # (server:3000 for the gateway + in-process websocket gateway, server:3104
+    # for files). To temporarily expose the gateway for debugging, add e.g.
+    #   ports: ["127.0.0.1:3000:3000"]
+    # here — but nothing in the stack needs it.
     volumes:
       - server-logs:/var/lib/server/logs
       - uploads:/opt/shared/uploads
@@ -242,19 +258,11 @@ services:
     networks:
       - standard-red-notes
       # - proxy
-    # Example Traefik labels (uncomment with the `proxy` network). Route /v1 (the
-    # API gateway, port 3000) and the files endpoints (port 3104) under the same
-    # host as the web UI. Files use Content-Range / Accept-Ranges, which Traefik
-    # passes through transparently.
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.docker.network=proxy"
-    #   # API gateway
-    #   - "traefik.http.routers.srn-api.rule=Host(`notes.example.com`) && PathPrefix(`/v1`, `/v2`, `/healthcheck`)"
-    #   - "traefik.http.routers.srn-api.entrypoints=websecure"
-    #   - "traefik.http.routers.srn-api.tls.certresolver=le"
-    #   - "traefik.http.routers.srn-api.service=srn-api"
-    #   - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
+    # NOTE: an external reverse proxy (Traefik/nginx/Caddy) does NOT need to
+    # route to this container at all. The app front door above already proxies
+    # every backend path (/v1, /v2, /auth, /subscription, /healthcheck,
+    # /files/, /sockets, /workflows-ui/) same-origin, so a single router to the
+    # `app` service covers the whole stack (see the labels example on `app`).
 
   mcp:
     profiles:

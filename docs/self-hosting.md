@@ -80,7 +80,7 @@ That's it. To stop the stack later: `docker compose down`.
 | Service             | Image                          | Purpose |
 |---------------------|--------------------------------|---------|
 | `app`               | built from `./app`             | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001). |
-| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Publishes the API + realtime websocket on `SERVER_PORT` (3000) and files on `FILES_PORT` (3125). |
+| `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Internal-only — publishes NO host ports; the `app` front door proxies the API + websocket (container port 3000) and files (container port 3104) same-origin. |
 | `db`                | `mariadb:11`                   | Primary datastore for accounts, notes, sync, and revisions. |
 | `cache`             | `redis:8-alpine`               | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file. |
 | `localstack`        | `localstack/localstack:4`      | Local AWS SNS/SQS emulator. The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on first start (see below). |
@@ -142,10 +142,8 @@ to boot otherwise).
 | `MYSQL_ROOT_PASSWORD` | MariaDB root password. | `openssl rand -hex 32` / .NET RNG |
 | `MYSQL_DATABASE` | Database name. | Your choice (default `standard_notes_db`) |
 | `MYSQL_USER` | Application database user. | Your choice (default `std_notes_user`) |
-| `APP_PORT` | Host port for the web app. | Your choice (default `3001`) |
-| `SERVER_PORT` | Host port for the API gateway. | Your choice (default `3000`) |
-| `FILES_PORT` | Host port for the files service. | Your choice (default `3125`) |
-| `PUBLIC_FILES_SERVER_URL` | Public URL clients use to reach the files service. Derived from your domain + `FILES_PORT`. | Computed by the script |
+| `APP_PORT` | The single host port. The app's nginx front door serves the web UI and proxies the API, files, and websocket same-origin — no other service publishes a host port. | Your choice (default `3001`) |
+| `PUBLIC_FILES_SERVER_URL` | Public URL clients use to reach the files service. It is the app origin + `/files` (the front door's prefix-strip proxy). | Computed by the script |
 | `AUTH_SERVER_U2F_RELYING_PARTY_ID` | WebAuthn/hardware-key relying-party ID (your host). | Computed (host of your domain, or `localhost`) |
 | `AUTH_SERVER_U2F_EXPECTED_ORIGIN` | Allowed WebAuthn origins. | Computed from your domain + app port |
 
@@ -212,20 +210,22 @@ server.
   plain HTTP on the host ports. See
   [Running behind a reverse proxy](#running-behind-a-reverse-proxy) for the full
   proxy config (`TRUST_PROXY`, nginx/Traefik examples, websocket upgrade).
-- **Port already in use?** Re-run the setup script and choose different host
-  ports, or edit `APP_PORT` / `SERVER_PORT` / `FILES_PORT` / `WEBSOCKET_PORT` in
-  `.env`, then `docker compose up -d` again.
+- **Port already in use?** Re-run the setup script and choose a different host
+  port, or edit `APP_PORT` in `.env`, then `docker compose up -d` again. It is
+  the only published port — the API gateway and files service are internal-only
+  and reached through the app front door.
 
 ---
 
 ## Running behind a reverse proxy
 
 For any internet-facing deployment you should terminate TLS at a reverse proxy
-(nginx, Traefik, or Caddy) in front of the stack. The Compose services speak
-plain HTTP on the host ports; the proxy adds HTTPS and forwards requests to
-them. This lets you serve the **whole app under one external host** - the web
-UI, the `/v1` API, the files endpoints, and the realtime websocket - with a
-single certificate.
+(nginx, Traefik, or Caddy) in front of the stack. The stack has a **single
+front door**: the `app` container's nginx (host port `APP_PORT`, default 3001)
+serves the web UI and already proxies the `/v1` API, the `/files/` endpoints,
+and the realtime `/sockets` websocket same-origin to the internal-only `server`
+container. Your proxy therefore needs exactly **one upstream** - the app port -
+and one certificate.
 
 ### Required environment
 
@@ -247,38 +247,46 @@ trust the proxy's forwarded headers and the cookie must be marked Secure:
 
 ### Single external host
 
-Route everything under one hostname by path:
+Route the whole hostname to the app front door (`app` container, host port
+`APP_PORT`/3001, container port 8080). The front door's nginx
+(`app/docker/nginx.conf`) then fans out by path on the internal Docker network:
 
-- `/` -> the **web** app (`app` container, port 80)
-- `/v1`, `/v2`, `/healthcheck` -> the **API gateway** (`server` container, port 3000)
-- the **files** endpoints -> the files port (`server` container, port 3104 inside;
-  published as `FILES_PORT`/3125). Point `PUBLIC_FILES_SERVER_URL` at the public
-  URL you route to it.
-- the **websocket** gateway -> the `server` container, port 3000 (it runs
-  IN-PROCESS inside the api-gateway, sharing its port). The `/sockets` path needs
-  the WebSocket Upgrade headers; the browser opens `wss://<host>/...`. Internally
-  the api-gateway mints connection tokens against its own `WEB_SOCKET_SERVER_URL`
-  (default `http://localhost:3000`).
+- `/` -> the web UI (static bundle)
+- `/v1`, `/v2`, `/auth`, `/subscription`, `/healthcheck` -> the **API gateway**
+  (`server` container, port 3000)
+- `/files/` -> the **files service** (`server` container, port 3104; the front
+  door strips the `/files` prefix). Point `PUBLIC_FILES_SERVER_URL` at the
+  public app origin + `/files`, e.g. `https://notes.example.com/files`.
+- `/sockets` -> the **websocket gateway** (in-process inside the api-gateway on
+  port 3000). The `/sockets` path needs the WebSocket Upgrade headers - the
+  front door already sends them, but YOUR proxy must pass `Upgrade`/`Connection`
+  through too. The browser opens `wss://<host>/sockets`. (`WEB_SOCKET_SERVER_URL`
+  is container-internal - the api-gateway minting tokens against itself - and
+  should stay at its default.)
+- `/workflows-ui/` -> the optional embedded Workflows editor (auth-checked by
+  the api-gateway, which proxies to the internal-only n8n container).
 
-The web client does not hard-code an API origin - it uses whatever sync-server
-URL you configure in the client - so single-origin routing is purely a proxy
-concern.
+The web client does not hard-code an API origin - it defaults to its own origin
+and follows the gateway's advertised files URL - so single-origin routing works
+out of the box.
 
 ### Compose: dropping host ports
 
-The default `docker compose up` publishes host ports so it works standalone. When
-a proxy fronts the stack you can instead attach the proxy-facing services to a
-shared Docker network and stop publishing ports. `docker-compose.yml` ships
-commented examples: create the network once with `docker network create proxy`,
-then uncomment the `# - proxy` network lines (and the Traefik `labels:` blocks)
-on the `app` and `server` services. Leaving the examples
+The default `docker compose up` publishes the single app port (`APP_PORT`) so
+the stack works standalone; the `server` service publishes nothing. When a proxy
+fronts the stack you can drop even that port: attach the `app` service to a
+shared Docker network and let the proxy reach it by service name.
+`docker-compose.yml` ships commented examples: create the network once with
+`docker network create proxy`, then uncomment the `# - proxy` network line (and
+the Traefik `labels:` block) on the `app` service. Leaving the examples
 commented keeps the default flow unchanged.
 
 ### nginx example
 
-TLS terminates at nginx; it forwards plain HTTP to the published container ports
-(adjust the `proxy_pass` upstreams to your host/ports). Note the explicit
-`Upgrade`/`Connection` handling on the websocket location.
+TLS terminates at nginx; it forwards plain HTTP to the single app front door
+(host port `APP_PORT`, default 3001), which handles all path routing itself.
+Note the explicit `Upgrade`/`Connection` handling on the websocket location and
+the unbuffered `/files/` location for large uploads/downloads.
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -302,41 +310,42 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host  $host;
 
-    # API gateway (auth, sync, etc.)
-    location /v1/ { proxy_pass http://127.0.0.1:3000; }
-    location /v2/ { proxy_pass http://127.0.0.1:3000; }
-    location /healthcheck { proxy_pass http://127.0.0.1:3000; }
-
-    # Files service (range requests pass through transparently)
-    location /files/ { proxy_pass http://127.0.0.1:3125/; }
-
-    # Realtime websocket gateway (in-process on the api-gateway, port 3000) -
-    # WebSocket Upgrade pass-through is required.
-    location /sockets/ {
-        proxy_pass http://127.0.0.1:3000/;
+    # Realtime websocket - WebSocket Upgrade pass-through is required.
+    location /sockets {
+        proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 1h;       # keep long-lived sockets open
     }
 
-    # Web app (catch-all, last)
+    # Files - stream large encrypted chunks without buffering them on disk.
+    location /files/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+
+    # Everything else (web UI, /v1 API, /workflows-ui, ...) - the app front
+    # door routes by path internally.
     location / { proxy_pass http://127.0.0.1:3001; }
 }
 ```
 
 Set in `.env`: `COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`,
-`PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`,
-`WEB_SOCKET_SERVER_URL=wss://notes.example.com/sockets`, and the WebAuthn
-origins. `TRUST_PROXY` can stay at its default when nginx runs on the same host
+`PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`, and the WebAuthn
+origins. (`WEB_SOCKET_SERVER_URL` is container-internal and should stay at its
+default.) `TRUST_PROXY` can stay at its default when nginx runs on the same host
 (loopback) or on the Docker network; set it to nginx's address otherwise.
 
 ### Traefik example
 
-Traefik (v2/v3) with the Docker provider. Add the stack services to Traefik's
-network and label them. Traefik forwards `X-Forwarded-*` and proxies the
-WebSocket `Upgrade`/`Connection` headers automatically, so no special websocket
-config is needed beyond a router.
+Traefik (v2/v3) with the Docker provider. Only the `app` service needs to join
+Traefik's network and be labeled - it is the single front door and proxies the
+API, files, and websocket internally. Traefik forwards `X-Forwarded-*` and
+proxies the WebSocket `Upgrade`/`Connection` headers automatically, so no
+special websocket config is needed beyond the one router.
 
 ```yaml
 # In docker-compose.yml (see the commented examples there):
@@ -349,27 +358,7 @@ services:
       - "traefik.http.routers.srn-web.rule=Host(`notes.example.com`)"
       - "traefik.http.routers.srn-web.entrypoints=websecure"
       - "traefik.http.routers.srn-web.tls.certresolver=le"
-      - "traefik.http.services.srn-web.loadbalancer.server.port=80"
-
-  server:
-    networks: [standard-red-notes, proxy]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.srn-api.rule=Host(`notes.example.com`) && PathPrefix(`/v1`, `/v2`, `/healthcheck`)"
-      - "traefik.http.routers.srn-api.entrypoints=websecure"
-      - "traefik.http.routers.srn-api.tls.certresolver=le"
-      - "traefik.http.routers.srn-api.service=srn-api"
-      - "traefik.http.services.srn-api.loadbalancer.server.port=3000"
-      # A second router/service for the files port (3104) can be added the same way.
-      # The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the
-      # SAME port (3000); route /sockets to it with another router/service on this
-      # same container/port (Traefik passes the WebSocket Upgrade through):
-      - "traefik.http.routers.srn-ws.rule=Host(`notes.example.com`) && PathPrefix(`/sockets`)"
-      - "traefik.http.routers.srn-ws.entrypoints=websecure"
-      - "traefik.http.routers.srn-ws.tls.certresolver=le"
-      - "traefik.http.routers.srn-ws.service=srn-ws"
-      - "traefik.http.services.srn-ws.loadbalancer.server.port=3000"
+      - "traefik.http.services.srn-web.loadbalancer.server.port=8080"
 
 networks:
   proxy:

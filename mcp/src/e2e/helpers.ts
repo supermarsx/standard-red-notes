@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { bootstrapHeadlessApp, type HeadlessApp } from '../snjs/bootstrap.js'
 
-export const SERVER = process.env.STANDARD_RED_NOTES_SERVER_URL ?? 'http://localhost:3000'
+export const SERVER = process.env.STANDARD_RED_NOTES_SERVER_URL ?? 'http://localhost:3001'
 export const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3106'
 export const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3106'
 export const INTERNAL_SECRET =

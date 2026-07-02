@@ -410,7 +410,7 @@ NOTES ON SECURITY
   the shared-server-key are never logged.
 
 EXAMPLES
-  srn-client login --server http://localhost:3000 --email me@example.com --password 'secret'
+  srn-client login --server http://localhost:3001 --email me@example.com --password 'secret'
   srn-client notes create --title "Hello" --text "world" --tag inbox,ideas
   srn-client notes list --limit 20
   srn-client export --out backup.json --format json

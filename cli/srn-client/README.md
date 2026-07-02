@@ -58,7 +58,7 @@ Requires Node 22+.
 ## Examples
 
 ```bash
-srn-client login --server http://localhost:3000 --email me@example.com --password 'secret'
+srn-client login --server http://localhost:3001 --email me@example.com --password 'secret'
 srn-client notes create --title "Hello" --text "world" --tag inbox,ideas
 srn-client notes list --limit 20
 srn-client notes get 7d5e357d-ff7f-4a56-9470-94d830d904a4
