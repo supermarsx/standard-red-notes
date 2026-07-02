@@ -37,8 +37,55 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope
 
 const STORE_NAME = 'items'
 
+/**
+ * Idle timeout for a single IndexedDB cursor scan. Reset on every entry, so a large
+ * but PROGRESSING scan is never killed — only a genuinely wedged cursor (no progress
+ * for this long) trips it, resolving the scan with whatever it has so far instead of
+ * hanging the worker forever.
+ */
+const CURSOR_IDLE_TIMEOUT_MS = 30_000
+
+/** Overall deadline for one auxiliary Cache/DB source measurement. */
+const SOURCE_TIMEOUT_MS = 30_000
+
+/**
+ * Master deadline for the whole scan. Independent of the individual awaits, so even if
+ * a source hangs in a way the per-op timeouts miss, a terminal 'done' is still posted
+ * and the main-thread pane leaves its loading state — it is NEVER left stuck.
+ */
+const MASTER_SCAN_TIMEOUT_MS = 120_000
+
 const post = (message: StorageUsageWorkerResponse): void => {
   ctx.postMessage(message)
+}
+
+/** Resolve to `fallback` if `promise` doesn't settle within `ms` (never rejects). */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        resolve(fallback)
+      }
+    }, ms)
+    promise.then(
+      (value) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve(value)
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve(fallback)
+        }
+      },
+    )
+  })
 }
 
 /**
@@ -274,26 +321,48 @@ function sumDatabaseBytes(name: string, onEntries: (entries: number) => void): P
       return
     }
 
-    openRequest.onerror = () => resolve(0)
+    let db: IDBDatabase | null = null
+    let done = false
+    let bytes = 0
+    let entries = 0
+
+    // Idle watchdog: if the open never fires or a cursor wedges, resolve with what we
+    // have so the caller (and the whole scan) can't hang on this database.
+    let watchdog = setTimeout(finishAll, CURSOR_IDLE_TIMEOUT_MS)
+    function bumpWatchdog(): void {
+      clearTimeout(watchdog)
+      watchdog = setTimeout(finishAll, CURSOR_IDLE_TIMEOUT_MS)
+    }
+    function finishAll(): void {
+      if (done) {
+        return
+      }
+      done = true
+      clearTimeout(watchdog)
+      onEntries(entries)
+      try {
+        db?.close()
+      } catch {
+        /* already closed */
+      }
+      resolve(bytes)
+    }
+
+    openRequest.onerror = () => finishAll()
     openRequest.onsuccess = () => {
-      const db = openRequest.result
+      db = openRequest.result
       const storeNames = Array.from(db.objectStoreNames)
       if (storeNames.length === 0) {
-        db.close()
-        resolve(0)
+        finishAll()
         return
       }
 
-      let bytes = 0
-      let entries = 0
       let remaining = storeNames.length
 
       const finishStore = () => {
         remaining -= 1
         if (remaining === 0) {
-          onEntries(entries)
-          db.close()
-          resolve(bytes)
+          finishAll()
         }
       }
 
@@ -303,10 +372,14 @@ function sumDatabaseBytes(name: string, onEntries: (entries: number) => void): P
           const cursorRequest = transaction.objectStore(storeName).openCursor()
           cursorRequest.onerror = finishStore
           cursorRequest.onsuccess = () => {
+            if (done) {
+              return
+            }
             const cursor = cursorRequest.result
             if (cursor) {
               bytes += sizeOfEntry(cursor.value)
               entries += 1
+              bumpWatchdog()
               cursor.continue()
             } else {
               finishStore()
@@ -336,12 +409,36 @@ function scanItemsStore(
       return
     }
 
-    openRequest.onerror = () => resolve()
+    let db: IDBDatabase | null = null
+    let done = false
+
+    // Idle watchdog: reset on every entry, so only a genuinely wedged cursor (no
+    // progress within the window) resolves early with the partial aggregates gathered
+    // so far — the scan then continues to caches/other DBs and still posts 'done'.
+    let watchdog = setTimeout(finish, CURSOR_IDLE_TIMEOUT_MS)
+    function bumpWatchdog(): void {
+      clearTimeout(watchdog)
+      watchdog = setTimeout(finish, CURSOR_IDLE_TIMEOUT_MS)
+    }
+    function finish(): void {
+      if (done) {
+        return
+      }
+      done = true
+      clearTimeout(watchdog)
+      try {
+        db?.close()
+      } catch {
+        /* already closed */
+      }
+      resolve()
+    }
+
+    openRequest.onerror = () => finish()
     openRequest.onsuccess = () => {
-      const db = openRequest.result
+      db = openRequest.result
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.close()
-        resolve()
+        finish()
         return
       }
 
@@ -350,19 +447,18 @@ function scanItemsStore(
         const transaction = db.transaction(STORE_NAME, 'readonly')
         cursorRequest = transaction.objectStore(STORE_NAME).openCursor()
       } catch {
-        db.close()
-        resolve()
+        finish()
         return
       }
 
       let sinceLastPost = 0
 
-      cursorRequest.onerror = () => {
-        db.close()
-        resolve()
-      }
+      cursorRequest.onerror = () => finish()
 
       cursorRequest.onsuccess = () => {
+        if (done) {
+          return
+        }
         const cursor = cursorRequest.result
         if (cursor) {
           const value = cursor.value as Record<string, unknown>
@@ -390,10 +486,10 @@ function scanItemsStore(
             post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
           }
 
+          bumpWatchdog()
           cursor.continue()
         } else {
-          db.close()
-          resolve()
+          finish()
         }
       }
     }
@@ -416,27 +512,59 @@ async function scan(request: Extract<StorageUsageWorkerRequest, { type: 'scan' }
     extraSources: [],
   }
 
-  // Items store first so the per-type breakdown + largest list stream in live.
-  await scanItemsStore(request, state)
-  post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
-
-  // Cache Storage is usually the biggest consumer (JS bundles/fonts/assets) — one
-  // source per named cache so the user sees WHAT is cached, not just a lump.
-  const cacheSources = await measureCacheStorages()
-  if (cacheSources.length > 0) {
-    state.extraSources.push(...cacheSources)
-    post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
+  // Post the terminal 'done' at most once. The master timeout below and the normal
+  // completion race to call this; whoever wins, the main-thread pane leaves loading.
+  let finished = false
+  const postDone = (): void => {
+    if (finished) {
+      return
+    }
+    finished = true
+    post({ type: 'done', requestId, snapshot: buildSnapshot(state, true) })
   }
 
-  // Any auxiliary IndexedDB databases beyond the items DB — one named source each
-  // (cached files, encryption keychain, search index, ...).
-  const otherDbSources = await measureOtherDatabases(databaseName)
-  if (otherDbSources.length > 0) {
-    state.extraSources.push(...otherDbSources)
-    post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
-  }
+  // Master deadline, independent of the awaits below: even if a source hangs in a way
+  // the per-op timeouts miss, a terminal 'done' (with whatever we have) is still sent
+  // so the pane is NEVER stuck loading.
+  const master = setTimeout(postDone, MASTER_SCAN_TIMEOUT_MS)
 
-  post({ type: 'done', requestId, snapshot: buildSnapshot(state, true) })
+  try {
+    // Items store first so the per-type breakdown + largest list stream in live.
+    await scanItemsStore(request, state)
+    if (finished) {
+      return
+    }
+    post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
+
+    // Cache Storage is usually the biggest consumer (JS bundles/fonts/assets) — one
+    // source per named cache so the user sees WHAT is cached, not just a lump.
+    const cacheSources = await withTimeout(measureCacheStorages(), SOURCE_TIMEOUT_MS, [])
+    if (finished) {
+      return
+    }
+    if (cacheSources.length > 0) {
+      state.extraSources.push(...cacheSources)
+      post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
+    }
+
+    // Any auxiliary IndexedDB databases beyond the items DB — one named source each
+    // (cached files, encryption keychain, search index, ...).
+    const otherDbSources = await withTimeout(measureOtherDatabases(databaseName), SOURCE_TIMEOUT_MS, [])
+    if (finished) {
+      return
+    }
+    if (otherDbSources.length > 0) {
+      state.extraSources.push(...otherDbSources)
+      post({ type: 'progress', requestId, snapshot: buildSnapshot(state, false) })
+    }
+
+    postDone()
+  } finally {
+    clearTimeout(master)
+    // Belt-and-suspenders: if we exited without a terminal message (unexpected), emit
+    // one so the pane never hangs.
+    postDone()
+  }
 }
 
 ctx.onmessage = (event: MessageEvent<StorageUsageWorkerRequest>): void => {

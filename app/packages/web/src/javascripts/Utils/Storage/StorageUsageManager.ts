@@ -34,6 +34,16 @@ const StorageUsageWorker = ((StorageUsageWorkerModule as { default?: { new (): W
 const DEFAULT_TOP_N = 20
 const DEFAULT_CHUNK_SIZE = 2000
 
+/**
+ * Main-thread liveness deadline. Reset on every message from the worker, so a slow but
+ * PROGRESSING scan is never aborted. If the worker goes fully silent for this long
+ * (wedged before posting, a lost postMessage, a crash with no onerror), we surface an
+ * error and tear down so the Storage pane leaves its loading state instead of hanging
+ * forever. Comfortably longer than the worker's own master timeout so the worker's own
+ * terminal 'done' normally wins.
+ */
+const WORKER_IDLE_TIMEOUT_MS = 150_000
+
 export interface StorageUsageScanCallbacks {
   /** Called for every progressive snapshot and the final one (`snapshot.done`). */
   onSnapshot: (snapshot: StorageUsageSnapshot) => void
@@ -149,12 +159,33 @@ export function scanStorageUsage(
   let finished = false
   const localStorageBytes = measureLocalStorageBytes()
 
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+
   const teardown = (): void => {
     if (finished) {
       return
     }
     finished = true
+    if (watchdog !== undefined) {
+      clearTimeout(watchdog)
+      watchdog = undefined
+    }
     worker.terminate()
+  }
+
+  // Reset on every message: only a fully SILENT (wedged/crashed) worker trips it.
+  const bumpWatchdog = (): void => {
+    if (finished) {
+      return
+    }
+    if (watchdog !== undefined) {
+      clearTimeout(watchdog)
+    }
+    watchdog = setTimeout(() => {
+      // Never leave the pane stuck: surface an error, then tear the worker down.
+      callbacks.onError?.('Storage scan timed out')
+      teardown()
+    }, WORKER_IDLE_TIMEOUT_MS)
   }
 
   const relay = (snapshot: StorageUsageSnapshot): void => {
@@ -166,6 +197,7 @@ export function scanStorageUsage(
     if (response.requestId !== requestId) {
       return
     }
+    bumpWatchdog()
     if (response.type === 'progress') {
       relay(response.snapshot)
     } else if (response.type === 'done') {
@@ -190,6 +222,8 @@ export function scanStorageUsage(
     chunkSize: options.chunkSize ?? DEFAULT_CHUNK_SIZE,
   }
   worker.postMessage(request)
+  // Arm the liveness watchdog now; the first worker message (or teardown) resets it.
+  bumpWatchdog()
 
   return { cancel: teardown }
 }

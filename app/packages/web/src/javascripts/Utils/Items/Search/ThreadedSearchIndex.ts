@@ -25,6 +25,20 @@ import * as SearchIndexWorkerModule from './searchIndex.worker'
 
 const SearchIndexWorker = SearchIndexWorkerModule as unknown as { new (): Worker }
 
+/**
+ * Per-request response deadline. A worker that HANGS mid-rebuild never fires onerror,
+ * so without this rebuild()/updateMany() would await send() forever. On expiry we
+ * tear the worker down (settling every pending send) and the caller falls back to the
+ * synchronous local build — the index is never left unbuilt and the UI never freezes.
+ */
+const REQUEST_TIMEOUT_MS = 30_000
+
+/** Lifetime cap on worker restarts; past it we stay on the inline main-thread path. */
+const MAX_WORKER_RESTARTS = 5
+
+/** Base backoff before restarting a crashed/hung worker; grows with the attempt. */
+const RESTART_BACKOFF_MS = 1_000
+
 type PendingResolver = (response: SearchIndexWorkerResponse) => void
 
 /**
@@ -43,6 +57,8 @@ export class ThreadedSearchIndex {
   private nextRequestId = 1
   private readonly pending = new Map<number, PendingResolver>()
   private readonly options: SearchIndexOptions
+  private destroyed = false
+  private workerRestarts = 0
 
   constructor(options: SearchIndexOptions = {}) {
     this.options = options
@@ -64,7 +80,7 @@ export class ThreadedSearchIndex {
   }
 
   private tryStartWorker(): void {
-    if (typeof Worker === 'undefined') {
+    if (typeof Worker === 'undefined' || this.destroyed) {
       return
     }
     try {
@@ -91,8 +107,34 @@ export class ThreadedSearchIndex {
       this.worker.terminate()
       this.worker = null
     }
-    // Reject nothing explicitly; callers race against the local fallback below.
+    // Settle every in-flight send so no caller is left awaiting: resolve each with an
+    // error response, which makes rebuild()/updateMany() take their local fallback
+    // instead of hanging on a promise that will never resolve.
+    for (const [requestId, resolver] of this.pending) {
+      resolver({ type: 'error', requestId, message: 'search index worker torn down' })
+    }
     this.pending.clear()
+    // Bring the worker back (bounded, with backoff) for FUTURE operations; the current
+    // one already fell back to the local index. destroy() sets `destroyed` first so a
+    // teardown-on-destroy never schedules a restart.
+    this.scheduleRestart()
+  }
+
+  private scheduleRestart(): void {
+    if (this.destroyed || typeof Worker === 'undefined') {
+      return
+    }
+    if (this.workerRestarts >= MAX_WORKER_RESTARTS) {
+      return
+    }
+    this.workerRestarts++
+    const delay = RESTART_BACKOFF_MS * this.workerRestarts
+    setTimeout(() => {
+      if (this.destroyed || this.worker) {
+        return
+      }
+      this.tryStartWorker()
+    }, delay)
   }
 
   private send(message: SearchIndexWorkerRequestPayload): Promise<SearchIndexWorkerResponse> {
@@ -101,8 +143,20 @@ export class ThreadedSearchIndex {
       return Promise.reject(new Error('worker unavailable'))
     }
     const requestId = this.nextRequestId++
-    return new Promise<SearchIndexWorkerResponse>((resolve) => {
-      this.pending.set(requestId, resolve)
+    return new Promise<SearchIndexWorkerResponse>((resolve, reject) => {
+      // Bounded wait: a hung worker never posts back, so without this rebuild() would
+      // await forever. On expiry, tear the worker down (settling siblings + scheduling
+      // a restart) and reject so the caller builds locally.
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId)
+        this.teardownWorker()
+        reject(new Error('search index worker timed out'))
+      }, REQUEST_TIMEOUT_MS)
+
+      this.pending.set(requestId, (response) => {
+        clearTimeout(timer)
+        resolve(response)
+      })
       worker.postMessage({ ...message, requestId } as SearchIndexWorkerRequest)
     })
   }
@@ -172,6 +226,9 @@ export class ThreadedSearchIndex {
 
   /** Release the worker. Call when the owning controller is torn down. */
   destroy(): void {
+    // Set first so the teardown below settles pending sends but never schedules a
+    // restart of a pool we are deliberately shutting down.
+    this.destroyed = true
     this.teardownWorker()
   }
 }

@@ -10,16 +10,27 @@
 // every batch it receives, so decrypt() resolves and we can count how many distinct
 // workers were ever constructed.
 let constructedWorkers = 0
+// Workers whose construction ordinal (1-based) is <= this value HANG: they accept a
+// batch but never post back and never fire onerror — exactly the pathological case the
+// timeout/respawn hardening must survive. Default 0 (all workers respond normally), so
+// the existing lazy-spawn tests are unaffected.
+let hangFirstN = 0
 
 class FakeWorker {
   onmessage: ((event: { data: unknown }) => void) | null = null
   onerror: (() => void) | null = null
+  private readonly ordinal: number
 
   constructor() {
     constructedWorkers++
+    this.ordinal = constructedWorkers
   }
 
   postMessage(message: { type: string; requestId: number; jobs: unknown[] }): void {
+    if (this.ordinal <= hangFirstN) {
+      // Hung worker: swallow the batch, never respond.
+      return
+    }
     // Respond asynchronously, mirroring a real worker round-trip.
     setTimeout(() => {
       this.onmessage?.({
@@ -57,6 +68,7 @@ describe('DecryptionPool lazy spawn', () => {
 
   beforeEach(() => {
     constructedWorkers = 0
+    hangFirstN = 0
     ;(global as { Worker?: unknown }).Worker = FakeWorker as unknown
     // Plenty of cores so the max ceiling is large and growth is observable.
     Object.defineProperty(navigator, 'hardwareConcurrency', { value: 40, configurable: true })
@@ -141,5 +153,71 @@ describe('DecryptionPool lazy spawn', () => {
     expect(pool.stats.maxWorkers).toBe(3)
     expect(pool.stats.spawned).toBe(3)
     pool.destroy()
+  })
+
+  // --- Hung-worker hardening: a worker that never responds must not freeze decrypt(). ---
+
+  it('times out a hung worker, respawns, and still completes the batch on a fresh worker', async () => {
+    jest.useFakeTimers()
+    try {
+      // The first-constructed worker (the one the only batch is dispatched to) hangs;
+      // the respawned worker responds — proving self-healing without data loss.
+      hangFirstN = 1
+      const pool = new DecryptionPool()
+
+      const promise = pool.decrypt(makeJobs(10))
+      // Drive the 30s response deadline, the respawn backoff, and the fresh worker's reply.
+      await jest.advanceTimersByTimeAsync(31_000)
+      await jest.advanceTimersByTimeAsync(1_000)
+
+      const results = await promise
+      expect(results).toHaveLength(10)
+      expect(pool.stats.batchTimeouts).toBeGreaterThanOrEqual(1)
+      expect(pool.stats.respawns).toBeGreaterThanOrEqual(1)
+      expect(pool.stats.batchesOk).toBe(1)
+      pool.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('rejects (into the caller sync fallback) rather than hanging when a worker always hangs', async () => {
+    jest.useFakeTimers()
+    try {
+      // Every worker — initial and every respawn — hangs forever.
+      hangFirstN = Number.POSITIVE_INFINITY
+      const pool = new DecryptionPool()
+
+      const promise = pool.decrypt(makeJobs(10))
+      const expectation = expect(promise).rejects.toThrow(/timed out/)
+      // 3 attempts * 30s + backoffs — bounded, so decrypt() settles instead of hanging.
+      await jest.advanceTimersByTimeAsync(120_000)
+      await expectation
+
+      // Bounded retries actually happened, and respawns stayed under the lifetime cap.
+      expect(pool.stats.batchTimeouts).toBeGreaterThanOrEqual(1)
+      expect(pool.stats.batchesFailed).toBe(1)
+      expect(pool.stats.respawns).toBeLessThanOrEqual(12)
+      pool.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('settles the in-flight batch (rejects, never hangs) when destroyed mid-flight', async () => {
+    jest.useFakeTimers()
+    try {
+      hangFirstN = Number.POSITIVE_INFINITY
+      const pool = new DecryptionPool()
+
+      const promise = pool.decrypt(makeJobs(10))
+      const expectation = expect(promise).rejects.toBeInstanceOf(Error)
+      // Tear the pool down while the batch is still awaiting a hung worker.
+      pool.destroy()
+      await jest.advanceTimersByTimeAsync(31_000)
+      await expectation
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })

@@ -73,6 +73,34 @@ const SATURATE_THRESHOLD = 2000
  */
 const INITIAL_WORKERS = 2
 
+/**
+ * Per-batch response deadline. A worker that HANGS (an infinite WASM loop, a wedged
+ * event loop) never fires onerror, so without this a hung worker would leave
+ * decrypt()'s Promise.all pending forever → cold-load freeze. On expiry we treat the
+ * worker as dead: terminate + respawn it and retry the batch on a fresh worker.
+ * 30s comfortably clears even a huge legitimate BATCH_SIZE batch on a slow device.
+ */
+const BATCH_TIMEOUT_MS = 30_000
+
+/**
+ * How many times a single batch is retried on a freshly respawned worker before we
+ * give up and let decrypt() reject — at which point the caller (ItemsEncryption)
+ * re-runs those exact payloads on its synchronous main-thread path, so nothing is
+ * ever dropped or left encrypted-by-accident.
+ */
+const MAX_BATCH_RETRIES = 2
+
+/**
+ * Lifetime cap on worker respawns across the whole pool. A permanently broken worker
+ * environment (WASM won't compile, OOM) must not spin up an unbounded respawn storm;
+ * once exhausted the pool stops respawning and every decrypt() rejects into the
+ * caller's sync fallback.
+ */
+const MAX_RESPAWNS = 12
+
+/** Base backoff before a respawn-and-retry; grows linearly with the attempt index. */
+const RESPAWN_BACKOFF_MS = 250
+
 type PendingResolver = (response: DecryptionWorkerResponse) => void
 
 interface PoolWorker {
@@ -112,8 +140,17 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
     batchesOk: 0,
     batchesFailed: 0,
     workerErrors: 0,
+    /** Batches that hit the response deadline (a hung, not cleanly-errored, worker). */
+    batchTimeouts: 0,
+    /** Times a batch was retried on a freshly respawned worker. */
+    batchRetries: 0,
+    /** Workers respawned after a timeout/error (capped at MAX_RESPAWNS). */
+    respawns: 0,
     lastError: '',
   }
+
+  /** Lifetime respawn counter, capped at MAX_RESPAWNS (see respawnAndPick). */
+  private respawnCount = 0
 
   constructor(config: DecryptionPoolConfig = {}) {
     this.maxWorkers = this.resolveMaxWorkers(config.maxWorkers)
@@ -240,11 +277,92 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
 
   private send(entry: PoolWorker, jobs: PooledDecryptionJob[]): Promise<DecryptionWorkerResponse> {
     const requestId = this.nextRequestId++
-    return new Promise<DecryptionWorkerResponse>((resolve) => {
-      entry.pending.set(requestId, resolve)
+    return new Promise<DecryptionWorkerResponse>((resolve, reject) => {
+      // Bounded wait: a HUNG worker never posts back and never fires onerror, so
+      // without this the promise (and decrypt()'s Promise.all) would hang forever.
+      const timer = setTimeout(() => {
+        // Stop listening for this request, then treat the worker as dead: drop it
+        // (terminating + settling its other pending batches) and reject so the retry
+        // loop can respawn and re-send on a fresh worker.
+        entry.pending.delete(requestId)
+        this.stats.batchTimeouts++
+        this.stats.workerErrors++
+        this.stats.lastError = 'decryption worker timed out'
+        this.dropWorker(entry, new Error('decryption worker timed out'))
+        reject(new Error('decryption worker timed out'))
+      }, BATCH_TIMEOUT_MS)
+
+      entry.pending.set(requestId, (response) => {
+        clearTimeout(timer)
+        resolve(response)
+      })
       const message: DecryptionWorkerRequest = { type: 'decryptBatch', requestId, jobs }
       entry.worker.postMessage(message)
     })
+  }
+
+  /** Respawn a worker (bounded by MAX_RESPAWNS) and return one to retry a batch on. */
+  private respawnAndPick(): PoolWorker | null {
+    if (this.destroyed || typeof Worker === 'undefined') {
+      return null
+    }
+    if (this.respawnCount >= MAX_RESPAWNS) {
+      return null
+    }
+    this.respawnCount++
+    this.stats.respawns++
+    const count = this.ensureWorkers(Math.max(1, this.workers.length + 1))
+    if (count === 0) {
+      return null
+    }
+    return this.workers[this.nextWorker++ % this.workers.length]
+  }
+
+  private backoff(attempt: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, RESPAWN_BACKOFF_MS * (attempt + 1)))
+  }
+
+  /**
+   * Send one batch, retrying on a freshly respawned worker after a timeout or a
+   * worker-level error. Returns the successful response, or throws once retries (and
+   * the respawn cap) are exhausted so decrypt() rejects into the caller's sync
+   * fallback — the batch is never silently dropped.
+   */
+  private async sendWithRetry(
+    entry: PoolWorker,
+    jobs: PooledDecryptionJob[],
+  ): Promise<Extract<DecryptionWorkerResponse, { type: 'decrypted' }>> {
+    let worker: PoolWorker | null = entry
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+      if (!worker) {
+        break
+      }
+      try {
+        const response = await this.send(worker, jobs)
+        if (response.type === 'decrypted') {
+          return response
+        }
+        // Worker-level error response (e.g. libsodium failed to init): the worker is
+        // effectively dead for this work, so drop it before retrying on a fresh one.
+        lastError = new Error(response.message || 'decryption worker batch failed')
+        this.dropWorker(worker, lastError)
+      } catch (error) {
+        // send() timed out (and already dropped the hung worker).
+        lastError = error instanceof Error ? error : new Error(String(error))
+      }
+
+      if (attempt < MAX_BATCH_RETRIES) {
+        await this.backoff(attempt)
+        this.stats.batchRetries++
+        worker = this.respawnAndPick()
+      } else {
+        worker = null
+      }
+    }
+
+    throw lastError ?? new Error('decryption batch failed after retries')
   }
 
   async decrypt<C extends ItemContent = ItemContent>(
@@ -292,11 +410,16 @@ export class DecryptionPool implements PayloadDecryptionPoolInterface {
 
     await Promise.all(
       batches.map(async (batch) => {
-        const response = await this.send(batch.entry, batch.jobs)
-        if (response.type !== 'decrypted') {
+        let response: Extract<DecryptionWorkerResponse, { type: 'decrypted' }>
+        try {
+          // Bounded, self-healing send: times out a hung worker, respawns, and
+          // retries on a fresh worker before giving up.
+          response = await this.sendWithRetry(batch.entry, batch.jobs)
+        } catch (error) {
           this.stats.batchesFailed++
-          // Surface so the service-level fallback re-runs the whole call sync.
-          throw new Error(response.message || 'decryption worker batch failed')
+          // Surface so the service-level fallback re-runs the whole call sync —
+          // items are never dropped, they are re-decrypted on the main thread.
+          throw error instanceof Error ? error : new Error(String(error))
         }
         this.stats.batchesOk++
         for (let i = 0; i < response.results.length; i++) {
