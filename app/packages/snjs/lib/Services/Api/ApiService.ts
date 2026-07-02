@@ -1268,6 +1268,126 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: server-side reminder DELIVERY (WhatsApp / Telegram /
+   * email). These hit the gateway /v1/reminder-delivery routes (cross-service-token
+   * protected). `getReminderDeliveryConfig` reports whether the feature is enabled
+   * on this server and allowed for this user (fail-closed); the delivery-config
+   * get/put manage the user's channel/destination/enabled record; list/publish
+   * cover the PLAINTEXT reminders the user explicitly opted into server delivery.
+   * Mirrors the emailReminder methods above.
+   */
+  async getReminderDeliveryConfig(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load reminder delivery config.',
+    })
+  }
+
+  async getReminderDeliveryDeliveryConfig(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryDeliveryConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load reminder delivery settings.',
+    })
+  }
+
+  async setReminderDeliveryDeliveryConfig(body: {
+    channel: string
+    destination: string
+    enabled: boolean
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryDeliveryConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to save reminder delivery settings.',
+      params: body,
+    })
+  }
+
+  async listReminderDeliveries(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryReminders),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list published reminders.',
+    })
+  }
+
+  async publishReminderDelivery(body: {
+    id: string
+    message: string
+    dueAtUtc: string
+    channel?: string
+    destination?: string
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryReminders),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to publish reminder for delivery.',
+      params: body,
+    })
+  }
+
+  /** Unpublish (remove) a published reminder so the server never delivers it. */
+  async deleteReminderDelivery(id: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryReminder(id)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to unpublish reminder.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: scoped, revocable CalDAV access tokens. These hit the
+   * gateway /v1/caldav/tokens routes (cross-service-token protected).
+   * `getCaldavConfig` reports availability (env master switch + per-user opt-in);
+   * `createCaldavToken` returns the plaintext token exactly once (never again).
+   * Mirrors the MCP token methods.
+   */
+  async getCaldavConfig(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.caldavConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load CalDAV config.',
+    })
+  }
+
+  async listCaldavTokens(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.caldavTokens),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list CalDAV tokens.',
+    })
+  }
+
+  async createCaldavToken(body: { label: string }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.caldavTokens),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create CalDAV token.',
+      params: body,
+    })
+  }
+
+  async deleteCaldavToken(tokenUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.caldavToken(tokenUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke CalDAV token.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

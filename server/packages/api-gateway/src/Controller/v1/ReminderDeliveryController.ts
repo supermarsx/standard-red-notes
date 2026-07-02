@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
-import { BaseHttpController, controller, httpGet, httpPost, httpPut } from 'inversify-express-utils'
+import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
 import { SettingName } from '@standardnotes/domain-core'
 
 import { TYPES } from '../../Bootstrap/Types'
@@ -25,9 +25,11 @@ import { DeliveryChannel, isDeliveryChannel } from '../../Service/ReminderDelive
  * All routes require a valid session (RequiredCrossServiceTokenMiddleware), so
  * `response.locals.user.uuid` identifies the owner.
  *
- * NOTE (first slice): the publish route is an authenticated STUB so the store is
- * reachable; the web client must POST published reminders here later (see the
- * punch-list). It does not expose anyone else's data.
+ * PUBLISH FLOW: the web client POSTs a reminder here when the user has delivery
+ * enabled (see the web Reminders/reminderDelivery helpers), re-POSTs it under the
+ * same stable id when it is edited or a recurring occurrence advances (the store
+ * re-arms `sent` when `dueAtUtc` changes), and DELETEs it when the in-app
+ * reminder is cleared. It does not expose anyone else's data.
  */
 @controller('/v1/reminder-delivery')
 export class ReminderDeliveryController extends BaseHttpController {
@@ -95,8 +97,9 @@ export class ReminderDeliveryController extends BaseHttpController {
   }
 
   /**
-   * Publish a reminder for delivery. STUB endpoint for this slice: the web client
-   * must call it when the user opts a reminder into server delivery.
+   * Publish a reminder for delivery. Called by the web client whenever a reminder
+   * is saved while the user's delivery config is enabled. Upserts by id; a changed
+   * dueAtUtc re-arms delivery (see PublishedRemindersStore.publish).
    */
   @httpPost('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async publish(request: Request, response: Response): Promise<void> {
@@ -133,6 +136,26 @@ export class ReminderDeliveryController extends BaseHttpController {
       ...(destination ? { destination } : {}),
     })
     response.status(201).json({ reminder: stored })
+  }
+
+  /**
+   * Unpublish (remove) a published reminder so it will never be delivered. The
+   * web client calls this when the user clears/removes an in-app reminder whose
+   * publication would otherwise still fire.
+   */
+  @httpDelete('/:id', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async unpublish(request: Request, response: Response): Promise<void> {
+    if (!this.gate(response)) {
+      return
+    }
+    const userUuid = this.userUuid(response)
+    const id = request.params.id as string
+    const removed = await this.reminderDeliveryService.unpublish(userUuid, id)
+    if (!removed) {
+      response.status(404).json({ error: { message: 'Published reminder not found.' } })
+      return
+    }
+    response.status(200).json({ removed: true })
   }
 
   private gate(response: Response): boolean {

@@ -142,6 +142,31 @@ const EmailReminderPaths = {
   emailReminder: (id: string) => `/v1/email-reminders/${id}`,
 }
 
+// Standard Red Notes: server-side reminder DELIVERY (WhatsApp / Telegram / email).
+// Authed gateway routes (cross-service-token protected). `/config` reports whether
+// the feature is available for this user (env master switch + per-user opt-in) so
+// the client can decide whether to show the UI. `/delivery-config` is the per-user
+// channel/destination/enabled record. The collection route lists/publishes the
+// PLAINTEXT reminders the user explicitly opted into server delivery (mirrors the
+// email-reminders + CalDAV published-data model — never any other E2E data).
+const ReminderDeliveryPaths = {
+  reminderDeliveryConfig: '/v1/reminder-delivery/config',
+  reminderDeliveryDeliveryConfig: '/v1/reminder-delivery/delivery-config',
+  reminderDeliveryReminders: '/v1/reminder-delivery',
+  reminderDeliveryReminder: (id: string) => `/v1/reminder-delivery/${encodeURIComponent(id)}`,
+}
+
+// Standard Red Notes: scoped, revocable CalDAV access tokens. Authed gateway
+// routes (cross-service-token protected). `/config` reports availability (env
+// master switch + per-user opt-in). A token is the Basic-auth credential stock
+// CalDAV clients use to read the user's PUBLISHED reminders feed; the plaintext
+// secret is returned exactly once on create (same shape as MCP tokens).
+const CaldavTokenPaths = {
+  caldavConfig: '/v1/caldav/tokens/config',
+  caldavTokens: '/v1/caldav/tokens',
+  caldavToken: (tokenUuid: string) => `/v1/caldav/tokens/${tokenUuid}`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -170,6 +195,8 @@ export const Paths = {
     ...SharePaths,
     ...DeadManSwitchPaths,
     ...EmailReminderPaths,
+    ...ReminderDeliveryPaths,
+    ...CaldavTokenPaths,
     meta: '/v1/meta',
   },
   v2: {

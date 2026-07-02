@@ -69,6 +69,14 @@ export class PublishedRemindersStore {
   /**
    * Upsert a published reminder for a user. Used by the publish endpoint.
    * Returns the stored reminder with normalized timestamps.
+   *
+   * RE-ARM SEMANTICS: when the caller does not pass `sent` explicitly and an
+   * existing reminder is re-published with a NEW `dueAtUtc`, `sent` resets to
+   * false. This is how the web client updates an edited reminder or advances a
+   * recurring one to its next occurrence under the same stable id — the new
+   * occurrence must be delivered even though the previous one already was.
+   * Re-publishing with the SAME `dueAtUtc` preserves `sent` (an unchanged,
+   * already-delivered reminder is not delivered twice).
    */
   async publish(
     userUuid: string,
@@ -80,9 +88,10 @@ export class PublishedRemindersStore {
     await this.mutate((data) => {
       const forUser = data[userUuid] ?? {}
       const existing = forUser[reminder.id]
+      const dueChanged = existing !== undefined && existing.dueAtUtc !== reminder.dueAtUtc
       stored = {
         ...reminder,
-        sent: reminder.sent ?? existing?.sent ?? false,
+        sent: reminder.sent ?? (dueChanged ? false : existing?.sent ?? false),
         createdAt: existing?.createdAt ?? reminder.createdAt ?? now,
         updatedAt: now,
       }
@@ -106,16 +115,19 @@ export class PublishedRemindersStore {
     })
   }
 
-  /** Remove a single published reminder. No-op if absent. */
-  async unpublish(userUuid: string, id: string): Promise<void> {
+  /** Remove a single published reminder. Returns whether anything was removed. */
+  async unpublish(userUuid: string, id: string): Promise<boolean> {
+    let removed = false
     await this.mutate((data) => {
-      if (data[userUuid]) {
+      if (data[userUuid] && data[userUuid][id]) {
         delete data[userUuid][id]
+        removed = true
         if (Object.keys(data[userUuid]).length === 0) {
           delete data[userUuid]
         }
       }
     })
+    return removed
   }
 
   private async read(): Promise<StoreShape> {

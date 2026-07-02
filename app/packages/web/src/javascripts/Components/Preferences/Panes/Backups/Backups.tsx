@@ -5,6 +5,7 @@ import DataBackups from './DataBackups'
 import EmailBackups from './EmailBackups'
 import NextcloudBackups from './NextcloudBackups'
 import EmailReminders from './EmailReminders'
+import ReminderDelivery from './ReminderDelivery'
 import FileBackupsCrossPlatform from './Files/FileBackupsCrossPlatform'
 import { observer } from 'mobx-react-lite'
 import TextBackupsCrossPlatform from './TextBackups/TextBackupsCrossPlatform'
@@ -26,6 +27,7 @@ const Backups: FunctionComponent<Props> = ({ application }) => {
       {!isUsingThirdPartyServer && <EmailBackups application={application} />}
       {!isUsingThirdPartyServer && <NextcloudBackups application={application} />}
       {!isUsingThirdPartyServer && <EmailReminders application={application} />}
+      {!isUsingThirdPartyServer && <ReminderDelivery application={application} />}
     </PreferencesPane>
   )
 }

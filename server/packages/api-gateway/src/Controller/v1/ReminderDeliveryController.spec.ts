@@ -29,6 +29,7 @@ describe('ReminderDeliveryController', () => {
     service = {
       isEnabled: jest.fn().mockReturnValue(true),
       publish: jest.fn(),
+      unpublish: jest.fn(),
       listReminders: jest.fn(),
       getConfig: jest.fn(),
       setConfig: jest.fn(),
@@ -111,6 +112,31 @@ describe('ReminderDeliveryController', () => {
         expect.objectContaining({ id: 'r1', message: 'Call Bob', dueAtUtc: '2026-06-25T12:00:00.000Z' }),
       )
       expect(statusMock).toHaveBeenCalledWith(201)
+    })
+  })
+
+  describe('unpublish', () => {
+    it('removes the published reminder and reports removal', async () => {
+      service.unpublish.mockResolvedValue(true)
+      await makeController().unpublish({ params: { id: 'r1' } } as unknown as Request, responseWith(allowed))
+      expect(service.unpublish).toHaveBeenCalledWith('user-1', 'r1')
+      expect(statusMock).toHaveBeenCalledWith(200)
+      expect(jsonMock).toHaveBeenCalledWith({ removed: true })
+    })
+
+    it('returns 404 when the reminder does not exist', async () => {
+      service.unpublish.mockResolvedValue(false)
+      await makeController().unpublish({ params: { id: 'nope' } } as unknown as Request, responseWith(allowed))
+      expect(statusMock).toHaveBeenCalledWith(404)
+    })
+
+    it('refuses with 403 when the user is not allowed', async () => {
+      await makeController().unpublish(
+        { params: { id: 'r1' } } as unknown as Request,
+        responseWith({ [SettingName.NAMES.ReminderDeliveryEnabled]: 'false' }),
+      )
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(service.unpublish).not.toHaveBeenCalled()
     })
   })
 

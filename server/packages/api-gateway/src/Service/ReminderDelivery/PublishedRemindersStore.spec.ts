@@ -52,6 +52,31 @@ describe('PublishedRemindersStore', () => {
     expect(list[0].sent).toBe(true)
   })
 
+  it('re-arms sent=false when an existing reminder is re-published with a new dueAtUtc', async () => {
+    const store = new PublishedRemindersStore(filePath)
+    await store.publish('u1', { id: 'r1', message: 'a', dueAtUtc: '2026-06-25T12:00:00.000Z' })
+    await store.markSent('u1', 'r1', true)
+
+    // Same dueAtUtc: sent stays true (no duplicate delivery).
+    const same = await store.publish('u1', { id: 'r1', message: 'edited text', dueAtUtc: '2026-06-25T12:00:00.000Z' })
+    expect(same.sent).toBe(true)
+
+    // New dueAtUtc (edit / recurring advance): delivery re-arms.
+    const rearmed = await store.publish('u1', { id: 'r1', message: 'edited text', dueAtUtc: '2026-06-26T12:00:00.000Z' })
+    expect(rearmed.sent).toBe(false)
+    expect((await store.listAllUnsent()).map((d) => d.reminder.id)).toEqual(['r1'])
+  })
+
+  it('unpublish removes the reminder and reports whether anything was removed', async () => {
+    const store = new PublishedRemindersStore(filePath)
+    await store.publish('u1', { id: 'r1', message: 'a', dueAtUtc: '2026-06-25T12:00:00.000Z' })
+
+    expect(await store.unpublish('u1', 'missing')).toBe(false)
+    expect(await store.unpublish('u1', 'r1')).toBe(true)
+    expect(await store.listForUser('u1')).toEqual([])
+    expect(await store.unpublish('u1', 'r1')).toBe(false)
+  })
+
   it('markSent(false, reason) keeps it unsent and records the error', async () => {
     const store = new PublishedRemindersStore(filePath)
     await store.publish('u1', { id: 'r1', message: 'a', dueAtUtc: '2026-06-25T12:00:00.000Z' })

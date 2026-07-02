@@ -53,6 +53,11 @@ export class ReminderDeliveryService {
     return this.remindersStore.listForUser(userUuid)
   }
 
+  /** Remove a published reminder so it will never be delivered. */
+  async unpublish(userUuid: string, id: string): Promise<boolean> {
+    return this.remindersStore.unpublish(userUuid, id)
+  }
+
   async markSent(userUuid: string, id: string, ok: boolean, error?: string): Promise<void> {
     return this.remindersStore.markSent(userUuid, id, ok, error)
   }
