@@ -63,6 +63,9 @@ const AdminPaths = {
   auditLog: '/v1/admin/audit-log',
   // Standard Red Notes: read-only gateway server status (master switches + health).
   serverStatus: '/v1/admin/server-status',
+  // Standard Red Notes: admin-editable server settings (AI providers, update
+  // check URL, Nextcloud backups master switch). Secrets are write-only.
+  serverSettings: '/v1/admin/server-settings',
   // Standard Red Notes: grant/revoke the admin role, reset 2FA, fix quota.
   userAdminRole: (userUuid: string) => `/v1/admin/users/${userUuid}/admin-role`,
   userMfaSecret: (userUuid: string) => `/v1/admin/users/${userUuid}/mfa-secret`,

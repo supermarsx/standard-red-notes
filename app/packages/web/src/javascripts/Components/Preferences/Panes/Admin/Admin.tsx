@@ -12,6 +12,7 @@ import { useTabState } from '@/Components/Tabs/useTabState'
 import AdminUsersTab, { LookedUpUser } from './AdminUsersTab'
 import AdminGroupsTab from './AdminGroupsTab'
 import AdminServerTab from './AdminServerTab'
+import AdminAiTab from './AdminAiTab'
 import AdminAuditTab from './AdminAuditTab'
 import AdminLogsTab from './AdminLogsTab'
 
@@ -95,6 +96,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           { id: 'users', title: 'Users' },
           { id: 'groups', title: 'Groups & roles' },
           { id: 'server', title: 'Server' },
+          { id: 'ai', title: 'AI' },
           { id: 'logs', title: 'Logs' },
           { id: 'audit', title: 'Audit log' },
         ]}
@@ -115,6 +117,9 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         </TabPanel>
         <TabPanel state={tabState} id="server" className="p-6">
           <AdminServerTab application={application} noteIfForbidden={noteIfForbidden} />
+        </TabPanel>
+        <TabPanel state={tabState} id="ai" className="p-6">
+          <AdminAiTab application={application} noteIfForbidden={noteIfForbidden} />
         </TabPanel>
         <TabPanel state={tabState} id="logs" className="p-6">
           <AdminLogsTab application={application} noteIfForbidden={noteIfForbidden} />

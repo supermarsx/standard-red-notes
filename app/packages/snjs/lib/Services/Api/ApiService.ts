@@ -838,6 +838,52 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: admin-editable server settings for the admin panel
+   * (AI provider keys/URLs, daily request limit, update-check URL, Nextcloud
+   * backups master switch). Secrets are never returned — the GET view carries
+   * only `configured` booleans plus a `sources` map saying whether each value
+   * is active from the environment, a persisted override, or the default.
+   */
+  async adminGetServerSettings(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.serverSettings),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load server settings.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: partial update of the admin server settings. Only the
+   * provided keys change; an explicit `null` clears a persisted value (falling
+   * back to the environment value or the default). Persisted values win over
+   * env. Returns the same view as adminGetServerSettings.
+   */
+  async adminSetServerSettings(partial: {
+    ai?: {
+      anthropicApiKey?: string | null
+      openaiApiKey?: string | null
+      openaiBaseUrl?: string | null
+      ollamaUrl?: string | null
+      dailyRequestLimit?: number | null
+    }
+    updateCheck?: {
+      url?: string | null
+    }
+    nextcloudBackups?: {
+      enabled?: boolean | null
+    }
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.serverSettings),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to update server settings.',
+      params: partial,
+    })
+  }
+
+  /**
    * Standard Red Notes: paginated admin users list (most-recent-first) with
    * optional filters. All filters are optional; the server clamps `limit` to its
    * own maximum (1500). Returns { users, total, limit, offset }.

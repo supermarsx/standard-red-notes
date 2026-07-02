@@ -3,6 +3,9 @@ import {
   ADMIN_USERS_MAX_LIMIT,
   adminUsersFiltersAreEmpty,
   buildAdminListUsersParams,
+  buildApiKeySettingUpdate,
+  buildDailyLimitSettingUpdate,
+  buildUrlSettingUpdate,
   dateBoundToISO,
   emptyAdminUsersFilterState,
   formatAdminUserDate,
@@ -15,6 +18,9 @@ import {
   logMatchesText,
   serviceStatusChipClass,
   serviceStatusLabel,
+  settingSource,
+  settingSourceChipClass,
+  settingSourceLabel,
   type AdminUsersFilterState,
   type LogEntry,
 } from './adminHelpers'
@@ -180,5 +186,84 @@ describe('log helpers', () => {
     expect(logMatchesText(entry, 'signed')).toBe(true)
     expect(logMatchesText(entry, 'SIGNED')).toBe(true)
     expect(logMatchesText(entry, 'logout')).toBe(false)
+  })
+})
+
+describe('setting source chips', () => {
+  it('labels each source, treating unknown strings as default', () => {
+    expect(settingSourceLabel('env')).toBe('From environment')
+    expect(settingSourceLabel('persisted')).toBe('Saved override')
+    expect(settingSourceLabel('default')).toBe('Default')
+    expect(settingSourceLabel('weird')).toBe('Default')
+    expect(settingSourceLabel(null)).toBe('Default')
+  })
+
+  it('highlights persisted overrides and keeps env/default calmer', () => {
+    expect(settingSourceChipClass('persisted')).toContain('bg-info')
+    expect(settingSourceChipClass('env')).toContain('bg-contrast')
+    expect(settingSourceChipClass('default')).toContain('bg-passive-4')
+    expect(settingSourceChipClass(undefined)).toContain('bg-passive-4')
+  })
+
+  it('resolves a source across candidate key spellings, defaulting when absent', () => {
+    expect(settingSource({ 'ai.anthropicApiKey': 'env' }, 'ai.anthropicApiKey', 'anthropicApiKey')).toBe('env')
+    expect(settingSource({ anthropicApiKey: 'persisted' }, 'ai.anthropicApiKey', 'anthropicApiKey')).toBe('persisted')
+    expect(settingSource({}, 'ai.anthropicApiKey')).toBe('default')
+    expect(settingSource(null, 'ai.anthropicApiKey')).toBe('default')
+    // Unexpected values in the map are skipped rather than trusted.
+    expect(settingSource({ 'ai.anthropicApiKey': 'bogus' }, 'ai.anthropicApiKey')).toBe('default')
+  })
+})
+
+describe('buildUrlSettingUpdate', () => {
+  it('maps empty input to an explicit null (clear the override)', () => {
+    expect(buildUrlSettingUpdate('')).toEqual({ ok: true, value: null })
+    expect(buildUrlSettingUpdate('   ')).toEqual({ ok: true, value: null })
+  })
+
+  it('accepts and trims http(s) URLs', () => {
+    expect(buildUrlSettingUpdate(' https://openrouter.ai/api/v1 ')).toEqual({
+      ok: true,
+      value: 'https://openrouter.ai/api/v1',
+    })
+    expect(buildUrlSettingUpdate('http://localhost:11434')).toEqual({ ok: true, value: 'http://localhost:11434' })
+    expect(buildUrlSettingUpdate('HTTPS://example.com')).toEqual({ ok: true, value: 'HTTPS://example.com' })
+  })
+
+  it('rejects non-http(s) input', () => {
+    expect(buildUrlSettingUpdate('localhost:11434').ok).toBe(false)
+    expect(buildUrlSettingUpdate('ftp://example.com').ok).toBe(false)
+    expect(buildUrlSettingUpdate('https://').ok).toBe(false)
+  })
+})
+
+describe('buildApiKeySettingUpdate', () => {
+  it('rejects empty input (Clear is a separate, explicit action)', () => {
+    expect(buildApiKeySettingUpdate('').ok).toBe(false)
+    expect(buildApiKeySettingUpdate('   ').ok).toBe(false)
+  })
+
+  it('accepts and trims a key', () => {
+    expect(buildApiKeySettingUpdate('  sk-ant-123  ')).toEqual({ ok: true, value: 'sk-ant-123' })
+  })
+})
+
+describe('buildDailyLimitSettingUpdate', () => {
+  it('maps empty and zero to null (unlimited, clears any persisted cap)', () => {
+    expect(buildDailyLimitSettingUpdate('')).toEqual({ ok: true, value: null })
+    expect(buildDailyLimitSettingUpdate(' 0 ')).toEqual({ ok: true, value: null })
+    expect(buildDailyLimitSettingUpdate('00')).toEqual({ ok: true, value: null })
+  })
+
+  it('accepts positive whole numbers', () => {
+    expect(buildDailyLimitSettingUpdate('100')).toEqual({ ok: true, value: 100 })
+    expect(buildDailyLimitSettingUpdate(' 42 ')).toEqual({ ok: true, value: 42 })
+  })
+
+  it('rejects negatives, fractions and non-numbers', () => {
+    expect(buildDailyLimitSettingUpdate('-1').ok).toBe(false)
+    expect(buildDailyLimitSettingUpdate('1.5').ok).toBe(false)
+    expect(buildDailyLimitSettingUpdate('abc').ok).toBe(false)
+    expect(buildDailyLimitSettingUpdate('1e999').ok).toBe(false)
   })
 })

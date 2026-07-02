@@ -235,6 +235,132 @@ export const serviceStatusLabel = (status: string | null | undefined): string =>
 }
 
 // ---------------------------------------------------------------------------
+// Server settings (AI tab + Server tab rows) — types, source chips, payload
+// validation. Mirrors the fixed /v1/admin/server-settings contract.
+// ---------------------------------------------------------------------------
+
+/** Where the currently-active value of a setting comes from. */
+export type SettingSource = 'env' | 'persisted' | 'default'
+
+export type AdminServerSettings = {
+  ai?: {
+    anthropicConfigured?: boolean
+    openaiConfigured?: boolean
+    openaiBaseUrl?: string | null
+    ollamaUrl?: string | null
+    dailyRequestLimit?: number | null
+    subscriptionMode?: string | null
+  }
+  updateCheck?: {
+    url?: string | null
+  }
+  nextcloudBackups?: {
+    enabled?: boolean
+  }
+}
+
+export type AdminServerSettingsResponse = {
+  settings?: AdminServerSettings
+  sources?: Record<string, string>
+}
+
+/** Human label for a source chip. Unknown strings fall back to "default". */
+export const settingSourceLabel = (source: string | null | undefined): string => {
+  switch (source) {
+    case 'env':
+      return 'From environment'
+    case 'persisted':
+      return 'Saved override'
+    default:
+      return 'Default'
+  }
+}
+
+/**
+ * Chip classes for a setting-source chip. A persisted override is highlighted
+ * (it wins over env); env is informational; default is neutral.
+ */
+export const settingSourceChipClass = (source: string | null | undefined): string => {
+  switch (source) {
+    case 'env':
+      return 'bg-contrast text-foreground'
+    case 'persisted':
+      return 'bg-info text-info-contrast'
+    default:
+      return 'bg-passive-4 text-foreground'
+  }
+}
+
+/**
+ * Look up a setting's source in the `sources` map, tolerating either flat
+ * ("anthropicApiKey") or dotted ("ai.anthropicApiKey") key styles so a server
+ * revision cannot silently break the chips. Missing = 'default'.
+ */
+export const settingSource = (
+  sources: Record<string, string> | null | undefined,
+  ...keys: string[]
+): SettingSource => {
+  if (sources) {
+    for (const key of keys) {
+      const value = sources[key]
+      if (value === 'env' || value === 'persisted' || value === 'default') {
+        return value
+      }
+    }
+  }
+  return 'default'
+}
+
+export type SettingUpdateResult<T> = { ok: true; value: T } | { ok: false; error: string }
+
+/**
+ * Validate + normalise a URL field before it is sent as a server setting.
+ * Empty input means "clear the persisted override" and maps to explicit null;
+ * anything else must be an http(s) URL. Trailing whitespace is trimmed.
+ */
+export const buildUrlSettingUpdate = (input: string): SettingUpdateResult<string | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '') {
+    return { ok: true, value: null }
+  }
+  if (!/^https?:\/\/.+/i.test(trimmed)) {
+    return { ok: false, error: 'Enter a full http(s):// URL, or leave empty to clear.' }
+  }
+  return { ok: true, value: trimmed }
+}
+
+/**
+ * Validate + normalise an API-key field. Keys are write-only: an empty input
+ * is NOT a clear here (the Clear button sends null explicitly) — it is a no-op
+ * guard the caller checks before enabling Save.
+ */
+export const buildApiKeySettingUpdate = (input: string): SettingUpdateResult<string> => {
+  const trimmed = input.trim()
+  if (trimmed === '') {
+    return { ok: false, error: 'Enter an API key first.' }
+  }
+  return { ok: true, value: trimmed }
+}
+
+/**
+ * Validate + normalise the daily request limit input. Empty or 0 = unlimited,
+ * sent as explicit null so any persisted cap is cleared. Otherwise a positive
+ * integer.
+ */
+export const buildDailyLimitSettingUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '' || trimmed === '0') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return { ok: false, error: 'Enter a whole number of requests per day, or 0 / empty for unlimited.' }
+  }
+  // Any spelling of zero ("00", "0.0") is unlimited too.
+  return { ok: true, value: value === 0 ? null : value }
+}
+
+// ---------------------------------------------------------------------------
 // Logs tab — level colouring + client-side text filter
 // ---------------------------------------------------------------------------
 
