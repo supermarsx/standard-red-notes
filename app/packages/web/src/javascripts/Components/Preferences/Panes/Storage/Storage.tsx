@@ -9,13 +9,20 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Icon from '@/Components/Icon/Icon'
+import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { getIconForItem } from '@/Utils/Items/Icons/getIconForItem'
 import { estimateStorage, formatBytes, StorageEstimateResult } from '@/Utils/StorageQuota'
 import { isStorageUsageScanAvailable, scanStorageUsage } from '@/Utils/Storage/StorageUsageManager'
 import { StorageLargestItem, StorageUsageSnapshot } from '@/Utils/Storage/storageUsageWorkerProtocol'
+import { confirmDialog } from '@standardnotes/ui-services'
 import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
-import { resolveStorageItemLabel, storageItemIconType } from './storageItemLabel'
+import {
+  isOpenableStorageItem,
+  isRiskySystemStorageItem,
+  resolveStorageItemLabel,
+  storageItemIconType,
+} from './storageItemLabel'
 
 type Props = {
   application: WebApplication
@@ -151,6 +158,25 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
 
   const handleDelete = useCallback(
     async (row: StorageLargestItem) => {
+      // Confirm HERE (naming the item + warning for system items) before deleting.
+      // Resolve the same label the row shows; fall back to the content type + uuid.
+      const found = application.items.findItem(row.uuid)
+      const label = resolveStorageItemLabel(found, row.uuid, row.contentType)
+      const risky = isRiskySystemStorageItem(row.contentType)
+      const confirmed = await confirmDialog({
+        title: 'Delete item',
+        text:
+          `Permanently delete “${label.primary}” from this device? This is a local deletion that can’t be undone.` +
+          (risky
+            ? ' This is a system item the app relies on — deleting it may affect app state (broken decryption or reset settings) until the next sync.'
+            : ''),
+        confirmButtonText: 'Delete',
+        confirmButtonStyle: 'danger',
+      })
+      if (!confirmed) {
+        return
+      }
+
       setBusy(true)
       try {
         const deleted = await deleteLargestItem(application, row)
@@ -386,28 +412,33 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                       </span>
                     </label>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <Button small disabled={busy} onClick={() => handleOpen(item.uuid)} title="Open" aria-label="Open">
-                        <Icon type="open-in" size="small" />
-                      </Button>
-                      <Button
-                        small
-                        disabled={busy}
-                        onClick={() => handleExport([item])}
-                        title="Export"
-                        aria-label="Export"
-                      >
-                        <Icon type="download" size="small" />
-                      </Button>
-                      <Button
-                        small
-                        colorStyle="danger"
-                        disabled={busy}
-                        onClick={() => handleDelete(item)}
-                        title="Delete"
-                        aria-label="Delete"
-                      >
-                        <Icon type="trash" size="small" />
-                      </Button>
+                      {/* Only Notes and Files can be opened in a view / exported in a
+                          native format; system items (keys, prefs, tags, …) offer Delete only. */}
+                      {isOpenableStorageItem(item.contentType) && (
+                        <>
+                          <StyledTooltip label="Open">
+                            <Button small disabled={busy} onClick={() => handleOpen(item.uuid)} aria-label="Open">
+                              <Icon type="open-in" size="small" />
+                            </Button>
+                          </StyledTooltip>
+                          <StyledTooltip label="Export">
+                            <Button small disabled={busy} onClick={() => handleExport([item])} aria-label="Export">
+                              <Icon type="download" size="small" />
+                            </Button>
+                          </StyledTooltip>
+                        </>
+                      )}
+                      <StyledTooltip label="Delete">
+                        <Button
+                          small
+                          colorStyle="danger"
+                          disabled={busy}
+                          onClick={() => handleDelete(item)}
+                          aria-label="Delete"
+                        >
+                          <Icon type="trash" size="small" />
+                        </Button>
+                      </StyledTooltip>
                     </div>
                   </div>
                 )

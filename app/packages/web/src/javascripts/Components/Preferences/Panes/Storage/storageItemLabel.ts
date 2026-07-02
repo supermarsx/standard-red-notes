@@ -96,6 +96,27 @@ export function storageItemIconType(contentType: string | undefined): IconType {
   return CONTENT_TYPE_ICON[contentType] ?? 'box'
 }
 
+/**
+ * Whether a largest-items row can be OPENED in a view and meaningfully EXPORTED in a
+ * native format — i.e. it's a user-facing Note or File. Every other content type
+ * (items keys, user preferences, tags, components, themes, smart views, key-system
+ * records, etc.) is a system item whose encrypted payload can't be opened or
+ * downloaded on its own, so those rows only offer Delete. Pure — keys off
+ * content_type alone, no decrypted item required.
+ */
+export function isOpenableStorageItem(contentType: string | undefined): boolean {
+  return contentType === ContentType.TYPES.Note || contentType === ContentType.TYPES.File
+}
+
+/**
+ * System records the app itself depends on: deleting an items key can make other
+ * items undecryptable and deleting user preferences resets settings until the next
+ * sync. Their delete confirmation carries an extra "may affect app state" warning.
+ */
+export function isRiskySystemStorageItem(contentType: string | undefined): boolean {
+  return contentType === ContentType.TYPES.ItemsKey || contentType === ContentType.TYPES.UserPrefs
+}
+
 /** Best-effort read of a string `title` off any item, trimmed, or undefined. */
 function readTitle(item: ItemInterface): string | undefined {
   const value = (item as { title?: unknown }).title

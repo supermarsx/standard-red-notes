@@ -5,9 +5,10 @@
 //
 //   - open   -> LinkingController.activateItem (the same path used to open a linked
 //               note/file; opens a File's preview), after closing Preferences.
-//   - delete -> confirmDialog (ui-services) + mutator.deleteItems (notes) or
-//               FilesController.deleteFile (files), then sync — matching how the app
-//               deletes notes/files elsewhere.
+//   - delete -> files.deleteFile (files) or mutator.deleteItems + sync (everything
+//               else), matching how the app deletes items elsewhere. The Storage pane
+//               confirms first (naming the item + warning for system items), so this
+//               performs the deletion without prompting again.
 //   - export -> createNoteExport (NoteExportUtils) for notes' native format, plus
 //               decrypted file bytes, zipped via archiveService.zipData/downloadData.
 
@@ -35,9 +36,10 @@ export async function openLargestItem(application: WebApplication, uuid: string)
 }
 
 /**
- * Delete the item behind a largest-list row after a confirmation dialog. Files go
- * through FilesController.deleteFile (which has its own confirm + toasts); notes and
- * everything else are permanently deleted via the mutator, then synced.
+ * Delete the item behind a largest-list row. The Storage pane already confirmed
+ * (naming the item and warning for system items), so this just performs the delete:
+ * files via the file service (with delete toasts), notes and everything else via the
+ * mutator, then a sync. Returns true when the deletion was issued.
  */
 export async function deleteLargestItem(application: WebApplication, row: StorageLargestItem): Promise<boolean> {
   const item = application.items.findItem(row.uuid)
@@ -47,20 +49,14 @@ export async function deleteLargestItem(application: WebApplication, row: Storag
   }
 
   if (isFile(item)) {
-    // FilesController.deleteFile already confirms, toasts and syncs.
-    await application.filesController.deleteFile(item)
+    const toastId = addToast({ type: ToastType.Loading, message: `Deleting file "${item.name}"…` })
+    try {
+      await application.files.deleteFile(item)
+      addToast({ type: ToastType.Success, message: `Deleted file "${item.name}".` })
+    } finally {
+      dismissToast(toastId)
+    }
     return true
-  }
-
-  const label = row.title && row.title !== row.uuid ? `"${row.title}"` : 'this item'
-  const confirmed = await confirmDialog({
-    title: 'Delete item',
-    text: `Permanently delete ${label}? This cannot be undone.`,
-    confirmButtonStyle: 'danger',
-    confirmButtonText: 'Delete',
-  })
-  if (!confirmed) {
-    return false
   }
 
   await application.mutator.deleteItems([item])

@@ -1,5 +1,10 @@
 import { ContentType } from '@standardnotes/snjs'
-import { resolveStorageItemLabel, storageItemIconType } from './storageItemLabel'
+import {
+  isOpenableStorageItem,
+  isRiskySystemStorageItem,
+  resolveStorageItemLabel,
+  storageItemIconType,
+} from './storageItemLabel'
 
 // The resolver is pure and only touches content_type / title / name, so plain mock
 // objects standing in for the decrypted items are enough to unit-test it. The type
@@ -71,5 +76,35 @@ describe('storageItemIconType', () => {
   it('falls back to a generic box icon for unknown/undefined content types', () => {
     expect(storageItemIconType('SN|Nonexistent')).toBe('box')
     expect(storageItemIconType(undefined)).toBe('box')
+  })
+})
+
+describe('isOpenableStorageItem', () => {
+  it('is true only for user-facing Note and File content types', () => {
+    expect(isOpenableStorageItem(ContentType.TYPES.Note)).toBe(true)
+    expect(isOpenableStorageItem(ContentType.TYPES.File)).toBe(true)
+  })
+
+  it('is false for system/non-openable content types', () => {
+    expect(isOpenableStorageItem(ContentType.TYPES.ItemsKey)).toBe(false)
+    expect(isOpenableStorageItem(ContentType.TYPES.UserPrefs)).toBe(false)
+    expect(isOpenableStorageItem(ContentType.TYPES.Tag)).toBe(false)
+    expect(isOpenableStorageItem(ContentType.TYPES.SmartView)).toBe(false)
+    expect(isOpenableStorageItem(ContentType.TYPES.Theme)).toBe(false)
+    expect(isOpenableStorageItem('SN|Nonexistent')).toBe(false)
+    expect(isOpenableStorageItem(undefined)).toBe(false)
+  })
+})
+
+describe('isRiskySystemStorageItem', () => {
+  it('is true for items keys and user preferences', () => {
+    expect(isRiskySystemStorageItem(ContentType.TYPES.ItemsKey)).toBe(true)
+    expect(isRiskySystemStorageItem(ContentType.TYPES.UserPrefs)).toBe(true)
+  })
+
+  it('is false for ordinary and openable content types', () => {
+    expect(isRiskySystemStorageItem(ContentType.TYPES.Note)).toBe(false)
+    expect(isRiskySystemStorageItem(ContentType.TYPES.Tag)).toBe(false)
+    expect(isRiskySystemStorageItem(undefined)).toBe(false)
   })
 })
