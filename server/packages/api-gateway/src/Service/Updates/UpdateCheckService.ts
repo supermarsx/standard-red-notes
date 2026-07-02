@@ -40,6 +40,14 @@ export type UpdateCheckFetchLike = (
 export interface UpdateCheckServiceConfig {
   /** The operator-configured endpoint to check. Unset => feature not configured. */
   url?: string
+  /**
+   * Standard Red Notes: optional lazy URL resolution (runtime server settings).
+   * When present it is consulted on EVERY getStatus call and takes precedence
+   * over the static `url`, so an admin-persisted UPDATE_CHECK_URL override
+   * (persisted → env precedence, see ServerSettingsResolver) takes effect on
+   * the next check without a restart. Must never throw.
+   */
+  urlResolver?: () => Promise<string | undefined>
   /** The version this deployment reports as "current". */
   currentVersion: string
   /** How long a fetched result is served from cache. Default 15 minutes. */
@@ -186,7 +194,7 @@ export function resolveOwnPackageVersion(startDir: string = __dirname): string {
 export class UpdateCheckService {
   private readonly cacheTtlMs: number
   private readonly timeoutMs: number
-  private cached?: { status: UpdateStatus; fetchedAt: number }
+  private cached?: { status: UpdateStatus; fetchedAt: number; url: string }
 
   constructor(
     private fetchFn: UpdateCheckFetchLike,
@@ -198,26 +206,41 @@ export class UpdateCheckService {
 
   /**
    * The one public entry point. Never throws — every failure mode maps to a
-   * degraded-but-valid UpdateStatus payload.
+   * degraded-but-valid UpdateStatus payload. The check URL is resolved lazily
+   * per call (runtime settings overlay → env), and the in-memory cache is keyed
+   * to the URL it was fetched from so changing the URL invalidates it.
    */
   async getStatus(force = false, now: number = Date.now()): Promise<UpdateStatus> {
-    if (!this.config.url) {
+    const url = await this.resolveUrl()
+    if (!url) {
       return {
         configured: false,
         currentVersion: this.config.currentVersion,
       }
     }
 
-    if (!force && this.cached && now - this.cached.fetchedAt < this.cacheTtlMs) {
+    if (!force && this.cached && this.cached.url === url && now - this.cached.fetchedAt < this.cacheTtlMs) {
       return this.cached.status
     }
 
-    const status = await this.performCheck(now)
-    this.cached = { status, fetchedAt: now }
+    const status = await this.performCheck(now, url)
+    this.cached = { status, fetchedAt: now, url }
     return status
   }
 
-  private async performCheck(now: number): Promise<UpdateStatus> {
+  private async resolveUrl(): Promise<string | undefined> {
+    if (this.config.urlResolver) {
+      try {
+        return await this.config.urlResolver()
+      } catch {
+        // A broken settings overlay must never take the endpoint down.
+        return this.config.url
+      }
+    }
+    return this.config.url
+  }
+
+  private async performCheck(now: number, url: string): Promise<UpdateStatus> {
     const base: UpdateStatus = {
       configured: true,
       currentVersion: this.config.currentVersion,
@@ -229,7 +252,7 @@ export class UpdateCheckService {
 
     let body: unknown
     try {
-      const response = await this.fetchFn(this.config.url as string, {
+      const response = await this.fetchFn(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json, application/vnd.github+json',

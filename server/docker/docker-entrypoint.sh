@@ -125,6 +125,18 @@ if [ -z "$VALET_TOKEN_SECRET" ]; then
   exit 1
 fi
 
+# Standard Red Notes: runtime-configurable server settings (admin pane).
+# The api-gateway persists admin-set overrides (AI provider config, update-check
+# URL, Nextcloud-backups gate) to this JSON file; PRECEDENCE: persisted wins
+# over env. The AUTH service reads the SAME file for the Nextcloud-backups
+# master gate, so both services must agree on the path. Mount/point it at a
+# volume if the overrides should survive container recreation.
+if [ -z "$SERVER_SETTINGS_PATH" ]; then
+  export SERVER_SETTINGS_PATH=/opt/server/packages/api-gateway/data/server-settings.json
+fi
+export API_GATEWAY_SERVER_SETTINGS_PATH=$SERVER_SETTINGS_PATH
+export AUTH_SERVER_SERVER_SETTINGS_PATH=$SERVER_SETTINGS_PATH
+
 ########
 # AUTH #
 ########

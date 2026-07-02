@@ -9,6 +9,8 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
+import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -73,6 +75,20 @@ export class AdminController extends BaseHttpController {
     // Standard Red Notes: server-log tailing for the admin Logs tab. Optional so
     // the endpoint degrades to an empty result when logs are not file-based.
     @inject(TYPES.ApiGateway_AdminLogsService) @optional() private adminLogsService?: AdminLogsService,
+    // Standard Red Notes: internal probe base URLs for server-status (name ->
+    // http://host:port). Bound in the container with single-container defaults
+    // (supervisord sibling ports) + env overrides; when absent (unit tests) the
+    // per-service URL fields above act as the fallback.
+    @inject(TYPES.ApiGateway_SERVICE_PROBE_URLS) @optional() private serviceProbeUrls?: Record<string, string>,
+    // Standard Red Notes: runtime server settings (persisted overlay over env,
+    // persisted wins). Optional so the settings routes degrade to 503 when the
+    // resolver is not bound (never on a production container).
+    @inject(TYPES.ApiGateway_ServerSettingsResolver)
+    @optional()
+    private serverSettingsResolver?: ServerSettingsResolver,
+    // Structured audit line for settings changes (setting NAMES only, never
+    // values) — the gateway has no reachable audit-log store of its own.
+    @inject(TYPES.ApiGateway_Logger) @optional() private logger?: { info(message: string, meta?: unknown): void },
   ) {
     super()
   }
@@ -380,7 +396,17 @@ export class AdminController extends BaseHttpController {
       return
     }
 
-    const assistantProviders = this.assistantProviderConfig ? configuredProviders(this.assistantProviderConfig) : []
+    // Effective assistant config: persisted admin overrides win over env (see
+    // ServerSettingsResolver); the env-bound config is the fallback.
+    let assistantConfig = this.assistantProviderConfig
+    if (this.serverSettingsResolver) {
+      try {
+        assistantConfig = await this.serverSettingsResolver.resolveAssistantConfig()
+      } catch {
+        // A broken settings overlay must not take server-status down.
+      }
+    }
+    const assistantProviders = assistantConfig ? configuredProviders(assistantConfig) : []
     // Never throws; unset UPDATE_CHECK_URL reports { configured: false }.
     const updateCheck = this.updateCheckService ? await this.updateCheckService.getStatus(false) : null
 
@@ -458,16 +484,216 @@ export class AdminController extends BaseHttpController {
   }
 
   /**
+   * Standard Red Notes: runtime server settings (admin pane). Returns the MASKED
+   * view — secrets (API keys) are NEVER returned, only `configured` booleans —
+   * plus a per-setting source map ('persisted' | 'env' | 'default').
+   * PRECEDENCE: persisted (admin-set) wins over env; env is the fallback.
+   * Admin-gated HARD (403 for non-admins), like server-status.
+   */
+  @httpGet('/server-settings', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getServerSettings(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    if (!this.serverSettingsResolver) {
+      response.status(503).json({ error: { message: 'Server settings are not available on this deployment.' } })
+
+      return
+    }
+
+    response.json(await this.serverSettingsResolver.view())
+  }
+
+  /**
+   * Standard Red Notes: update runtime server settings. Accepts a PARTIAL body —
+   * only the provided keys change. Per key: a concrete value persists an
+   * admin override (which WINS over env), an explicit `null` CLEARS the
+   * persisted override (falling back to env), and an absent key is untouched.
+   * Values are validated (URLs must parse as http/https, the daily limit must
+   * be an integer >= 0, keys must be non-empty strings). Changes take effect on
+   * next use — consumers read through the ServerSettingsResolver per request.
+   * The change is audit-logged as a structured log line carrying setting NAMES
+   * only, never values (the gateway has no audit-log store of its own; the
+   * auth-side audit log is not reachable from this gateway-local endpoint).
+   */
+  @httpPut('/server-settings', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async setServerSettings(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    if (!this.serverSettingsResolver) {
+      response.status(503).json({ error: { message: 'Server settings are not available on this deployment.' } })
+
+      return
+    }
+
+    const parsed = this.parseServerSettingsBody(request.body)
+    if ('error' in parsed) {
+      response.status(400).json({ error: { message: parsed.error } })
+
+      return
+    }
+    if (parsed.changedSettings.length === 0) {
+      response.status(400).json({ error: { message: 'No recognized settings provided.' } })
+
+      return
+    }
+
+    await this.serverSettingsResolver.applyPatch(parsed.patch)
+
+    // Audit: setting NAMES only — never values, never key material.
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+    this.logger?.info('admin server-settings updated', {
+      audit: 'admin.server-settings.update',
+      adminUuid,
+      changedSettings: parsed.changedSettings,
+    })
+
+    response.json(await this.serverSettingsResolver.view())
+  }
+
+  /**
+   * Validates a PUT /server-settings body into a store patch. Returns the patch
+   * plus the dot-path names of every setting it changes (for the audit line),
+   * or a human-readable validation error. `null` means CLEAR, a value means
+   * SET, an absent key means leave untouched.
+   */
+  private parseServerSettingsBody(
+    body: unknown,
+  ): { patch: ServerSettingsPatch; changedSettings: string[] } | { error: string } {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return { error: 'Request body must be a JSON object.' }
+    }
+    const root = body as Record<string, unknown>
+    const patch: ServerSettingsPatch = {}
+    const changedSettings: string[] = []
+
+    const secret = (value: unknown, name: string): string | null | { error: string } => {
+      if (value === null) {
+        return null
+      }
+      if (typeof value === 'string' && value.trim() !== '') {
+        return value.trim()
+      }
+
+      return { error: `${name} must be a non-empty string, or null to clear it.` }
+    }
+    const url = (value: unknown, name: string): string | null | { error: string } => {
+      if (value === null) {
+        return null
+      }
+      if (typeof value === 'string' && value.trim() !== '') {
+        try {
+          const parsedUrl = new URL(value.trim())
+          if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+            return { error: `${name} must be an http(s) URL.` }
+          }
+
+          return value.trim()
+        } catch {
+          return { error: `${name} must be a valid URL.` }
+        }
+      }
+
+      return { error: `${name} must be a URL string, or null to clear it.` }
+    }
+
+    if (root.ai !== undefined) {
+      if (!root.ai || typeof root.ai !== 'object' || Array.isArray(root.ai)) {
+        return { error: 'ai must be an object.' }
+      }
+      const ai = root.ai as Record<string, unknown>
+      patch.ai = {}
+
+      for (const key of ['anthropicApiKey', 'openaiApiKey'] as const) {
+        if (ai[key] !== undefined) {
+          const value = secret(ai[key], `ai.${key}`)
+          if (value !== null && typeof value === 'object') {
+            return value
+          }
+          patch.ai[key] = value
+          changedSettings.push(`ai.${key}`)
+        }
+      }
+      for (const key of ['openaiBaseUrl', 'ollamaUrl'] as const) {
+        if (ai[key] !== undefined) {
+          const value = url(ai[key], `ai.${key}`)
+          if (value !== null && typeof value === 'object') {
+            return value
+          }
+          patch.ai[key] = value
+          changedSettings.push(`ai.${key}`)
+        }
+      }
+      if (ai.dailyRequestLimit !== undefined) {
+        if (ai.dailyRequestLimit === null) {
+          patch.ai.dailyRequestLimit = null
+        } else if (typeof ai.dailyRequestLimit === 'number' && Number.isInteger(ai.dailyRequestLimit) && ai.dailyRequestLimit >= 0) {
+          patch.ai.dailyRequestLimit = ai.dailyRequestLimit
+        } else {
+          return { error: 'ai.dailyRequestLimit must be an integer >= 0, or null to clear it.' }
+        }
+        changedSettings.push('ai.dailyRequestLimit')
+      }
+    }
+
+    if (root.updateCheck !== undefined) {
+      if (!root.updateCheck || typeof root.updateCheck !== 'object' || Array.isArray(root.updateCheck)) {
+        return { error: 'updateCheck must be an object.' }
+      }
+      const updateCheck = root.updateCheck as Record<string, unknown>
+      if (updateCheck.url !== undefined) {
+        const value = url(updateCheck.url, 'updateCheck.url')
+        if (value !== null && typeof value === 'object') {
+          return value
+        }
+        patch.updateCheck = { url: value }
+        changedSettings.push('updateCheck.url')
+      }
+    }
+
+    if (root.nextcloudBackups !== undefined) {
+      if (!root.nextcloudBackups || typeof root.nextcloudBackups !== 'object' || Array.isArray(root.nextcloudBackups)) {
+        return { error: 'nextcloudBackups must be an object.' }
+      }
+      const nextcloudBackups = root.nextcloudBackups as Record<string, unknown>
+      if (nextcloudBackups.enabled !== undefined) {
+        if (nextcloudBackups.enabled !== null && typeof nextcloudBackups.enabled !== 'boolean') {
+          return { error: 'nextcloudBackups.enabled must be a boolean, or null to clear it.' }
+        }
+        patch.nextcloudBackups = { enabled: nextcloudBackups.enabled }
+        changedSettings.push('nextcloudBackups.enabled')
+      }
+    }
+
+    return { patch, changedSettings }
+  }
+
+  /**
    * Standard Red Notes: build the server-status `services` array — the gateway
    * itself, the auth server (from the readiness probe already taken), and each
    * of the other backend services probed for /healthcheck/readiness in parallel.
    */
   private async probeServices(auth: AuthReadiness): Promise<ServiceStatusEntry[]> {
+    // Probe bases come from the SERVICE_PROBE_URLS map (single-container
+    // defaults to the supervisord sibling ports; env-overridable), falling back
+    // to the raw service-URL fields when the map is not bound (unit tests).
+    // NOTE: files deliberately has NO filesServerUrl fallback beyond the map —
+    // FILES_SERVER_URL is the PUBLIC files URL in this fork's entrypoint and is
+    // not reachable from inside the container.
     const targets: Array<[string, string | undefined]> = [
-      ['syncing-server', this.syncingServerUrl],
-      ['files', this.filesServerUrl],
-      ['revisions', this.revisionsServerUrl],
-      ['websocket-gateway', this.webSocketServerUrl],
+      ['syncing-server', this.serviceProbeUrls?.['syncing-server'] ?? this.syncingServerUrl],
+      ['files', this.serviceProbeUrls?.['files'] ?? this.filesServerUrl],
+      ['revisions', this.serviceProbeUrls?.['revisions'] ?? this.revisionsServerUrl],
+      // No websocket gateway runs in the single-container image, so it keeps
+      // reporting 'unknown' (not configured) unless WEB_SOCKET_SERVER_URL is set.
+      ['websocket-gateway', this.serviceProbeUrls?.['websocket-gateway'] ?? this.webSocketServerUrl],
     ]
 
     const probed = await Promise.all(targets.map(([name, url]) => this.probeServiceReadiness(name, url)))
@@ -518,6 +744,22 @@ export class AdminController extends BaseHttpController {
       if (readinessResponse.status === 503) {
         return { name, reachable: true, status: 'degraded', detail: 'readiness reported unavailable' }
       }
+      if (readinessResponse.status === 404) {
+        // Standard Red Notes: builds whose service predates the readiness route
+        // 404 here while being perfectly healthy. Fall back to the plain
+        // /healthcheck liveness probe and report honestly that only liveness
+        // was verified, instead of a false 'down'.
+        const livenessResponse = await fetchFn(`${url}/healthcheck`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        })
+        if (livenessResponse.status === 200) {
+          return { name, reachable: true, status: 'ok', detail: 'liveness only' }
+        }
+
+        return { name, reachable: true, status: 'down', detail: `unexpected status ${livenessResponse.status}` }
+      }
 
       return { name, reachable: true, status: 'down', detail: `unexpected status ${readinessResponse.status}` }
     } catch {
@@ -536,14 +778,17 @@ export class AdminController extends BaseHttpController {
   private async probeAuthReadiness(
     fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
   ): Promise<{ reachable: boolean; status?: string; checks?: Record<string, boolean> }> {
-    if (!this.authServerUrl) {
+    // Same probe-base resolution as the services array: probe map (defaults to
+    // the supervisord sibling port) first, raw AUTH_SERVER_URL as fallback.
+    const authProbeUrl = this.serviceProbeUrls?.['auth'] ?? this.authServerUrl
+    if (!authProbeUrl) {
       return { reachable: false }
     }
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 3000)
     try {
-      const readinessResponse = await fetchFn(`${this.authServerUrl}/healthcheck/readiness`, {
+      const readinessResponse = await fetchFn(`${authProbeUrl}/healthcheck/readiness`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         signal: controller.signal,

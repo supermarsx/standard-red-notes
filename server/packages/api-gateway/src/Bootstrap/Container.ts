@@ -53,6 +53,8 @@ import { EmailProvider } from '../Service/ReminderDelivery/Providers/EmailProvid
 import { WhatsAppProvider } from '../Service/ReminderDelivery/Providers/WhatsAppProvider'
 import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
 import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
+import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
+import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
 import * as path from 'path'
 
 export class ContainerConfigLoader {
@@ -196,7 +198,10 @@ export class ContainerConfigLoader {
     // Assistant LLM proxy configuration (server-held provider credentials).
     // The "openai" provider is the general OpenAI-compatible case driven by a
     // configurable base URL (OpenAI, LM Studio, Ollama, OpenRouter, custom).
-    container.bind<AssistantProviderConfig>(TYPES.ApiGateway_ASSISTANT_PROVIDER_CONFIG).toConstantValue({
+    // NOTE: this is the ENV baseline only — the effective config is resolved per
+    // request through the ServerSettingsResolver bound below (persisted admin
+    // overrides WIN over these env values).
+    const envAssistantProviderConfig: AssistantProviderConfig = {
       anthropicApiKey: env.get('ASSISTANT_ANTHROPIC_API_KEY', true) || undefined,
       openaiApiKey: env.get('ASSISTANT_OPENAI_API_KEY', true) || undefined,
       openaiBaseURL: env.get('ASSISTANT_OPENAI_BASE_URL', true) || undefined,
@@ -211,7 +216,38 @@ export class ContainerConfigLoader {
       openaiAccountId: env.get('ASSISTANT_OPENAI_ACCOUNT_ID', true) || undefined,
       openaiBeta: env.get('ASSISTANT_OPENAI_BETA', true) || undefined,
       openaiExtraHeaders: env.get('ASSISTANT_OPENAI_EXTRA_HEADERS', true) || undefined,
+    }
+    container
+      .bind<AssistantProviderConfig>(TYPES.ApiGateway_ASSISTANT_PROVIDER_CONFIG)
+      .toConstantValue(envAssistantProviderConfig)
+
+    // Standard Red Notes: runtime-configurable server settings (admin pane).
+    // A persisted JSON overlay over env config — PRECEDENCE: persisted (admin-set)
+    // WINS over env; env is the fallback; hardcoded defaults last. Consumers
+    // (assistant provider factory calls, UpdateCheckService, the Nextcloud gate
+    // view) read through the resolver per request, so admin changes take effect
+    // on next use without a restart. Default path sits next to the other
+    // gateway JSON stores; SERVER_SETTINGS_PATH overrides it (the docker
+    // entrypoint points BOTH the gateway and the auth service at the same file
+    // so the auth-side Nextcloud gate can read the same overlay).
+    const serverSettingsPath =
+      env.get('SERVER_SETTINGS_PATH', true) || path.resolve(process.cwd(), 'data', 'server-settings.json')
+    const serverSettingsStore = new ServerSettingsStore(serverSettingsPath)
+    const serverSettingsResolver = new ServerSettingsResolver(serverSettingsStore, {
+      assistant: envAssistantProviderConfig,
+      assistantDailyRequestLimit: env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
+        ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
+        : undefined,
+      updateCheckUrl: env.get('UPDATE_CHECK_URL', true) || undefined,
+      nextcloudBackupsEnabled: env.get('NEXTCLOUD_BACKUPS_ENABLED', true)
+        ? env.get('NEXTCLOUD_BACKUPS_ENABLED', true) === 'true'
+        : undefined,
     })
+    container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
+    container
+      .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
+      .toConstantValue(serverSettingsResolver)
+
     container
       .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_PROVIDER)
       .toConstantValue(env.get('ASSISTANT_DEFAULT_PROVIDER', true) || 'anthropic')
@@ -297,6 +333,9 @@ export class ContainerConfigLoader {
     container.bind<UpdateCheckService>(TYPES.ApiGateway_UpdateCheckService).toConstantValue(
       new UpdateCheckService(globalThis.fetch.bind(globalThis) as unknown as UpdateCheckFetchLike, {
         url: env.get('UPDATE_CHECK_URL', true) || undefined,
+        // Runtime settings overlay: an admin-persisted URL wins over the env
+        // value and takes effect on the next check (no restart).
+        urlResolver: () => serverSettingsResolver.resolveUpdateCheckUrl(),
         currentVersion: env.get('UPDATE_CHECK_CURRENT_VERSION', true) || resolveOwnPackageVersion(),
         cacheTtlMs: env.get('UPDATE_CHECK_CACHE_TTL_MS', true) ? +env.get('UPDATE_CHECK_CACHE_TTL_MS', true) : undefined,
         timeoutMs: env.get('UPDATE_CHECK_TIMEOUT_MS', true) ? +env.get('UPDATE_CHECK_TIMEOUT_MS', true) : undefined,
@@ -312,6 +351,38 @@ export class ContainerConfigLoader {
     container
       .bind<AdminLogsService>(TYPES.ApiGateway_AdminLogsService)
       .toConstantValue(new AdminLogsService(serverLogsPath))
+
+    // Standard Red Notes: internal PROBE base URLs for the admin server-status
+    // endpoint. These are deliberately separate from the proxy URLs above:
+    //   - FILES_SERVER_URL is defined as the PUBLIC files URL in this fork's
+    //     docker entrypoint (PUBLIC_FILES_SERVER_URL, e.g. the app front door's
+    //     /files prefix), so it is NOT reachable from inside the container and
+    //     must never be used as a probe target.
+    //   - In the single-container image the sibling services listen on
+    //     localhost:<internal port> (ports exported by docker-entrypoint.sh:
+    //     syncing 3101, auth 3103, files 3104, revisions 3105).
+    // Resolution per service: <SERVICE>_PROBE_URL env override (multi-service
+    // topologies) → the service-URL env where it is an internal URL → the
+    // supervisord sibling port (from the entrypoint's port envs, with hardcoded
+    // fallbacks matching the entrypoint).
+    const probePort = (portEnvVar: string, fallback: number): string =>
+      env.get(portEnvVar, true) || String(fallback)
+    const serviceProbeUrls: Record<string, string> = {
+      'syncing-server':
+        env.get('SYNCING_SERVER_PROBE_URL', true) ||
+        env.get('SYNCING_SERVER_JS_URL', true) ||
+        `http://localhost:${probePort('SYNCING_SERVER_PORT', 3101)}`,
+      auth:
+        env.get('AUTH_SERVER_PROBE_URL', true) ||
+        env.get('AUTH_SERVER_URL', true) ||
+        `http://localhost:${probePort('AUTH_SERVER_PORT', 3103)}`,
+      files: env.get('FILES_SERVER_PROBE_URL', true) || `http://localhost:${probePort('FILES_SERVER_PORT', 3104)}`,
+      revisions:
+        env.get('REVISIONS_SERVER_PROBE_URL', true) ||
+        env.get('REVISIONS_SERVER_URL', true) ||
+        `http://localhost:${probePort('REVISIONS_SERVER_PORT', 3105)}`,
+    }
+    container.bind<Record<string, string>>(TYPES.ApiGateway_SERVICE_PROBE_URLS).toConstantValue(serviceProbeUrls)
 
     // Standard Red Notes: OPT-IN read-only CalDAV feed.
     //

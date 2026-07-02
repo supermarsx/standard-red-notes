@@ -168,6 +168,60 @@ describe('UpdateCheckService', () => {
       expect(fetchFn).toHaveBeenCalledTimes(2)
     })
 
+    it('resolves the url lazily per call: a runtime override WINS over the static env url', async () => {
+      const fetchFn = makeFetch({ version: '1.1.0' })
+      const service = new UpdateCheckService(fetchFn, {
+        url: 'https://env.example.com/version.json',
+        urlResolver: async () => 'https://persisted.example.com/version.json',
+        currentVersion: '1.0.0',
+      })
+
+      await service.getStatus()
+      expect(fetchFn).toHaveBeenCalledWith('https://persisted.example.com/version.json', expect.anything())
+    })
+
+    it('reports not configured when the resolver clears the url, and invalidates the cache on a url change', async () => {
+      const fetchFn = makeFetch({ version: '1.1.0' })
+      let resolved: string | undefined = 'https://a.example.com/version.json'
+      const service = new UpdateCheckService(fetchFn, {
+        urlResolver: async () => resolved,
+        currentVersion: '1.0.0',
+        cacheTtlMs: 60_000,
+      })
+
+      await service.getStatus(false, 0)
+      expect(fetchFn).toHaveBeenCalledTimes(1)
+
+      // Same url within ttl => cached.
+      await service.getStatus(false, 1)
+      expect(fetchFn).toHaveBeenCalledTimes(1)
+
+      // Changed url within ttl => the cache is keyed to the url and refetches.
+      resolved = 'https://b.example.com/version.json'
+      await service.getStatus(false, 2)
+      expect(fetchFn).toHaveBeenCalledTimes(2)
+      expect(fetchFn).toHaveBeenLastCalledWith('https://b.example.com/version.json', expect.anything())
+
+      // Cleared url => not configured, no fetch.
+      resolved = undefined
+      expect(await service.getStatus(false, 3)).toEqual({ configured: false, currentVersion: '1.0.0' })
+      expect(fetchFn).toHaveBeenCalledTimes(2)
+    })
+
+    it('falls back to the static url when the resolver throws', async () => {
+      const fetchFn = makeFetch({ version: '1.1.0' })
+      const service = new UpdateCheckService(fetchFn, {
+        url: 'https://env.example.com/version.json',
+        urlResolver: async () => {
+          throw new Error('settings store unreadable')
+        },
+        currentVersion: '1.0.0',
+      })
+
+      await service.getStatus()
+      expect(fetchFn).toHaveBeenCalledWith('https://env.example.com/version.json', expect.anything())
+    })
+
     it('degrades to an unreachable error on network failure without throwing', async () => {
       const fetchFn = jest.fn().mockRejectedValue(new Error('boom')) as jest.MockedFunction<UpdateCheckFetchLike>
       const service = new UpdateCheckService(fetchFn, {

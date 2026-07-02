@@ -1,14 +1,19 @@
 import 'reflect-metadata'
 
+import { promises as fs } from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { Request, Response } from 'express'
 import { RoleName } from '@standardnotes/domain-core'
 
-import { AdminController } from './AdminController'
+import { AdminController, ReadinessFetchLike, ServiceStatusEntry } from './AdminController'
 import { AssistantProviderConfig } from '../../Service/Assistant/providers/factory'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
+import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import { ServerSettingsStore } from '../../Service/ServerSettings/ServerSettingsStore'
 
 // Only which providers are configured matters for the server-status payload.
 jest.mock('../../Service/Assistant/providers/factory', () => ({
@@ -29,7 +34,16 @@ describe('AdminController server-status', () => {
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
-  const makeController = (options: { withRedis?: boolean; adminLogsService?: AdminLogsService } = {}) =>
+  const makeController = (
+    options: {
+      withRedis?: boolean
+      adminLogsService?: AdminLogsService
+      filesServerUrl?: string
+      serviceProbeUrls?: Record<string, string>
+      serverSettingsResolver?: ServerSettingsResolver
+      logger?: { info: jest.Mock }
+    } = {},
+  ) =>
     new AdminController(
       serviceProxy,
       endpointResolver,
@@ -44,10 +58,13 @@ describe('AdminController server-status', () => {
       // No backend service URLs in the unit test => each service degrades to
       // { reachable: false, status: 'unknown', detail: 'not configured' }.
       undefined,
-      undefined,
+      options.filesServerUrl,
       undefined,
       undefined,
       options.adminLogsService,
+      options.serviceProbeUrls,
+      options.serverSettingsResolver,
+      options.logger,
     )
 
   const responseWith = (roles: Array<{ name: string }>): Response => {
@@ -178,6 +195,217 @@ describe('AdminController server-status', () => {
 
     expect(tail).toHaveBeenCalledWith({ limit: 500, service: 'auth', level: 'error' })
     expect(jsonMock).toHaveBeenCalledWith({ entries: [{ message: 'x' }], truncated: true })
+  })
+
+  describe('service probe URL resolution', () => {
+    type ProbeSpyTarget = {
+      probeServiceReadiness: (name: string, url?: string, fetchFn?: ReadinessFetchLike) => Promise<ServiceStatusEntry>
+      probeAuthReadiness: (fetchFn?: ReadinessFetchLike) => Promise<{ reachable: boolean }>
+    }
+
+    const singleContainerProbeUrls = {
+      'syncing-server': 'http://localhost:3101',
+      auth: 'http://localhost:3103',
+      files: 'http://localhost:3104',
+      revisions: 'http://localhost:3105',
+    }
+
+    it('probes each service at its internal probe URL — the map WINS over the (public) files URL', async () => {
+      const controller = makeController({
+        serviceProbeUrls: singleContainerProbeUrls,
+        // The env FILES_SERVER_URL is the PUBLIC files URL in this fork's
+        // entrypoint; it must NOT be used as the probe target.
+        filesServerUrl: 'http://localhost:3001/files',
+      })
+      const probeSpy = jest
+        .spyOn(controller as unknown as ProbeSpyTarget, 'probeServiceReadiness')
+        .mockImplementation(async (name: string) => ({ name, reachable: true, status: 'ok' }))
+      jest
+        .spyOn(controller as unknown as ProbeSpyTarget, 'probeAuthReadiness')
+        .mockResolvedValue({ reachable: true })
+
+      await controller.getServerStatus({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+
+      const probed = Object.fromEntries(probeSpy.mock.calls.map((call) => [call[0], call[1]]))
+      expect(probed).toEqual({
+        'syncing-server': 'http://localhost:3101',
+        files: 'http://localhost:3104',
+        revisions: 'http://localhost:3105',
+        // Not in the map and no env URL => stays unset (reports 'unknown').
+        'websocket-gateway': undefined,
+      })
+    })
+
+    it('probes the auth readiness at the mapped internal URL even when AUTH_SERVER_URL is unset', async () => {
+      const controller = makeController({ serviceProbeUrls: singleContainerProbeUrls })
+      const fetchFn = jest
+        .fn()
+        .mockResolvedValue({ status: 200, json: async () => ({ status: 'ready', checks: { db: true } }) })
+
+      const result = await (controller as unknown as ProbeSpyTarget).probeAuthReadiness(fetchFn)
+
+      expect(fetchFn).toHaveBeenCalledWith('http://localhost:3103/healthcheck/readiness', expect.anything())
+      expect(result).toEqual({ reachable: true, status: 'ready', checks: { db: true } })
+    })
+
+    it('treats a 404 readiness as "fall back to liveness": /healthcheck 200 => ok (liveness only)', async () => {
+      const controller = makeController()
+      const fetchFn = jest
+        .fn()
+        .mockResolvedValueOnce({ status: 404, json: async () => ({}) })
+        .mockResolvedValueOnce({ status: 200, json: async () => ({}) })
+
+      const entry = await (controller as unknown as ProbeSpyTarget).probeServiceReadiness(
+        'revisions',
+        'http://localhost:3105',
+        fetchFn,
+      )
+
+      expect(fetchFn).toHaveBeenNthCalledWith(1, 'http://localhost:3105/healthcheck/readiness', expect.anything())
+      expect(fetchFn).toHaveBeenNthCalledWith(2, 'http://localhost:3105/healthcheck', expect.anything())
+      expect(entry).toEqual({ name: 'revisions', reachable: true, status: 'ok', detail: 'liveness only' })
+    })
+
+    it('still reports down when both readiness (404) and liveness fail', async () => {
+      const controller = makeController()
+      const fetchFn = jest
+        .fn()
+        .mockResolvedValueOnce({ status: 404, json: async () => ({}) })
+        .mockResolvedValueOnce({ status: 500, json: async () => ({}) })
+
+      const entry = await (controller as unknown as ProbeSpyTarget).probeServiceReadiness(
+        'revisions',
+        'http://localhost:3105',
+        fetchFn,
+      )
+
+      expect(entry).toMatchObject({ name: 'revisions', reachable: true, status: 'down' })
+    })
+  })
+
+  describe('server-settings routes', () => {
+    let dir: string
+    let resolver: ServerSettingsResolver
+    let logger: { info: jest.Mock }
+
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-admin-settings-'))
+      resolver = new ServerSettingsResolver(new ServerSettingsStore(path.join(dir, 'server-settings.json')), {
+        assistant: { openaiApiKey: 'env-openai-key' },
+        updateCheckUrl: 'https://env.update.example.com',
+      })
+      logger = { info: jest.fn() }
+    })
+
+    afterEach(async () => {
+      await fs.rm(dir, { recursive: true, force: true })
+    })
+
+    const settingsController = () => makeController({ serverSettingsResolver: resolver, logger })
+
+    it('rejects a non-admin requestor with 403 on both GET and PUT', async () => {
+      await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.CoreUser }]))
+      expect(statusMock).toHaveBeenCalledWith(403)
+
+      await settingsController().setServerSettings(
+        { body: { ai: { anthropicApiKey: 'x' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.CoreUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect((await resolver.resolveAssistantConfig()).anthropicApiKey).toBeUndefined()
+    })
+
+    it('degrades to 503 when the resolver is not wired', async () => {
+      await makeController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+      expect(statusMock).toHaveBeenCalledWith(503)
+    })
+
+    it('GET returns the masked view (configured booleans, NEVER key material) with sources', async () => {
+      await resolver.applyPatch({ ai: { anthropicApiKey: 'persisted-secret' } })
+
+      await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+
+      const payload = jsonMock.mock.calls[0][0]
+      expect(JSON.stringify(payload)).not.toContain('persisted-secret')
+      expect(JSON.stringify(payload)).not.toContain('env-openai-key')
+      expect(payload.settings.ai).toMatchObject({ anthropicConfigured: true, openaiConfigured: true })
+      expect(payload.sources).toMatchObject({
+        'ai.anthropicApiKey': 'persisted',
+        'ai.openaiApiKey': 'env',
+        'updateCheck.url': 'env',
+        'nextcloudBackups.enabled': 'default',
+      })
+    })
+
+    it('PUT validates: bad URL, negative limit, empty key and empty body are 400s that persist nothing', async () => {
+      const cases = [
+        { updateCheck: { url: 'not-a-url' } },
+        { ai: { openaiBaseUrl: 'ftp://nope.example.com' } },
+        { ai: { dailyRequestLimit: -1 } },
+        { ai: { dailyRequestLimit: 1.5 } },
+        { ai: { anthropicApiKey: '' } },
+        { nextcloudBackups: { enabled: 'yes' } },
+        {},
+      ]
+      for (const body of cases) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect(await resolver.resolveUpdateCheckUrl()).toEqual('https://env.update.example.com')
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    it('PUT persists a partial patch (persisted WINS over env), audit-logs NAMES only, and returns the view', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            ai: { anthropicApiKey: 'sk-new-secret', dailyRequestLimit: 25 },
+            updateCheck: { url: 'https://persisted.update.example.com' },
+            nextcloudBackups: { enabled: true },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+      )
+
+      // Precedence: the persisted values now win over env on the next resolve.
+      expect((await resolver.resolveAssistantConfig()).anthropicApiKey).toEqual('sk-new-secret')
+      expect(await resolver.resolveUpdateCheckUrl()).toEqual('https://persisted.update.example.com')
+      expect(await resolver.resolveNextcloudBackupsEnabled()).toBe(true)
+
+      // Audit line: setting NAMES only — never values.
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          audit: 'admin.server-settings.update',
+          adminUuid: 'admin-1',
+          changedSettings: ['ai.anthropicApiKey', 'ai.dailyRequestLimit', 'updateCheck.url', 'nextcloudBackups.enabled'],
+        }),
+      )
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain('sk-new-secret')
+
+      // The response is the masked GET view.
+      const payload = jsonMock.mock.calls[0][0]
+      expect(JSON.stringify(payload)).not.toContain('sk-new-secret')
+      expect(payload.settings.ai).toMatchObject({ anthropicConfigured: true, dailyRequestLimit: 25 })
+      expect(payload.settings.updateCheck).toEqual({ url: 'https://persisted.update.example.com' })
+      expect(payload.settings.nextcloudBackups).toEqual({ enabled: true })
+    })
+
+    it('PUT with an explicit null CLEARS the persisted override (source falls back to env)', async () => {
+      await resolver.applyPatch({ updateCheck: { url: 'https://persisted.update.example.com' } })
+
+      await settingsController().setServerSettings(
+        { body: { updateCheck: { url: null } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+      )
+
+      expect(await resolver.resolveUpdateCheckUrl()).toEqual('https://env.update.example.com')
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.sources['updateCheck.url']).toEqual('env')
+    })
   })
 })
 

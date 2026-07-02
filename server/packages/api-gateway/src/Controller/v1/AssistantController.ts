@@ -12,6 +12,7 @@ import {
   resolveProvider,
 } from '../../Service/Assistant/providers/factory'
 import { ChatMessage, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
+import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 
 interface StreamRequestBody {
   provider?: string
@@ -54,8 +55,41 @@ export class AssistantController extends BaseHttpController {
     @inject(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT) private globalDailyLimit: number,
     @inject(TYPES.ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS) private transcriptionModels: string[],
     @inject(TYPES.ApiGateway_Redis) @optional() private redis?: IORedis.Redis,
+    // Standard Red Notes: runtime server settings (persisted overlay over env,
+    // persisted wins). Consulted PER REQUEST so admin-set keys/URLs/limits take
+    // effect immediately; the boot-time env values above are the fallback when
+    // the resolver is absent (unit tests) or its store is unreadable.
+    @inject(TYPES.ApiGateway_ServerSettingsResolver)
+    @optional()
+    private serverSettingsResolver?: ServerSettingsResolver,
   ) {
     super()
+  }
+
+  /** Effective provider config: persisted admin overrides win over env. */
+  private async effectiveProviderConfig(): Promise<AssistantProviderConfig> {
+    if (this.serverSettingsResolver) {
+      try {
+        return await this.serverSettingsResolver.resolveAssistantConfig()
+      } catch {
+        // Fall through to the env-bound config.
+      }
+    }
+
+    return this.providerConfig
+  }
+
+  /** Effective global daily ceiling: persisted admin override wins over env. */
+  private async effectiveGlobalDailyLimit(): Promise<number> {
+    if (this.serverSettingsResolver) {
+      try {
+        return await this.serverSettingsResolver.resolveAssistantDailyRequestLimit()
+      } catch {
+        // Fall through to the env-bound limit.
+      }
+    }
+
+    return this.globalDailyLimit
   }
 
   // `/transcription/models` is intentionally public, like `/config`: it returns only
@@ -70,7 +104,7 @@ export class AssistantController extends BaseHttpController {
 
   @httpGet('/config')
   async config(_request: Request, response: Response): Promise<void> {
-    const providers = configuredProviders(this.providerConfig)
+    const providers = configuredProviders(await this.effectiveProviderConfig())
 
     response.json({
       providers,
@@ -83,8 +117,9 @@ export class AssistantController extends BaseHttpController {
   // API key, so it must not be reachable without a session.
   @httpGet('/models', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async models(request: Request, response: Response): Promise<void> {
+    const providerConfig = await this.effectiveProviderConfig()
     const requested = typeof request.query.provider === 'string' ? request.query.provider : ''
-    const providers = configuredProviders(this.providerConfig)
+    const providers = configuredProviders(providerConfig)
     const provider = requested || (providers.includes(this.defaultProvider) ? this.defaultProvider : providers[0] || '')
 
     if (!provider || !providers.includes(provider)) {
@@ -94,7 +129,7 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
-    const models = await listProviderModels(provider, this.providerConfig)
+    const models = await listProviderModels(provider, providerConfig)
     response.json({ provider, models })
   }
 
@@ -102,7 +137,7 @@ export class AssistantController extends BaseHttpController {
   async usage(_request: Request, response: Response): Promise<void> {
     const userUuid = (response.locals.user as { uuid: string }).uuid
     const limits = this.resolveUserLimits(response)
-    const limit = this.effectiveLimit(limits)
+    const limit = this.effectiveLimit(limits, await this.effectiveGlobalDailyLimit())
     const dayKey = this.currentDayKey()
 
     let used = 0
@@ -136,7 +171,7 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
-    const limit = this.effectiveLimit(limits)
+    const limit = this.effectiveLimit(limits, await this.effectiveGlobalDailyLimit())
     const dayKey = this.currentDayKey()
 
     // 2) Meter per user per day. We INCR up front (so concurrent requests can't
@@ -169,7 +204,7 @@ export class AssistantController extends BaseHttpController {
 
     let provider
     try {
-      provider = resolveProvider(providerId, model, this.providerConfig)
+      provider = resolveProvider(providerId, model, await this.effectiveProviderConfig())
     } catch (error) {
       // The proxy never started, so refund the metered request.
       await this.refundUsage(userUuid, dayKey, limit)
@@ -239,18 +274,20 @@ export class AssistantController extends BaseHttpController {
     return reset.toISOString()
   }
 
-  private effectiveLimit(limits: ResolvedUserLimits): number {
+  private effectiveLimit(limits: ResolvedUserLimits, globalDailyLimit: number = this.globalDailyLimit): number {
     if (limits.perUserLimit !== undefined && limits.perUserLimit > 0) {
       return limits.perUserLimit
     }
     // IMPORTANT: a return value of 0 means UNLIMITED (no daily cap is enforced).
-    // The global ceiling comes from the ASSISTANT_DAILY_REQUEST_LIMIT env var,
-    // which defaults to 0 when unset/empty (see Bootstrap/Container.ts). So out of
-    // the box, AI usage is UNLIMITED. Operators who want to cap usage MUST set
-    // ASSISTANT_DAILY_REQUEST_LIMIT to a POSITIVE value (a per-user override via
-    // the AI_REQUEST_LIMIT setting takes precedence above). Any value <= 0 is
-    // intentionally treated as unlimited — do not "fix" this to a default cap.
-    return this.globalDailyLimit > 0 ? this.globalDailyLimit : 0
+    // The global ceiling comes from the ASSISTANT_DAILY_REQUEST_LIMIT env var —
+    // or a runtime admin override persisted via /v1/admin/server-settings, which
+    // WINS over the env value (see ServerSettingsResolver) — and defaults to 0
+    // when unset/empty (see Bootstrap/Container.ts). So out of the box, AI usage
+    // is UNLIMITED. Operators who want to cap usage MUST set a POSITIVE value
+    // (a per-user override via the AI_REQUEST_LIMIT setting takes precedence
+    // above). Any value <= 0 is intentionally treated as unlimited — do not
+    // "fix" this to a default cap.
+    return globalDailyLimit > 0 ? globalDailyLimit : 0
   }
 
   private async refundUsage(userUuid: string, dayKey: string, limit: number): Promise<void> {

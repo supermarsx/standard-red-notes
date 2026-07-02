@@ -83,4 +83,14 @@ export const TYPES = {
   // supervisord log directory). SERVER_LOGS_PATH configures the directory.
   ApiGateway_SERVER_LOGS_PATH: Symbol.for('ApiGateway_SERVER_LOGS_PATH'),
   ApiGateway_AdminLogsService: Symbol.for('ApiGateway_AdminLogsService'),
+  // Standard Red Notes: internal probe base URLs for the admin server-status
+  // endpoint (name -> http://host:port). Defaults match the single-container
+  // supervisord port layout (see docker/docker-entrypoint.sh); each is
+  // overridable via <SERVICE>_PROBE_URL for multi-service topologies.
+  ApiGateway_SERVICE_PROBE_URLS: Symbol.for('ApiGateway_SERVICE_PROBE_URLS'),
+  // Standard Red Notes: runtime-configurable server settings (persisted overlay
+  // over env; persisted wins). Store = the atomic JSON file, Resolver = the
+  // persisted→env→default read path consumers go through.
+  ApiGateway_ServerSettingsStore: Symbol.for('ApiGateway_ServerSettingsStore'),
+  ApiGateway_ServerSettingsResolver: Symbol.for('ApiGateway_ServerSettingsResolver'),
 }

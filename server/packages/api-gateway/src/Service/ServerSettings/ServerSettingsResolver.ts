@@ -1,0 +1,167 @@
+import { AssistantProviderConfig } from '../Assistant/providers/factory'
+import { openAiCompatibleConfigured } from '../Assistant/providers/openaiAuth'
+import { PersistedServerSettings, ServerSettingsPatch, ServerSettingsStore } from './ServerSettingsStore'
+
+/**
+ * Standard Red Notes: the single read path for runtime-configurable server
+ * settings. PRECEDENCE (documented contract): persisted (admin-set via
+ * PUT /v1/admin/server-settings) WINS over env; env is the fallback; hardcoded
+ * defaults apply last.
+ *
+ * Every `resolve*` method re-reads the persisted store, so consumers that call
+ * through here per request/use pick up admin changes WITHOUT a restart. The
+ * env baseline is captured once at boot (env vars cannot change mid-process
+ * anyway).
+ */
+
+export type ServerSettingSource = 'persisted' | 'env' | 'default'
+
+export interface EnvSettingsBaseline {
+  /** The env-derived assistant provider config (ASSISTANT_* vars). */
+  assistant: AssistantProviderConfig
+  /** ASSISTANT_DAILY_REQUEST_LIMIT; undefined when the env var is unset. */
+  assistantDailyRequestLimit?: number
+  /** UPDATE_CHECK_URL; undefined when unset. */
+  updateCheckUrl?: string
+  /**
+   * NEXTCLOUD_BACKUPS_ENABLED as visible to the gateway process; undefined when
+   * unset. In the single-container image every service shares the container
+   * environment, so the gateway sees the same operator env the auth service
+   * reads. Enforcement of the gate stays auth-side (see the auth package's
+   * TriggerNextcloudBackupForAllUsers, which reads the SAME persisted overlay
+   * file via SERVER_SETTINGS_PATH); this value only feeds the admin view.
+   */
+  nextcloudBackupsEnabled?: boolean
+}
+
+/** The masked admin view returned by GET/PUT /v1/admin/server-settings. */
+export interface ServerSettingsView {
+  settings: {
+    ai: {
+      anthropicConfigured: boolean
+      openaiConfigured: boolean
+      openaiBaseUrl: string | null
+      ollamaUrl: string | null
+      dailyRequestLimit: number | null
+      subscriptionMode: string | null
+    }
+    updateCheck: { url: string | null }
+    nextcloudBackups: { enabled: boolean }
+  }
+  sources: Record<string, ServerSettingSource>
+}
+
+export class ServerSettingsResolver {
+  constructor(
+    private readonly store: ServerSettingsStore,
+    private readonly envBaseline: EnvSettingsBaseline,
+  ) {}
+
+  /** Pass-through so route handlers only need the resolver injected. */
+  async applyPatch(patch: ServerSettingsPatch): Promise<void> {
+    await this.store.update(patch)
+  }
+
+  /**
+   * The effective assistant provider config: env baseline with the persisted
+   * overlay applied on top. Re-read per call so key/URL/limit changes take
+   * effect on the next request without a restart.
+   */
+  async resolveAssistantConfig(): Promise<AssistantProviderConfig> {
+    const persisted = await this.safeRead()
+    const ai = persisted.ai ?? {}
+
+    return {
+      ...this.envBaseline.assistant,
+      ...(ai.anthropicApiKey !== undefined ? { anthropicApiKey: ai.anthropicApiKey } : {}),
+      ...(ai.openaiApiKey !== undefined ? { openaiApiKey: ai.openaiApiKey } : {}),
+      ...(ai.openaiBaseUrl !== undefined ? { openaiBaseURL: ai.openaiBaseUrl } : {}),
+      ...(ai.ollamaUrl !== undefined ? { ollamaUrl: ai.ollamaUrl } : {}),
+    }
+  }
+
+  /** Effective global daily AI request ceiling. 0 = unlimited (the default). */
+  async resolveAssistantDailyRequestLimit(): Promise<number> {
+    const persisted = await this.safeRead()
+
+    return persisted.ai?.dailyRequestLimit ?? this.envBaseline.assistantDailyRequestLimit ?? 0
+  }
+
+  /** Effective UPDATE_CHECK_URL; undefined = feature not configured. */
+  async resolveUpdateCheckUrl(): Promise<string | undefined> {
+    const persisted = await this.safeRead()
+
+    return persisted.updateCheck?.url ?? this.envBaseline.updateCheckUrl
+  }
+
+  /** Effective Nextcloud-backups master gate (gateway-side VIEW; default OFF). */
+  async resolveNextcloudBackupsEnabled(): Promise<boolean> {
+    const persisted = await this.safeRead()
+
+    return persisted.nextcloudBackups?.enabled ?? this.envBaseline.nextcloudBackupsEnabled ?? false
+  }
+
+  /**
+   * The masked admin view: configured booleans for secrets (API keys are NEVER
+   * returned), plain values for non-secrets, plus a per-setting source map
+   * ('persisted' | 'env' | 'default') so the admin pane can show where each
+   * effective value comes from.
+   */
+  async view(): Promise<ServerSettingsView> {
+    const persisted = await this.safeRead()
+    const config = await this.resolveAssistantConfig()
+    const env = this.envBaseline
+
+    const ai = persisted.ai ?? {}
+    const sources: Record<string, ServerSettingSource> = {
+      'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
+      'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
+      'ai.openaiBaseUrl': this.source(ai.openaiBaseUrl, env.assistant.openaiBaseURL),
+      'ai.ollamaUrl': this.source(ai.ollamaUrl, env.assistant.ollamaUrl),
+      'ai.dailyRequestLimit': this.source(ai.dailyRequestLimit, env.assistantDailyRequestLimit),
+      'updateCheck.url': this.source(persisted.updateCheck?.url, env.updateCheckUrl),
+      'nextcloudBackups.enabled': this.source(persisted.nextcloudBackups?.enabled, env.nextcloudBackupsEnabled),
+    }
+
+    return {
+      settings: {
+        ai: {
+          anthropicConfigured: Boolean(config.anthropicApiKey),
+          openaiConfigured: openAiCompatibleConfigured(config),
+          openaiBaseUrl: config.openaiBaseURL ?? null,
+          ollamaUrl: config.ollamaUrl ?? null,
+          dailyRequestLimit: await this.resolveAssistantDailyRequestLimit(),
+          // env-only for now (ASSISTANT_OPENAI_AUTH_MODE); reported so the admin
+          // pane can render the subscription-mode state truthfully.
+          subscriptionMode: config.openaiAuthMode ?? null,
+        },
+        updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
+        nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
+      },
+      sources,
+    }
+  }
+
+  private source(persistedValue: unknown, envValue: unknown): ServerSettingSource {
+    if (persistedValue !== undefined) {
+      return 'persisted'
+    }
+    if (envValue !== undefined) {
+      return 'env'
+    }
+
+    return 'default'
+  }
+
+  /**
+   * A corrupt/unreadable settings file must never take a consumer down: fall
+   * back to the env baseline (as if nothing were persisted).
+   */
+  private async safeRead(): Promise<PersistedServerSettings> {
+    try {
+      return await this.store.read()
+    } catch {
+      return {}
+    }
+  }
+}

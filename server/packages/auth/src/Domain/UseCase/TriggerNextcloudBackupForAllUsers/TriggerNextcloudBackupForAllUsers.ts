@@ -27,12 +27,24 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     private timer: TimerInterface,
     private logger: Logger,
     private nextcloudBackupsEnabled: boolean,
+    // Standard Red Notes: OPTIONAL runtime override of the master gate. Resolves
+    // the admin-persisted server-settings overlay (written gateway-side via
+    // PUT /v1/admin/server-settings, read here through the shared
+    // SERVER_SETTINGS_PATH file). PRECEDENCE: a persisted admin value WINS over
+    // the boot-time env boolean above; `undefined` (no override persisted / no
+    // shared file) falls back to the env value. Consulted per execute() so an
+    // admin toggle takes effect on the next scheduled run without a restart.
+    private nextcloudBackupsEnabledOverride?: () => Promise<boolean | undefined>,
   ) {}
 
   async execute(dto: TriggerNextcloudBackupForAllUsersDTO): Promise<Result<void>> {
-    if (!this.nextcloudBackupsEnabled) {
+    const overrideEnabled = this.nextcloudBackupsEnabledOverride
+      ? await this.nextcloudBackupsEnabledOverride()
+      : undefined
+    const enabled = overrideEnabled ?? this.nextcloudBackupsEnabled
+    if (!enabled) {
       this.logger.info(
-        'Scheduled Nextcloud backups are disabled by the operator (NEXTCLOUD_BACKUPS_ENABLED). Skipping.',
+        'Scheduled Nextcloud backups are disabled by the operator (NEXTCLOUD_BACKUPS_ENABLED / admin server settings). Skipping.',
       )
 
       return Result.ok()

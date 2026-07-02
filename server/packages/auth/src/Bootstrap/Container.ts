@@ -427,6 +427,7 @@ import { TriggerEmailBackupForUser } from '../Domain/UseCase/TriggerEmailBackupF
 import { TriggerEmailBackupForAllUsers } from '../Domain/UseCase/TriggerEmailBackupForAllUsers/TriggerEmailBackupForAllUsers'
 import { TriggerNextcloudBackupForUser } from '../Domain/UseCase/TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
 import { TriggerNextcloudBackupForAllUsers } from '../Domain/UseCase/TriggerNextcloudBackupForAllUsers/TriggerNextcloudBackupForAllUsers'
+import { ServerSettingsOverlayReader } from '../Infra/FS/ServerSettingsOverlayReader'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -453,9 +454,16 @@ import { RedisSessionTokensCooldownRepository } from '../Infra/Redis/RedisSessio
 import { InMemorySessionTokensCooldownRepository } from '../Infra/InMemory/InMemorySessionTokensCooldownRepository'
 import { GetCooldownSessionTokens } from '../Domain/UseCase/GetCooldownSessionTokens/GetCooldownSessionTokens'
 import { VerifyUserServerPassword } from '../Domain/UseCase/VerifyUserServerPassword/VerifyUserServerPassword'
+import { buildSnsClientConfig, LazyDomainEventPublisher } from './LazyDomainEventPublisher'
 
 export class ContainerConfigLoader {
-  constructor(private mode: 'server' | 'worker' = 'server') {}
+  // Standard Red Notes: 'cli' is an additive lean-boot mode for the srn-admin
+  // bin. It behaves exactly like 'worker' (no migrations) except that it skips
+  // constructing the SNS/SQS/S3 clients and the SQS event subscriber, which the
+  // CLI never uses (domain-event publishing stays functional through a lazy
+  // publisher — see LazyDomainEventPublisher). 'server'/'worker' behavior is
+  // unchanged.
+  constructor(private mode: 'server' | 'worker' | 'cli' = 'server') {}
 
   async load(configuration?: {
     controllerConatiner?: ControllerContainerInterface
@@ -497,6 +505,8 @@ export class ContainerConfigLoader {
     const isConfiguredForHomeServer = env.get('MODE', true) === 'home-server'
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'
     const isConfiguredForHomeServerOrSelfHosting = isConfiguredForHomeServer || isConfiguredForSelfHosting
+    // Standard Red Notes: lean CLI boot (see constructor comment).
+    const isConfiguredForCli = this.mode === 'cli'
     const isConfiguredForInMemoryCache = env.get('CACHE_TYPE', true) === 'memory'
     const captchaServerUrl = env.get('CAPTCHA_SERVER_URL', true)
     const captchaUIUrl = env.get('CAPTCHA_UI_URL', true)
@@ -541,7 +551,11 @@ export class ContainerConfigLoader {
 
     container.bind<TimerInterface>(TYPES.Auth_Timer).toConstantValue(new Timer())
 
-    if (!isConfiguredForHomeServer) {
+    // Standard Red Notes: the CLI never consumes events and only rarely
+    // publishes one, so 'cli' mode skips constructing the SNS/SQS/S3 clients
+    // (publishing stays available lazily — see the DomainEventPublisher
+    // binding below).
+    if (!isConfiguredForHomeServer && !isConfiguredForCli) {
       const snsConfig: SNSClientConfig = {
         region: env.get('SNS_AWS_REGION', true),
       }
@@ -603,13 +617,24 @@ export class ContainerConfigLoader {
 
     container.bind(TYPES.Auth_SNS_TOPIC_ARN).toConstantValue(env.get('SNS_TOPIC_ARN', true))
 
-    container
-      .bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher)
-      .toConstantValue(
-        isConfiguredForHomeServer
-          ? directCallDomainEventPublisher
-          : new SNSDomainEventPublisher(container.get(TYPES.Auth_SNS), container.get(TYPES.Auth_SNS_TOPIC_ARN)),
+    // Standard Red Notes: lean CLI boot — many use-case bindings eagerly resolve
+    // the publisher at load time, but only fix-quota ever publishes. In 'cli'
+    // mode the SNS client + publisher are built on the FIRST publish so boot
+    // skips them while publishing stays correct.
+    let domainEventPublisher: DomainEventPublisherInterface
+    if (isConfiguredForHomeServer) {
+      domainEventPublisher = directCallDomainEventPublisher
+    } else if (isConfiguredForCli) {
+      domainEventPublisher = new LazyDomainEventPublisher(
+        () => new SNSDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), env.get('SNS_TOPIC_ARN', true)),
       )
+    } else {
+      domainEventPublisher = new SNSDomainEventPublisher(
+        container.get(TYPES.Auth_SNS),
+        container.get(TYPES.Auth_SNS_TOPIC_ARN),
+      )
+    }
+    container.bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher).toConstantValue(domainEventPublisher)
 
     // Mapping
     container
@@ -2257,6 +2282,16 @@ export class ContainerConfigLoader {
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<winston.Logger>(TYPES.Auth_Logger),
           container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
+          // Standard Red Notes: runtime admin override of the master gate. The
+          // api-gateway persists admin server settings to SERVER_SETTINGS_PATH
+          // (the docker entrypoint points both services at the same file); a
+          // persisted value WINS over the env boolean above. No shared file /
+          // env unset => undefined => the env value applies unchanged.
+          (() => {
+            const overlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
+
+            return () => overlayReader.nextcloudBackupsEnabled()
+          })(),
         ),
       )
     container
@@ -2297,7 +2332,10 @@ export class ContainerConfigLoader {
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
-    if (!isConfiguredForHomeServer) {
+    // Standard Red Notes: skipped in 'cli' mode — its CSV reader needs the S3
+    // client the lean CLI boot does not construct, and the srn-admin CLI never
+    // resolves this use case.
+    if (!isConfiguredForHomeServer && !isConfiguredForCli) {
       container
         .bind<DeleteAccountsFromCSVFile>(TYPES.Auth_DeleteAccountsFromCSVFile)
         .toConstantValue(
@@ -2703,7 +2741,10 @@ export class ContainerConfigLoader {
       container
         .bind<DomainEventMessageHandlerInterface>(TYPES.Auth_DomainEventMessageHandler)
         .toConstantValue(directCallEventMessageHandler)
-    } else {
+    } else if (!isConfiguredForCli) {
+      // Standard Red Notes: the SQS subscriber wiring needs the SQS client the
+      // lean 'cli' boot does not construct — and the CLI never consumes events
+      // (only bin/worker.ts resolves the subscriber).
       container
         .bind<DomainEventMessageHandlerInterface>(TYPES.Auth_DomainEventMessageHandler)
         .toConstantValue(new SQSEventMessageHandler(eventHandlers, container.get(TYPES.Auth_Logger)))
