@@ -12,6 +12,9 @@ module.exports = {
       prefix: '<rootDir>',
     }),
     '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
+    // Deep imports of pure toast modules resolve to real sources (unit-testable);
+    // the package root stays proxied since its index pulls in React components.
+    '^@standardnotes/toast/src/(.*)$': '<rootDir>/../toast/src/$1',
     '@standardnotes/toast': 'identity-obj-proxy',
     '@standardnotes/styles': 'identity-obj-proxy',
     '@simplewebauthn/browser': 'identity-obj-proxy',

@@ -35,7 +35,11 @@ const CompactRow: FunctionComponent<{
   onDismiss: (id: string) => void
 }> = ({ notification, isRead, onDismiss }) => (
   <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5 last:border-b-0">
-    <Icon type={LEVEL_ICON[notification.level]} className={classNames('flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+    {notification.icon ? (
+      <div className="flex flex-shrink-0 items-center">{notification.icon}</div>
+    ) : (
+      <Icon type={LEVEL_ICON[notification.level]} className={classNames('flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+    )}
     <span className="min-w-0 flex-grow truncate text-sm font-semibold text-text" title={notification.title}>
       {notification.title}
     </span>

@@ -22,6 +22,7 @@ import {
   definitionsForMetric,
 } from './achievementDefinitions'
 import { achievementUnlockToastIcon } from './AchievementTrophy'
+import { recordAchievementNotification } from '../Notifications/achievementNotifications'
 
 const STATE_STORAGE_KEY = 'sn_achievements_state'
 const CONFIG_STORAGE_KEY = 'sn_achievements_config'
@@ -180,6 +181,14 @@ class AchievementsServiceImpl {
       } catch {
         // Fire-and-forget: a toast failure must never break instrumentation.
       }
+    }
+    // Also record the unlock into the centralized notifications feed so it shows
+    // (unread, with the tier-colored trophy) in the notifications pane. Recorded
+    // regardless of the toast toggle — that flag only governs the popup.
+    try {
+      recordAchievementNotification(def.id)
+    } catch {
+      // Fire-and-forget.
     }
     // Maintain the meta "unlockedCount" counter, then re-evaluate the meta
     // achievements that depend on it (Pin Collector, Completionist). We guard

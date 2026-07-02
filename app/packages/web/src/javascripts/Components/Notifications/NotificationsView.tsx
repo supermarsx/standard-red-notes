@@ -43,7 +43,11 @@ const FullNotificationRow: FunctionComponent<{
   onDismiss: (id: string) => void
 }> = ({ notification, isRead, onDismiss }) => (
   <div className="flex gap-3 rounded-md border border-border bg-default p-3.5">
-    <Icon type={LEVEL_ICON[notification.level]} className={classNames('mt-0.5 flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+    {notification.icon ? (
+      <div className="mt-0.5 flex-shrink-0">{notification.icon}</div>
+    ) : (
+      <Icon type={LEVEL_ICON[notification.level]} className={classNames('mt-0.5 flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+    )}
     <div className="min-w-0 flex-grow">
       <div className="flex items-center gap-2">
         <span className="text-sm font-bold text-text">{notification.title}</span>

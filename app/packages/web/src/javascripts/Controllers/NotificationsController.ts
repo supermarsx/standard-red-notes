@@ -1,8 +1,16 @@
 import { ApplicationEvent } from '@standardnotes/snjs'
-import { addToast, ToastType } from '@standardnotes/toast'
+import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
+import type { ReactNode } from 'react'
 import { WebApplication } from '@/Application/WebApplication'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
+import { ACHIEVEMENTS } from '@/Achievements/achievementDefinitions'
+import { achievementUnlockToastIcon } from '@/Achievements/AchievementTrophy'
+import {
+  listAchievementNotifications,
+  removeAchievementNotification,
+  subscribeAchievementNotifications,
+} from '@/Notifications/achievementNotifications'
 import {
   loadNotificationsSettings,
   NotificationsSettings,
@@ -26,9 +34,14 @@ export type AppNotification = {
   action?: NotificationAction
   /** Whether the user may dismiss this notification with the X button. */
   dismissable?: boolean
+  /** Optional custom icon (e.g. the tier-colored achievement trophy). */
+  icon?: ReactNode
 }
 
 const READ_STORAGE_KEY = 'standardnotes.notifications.read.v1'
+
+/** Notification-id prefix for unlocked-achievement entries. */
+const ACHIEVEMENT_NOTIFICATION_PREFIX = 'achievement:'
 
 /**
  * Standard Red Notes: centralizes the app's scattered alerts/warnings into one
@@ -41,6 +54,9 @@ const READ_STORAGE_KEY = 'standardnotes.notifications.read.v1'
  *  - "Sign in needed" — involuntary re-auth (always shown).
  *  - "You're offline" — `navigator.onLine` loss.
  *  - "Sync problem" / "Syncing paused" — sync failure / rate limiting.
+ *  - "Achievement unlocked" — persisted unlock feed (see
+ *    achievementNotifications.ts), rendered with the tier-colored trophy;
+ *    dismissing removes the record permanently.
  *
  * Read/unread: notifications carry a persisted read flag (keyed by their stable
  * condition id). The count bubble reflects UNREAD only. When/how a shown alert
@@ -58,14 +74,20 @@ export class NotificationsController extends AbstractViewController {
 
   /** Ids the user has dismissed; cleared when the underlying condition clears. */
   private dismissedIds = new Set<string>()
-  /** Ids the user has read; persisted; cleared when the condition clears. */
-  private readIds = new Set<string>(this.loadReadIds())
+  /**
+   * Ids the user has read; persisted; cleared when the condition clears.
+   * An observable set so `unreadCount` (and the unread badge) reacts to reads
+   * without needing to touch the notifications array.
+   */
+  private readIds = observable.set<string>(this.loadReadIds())
 
   private syncFailing = false
   private syncRateLimited = false
 
   private reminderTimer: ReturnType<typeof setInterval> | null = null
   private readTimer: ReturnType<typeof setTimeout> | null = null
+  /** Id of the currently-outstanding "unread notifications" reminder toast. */
+  private reminderToastId: string | null = null
 
   constructor(private application: WebApplication) {
     super(application.events)
@@ -118,6 +140,22 @@ export class NotificationsController extends AbstractViewController {
       ),
     )
 
+    // New achievement unlocks land in the persisted feed; fold them in live.
+    this.disposers.push(subscribeAchievementNotifications(() => this.recompute()))
+
+    // A reminder toast must never outlive the unread items it advertises: as
+    // soon as everything is read/dismissed/cleared, retract it.
+    this.disposers.push(
+      reaction(
+        () => this.unreadCount,
+        (unread) => {
+          if (unread === 0) {
+            this.retractReminderToast()
+          }
+        },
+      ),
+    )
+
     const onOnline = () => this.recompute()
     const onOffline = () => this.recompute()
     window.addEventListener('online', onOnline)
@@ -156,27 +194,25 @@ export class NotificationsController extends AbstractViewController {
     const candidates = this.buildCandidates()
     const candidateIds = new Set(candidates.map((notification) => notification.id))
 
-    // Forget dismissals/reads whose condition has cleared.
-    for (const dismissedId of Array.from(this.dismissedIds)) {
-      if (!candidateIds.has(dismissedId)) {
-        this.dismissedIds.delete(dismissedId)
-      }
-    }
-    let readChanged = false
-    for (const readId of Array.from(this.readIds)) {
-      if (!candidateIds.has(readId)) {
-        this.readIds.delete(readId)
-        readChanged = true
-      }
-    }
-    if (readChanged) {
-      this.persistReadIds()
-    }
-
-    const next = candidates.filter((notification) => !this.dismissedIds.has(notification.id))
-
     runInAction(() => {
-      this.notifications = next
+      // Forget dismissals/reads whose condition has cleared.
+      for (const dismissedId of Array.from(this.dismissedIds)) {
+        if (!candidateIds.has(dismissedId)) {
+          this.dismissedIds.delete(dismissedId)
+        }
+      }
+      let readChanged = false
+      for (const readId of Array.from(this.readIds)) {
+        if (!candidateIds.has(readId)) {
+          this.readIds.delete(readId)
+          readChanged = true
+        }
+      }
+      if (readChanged) {
+        this.persistReadIds()
+      }
+
+      this.notifications = candidates.filter((notification) => !this.dismissedIds.has(notification.id))
     })
   }
 
@@ -250,14 +286,36 @@ export class NotificationsController extends AbstractViewController {
       }
     }
 
+    // Unlocked achievements (persisted event feed; newest first, after alerts).
+    // Dismissing one removes its record — see dismiss().
+    const achievementRecords = listAchievementNotifications()
+    for (let i = achievementRecords.length - 1; i >= 0; i--) {
+      const record = achievementRecords[i]
+      const definition = ACHIEVEMENTS.find((achievement) => achievement.id === record.achievementId)
+      if (!definition) {
+        continue
+      }
+      notifications.push({
+        id: `${ACHIEVEMENT_NOTIFICATION_PREFIX}${definition.id}`,
+        title: 'Achievement unlocked',
+        message: definition.description ? `${definition.name} — ${definition.description}` : definition.name,
+        level: 'info',
+        icon: achievementUnlockToastIcon(definition),
+        dismissable: true,
+      })
+    }
+
     return notifications
   }
 
   dismiss = (id: string): void => {
+    if (id.startsWith(ACHIEVEMENT_NOTIFICATION_PREFIX)) {
+      // Achievement entries are backed by a persisted record — remove it so the
+      // dismissal survives reloads (the feed subscription then recomputes).
+      removeAchievementNotification(id.slice(ACHIEVEMENT_NOTIFICATION_PREFIX.length))
+    }
     this.dismissedIds.add(id)
-    runInAction(() => {
-      this.notifications = this.notifications.filter((notification) => notification.id !== id)
-    })
+    this.notifications = this.notifications.filter((notification) => notification.id !== id)
   }
 
   /** Mark every currently-shown notification read (persisted). */
@@ -271,10 +329,6 @@ export class NotificationsController extends AbstractViewController {
     }
     if (changed) {
       this.persistReadIds()
-      // Touch the observable so `unreadCount` consumers re-render.
-      runInAction(() => {
-        this.notifications = [...this.notifications]
-      })
     }
   }
 
@@ -360,18 +414,35 @@ export class NotificationsController extends AbstractViewController {
   private maybeRemind(): void {
     const unread = this.unreadCount
     if (unread <= 0) {
+      this.retractReminderToast()
       return
     }
-    addToast({
+    // Never stack reminders: retract any outstanding one before raising anew.
+    this.retractReminderToast()
+    this.reminderToastId = addToast({
       type: ToastType.Regular,
       message: `You have ${unread} unread notification${unread === 1 ? '' : 's'} — open Notifications to review.`,
       actions: [
         {
           label: 'View',
-          handler: () => this.openTab(),
+          handler: (toastId) => {
+            dismissToast(toastId)
+            if (this.reminderToastId === toastId) {
+              this.reminderToastId = null
+            }
+            this.openTab()
+          },
         },
       ],
     })
+  }
+
+  /** Dismiss the outstanding unread-reminder toast, if any. */
+  private retractReminderToast(): void {
+    if (this.reminderToastId) {
+      dismissToast(this.reminderToastId)
+      this.reminderToastId = null
+    }
   }
 
   private clearTimers(): void {
@@ -380,6 +451,7 @@ export class NotificationsController extends AbstractViewController {
       clearInterval(this.reminderTimer)
       this.reminderTimer = null
     }
+    this.retractReminderToast()
   }
 
   private loadReadIds(): string[] {
