@@ -119,11 +119,22 @@ export class ContainerConfigLoader {
     if (!isConfiguredForInMemoryCache) {
       const redisUrl = env.get('REDIS_URL')
       const isRedisInClusterMode = redisUrl.indexOf(',') > 0
+      // Standard Red Notes: bounded exponential reconnection backoff (cap 5s) plus
+      // an explicit per-request retry ceiling so a brief Redis blip self-heals
+      // instead of wedging the process. No BullMQ here, so a finite
+      // maxRetriesPerRequest is safe. Connection target/secrets are unchanged.
+      const redisRetryStrategy = (times: number): number => Math.min(times * 200, 5000)
       let redis
       if (isRedisInClusterMode) {
-        redis = new Redis.Cluster(redisUrl.split(','))
+        redis = new Redis.Cluster(redisUrl.split(','), {
+          clusterRetryStrategy: redisRetryStrategy,
+          redisOptions: { maxRetriesPerRequest: 20 },
+        })
       } else {
-        redis = new Redis(redisUrl)
+        redis = new Redis(redisUrl, {
+          maxRetriesPerRequest: 20,
+          retryStrategy: redisRetryStrategy,
+        })
       }
       container.bind(TYPES.ApiGateway_Redis).toConstantValue(redis)
     }

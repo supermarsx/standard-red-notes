@@ -36,12 +36,25 @@ export class DuplicateItemSyncedEventHandler implements DomainEventHandlerInterf
     )
 
     if (existingOriginalItem !== null) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createRevisionsCopyRequestedEvent(event.payload.userUuid, {
-          originalItemUuid: existingOriginalItem.id.toString(),
-          newItemUuid: item.id.toString(),
-        }),
-      )
+      // Standard Red Notes: the duplicated item is already persisted. Publishing
+      // the follow-on revisions-copy event is best-effort — if the event bus is
+      // briefly unavailable we log and move on rather than letting the throw
+      // bubble out of the event handler and wedge the subscriber. This only
+      // affects revision-copy propagation, not the persisted item itself.
+      try {
+        await this.domainEventPublisher.publish(
+          this.domainEventFactory.createRevisionsCopyRequestedEvent(event.payload.userUuid, {
+            originalItemUuid: existingOriginalItem.id.toString(),
+            newItemUuid: item.id.toString(),
+          }),
+        )
+      } catch (error) {
+        this.logger.error(
+          `Failed to publish revisions copy requested event for item ${item.id.toString()} (item already persisted). Error: ${
+            (error as Error).message
+          }`,
+        )
+      }
     }
   }
 }

@@ -18,8 +18,28 @@ import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { parseTrustProxyValue } from '../src/Bootstrap/TrustProxy'
 
+// Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
+// rejection or uncaught exception leaves the process in an unknown state, so we
+// log a clear FATAL line (with stack) and exit non-zero to let the supervisor
+// restart us. This keeps crash-loops VISIBLE instead of silently swallowed.
+let fatalLogger: { error: (message: string) => void } = console
+const logFatal = (label: string, error: unknown): void => {
+  const err = error instanceof Error ? error : new Error(String(error))
+  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+}
+process.on('unhandledRejection', (reason: unknown) => {
+  logFatal('unhandledRejection', reason)
+  process.exit(1)
+})
+process.on('uncaughtException', (error: Error) => {
+  logFatal('uncaughtException', error)
+  process.exit(1)
+})
+
 const container = new ContainerConfigLoader('server')
-void container.load().then((container) => {
+void container
+  .load()
+  .then((container) => {
   const env: Env = new Env()
   env.load()
 
@@ -131,6 +151,7 @@ void container.load().then((container) => {
   })
 
   const logger: winston.Logger = container.get(TYPES.Files_Logger)
+  fatalLogger = logger
 
   server.setErrorConfig((app) => {
     app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
@@ -159,4 +180,8 @@ void container.load().then((container) => {
   })
 
   logger.info(`Server started on port ${process.env.PORT}`)
-})
+  })
+  .catch((error: unknown) => {
+    logFatal('startup', error)
+    process.exit(1)
+  })

@@ -52,8 +52,29 @@ import { TriggerDueEmailReminders } from '../src/Domain/UseCase/TriggerDueEmailR
 const DEAD_MAN_SWITCH_SCAN_INTERVAL_MS = 5 * 60 * 1000
 const EMAIL_REMINDER_SCAN_INTERVAL_MS = 60 * 1000
 
+// Standard Red Notes: fail-fast global crash handlers. Preserve fail-fast for
+// config/DI faults (a recent auth DI crash-loop was fixed by failing fast) — a
+// genuinely unhandled rejection or uncaught exception is logged as a clear FATAL
+// line (with stack) and the process exits non-zero so the supervisor restarts
+// it. This keeps crash-loops VISIBLE instead of silently swallowed.
+let fatalLogger: { error: (message: string) => void } = console
+const logFatal = (label: string, error: unknown): void => {
+  const err = error instanceof Error ? error : new Error(String(error))
+  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+}
+process.on('unhandledRejection', (reason: unknown) => {
+  logFatal('unhandledRejection', reason)
+  process.exit(1)
+})
+process.on('uncaughtException', (error: Error) => {
+  logFatal('uncaughtException', error)
+  process.exit(1)
+})
+
 const container = new ContainerConfigLoader()
-void container.load().then(async (container) => {
+void container
+  .load()
+  .then(async (container) => {
   dayjs.extend(utc)
 
   const env: Env = new Env()
@@ -73,6 +94,7 @@ void container.load().then(async (container) => {
   })
 
   const logger: winston.Logger = container.get(TYPES.Auth_Logger)
+  fatalLogger = logger
 
   server.setErrorConfig((app) => {
     app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
@@ -250,4 +272,8 @@ void container.load().then(async (container) => {
   })
 
   logger.info(`Server started on port ${process.env.PORT}`)
-})
+  })
+  .catch((error: unknown) => {
+    logFatal('startup', error)
+    process.exit(1)
+  })

@@ -27,8 +27,29 @@ import { SyncResponseFactoryResolverInterface } from '../src/Domain/Item/SyncRes
 import { SyncResponse20200115 } from '../src/Domain/Item/SyncResponse/SyncResponse20200115'
 import { CheckForTrafficAbuse } from '../src/Domain/UseCase/Syncing/CheckForTrafficAbuse/CheckForTrafficAbuse'
 
+// Standard Red Notes: fail-fast global crash handlers. Transient DB/Redis blips
+// self-heal via the ioredis retryStrategy / TypeORM pool; but a genuinely
+// unhandled rejection or uncaught exception leaves the process in an unknown
+// state, so we log a clear FATAL line (with stack) and exit non-zero to let the
+// supervisor restart us. This makes crash-loops VISIBLE instead of swallowed.
+let fatalLogger: { error: (message: string) => void } = console
+const logFatal = (label: string, error: unknown): void => {
+  const err = error instanceof Error ? error : new Error(String(error))
+  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+}
+process.on('unhandledRejection', (reason: unknown) => {
+  logFatal('unhandledRejection', reason)
+  process.exit(1)
+})
+process.on('uncaughtException', (error: Error) => {
+  logFatal('uncaughtException', error)
+  process.exit(1)
+})
+
 const container = new ContainerConfigLoader()
-void container.load().then((container) => {
+void container
+  .load()
+  .then((container) => {
   const env: Env = new Env()
   env.load()
 
@@ -71,6 +92,7 @@ void container.load().then((container) => {
   })
 
   const logger: winston.Logger = container.get(TYPES.Sync_Logger)
+  fatalLogger = logger
 
   server.setErrorConfig((app) => {
     app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
@@ -158,4 +180,8 @@ void container.load().then((container) => {
   })
 
   logger.info(`Server started on port ${process.env.PORT}`)
-})
+  })
+  .catch((error: unknown) => {
+    logFatal('startup', error)
+    process.exit(1)
+  })

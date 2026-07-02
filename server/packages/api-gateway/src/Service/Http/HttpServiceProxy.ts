@@ -90,11 +90,17 @@ export class HttpServiceProxy implements ServiceProxyInterface {
       }
     } catch (error) {
       const requestDidNotMakeIt = this.requestTimedOutOrDidNotReachDestination(error as Record<string, unknown>)
-      const tooManyRetryAttempts = dto.retryAttempt && dto.retryAttempt > 2
+      const currentAttempt = dto.retryAttempt ?? 0
+      const tooManyRetryAttempts = currentAttempt > 2
       if (!tooManyRetryAttempts && requestDidNotMakeIt) {
-        await this.timer.sleep(50)
+        // Standard Red Notes: bounded exponential backoff (base 100ms, capped at
+        // 5s) with light jitter instead of a fixed 50ms delay, so a brief auth
+        // blip self-heals without retrying in lock-step. Attempt cap unchanged.
+        const backoffMs = Math.min(100 * 2 ** currentAttempt, 5000)
+        const jitterMs = Math.floor(Math.random() * 50)
+        await this.timer.sleep(backoffMs + jitterMs)
 
-        const nextRetryAttempt = dto.retryAttempt ? dto.retryAttempt + 1 : 1
+        const nextRetryAttempt = currentAttempt + 1
 
         return this.validateSession({
           headers: dto.headers,

@@ -111,16 +111,39 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       }
 
       if (existingItem) {
-        const udpatedItemOrError = await this.updateExistingItem.execute({
-          existingItem,
-          itemHash,
-          sessionUuid: dto.sessionUuid,
-          performingUserUuid: dto.userUuid,
-          isFreeUser: dto.isFreeUser,
-        })
-        if (udpatedItemOrError.isFailed()) {
+        // Standard Red Notes: wrap the update path symmetrically with the
+        // save-new path below. UpdateExistingItem.execute normally returns a
+        // failed Result on error, but a thrown/rejected execution (e.g. a
+        // transient DB error) would otherwise propagate as an unhandled
+        // rejection and abort the whole batch. Turn it into a per-item conflict
+        // instead — the item is NOT pushed into savedItems, so we never ack a
+        // save that did not persist; the client retries it on the next sync.
+        try {
+          const udpatedItemOrError = await this.updateExistingItem.execute({
+            existingItem,
+            itemHash,
+            sessionUuid: dto.sessionUuid,
+            performingUserUuid: dto.userUuid,
+            isFreeUser: dto.isFreeUser,
+          })
+          if (udpatedItemOrError.isFailed()) {
+            this.logger.error(
+              `[${dto.userUuid}] Updating item ${itemHash.props.uuid} failed. Error: ${udpatedItemOrError.getError()}`,
+            )
+
+            conflicts.push({
+              unsavedItem: itemHash,
+              type: ConflictType.UuidConflict,
+            })
+
+            continue
+          }
+          const updatedItem = udpatedItemOrError.getValue()
+
+          savedItems.push(updatedItem)
+        } catch (error) {
           this.logger.error(
-            `[${dto.userUuid}] Updating item ${itemHash.props.uuid} failed. Error: ${udpatedItemOrError.getError()}`,
+            `[${dto.userUuid}] Updating item ${itemHash.props.uuid} threw. Error: ${(error as Error).message}`,
           )
 
           conflicts.push({
@@ -130,9 +153,6 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
           continue
         }
-        const updatedItem = udpatedItemOrError.getValue()
-
-        savedItems.push(updatedItem)
       } else {
         try {
           const newItemOrError = await this.saveNewItem.execute({
@@ -178,7 +198,27 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     // caught up); otherwise it discards the push and reconciles over HTTP.
     const baseSyncToken = this.calculateSyncToken(lastUpdatedTimestamp, [])
 
-    await this.notifyOtherClientsOfTheUserThatItemsChanged(dto, savedItems, lastUpdatedTimestamp, syncToken, baseSyncToken)
+    // Standard Red Notes: the items above are already durably persisted. Client
+    // notification / realtime push is best-effort — if it throws (e.g. a Redis
+    // publish blip) we must NOT turn a successful save into a failed request.
+    // Swallow-and-log only the post-persist notification; other clients will pick
+    // the change up on their next regular sync. (The actual persist errors above
+    // are still surfaced as conflicts, not swallowed here.)
+    try {
+      await this.notifyOtherClientsOfTheUserThatItemsChanged(
+        dto,
+        savedItems,
+        lastUpdatedTimestamp,
+        syncToken,
+        baseSyncToken,
+      )
+    } catch (error) {
+      this.logger.error(
+        `[${dto.userUuid}] Notifying other clients of changed items failed post-persist (items already saved). Error: ${
+          (error as Error).message
+        }`,
+      )
+    }
 
     return Result.ok({
       savedItems,

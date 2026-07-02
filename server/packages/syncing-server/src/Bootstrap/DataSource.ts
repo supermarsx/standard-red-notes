@@ -96,6 +96,19 @@ export class AppDataSource {
         username: inReplicaMode ? undefined : this.configuration.env.get('DB_USERNAME'),
         password: inReplicaMode ? undefined : this.configuration.env.get('DB_PASSWORD'),
         database: inReplicaMode ? undefined : this.configuration.env.get('DB_DATABASE'),
+        // Standard Red Notes: sane, bounded connection pool (env-overridable) plus
+        // TCP keep-alive + a connect timeout so a brief DB blip fails fast and the
+        // pool self-heals dead sockets instead of the process wedging on a stalled
+        // connection. Connection target/credentials are unchanged.
+        poolSize: this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+          ? +this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+          : 20,
+        extra: {
+          waitForConnections: true,
+          connectTimeout: 10_000,
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 10_000,
+        },
       }
 
       this._dataSource = new DataSource(mySQLDataSourceOptions)

@@ -60,8 +60,28 @@ import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
+// Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
+// rejection or uncaught exception leaves the process in an unknown state, so we
+// log a clear FATAL line (with stack) and exit non-zero to let the supervisor
+// restart us. This keeps crash-loops VISIBLE instead of silently swallowed.
+let fatalLogger: { error: (message: string) => void } = console
+const logFatal = (label: string, error: unknown): void => {
+  const err = error instanceof Error ? error : new Error(String(error))
+  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+}
+process.on('unhandledRejection', (reason: unknown) => {
+  logFatal('unhandledRejection', reason)
+  process.exit(1)
+})
+process.on('uncaughtException', (error: Error) => {
+  logFatal('uncaughtException', error)
+  process.exit(1)
+})
+
 const container = new ContainerConfigLoader()
-void container.load().then((container) => {
+void container
+  .load()
+  .then((container) => {
   const env: Env = new Env()
   env.load()
 
@@ -70,6 +90,7 @@ void container.load().then((container) => {
     : '50mb'
 
   const logger: winston.Logger = container.get(TYPES.ApiGateway_Logger)
+  fatalLogger = logger
 
   const server = new InversifyExpressServer(container)
 
@@ -318,4 +339,8 @@ void container.load().then((container) => {
   })
 
   logger.info(`Server started on port ${process.env.PORT}`)
-})
+  })
+  .catch((error: unknown) => {
+    logFatal('startup', error)
+    process.exit(1)
+  })

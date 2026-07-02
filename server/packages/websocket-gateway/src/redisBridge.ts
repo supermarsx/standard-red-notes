@@ -25,6 +25,9 @@ export function startRedisBridge<S extends SendableSocket>(
     // Keep the process alive but don't crash on transient Redis outages.
     lazyConnect: false,
     maxRetriesPerRequest: null,
+    // Standard Red Notes: bounded exponential reconnection backoff (cap 5s) so a
+    // brief Redis blip self-heals instead of reconnecting in a tight loop.
+    retryStrategy: (times: number) => Math.min(times * 200, 5000),
   })
 
   client.on('error', (err) => {
