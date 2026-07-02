@@ -175,7 +175,7 @@ cd standard-red-notes
 ```
 
 `setup` generates a complete `.env` with secure secrets; `--up` then brings the
-stack up (web app, server, MySQL, Redis, LocalStack). When it finishes, open
+stack up (web app, server, MySQL, Redis, floci as the SNS/SQS emulator). When it finishes, open
 **<http://localhost:3001>** and choose **Register** — every feature is included,
 nothing to purchase.
 

@@ -83,18 +83,20 @@ That's it. To stop the stack later: `docker compose down`.
 | `server`            | built from `./server`          | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Internal-only — publishes NO host ports; the `app` front door proxies the API + websocket (container port 3000) and files (container port 3104) same-origin. |
 | `db`                | `mariadb:11`                   | Primary datastore for accounts, notes, sync, and revisions. |
 | `cache`             | `redis:8-alpine`               | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file. |
-| `localstack`        | `localstack/localstack:4`      | Local AWS SNS/SQS emulator. The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on first start (see below). |
+| `floci`             | `floci/floci:1.5.29-compat`    | Local AWS SNS/SQS emulator ([floci.io](https://floci.io), MIT). The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on every start (see below). Replaces LocalStack: no auth token required (LocalStack 2026.3.0+ demands one even for SNS/SQS, which is why we last pinned `localstack:4.4.0`), and it is far lighter (single native binary vs a Python runtime). It is LocalStack wire-compatible, so switching back only means swapping the image — see the escape-hatch comment in `docker-compose.yml`. |
 | `mcp`               | built from `./mcp`             | Optional MCP stdio bridge. Only runs with the `mcp` profile: `docker compose --profile mcp run --rm mcp`. |
 
-### The localstack bootstrap
+### The SNS/SQS bootstrap
 
-On first start, localstack runs
-`server/docker/localstack_bootstrap.sh` (mounted into its `init/ready.d`
-directory). That script creates the SNS topics and SQS queues and wires up the
-subscriptions the server relies on - including the `websocket-local-queue` that
-the realtime gateway consumes. This bootstrap only runs when the localstack data
-volume is empty (a fresh start). See [Troubleshooting](#troubleshooting) if
-realtime updates aren't flowing.
+On every start, floci runs
+`server/docker/localstack_bootstrap.sh` (mounted into its LocalStack-compatible
+`init/ready.d` directory — the script name is historical). That script creates
+the SNS topics and SQS queues and wires up the subscriptions the server relies
+on - including the `websocket-local-queue` that the realtime gateway consumes.
+floci's queue state is in-memory, so the bootstrap re-runs on each container
+start (all its calls are idempotent) — there is no emulator data volume to
+manage. See [Troubleshooting](#troubleshooting) if realtime updates aren't
+flowing.
 
 ---
 
@@ -416,7 +418,7 @@ docker compose down
 
 # Upgrade: pull newer base images and rebuild the app/server images
 git pull
-docker compose pull            # refresh mariadb / redis / localstack images
+docker compose pull            # refresh mariadb / redis / floci images
 docker compose up -d --build   # rebuild app/server/gateway and restart
 ```
 
@@ -436,7 +438,6 @@ and container rebuilds:
 | `mariadb-data`    | The MariaDB database - **all accounts, notes, and revisions**. | The one to back up. |
 | `redis-data`      | Redis append-only persistence (cache/sessions/pub-sub). | Safe to lose; rebuilt at runtime. |
 | `uploads`         | Uploaded file attachments stored by the files service. | Back this up alongside the DB if you use file uploads. |
-| `localstack-data` | localstack's SNS/SQS state. | Recreated by the bootstrap on a fresh volume. |
 | `server-logs`     | Server process logs. | Disposable. |
 | `mcp-data`        | MCP bridge local state (only with the `mcp` profile). | Disposable. |
 
@@ -487,21 +488,23 @@ long `start_period` (90s) because it boots several processes under supervisord;
 give it a minute on first run before assuming failure.
 
 **Realtime updates / the websocket gateway aren't working after a reset.**
-The localstack queues are created by the bootstrap script *only when the
-`localstack-data` volume is empty*. If you cleared volumes or the bootstrap
-didn't run, recreate localstack with a fresh volume:
+The SNS topics and SQS queues are created by the bootstrap script on *every*
+floci start (its state is in-memory). If the bootstrap didn't run or something
+looks wrong, just restart the emulator:
 
 ```bash
-docker compose rm -sf localstack
-docker volume rm standard-red-notes_localstack-data
-docker compose up -d localstack
+docker compose restart floci
 ```
 
-Confirm the queues exist:
+Confirm the queues exist (the `-compat` image ships `awslocal`):
 
 ```bash
-docker compose exec localstack awslocal sqs list-queues
+docker compose exec floci awslocal sqs list-queues
 ```
+
+If you previously ran the LocalStack-based stack, a leftover
+`standard-red-notes_localstack-data` volume can be deleted — floci doesn't use
+it: `docker volume rm standard-red-notes_localstack-data`.
 
 **"Port is already allocated" on startup.**
 Another process owns one of your host ports. Change the `*_PORT` values in

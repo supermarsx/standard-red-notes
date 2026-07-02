@@ -8,7 +8,7 @@ services:
       NODE_ENV: production
       VERSION: snjs-test
       SNS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:payments-local-topic
-      SNS_ENDPOINT: http://localstack:4566
+      SNS_ENDPOINT: http://floci:4566
       SNS_DISABLE_SSL: true
       SNS_SECRET_ACCESS_KEY: x
       SNS_ACCESS_KEY_ID: x
@@ -32,20 +32,22 @@ services:
     networks:
       - standardnotes_self_hosted
 
-  localstack:
-    image: localstack/localstack:3.0
-    container_name: localstack-ci
+  # SNS/SQS emulator (LocalStack replacement — no auth token, LocalStack
+  # wire-compatible: port 4566, init/ready.d hooks; -compat variant ships
+  # awslocal for the bootstrap script). Escape hatch: localstack/localstack:4.4.0.
+  floci:
+    image: floci/floci:1.5.29-compat
+    container_name: floci-ci
     expose:
       - 4566
     restart: unless-stopped
-    environment:
-      - SERVICES=sns,sqs
-      - HOSTNAME_EXTERNAL=localstack
-      - LS_LOG=warn
     volumes:
       - ./docker/localstack_bootstrap.sh:/etc/localstack/init/ready.d/localstack_bootstrap.sh
     networks:
-      - standardnotes_self_hosted
+      standardnotes_self_hosted:
+        # Old hostname kept answering for anything still pointing at `localstack`.
+        aliases:
+          - localstack
 
   db:
     image: mysql:8

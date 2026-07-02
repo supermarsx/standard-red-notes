@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# SNS/SQS bootstrap for the local AWS emulator. Historically written for
+# LocalStack; it now runs unchanged under floci (floci/floci:*-compat), which
+# executes the same /etc/localstack/init/ready.d hooks and ships awslocal.
+# floci's SNS/SQS state is in-memory, so this runs on EVERY emulator start —
+# all calls below are idempotent (create-queue/create-topic/subscribe).
+
 set -euo pipefail
 
 echo "configuring sns/sqs"

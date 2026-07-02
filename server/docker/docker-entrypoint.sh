@@ -232,12 +232,12 @@ if [ -z "$AUTH_SERVER_VALET_TOKEN_TTL" ]; then
   export AUTH_SERVER_VALET_TOKEN_TTL=7200
 fi
 
-# Localstack Setup
+# SNS/SQS emulator setup (floci — the compose stack's LocalStack replacement)
 if [ -z "$AUTH_SERVER_SNS_TOPIC_ARN" ]; then
   export AUTH_SERVER_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:auth-local-topic"
 fi
 if [ -z "$AUTH_SERVER_SNS_ENDPOINT" ]; then
-  export AUTH_SERVER_SNS_ENDPOINT="http://localstack:4566"
+  export AUTH_SERVER_SNS_ENDPOINT="http://floci:4566"
 fi
 file_env 'AUTH_SERVER_SNS_SECRET_ACCESS_KEY'
 if [ -z "$AUTH_SERVER_SNS_SECRET_ACCESS_KEY" ]; then
@@ -251,7 +251,7 @@ if [ -z "$AUTH_SERVER_SNS_AWS_REGION" ]; then
   export AUTH_SERVER_SNS_AWS_REGION="us-east-1"
 fi
 if [ -z "$AUTH_SERVER_SQS_QUEUE_URL" ]; then
-  export AUTH_SERVER_SQS_QUEUE_URL="http://localstack:4566/000000000000/auth-local-queue"
+  export AUTH_SERVER_SQS_QUEUE_URL="http://floci:4566/000000000000/auth-local-queue"
 fi
 if [ -z "$AUTH_SERVER_SQS_AWS_REGION" ]; then
   export AUTH_SERVER_SQS_AWS_REGION="us-east-1"
@@ -265,7 +265,7 @@ if [ -z "$AUTH_SERVER_SQS_SECRET_ACCESS_KEY" ]; then
   export AUTH_SERVER_SQS_SECRET_ACCESS_KEY="x"
 fi
 if [ -z "$AUTH_SERVER_SQS_ENDPOINT" ]; then
-  export AUTH_SERVER_SQS_ENDPOINT="http://localstack:4566"
+  export AUTH_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
 # U2F Setup
@@ -301,7 +301,7 @@ if [ -z "$SYNCING_SERVER_SNS_TOPIC_ARN" ]; then
   export SYNCING_SERVER_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:syncing-server-local-topic"
 fi
 if [ -z "$SYNCING_SERVER_SNS_ENDPOINT" ]; then
-  export SYNCING_SERVER_SNS_ENDPOINT="http://localstack:4566"
+  export SYNCING_SERVER_SNS_ENDPOINT="http://floci:4566"
 fi
 file_env 'SYNCING_SERVER_SNS_SECRET_ACCESS_KEY'
 if [ -z "$SYNCING_SERVER_SNS_SECRET_ACCESS_KEY" ]; then
@@ -315,7 +315,7 @@ if [ -z "$SYNCING_SERVER_SNS_AWS_REGION" ]; then
   export SYNCING_SERVER_SNS_AWS_REGION="us-east-1"
 fi
 if [ -z "$SYNCING_SERVER_SQS_QUEUE_URL" ]; then
-  export SYNCING_SERVER_SQS_QUEUE_URL="http://localstack:4566/000000000000/syncing-server-local-queue"
+  export SYNCING_SERVER_SQS_QUEUE_URL="http://floci:4566/000000000000/syncing-server-local-queue"
 fi
 if [ -z "$SYNCING_SERVER_SQS_AWS_REGION" ]; then
   export SYNCING_SERVER_SQS_AWS_REGION="us-east-1"
@@ -329,7 +329,7 @@ if [ -z "$SYNCING_SERVER_SQS_SECRET_ACCESS_KEY" ]; then
   export SYNCING_SERVER_SQS_SECRET_ACCESS_KEY="x"
 fi
 if [ -z "$SYNCING_SERVER_SQS_ENDPOINT" ]; then
-  export SYNCING_SERVER_SQS_ENDPOINT="http://localstack:4566"
+  export SYNCING_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
 export SYNCING_SERVER_AUTH_SERVER_URL=http://localhost:$AUTH_SERVER_PORT
@@ -365,7 +365,7 @@ if [ -z "$FILES_SERVER_SNS_TOPIC_ARN" ]; then
   export FILES_SERVER_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:files-local-topic"
 fi
 if [ -z "$FILES_SERVER_SNS_ENDPOINT" ]; then
-  export FILES_SERVER_SNS_ENDPOINT="http://localstack:4566"
+  export FILES_SERVER_SNS_ENDPOINT="http://floci:4566"
 fi
 file_env 'FILES_SERVER_SNS_SECRET_ACCESS_KEY'
 if [ -z "$FILES_SERVER_SNS_SECRET_ACCESS_KEY" ]; then
@@ -379,7 +379,7 @@ if [ -z "$FILES_SERVER_SNS_AWS_REGION" ]; then
   export FILES_SERVER_SNS_AWS_REGION="us-east-1"
 fi
 if [ -z "$FILES_SERVER_SQS_QUEUE_URL" ]; then
-  export FILES_SERVER_SQS_QUEUE_URL="http://localstack:4566/000000000000/files-local-queue"
+  export FILES_SERVER_SQS_QUEUE_URL="http://floci:4566/000000000000/files-local-queue"
 fi
 if [ -z "$FILES_SERVER_SQS_AWS_REGION" ]; then
   export FILES_SERVER_SQS_AWS_REGION="us-east-1"
@@ -393,7 +393,7 @@ if [ -z "$FILES_SERVER_SQS_SECRET_ACCESS_KEY" ]; then
   export FILES_SERVER_SQS_SECRET_ACCESS_KEY="x"
 fi
 if [ -z "$FILES_SERVER_SQS_ENDPOINT" ]; then
-  export FILES_SERVER_SQS_ENDPOINT="http://localstack:4566"
+  export FILES_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
 printenv | grep FILES_SERVER_ | sed 's/FILES_SERVER_//g' > /opt/server/packages/files/.env
@@ -413,7 +413,7 @@ if [ -z "$REVISIONS_SERVER_SNS_TOPIC_ARN" ]; then
   export REVISIONS_SERVER_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:revisions-server-local-topic"
 fi
 if [ -z "$REVISIONS_SERVER_SNS_ENDPOINT" ]; then
-  export REVISIONS_SERVER_SNS_ENDPOINT="http://localstack:4566"
+  export REVISIONS_SERVER_SNS_ENDPOINT="http://floci:4566"
 fi
 file_env 'REVISIONS_SERVER_SNS_SECRET_ACCESS_KEY'
 if [ -z "$REVISIONS_SERVER_SNS_SECRET_ACCESS_KEY" ]; then
@@ -427,7 +427,7 @@ if [ -z "$REVISIONS_SERVER_SNS_AWS_REGION" ]; then
   export REVISIONS_SERVER_SNS_AWS_REGION="us-east-1"
 fi
 if [ -z "$REVISIONS_SERVER_SQS_QUEUE_URL" ]; then
-  export REVISIONS_SERVER_SQS_QUEUE_URL="http://localstack:4566/000000000000/revisions-server-local-queue"
+  export REVISIONS_SERVER_SQS_QUEUE_URL="http://floci:4566/000000000000/revisions-server-local-queue"
 fi
 if [ -z "$REVISIONS_SERVER_SQS_AWS_REGION" ]; then
   export REVISIONS_SERVER_SQS_AWS_REGION="us-east-1"
@@ -441,7 +441,7 @@ if [ -z "$REVISIONS_SERVER_SQS_SECRET_ACCESS_KEY" ]; then
   export REVISIONS_SERVER_SQS_SECRET_ACCESS_KEY="x"
 fi
 if [ -z "$REVISIONS_SERVER_SQS_ENDPOINT" ]; then
-  export REVISIONS_SERVER_SQS_ENDPOINT="http://localstack:4566"
+  export REVISIONS_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
 printenv | grep REVISIONS_SERVER_ | sed 's/REVISIONS_SERVER_//g' > /opt/server/packages/revisions/.env

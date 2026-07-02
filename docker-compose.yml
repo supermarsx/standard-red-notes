@@ -76,12 +76,13 @@ x-server-env: &server-env
   WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
   WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
   # SNS/SQS event source for realtime push: the gateway consumes the syncing
-  # server's WEB_SOCKET_MESSAGE_REQUESTED events from this queue.
-  SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://localstack:4566/000000000000/websocket-local-queue}
-  SQS_ENDPOINT: ${SQS_ENDPOINT:-http://localstack:4566}
+  # server's WEB_SOCKET_MESSAGE_REQUESTED events from this queue. The `floci`
+  # service below emulates SNS/SQS; credentials are dummies (floci has no auth).
+  SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://floci:4566/000000000000/websocket-local-queue}
+  SQS_ENDPOINT: ${SQS_ENDPOINT:-http://floci:4566}
   SQS_AWS_REGION: ${SQS_AWS_REGION:-us-east-1}
-  SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-localstack}
-  SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-localstack}
+  SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-floci}
+  SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-floci}
   AUTH_SERVER_U2F_RELYING_PARTY_ID: ${AUTH_SERVER_U2F_RELYING_PARTY_ID:-localhost}
   AUTH_SERVER_U2F_RELYING_PARTY_NAME: ${AUTH_SERVER_U2F_RELYING_PARTY_NAME:-Standard Red Notes}
   AUTH_SERVER_U2F_EXPECTED_ORIGIN: ${AUTH_SERVER_U2F_EXPECTED_ORIGIN:-http://localhost:3001,http://localhost}
@@ -247,7 +248,7 @@ services:
         condition: service_healthy
       cache:
         condition: service_healthy
-      localstack:
+      floci:
         condition: service_healthy
     # Internal-only: NO host ports. ALL client traffic (API /v1|/v2|/auth,
     # files /files/, realtime /sockets, workflows /workflows-ui/) enters
@@ -457,35 +458,53 @@ services:
     networks:
       - standard-red-notes
 
-  localstack:
-    # Pinned to 4.4.0: the last release before LocalStack (2026.3.0+) merged
-    # community+pro into one image that requires a LOCALSTACK_AUTH_TOKEN even for
-    # SNS/SQS. 4.4.0 runs the SNS/SQS the stack needs with no account/token.
-    image: localstack/localstack:4.4.0
+  floci:
+    # Local AWS SNS/SQS emulator (https://floci.io, MIT). Replaces LocalStack:
+    # floci needs no auth token, is LocalStack wire- and layout-compatible
+    # (port 4566, account 000000000000 queue URLs, /etc/localstack/init/ready.d
+    # init hooks, /_localstack/health endpoint), and is far lighter (a single
+    # native binary, ~13 MiB-class at rest vs LocalStack's ~500 MiB Python
+    # runtime). History: we previously pinned localstack/localstack:4.4.0 — the
+    # last release before LocalStack 2026.3.0+ merged community+pro into one
+    # image that requires a LOCALSTACK_AUTH_TOKEN even for SNS/SQS.
+    #
+    # ESCAPE HATCH — to switch back to LocalStack, replace `image` below with
+    #   image: localstack/localstack:4.4.0
+    # add `SERVICES: sns,sqs` + `LS_LOG: warn` under `environment:`, change the
+    # healthcheck to `awslocal sqs list-queues`, and raise the mem limit to
+    # 512m. The bootstrap script and every URL keep working unchanged (the
+    # service keeps the `localstack` network alias below).
+    #
+    # The -compat image variant ships the AWS CLI + awslocal, which the
+    # bootstrap init script (and the old LocalStack tooling muscle memory,
+    # e.g. `docker compose exec floci awslocal sqs list-queues`) relies on.
+    image: floci/floci:1.5.29-compat
     restart: unless-stopped
     # Hardening: internal-only (no host port published) and no privilege
-    # escalation. LocalStack runs its own root supervisor that spawns/forks the
-    # emulated AWS services and manages its runtime under /var/lib/localstack, and
-    # is known to misbehave under a stripped capability set, so we deliberately do
-    # NOT cap_drop ALL here (it's a dev-only emulator on the internal network).
+    # escalation. Note floci's SNS/SQS state is in-memory: the ready.d bootstrap
+    # recreates all topics/queues/subscriptions on every container start (the
+    # create/subscribe calls are idempotent), so no data volume is needed.
     security_opt:
       - "no-new-privileges:true"
-    mem_limit: ${LOCALSTACK_MEM_LIMIT:-512m}
+    mem_limit: ${FLOCI_MEM_LIMIT:-256m}
     pids_limit: 512
-    environment:
-      SERVICES: sns,sqs
-      LS_LOG: warn
     volumes:
       - ./server/docker/localstack_bootstrap.sh:/etc/localstack/init/ready.d/localstack_bootstrap.sh:ro
-      - localstack-data:/var/lib/localstack
     healthcheck:
-      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1 || exit 1"]
+      # floci serves a LocalStack-compatible health endpoint; the sqs service
+      # reports "running" once the emulator is up (init hooks run right after).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\":\"running\"' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 20
       start_period: 30s
     networks:
-      - standard-red-notes
+      standard-red-notes:
+        # Keep the old hostname answering too: server images built before the
+        # floci swap (and any user .env overriding SQS_ENDPOINT/queue URLs with
+        # the old hostname) still resolve `localstack` to this container.
+        aliases:
+          - localstack
 
 networks:
   standard-red-notes:
@@ -503,7 +522,6 @@ volumes:
   mysql-data:
   mariadb-data:
   redis-data:
-  localstack-data:
   server-logs:
   uploads:
   mcp-data:
