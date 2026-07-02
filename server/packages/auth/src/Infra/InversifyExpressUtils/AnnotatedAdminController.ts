@@ -136,110 +136,118 @@ export class AnnotatedAdminController extends BaseAdminController {
     return super.disableEmailBackups(request)
   }
 
-  @httpGet('/lookup-user/:email')
+  // Standard Red Notes: every admin-panel route below attaches the required
+  // cross-service-token middleware. It decodes the X-Auth-Token the api-gateway
+  // forwards onto response.locals (user + roles), which is what the
+  // BaseAdminController's requestorIsAdmin() gate and the audit-log actor
+  // attribution read. Without it locals.roles stays empty and every admin
+  // endpoint 403s even for genuine INTERNAL_TEAM_USER admins. The six legacy
+  // internal routes above are deliberately left as-is: they predate the panel,
+  // are not reachable through the public gateway, and stay internal-only.
+  @httpGet('/lookup-user/:email', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async lookupUser(request: Request, response: Response): Promise<results.JsonResult> {
     return super.lookupUser(request, response)
   }
 
-  @httpGet('/users/:userUuid/feature-flags')
+  @httpGet('/users/:userUuid/feature-flags', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getUserFeatureFlags(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getUserFeatureFlags(request, response)
   }
 
-  @httpPut('/users/:userUuid/feature-flags')
+  @httpPut('/users/:userUuid/feature-flags', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setUserFeatureFlag(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setUserFeatureFlag(request, response)
   }
 
-  @httpGet('/users/:email/ban-status')
+  @httpGet('/users/:email/ban-status', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getUserBanStatus(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getUserBanStatus(request, response)
   }
 
-  @httpPut('/users/:userUuid/ban-status')
+  @httpPut('/users/:userUuid/ban-status', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setUserBanStatusEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setUserBanStatusEndpoint(request, response)
   }
 
-  @httpGet('/registration')
+  @httpGet('/registration', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getRegistrationFlag(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getRegistrationFlag(request, response)
   }
 
-  @httpPut('/registration')
+  @httpPut('/registration', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setRegistrationFlag(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setRegistrationFlag(request, response)
   }
 
-  @httpGet('/audit-log')
+  @httpGet('/audit-log', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getAuditLog(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getAuditLog(request, response)
   }
 
   // NOTE: exact '/users' — distinct from the '/users/:userUuid/...' sub-routes.
-  @httpGet('/users')
+  @httpGet('/users', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getUsers(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getUsers(request, response)
   }
 
-  @httpGet('/roles')
+  @httpGet('/roles', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getAvailableRoles(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getAvailableRoles(request, response)
   }
 
-  @httpGet('/groups')
+  @httpGet('/groups', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async listGroups(request: Request, response: Response): Promise<results.JsonResult> {
     return super.listGroups(request, response)
   }
 
-  @httpPost('/groups')
+  @httpPost('/groups', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async createGroup(request: Request, response: Response): Promise<results.JsonResult> {
     return super.createGroup(request, response)
   }
 
-  @httpDelete('/groups/:groupUuid')
+  @httpDelete('/groups/:groupUuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async deleteGroup(request: Request, response: Response): Promise<results.JsonResult> {
     return super.deleteGroup(request, response)
   }
 
-  @httpPut('/groups/:groupUuid/roles')
+  @httpPut('/groups/:groupUuid/roles', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setGroupRoles(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setGroupRoles(request, response)
   }
 
-  @httpGet('/groups/:groupUuid/members')
+  @httpGet('/groups/:groupUuid/members', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async listGroupMembers(request: Request, response: Response): Promise<results.JsonResult> {
     return super.listGroupMembers(request, response)
   }
 
-  @httpPost('/groups/:groupUuid/members')
+  @httpPost('/groups/:groupUuid/members', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async addUserToGroup(request: Request, response: Response): Promise<results.JsonResult> {
     return super.addUserToGroup(request, response)
   }
 
-  @httpDelete('/groups/:groupUuid/members/:userUuid')
+  @httpDelete('/groups/:groupUuid/members/:userUuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async removeUserFromGroup(request: Request, response: Response): Promise<results.JsonResult> {
     return super.removeUserFromGroup(request, response)
   }
 
-  @httpGet('/users/:userUuid/effective-permissions')
+  @httpGet('/users/:userUuid/effective-permissions', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getUserEffectivePermissions(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getUserEffectivePermissions(request, response)
   }
 
-  @httpPut('/users/:userUuid/admin-role')
+  @httpPut('/users/:userUuid/admin-role', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setUserAdminRole(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setUserAdminRole(request, response)
   }
 
   // NOTE: '/users/:userUuid/mfa-secret', not '/users/:userUuid/mfa' — the latter
   // is the pre-existing internal (ungated) deleteMFASetting route above.
-  @httpDelete('/users/:userUuid/mfa-secret')
+  @httpDelete('/users/:userUuid/mfa-secret', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async resetUserMFA(request: Request, response: Response): Promise<results.JsonResult> {
     return super.resetUserMFA(request, response)
   }
 
-  @httpPost('/users/:userUuid/fix-quota')
+  @httpPost('/users/:userUuid/fix-quota', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async fixUserQuota(request: Request, response: Response): Promise<results.JsonResult> {
     return super.fixUserQuota(request, response)
   }

@@ -231,6 +231,11 @@ export class User {
   }
 
   isBanned(): boolean {
-    return this.banned === true
+    // The column is a tinyint(1): TypeORM hydrates it from MySQL/MariaDB as the
+    // NUMBER 0/1, while SetUserBanStatus assigns a real boolean before saving.
+    // A strict `=== true` comparison therefore reported every persisted ban as
+    // "not banned" (numeric 1 !== true) and bans were silently never enforced.
+    // Coerce so both representations count.
+    return Number(this.banned) === 1
   }
 }

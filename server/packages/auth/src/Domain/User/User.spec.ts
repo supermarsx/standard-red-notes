@@ -30,4 +30,33 @@ describe('User', () => {
 
     expect(user.isPotentiallyAPrivateUsernameAccount()).toBeFalsy()
   })
+
+  // Standard Red Notes: the banned column is a tinyint(1) — TypeORM hydrates it
+  // from MySQL/MariaDB as the NUMBER 0/1, while SetUserBanStatus assigns a real
+  // boolean before saving. isBanned() must treat BOTH representations as banned;
+  // the old strict `=== true` check reported every persisted ban as "not banned"
+  // and bans were silently never enforced (SignIn + AuthenticateUser).
+  it('should report banned for the in-memory boolean representation', () => {
+    const user = createUser()
+    user.banned = true
+
+    expect(user.isBanned()).toBe(true)
+  })
+
+  it('should report banned for the tinyint-hydrated numeric representation', () => {
+    const user = createUser()
+    user.banned = 1 as unknown as boolean
+
+    expect(user.isBanned()).toBe(true)
+  })
+
+  it('should report not banned for falsy representations', () => {
+    const user = createUser()
+
+    user.banned = false
+    expect(user.isBanned()).toBe(false)
+
+    user.banned = 0 as unknown as boolean
+    expect(user.isBanned()).toBe(false)
+  })
 })
