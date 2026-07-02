@@ -35,6 +35,7 @@ import '../src/Controller/v1/OcrController'
 import '../src/Controller/v1/CollaborationController'
 import '../src/Controller/v1/WebController'
 import '../src/Controller/v1/IntegrationsController'
+import '../src/Controller/v1/WorkflowsController'
 
 import '../src/Controller/v2/PaymentsControllerV2'
 import '../src/Controller/v2/ActionsControllerV2'
@@ -57,6 +58,7 @@ import {
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
+import { registerWorkflowsUiProxy } from '../src/Workflows/registerWorkflowsUiProxy'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
@@ -264,6 +266,19 @@ void container
     logger.info('CalDAV router mounted')
   } catch (error) {
     logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+  }
+
+  // Standard Red Notes: mount the authenticated same-origin proxy for the
+  // embedded n8n workflows editor at WORKFLOWS_UI_BASE_PATH (default
+  // /workflows-ui). The proxy gates itself: 404 when the WORKFLOWS_ENABLED
+  // master switch is off, 403 unless the request carries the short-lived
+  // UI-access cookie minted by the session-authed /v1/workflows endpoints AND
+  // the user has an active pairing. Mounting it unconditionally is safe.
+  try {
+    registerWorkflowsUiProxy(app, container)
+    logger.info('Workflows editor proxy mounted')
+  } catch (error) {
+    logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
   }
 
   // Standard Red Notes: start the reminder-delivery scheduler. It gates itself on

@@ -57,4 +57,13 @@ export type CrossServiceTokenData = {
    */
   ai_enabled?: boolean
   ai_request_limit?: number
+  /**
+   * Standard Red Notes: per-user WORKFLOWS (n8n automation) gate, read from the
+   * auth settings store at token-mint time (SettingName.WorkflowsEnabled).
+   *
+   * OPT-IN (default-off), the inverse of `ai_enabled`: the field is EMITTED ONLY
+   * WHEN the admin-managed setting is literally 'true'. Absent MUST be treated
+   * as disabled, which also keeps every pre-existing token valid unchanged.
+   */
+  workflows_enabled?: boolean
 }

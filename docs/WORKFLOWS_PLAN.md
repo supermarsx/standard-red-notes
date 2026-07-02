@@ -106,10 +106,18 @@ webhooks). The E2E encryption boundary is preserved by construction.
    (snjs) is the note-writing runner, paired with the user's credentials on
    their own host; trust boundary = the user's own server.
 2. **n8n topology: one shared n8n container** on the internal docker network.
-   Per-user n8n accounts are provisioned at pairing time where the n8n edition
-   allows; if community-edition user-management APIs are too limited, access is
-   instead gated at the SRN proxy (only entitled + paired users can reach the
-   editor) — implementation picks the feasible variant and documents it.
+   **Settled (Phase 1 implementation): access is gated at the SRN proxy** —
+   only entitled + explicitly PAIRED users can reach the editor through the
+   authenticated `/workflows-ui` gateway proxy; the n8n container publishes no
+   host port. Finding: n8n's public REST API does expose `POST /api/v1/users`
+   (invite) and `POST /api/v1/credentials` on the community edition, BUT (a)
+   the public API requires an owner-provisioned API key that only exists after
+   manual owner setup, (b) invites are an email/URL acceptance flow, not silent
+   provisioning, and (c) the community edition lacks credential *sharing*, so a
+   credential created via the owner's API key cannot be handed to an invited
+   member account. Per-user n8n accounts therefore buy little on community
+   edition; the shared instance runs in single-owner mode and per-user
+   enforcement lives at the SRN boundary, which this plan explicitly allows.
 3. **Editor UI: embed n8n's editor** (sandboxed same-origin iframe). A native
    "simple mode" builder may come later.
 
@@ -120,6 +128,73 @@ webhooks). The E2E encryption boundary is preserved by construction.
   toggle; gateway `/v1/workflows/*` (status/pair/unpair) + same-origin UI proxy;
   sidebar section + WorkflowsView with pairing flow (provision n8n user, mint
   scoped MCP token, register SRN credential + webhooks); iframe embed.
+
+### 7.1 Phase 1 server implementation status (done 2026-07-02)
+
+**Shipped:**
+- `SettingName.WorkflowsEnabled` (`WORKFLOWS_ENABLED`) in domain-core; added to
+  `ADMIN_MANAGEABLE_SETTINGS` in auth's `BaseAdminController` with the strict
+  'true'/'false' validator (mirrors `OcrServerAllowed`), and to the
+  unencrypted/unsensitive lists in `SettingsAssociationService` so token minting
+  reads it without per-user key material.
+- Entitlement transport: `workflows_enabled` on the cross-service token
+  (`CreateCrossServiceToken` emits it ONLY when the setting is literally 'true';
+  absent = disabled, so existing tokens stay valid), projected onto
+  `response.locals.settings` by the gateway `AuthMiddleware`. Note: admin
+  toggles propagate on the next token mint (cross-service token cache TTL),
+  same as `AiEnabled`.
+- Gateway `WorkflowsController` (`/v1/workflows/status|pair|unpair`) behind
+  `RequiredCrossServiceTokenMiddleware`, implementing the fixed contract
+  (`{enabled, paired, editorUrl}` / `{paired: true, editorUrl}` / `{paired:
+  false}`; 403 `workflows-disabled` / `workflows-not-allowed` when not
+  entitled). Pairing state = JSON file store (`WorkflowsPairingStore`, default
+  `./data/workflows/pairings.json`, override `WORKFLOWS_DATA_PATH`) — the
+  api-gateway has no database; this mirrors the CalDAV/reminder-delivery
+  stores. Caveat: pairing records live in the container filesystem, so a
+  container REBUILD clears them — users simply re-pair (one click); move to a
+  volume/db if that ever matters.
+- Editor same-origin proxy: `/workflows-ui/` mounted on the gateway (and the
+  app nginx forwards the same path to the gateway, keeping the iframe
+  same-origin with the web app). The iframe cannot send an Authorization
+  header, so the session-authed status/pair endpoints mint a short-lived
+  (12h default), purpose-scoped, HttpOnly, path-scoped cookie (HS256,
+  `AUTH_JWT_SECRET`); the proxy verifies it AND re-checks the master switch AND
+  the pairing record on every request (unpair revokes on the next request).
+  Streaming pipe over node http; n8n runs with `N8N_PUSH_BACKEND=sse` +
+  `N8N_PATH=/workflows-ui/` so no WebSocket upgrade or path rewriting is
+  needed. Caveat: deployments using `SHARED_SERVER_ACCESS_KEY_MODE=all` gate
+  the iframe requests too (no header channel) — same class of caveat as CalDAV
+  clients.
+- docker-compose: optional `n8n` service under the `workflows` profile
+  (internal network only, own `n8n-data` volume, healthcheck, hardened); the
+  `server` service does NOT depend on it, so the stack is healthy without the
+  image. `WORKFLOWS_ENABLED` (default false) + `WORKFLOWS_N8N_URL` in the
+  shared server env.
+
+**Deferred (honest gaps, in dependency order):**
+1. **Scoped MCP token minting at pair time — deferred to Phase 2 (client-driven
+   pairing step).** `CreateMcpToken` requires CLIENT-side wrapped key material
+   (`wrappedKeys`/`kdfSalt`/`kdfParams`) that only the signed-in client can
+   produce; the server alone cannot mint one. Additionally there is nowhere to
+   put the credential yet: creating an n8n credential via its public API needs
+   an owner-provisioned n8n API key (manual owner setup). Phase 2: the
+   WorkflowsView pairing flow calls the existing `/v1/mcp-tokens` surface (as
+   the MCP bridge does) and stores the resulting token as an n8n credential;
+   `WorkflowsPairing.mcpTokenUuid` already reserves the bookkeeping slot.
+2. **SRN webhook registration at pair time — deferred to Phase 2.** Webhook
+   targets are per-workflow n8n URLs that only exist once the user has created
+   a workflow with an SRN Trigger node (Phase 2). Registering a placeholder at
+   pair time would deliver events nowhere. `WorkflowsPairing.webhookUuids`
+   reserves the slot.
+3. **Audit-log entries + `admin.action` webhook on pair/unpair — deferred to
+   Phase 3 (as already planned there).** The audit writer and webhook
+   dispatcher are auth-internal and not reachable from the gateway's HTTP
+   deployment path; Phase 1 records pair/unpair as structured gateway log lines
+   (`workflows.paired` / `workflows.unpaired` with user uuid + ip). Admin
+   TOGGLES of the per-user flag DO get the full audit + `admin.action` webhook
+   treatment already, via the existing `setUserFeatureFlag` path.
+4. **Per-user n8n accounts — not pursued on community edition** (see §6.2
+   finding); the SRN proxy is the enforcement point.
 - **Phase 2 — SRN node package** (`n8n-nodes-standard-red-notes`): SRN Trigger
   (HMAC verify), AI Agent (assistant proxy), Share Note / Send Link, Send Email,
   Send File (valet), Create/Update Note (via MCP bridge), note→PDF sidecar.

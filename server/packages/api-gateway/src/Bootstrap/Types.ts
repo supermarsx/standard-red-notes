@@ -73,4 +73,8 @@ export const TYPES = {
   ApiGateway_REMINDER_DELIVERY_ENABLED: Symbol.for('ApiGateway_REMINDER_DELIVERY_ENABLED'),
   ApiGateway_ReminderDeliveryService: Symbol.for('ApiGateway_ReminderDeliveryService'),
   ApiGateway_ReminderDeliveryScheduler: Symbol.for('ApiGateway_ReminderDeliveryScheduler'),
+  // Standard Red Notes: WORKFLOWS (n8n-backed automation) — master switch,
+  // pairing state + editor-proxy gate service.
+  ApiGateway_WORKFLOWS_ENABLED: Symbol.for('ApiGateway_WORKFLOWS_ENABLED'),
+  ApiGateway_WorkflowsService: Symbol.for('ApiGateway_WorkflowsService'),
 }

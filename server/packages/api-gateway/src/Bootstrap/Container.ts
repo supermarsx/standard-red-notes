@@ -49,6 +49,8 @@ import { ProviderRegistry } from '../Service/ReminderDelivery/Providers/Provider
 import { TelegramProvider } from '../Service/ReminderDelivery/Providers/TelegramProvider'
 import { EmailProvider } from '../Service/ReminderDelivery/Providers/EmailProvider'
 import { WhatsAppProvider } from '../Service/ReminderDelivery/Providers/WhatsAppProvider'
+import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
+import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 import * as path from 'path'
 
 export class ContainerConfigLoader {
@@ -368,6 +370,41 @@ export class ContainerConfigLoader {
           logger,
         ),
       )
+
+    // Standard Red Notes: OPT-IN WORKFLOWS (n8n-backed automation engine).
+    //
+    // Two gates, both fail-closed: this operator master switch AND the
+    // admin-managed per-user WORKFLOWS_ENABLED setting (which rides along in the
+    // cross-service token). The n8n engine itself is a peer container on the
+    // internal docker network (WORKFLOWS_N8N_URL) with no host port — its editor
+    // UI is reachable ONLY through the authenticated /workflows-ui gateway proxy,
+    // and only for entitled + explicitly PAIRED users. Pairing state is a JSON
+    // file under WORKFLOWS_DATA_PATH (default ./data/workflows), keeping the
+    // feature self-contained in the api-gateway, which has no database of its own
+    // (same pattern as the CalDAV/reminder-delivery stores). The editor-proxy
+    // UI-access token reuses AUTH_JWT_SECRET (already held by the gateway) and
+    // mirrors COOKIE_SECURE so its cookie matches the deployment's cookie policy.
+    const workflowsEnabled = ['true', '1', 'yes', 'on'].includes(
+      (env.get('WORKFLOWS_ENABLED', true) || '').toLowerCase(),
+    )
+    const workflowsDataPath = env.get('WORKFLOWS_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'workflows')
+    const workflowsUiTokenTtlSeconds = env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
+      ? +env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
+      : 12 * 60 * 60
+    container.bind<boolean>(TYPES.ApiGateway_WORKFLOWS_ENABLED).toConstantValue(workflowsEnabled)
+    container.bind<WorkflowsService>(TYPES.ApiGateway_WorkflowsService).toConstantValue(
+      new WorkflowsService(
+        {
+          enabled: workflowsEnabled,
+          n8nUrl: env.get('WORKFLOWS_N8N_URL', true) || 'http://n8n:5678',
+          uiBasePath: env.get('WORKFLOWS_UI_BASE_PATH', true) || '/workflows-ui',
+          jwtSecret: env.get('AUTH_JWT_SECRET'),
+          cookieSecure: (env.get('COOKIE_SECURE', true) || '').toLowerCase() === 'true',
+          uiTokenTtlSeconds: Math.max(60, workflowsUiTokenTtlSeconds),
+        },
+        new WorkflowsPairingStore(path.join(workflowsDataPath, 'pairings.json')),
+      ),
+    )
 
     // Middleware
     container

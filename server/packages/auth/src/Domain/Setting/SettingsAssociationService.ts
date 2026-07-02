@@ -30,6 +30,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // plain 'true'/'false' flag carrying no secret; stored unencrypted so the
     // trigger job can read it without per-user key material when gating a backup.
     SettingName.NAMES.NextcloudBackupAllowed,
+    // Standard Red Notes: per-user admin gate for the WORKFLOWS (n8n) feature. A
+    // plain 'true'/'false' flag carrying no secret; stored unencrypted so
+    // cross-service token minting can read it without per-user key material.
+    SettingName.NAMES.WorkflowsEnabled,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -63,6 +67,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // owning client and the admin panel must be able to read it back; it carries no
     // secret, so it is not marked sensitive (getSetting returns its plain value).
     SettingName.NAMES.NextcloudBackupAllowed,
+    // Standard Red Notes: per-user admin gate for the WORKFLOWS (n8n) feature.
+    // The owning client and the admin panel must be able to read it back; it
+    // carries no secret, so it is not marked sensitive.
+    SettingName.NAMES.WorkflowsEnabled,
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.LogSessionUserAgent,
     SettingName.NAMES.RecoveryCodes,

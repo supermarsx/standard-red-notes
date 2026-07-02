@@ -188,6 +188,14 @@ export abstract class AuthMiddleware extends BaseMiddleware {
       settings[SettingName.NAMES.AiRequestLimit] = decodedToken.ai_request_limit
     }
 
+    // WORKFLOWS_ENABLED is OPT-IN (default-off): auth emits `workflows_enabled`
+    // ONLY when the admin-managed setting is literally 'true', so the key is
+    // projected only in that case. An absent key means "not entitled" and the
+    // WorkflowsController FAILS CLOSED, which is the correct default.
+    if (decodedToken.workflows_enabled === true) {
+      settings[SettingName.NAMES.WorkflowsEnabled] = 'true'
+    }
+
     return settings
   }
 

@@ -101,6 +101,19 @@ x-server-env: &server-env
   # can take seconds). Defaults: 50 pages, 12 MB per page image.
   OCR_SERVER_MAX_PAGES: ${OCR_SERVER_MAX_PAGES:-50}
   OCR_SERVER_MAX_IMAGE_BYTES: ${OCR_SERVER_MAX_IMAGE_BYTES:-12582912}
+  # OPT-IN Workflows (n8n-backed automation engine, /v1/workflows + the embedded
+  # editor at /workflows-ui). Two gates apply, both fail-closed: this operator
+  # master switch AND a per-user, admin-managed WORKFLOWS_ENABLED setting
+  # (default off) toggled from Preferences -> Admin — so even with this on, the
+  # feature is offered only to users an admin has explicitly allowed, and only
+  # after the user explicitly pairs ("Connect workflows"). The n8n engine itself
+  # is the OPTIONAL `n8n` service below (compose profile `workflows`); the stack
+  # runs fine without it — the gateway then reports the engine unreachable (502)
+  # on editor access while everything else stays healthy.
+  WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-false}
+  # Internal (docker-network) URL of the n8n engine; the editor is only ever
+  # reached through the api-gateway's authenticated /workflows-ui proxy.
+  WORKFLOWS_N8N_URL: ${WORKFLOWS_N8N_URL:-http://n8n:5678}
   # Optional server-wide shared access key ("obfuscation gate"). OFF by default
   # (empty key => zero behavior change). This is OBFUSCATION / access-gating for a
   # self-hosted instance, NOT end-to-end security (that is the client-side E2E
@@ -289,6 +302,77 @@ services:
     networks:
       - standard-red-notes
 
+  # ---------------------------------------------------------------------------
+  # OPTIONAL workflows engine (n8n) backing the Workflows feature. Runs ONLY
+  # with the `workflows` compose profile (`docker compose --profile workflows
+  # up -d`), so the stack stays healthy when the image was never pulled and the
+  # `server` service intentionally does NOT depend_on it (the gateway answers
+  # 502 on editor access while the engine is down; everything else is unaffected).
+  #
+  # SECURITY: internal network ONLY — no host port. The editor UI and REST API
+  # are reachable exclusively through the api-gateway's authenticated
+  # /workflows-ui proxy, which admits only sessions that are BOTH admin-entitled
+  # (per-user WORKFLOWS_ENABLED setting) AND explicitly paired. n8n runs in
+  # shared single-owner mode (community edition; see docs/WORKFLOWS_PLAN.md
+  # §6.2) — per-user access enforcement lives at the SRN proxy boundary.
+  #
+  # Required env when enabling for real use:
+  #   WORKFLOWS_ENABLED=true      (master switch, x-server-env above)
+  #   N8N_ENCRYPTION_KEY=<random> (STABLE key for n8n's credential store; without
+  #                                it n8n generates one into its volume — fine,
+  #                                but set it explicitly for backup/restore)
+  n8n:
+    profiles:
+      - workflows
+    # Pin to a specific version tag (e.g. n8nio/n8n:1.x.y) for reproducible
+    # deployments; `latest` tracks n8n's current stable release.
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    # Hardening: the image runs as the unprivileged `node` user (uid 1000) and
+    # only serves HTTP on 5678 internally — no capabilities needed.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    mem_limit: ${N8N_MEM_LIMIT:-1g}
+    pids_limit: 512
+    environment:
+      # Serve the whole app under the SAME base path as the gateway proxy
+      # (/workflows-ui/), so the proxy forwards paths verbatim — no rewriting.
+      N8N_PATH: /workflows-ui/
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      # Public host n8n uses when composing its own URLs (webhook display etc.).
+      # Point it at the host the web app is served from when exposing for real.
+      N8N_HOST: ${WORKFLOWS_PUBLIC_HOST:-localhost}
+      # The gateway proxy is a plain HTTP streaming pipe (no WebSocket upgrade
+      # handling), so run n8n's editor push channel over Server-Sent Events.
+      N8N_PUSH_BACKEND: sse
+      # The editor is reached over plain http inside the compose network (TLS —
+      # if any — terminates at the outer proxy); without this n8n 1.x refuses
+      # its auth cookie on non-https origins. Set true behind real HTTPS.
+      N8N_SECURE_COOKIE: "false"
+      # Stable encryption key for n8n's credential store (see comment above).
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    healthcheck:
+      # /healthz sits under N8N_PATH when a base path is configured; probe both
+      # forms so the check is robust across n8n versions.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:5678/workflows-ui/healthz >/dev/null 2>&1 || wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - standard-red-notes
+
   db:
     image: mariadb:lts
     restart: unless-stopped
@@ -404,3 +488,4 @@ volumes:
   server-logs:
   uploads:
   mcp-data:
+  n8n-data:

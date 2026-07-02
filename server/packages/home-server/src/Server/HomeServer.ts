@@ -7,6 +7,7 @@ import {
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
   registerCaldavRoutes,
+  registerWorkflowsUiProxy,
   startReminderDeliveryScheduler,
 } from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
@@ -298,6 +299,17 @@ export class HomeServer implements HomeServerInterface {
         logger.info('CalDAV router mounted')
       } catch (error) {
         logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+      }
+
+      // Standard Red Notes: mount the authenticated same-origin proxy for the
+      // embedded n8n workflows editor. It gates itself (404 when the
+      // WORKFLOWS_ENABLED master switch is off; 403 without the UI-access cookie
+      // + an active pairing), so mounting it unconditionally is safe.
+      try {
+        registerWorkflowsUiProxy(app, container)
+        logger.info('Workflows editor proxy mounted')
+      } catch (error) {
+        logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
       }
 
       // Standard Red Notes: start the reminder-delivery scheduler. It gates itself

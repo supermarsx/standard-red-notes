@@ -138,6 +138,17 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // 'true'). Client-MUTABLE so the user controls it; unencrypted/unsensitive so the
     // gateway can read it without per-user key material when gating delivery.
     ReminderDeliveryEnabled: 'REMINDER_DELIVERY_ENABLED',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT admin gate for the WORKFLOWS
+    // (n8n-backed automation) feature. Mirrors OcrServerAllowed: a plain
+    // 'true'/'false' flag toggled per user from the admin panel. Two gates apply
+    // before any /v1/workflows endpoint or the embedded editor proxy will serve a
+    // user: the operator master switch WORKFLOWS_ENABLED env (api-gateway) AND
+    // this per-user flag being literally 'true'. Default disabled
+    // (absent/anything-but-'true'). Rides along in the cross-service token
+    // (workflows_enabled) so the api-gateway can enforce the gate without a
+    // second cross-service round trip. Carries no secret; unencrypted/unsensitive
+    // so token minting can read it without per-user key material.
+    WorkflowsEnabled: 'WORKFLOWS_ENABLED',
   }
 
   get value(): string {
