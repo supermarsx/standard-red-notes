@@ -38,7 +38,7 @@ export const VaultModalMembers = ({
     <div>
       <div className="mb-3 text-lg">Vault Members</div>
       {vaultHasNoDesignatedSurvivor && members.length > 1 && isCurrentUserAdmin && (
-        <div className="bg-danger-faded mb-3 grid grid-cols-[auto,1fr] gap-x-[0.65rem] gap-y-0.5 overflow-hidden rounded p-2.5 text-danger">
+        <div className="bg-danger-faded mb-3 grid grid-cols-[auto_1fr] gap-x-[0.65rem] gap-y-0.5 overflow-hidden rounded p-2.5 text-danger">
           <Icon type="warning" className="place-self-center" />
           <div className="text-base font-semibold">No designated survivor</div>
           <div className="col-start-2">
@@ -62,7 +62,7 @@ export const VaultModalMembers = ({
           return (
             <div
               key={contact?.uuid || member.user_uuid}
-              className="grid grid-cols-[auto,1fr] gap-x-[0.65rem] gap-y-0.5 text-base font-medium md:text-sm"
+              className="grid grid-cols-[auto_1fr] gap-x-[0.65rem] gap-y-0.5 text-base font-medium md:text-sm"
             >
               <Icon type="user" className="col-start-1 col-end-2 place-self-center" />
               <div className="flex items-center gap-2 overflow-hidden text-ellipsis text-base font-bold">

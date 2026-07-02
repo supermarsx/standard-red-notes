@@ -40,7 +40,7 @@ const ContactItem = ({ contact }: Props) => {
       </ModalOverlay>
 
       <div className="flex items-start gap-3.5 rounded-lg border border-border px-3.5 py-2.5 shadow-sm">
-        <div className="grid grid-cols-[1fr,auto] grid-rows-2 place-items-center gap-x-3.5 gap-y-1 overflow-hidden">
+        <div className="grid grid-cols-[1fr_auto] grid-rows-2 place-items-center gap-x-3.5 gap-y-1 overflow-hidden">
           <Icon type="user" size="custom" className="h-5 w-5 flex-shrink-0" />
           <span
             className={classNames(
