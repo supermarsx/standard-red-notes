@@ -134,3 +134,45 @@ export function isStorageNearlyFull(estimate: StorageEstimateResult | undefined)
   }
   return estimate.usedFraction >= HIGH_USAGE_THRESHOLD
 }
+
+/**
+ * Standard Red Notes: the user-configurable "Maximum storage usage" is a SOFT,
+ * advisory cap (PrefKey.StorageMaxUsageBytes; 0 == Unlimited). When the boot-time
+ * storage check finds usage over that cap we surface a single toast so the user
+ * learns about it even without opening the Storage pane — but at most ONCE per
+ * session so it never becomes spammy, and it NEVER blocks saving or syncing.
+ */
+let userCapToastShownThisSession = false
+
+/**
+ * Notify (via the provided callback) that usage exceeds the user's soft cap.
+ * No-ops when there is no estimate, no cap configured, usage is within the cap,
+ * or the once-per-session toast was already shown. Returns whether it notified.
+ */
+export function maybeNotifyStorageCapExceeded(
+  estimate: StorageEstimateResult | undefined,
+  capBytes: number,
+  notify: (message: string) => void,
+): boolean {
+  if (!estimate || !Number.isFinite(capBytes) || capBytes <= 0 || estimate.usage <= capBytes) {
+    return false
+  }
+
+  log(
+    LoggingDomain.Storage,
+    `[StorageQuota] Usage ${formatBytes(estimate.usage)} exceeds the configured soft limit of ` +
+      `${formatBytes(capBytes)} (advisory only — writes are never blocked).`,
+  )
+
+  if (userCapToastShownThisSession) {
+    return false
+  }
+  userCapToastShownThisSession = true
+
+  notify(
+    `Local storage usage (${formatBytes(estimate.usage)}) exceeds your configured limit of ` +
+      `${formatBytes(capBytes)}. This limit is advisory — saving and syncing are not blocked. ` +
+      'Free up space or raise the limit in Preferences → Storage.',
+  )
+  return true
+}

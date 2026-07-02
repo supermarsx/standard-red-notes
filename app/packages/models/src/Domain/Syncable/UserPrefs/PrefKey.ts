@@ -108,6 +108,11 @@ export enum PrefKey {
   CustomNotesOrder = 'customNotesOrder',
   CustomFoldersOrder = 'customFoldersOrder',
   CustomTagsOrder = 'customTagsOrder',
+  // Standard Red Notes: user-configured maximum local storage usage in BYTES.
+  // 0 == Unlimited (usage is measured against the browser's quota estimate
+  // instead). This is a SOFT, advisory limit surfaced in the Storage preferences
+  // pane and via a warning toast — saving and syncing are never blocked by it.
+  StorageMaxUsageBytes = 'storageMaxUsageBytes',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -208,6 +213,7 @@ export type PrefValue = {
   [PrefKey.CustomNotesOrder]: string[]
   [PrefKey.CustomFoldersOrder]: string[]
   [PrefKey.CustomTagsOrder]: string[]
+  [PrefKey.StorageMaxUsageBytes]: number
   [PrefKey.SuperNoteImageAlignment]: 'left' | 'center' | 'right'
   /**
    * The editor font family. Empty string means the theme/system default.

@@ -36,6 +36,7 @@ import {
   estimateStorage,
   formatBytes,
   isStorageNearlyFull,
+  maybeNotifyStorageCapExceeded,
   requestPersistentStorage,
 } from '@/Utils/StorageQuota'
 import { log, LoggingDomain } from '@/Logging'
@@ -147,7 +148,7 @@ const recordAccountAgeAchievement = (application: WebApplication): void => {
  * act before writes start silently failing mid-load. Fully best-effort and
  * feature-detected — any failure is swallowed and never affects launch.
  */
-const ensureRobustStorage = async (): Promise<void> => {
+const ensureRobustStorage = async (application: WebApplication): Promise<void> => {
   try {
     await requestPersistentStorage()
 
@@ -167,6 +168,18 @@ const ensureRobustStorage = async (): Promise<void> => {
             'Free up disk space to avoid local save failures.',
         })
       }
+
+      // Standard Red Notes: also check the USER-configured soft cap (Preferences →
+      // Storage → Maximum usage; 0 == Unlimited) so the user learns they're over it
+      // even without opening the pane. Advisory only (never blocks writes) and at
+      // most one toast per session.
+      const userCapBytes = application.getPreference(
+        PrefKey.StorageMaxUsageBytes,
+        PrefDefaults[PrefKey.StorageMaxUsageBytes],
+      )
+      maybeNotifyStorageCapExceeded(estimate, userCapBytes, (message) => {
+        addToast({ type: ToastType.Error, message })
+      })
     }
   } catch (error) {
     console.error('[StorageQuota] Robust storage setup failed', error)
@@ -313,7 +326,7 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     // storage pressure, then surface quota and warn the user if storage is nearly
     // full so they don't hit silent write failures mid-load. Best-effort + fully
     // feature-detected; never blocks launch.
-    void ensureRobustStorage()
+    void ensureRobustStorage(application)
   }, [application, engagePasskeyGateIfRegistered, handleDemoSignInFromParamsIfApplicable])
 
   useEffect(() => {

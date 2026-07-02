@@ -8,13 +8,18 @@ import PreferencesPane from '@/Components/Preferences/PreferencesComponents/Pref
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
+import Dropdown from '@/Components/Dropdown/Dropdown'
+import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import Icon from '@/Components/Icon/Icon'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
+import usePreference from '@/Hooks/usePreference'
 import { getIconForItem } from '@/Utils/Items/Icons/getIconForItem'
 import { estimateStorage, formatBytes, StorageEstimateResult } from '@/Utils/StorageQuota'
 import { isStorageUsageScanAvailable, scanStorageUsage } from '@/Utils/Storage/StorageUsageManager'
 import { StorageLargestItem, StorageUsageSnapshot } from '@/Utils/Storage/storageUsageWorkerProtocol'
+import { PrefKey } from '@standardnotes/snjs'
 import { confirmDialog } from '@standardnotes/ui-services'
+import { BYTES_PER_GB, BYTES_PER_MB, resolveStorageCapState, STORAGE_CAP_UNLIMITED } from './storageCap'
 import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
 import {
@@ -33,6 +38,39 @@ const sortBucketsBySize = (snapshot: StorageUsageSnapshot) =>
 
 const sortSourcesBySize = (snapshot: StorageUsageSnapshot) =>
   [...snapshot.sources].sort((a, b) => b.bytes - a.bytes)
+
+// --- "Maximum usage" (soft cap) select options. The value is the cap in bytes
+// (stringified), plus the 'unlimited' and 'custom' sentinels. ---
+const CAP_PRESET_GB = [1, 5, 10, 25, 50]
+const CAP_PRESET_BYTES = CAP_PRESET_GB.map((gb) => gb * BYTES_PER_GB)
+const CAP_DROPDOWN_ITEMS: DropdownItem[] = [
+  { label: 'Unlimited', value: 'unlimited' },
+  ...CAP_PRESET_GB.map((gb) => ({ label: `${gb} GB`, value: String(gb * BYTES_PER_GB) })),
+  { label: 'Custom…', value: 'custom' },
+]
+
+type CapUnit = 'MB' | 'GB'
+
+/** Split a byte cap into the friendliest number + MB/GB unit for the custom inputs. */
+const capBytesToCustomParts = (bytes: number): { amount: string; unit: CapUnit } => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return { amount: '1', unit: 'GB' }
+  }
+  if (bytes >= BYTES_PER_GB) {
+    return { amount: String(Math.round((bytes / BYTES_PER_GB) * 100) / 100), unit: 'GB' }
+  }
+  return { amount: String(Math.max(1, Math.round(bytes / BYTES_PER_MB))), unit: 'MB' }
+}
+
+/** Custom inputs → byte cap; undefined when the amount isn't a usable positive number. */
+const encodeCustomCap = (amount: string, unit: CapUnit): number | undefined => {
+  const parsed = Number(amount)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined
+  }
+  const bytes = Math.round(parsed * (unit === 'GB' ? BYTES_PER_GB : BYTES_PER_MB))
+  return Math.max(BYTES_PER_MB, bytes)
+}
 
 /**
  * Standard Red Notes: Storage pane. Shows where local disk space goes and lets the
@@ -135,6 +173,89 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
   // to "used"); otherwise it reconciles to what we measured.
   const breakdownTotal = sources.reduce((sum, source) => sum + source.bytes, 0)
 
+  // --- Maximum usage: the user's SOFT cap (0 == Unlimited). Advisory only — it
+  // recolors the usage bar and warns, but never blocks saving or syncing. When a
+  // cap is set the bar/percentage are driven against it instead of the quota. ---
+  const capBytes = usePreference(PrefKey.StorageMaxUsageBytes)
+  const hasCap = Number.isFinite(capBytes) && capBytes > STORAGE_CAP_UNLIMITED
+  const capState = useMemo(() => resolveStorageCapState(usage, capBytes), [usage, capBytes])
+  const isPresetCap = CAP_PRESET_BYTES.includes(capBytes)
+  // 'Custom…' stays selected while the user is choosing a value, even when the
+  // stored cap still equals a preset (or Unlimited).
+  const [customCapSelected, setCustomCapSelected] = useState(() => hasCap && !isPresetCap)
+  const showCustomCapInputs = customCapSelected || (hasCap && !isPresetCap)
+  const capDropdownValue = showCustomCapInputs ? 'custom' : hasCap ? String(capBytes) : 'unlimited'
+
+  const [customCapAmount, setCustomCapAmount] = useState(() => capBytesToCustomParts(capBytes).amount)
+  const [customCapUnit, setCustomCapUnit] = useState<CapUnit>(() => capBytesToCustomParts(capBytes).unit)
+
+  // Re-sync the custom inputs when the cap changes UNDERNEATH us (another device /
+  // preset picked elsewhere) — but never clobber what the user is typing: skip when
+  // the local inputs already encode the stored cap.
+  useEffect(() => {
+    if (!hasCap || isPresetCap) {
+      return
+    }
+    if (encodeCustomCap(customCapAmount, customCapUnit) === capBytes) {
+      return
+    }
+    const parts = capBytesToCustomParts(capBytes)
+    setCustomCapAmount(parts.amount)
+    setCustomCapUnit(parts.unit)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capBytes])
+
+  const setCapPreference = useCallback(
+    (bytes: number) => {
+      void application.setPreference(PrefKey.StorageMaxUsageBytes, bytes)
+    },
+    [application],
+  )
+
+  const applyCustomCap = useCallback(
+    (amount: string, unit: CapUnit) => {
+      const bytes = encodeCustomCap(amount, unit)
+      if (bytes !== undefined && bytes !== capBytes) {
+        setCapPreference(bytes)
+      }
+    },
+    [capBytes, setCapPreference],
+  )
+
+  const handleCapPresetChange = useCallback(
+    (value: string) => {
+      if (value === 'custom') {
+        setCustomCapSelected(true)
+        // Seed the custom fields from the current cap (default 1 GB when Unlimited)
+        // and persist immediately so the displayed value always matches the pref.
+        const parts = capBytesToCustomParts(capBytes)
+        setCustomCapAmount(parts.amount)
+        setCustomCapUnit(parts.unit)
+        applyCustomCap(parts.amount, parts.unit)
+        return
+      }
+      setCustomCapSelected(false)
+      const bytes = value === 'unlimited' ? STORAGE_CAP_UNLIMITED : Number(value)
+      if (Number.isFinite(bytes) && bytes !== capBytes) {
+        setCapPreference(bytes)
+      }
+    },
+    [applyCustomCap, capBytes, setCapPreference],
+  )
+
+  // Bar geometry/color: against the cap when set (warning tint at 80%, danger when
+  // over), against the browser quota when Unlimited (existing behavior).
+  const barPercent = hasCap ? capState.percent : usedPercent
+  const barColorClass = hasCap
+    ? capState.status === 'over'
+      ? 'h-full bg-danger'
+      : capState.status === 'warning'
+        ? 'h-full bg-warning'
+        : 'h-full bg-info'
+    : usedPercent >= 80
+      ? 'h-full bg-danger'
+      : 'h-full bg-info'
+
   const largest = snapshot?.largest ?? []
 
   const toggleSelected = useCallback((uuid: string) => {
@@ -226,29 +347,91 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
           <HorizontalSeparator classes="my-4" />
 
           <Subtitle>Total usage</Subtitle>
+          {capState.status === 'over' && (
+            <div className="mt-2 rounded border border-solid border-danger bg-danger-faded p-3 text-sm text-danger">
+              <span className="font-semibold">You’ve exceeded your configured storage limit</span> — free up space or
+              raise the limit below. The limit is advisory: syncing and saving are never blocked.
+            </div>
+          )}
           {estimate ? (
             <>
               <Text className="mt-1">
                 <span className="font-bold">{formatBytes(usage)}</span> used
-                {quota > 0 ? (
+                {hasCap ? (
+                  <>
+                    {' '}
+                    of <span className="font-bold">{formatBytes(capBytes)}</span> limit (
+                    {(capState.ratio * 100).toFixed(1)}%)
+                  </>
+                ) : quota > 0 ? (
                   <>
                     {' '}
                     of <span className="font-bold">{formatBytes(quota)}</span> ({usedPercent.toFixed(1)}%)
                   </>
                 ) : null}
               </Text>
-              {quota > 0 && (
+              {(hasCap || quota > 0) && (
                 <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-passive-3">
-                  <div
-                    className={usedPercent >= 80 ? 'h-full bg-danger' : 'h-full bg-info'}
-                    style={{ width: `${usedPercent}%` }}
-                  />
+                  <div className={barColorClass} style={{ width: `${barPercent}%` }} />
                 </div>
+              )}
+              {capState.status === 'warning' && (
+                <Text className="mt-1 text-warning">
+                  Approaching your configured storage limit — {(capState.ratio * 100).toFixed(1)}% used. Free up space
+                  or raise the limit below.
+                </Text>
               )}
             </>
           ) : (
             <Text className="mt-1">Storage estimate is unavailable in this browser.</Text>
           )}
+        </PreferencesSegment>
+
+        <PreferencesSegment>
+          <Subtitle>Maximum usage</Subtitle>
+          <Text className="mt-1">
+            Set a storage budget for this device. Advisory limit for this device; syncing and saving are never blocked
+            — you’ll simply be warned when usage approaches or exceeds it. With Unlimited, usage is measured against
+            the browser’s quota instead.
+          </Text>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Dropdown
+              label="Maximum storage usage"
+              items={CAP_DROPDOWN_ITEMS}
+              value={capDropdownValue}
+              onChange={handleCapPresetChange}
+            />
+            {showCustomCapInputs && (
+              <>
+                <input
+                  type="number"
+                  className="w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  min={1}
+                  step="any"
+                  value={customCapAmount}
+                  aria-label="Custom maximum storage amount"
+                  onChange={(event) => {
+                    setCustomCapAmount(event.target.value)
+                    applyCustomCap(event.target.value, customCapUnit)
+                  }}
+                />
+                <select
+                  className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  value={customCapUnit}
+                  aria-label="Custom maximum storage unit"
+                  onChange={(event) => {
+                    const unit = event.target.value as CapUnit
+                    setCustomCapUnit(unit)
+                    applyCustomCap(customCapAmount, unit)
+                  }}
+                >
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                </select>
+              </>
+            )}
+          </div>
+          {hasCap && <Text className="mt-2 text-passive-1">Current limit: {formatBytes(capBytes)}.</Text>}
         </PreferencesSegment>
       </PreferencesGroup>
 

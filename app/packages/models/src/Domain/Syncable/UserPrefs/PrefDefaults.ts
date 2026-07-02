@@ -99,6 +99,10 @@ export const PrefDefaults = {
   [PrefKey.CustomNotesOrder]: [],
   [PrefKey.CustomFoldersOrder]: [],
   [PrefKey.CustomTagsOrder]: [],
+  // Standard Red Notes: 0 == Unlimited — no user cap on local storage usage; the
+  // Storage pane measures against the browser quota estimate instead. Any value
+  // > 0 is an advisory (soft) cap in bytes; it never blocks saving or syncing.
+  [PrefKey.StorageMaxUsageBytes]: 0,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }
