@@ -837,6 +837,84 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: paginated admin users list (most-recent-first) with
+   * optional filters. All filters are optional; the server clamps `limit` to its
+   * own maximum (1500). Returns { users, total, limit, offset }.
+   */
+  async adminListUsers(options: {
+    limit?: number
+    offset?: number
+    sort?: string
+    email?: string
+    createdAfter?: string
+    createdBefore?: string
+    role?: string
+    banned?: boolean
+    subscription?: string
+  }): Promise<HttpResponse> {
+    const params: Record<string, string> = {}
+    if (options.limit !== undefined) {
+      params.limit = String(options.limit)
+    }
+    if (options.offset !== undefined) {
+      params.offset = String(options.offset)
+    }
+    if (options.sort) {
+      params.sort = options.sort
+    }
+    if (options.email) {
+      params.email = options.email
+    }
+    if (options.createdAfter) {
+      params.createdAfter = options.createdAfter
+    }
+    if (options.createdBefore) {
+      params.createdBefore = options.createdBefore
+    }
+    if (options.role) {
+      params.role = options.role
+    }
+    if (options.banned !== undefined) {
+      params.banned = String(options.banned)
+    }
+    if (options.subscription) {
+      params.subscription = options.subscription
+    }
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.adminUsers),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list users.',
+      params,
+    })
+  }
+
+  /**
+   * Standard Red Notes: read-only tail of the server logs across all services.
+   * All filters optional; the server clamps `limit` to its own maximum (500).
+   * Returns { entries, truncated }.
+   */
+  async adminGetLogs(options: { limit?: number; service?: string; level?: string }): Promise<HttpResponse> {
+    const params: Record<string, string> = {}
+    if (options.limit !== undefined) {
+      params.limit = String(options.limit)
+    }
+    if (options.service) {
+      params.service = options.service
+    }
+    if (options.level) {
+      params.level = options.level
+    }
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.adminLogs),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load server logs.',
+      params,
+    })
+  }
+
   /** Standard Red Notes: grant or revoke the admin (internal team) role. */
   async adminSetUserAdminRole(userUuid: string, granted: boolean): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({

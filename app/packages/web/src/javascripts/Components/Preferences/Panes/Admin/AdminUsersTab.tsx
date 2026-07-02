@@ -1,5 +1,16 @@
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
 import { isErrorResponse } from '@standardnotes/snjs'
+import {
+  ADMIN_USERS_DEFAULT_PAGE_SIZE,
+  AdminUserRow,
+  AdminUsersFilterState,
+  buildAdminListUsersParams,
+  emptyAdminUsersFilterState,
+  formatAdminUserDate,
+  formatAdminUserRoles,
+  formatAdminUserStorage,
+  formatAdminUserSubscription,
+} from './adminHelpers'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -266,6 +277,108 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       setLookingUp(false)
     }
   }, [application, email, setUser, noteIfForbidden])
+
+  // -------------------------------------------------------------------------
+  // Paginated users list (most-recent-first) + filters. Sits above the email
+  // lookup; selecting a row reuses the exact same manage flow (setUser).
+  // -------------------------------------------------------------------------
+  const [rows, setRows] = useState<AdminUserRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(ADMIN_USERS_DEFAULT_PAGE_SIZE)
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState<string | null>(null)
+  const [filters, setFilters] = useState<AdminUsersFilterState>(emptyAdminUsersFilterState())
+  // Raw email box value, debounced into `filters.email`.
+  const [emailSearchInput, setEmailSearchInput] = useState('')
+  const [availableRoles, setAvailableRoles] = useState<string[]>([])
+
+  const loadUsers = useCallback(async () => {
+    setListLoading(true)
+    setListError(null)
+    try {
+      const params = buildAdminListUsersParams(filters, page, pageSize)
+      const response = await application.legacyApi.adminListUsers(params)
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        setListError('The users list is not available on this server.')
+        setRows([])
+        setTotal(0)
+        return
+      }
+      const data = (response as { data?: { users?: AdminUserRow[]; total?: number } }).data
+      setRows(data?.users ?? [])
+      setTotal(data?.total ?? 0)
+    } catch (error) {
+      console.error(error)
+      setListError('Could not load the users list.')
+      setRows([])
+      setTotal(0)
+    } finally {
+      setListLoading(false)
+    }
+  }, [application, noteIfForbidden, filters, page, pageSize])
+
+  useEffect(() => {
+    void loadUsers()
+  }, [loadUsers])
+
+  // Debounce the email search box into the filter (and reset to the first page).
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setFilters((prev) => {
+        if (prev.email === emailSearchInput) {
+          return prev
+        }
+        setPage(0)
+        return { ...prev, email: emailSearchInput }
+      })
+    }, 400)
+    return () => window.clearTimeout(handle)
+  }, [emailSearchInput])
+
+  // Populate the role filter dropdown (best-effort; absent on older servers).
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await application.legacyApi.adminGetAvailableRoles()
+        if (cancelled || isErrorResponse(response)) {
+          return
+        }
+        const data = (response as { data?: { roleNames?: string[] } }).data
+        setAvailableRoles(data?.roleNames ?? [])
+      } catch (error) {
+        console.error(error)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [application])
+
+  // Non-email filter setters reset to the first page so results stay coherent.
+  const setFilterField = useCallback(
+    <K extends keyof AdminUsersFilterState>(key: K, value: AdminUsersFilterState[K]) => {
+      setFilters((prev) => ({ ...prev, [key]: value }))
+      setPage(0)
+    },
+    [],
+  )
+
+  const selectRow = useCallback(
+    (row: AdminUserRow) => {
+      // Reuse the existing lookup->manage flow: setting the user (and email)
+      // triggers the effect that loads flags, ban status and permissions.
+      setEmail(row.email)
+      setUser({ uuid: row.uuid, email: row.email })
+    },
+    [setEmail, setUser],
+  )
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const firstShown = total === 0 ? 0 : page * pageSize + 1
+  const lastShown = page * pageSize + rows.length
 
   const toggleAiEnabled = useCallback(
     async (nextValue: boolean) => {
@@ -547,7 +660,172 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
   return (
     <PreferencesSegment>
-      <Title>Manage user AI access</Title>
+      <Title>Users</Title>
+      <Subtitle>
+        The most-recent users, newest first. Filter the list, then click a row to manage that user below. The email
+        lookup underneath is a quick path to a single known account.
+      </Subtitle>
+
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="flex flex-col">
+          <Text className="mb-1 text-xs">Email search</Text>
+          <DecoratedInput
+            className={{ container: 'w-56' }}
+            placeholder="Search by email…"
+            value={emailSearchInput}
+            onChange={setEmailSearchInput}
+            type="email"
+          />
+        </div>
+        <div className="flex flex-col">
+          <Text className="mb-1 text-xs">Created after</Text>
+          <DecoratedInput
+            className={{ container: 'w-40' }}
+            value={filters.createdAfter}
+            onChange={(value) => setFilterField('createdAfter', value)}
+            type="date"
+          />
+        </div>
+        <div className="flex flex-col">
+          <Text className="mb-1 text-xs">Created before</Text>
+          <DecoratedInput
+            className={{ container: 'w-40' }}
+            value={filters.createdBefore}
+            onChange={(value) => setFilterField('createdBefore', value)}
+            type="date"
+          />
+        </div>
+        <div className="flex flex-col">
+          <Text className="mb-1 text-xs">Subscription</Text>
+          <Dropdown
+            label="Subscription filter"
+            items={[
+              { label: 'Any', value: 'any' },
+              { label: 'Active', value: 'active' },
+              { label: 'Inactive', value: 'inactive' },
+              { label: 'None', value: 'none' },
+            ]}
+            value={filters.subscription}
+            onChange={(value) => setFilterField('subscription', value as AdminUsersFilterState['subscription'])}
+          />
+        </div>
+        <div className="flex flex-col">
+          <Text className="mb-1 text-xs">Banned</Text>
+          <Dropdown
+            label="Banned filter"
+            items={[
+              { label: 'Any', value: 'any' },
+              { label: 'Banned', value: 'yes' },
+              { label: 'Not banned', value: 'no' },
+            ]}
+            value={filters.banned}
+            onChange={(value) => setFilterField('banned', value as AdminUsersFilterState['banned'])}
+          />
+        </div>
+        {availableRoles.length > 0 && (
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs">Role</Text>
+            <Dropdown
+              label="Role filter"
+              items={[{ label: 'Any', value: '' }, ...availableRoles.map((role) => ({ label: role, value: role }))]}
+              value={filters.role}
+              onChange={(value) => setFilterField('role', value)}
+            />
+          </div>
+        )}
+        <Button label="Refresh" onClick={() => void loadUsers()} disabled={listLoading} />
+      </div>
+
+      <div className="mt-3">
+        {listLoading ? (
+          <Spinner className="h-5 w-5" />
+        ) : listError ? (
+          <Text className="text-danger">{listError}</Text>
+        ) : rows.length === 0 ? (
+          <Text>No users match these filters.</Text>
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded border border-border">
+              <table className="w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-contrast">
+                    <th className="p-2 font-bold">Email</th>
+                    <th className="p-2 font-bold">Created</th>
+                    <th className="p-2 font-bold">Roles</th>
+                    <th className="p-2 font-bold">Subscription</th>
+                    <th className="p-2 font-bold">Banned</th>
+                    <th className="p-2 font-bold">MFA</th>
+                    <th className="p-2 font-bold">Storage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr
+                      key={row.uuid}
+                      onClick={() => selectRow(row)}
+                      className={`cursor-pointer border-b border-border last:border-b-0 hover:bg-info-backdrop ${
+                        user?.uuid === row.uuid ? 'bg-info-backdrop' : ''
+                      }`}
+                    >
+                      <td className="p-2">{row.email}</td>
+                      <td className="whitespace-nowrap p-2">{formatAdminUserDate(row.createdAt)}</td>
+                      <td className="p-2">{formatAdminUserRoles(row.roles)}</td>
+                      <td className="p-2">{formatAdminUserSubscription(row.subscription)}</td>
+                      <td className="p-2">{row.banned ? 'Yes' : 'No'}</td>
+                      <td className="p-2">{row.mfaEnabled ? 'On' : 'Off'}</td>
+                      <td className="whitespace-nowrap p-2">
+                        {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Text>
+                {total > 0 ? (
+                  <>
+                    Showing {firstShown}&ndash;{lastShown} of {total}
+                  </>
+                ) : (
+                  'No users'
+                )}
+              </Text>
+              <div className="flex items-center gap-2">
+                <Button label="Previous" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} />
+                <Text>
+                  Page {page + 1} of {pageCount}
+                </Text>
+                <Button
+                  label="Next"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={page + 1 >= pageCount || lastShown >= total}
+                />
+              </div>
+              <Dropdown
+                label="Users per page"
+                items={[
+                  { label: '100 / page', value: '100' },
+                  { label: '250 / page', value: '250' },
+                  { label: '500 / page', value: '500' },
+                  { label: '1000 / page', value: '1000' },
+                  { label: '1500 / page', value: '1500' },
+                ]}
+                value={String(pageSize)}
+                onChange={(value) => {
+                  setPageSize(Number(value))
+                  setPage(0)
+                }}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <HorizontalSeparator classes="my-4" />
+
+      <Title>Manage user by email</Title>
       <Subtitle>Look up a user by email to manage their per-user feature flags.</Subtitle>
       <div className="mt-3 flex items-center gap-3">
         <DecoratedInput

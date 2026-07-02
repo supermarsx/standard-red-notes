@@ -50,6 +50,11 @@ const SettingsPaths = {
 // /admin controller and gated on the INTERNAL_TEAM_USER role server-side).
 const AdminPaths = {
   lookupUser: (email: string) => `/v1/admin/lookup-user/${encodeURIComponent(email)}`,
+  // Standard Red Notes: paginated admin users list (most-recent-first) with
+  // filtering. Server clamps limit to 1500.
+  adminUsers: '/v1/admin/users',
+  // Standard Red Notes: read-only tail of the server logs (all services).
+  adminLogs: '/v1/admin/logs',
   userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,

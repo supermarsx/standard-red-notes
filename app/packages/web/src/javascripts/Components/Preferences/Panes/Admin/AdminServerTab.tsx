@@ -9,6 +9,7 @@ import Button from '@/Components/Button/Button'
 import Switch from '@/Components/Switch/Switch'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { ServerService, serviceStatusChipClass, serviceStatusLabel } from './adminHelpers'
 
 type Props = {
   application: WebApplication
@@ -16,6 +17,7 @@ type Props = {
 }
 
 type ServerStatus = {
+  services?: ServerService[]
   masterSwitches?: {
     ocrServerEnabled?: boolean
     workflowsEnabled?: boolean
@@ -139,6 +141,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const masterSwitches = serverStatus?.masterSwitches
   const gatewayRedis = serverStatus?.health?.gateway?.redis
   const auth = serverStatus?.health?.auth
+  const services = serverStatus?.services ?? []
 
   return (
     <>
@@ -209,6 +212,37 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               <Text>Gateway cache (Redis)</Text>
               <StateChip state={gatewayRedis ?? null} unknown="Not configured" />
             </div>
+
+            {services.length > 0 && (
+              <>
+                <HorizontalSeparator classes="my-2" />
+                <Text>All services</Text>
+                <div className="flex flex-wrap gap-2">
+                  {services.map((service) => (
+                    <span
+                      key={service.name}
+                      title={service.detail ?? serviceStatusLabel(service.status)}
+                      className={`inline-flex items-center gap-1 whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
+                        service.status,
+                      )}`}
+                    >
+                      {service.name}: {serviceStatusLabel(service.status)}
+                    </span>
+                  ))}
+                </div>
+                {services.some((service) => service.detail) && (
+                  <div className="mt-1 flex flex-col gap-0.5">
+                    {services
+                      .filter((service) => service.detail)
+                      .map((service) => (
+                        <Text key={service.name} className="text-xs">
+                          <strong>{service.name}</strong>: {service.detail}
+                        </Text>
+                      ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         ) : null}
       </PreferencesSegment>
