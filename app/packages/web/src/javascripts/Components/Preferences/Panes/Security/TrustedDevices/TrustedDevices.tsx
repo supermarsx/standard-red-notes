@@ -11,6 +11,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
 import { getTrustedDeviceToken, persistTrustedDeviceToken, clearTrustedDeviceToken } from './trustedDeviceStorage'
+import PendingMfaApprovals from './PendingMfaApprovals'
 import { achievements, METRICS } from '@/Achievements'
 
 type Props = {
@@ -186,6 +187,10 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
             </div>
           ))}
       </PreferencesSegment>
+
+      <HorizontalSeparator classes="my-4" />
+
+      <PendingMfaApprovals application={application} />
     </PreferencesGroup>
   )
 }
