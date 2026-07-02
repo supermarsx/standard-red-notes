@@ -6,6 +6,7 @@ import PaneSelector from './PaneSelector'
 import { PreferencesProps } from './PreferencesProps'
 import { FOCUSABLE_BUT_NOT_TABBABLE } from '@/Constants/Constants'
 import { classNames } from '@standardnotes/snjs'
+import { WidePaneContext } from './PreferencesComponents/WidePaneContext'
 
 type Props = PreferencesProps & {
   menu: PreferencesSessionController
@@ -30,7 +31,9 @@ const PreferencesCanvas: FunctionComponent<Props> = (props) => (
       )}
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
     >
-      <PaneSelector {...props} />
+      <WidePaneContext.Provider value={props.menu.isSelectedPaneWide}>
+        <PaneSelector {...props} />
+      </WidePaneContext.Provider>
     </div>
   </div>
 )

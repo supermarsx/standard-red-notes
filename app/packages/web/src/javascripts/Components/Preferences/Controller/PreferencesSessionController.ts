@@ -44,7 +44,9 @@ export class PreferencesSessionController {
     // carry the INTERNAL_TEAM_USER role. Non-admins never see the entry, and the
     // server independently re-checks the role on every admin endpoint.
     if (application.featuresController.isAdminUser()) {
-      menuItems.push({ id: 'admin', label: 'Admin', icon: 'tune', order: 10 })
+      // wide: the Admin pane hosts big tables (users list, audit log, logs) and
+      // gets a double-width content column via PreferencesPane.
+      menuItems.push({ id: 'admin', label: 'Admin', icon: 'tune', order: 10, wide: true })
     }
 
     if (isDesktopApplication()) {
@@ -187,6 +189,11 @@ export class PreferencesSessionController {
     }
 
     return 'account'
+  }
+
+  /** True when the currently selected pane requested a double-width content column. */
+  get isSelectedPaneWide(): boolean {
+    return this.selectedMenuItem?.wide === true
   }
 
   selectPane = (key: PreferencePaneId) => {
