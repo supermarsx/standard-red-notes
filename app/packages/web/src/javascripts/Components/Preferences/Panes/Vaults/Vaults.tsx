@@ -4,6 +4,7 @@ import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/Pre
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import { useApplication } from '@/Components/ApplicationProvider'
 import ContactItem from './Contacts/ContactItem'
+import CollaborationIDSection from './Contacts/CollaborationIDSection'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import EditContactModal from './Contacts/EditContactModal'
 import { useCallback, useEffect, useState } from 'react'
@@ -24,7 +25,6 @@ import Button from '@/Components/Button/Button'
 import InviteItem from './Invites/InviteItem'
 import EditVaultModal from './Vaults/VaultModal/EditVaultModal'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
-import { ToastType, addToast } from '@standardnotes/toast'
 
 const Vaults = observer(() => {
   const application = useApplication()
@@ -180,48 +180,7 @@ const Vaults = observer(() => {
           </PreferencesSegment>
         </PreferencesGroup>
       )}
-      {hasAccount && isSharedVaultsEnabled && (
-        <PreferencesGroup>
-          <PreferencesSegment>
-            <Title>CollaborationID</Title>
-            <Subtitle>Share your CollaborationID with collaborators to join their vaults.</Subtitle>
-            {contactService.isCollaborationEnabled() ? (
-              <>
-                <code className="mt-2.5 overflow-hidden whitespace-pre-wrap break-words rounded border border-border bg-contrast p-3">
-                  {contactService.getCollaborationID()}
-                </code>
-                <Button
-                  label="Copy ID"
-                  className="mt-2"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(contactService.getCollaborationID())
-                      addToast({
-                        type: ToastType.Success,
-                        message: 'Copied to clipboard',
-                      })
-                    } catch (error) {
-                      addToast({
-                        type: ToastType.Error,
-                        message: 'Failed to copy to clipboard',
-                      })
-                      console.error(error)
-                    }
-                  }}
-                />
-              </>
-            ) : (
-              <div className="mt-2.5 flex flex-row">
-                <Button
-                  label="Enable Vault Sharing"
-                  className="mr-3 text-xs"
-                  onClick={() => contactService.enableCollaboration()}
-                />
-              </div>
-            )}
-          </PreferencesSegment>
-        </PreferencesGroup>
-      )}
+      {hasAccount && isSharedVaultsEnabled && <CollaborationIDSection />}
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Vaults</Title>

@@ -1,8 +1,13 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react'
 import Modal, { ModalAction } from '@/Components/Modal/Modal'
+import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
+import Icon from '@/Components/Icon/Icon'
+import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { ClientDisplayableError, InviteRecord, TrustedContactInterface } from '@standardnotes/snjs'
+import { ToastType, addToast } from '@standardnotes/toast'
+import ScanCollaborationIDModal, { isQRScanningSupported } from './ScanCollaborationIDModal'
 
 type Props = {
   fromInvite?: InviteRecord
@@ -17,6 +22,33 @@ const EditContactModal: FunctionComponent<Props> = ({ onCloseDialog, fromInvite,
   const [name, setName] = useState<string>('')
   const [collaborationID, setCollaborationID] = useState<string>('')
   const [editingContact, setEditingContact] = useState<TrustedContactInterface | undefined>(undefined)
+
+  const [isQRScanAvailable, setIsQRScanAvailable] = useState(false)
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false)
+  const closeScanModal = useCallback(() => setIsScanModalOpen(false), [])
+
+  useEffect(() => {
+    let mounted = true
+    isQRScanningSupported()
+      .then((supported) => {
+        if (mounted) {
+          setIsQRScanAvailable(supported)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const handleScannedCollaborationID = useCallback((scannedID: string) => {
+    setCollaborationID(scannedID)
+    setIsScanModalOpen(false)
+    addToast({
+      type: ToastType.Success,
+      message: 'CollaborationID scanned',
+    })
+  }, [])
 
   const handleDialogClose = useCallback(() => {
     onCloseDialog()
@@ -119,17 +151,37 @@ const EditContactModal: FunctionComponent<Props> = ({ onCloseDialog, fromInvite,
                 setCollaborationID(value)
               }}
               onEnter={handleSubmit}
+              right={
+                isQRScanAvailable
+                  ? [
+                      <StyledTooltip label="Scan QR code">
+                        <button
+                          type="button"
+                          className="flex cursor-pointer border-0 bg-transparent p-0 text-neutral hover:text-info"
+                          aria-label="Scan QR code"
+                          onClick={() => setIsScanModalOpen(true)}
+                        >
+                          <Icon type="camera" size="medium" />
+                        </button>
+                      </StyledTooltip>,
+                    ]
+                  : undefined
+              }
             />
           </label>
         )}
 
         {!editContactUuid && (
           <p>
-            Ask your contact for their Standard Red Notes CollaborationID via secure email or chat. Then, enter it here to
-            add them as a contact.
+            Ask your contact for their Standard Red Notes CollaborationID via secure email or chat. Then, enter it here
+            to add them as a contact.{' '}
+            {isQRScanAvailable && 'You can also scan their CollaborationID QR code using the camera button above.'}
           </p>
         )}
       </div>
+      <ModalOverlay isOpen={isScanModalOpen} close={closeScanModal}>
+        <ScanCollaborationIDModal onScan={handleScannedCollaborationID} close={closeScanModal} />
+      </ModalOverlay>
     </Modal>
   )
 }
