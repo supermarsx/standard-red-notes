@@ -1,0 +1,644 @@
+import { FunctionComponent, useCallback, useEffect, useState } from 'react'
+import { isErrorResponse } from '@standardnotes/snjs'
+
+import { WebApplication } from '@/Application/WebApplication'
+import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
+import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
+import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
+import Button from '@/Components/Button/Button'
+import Switch from '@/Components/Switch/Switch'
+import DecoratedInput from '@/Components/Input/DecoratedInput'
+import Dropdown from '@/Components/Dropdown/Dropdown'
+import Spinner from '@/Components/Spinner/Spinner'
+import { ToastType, addToast } from '@standardnotes/toast'
+import { confirmDialog } from '@standardnotes/ui-services'
+import { formatSizeToReadableString } from '@standardnotes/filepicker'
+
+export type LookedUpUser = {
+  uuid: string
+  email: string
+}
+
+// Server-only Standard Red Notes setting names. The client's published
+// domain-core does not carry these, so use the literal strings the server
+// expects (must match the server's SettingName.NAMES values exactly).
+const AI_ENABLED = 'AI_ENABLED'
+const AI_REQUEST_LIMIT = 'AI_REQUEST_LIMIT'
+const COLLABORATION_ENABLED = 'COLLABORATION_ENABLED'
+const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
+// OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
+// decrypted PDF page images to the server, which leaves end-to-end encryption).
+const OCR_SERVER_ALLOWED = 'OCR_SERVER_ALLOWED'
+// OPT-IN n8n-backed workflows (automations). Defaults OFF. Keep in sync with the
+// server's SettingName.NAMES value (SettingName.WorkflowsEnabled = 'WORKFLOWS_ENABLED'
+// in server/packages/domain-core). Also requires the WORKFLOWS_ENABLED operator env.
+const WORKFLOWS_ENABLED = 'WORKFLOWS_ENABLED'
+// OPT-IN scheduled Nextcloud backups. Defaults OFF. Backups remain E2E ciphertext
+// (content stays private), but the server-stored app password grants Nextcloud file
+// access and upload timing/size are exposed. See the privacy alert near the toggle.
+const NEXTCLOUD_BACKUP_ALLOWED = 'NEXTCLOUD_BACKUP_ALLOWED'
+// READ-ONLY view of the user's Nextcloud backup cadence (disabled|daily|weekly|
+// monthly). Surfaced so the admin can SEE the user's backup state.
+const NEXTCLOUD_BACKUP_FREQUENCY = 'NEXTCLOUD_BACKUP_FREQUENCY'
+// Per-user SERVER storage limit in bytes. On the server this is a SUBSCRIPTION
+// setting (not a plain user setting); -1 means unlimited — the only value the
+// files server treats as unlimited. Managed via the same feature-flags endpoints.
+const FILE_UPLOAD_BYTES_LIMIT = 'FILE_UPLOAD_BYTES_LIMIT'
+
+// Match @standardnotes/filepicker's binary units so the displayed current value
+// (formatSizeToReadableString) round-trips with what the admin enters here.
+const BYTES_IN_ONE_MEGABYTE = 1_048_576
+const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
+
+type StorageInfo = {
+  hasSubscription: boolean
+  uploadBytesLimit: number | null
+  uploadBytesUsed: number | null
+}
+
+const describeStorageLimit = (storage: StorageInfo | null): string => {
+  if (!storage || !storage.hasSubscription || storage.uploadBytesLimit === -1) {
+    return 'Unlimited'
+  }
+  if (storage.uploadBytesLimit === null) {
+    return 'Not set (server default)'
+  }
+  return formatSizeToReadableString(storage.uploadBytesLimit)
+}
+
+const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) ? String(amount) : amount.toFixed(2))
+
+type Props = {
+  application: WebApplication
+  noteIfForbidden: (response: { status?: number }) => void
+  // The looked-up user (and the email field feeding the lookup) live in the
+  // Admin shell so they survive tab switches — inactive tab panels unmount.
+  email: string
+  setEmail: (email: string) => void
+  user: LookedUpUser | undefined
+  setUser: (user: LookedUpUser | undefined) => void
+}
+
+const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden, email, setEmail, user, setUser }) => {
+  const [lookingUp, setLookingUp] = useState(false)
+
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [aiRequestLimit, setAiRequestLimit] = useState('')
+  // Collaboration and live sync default to ENABLED; they are gated off only when
+  // the per-user setting is explicitly 'false'.
+  const [collaborationEnabled, setCollaborationEnabled] = useState(true)
+  const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
+  // Server OCR is OFF by default (opt-in E2E downgrade); only 'true' enables it.
+  const [ocrServerAllowed, setOcrServerAllowed] = useState(false)
+  // Workflows are OFF by default; only 'true' enables them for the user.
+  const [workflowsEnabled, setWorkflowsEnabled] = useState(false)
+  // Nextcloud backups are OFF by default; only 'true' enables them. The cadence and
+  // app-password-configured status are read-only context for the admin.
+  const [nextcloudBackupAllowed, setNextcloudBackupAllowed] = useState(false)
+  const [nextcloudBackupFrequency, setNextcloudBackupFrequency] = useState<string | null>(null)
+  const [nextcloudAppPasswordConfigured, setNextcloudAppPasswordConfigured] = useState(false)
+  // Per-user SERVER storage limit (bytes; -1 = unlimited). Read from and written
+  // to the user's subscription settings via the admin feature-flags endpoints.
+  const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
+  const [storageLimitValue, setStorageLimitValue] = useState('')
+  const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
+  const [savingStorageLimit, setSavingStorageLimit] = useState(false)
+  const [flagsLoading, setFlagsLoading] = useState(false)
+  const [savingLimit, setSavingLimit] = useState(false)
+
+  const [banned, setBanned] = useState(false)
+  const [banningInProgress, setBanningInProgress] = useState(false)
+
+  const loadFlags = useCallback(
+    async (userUuid: string) => {
+      setFlagsLoading(true)
+      try {
+        const response = await application.legacyApi.adminGetUserFeatureFlags(userUuid)
+        if (isErrorResponse(response)) {
+          addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
+          return
+        }
+        const data = (
+          response as {
+            data?: {
+              flags?: Record<string, string | null>
+              nextcloudAppPasswordConfigured?: boolean
+              storage?: StorageInfo | null
+            }
+          }
+        ).data
+        const flags = data?.flags ?? {}
+        setAiEnabled(flags[AI_ENABLED] === 'true')
+        setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
+        setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
+        setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
+        setOcrServerAllowed(flags[OCR_SERVER_ALLOWED] === 'true')
+        setWorkflowsEnabled(flags[WORKFLOWS_ENABLED] === 'true')
+        setNextcloudBackupAllowed(flags[NEXTCLOUD_BACKUP_ALLOWED] === 'true')
+        setNextcloudBackupFrequency(flags[NEXTCLOUD_BACKUP_FREQUENCY] ?? null)
+        setNextcloudAppPasswordConfigured(Boolean(data?.nextcloudAppPasswordConfigured))
+
+        const storage = data?.storage ?? null
+        setStorageInfo(storage)
+        // Seed the editor with the user's current limit so "Save" without edits
+        // is a no-op. No explicit setting and -1 both surface as Unlimited.
+        const currentLimit = storage?.uploadBytesLimit ?? null
+        if (currentLimit === null || currentLimit === -1) {
+          setStorageLimitUnit('unlimited')
+          setStorageLimitValue('')
+        } else if (currentLimit >= BYTES_IN_ONE_GIGABYTE) {
+          setStorageLimitUnit('GB')
+          setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_GIGABYTE))
+        } else {
+          setStorageLimitUnit('MB')
+          setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_MEGABYTE))
+        }
+      } catch (error) {
+        console.error(error)
+      } finally {
+        setFlagsLoading(false)
+      }
+    },
+    [application],
+  )
+
+  const loadBanStatus = useCallback(
+    async (lookupEmail: string) => {
+      try {
+        const response = await application.legacyApi.adminGetUserBanStatus(lookupEmail)
+        if (isErrorResponse(response)) {
+          return
+        }
+        const data = (response as { data?: { banned?: boolean } }).data
+        setBanned(Boolean(data?.banned))
+      } catch (error) {
+        console.error(error)
+      }
+    },
+    [application],
+  )
+
+  // Load (or reload) the looked-up user's flags and ban status whenever the
+  // user changes — including on remount, so switching back to this tab
+  // restores fresh data for the user that stayed in the shell.
+  useEffect(() => {
+    if (!user) {
+      return
+    }
+    setBanned(false)
+    void Promise.all([loadFlags(user.uuid), loadBanStatus(user.email)])
+  }, [user, loadFlags, loadBanStatus])
+
+  const lookupUser = useCallback(async () => {
+    if (!email.trim()) {
+      return
+    }
+    setLookingUp(true)
+    setUser(undefined)
+    setBanned(false)
+    try {
+      const response = await application.legacyApi.adminLookupUser(email.trim())
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        addToast({ type: ToastType.Error, message: 'No user found with that email.' })
+        return
+      }
+      const data = (response as { data?: { uuid?: string } }).data
+      if (!data?.uuid) {
+        addToast({ type: ToastType.Error, message: 'No user found with that email.' })
+        return
+      }
+      // Setting the user triggers the effect above, which loads flags + ban status.
+      setUser({ uuid: data.uuid, email: email.trim() })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to look up user.' })
+    } finally {
+      setLookingUp(false)
+    }
+  }, [application, email, setUser, noteIfForbidden])
+
+  const toggleAiEnabled = useCallback(
+    async (nextValue: boolean) => {
+      if (!user) {
+        return
+      }
+      const previous = aiEnabled
+      setAiEnabled(nextValue)
+      try {
+        const response = await application.legacyApi.adminSetUserFeatureFlag(
+          user.uuid,
+          AI_ENABLED,
+          nextValue ? 'true' : 'false',
+        )
+        if (isErrorResponse(response)) {
+          setAiEnabled(previous)
+          addToast({ type: ToastType.Error, message: 'Failed to update AI access.' })
+        }
+      } catch (error) {
+        console.error(error)
+        setAiEnabled(previous)
+        addToast({ type: ToastType.Error, message: 'Failed to update AI access.' })
+      }
+    },
+    [application, user, aiEnabled],
+  )
+
+  const toggleUserFlag = useCallback(
+    async (
+      settingName: string,
+      enabled: boolean,
+      setLocal: (value: boolean) => void,
+      previous: boolean,
+      failureMessage: string,
+    ) => {
+      if (!user) {
+        return
+      }
+      setLocal(enabled)
+      try {
+        // Enabled is the default, so we only persist an explicit 'false' to gate
+        // the feature off; turning it back on stores 'true'.
+        const response = await application.legacyApi.adminSetUserFeatureFlag(
+          user.uuid,
+          settingName,
+          enabled ? 'true' : 'false',
+        )
+        if (isErrorResponse(response)) {
+          setLocal(previous)
+          addToast({ type: ToastType.Error, message: failureMessage })
+        }
+      } catch (error) {
+        console.error(error)
+        setLocal(previous)
+        addToast({ type: ToastType.Error, message: failureMessage })
+      }
+    },
+    [application, user],
+  )
+
+  const saveRequestLimit = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    setSavingLimit(true)
+    try {
+      const response = await application.legacyApi.adminSetUserFeatureFlag(
+        user.uuid,
+        AI_REQUEST_LIMIT,
+        aiRequestLimit.trim() === '' ? null : aiRequestLimit.trim(),
+      )
+      if (isErrorResponse(response)) {
+        addToast({ type: ToastType.Error, message: 'Failed to update AI request limit.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'AI request limit saved.' })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update AI request limit.' })
+    } finally {
+      setSavingLimit(false)
+    }
+  }, [application, user, aiRequestLimit])
+
+  const saveStorageLimit = useCallback(async () => {
+    if (!user) {
+      return
+    }
+
+    let bytesValue: string
+    if (storageLimitUnit === 'unlimited') {
+      // -1 is the server/files-service sentinel for unlimited storage.
+      bytesValue = '-1'
+    } else {
+      const amount = Number(storageLimitValue)
+      if (!Number.isFinite(amount) || amount <= 0) {
+        addToast({ type: ToastType.Error, message: 'Enter a storage limit greater than zero, or choose Unlimited.' })
+        return
+      }
+      bytesValue = String(
+        Math.round(amount * (storageLimitUnit === 'GB' ? BYTES_IN_ONE_GIGABYTE : BYTES_IN_ONE_MEGABYTE)),
+      )
+    }
+
+    setSavingStorageLimit(true)
+    try {
+      const response = await application.legacyApi.adminSetUserFeatureFlag(
+        user.uuid,
+        FILE_UPLOAD_BYTES_LIMIT,
+        bytesValue,
+      )
+      if (isErrorResponse(response)) {
+        addToast({ type: ToastType.Error, message: 'Failed to update storage limit.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'Storage limit saved. It applies to new uploads.' })
+      // Re-read so the display reflects the canonical stored value.
+      await loadFlags(user.uuid)
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update storage limit.' })
+    } finally {
+      setSavingStorageLimit(false)
+    }
+  }, [application, user, storageLimitUnit, storageLimitValue, loadFlags])
+
+  const toggleBan = useCallback(
+    async (nextBanned: boolean) => {
+      if (!user) {
+        return
+      }
+
+      const confirmed = await confirmDialog({
+        title: nextBanned ? 'Ban user' : 'Unban user',
+        text: nextBanned
+          ? `Ban ${user.email}? They will be signed out and blocked from accessing their account until unbanned.`
+          : `Unban ${user.email}? They will regain access to their account.`,
+        confirmButtonText: nextBanned ? 'Ban user' : 'Unban user',
+        confirmButtonStyle: nextBanned ? 'danger' : 'info',
+      })
+      if (!confirmed) {
+        return
+      }
+
+      const previous = banned
+      setBanned(nextBanned)
+      setBanningInProgress(true)
+      try {
+        const response = await application.legacyApi.adminSetUserBanStatus(user.uuid, nextBanned)
+        if (isErrorResponse(response)) {
+          setBanned(previous)
+          addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+          return
+        }
+        addToast({
+          type: ToastType.Success,
+          message: nextBanned ? 'User has been banned.' : 'User has been unbanned.',
+        })
+      } catch (error) {
+        console.error(error)
+        setBanned(previous)
+        addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+      } finally {
+        setBanningInProgress(false)
+      }
+    },
+    [application, user, banned],
+  )
+
+  return (
+    <PreferencesSegment>
+      <Title>Manage user AI access</Title>
+      <Subtitle>Look up a user by email to manage their per-user feature flags.</Subtitle>
+      <div className="mt-3 flex items-center gap-3">
+        <DecoratedInput
+          className={{ container: 'flex-grow' }}
+          placeholder="user@example.com"
+          value={email}
+          onChange={setEmail}
+          onEnter={() => void lookupUser()}
+          type="email"
+        />
+        <Button label="Look up" onClick={() => void lookupUser()} disabled={lookingUp} />
+      </div>
+      {lookingUp && <Spinner className="mt-3 h-5 w-5" />}
+
+      {user && (
+        <div className="mt-4">
+          <HorizontalSeparator classes="my-3" />
+          <Subtitle>
+            Editing: {user.email} ({user.uuid})
+          </Subtitle>
+
+          {flagsLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : (
+            <>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>AI access</Subtitle>
+                  <Text>Allow this user to use AI-powered features.</Text>
+                </div>
+                <Switch checked={aiEnabled} onChange={(checked) => void toggleAiEnabled(checked)} />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex flex-col gap-2">
+                <Subtitle>AI request / token limit</Subtitle>
+                <Text>Maximum number of AI requests/tokens allowed for this user. Leave blank for no limit.</Text>
+                <div className="mt-1 flex items-center gap-3">
+                  <DecoratedInput
+                    className={{ container: 'w-40' }}
+                    placeholder="e.g. 1000"
+                    value={aiRequestLimit}
+                    onChange={setAiRequestLimit}
+                    type="number"
+                  />
+                  <Button label="Save limit" onClick={() => void saveRequestLimit()} disabled={savingLimit} />
+                </div>
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Collaboration</Subtitle>
+                  <Text>Allow this user to create shared vaults and invite collaborators.</Text>
+                </div>
+                <Switch
+                  checked={collaborationEnabled}
+                  onChange={(checked) =>
+                    void toggleUserFlag(
+                      COLLABORATION_ENABLED,
+                      checked,
+                      setCollaborationEnabled,
+                      collaborationEnabled,
+                      'Failed to update collaboration access.',
+                    )
+                  }
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Live sync</Subtitle>
+                  <Text>Push real-time updates to this user's other devices. Disabling keeps manual sync working.</Text>
+                </div>
+                <Switch
+                  checked={liveSyncEnabled}
+                  onChange={(checked) =>
+                    void toggleUserFlag(
+                      LIVE_SYNC_ENABLED,
+                      checked,
+                      setLiveSyncEnabled,
+                      liveSyncEnabled,
+                      'Failed to update live sync access.',
+                    )
+                  }
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Server-side OCR</Subtitle>
+                  <Text>
+                    Allow this user to run PDF OCR on the server. WARNING: server OCR uploads decrypted PDF page images
+                    to the server, which <strong>leaves end-to-end encryption</strong> (the server can read that
+                    content), like the AI assistant. Browser OCR stays on the user's device and is unaffected. Requires
+                    the OCR_SERVER_ENABLED operator switch. Off by default.
+                  </Text>
+                </div>
+                <Switch
+                  checked={ocrServerAllowed}
+                  onChange={(checked) =>
+                    void toggleUserFlag(
+                      OCR_SERVER_ALLOWED,
+                      checked,
+                      setOcrServerAllowed,
+                      ocrServerAllowed,
+                      'Failed to update server OCR access.',
+                    )
+                  }
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Workflows</Subtitle>
+                  <Text>
+                    Allow this user to use the n8n-backed Workflows automation engine (build visual automations that
+                    react to notebook events, run AI steps, and send emails/notes/files). The user must still explicitly
+                    connect from their Workflows pane; connecting provisions a revocable, scoped access token — never
+                    their master key or note contents. Requires the WORKFLOWS_ENABLED operator switch. Off by default.
+                  </Text>
+                </div>
+                <Switch
+                  checked={workflowsEnabled}
+                  onChange={(checked) =>
+                    void toggleUserFlag(
+                      WORKFLOWS_ENABLED,
+                      checked,
+                      setWorkflowsEnabled,
+                      workflowsEnabled,
+                      'Failed to update workflows access.',
+                    )
+                  }
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Nextcloud backups</Subtitle>
+                  <Text>
+                    Allow scheduled encrypted backups of this user's data to their configured Nextcloud. Backups are
+                    end-to-end <strong>ciphertext</strong> &mdash; the content stays private and neither this server nor
+                    Nextcloud can read it. However, the dedicated Nextcloud{' '}
+                    <strong>app password is server-stored</strong> and grants Nextcloud file access, and the upload{' '}
+                    <strong>timing and size are exposed</strong> to the server and Nextcloud. Use a dedicated{' '}
+                    <strong>low-privilege Nextcloud app password</strong>. Requires the NEXTCLOUD_BACKUPS_ENABLED
+                    operator switch and the user's own URL/folder/frequency/app-password setup. Off by default.
+                  </Text>
+                  <Text className="mt-1">
+                    Current state: cadence{' '}
+                    <strong>
+                      {nextcloudBackupFrequency && nextcloudBackupFrequency !== ''
+                        ? nextcloudBackupFrequency
+                        : 'not set'}
+                    </strong>
+                    , app password <strong>{nextcloudAppPasswordConfigured ? 'configured' : 'not configured'}</strong>.
+                    (The app password itself is never shown.)
+                  </Text>
+                </div>
+                <Switch
+                  checked={nextcloudBackupAllowed}
+                  onChange={(checked) =>
+                    void toggleUserFlag(
+                      NEXTCLOUD_BACKUP_ALLOWED,
+                      checked,
+                      setNextcloudBackupAllowed,
+                      nextcloudBackupAllowed,
+                      'Failed to update Nextcloud backup access.',
+                    )
+                  }
+                />
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex flex-col gap-2">
+                <Subtitle>Server storage limit</Subtitle>
+                <Text>
+                  Maximum total size of this user's files stored on the server. Current usage:{' '}
+                  <strong>
+                    {storageInfo?.uploadBytesUsed != null
+                      ? formatSizeToReadableString(storageInfo.uploadBytesUsed)
+                      : 'unknown'}
+                  </strong>
+                  , limit: <strong>{describeStorageLimit(storageInfo)}</strong>. A new limit applies to new uploads;
+                  upload tokens issued before the change keep the previous limit until they expire.
+                </Text>
+                {storageInfo && !storageInfo.hasSubscription ? (
+                  <Text>
+                    This account has no subscription record, so the server treats its storage as unlimited and the limit
+                    cannot be changed here.
+                  </Text>
+                ) : (
+                  <div className="mt-1 flex items-center gap-3">
+                    <DecoratedInput
+                      className={{ container: 'w-28' }}
+                      placeholder="e.g. 5"
+                      value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
+                      onChange={setStorageLimitValue}
+                      type="number"
+                      disabled={storageLimitUnit === 'unlimited'}
+                    />
+                    <Dropdown
+                      label="Storage limit unit"
+                      items={[
+                        { label: 'MB', value: 'MB' },
+                        { label: 'GB', value: 'GB' },
+                        { label: 'Unlimited', value: 'unlimited' },
+                      ]}
+                      value={storageLimitUnit}
+                      onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
+                    />
+                    <Button
+                      label="Save limit"
+                      onClick={() => void saveStorageLimit()}
+                      disabled={savingStorageLimit || flagsLoading}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col">
+                  <Subtitle>Account banned</Subtitle>
+                  <Text>
+                    {banned
+                      ? 'This account is banned. The user is blocked from signing in and any existing session is rejected.'
+                      : "Ban this user to block sign-in and revoke access from this user's existing sessions."}
+                  </Text>
+                </div>
+                <Switch checked={banned} disabled={banningInProgress} onChange={(checked) => void toggleBan(checked)} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </PreferencesSegment>
+  )
+}
+
+export default AdminUsersTab

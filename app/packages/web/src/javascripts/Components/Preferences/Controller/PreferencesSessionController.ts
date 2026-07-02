@@ -38,7 +38,7 @@ export class PreferencesSessionController {
     // carry the INTERNAL_TEAM_USER role. Non-admins never see the entry, and the
     // server independently re-checks the role on every admin endpoint.
     if (application.featuresController.isAdminUser()) {
-      menuItems.push({ id: 'admin', label: 'Admin', icon: 'server', order: 10 })
+      menuItems.push({ id: 'admin', label: 'Admin', icon: 'tune', order: 10 })
     }
 
     if (isDesktopApplication()) {
