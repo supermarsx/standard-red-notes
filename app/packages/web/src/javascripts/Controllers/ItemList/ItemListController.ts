@@ -210,19 +210,37 @@ export class ItemListController
   private createColdLoadThrottle(intervalMs: number): (() => void) & { cancel: () => void } {
     let lastRun = 0
     let trailingTimeout: ReturnType<typeof setTimeout> | undefined
+    /**
+     * Standard Red Notes (cold-load throughput fix): ADAPTIVE interim-reload cadence.
+     * Each interim reload costs O(N-loaded-so-far) (derive + merge-sort tail + list
+     * rebuild), so at a fixed 1/s cadence the interim reloads themselves become the
+     * dominant main-thread consumer on huge accounts, starving the database drain —
+     * heavier ticks -> longer drain -> more ticks (super-linear total). We measure each
+     * interim reload's duration and back off the next one to `duration * 4` (capped at
+     * 15s), so interim rendering never consumes more than ~20-25% of the main thread
+     * regardless of account size. Small accounts (reloads < 250ms) keep the original
+     * 1/s cadence exactly. Correctness is unaffected: the guaranteed final reload on
+     * ApplicationEvent.LocalDataLoaded always produces the complete canonical list.
+     */
+    let dynamicIntervalMs = intervalMs
+    const maxIntervalMs = 15000
     const run = () => {
       lastRun = Date.now()
       trailingTimeout = undefined
-      void this.reloadItems(ItemsReloadSource.ItemStream)
+      const startedAt = Date.now()
+      void this.reloadItems(ItemsReloadSource.ItemStream).then(() => {
+        const duration = Date.now() - startedAt
+        dynamicIntervalMs = Math.min(Math.max(intervalMs, duration * 4), maxIntervalMs)
+      })
     }
     const throttled = () => {
       const elapsed = Date.now() - lastRun
-      if (elapsed >= intervalMs) {
+      if (elapsed >= dynamicIntervalMs) {
         run()
       } else if (!trailingTimeout) {
         // Schedule a single trailing run so the final pre-LocalDataLoaded batch is not lost
         // if it arrives inside the throttle window.
-        trailingTimeout = setTimeout(run, intervalMs - elapsed)
+        trailingTimeout = setTimeout(run, dynamicIntervalMs - elapsed)
       }
     }
     throttled.cancel = () => {

@@ -20,6 +20,32 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   private needsSort = true
 
   /**
+   * Standard Red Notes (cold-load throughput fix): the number of leading slots of
+   * {@link sortedItems} that are known to be in sorted order (relative to the CURRENT
+   * display options). Slots in this region may contain `undefined` holes from removals —
+   * holes don't disturb the relative order of the remaining elements. Every slot at an
+   * index >= this boundary is an unsorted append (new items are always pushed to the
+   * end). Set to the full array length after every resort.
+   *
+   * This lets {@link resortItems} take an INCREMENTAL path when only appends/removals
+   * happened since the last sort (the cold-load case): sort just the appended tail
+   * (O(M log M)) and merge it into the already-sorted region (O(N + M)), instead of
+   * re-sorting all N items (O(N log N)) on every read. Anything that can invalidate the
+   * sorted region's order sets {@link needsFullResort} instead.
+   */
+  private sortedRegionLength = 0
+
+  /**
+   * Standard Red Notes (cold-load throughput fix): true when the already-sorted region
+   * of {@link sortedItems} can no longer be assumed sorted — an element INSIDE it
+   * changed its sort value or pinned state, or the display/vault options (and thus the
+   * comparator) changed. Forces {@link resortItems} down the original full-sort path;
+   * the incremental merge is only taken when this is false, so correctness is preserved
+   * by construction.
+   */
+  private needsFullResort = false
+
+  /**
    * Standard Red Notes: a monotonic counter bumped whenever {@link sortedItems}
    * is mutated (this controller is the sole mutator). Lets callers memoize
    * derived views — e.g. `ItemManager.getDisplayableNotes`'s `filter(isNote)` —
@@ -71,6 +97,8 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   setVaultDisplayOptions(vaultOptions?: VaultDisplayOptions): void {
     this.vaultOptions = vaultOptions
     this.needsSort = true
+    /** Filter criteria changed; previously-sorted positions can't be trusted for a merge. */
+    this.needsFullResort = true
 
     this.filterThenSortElements(this.collection.all(this.contentTypes) as I[])
   }
@@ -78,6 +106,8 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
   setDisplayOptions(displayOptions: Partial<DisplayControllerDisplayOptions & O>): void {
     this.options = { ...this.options, ...displayOptions }
     this.needsSort = true
+    /** The comparator (sortBy/direction/custom order) may have changed; a full resort is required. */
+    this.needsFullResort = true
 
     this.filterThenSortElements(this.collection.all(this.contentTypes) as I[])
   }
@@ -170,6 +200,17 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
             /** Needs resort because its re-sort value has changed,
              * and thus its position might change */
             this.needsSort = true
+
+            /**
+             * Standard Red Notes (cold-load throughput fix): if the changed element sits
+             * INSIDE the already-sorted region, that region is no longer sorted, so the
+             * incremental merge path is invalid — force a full resort. Changes to elements
+             * in the appended (not-yet-sorted) tail don't matter: the tail is sorted from
+             * scratch on every resort anyway.
+             */
+            if (previousIndex != undefined && previousIndex < this.sortedRegionLength) {
+              this.needsFullResort = true
+            }
           }
         } else {
           /** Has not yet been inserted */
@@ -224,31 +265,106 @@ export class ItemDisplayController<I extends DisplayItem, O extends AnyDisplayOp
       })
     }
 
-    const resorted = this.sortedItems.sort((a, b) => {
+    const comparator = (a: I | undefined, b: I | undefined) => {
       return sortTwoItems(a, b, this.options.sortBy, this.options.sortDirection, false, customOrderMap)
-    })
+    }
 
     /**
-     * Now that resorted contains the sorted elements (but also can contain undefined element)
-     * we create another array that filters out any of the undefinedes. We also keep track of the
-     * current index while we loop and set that in the this.sortMap.
-     * */
-    const results = []
-    let currentIndex = 0
+     * Standard Red Notes (cold-load throughput fix): when nothing inside the
+     * already-sorted region changed order-relevant state (only appends and/or removals
+     * happened — the initial bulk-load case), we can sort just the appended tail and
+     * MERGE it into the sorted region: O(N + M log M) instead of O(N log N) per resort.
+     * Because Array.prototype.sort is stable (ES2019) and the merge prefers the
+     * existing region on ties, the merged output is element-for-element identical to
+     * what the full stable sort of the same array would produce.
+     *
+     * Custom (manual) sort mode is excluded: its comparator falls back to
+     * title/created_at for items absent from the custom order, and in-place changes to
+     * those fields intentionally do NOT set needsSort in custom mode, so the sorted
+     * region can't be assumed comparator-sorted there. It always takes the full path,
+     * exactly as before.
+     */
+    const canMergeIncrementally = !this.needsFullResort && this.options.sortBy !== CustomSortKey
 
-    /** @O(n) */
-    for (const element of resorted) {
-      if (!element) {
-        continue
+    let results: I[]
+
+    if (canMergeIncrementally) {
+      results = this.mergeAppendedTailIntoSortedRegion(comparator)
+    } else {
+      const resorted = this.sortedItems.sort(comparator)
+
+      /**
+       * Now that resorted contains the sorted elements (but also can contain undefined element)
+       * we create another array that filters out any of the undefinedes.
+       * */
+      results = []
+
+      /** @O(n) */
+      for (const element of resorted) {
+        if (!element) {
+          continue
+        }
+
+        results.push(element)
       }
+    }
 
-      results.push(element)
-
+    /** Update the saved positions. */
+    let currentIndex = 0
+    for (const element of results) {
       this.sortMap[element.uuid] = currentIndex
-
       currentIndex++
     }
 
     this.sortedItems = results
+    this.sortedRegionLength = results.length
+    this.needsFullResort = false
+  }
+
+  /**
+   * Standard Red Notes (cold-load throughput fix): incremental resort. The first
+   * {@link sortedRegionLength} slots of {@link sortedItems} are already in sorted order
+   * (possibly with undefined holes from removals, which don't disturb the relative
+   * order of the survivors); everything after them is an unsorted appended tail. Sort
+   * the tail with the same comparator, then merge the two sorted sequences, skipping
+   * holes. Ties prefer the existing region, matching what a full STABLE sort of the
+   * same array (region first, tail after) would produce — so the output is identical
+   * to the full-sort path, in O(N + M log M) instead of O(N log N).
+   */
+  private mergeAppendedTailIntoSortedRegion(comparator: (a: I | undefined, b: I | undefined) => number): I[] {
+    const boundary = Math.min(this.sortedRegionLength, this.sortedItems.length)
+
+    const appended: I[] = []
+    for (let index = boundary; index < this.sortedItems.length; index++) {
+      const element = this.sortedItems[index]
+      if (element != undefined) {
+        appended.push(element)
+      }
+    }
+    appended.sort(comparator)
+
+    const merged: I[] = []
+    let tailCursor = 0
+
+    /** @O(n + m) */
+    for (let index = 0; index < boundary; index++) {
+      const existing = this.sortedItems[index]
+      if (existing == undefined) {
+        /** A removal hole; compacted out exactly like the full path's undefined filter. */
+        continue
+      }
+      while (tailCursor < appended.length && comparator(appended[tailCursor], existing) < 0) {
+        merged.push(appended[tailCursor])
+        tailCursor++
+      }
+      merged.push(existing)
+    }
+
+    while (tailCursor < appended.length) {
+      merged.push(appended[tailCursor])
+      tailCursor++
+    }
+
+    return merged
   }
 }
