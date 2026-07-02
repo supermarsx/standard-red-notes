@@ -85,6 +85,21 @@ input:focus {
   box-shadow: 0 0 0 1px var(--sn-stylekit-info-color);
 }
 
+/* Wrapper components (DecoratedInput, editor toolbar/search fields, challenge
+   modal prompts, …) draw their own focus ring on a container element via
+   Tailwind's `focus-within:ring-*` / `focus-within:border-*` utilities. The
+   inner input must not also show the 1px shadow above, or two rings appear.
+   Tailwind v4 emits utilities inside a native `@layer`, so `focus:shadow-none`
+   on the input itself cannot override the unlayered rule above — the
+   suppression has to live here, unlayered, next to the rule it exempts.
+   Radios/checkboxes are excluded: their focus treatment is owned entirely by
+   _radio.scss/_checkbox.scss. Bare inputs (no ring-drawing wrapper) keep the
+   1px shadow for accessibility. */
+:is([class*='focus-within:ring-'], [class*='focus-within:border-'])
+  input:not([type='radio'], [type='checkbox']):focus {
+  box-shadow: none;
+}
+
 .sk-button:focus-visible,
 button:focus-visible {
   outline: none;
