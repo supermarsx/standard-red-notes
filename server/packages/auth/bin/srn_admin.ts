@@ -1,65 +1,207 @@
 import 'reflect-metadata'
 
-import { Email, RoleName, SettingName, Uuid } from '@standardnotes/domain-core'
-
-import { ContainerConfigLoader } from '../src/Bootstrap/Container'
-import TYPES from '../src/Bootstrap/Types'
-import { Env } from '../src/Bootstrap/Env'
-import { UserRepositoryInterface } from '../src/Domain/User/UserRepositoryInterface'
-import { RoleServiceInterface } from '../src/Domain/Role/RoleServiceInterface'
-import { User } from '../src/Domain/User/User'
-
 /**
  * Standard Red Notes: in-container admin CLI ("srn-admin").
  *
  * Runs INSIDE the auth container (same DI container + DataSource as the other
- * maintenance bins, in 'worker' mode so it never triggers migrations) and
- * performs admin operations by reusing the auth package's own use-cases and
- * repositories — no HTTP, no admin session required.
+ * maintenance bins, in the lean 'cli' mode so it never runs migrations and
+ * skips the SNS/SQS/S3 clients) and performs admin operations by reusing the
+ * auth package's own use-cases and repositories — no HTTP, no admin session.
+ *
+ * FAST START: this file keeps its static imports tiny (domain-core, the TYPES
+ * symbol table and the pure CLI helpers). The DI container — DataSource, Redis,
+ * hundreds of bindings — is imported LAZILY, only for commands that need the
+ * database. `help`, unknown commands, argument errors and the read-only
+ * diagnostics (`status`, `logs`, `config`, `roles list`, `flags list`) never
+ * pay for it.
  *
  * Invoke via:
- *   docker compose exec server node packages/auth/docker/entrypoint-admin.js <command> [args]
- * (the entrypoint wires up Yarn PnP, then loads this compiled bin).
+ *   docker compose exec server srn-admin <command> [args]
  */
 
-const ADMIN_ROLE = RoleName.NAMES.InternalTeamUser
+import { promises as fsPromises } from 'fs'
+import * as net from 'net'
+import * as path from 'path'
+import { randomUUID } from 'crypto'
 
-// Minimal shape of the package's Result<T> + a use-case, so we can drive the
-// use-cases through the container without importing each one's file.
+import { Email, RoleName, SettingName, Uuid, type MapperInterface } from '@standardnotes/domain-core'
+
+import TYPES from '../src/Bootstrap/Types'
+import { AuditAction } from '../src/Domain/AuditLog/AuditAction'
+import type { AuditLogWriterInterface } from '../src/Domain/AuditLog/AuditLogWriterInterface'
+import type { AuditLogEntry } from '../src/Domain/AuditLog/AuditLogEntry'
+import type { AuditLogEntryHttpProjection } from '../src/Infra/Http/Projection/AuditLogEntryHttpProjection'
+import type { RoleServiceInterface } from '../src/Domain/Role/RoleServiceInterface'
+import type { SettingRepositoryInterface } from '../src/Domain/Setting/SettingRepositoryInterface'
+import type { User } from '../src/Domain/User/User'
+import type { AdminUserRow, UserRepositoryInterface } from '../src/Domain/User/UserRepositoryInterface'
+import type { Webhook } from '../src/Domain/Webhook/Webhook'
+import type { WebhookRepositoryInterface } from '../src/Domain/Webhook/WebhookRepositoryInterface'
+
+import {
+  ADMIN_ROLE_NAME,
+  CLI_MANAGEABLE_FLAGS,
+  CliLogEntry,
+  OPERATOR_ENVS,
+  STORAGE_LIMIT_SETTING,
+  STORAGE_USED_SETTING,
+  findFlagSpec,
+  formatBytes,
+  formatTable,
+  helpFor,
+  matchGroupUuidInList,
+  parseArgs,
+  parseDateFilter,
+  parseEnvFileContent,
+  parseStorageLimitInput,
+  resolveOperatorEnv,
+  serviceProbeTargets,
+  stringOption,
+  tailLogFiles,
+  usage,
+  validateFlagValue,
+  type GroupLike,
+  type OperatorService,
+  type ParsedArgs,
+} from '../src/Infra/Cli/SrnAdminCli'
+
+/* ---------------------------------------------------------------------------
+ * Small shared shapes so use cases can be driven through the container without
+ * importing each one's module (keeps the lazy-boot property).
+ * ------------------------------------------------------------------------- */
+
 type ResultLike<T> = { isFailed(): boolean; getError(): string; getValue(): T }
 type UseCase<Dto, T = unknown> = { execute(dto: Dto): Promise<ResultLike<T>> }
-
-function usage(): void {
-  process.stdout.write(
-    `srn-admin — in-container admin operations for the Standard Red Notes auth server
-
-USAGE
-  srn-admin <command> [args]
-
-  A <user> may be an email address or a user uuid.
-  A <group> may be a group name or a group uuid.
-
-USERS / ROLES
-  whois <user>                       Show a user's uuid, email, direct roles
-  grant-admin <user>                 Give a user the admin role (${ADMIN_ROLE})
-  revoke-admin <user>                Remove the admin role from a user
-  list-roles <user>                  List a user's direct + effective roles
-  reset-mfa <user>                   Disable/clear a user's 2FA (and recovery codes)
-  fix-quota <email>                  Recalculate a user's storage quota
-
-RBAC GROUPS
-  group list                         List all groups
-  group create <name> [roles]        Create a group ([roles] = comma-separated role names)
-  group delete <group>               Delete a group
-  group set-roles <group> <r,r>      Set a group's roles (comma-separated)
-  group members <group>              List a group's members
-  group add-user <group> <user>      Add a user to a group
-  group remove-user <group> <user>   Remove a user from a group
-`,
-  )
+// DeleteSetting predates the Result<T> convention and returns a plain object.
+type DeleteSettingLike = {
+  execute(dto: {
+    userUuid: string
+    settingName: string
+    softDelete?: boolean
+  }): Promise<{ success: boolean; error?: { message: string } }>
 }
 
-async function resolveUser(userRepository: UserRepositoryInterface, identifier: string): Promise<User | null> {
+const out = (text: string): boolean => process.stdout.write(text)
+const outLine = (text: string): boolean => process.stdout.write(text + '\n')
+const outJson = (value: unknown): boolean => process.stdout.write(JSON.stringify(value, null, 2) + '\n')
+const errLine = (text: string): boolean => process.stderr.write(text + '\n')
+
+class UsageError extends Error {}
+
+function requireResult<T>(result: ResultLike<T>): T {
+  if (result.isFailed()) {
+    throw new Error(result.getError())
+  }
+
+  return result.getValue()
+}
+
+/* ---------------------------------------------------------------------------
+ * Container-free IO helpers (status / logs / config)
+ * ------------------------------------------------------------------------- */
+
+function packagesRoot(): string {
+  // dist/bin/srn_admin.js -> dist -> auth -> packages
+  return process.env.SRN_PACKAGES_DIR ?? path.resolve(__dirname, '..', '..', '..')
+}
+
+async function readPackageEnv(packageName: string): Promise<Record<string, string>> {
+  try {
+    const content = await fsPromises.readFile(path.join(packagesRoot(), packageName, '.env'), 'utf8')
+
+    return parseEnvFileContent(content)
+  } catch {
+    return {}
+  }
+}
+
+function tcpProbe(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port })
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (!settled) {
+        settled = true
+        socket.destroy()
+        resolve(ok)
+      }
+    }
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => done(true))
+    socket.once('timeout', () => done(false))
+    socket.once('error', () => done(false))
+  })
+}
+
+interface ReadinessProbe {
+  name: string
+  port: number
+  reachable: boolean
+  status: 'ok' | 'degraded' | 'down'
+  checks?: Record<string, boolean>
+  detail?: string
+}
+
+async function probeReadiness(name: string, port: number): Promise<ReadinessProbe> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 2500)
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/healthcheck/readiness`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+    let body: { status?: string; checks?: Record<string, boolean> } = {}
+    try {
+      body = (await response.json()) as typeof body
+    } catch {
+      /* non-JSON readiness body — status code is still authoritative */
+    }
+    if (response.status === 200) {
+      return { name, port, reachable: true, status: 'ok', checks: body.checks }
+    }
+    if (response.status === 503) {
+      return { name, port, reachable: true, status: 'degraded', checks: body.checks, detail: 'readiness unavailable' }
+    }
+
+    return { name, port, reachable: true, status: 'down', detail: `unexpected status ${response.status}` }
+  } catch {
+    return { name, port, reachable: false, status: 'down', detail: 'unreachable' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Lazy container boot
+ * ------------------------------------------------------------------------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ContainerLike = { get<T = any>(symbol: symbol): T }
+
+let containerPromise: Promise<ContainerLike> | undefined
+
+async function loadContainer(): Promise<ContainerLike> {
+  if (containerPromise === undefined) {
+    containerPromise = (async () => {
+      // Deferred require: this line pulls in the full auth module graph
+      // (TypeORM, ioredis, AWS SDK, every use case) — the expensive part of a
+      // CLI invocation — so only DB-backed commands pay for it.
+      const { ContainerConfigLoader } = await import('../src/Bootstrap/Container')
+
+      return (await new ContainerConfigLoader('cli').load()) as unknown as ContainerLike
+    })()
+  }
+
+  return containerPromise
+}
+
+async function resolveUser(container: ContainerLike, identifier: string | undefined): Promise<User> {
+  if (!identifier) {
+    throw new UsageError('a <user> (email or uuid) is required')
+  }
+  const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+
   const asUuid = Uuid.create(identifier)
   if (!asUuid.isFailed()) {
     const byUuid = await userRepository.findOneByUuid(asUuid.getValue())
@@ -69,265 +211,1177 @@ async function resolveUser(userRepository: UserRepositoryInterface, identifier: 
   }
   const asEmail = Email.create(identifier)
   if (!asEmail.isFailed()) {
-    return userRepository.findOneByUsernameOrEmail(asEmail.getValue())
-  }
-  return null
-}
-
-// Minimal shape of a group as returned by Auth_ListGroups.
-type GroupLike = { id?: { toString(): string }; props?: { name?: string } }
-
-/**
- * Pure matcher: given the full group list and an identifier (a group uuid or a
- * group name), return the matching group's uuid. Kept free of DI/IO so it can be
- * unit-tested. A uuid match is preferred (only when the identifier is a valid
- * uuid); otherwise an exact NAME match is used — case-sensitive first, falling
- * back to a UNIQUE case-insensitive match. Ambiguous names and no-match both
- * throw a helpful error.
- */
-export function matchGroupUuidInList(groups: GroupLike[], identifier: string, identifierIsUuid: boolean): string {
-  const entries = groups.map((group) => ({
-    uuid: group.id?.toString() ?? '',
-    name: group.props?.name ?? '',
-  }))
-
-  if (identifierIsUuid) {
-    const byUuid = entries.find((entry) => entry.uuid === identifier)
-    if (byUuid) {
-      return byUuid.uuid
+    const byEmail = await userRepository.findOneByUsernameOrEmail(asEmail.getValue())
+    if (byEmail) {
+      return byEmail
     }
   }
-
-  const caseSensitive = entries.filter((entry) => entry.name === identifier)
-  const matches =
-    caseSensitive.length > 0
-      ? caseSensitive
-      : entries.filter((entry) => entry.name.toLowerCase() === identifier.toLowerCase())
-
-  if (matches.length === 1) {
-    return matches[0].uuid
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `"${identifier}" is ambiguous — it matches ${matches.length} groups: ${matches
-        .map((entry) => entry.uuid)
-        .join(', ')}. Pass the group uuid instead.`,
-    )
-  }
-  throw new Error(`no group found for "${identifier}"`)
+  throw new Error(`no user found for "${identifier}"`)
 }
 
-async function directRoleNames(user: User): Promise<string[]> {
-  const roles = await user.roles
-  return roles.map((role) => role.name)
-}
-
-function requireResult<T>(result: ResultLike<T>): T {
-  if (result.isFailed()) {
-    throw new Error(result.getError())
+/** Best-effort audit entry for CLI mutations (never fails the operation). */
+async function writeAudit(
+  container: ContainerLike,
+  action: string,
+  target: { type: string; uuid: string | null },
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const writer = container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter)
+    await writer.write({
+      actorUuid: null,
+      action,
+      targetType: target.type,
+      targetUuid: target.uuid,
+      ip: null,
+      metadata: { ...metadata, via: 'srn-admin' },
+    })
+  } catch {
+    /* the audit writer is itself best-effort; a missing binding must not break the CLI */
   }
-  return result.getValue()
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function run(container: any): Promise<number> {
-  const [command, ...args] = process.argv.slice(2)
+/* ---------------------------------------------------------------------------
+ * USERS
+ * ------------------------------------------------------------------------- */
 
-  if (!command || command === 'help' || command === '--help' || command === '-h') {
-    usage()
+async function cmdUsersList(args: ParsedArgs): Promise<number> {
+  const { options } = args
+
+  const limitRaw = stringOption(options, 'limit')
+  const offsetRaw = stringOption(options, 'offset')
+  const limit = limitRaw !== undefined ? Number.parseInt(limitRaw, 10) : 100
+  const offset = offsetRaw !== undefined ? Number.parseInt(offsetRaw, 10) : 0
+  if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(offset) || offset < 0) {
+    throw new UsageError('--limit must be a positive integer and --offset a non-negative integer')
+  }
+
+  const sortRaw = stringOption(options, 'sort') ?? 'createdAt'
+  if (!['createdAt', 'email', 'updatedAt'].includes(sortRaw)) {
+    throw new UsageError(`invalid --sort '${sortRaw}' (createdAt | email | updatedAt)`)
+  }
+
+  const bannedRaw = stringOption(options, 'banned')
+  if (bannedRaw !== undefined && !['true', 'false'].includes(bannedRaw)) {
+    throw new UsageError("--banned takes 'true' or 'false'")
+  }
+
+  const subscriptionRaw = stringOption(options, 'subscription')
+  if (subscriptionRaw !== undefined && !['active', 'inactive', 'none'].includes(subscriptionRaw)) {
+    throw new UsageError('--subscription takes active | inactive | none')
+  }
+
+  const parseDateOption = (name: string): number | undefined => {
+    const raw = stringOption(options, name)
+    if (raw === undefined) {
+      return undefined
+    }
+    const parsed = parseDateFilter(raw)
+    if (parsed === undefined) {
+      throw new UsageError(`invalid --${name} '${raw}' (use ISO-8601 or epoch milliseconds)`)
+    }
+
+    return parsed
+  }
+  const createdAfter = parseDateOption('created-after')
+  const createdBefore = parseDateOption('created-before')
+
+  const container = await loadContainer()
+  const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+
+  const result = await userRepository.findUsersForAdmin({
+    limit,
+    offset,
+    sort: sortRaw as 'createdAt' | 'email' | 'updatedAt',
+    email: stringOption(options, 'email'),
+    role: stringOption(options, 'role'),
+    banned: bannedRaw !== undefined ? bannedRaw === 'true' : undefined,
+    subscription: subscriptionRaw as 'active' | 'inactive' | 'none' | undefined,
+    createdAfter,
+    createdBefore,
+  })
+
+  if (options.json === true) {
+    outJson({ users: result.rows, total: result.total, limit, offset })
+
     return 0
   }
 
-  const userRepository = container.get(TYPES.Auth_UserRepository) as UserRepositoryInterface
+  if (result.rows.length === 0) {
+    outLine('(no users match)')
 
-  const needUser = async (identifier: string | undefined): Promise<User> => {
-    if (!identifier) {
-      throw new Error('a <user> (email or uuid) is required')
-    }
-    const user = await resolveUser(userRepository, identifier)
-    if (!user) {
-      throw new Error(`no user found for "${identifier}"`)
-    }
-    return user
+    return 0
   }
 
-  switch (command) {
-    case 'whois': {
-      const user = await needUser(args[0])
-      process.stdout.write(
-        `uuid:  ${user.uuid}\nemail: ${user.email}\nroles: ${(await directRoleNames(user)).join(', ') || '(none)'}\n`,
-      )
-      return 0
+  const rows = result.rows.map((row: AdminUserRow) => [
+    row.email,
+    row.uuid,
+    row.createdAt.slice(0, 10),
+    row.roles.join(',') || '-',
+    row.banned ? 'yes' : 'no',
+    row.mfaEnabled ? 'on' : 'off',
+    `${formatBytes(row.storageUsedBytes)} / ${formatBytes(row.storageLimitBytes)}`,
+  ])
+  outLine(formatTable(['EMAIL', 'UUID', 'CREATED', 'ROLES', 'BANNED', 'MFA', 'STORAGE USED/LIMIT'], rows))
+  outLine(`\n${offset + 1}-${offset + result.rows.length} of ${result.total} user(s)`)
+
+  return 0
+}
+
+async function cmdUser(args: ParsedArgs): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError('user <user> — a <user> (email or uuid) is required')
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+  const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+
+  // Reuse the admin list finder's batched enrichment (roles, subscription,
+  // MFA, storage) so the CLI shows exactly what the admin panel shows.
+  const adminList = await userRepository.findUsersForAdmin({
+    limit: 100,
+    offset: 0,
+    sort: 'createdAt',
+    email: user.email,
+  })
+  const row = adminList.rows.find((candidate) => candidate.uuid === user.uuid)
+
+  // Effective roles/permissions (direct + group-conferred).
+  let effective:
+    | { directRoleNames: string[]; groupRoleNames: string[]; effectiveRoleNames: string[]; effectivePermissionNames: string[] }
+    | undefined
+  try {
+    const getEffective = container.get<UseCase<{ userUuid: string }>>(TYPES.Auth_GetUserEffectivePermissions)
+    effective = requireResult(await getEffective.execute({ userUuid: user.uuid })) as typeof effective
+  } catch {
+    /* effective-permissions use case unavailable; direct roles still shown */
+  }
+
+  const getSetting = container.get<
+    UseCase<
+      { userUuid: string; settingName: string; allowSensitiveRetrieval: boolean; decrypted: boolean },
+      { decryptedValue?: string | null }
+    >
+  >(TYPES.Auth_GetSetting)
+
+  const flags: Record<string, string | null> = {}
+  for (const spec of CLI_MANAGEABLE_FLAGS) {
+    const result = await getSetting.execute({
+      userUuid: user.uuid,
+      settingName: spec.name,
+      allowSensitiveRetrieval: false,
+      decrypted: true,
+    })
+    flags[spec.name] = result.isFailed() ? null : (result.getValue().decryptedValue ?? null)
+  }
+
+  // Existence-only probe (never decrypts) — mirrors the panel's read-only
+  // "Nextcloud destination configured?" indicator.
+  const appPassword = await getSetting.execute({
+    userUuid: user.uuid,
+    settingName: SettingName.NAMES.NextcloudBackupAppPassword,
+    allowSensitiveRetrieval: true,
+    decrypted: false,
+  })
+  const nextcloudConfigured = !appPassword.isFailed()
+
+  const directRoles = (await user.roles).map((role) => role.name)
+
+  if (args.options.json === true) {
+    outJson({
+      uuid: user.uuid,
+      email: user.email,
+      createdAt: user.createdAt.toISOString(),
+      updatedAt: user.updatedAt.toISOString(),
+      banned: user.isBanned(),
+      bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
+      banReason: user.banReason ?? null,
+      mfaEnabled: row?.mfaEnabled ?? null,
+      roles: {
+        direct: directRoles,
+        groupConferred: effective?.groupRoleNames ?? null,
+        effective: effective?.effectiveRoleNames ?? directRoles,
+      },
+      effectivePermissions: effective?.effectivePermissionNames ?? null,
+      subscription: row?.subscription ?? null,
+      storage: { usedBytes: row?.storageUsedBytes ?? null, limitBytes: row?.storageLimitBytes ?? null },
+      flags,
+      nextcloudAppPasswordConfigured: nextcloudConfigured,
+    })
+
+    return 0
+  }
+
+  outLine(`uuid:     ${user.uuid}`)
+  outLine(`email:    ${user.email}`)
+  outLine(`created:  ${user.createdAt.toISOString()}`)
+  outLine(
+    `banned:   ${
+      user.isBanned()
+        ? `yes (since ${user.bannedAt?.toISOString() ?? '?'}${user.banReason ? `, reason: ${user.banReason}` : ''})`
+        : 'no'
+    }`,
+  )
+  outLine(`mfa:      ${row ? (row.mfaEnabled ? 'on' : 'off') : 'unknown'}`)
+  if (row?.subscription) {
+    outLine(`plan:     ${row.subscription.plan ?? '-'} (${row.subscription.active ? 'active' : 'inactive'})`)
+  }
+  outLine(`storage:  ${formatBytes(row?.storageUsedBytes ?? null)} used / ${formatBytes(row?.storageLimitBytes ?? null)} limit`)
+  outLine('')
+  outLine(`direct roles:          ${directRoles.join(', ') || '(none)'}`)
+  if (effective) {
+    outLine(`group-conferred roles: ${effective.groupRoleNames.join(', ') || '(none)'}`)
+    outLine(`effective roles:       ${effective.effectiveRoleNames.join(', ') || '(none)'}`)
+    outLine(`effective permissions: ${effective.effectivePermissionNames.join(', ') || '(none)'}`)
+  }
+  outLine('')
+  outLine('feature flags (unset = server default):')
+  for (const spec of CLI_MANAGEABLE_FLAGS) {
+    outLine(`  ${spec.name.padEnd(28)} ${flags[spec.name] ?? '(default)'}`)
+  }
+  outLine(`  ${'NEXTCLOUD_APP_PASSWORD'.padEnd(28)} ${nextcloudConfigured ? '(configured)' : '(not configured)'}`)
+
+  return 0
+}
+
+async function cmdBan(args: ParsedArgs, banned: boolean): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError(`${banned ? 'ban' : 'unban'} <user> — a <user> (email or uuid) is required`)
+  }
+  const banReason = stringOption(args.options, 'reason') ?? null
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  const setUserBanStatus = container.get<UseCase<{ userUuid: string; banned: boolean; banReason: string | null }, User>>(
+    TYPES.Auth_SetUserBanStatus,
+  )
+  requireResult(await setUserBanStatus.execute({ userUuid: user.uuid, banned, banReason }))
+
+  await writeAudit(container, AuditAction.BanChanged, { type: 'user', uuid: user.uuid }, { banned, banReason })
+
+  if (banned) {
+    outLine(
+      `Banned ${user.email} (${user.uuid})${banReason ? ` — reason: ${banReason}` : ''}. Takes effect on their next authenticated request.`,
+    )
+  } else {
+    outLine(`Unbanned ${user.email} (${user.uuid}).`)
+  }
+
+  return 0
+}
+
+async function cmdResetMfa(args: ParsedArgs): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError('reset-mfa <user> — a <user> (email or uuid) is required')
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  const deleteSetting = container.get<DeleteSettingLike>(TYPES.Auth_DeleteSetting)
+  const result = await deleteSetting.execute({
+    userUuid: user.uuid,
+    settingName: SettingName.NAMES.MfaSecret,
+    softDelete: true,
+  })
+  if (!result.success) {
+    throw new Error(result.error?.message ?? `No 2FA configuration found for ${user.email}.`)
+  }
+
+  await writeAudit(container, AuditAction.MfaReset, { type: 'user', uuid: user.uuid }, { name: SettingName.NAMES.MfaSecret })
+
+  outLine(`Cleared 2FA (and recovery codes) for ${user.email} (${user.uuid})`)
+
+  return 0
+}
+
+async function cmdFixQuota(args: ParsedArgs): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError('fix-quota <user> — a <user> (email or uuid) is required')
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  const fixQuota = container.get<UseCase<{ userEmail: string }>>(TYPES.Auth_FixStorageQuotaForUser)
+  requireResult(await fixQuota.execute({ userEmail: user.email }))
+
+  await writeAudit(container, AuditAction.QuotaRecalculated, { type: 'user', uuid: user.uuid }, {})
+
+  outLine(`Recalculated storage quota for ${user.email} (the files worker refreshes the counter asynchronously)`)
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
+ * ROLES
+ * ------------------------------------------------------------------------- */
+
+async function cmdRolesMutate(identifier: string | undefined, roleNameRaw: string | undefined, grant: boolean): Promise<number> {
+  if (!identifier || !roleNameRaw) {
+    throw new UsageError(`roles ${grant ? 'grant' : 'revoke'} <user> <ROLE_NAME> — see 'srn-admin roles list'`)
+  }
+  const roleNameOrError = RoleName.create(roleNameRaw)
+  if (roleNameOrError.isFailed()) {
+    throw new UsageError(`unknown role '${roleNameRaw}'. Known roles: ${Object.values(RoleName.NAMES).join(', ')}`)
+  }
+  const roleName = roleNameOrError.getValue()
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+  const roleService = container.get<RoleServiceInterface>(TYPES.Auth_RoleService)
+  const userUuid = requireResult(Uuid.create(user.uuid) as ResultLike<Uuid>)
+
+  if (grant) {
+    await roleService.addRoleToUser(userUuid, roleName)
+  } else {
+    await roleService.removeRoleFromUser(userUuid, roleName)
+  }
+
+  await writeAudit(container, AuditAction.RoleChanged, { type: 'user', uuid: user.uuid }, { role: roleName.value, granted: grant })
+
+  outLine(`${grant ? 'Granted' : 'Revoked'} ${roleName.value} ${grant ? 'to' : 'from'} ${user.email} (${user.uuid})`)
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
+ * FLAGS + STORAGE LIMIT
+ * ------------------------------------------------------------------------- */
+
+function printFlagsList(): number {
+  const rows = CLI_MANAGEABLE_FLAGS.map((spec) => [
+    spec.name,
+    spec.allowedValues ? spec.allowedValues.join(' | ') : '(free-form)',
+    spec.description + (spec.cliOnly ? ' [CLI-only]' : ''),
+  ])
+  rows.push([STORAGE_LIMIT_SETTING, 'bytes | unlimited', "Per-user storage limit — use 'storage-limit set'"])
+  outLine(formatTable(['SETTING', 'VALUES', 'DESCRIPTION'], rows))
+  outLine('\nSensitive settings (MFA secrets, backup app passwords, ...) are not manageable here.')
+
+  return 0
+}
+
+async function cmdFlagsGet(args: ParsedArgs): Promise<number> {
+  const [identifier, settingRaw] = args.positionals
+  if (!identifier) {
+    throw new UsageError('flags get <user> [SETTING]')
+  }
+  const specs = settingRaw !== undefined ? [findFlagSpec(settingRaw)] : CLI_MANAGEABLE_FLAGS
+  if (specs[0] === undefined) {
+    throw new UsageError(`'${settingRaw}' is not an admin-manageable setting — see 'srn-admin flags list'`)
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+  const getSetting = container.get<
+    UseCase<
+      { userUuid: string; settingName: string; allowSensitiveRetrieval: boolean; decrypted: boolean },
+      { decryptedValue?: string | null }
+    >
+  >(TYPES.Auth_GetSetting)
+
+  const values: Record<string, string | null> = {}
+  for (const spec of specs as typeof CLI_MANAGEABLE_FLAGS) {
+    const result = await getSetting.execute({
+      userUuid: user.uuid,
+      settingName: spec.name,
+      allowSensitiveRetrieval: false,
+      decrypted: true,
+    })
+    values[spec.name] = result.isFailed() ? null : (result.getValue().decryptedValue ?? null)
+  }
+
+  if (args.options.json === true) {
+    outJson({ userUuid: user.uuid, email: user.email, flags: values })
+
+    return 0
+  }
+
+  outLine(
+    formatTable(
+      ['SETTING', 'VALUE'],
+      Object.entries(values).map(([name, value]) => [name, value ?? '(default)']),
+    ),
+  )
+
+  return 0
+}
+
+async function cmdFlagsSet(args: ParsedArgs, unset: boolean): Promise<number> {
+  const [identifier, settingRaw, valueRaw] = args.positionals
+  if (!identifier || !settingRaw || (!unset && valueRaw === undefined)) {
+    throw new UsageError(unset ? 'flags unset <user> <SETTING>' : 'flags set <user> <SETTING> <value>')
+  }
+
+  // The storage limit is a SUBSCRIPTION setting with a dedicated path.
+  if (settingRaw.toUpperCase() === STORAGE_LIMIT_SETTING) {
+    if (unset) {
+      throw new UsageError(`${STORAGE_LIMIT_SETTING} cannot be unset — use 'storage-limit set <user> <bytes|unlimited>'`)
     }
 
-    case 'grant-admin':
-    case 'revoke-admin': {
-      const user = await needUser(args[0])
-      const roleService = container.get(TYPES.Auth_RoleService) as RoleServiceInterface
-      const roleName = requireResult(RoleName.create(ADMIN_ROLE) as ResultLike<RoleName>)
-      const userUuid = requireResult(Uuid.create(user.uuid) as ResultLike<Uuid>)
-      if (command === 'grant-admin') {
-        await roleService.addRoleToUser(userUuid, roleName)
-        process.stdout.write(`Granted ${ADMIN_ROLE} to ${user.email} (${user.uuid})\n`)
-      } else {
-        await roleService.removeRoleFromUser(userUuid, roleName)
-        process.stdout.write(`Revoked ${ADMIN_ROLE} from ${user.email} (${user.uuid})\n`)
-      }
-      return 0
-    }
+    return setStorageLimit(identifier, valueRaw)
+  }
 
-    case 'list-roles': {
-      const user = await needUser(args[0])
-      process.stdout.write(`direct roles: ${(await directRoleNames(user)).join(', ') || '(none)'}\n`)
-      try {
-        const getEffective = container.get(TYPES.Auth_GetUserEffectivePermissions) as UseCase<{ userUuid: string }>
-        const effective = requireResult(await getEffective.execute({ userUuid: user.uuid })) as {
-          effectiveRoleNames?: string[]
-          effectivePermissionNames?: string[]
-        }
-        process.stdout.write(`effective roles: ${(effective.effectiveRoleNames ?? []).join(', ') || '(none)'}\n`)
-        process.stdout.write(
-          `effective permissions: ${(effective.effectivePermissionNames ?? []).join(', ') || '(none)'}\n`,
-        )
-      } catch {
-        /* effective-permissions use-case unavailable; direct roles already printed */
-      }
-      return 0
-    }
+  const spec = findFlagSpec(settingRaw)
+  if (spec === undefined) {
+    throw new UsageError(
+      `'${settingRaw}' is not an admin-manageable setting (sensitive/unknown settings are refused) — see 'srn-admin flags list'`,
+    )
+  }
 
-    case 'reset-mfa': {
-      const user = await needUser(args[0])
-      const deleteSetting = container.get(TYPES.Auth_DeleteSetting) as UseCase<{
-        userUuid: string
-        settingName: string
-        softDelete?: boolean
-      }>
-      requireResult(
-        await deleteSetting.execute({ userUuid: user.uuid, settingName: SettingName.NAMES.MfaSecret, softDelete: true }),
-      )
-      process.stdout.write(`Cleared 2FA (and recovery codes) for ${user.email} (${user.uuid})\n`)
-      return 0
-    }
+  const value = unset ? null : (valueRaw as string)
+  const validation = validateFlagValue(spec, value)
+  if (!validation.ok) {
+    throw new UsageError(validation.error)
+  }
 
-    case 'fix-quota': {
-      const user = await needUser(args[0])
-      const fixQuota = container.get(TYPES.Auth_FixStorageQuotaForUser) as UseCase<{ userEmail: string }>
-      requireResult(await fixQuota.execute({ userEmail: user.email }))
-      process.stdout.write(`Recalculated storage quota for ${user.email}\n`)
-      return 0
-    }
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
 
-    case 'group': {
-      return runGroup(container, args)
-    }
+  const setSettingValue = container.get<
+    UseCase<{ settingName: string; value: string | null; userUuid: string; checkUserPermissions: boolean }>
+  >(TYPES.Auth_SetSettingValue)
+  requireResult(
+    await setSettingValue.execute({
+      settingName: spec.name,
+      value,
+      userUuid: user.uuid,
+      checkUserPermissions: false,
+    }),
+  )
 
-    default:
-      process.stderr.write(`Unknown command: ${command}\n\n`)
-      usage()
-      return 1
+  // Setting NAME only, never the value (mirrors the panel's audit policy).
+  await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: user.uuid }, { name: spec.name })
+
+  outLine(`${unset ? 'Cleared' : 'Set'} ${spec.name}${unset ? '' : `=${value}`} for ${user.email} (${user.uuid})`)
+
+  return 0
+}
+
+async function storageInfoForUser(
+  container: ContainerLike,
+  userUuid: string,
+): Promise<{ subscriptionUuid: string | null; limit: number | null; used: number | null }> {
+  const getRegularSubscription = container.get<UseCase<{ userUuid: string }, { uuid: string }>>(
+    TYPES.Auth_GetRegularSubscriptionForUser,
+  )
+  const subscriptionOrError = await getRegularSubscription.execute({ userUuid })
+  if (subscriptionOrError.isFailed()) {
+    return { subscriptionUuid: null, limit: null, used: null }
+  }
+  const subscriptionUuid = subscriptionOrError.getValue().uuid
+
+  const getSubscriptionSetting = container.get<
+    UseCase<
+      { userSubscriptionUuid: string; settingName: string; allowSensitiveRetrieval: boolean },
+      { setting: { props: { value: string | null } } }
+    >
+  >(TYPES.Auth_GetSubscriptionSetting)
+
+  const readNumber = async (settingName: string): Promise<number | null> => {
+    const result = await getSubscriptionSetting.execute({
+      userSubscriptionUuid: subscriptionUuid,
+      settingName,
+      allowSensitiveRetrieval: false,
+    })
+    if (result.isFailed()) {
+      return null
+    }
+    const raw = result.getValue().setting.props.value
+    const parsed = raw === null ? Number.NaN : Number(raw)
+
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  return {
+    subscriptionUuid,
+    limit: await readNumber(STORAGE_LIMIT_SETTING),
+    used: await readNumber(STORAGE_USED_SETTING),
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function runGroup(container: any, args: string[]): Promise<number> {
-  const [sub, ...rest] = args
-  const userRepository = container.get(TYPES.Auth_UserRepository) as UserRepositoryInterface
-
-  const resolveUserUuid = async (identifier: string): Promise<string> => {
-    const user = await resolveUser(userRepository, identifier)
-    if (!user) {
-      throw new Error(`no user found for "${identifier}"`)
-    }
-    return user.uuid
+async function cmdStorageLimitGet(args: ParsedArgs): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError('storage-limit get <user>')
   }
 
-  // Resolve a <group> argument (a group name OR a group uuid) to a group uuid.
-  // Fetches the group list once per invocation via Auth_ListGroups.
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+  const info = await storageInfoForUser(container, user.uuid)
+
+  if (args.options.json === true) {
+    outJson({ userUuid: user.uuid, email: user.email, ...info })
+
+    return 0
+  }
+
+  if (info.subscriptionUuid === null) {
+    outLine(
+      `${user.email} has no regular subscription record — the files server already treats such accounts as unlimited.`,
+    )
+
+    return 0
+  }
+  outLine(`used:  ${formatBytes(info.used)}${info.used !== null ? ` (${info.used} bytes)` : ''}`)
+  outLine(`limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`)
+
+  return 0
+}
+
+async function setStorageLimit(identifier: string, rawValue: string): Promise<number> {
+  const parsed = parseStorageLimitInput(rawValue)
+  if (!parsed.ok) {
+    throw new UsageError(parsed.error)
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  const getRegularSubscription = container.get<UseCase<{ userUuid: string }, { uuid: string }>>(
+    TYPES.Auth_GetRegularSubscriptionForUser,
+  )
+  const subscriptionOrError = await getRegularSubscription.execute({ userUuid: user.uuid })
+  if (subscriptionOrError.isFailed()) {
+    throw new Error(
+      `${user.email} has no regular subscription record. Accounts without one are already treated as unlimited by the files server.`,
+    )
+  }
+
+  const setSubscriptionSettingValue = container.get<
+    UseCase<{ userSubscriptionUuid: string; settingName: string; value: string }>
+  >(TYPES.Auth_SetSubscriptionSettingValue)
+  requireResult(
+    await setSubscriptionSettingValue.execute({
+      userSubscriptionUuid: subscriptionOrError.getValue().uuid,
+      settingName: STORAGE_LIMIT_SETTING,
+      value: parsed.value,
+    }),
+  )
+
+  await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: user.uuid }, { name: STORAGE_LIMIT_SETTING })
+
+  outLine(
+    `Set storage limit for ${user.email} to ${formatBytes(Number(parsed.value))}. New upload valet tokens honor it immediately; tokens issued earlier keep the old limit until they expire.`,
+  )
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
+ * REGISTRATION (env vs persisted, shown honestly)
+ * ------------------------------------------------------------------------- */
+
+async function registrationPersistedCount(container: ContainerLike): Promise<number> {
+  const settingRepository = container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository)
+  const name = requireResult(SettingName.create(SettingName.NAMES.RegistrationDisabled) as ResultLike<SettingName>)
+
+  return settingRepository.countAllByNameAndValue({ name, value: 'true' })
+}
+
+async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promise<number> {
+  if (sub === 'status' || sub === undefined) {
+    // The env master switch is read at BOOT by the auth service; the CLI reads
+    // the same entrypoint-generated .env the service loaded.
+    const authEnv = await readPackageEnv('auth')
+    const envDisabled = (process.env.DISABLE_USER_REGISTRATION ?? authEnv.DISABLE_USER_REGISTRATION) === 'true'
+
+    const container = await loadContainer()
+    const persistedCount = await registrationPersistedCount(container)
+    const persistedDisabled = persistedCount > 0
+    const effective = envDisabled || persistedDisabled
+
+    if (args.options.json === true) {
+      outJson({
+        registrationDisabled: effective,
+        env: { disableUserRegistration: envDisabled, note: 'read at boot; change requires editing the operator .env and restarting' },
+        persisted: { registrationDisabled: persistedDisabled, trueRows: persistedCount, note: 'runtime flag; toggle with registration enable|disable' },
+      })
+
+      return 0
+    }
+
+    outLine(`registration: ${effective ? 'DISABLED' : 'enabled'}`)
+    outLine(`  env DISABLE_USER_REGISTRATION: ${envDisabled ? 'true' : 'false'} (boot-time; read-only from this CLI)`)
+    outLine(
+      `  persisted runtime flag:        ${persistedDisabled ? `true (${persistedCount} REGISTRATION_DISABLED row(s))` : 'false'}`,
+    )
+    if (envDisabled) {
+      outLine("  NOTE: the env switch is on — 'registration enable' alone cannot re-open signups; edit the operator .env and restart.")
+    }
+
+    return 0
+  }
+
+  if (sub === 'disable') {
+    const container = await loadContainer()
+    const asIdentifier = stringOption(args.options, 'as')
+
+    let target: { uuid: string; email: string }
+    if (asIdentifier !== undefined) {
+      const user = await resolveUser(container, asIdentifier)
+      target = { uuid: user.uuid, email: user.email }
+    } else {
+      // The panel stores the flag on the acting admin's record; from the CLI we
+      // pick the oldest admin so the panel shows a consistent state.
+      const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+      const admins = await userRepository.findUsersForAdmin({
+        limit: 1,
+        offset: 0,
+        sort: 'createdAt',
+        role: ADMIN_ROLE_NAME,
+      })
+      if (admins.rows.length === 0) {
+        throw new Error(`no ${ADMIN_ROLE_NAME} user found to carry the flag — pass --as <user>`)
+      }
+      target = { uuid: admins.rows[0].uuid, email: admins.rows[0].email }
+    }
+
+    const setSettingValue = container.get<
+      UseCase<{ settingName: string; value: string | null; userUuid: string; checkUserPermissions: boolean }>
+    >(TYPES.Auth_SetSettingValue)
+    requireResult(
+      await setSettingValue.execute({
+        settingName: SettingName.NAMES.RegistrationDisabled,
+        value: 'true',
+        userUuid: target.uuid,
+        checkUserPermissions: false,
+      }),
+    )
+
+    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: target.uuid }, {
+      name: SettingName.NAMES.RegistrationDisabled,
+    })
+
+    outLine(`Registration DISABLED (persisted flag written to ${target.email}). Effective immediately — no restart needed.`)
+
+    return 0
+  }
+
+  if (sub === 'enable') {
+    const container = await loadContainer()
+    const settingRepository = container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository)
+    const setSettingValue = container.get<
+      UseCase<{ settingName: string; value: string | null; userUuid: string; checkUserPermissions: boolean }>
+    >(TYPES.Auth_SetSettingValue)
+    const name = requireResult(SettingName.create(SettingName.NAMES.RegistrationDisabled) as ResultLike<SettingName>)
+
+    // ANY user's 'true' row disables signups instance-wide, so clear them ALL
+    // (re-query from offset 0 each round because the flips shrink the match set).
+    let cleared = 0
+    for (let round = 0; round < 100; round++) {
+      const settings = await settingRepository.findAllByNameAndValue({ name, value: 'true', offset: 0, limit: 100 })
+      if (settings.length === 0) {
+        break
+      }
+      for (const setting of settings) {
+        requireResult(
+          await setSettingValue.execute({
+            settingName: SettingName.NAMES.RegistrationDisabled,
+            value: 'false',
+            userUuid: setting.props.userUuid.value,
+            checkUserPermissions: false,
+          }),
+        )
+        cleared++
+      }
+    }
+
+    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: null }, {
+      name: SettingName.NAMES.RegistrationDisabled,
+      clearedRows: cleared,
+    })
+
+    const authEnv = await readPackageEnv('auth')
+    const envDisabled = (process.env.DISABLE_USER_REGISTRATION ?? authEnv.DISABLE_USER_REGISTRATION) === 'true'
+    outLine(`Registration persisted flag cleared (${cleared} row(s) set to 'false').`)
+    if (envDisabled) {
+      outLine('WARNING: env DISABLE_USER_REGISTRATION is still true — signups remain blocked until you change the operator .env and restart.')
+    }
+
+    return 0
+  }
+
+  throw new UsageError(`unknown registration subcommand '${sub}' — status | enable | disable`)
+}
+
+/* ---------------------------------------------------------------------------
+ * WEBHOOKS
+ * ------------------------------------------------------------------------- */
+
+function webhookToRow(webhook: Webhook): { uuid: string; scope: string; enabled: boolean; events: string[]; targetUrl: string } {
+  return {
+    uuid: webhook.id.toString(),
+    scope: webhook.props.userUuid === null ? 'global' : webhook.props.userUuid,
+    enabled: webhook.props.enabled,
+    events: webhook.props.events,
+    targetUrl: webhook.props.targetUrl,
+  }
+}
+
+async function cmdWebhooks(args: ParsedArgs, sub: string | undefined): Promise<number> {
+  if (sub === 'list') {
+    const container = await loadContainer()
+    const webhookRepository = container.get<WebhookRepositoryInterface>(TYPES.Auth_WebhookRepository)
+
+    const webhooks = [...(await webhookRepository.findGlobal())]
+    const identifier = args.positionals[0]
+    let scopeNote = 'global webhooks'
+    if (identifier !== undefined) {
+      const user = await resolveUser(container, identifier)
+      const userUuid = requireResult(Uuid.create(user.uuid) as ResultLike<Uuid>)
+      webhooks.push(...(await webhookRepository.findByUserUuid(userUuid)))
+      scopeNote = `global webhooks + ${user.email}'s`
+    }
+
+    // The HMAC secret is NEVER shown here — it is printed once at creation.
+    const rows = webhooks.map(webhookToRow)
+    if (args.options.json === true) {
+      outJson({ webhooks: rows })
+
+      return 0
+    }
+    if (rows.length === 0) {
+      outLine(`(no ${scopeNote})`)
+
+      return 0
+    }
+    outLine(
+      formatTable(
+        ['UUID', 'SCOPE', 'ENABLED', 'EVENTS', 'TARGET URL'],
+        rows.map((row) => [row.uuid, row.scope, row.enabled ? 'yes' : 'no', row.events.join(','), row.targetUrl]),
+      ),
+    )
+
+    return 0
+  }
+
+  if (sub === 'create') {
+    const [targetUrl, eventsCsv] = args.positionals
+    if (!targetUrl || !eventsCsv) {
+      throw new UsageError('webhooks create <url> <event,event> [--user <user>] — see \'srn-admin help webhooks\'')
+    }
+    const events = eventsCsv
+      .split(',')
+      .map((event) => event.trim())
+      .filter(Boolean)
+
+    const container = await loadContainer()
+    const userIdentifier = stringOption(args.options, 'user')
+    const scopedUser = userIdentifier !== undefined ? await resolveUser(container, userIdentifier) : null
+
+    const registerWebhook = container.get<
+      UseCase<
+        { userUuid: string; targetUrl: string; events: string[]; global?: boolean },
+        { uuid: string; userUuid: string | null; targetUrl: string; events: string[]; secret: string }
+      >
+    >(TYPES.Auth_RegisterWebhook)
+    const created = requireResult(
+      await registerWebhook.execute({
+        // For a GLOBAL webhook the use case persists a null user_uuid; the
+        // userUuid only has to be well-formed (there is no acting admin here).
+        userUuid: scopedUser?.uuid ?? randomUUID(),
+        targetUrl,
+        events,
+        global: scopedUser === null,
+      }),
+    )
+
+    await writeAudit(container, AuditAction.WebhookCreated, { type: 'webhook', uuid: created.uuid }, {
+      global: scopedUser === null,
+      events,
+    })
+
+    outLine(`Created ${scopedUser === null ? 'GLOBAL' : `user-scoped (${scopedUser.email})`} webhook ${created.uuid}`)
+    outLine(`  target: ${created.targetUrl}`)
+    outLine(`  events: ${created.events.join(', ')}`)
+    outLine(`  secret: ${created.secret}`)
+    outLine('  Store the secret now — it is shown ONLY this once (X-SRN-Signature HMAC key).')
+
+    return 0
+  }
+
+  if (sub === 'delete') {
+    const webhookId = args.positionals[0]
+    if (!webhookId) {
+      throw new UsageError('webhooks delete <webhook-uuid>')
+    }
+
+    const container = await loadContainer()
+    const deleteWebhook = container.get<UseCase<{ userUuid: string; webhookId: string; isAdmin?: boolean }>>(
+      TYPES.Auth_DeleteWebhook,
+    )
+    requireResult(await deleteWebhook.execute({ userUuid: randomUUID(), webhookId, isAdmin: true }))
+
+    await writeAudit(container, AuditAction.WebhookDeleted, { type: 'webhook', uuid: webhookId }, {})
+
+    outLine(`Deleted webhook ${webhookId}`)
+
+    return 0
+  }
+
+  throw new UsageError(`unknown webhooks subcommand '${sub ?? '(none)'}' — list | create | delete`)
+}
+
+/* ---------------------------------------------------------------------------
+ * AUDIT LOG
+ * ------------------------------------------------------------------------- */
+
+async function cmdAudit(args: ParsedArgs): Promise<number> {
+  const { options } = args
+  const limitRaw = stringOption(options, 'limit')
+  const offsetRaw = stringOption(options, 'offset')
+  const limit = limitRaw !== undefined ? Number.parseInt(limitRaw, 10) : 50
+  const offset = offsetRaw !== undefined ? Number.parseInt(offsetRaw, 10) : 0
+  if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(offset) || offset < 0) {
+    throw new UsageError('--limit must be a positive integer and --offset a non-negative integer')
+  }
+
+  const container = await loadContainer()
+
+  let actorUuid: string | undefined
+  const userIdentifier = stringOption(options, 'user')
+  if (userIdentifier !== undefined) {
+    actorUuid = (await resolveUser(container, userIdentifier)).uuid
+  }
+
+  const queryAuditLog = container.get<
+    UseCase<
+      { actorUuid?: string; action?: string; from?: string; to?: string; limit?: number; offset?: number },
+      { entries: AuditLogEntry[]; total: number; limit: number; offset: number }
+    >
+  >(TYPES.Auth_QueryAuditLog)
+  const result = requireResult(
+    await queryAuditLog.execute({
+      actorUuid,
+      action: stringOption(options, 'action'),
+      from: stringOption(options, 'from'),
+      to: stringOption(options, 'to'),
+      limit,
+      offset,
+    }),
+  )
+
+  const mapper = container.get<MapperInterface<AuditLogEntry, AuditLogEntryHttpProjection>>(
+    TYPES.Auth_AuditLogEntryHttpMapper,
+  )
+  const projections = result.entries.map((entry) => mapper.toProjection(entry))
+
+  if (options.json === true) {
+    outJson({ entries: projections, total: result.total, limit: result.limit, offset: result.offset })
+
+    return 0
+  }
+
+  if (projections.length === 0) {
+    outLine('(no audit entries match)')
+
+    return 0
+  }
+
+  outLine(
+    formatTable(
+      ['TIME', 'ACTION', 'ACTOR', 'TARGET', 'METADATA'],
+      projections.map((entry) => [
+        entry.createdAt,
+        entry.action,
+        entry.actorUuid ?? '-',
+        entry.targetUuid ? `${entry.targetType ?? '?'}:${entry.targetUuid}` : '-',
+        entry.metadata ? JSON.stringify(entry.metadata) : '-',
+      ]),
+    ),
+  )
+  outLine(`\n${result.offset + 1}-${result.offset + projections.length} of ${result.total} entr(ies), newest first`)
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
+ * STATUS / LOGS / CONFIG (container-free — instant)
+ * ------------------------------------------------------------------------- */
+
+async function cmdStatus(args: ParsedArgs): Promise<number> {
+  const packageNames = ['api-gateway', 'syncing-server', 'auth', 'files', 'revisions']
+  const envFiles: Record<string, Record<string, string>> = {}
+  await Promise.all(
+    packageNames.map(async (name) => {
+      envFiles[name] = await readPackageEnv(name)
+    }),
+  )
+
+  const targets = serviceProbeTargets(envFiles)
+
+  // DB/Redis reachability: raw TCP dial using the same envs the services use.
+  const authEnv = envFiles.auth ?? {}
+  const dbHost = process.env.DB_HOST ?? authEnv.DB_HOST
+  const dbPort = Number.parseInt(process.env.DB_PORT ?? authEnv.DB_PORT ?? '3306', 10)
+  let redisHost = process.env.REDIS_HOST
+  let redisPort = Number.parseInt(process.env.REDIS_PORT ?? '6379', 10)
+  const redisUrl = process.env.REDIS_URL ?? authEnv.REDIS_URL
+  if (!redisHost && redisUrl) {
+    try {
+      const parsed = new URL(redisUrl.split(',')[0])
+      redisHost = parsed.hostname
+      redisPort = parsed.port ? Number.parseInt(parsed.port, 10) : 6379
+    } catch {
+      /* unparsable REDIS_URL — reported as unknown below */
+    }
+  }
+
+  const [probes, dbReachable, redisReachable] = await Promise.all([
+    Promise.all(targets.map((target) => probeReadiness(target.name, target.port))),
+    dbHost ? tcpProbe(dbHost, Number.isFinite(dbPort) ? dbPort : 3306) : Promise.resolve(null),
+    redisHost ? tcpProbe(redisHost, Number.isFinite(redisPort) ? redisPort : 6379) : Promise.resolve(null),
+  ])
+
+  if (args.options.json === true) {
+    outJson({
+      services: probes,
+      dependencies: {
+        db: { host: dbHost ?? null, reachable: dbReachable },
+        redis: { host: redisHost ?? null, reachable: redisReachable },
+      },
+      note: 'worker processes have no health port and are not probed — check logs --service <name>-worker',
+    })
+
+    return 0
+  }
+
+  const chip = (status: string): string => {
+    return status === 'ok' ? '[ OK ]' : status === 'degraded' ? '[WARN]' : '[DOWN]'
+  }
+
+  const rows = probes.map((probe) => [
+    chip(probe.status),
+    probe.name,
+    `:${probe.port}`,
+    probe.checks ? Object.entries(probe.checks).map(([key, ok]) => `${key}:${ok ? 'ok' : 'FAIL'}`).join(' ') : (probe.detail ?? ''),
+  ])
+  const dependencyRow = (label: string, host: string | undefined, reachable: boolean | null): string[] => [
+    reachable === null ? '[ ?? ]' : reachable ? '[ OK ]' : '[DOWN]',
+    label,
+    host ?? '(not configured)',
+    reachable === null ? 'no address to probe' : reachable ? 'tcp reachable' : 'tcp unreachable',
+  ]
+  rows.push(dependencyRow('db', dbHost, dbReachable))
+  rows.push(dependencyRow('redis', redisHost, redisReachable))
+
+  outLine(formatTable(['STATE', 'SERVICE', 'ADDR', 'DETAIL'], rows))
+  outLine('\nWorker processes (auth-worker, files-worker, ...) expose no health port — see: srn-admin logs --service auth-worker')
+
+  return 0
+}
+
+async function cmdLogs(args: ParsedArgs): Promise<number> {
+  const { options } = args
+  const tailRaw = stringOption(options, 'tail')
+  const limit = tailRaw !== undefined ? Number.parseInt(tailRaw, 10) : 100
+  if (!Number.isFinite(limit) || limit <= 0) {
+    throw new UsageError('--tail must be a positive integer')
+  }
+
+  const logsDirectory = process.env.SERVER_LOGS_PATH ?? '/var/lib/server/logs'
+  const result = await tailLogFiles(
+    {
+      readdir: (directory) => fsPromises.readdir(directory),
+      readFile: (filePath) => fsPromises.readFile(filePath, 'utf8'),
+      joinPath: (...parts) => path.join(...parts),
+    },
+    logsDirectory,
+    { limit, service: stringOption(options, 'service'), level: stringOption(options, 'level') },
+  )
+
+  // Chronological (oldest first) for reading, like `tail`.
+  const entries = [...result.entries].reverse()
+
+  if (options.json === true) {
+    outJson({ entries, truncated: result.truncated, logsDirectory })
+
+    return 0
+  }
+
+  if (entries.length === 0) {
+    outLine(`(no matching log lines under ${logsDirectory})`)
+
+    return 0
+  }
+  for (const entry of entries as CliLogEntry[]) {
+    const time = entry.timestamp ?? '-'
+    const level = entry.level ?? '-'
+    outLine(`${time}  ${(entry.service ?? '-').padEnd(22)} ${level.padEnd(5)} ${entry.message}`)
+  }
+  if (result.truncated) {
+    outLine('... (older matching lines exist — raise --tail)')
+  }
+
+  return 0
+}
+
+async function cmdConfig(args: ParsedArgs): Promise<number> {
+  const packageEnvFiles: Partial<Record<OperatorService, Record<string, string>>> = {
+    auth: await readPackageEnv('auth'),
+    'api-gateway': await readPackageEnv('api-gateway'),
+  }
+
+  const resolved = OPERATOR_ENVS.map((spec) =>
+    resolveOperatorEnv(spec, process.env as Record<string, string | undefined>, packageEnvFiles),
+  )
+
+  if (args.options.json === true) {
+    outJson({
+      config: resolved,
+      honesty: {
+        envValues:
+          'every env above is read at BOOT and is read-only from this CLI — change it in the operator .env (compose level) and restart the stack',
+        runtimeSettable: "only the persisted registration gate is runtime-settable: 'srn-admin registration enable|disable'",
+      },
+    })
+
+    return 0
+  }
+
+  outLine(
+    formatTable(
+      ['ENV', 'SERVICE', 'VALUE', 'SOURCE', 'RESTART TO CHANGE'],
+      resolved.map((entry) => [
+        entry.env,
+        entry.service,
+        entry.effective + (entry.note ? ' *' : ''),
+        entry.source,
+        entry.restartRequired ? 'yes' : 'no',
+      ]),
+    ),
+  )
+  for (const entry of resolved) {
+    if (entry.note) {
+      outLine(`  * ${entry.env}: ${entry.note}`)
+    }
+  }
+  outLine('')
+  outLine('HONESTY: all values above are read at BOOT. This CLI cannot change them —')
+  outLine('edit the operator .env (compose level, using the AUTH_SERVER_/API_GATEWAY_')
+  outLine('prefixes) and restart the stack. The only runtime-settable server flag is')
+  outLine("the persisted registration gate: 'srn-admin registration enable|disable'.")
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
+ * RBAC GROUPS (existing commands, unchanged semantics)
+ * ------------------------------------------------------------------------- */
+
+async function cmdGroup(args: string[]): Promise<number> {
+  const [sub, ...rest] = args
+  if (sub === undefined || sub === 'help') {
+    out(helpFor('group'))
+
+    return sub === undefined ? 1 : 0
+  }
+
+  const container = await loadContainer()
+
+  // Resolve a <group> argument (name OR uuid) to a group uuid via one list call.
   const resolveGroupUuid = async (identifier: string): Promise<string> => {
-    const listGroups = container.get(TYPES.Auth_ListGroups) as UseCase<undefined>
+    const listGroups = container.get<UseCase<undefined>>(TYPES.Auth_ListGroups)
     const groups = requireResult(await listGroups.execute(undefined)) as GroupLike[]
     const identifierIsUuid = !Uuid.create(identifier).isFailed()
+
     return matchGroupUuidInList(groups, identifier, identifierIsUuid)
   }
 
   switch (sub) {
     case 'list': {
-      const listGroups = container.get(TYPES.Auth_ListGroups) as UseCase<undefined>
-      const groups = requireResult(await listGroups.execute(undefined)) as Array<{
-        id?: { toString(): string }
-        props?: { name?: string }
-      }>
+      const listGroups = container.get<UseCase<undefined>>(TYPES.Auth_ListGroups)
+      const groups = requireResult(await listGroups.execute(undefined)) as GroupLike[]
       if (groups.length === 0) {
-        process.stdout.write('(no groups)\n')
+        outLine('(no groups)')
       }
       for (const group of groups) {
-        process.stdout.write(`${group.id?.toString() ?? ''}  ${group.props?.name ?? ''}\n`)
+        outLine(`${group.id?.toString() ?? ''}  ${group.props?.name ?? ''}`)
       }
+
       return 0
     }
 
     case 'create': {
       const name = rest[0]
       if (!name) {
-        throw new Error('group create <name> [comma,separated,roles]')
+        throw new UsageError('group create <name> [comma,separated,roles]')
       }
-      const roleNames = rest[1] ? rest[1].split(',').map((value) => value.trim()).filter(Boolean) : undefined
-      const createGroup = container.get(TYPES.Auth_CreateGroup) as UseCase<{
-        name: string
-        description?: string | null
-        roleNames?: string[]
-      }>
+      const roleNames = rest[1]
+        ? rest[1]
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : undefined
+      const createGroup = container.get<UseCase<{ name: string; description?: string | null; roleNames?: string[] }>>(
+        TYPES.Auth_CreateGroup,
+      )
       const group = requireResult(await createGroup.execute({ name, roleNames })) as { id?: { toString(): string } }
-      process.stdout.write(`Created group "${name}" (${group.id?.toString() ?? ''})\n`)
+      outLine(`Created group "${name}" (${group.id?.toString() ?? ''})`)
+
       return 0
     }
 
     case 'delete': {
       const groupArg = rest[0]
       if (!groupArg) {
-        throw new Error('group delete <group>')
+        throw new UsageError('group delete <group>')
       }
       const groupUuid = await resolveGroupUuid(groupArg)
-      const deleteGroup = container.get(TYPES.Auth_DeleteGroup) as UseCase<{ groupUuid: string }>
+      const deleteGroup = container.get<UseCase<{ groupUuid: string }>>(TYPES.Auth_DeleteGroup)
       requireResult(await deleteGroup.execute({ groupUuid }))
-      process.stdout.write(`Deleted group ${groupUuid}\n`)
+      outLine(`Deleted group ${groupUuid}`)
+
       return 0
     }
 
     case 'set-roles': {
       const [groupArg, rolesCsv] = rest
       if (!groupArg || !rolesCsv) {
-        throw new Error('group set-roles <group> <role1,role2>')
+        throw new UsageError('group set-roles <group> <role1,role2>')
       }
       const groupUuid = await resolveGroupUuid(groupArg)
-      const setRoles = container.get(TYPES.Auth_SetGroupRoles) as UseCase<{ groupUuid: string; roleNames: string[] }>
+      const setRoles = container.get<UseCase<{ groupUuid: string; roleNames: string[] }>>(TYPES.Auth_SetGroupRoles)
       requireResult(
         await setRoles.execute({
           groupUuid,
-          roleNames: rolesCsv.split(',').map((value) => value.trim()).filter(Boolean),
+          roleNames: rolesCsv
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean),
         }),
       )
-      process.stdout.write(`Set roles for group ${groupUuid}\n`)
+      outLine(`Set roles for group ${groupUuid}`)
+
       return 0
     }
 
     case 'members': {
       const groupArg = rest[0]
       if (!groupArg) {
-        throw new Error('group members <group>')
+        throw new UsageError('group members <group>')
       }
       const groupUuid = await resolveGroupUuid(groupArg)
-      const listMembers = container.get(TYPES.Auth_ListGroupMembers) as UseCase<{ groupUuid: string }>
+      const listMembers = container.get<UseCase<{ groupUuid: string }>>(TYPES.Auth_ListGroupMembers)
       const members = requireResult(await listMembers.execute({ groupUuid })) as Array<{
         uuid: string
         email: string | null
       }>
       if (members.length === 0) {
-        process.stdout.write('(no members)\n')
+        outLine('(no members)')
       }
       for (const member of members) {
-        process.stdout.write(`${member.uuid}  ${member.email ?? ''}\n`)
+        outLine(`${member.uuid}  ${member.email ?? ''}`)
       }
+
       return 0
     }
 
@@ -335,33 +1389,175 @@ async function runGroup(container: any, args: string[]): Promise<number> {
     case 'remove-user': {
       const [groupArg, identifier] = rest
       if (!groupArg || !identifier) {
-        throw new Error(`group ${sub} <group> <user>`)
+        throw new UsageError(`group ${sub} <group> <user>`)
       }
       const groupUuid = await resolveGroupUuid(groupArg)
-      const userUuid = await resolveUserUuid(identifier)
+      const user = await resolveUser(container, identifier)
       const symbol = sub === 'add-user' ? TYPES.Auth_AddUserToGroup : TYPES.Auth_RemoveUserFromGroup
-      const useCase = container.get(symbol) as UseCase<{ groupUuid: string; userUuid: string }>
-      requireResult(await useCase.execute({ groupUuid, userUuid }))
-      process.stdout.write(`${sub === 'add-user' ? 'Added' : 'Removed'} ${identifier} ${sub === 'add-user' ? 'to' : 'from'} group ${groupUuid}\n`)
+      const useCase = container.get<UseCase<{ groupUuid: string; userUuid: string }>>(symbol)
+      requireResult(await useCase.execute({ groupUuid, userUuid: user.uuid }))
+      outLine(`${sub === 'add-user' ? 'Added' : 'Removed'} ${identifier} ${sub === 'add-user' ? 'to' : 'from'} group ${groupUuid}`)
+
       return 0
     }
 
     default:
-      throw new Error(`unknown group subcommand: ${sub ?? '(none)'} — see "srn-admin help"`)
+      throw new UsageError(`unknown group subcommand: ${sub} — see "srn-admin help group"`)
   }
 }
 
-const container = new ContainerConfigLoader('worker')
-void container.load().then((container) => {
-  const env: Env = new Env()
-  env.load()
+/* ---------------------------------------------------------------------------
+ * Dispatch
+ * ------------------------------------------------------------------------- */
 
-  run(container)
-    .then((code) => {
-      process.exit(code)
-    })
-    .catch((error) => {
-      process.stderr.write(`srn-admin: ${(error as Error).message}\n`)
-      process.exit(1)
-    })
-})
+async function main(): Promise<number> {
+  const argv = process.argv.slice(2)
+  const [command, ...rest] = argv
+
+  if (!command || command === 'help' || command === '--help' || command === '-h') {
+    out(helpFor(rest[0], rest[1]))
+
+    return 0
+  }
+
+  // `<command> help` and `<command> <sub> --help` also print help — instantly.
+  if (rest[0] === 'help') {
+    out(helpFor(command, rest[1]))
+
+    return 0
+  }
+
+  const args = parseArgs(rest)
+  if (args.options.help === true) {
+    out(helpFor(command, args.positionals[0]))
+
+    return 0
+  }
+
+  switch (command) {
+    /* USERS ------------------------------------------------------------- */
+    case 'users': {
+      const [sub, ...subPositionals] = args.positionals
+      if (sub !== 'list') {
+        throw new UsageError(`unknown users subcommand '${sub ?? '(none)'}' — try 'srn-admin users list'`)
+      }
+
+      return cmdUsersList({ positionals: subPositionals, options: args.options })
+    }
+
+    case 'user':
+    case 'whois':
+    case 'list-roles':
+      return cmdUser(args)
+
+    case 'ban':
+      return cmdBan(args, true)
+    case 'unban':
+      return cmdBan(args, false)
+
+    case 'reset-mfa':
+      return cmdResetMfa(args)
+    case 'fix-quota':
+      return cmdFixQuota(args)
+
+    /* ROLES & GROUPS ----------------------------------------------------- */
+    case 'roles': {
+      const [sub, ...subPositionals] = args.positionals
+      if (sub === 'list') {
+        const roleNames = Object.values(RoleName.NAMES)
+        if (args.options.json === true) {
+          outJson({ roleNames })
+        } else {
+          outLine(roleNames.join('\n'))
+        }
+
+        return 0
+      }
+      if (sub === 'grant' || sub === 'revoke') {
+        return cmdRolesMutate(subPositionals[0], subPositionals[1], sub === 'grant')
+      }
+      throw new UsageError(`unknown roles subcommand '${sub ?? '(none)'}' — list | grant | revoke`)
+    }
+
+    case 'grant-admin':
+      return cmdRolesMutate(args.positionals[0], ADMIN_ROLE_NAME, true)
+    case 'revoke-admin':
+      return cmdRolesMutate(args.positionals[0], ADMIN_ROLE_NAME, false)
+
+    case 'group':
+      return cmdGroup(args.positionals)
+
+    /* FLAGS --------------------------------------------------------------- */
+    case 'flags': {
+      const [sub, ...subPositionals] = args.positionals
+      const subArgs = { positionals: subPositionals, options: args.options }
+      switch (sub) {
+        case 'list':
+          return printFlagsList()
+        case 'get':
+          return cmdFlagsGet(subArgs)
+        case 'set':
+          return cmdFlagsSet(subArgs, false)
+        case 'unset':
+          return cmdFlagsSet(subArgs, true)
+        default:
+          throw new UsageError(`unknown flags subcommand '${sub ?? '(none)'}' — list | get | set | unset`)
+      }
+    }
+
+    case 'storage-limit': {
+      const [sub, ...subPositionals] = args.positionals
+      if (sub === 'get') {
+        return cmdStorageLimitGet({ positionals: subPositionals, options: args.options })
+      }
+      if (sub === 'set') {
+        const [identifier, value] = subPositionals
+        if (!identifier || value === undefined) {
+          throw new UsageError('storage-limit set <user> <bytes|unlimited>')
+        }
+
+        return setStorageLimit(identifier, value)
+      }
+      throw new UsageError(`unknown storage-limit subcommand '${sub ?? '(none)'}' — get | set`)
+    }
+
+    /* SERVER --------------------------------------------------------------- */
+    case 'registration':
+      return cmdRegistration({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'webhooks':
+      return cmdWebhooks({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'config':
+      return cmdConfig(args)
+
+    /* DIAGNOSTICS ----------------------------------------------------------- */
+    case 'status':
+      return cmdStatus(args)
+
+    case 'logs':
+      return cmdLogs(args)
+
+    case 'audit':
+      return cmdAudit(args)
+
+    default:
+      errLine(`Unknown command: ${command}\n`)
+      out(usage())
+
+      return 1
+  }
+}
+
+void main()
+  .then((code) => {
+    process.exit(code)
+  })
+  .catch((error) => {
+    if (error instanceof UsageError) {
+      errLine(`srn-admin: ${error.message}`)
+    } else {
+      errLine(`srn-admin: ${(error as Error).message}`)
+    }
+    process.exit(1)
+  })
