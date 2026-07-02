@@ -13,6 +13,7 @@ export const ElementIds = {
   TemplatesColumn: 'templates-column',
   NotificationsColumn: 'notifications-column',
   FilesColumn: 'files-column',
+  WorkflowsColumn: 'workflows-column',
   EditorContent: 'editor-content',
   FileTextPreview: 'file-text-preview',
   FileTitleEditor: 'file-title-editor',

@@ -28,6 +28,7 @@ import ResearchSectionButton from '../Research/ResearchSectionButton'
 import BookmarksSectionButton from '../Bookmarks/BookmarksSectionButton'
 import TemplatesSectionButton from '../Templates/TemplatesSectionButton'
 import FilesSectionButton from '../FilesView/FilesSectionButton'
+import WorkflowsSectionButton from '../Workflows/WorkflowsSectionButton'
 
 type Props = {
   application: WebApplication
@@ -106,6 +107,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
         <BookmarksSectionButton application={application} />
         <TemplatesSectionButton application={application} />
         <FilesSectionButton application={application} />
+        <WorkflowsSectionButton application={application} />
         <SmartViewsSection
           application={application}
           featuresController={application.featuresController}

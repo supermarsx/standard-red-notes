@@ -1038,6 +1038,41 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Authenticated JSON GET variant of {@link serverJsonRequest}. Unlike
+   * {@link assistantConfigRequest} it returns the HTTP status alongside the
+   * parsed body, so callers can distinguish "endpoint absent" (404 — e.g. a
+   * server that has not deployed the feature yet) from an actual payload and
+   * degrade gracefully instead of throwing on a non-JSON error page.
+   */
+  public async serverGetJsonRequest<T>(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T }> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    const url = `${host.replace(/\/$/, '')}${path}`
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      signal,
+    })
+
+    let data: T
+    try {
+      data = (await response.json()) as T
+    } catch {
+      data = {} as T
+    }
+
+    return { status: response.status, ok: response.ok, data }
+  }
+
+  /**
    * Read the server-held ChatGPT/Codex subscription pairing status
    * (admin-gated on the server, GET /v1/assistant/subscription/status).
    *

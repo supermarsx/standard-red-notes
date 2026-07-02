@@ -48,6 +48,10 @@ const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
 // OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
 // decrypted PDF page images to the server, which leaves end-to-end encryption).
 const OCR_SERVER_ALLOWED = 'OCR_SERVER_ALLOWED'
+// OPT-IN n8n-backed workflows (automations). Defaults OFF. Keep in sync with the
+// server's SettingName.NAMES value (SettingName.WorkflowsEnabled = 'WORKFLOWS_ENABLED'
+// in server/packages/domain-core). Also requires the WORKFLOWS_ENABLED operator env.
+const WORKFLOWS_ENABLED = 'WORKFLOWS_ENABLED'
 // OPT-IN scheduled Nextcloud backups. Defaults OFF. Backups remain E2E ciphertext
 // (content stays private), but the server-stored app password grants Nextcloud file
 // access and upload timing/size are exposed. See the privacy alert near the toggle.
@@ -98,6 +102,8 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
   const [liveSyncEnabled, setLiveSyncEnabled] = useState(true)
   // Server OCR is OFF by default (opt-in E2E downgrade); only 'true' enables it.
   const [ocrServerAllowed, setOcrServerAllowed] = useState(false)
+  // Workflows are OFF by default; only 'true' enables them for the user.
+  const [workflowsEnabled, setWorkflowsEnabled] = useState(false)
   // Nextcloud backups are OFF by default; only 'true' enables them. The cadence and
   // app-password-configured status are read-only context for the admin.
   const [nextcloudBackupAllowed, setNextcloudBackupAllowed] = useState(false)
@@ -341,6 +347,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
         setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
         setOcrServerAllowed(flags[OCR_SERVER_ALLOWED] === 'true')
+        setWorkflowsEnabled(flags[WORKFLOWS_ENABLED] === 'true')
         setNextcloudBackupAllowed(flags[NEXTCLOUD_BACKUP_ALLOWED] === 'true')
         setNextcloudBackupFrequency(flags[NEXTCLOUD_BACKUP_FREQUENCY] ?? null)
         setNextcloudAppPasswordConfigured(Boolean(data?.nextcloudAppPasswordConfigured))
@@ -745,6 +752,33 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
                           setOcrServerAllowed,
                           ocrServerAllowed,
                           'Failed to update server OCR access.',
+                        )
+                      }
+                    />
+                  </div>
+
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col">
+                      <Subtitle>Workflows</Subtitle>
+                      <Text>
+                        Allow this user to use the n8n-backed Workflows automation engine (build visual automations
+                        that react to notebook events, run AI steps, and send emails/notes/files). The user must still
+                        explicitly connect from their Workflows pane; connecting provisions a revocable, scoped access
+                        token — never their master key or note contents. Requires the WORKFLOWS_ENABLED operator
+                        switch. Off by default.
+                      </Text>
+                    </div>
+                    <Switch
+                      checked={workflowsEnabled}
+                      onChange={(checked) =>
+                        void toggleUserFlag(
+                          WORKFLOWS_ENABLED,
+                          checked,
+                          setWorkflowsEnabled,
+                          workflowsEnabled,
+                          'Failed to update workflows access.',
                         )
                       }
                     />

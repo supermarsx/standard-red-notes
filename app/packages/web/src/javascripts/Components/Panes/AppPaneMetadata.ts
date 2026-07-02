@@ -16,6 +16,7 @@ export enum AppPaneId {
   Templates = 'TemplatesColumn',
   Notifications = 'NotificationsColumn',
   Files = 'FilesColumn',
+  Workflows = 'WorkflowsColumn',
 }
 
 export const AppPaneIdToDivId = {
@@ -34,4 +35,5 @@ export const AppPaneIdToDivId = {
   [AppPaneId.Templates]: ElementIds.TemplatesColumn,
   [AppPaneId.Notifications]: ElementIds.NotificationsColumn,
   [AppPaneId.Files]: ElementIds.FilesColumn,
+  [AppPaneId.Workflows]: ElementIds.WorkflowsColumn,
 }
