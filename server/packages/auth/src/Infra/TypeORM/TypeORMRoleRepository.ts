@@ -27,4 +27,16 @@ export class TypeORMRoleRepository implements RoleRepositoryInterface {
 
     return roles.shift() as Role
   }
+
+  async findAll(): Promise<Role[]> {
+    return this.ormRepository.createQueryBuilder('role').orderBy('role.name', 'ASC').addOrderBy('role.version', 'DESC').getMany()
+  }
+
+  async findOneByUuid(uuid: string): Promise<Role | null> {
+    return this.ormRepository.createQueryBuilder('role').where('role.uuid = :uuid', { uuid }).getOne()
+  }
+
+  async save(role: Role): Promise<void> {
+    await this.ormRepository.save(role)
+  }
 }

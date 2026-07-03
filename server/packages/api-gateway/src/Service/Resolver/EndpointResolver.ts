@@ -103,6 +103,8 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:admin/audit-log', 'admin.getAuditLog'],
     ['[GET]:admin/users', 'admin.getUsers'],
     ['[GET]:admin/roles', 'admin.getAvailableRoles'],
+    ['[GET]:admin/roles/detailed', 'admin.listRolesWithPermissions'],
+    ['[PUT]:admin/roles/:roleUuid/permissions', 'admin.setRolePermissions'],
     ['[GET]:admin/groups', 'admin.listGroups'],
     ['[POST]:admin/groups', 'admin.createGroup'],
     ['[DELETE]:admin/groups/:groupUuid', 'admin.deleteGroup'],

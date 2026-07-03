@@ -20,6 +20,8 @@ import { RemoveUserFromGroup } from '../../../Domain/UseCase/RemoveUserFromGroup
 import { SetGroupRoles } from '../../../Domain/UseCase/SetGroupRoles/SetGroupRoles'
 import { ListGroupMembers } from '../../../Domain/UseCase/ListGroupMembers/ListGroupMembers'
 import { GetUserEffectivePermissions } from '../../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
+import { ListRolesWithPermissions } from '../../../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
+import { SetRolePermissions } from '../../../Domain/UseCase/SetRolePermissions/SetRolePermissions'
 
 import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscriptionToken/CreateSubscriptionToken'
@@ -149,6 +151,14 @@ export class BaseAdminController extends BaseHttpController {
     protected doListGroupMembers?: ListGroupMembers,
     protected doGetUserEffectivePermissions?: GetUserEffectivePermissions,
     protected groupHttpMapper?: MapperInterface<Group, GroupHttpProjection>,
+    // Standard Red Notes: RBAC ROLE management (the roles themselves, not just
+    // group->role links). Roles are enum + migration bound, so this is a SAFE
+    // subset: read every role with its permissions + edit which seeded
+    // permissions a role grants. There is deliberately no create/delete — new
+    // role TYPES require a migration. Optional so existing constructions (home
+    // server, tests) keep compiling; the endpoints fail gracefully when absent.
+    protected doListRolesWithPermissions?: ListRolesWithPermissions,
+    protected doSetRolePermissions?: SetRolePermissions,
   ) {
     super()
 
@@ -175,6 +185,8 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.addUserToGroup', this.addUserToGroup.bind(this))
       this.controllerContainer.register('admin.removeUserFromGroup', this.removeUserFromGroup.bind(this))
       this.controllerContainer.register('admin.getAvailableRoles', this.getAvailableRoles.bind(this))
+      this.controllerContainer.register('admin.listRolesWithPermissions', this.listRolesWithPermissions.bind(this))
+      this.controllerContainer.register('admin.setRolePermissions', this.setRolePermissions.bind(this))
       this.controllerContainer.register(
         'admin.getUserEffectivePermissions',
         this.getUserEffectivePermissions.bind(this),
@@ -1091,6 +1103,80 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     return this.json({ roleNames: Object.values(RoleName.NAMES) })
+  }
+
+  /**
+   * Standard Red Notes: list every role with the permissions it grants, plus the
+   * seeded permission catalog for the editor. Read-only, so no audit entry.
+   *
+   * FEASIBILITY NOTE surfaced to the client via `builtInRoleNames`: roles are
+   * enum + migration bound, so all roles are built-in and new role TYPES require
+   * a migration. Only a role's permission ASSIGNMENTS are editable at runtime
+   * (see setRolePermissions).
+   */
+  async listRolesWithPermissions(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doListRolesWithPermissions === undefined) {
+      return this.json({ error: { message: 'Role management is not available.' } }, 500)
+    }
+
+    const result = await this.doListRolesWithPermissions.execute()
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json(result.getValue())
+  }
+
+  /**
+   * Standard Red Notes: replace the set of permissions a role grants. Body:
+   * { permissionNames: string[] }, all of which must exist in the catalog.
+   *
+   * BUILT-IN GUARD (server-side): this only ever mutates the role_permissions
+   * join table of an EXISTING role addressed by uuid — it can never create,
+   * rename or delete a role, and every permission must already exist in the
+   * catalog. Audit-logged as a role change with targetType 'role'.
+   */
+  async setRolePermissions(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doSetRolePermissions === undefined) {
+      return this.json({ error: { message: 'Role management is not available.' } }, 500)
+    }
+
+    const { roleUuid } = request.params as Record<string, string>
+    const { permissionNames } = request.body as { permissionNames?: string[] }
+
+    const result = await this.doSetRolePermissions.execute({
+      roleUuid,
+      permissionNames: permissionNames ?? [],
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const role = result.getValue()
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetType: 'role',
+      targetUuid: role.uuid,
+      ip: this.clientIp(request),
+      metadata: { role: role.name, permissionNames: role.permissionNames },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetUuid: role.uuid,
+      metadata: { role: role.name, permissionNames: role.permissionNames },
+    })
+
+    return this.json({ role })
   }
 
   /**

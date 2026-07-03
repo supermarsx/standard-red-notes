@@ -50,9 +50,11 @@ import { RevokedSession } from '../Domain/Session/RevokedSession'
 import { DomainEventFactory } from '../Domain/Event/DomainEventFactory'
 import { AuthenticateRequest } from '../Domain/UseCase/AuthenticateRequest'
 import { Role } from '../Domain/Role/Role'
+import { Permission } from '../Domain/Permission/Permission'
 import { RoleProjector } from '../Projection/RoleProjector'
 import { PermissionProjector } from '../Projection/PermissionProjector'
 import { TypeORMRoleRepository } from '../Infra/TypeORM/TypeORMRoleRepository'
+import { TypeORMPermissionRepository } from '../Infra/TypeORM/TypeORMPermissionRepository'
 import { Setting } from '../Domain/Setting/Setting'
 import { TypeORMSettingRepository } from '../Infra/TypeORM/TypeORMSettingRepository'
 import { CrypterInterface } from '../Domain/Encryption/CrypterInterface'
@@ -151,6 +153,7 @@ import { PKCERepositoryInterface } from '../Domain/User/PKCERepositoryInterface'
 import { LockRepositoryInterface } from '../Domain/User/LockRepositoryInterface'
 import { RedisPKCERepository } from '../Infra/Redis/RedisPKCERepository'
 import { RoleRepositoryInterface } from '../Domain/Role/RoleRepositoryInterface'
+import { PermissionRepositoryInterface } from '../Domain/Permission/PermissionRepositoryInterface'
 import { RevokedSessionRepositoryInterface } from '../Domain/Session/RevokedSessionRepositoryInterface'
 import { SessionRepositoryInterface } from '../Domain/Session/SessionRepositoryInterface'
 import { UserRepositoryInterface } from '../Domain/User/UserRepositoryInterface'
@@ -290,6 +293,8 @@ import { RemoveUserFromGroup } from '../Domain/UseCase/RemoveUserFromGroup/Remov
 import { SetGroupRoles } from '../Domain/UseCase/SetGroupRoles/SetGroupRoles'
 import { ListGroupMembers } from '../Domain/UseCase/ListGroupMembers/ListGroupMembers'
 import { GetUserEffectivePermissions } from '../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
+import { ListRolesWithPermissions } from '../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
+import { SetRolePermissions } from '../Domain/UseCase/SetRolePermissions/SetRolePermissions'
 import { BaseSharesController } from '../Infra/InversifyExpressUtils/Base/BaseSharesController'
 import { DeadManSwitch } from '../Domain/DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../Domain/DeadManSwitch/DeadManSwitchRepositoryInterface'
@@ -753,6 +758,9 @@ export class ContainerConfigLoader {
       .toConstantValue(appDataSource.getRepository(RevokedSession))
     container.bind<Repository<Role>>(TYPES.Auth_ORMRoleRepository).toConstantValue(appDataSource.getRepository(Role))
     container
+      .bind<Repository<Permission>>(TYPES.Auth_ORMPermissionRepository)
+      .toConstantValue(appDataSource.getRepository(Permission))
+    container
       .bind<Repository<Session>>(TYPES.Auth_ORMSessionRepository)
       .toConstantValue(appDataSource.getRepository(Session))
     container
@@ -851,6 +859,7 @@ export class ContainerConfigLoader {
       .bind<OfflineSettingRepositoryInterface>(TYPES.Auth_OfflineSettingRepository)
       .to(TypeORMOfflineSettingRepository)
     container.bind<RoleRepositoryInterface>(TYPES.Auth_RoleRepository).to(TypeORMRoleRepository)
+    container.bind<PermissionRepositoryInterface>(TYPES.Auth_PermissionRepository).to(TypeORMPermissionRepository)
     container
       .bind<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository)
       .to(TypeORMUserSubscriptionRepository)
@@ -1672,6 +1681,22 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_UserRepository),
           container.get(TYPES.Auth_GroupRepository),
           container.get(TYPES.Auth_RoleRepository),
+        ),
+      )
+    container
+      .bind<ListRolesWithPermissions>(TYPES.Auth_ListRolesWithPermissions)
+      .toConstantValue(
+        new ListRolesWithPermissions(
+          container.get(TYPES.Auth_RoleRepository),
+          container.get(TYPES.Auth_PermissionRepository),
+        ),
+      )
+    container
+      .bind<SetRolePermissions>(TYPES.Auth_SetRolePermissions)
+      .toConstantValue(
+        new SetRolePermissions(
+          container.get(TYPES.Auth_RoleRepository),
+          container.get(TYPES.Auth_PermissionRepository),
         ),
       )
     container

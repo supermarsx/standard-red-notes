@@ -26,6 +26,8 @@ import { RemoveUserFromGroup } from '../../Domain/UseCase/RemoveUserFromGroup/Re
 import { SetGroupRoles } from '../../Domain/UseCase/SetGroupRoles/SetGroupRoles'
 import { ListGroupMembers } from '../../Domain/UseCase/ListGroupMembers/ListGroupMembers'
 import { GetUserEffectivePermissions } from '../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
+import { ListRolesWithPermissions } from '../../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
+import { SetRolePermissions } from '../../Domain/UseCase/SetRolePermissions/SetRolePermissions'
 import { GetRegularSubscriptionForUser } from '../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSubscriptionSetting } from '../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
@@ -71,6 +73,10 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_GetUserEffectivePermissions)
     override doGetUserEffectivePermissions: GetUserEffectivePermissions,
     @inject(TYPES.Auth_GroupHttpMapper) override groupHttpMapper: MapperInterface<Group, GroupHttpProjection>,
+    // Standard Red Notes: RBAC role management (read all roles + edit a role's
+    // permission assignments). See BaseAdminController.
+    @inject(TYPES.Auth_ListRolesWithPermissions) override doListRolesWithPermissions: ListRolesWithPermissions,
+    @inject(TYPES.Auth_SetRolePermissions) override doSetRolePermissions: SetRolePermissions,
   ) {
     super(
       doDeleteSetting,
@@ -101,6 +107,8 @@ export class AnnotatedAdminController extends BaseAdminController {
       doListGroupMembers,
       doGetUserEffectivePermissions,
       groupHttpMapper,
+      doListRolesWithPermissions,
+      doSetRolePermissions,
     )
   }
 
@@ -193,6 +201,18 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpGet('/roles', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async getAvailableRoles(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getAvailableRoles(request, response)
+  }
+
+  // NOTE: '/roles/detailed' — distinct from the '/roles' name-list above and
+  // from '/roles/:roleUuid/permissions' below.
+  @httpGet('/roles/detailed', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async listRolesWithPermissions(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.listRolesWithPermissions(request, response)
+  }
+
+  @httpPut('/roles/:roleUuid/permissions', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async setRolePermissions(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setRolePermissions(request, response)
   }
 
   @httpGet('/groups', TYPES.Auth_RequiredCrossServiceTokenMiddleware)

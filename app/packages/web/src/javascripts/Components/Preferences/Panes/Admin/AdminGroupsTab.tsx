@@ -11,6 +11,12 @@ import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
 import { rolePickerOptions, toggleRoleName } from './adminGroupsUi'
+import {
+  AdminRole,
+  permissionPickerOptions,
+  permissionSetsEqual,
+  togglePermissionName,
+} from './adminRolesUi'
 
 type AdminGroup = {
   uuid: string
@@ -49,6 +55,13 @@ const RoleToggleChip: FunctionComponent<{ name: string; selected: boolean; onTog
   </button>
 )
 
+/** Static "built-in" marker for a role that is enum + migration bound. */
+const BuiltInBadge: FunctionComponent = () => (
+  <span className="whitespace-nowrap rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-contrast">
+    Built-in
+  </span>
+)
+
 type Props = {
   application: WebApplication
   noteIfForbidden: (response: { status?: number }) => void
@@ -71,6 +84,71 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([])
   const [membersLoading, setMembersLoading] = useState(false)
   const [newMemberUuid, setNewMemberUuid] = useState('')
+
+  // Role management: the roles themselves (which permissions each role grants).
+  // Roles are enum + migration bound server-side, so this section is READ +
+  // edit-permission-assignments only — never create/delete a role type.
+  const [roles, setRoles] = useState<AdminRole[]>([])
+  const [permissionCatalog, setPermissionCatalog] = useState<string[]>([])
+  const [rolesLoading, setRolesLoading] = useState(false)
+  // Which role's permission editor is expanded (permission CHIPS are always
+  // visible on every row; this only gates the editor).
+  const [editingRoleUuid, setEditingRoleUuid] = useState<string | null>(null)
+  // Working copy of the permissions for the role currently being edited.
+  const [draftPermissions, setDraftPermissions] = useState<string[]>([])
+  const [savingRole, setSavingRole] = useState(false)
+
+  const loadRoles = useCallback(async () => {
+    setRolesLoading(true)
+    try {
+      const response = await application.legacyApi.adminListRolesWithPermissions()
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        return
+      }
+      const data = (response as { data?: { roles?: AdminRole[]; permissions?: string[] } }).data
+      setRoles(data?.roles ?? [])
+      setPermissionCatalog(data?.permissions ?? [])
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setRolesLoading(false)
+    }
+  }, [application, noteIfForbidden])
+
+  useEffect(() => {
+    void loadRoles()
+  }, [loadRoles])
+
+  const beginEditingRole = useCallback((role: AdminRole) => {
+    setEditingRoleUuid(role.uuid)
+    setDraftPermissions([...role.permissionNames])
+  }, [])
+
+  const saveRolePermissions = useCallback(
+    async (role: AdminRole) => {
+      setSavingRole(true)
+      try {
+        const response = await application.legacyApi.adminSetRolePermissions(role.uuid, draftPermissions)
+        if (isErrorResponse(response)) {
+          const message =
+            ((response as { data?: { error?: { message?: string } } }).data?.error?.message) ??
+            'Failed to update role permissions.'
+          addToast({ type: ToastType.Error, message })
+          return
+        }
+        addToast({ type: ToastType.Success, message: `Updated permissions for ${role.name}.` })
+        setEditingRoleUuid(null)
+        await loadRoles()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: 'Failed to update role permissions.' })
+      } finally {
+        setSavingRole(false)
+      }
+    },
+    [application, draftPermissions, loadRoles],
+  )
 
   const loadGroups = useCallback(async () => {
     setGroupsLoading(true)
@@ -243,12 +321,104 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   )
 
   return (
-    <PreferencesSegment>
-      <Title>Groups &amp; permissions</Title>
-      <Text>
-        Groups confer a set of roles on every member. A user&apos;s effective permissions are the union of their own
-        roles and the roles granted by their groups. Users in no groups behave exactly as before.
-      </Text>
+    <>
+      <PreferencesSegment>
+        <Title>Roles &amp; permissions</Title>
+        <Text>
+          Each role grants a set of permissions. Roles are built into the server (a fixed list plus database
+          migrations), so new role <em>types</em> cannot be created here — adding one requires a migration. You can,
+          however, edit which permissions each existing role grants, drawing from the server&apos;s permission catalog.
+        </Text>
+
+        {rolesLoading ? (
+          <Spinner className="mt-3 h-5 w-5" />
+        ) : roles.length === 0 ? (
+          <Text className="mt-3">No roles reported by this server.</Text>
+        ) : (
+          <div className="mt-3 flex flex-col gap-3">
+            {roles.map((role) => {
+              const isEditing = editingRoleUuid === role.uuid
+              const options = permissionPickerOptions(
+                permissionCatalog,
+                isEditing ? draftPermissions : role.permissionNames,
+              )
+              const unchanged = permissionSetsEqual(draftPermissions, role.permissionNames)
+              return (
+                <div key={role.uuid} className="rounded-md border border-border p-3">
+                  <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+                    <div className="flex min-w-0 flex-grow flex-col">
+                      <div className="flex flex-wrap items-center gap-x-2">
+                        <Subtitle>{role.name}</Subtitle>
+                        {role.isBuiltIn && <BuiltInBadge />}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {role.permissionNames.length > 0 ? (
+                          role.permissionNames.map((permission) => <RoleChip key={permission} name={permission} />)
+                        ) : (
+                          <Text className="text-xs italic text-passive-1">No permissions granted</Text>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-2">
+                      <Button
+                        small
+                        label={isEditing ? 'Close' : 'Edit permissions'}
+                        onClick={() => (isEditing ? setEditingRoleUuid(null) : beginEditingRole(role))}
+                      />
+                    </div>
+                  </div>
+
+                  {isEditing && (
+                    <div className="mt-3 rounded border border-border p-3">
+                      <Text className="text-xs text-passive-1">
+                        Toggle the permissions this role grants, then Save. Only permissions from the server catalog can
+                        be assigned.
+                      </Text>
+                      {options.length === 0 ? (
+                        <Text className="mt-2">This server reports no permission catalog.</Text>
+                      ) : (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {options.map((permission) => {
+                            const selected = draftPermissions.includes(permission)
+                            return (
+                              <RoleToggleChip
+                                key={permission}
+                                name={permission}
+                                selected={selected}
+                                onToggle={() =>
+                                  setDraftPermissions((current) =>
+                                    togglePermissionName(current, permission, !selected),
+                                  )
+                                }
+                              />
+                            )
+                          })}
+                        </div>
+                      )}
+                      <div className="mt-3 flex items-center gap-2">
+                        <Button
+                          small
+                          label={savingRole ? 'Saving…' : 'Save permissions'}
+                          disabled={savingRole || unchanged}
+                          onClick={() => void saveRolePermissions(role)}
+                        />
+                        <Button small label="Cancel" onClick={() => setEditingRoleUuid(null)} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </PreferencesSegment>
+
+      <PreferencesSegment>
+        <Title>Groups</Title>
+        <Text>
+          Groups confer a set of roles on every member. A user&apos;s effective permissions are the union of their own
+          roles and the roles granted by their groups. Users in no groups behave exactly as before.
+        </Text>
 
       {/* Create-group form: name + description + Create on one aligned row,
           with an optional role picker underneath so a group can be born with
@@ -411,7 +581,8 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           })}
         </div>
       )}
-    </PreferencesSegment>
+      </PreferencesSegment>
+    </>
   )
 }
 

@@ -1006,6 +1006,34 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: list every role with the permissions it grants, plus the
+   * seeded permission catalog and the built-in role names. Roles are enum +
+   * migration bound, so only permission ASSIGNMENTS are editable at runtime.
+   */
+  async adminListRolesWithPermissions(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.rolesDetailed),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get roles with permissions.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: replace the set of permissions a role grants. All names
+   * must exist in the catalog; the server can never create/rename/delete a role.
+   */
+  async adminSetRolePermissions(roleUuid: string, permissionNames: string[]): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.rolePermissions(roleUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set role permissions.',
+      params: { permissionNames },
+    })
+  }
+
   async adminListGroups(): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Get,

@@ -72,6 +72,10 @@ const AdminPaths = {
   userFixQuota: (userUuid: string) => `/v1/admin/users/${userUuid}/fix-quota`,
   // Standard Red Notes: RBAC groups & granular permissions.
   roles: '/v1/admin/roles',
+  // Standard Red Notes: every role with its permissions + the permission
+  // catalog (read), and a role's editable permission assignments (write).
+  rolesDetailed: '/v1/admin/roles/detailed',
+  rolePermissions: (roleUuid: string) => `/v1/admin/roles/${roleUuid}/permissions`,
   groups: '/v1/admin/groups',
   group: (groupUuid: string) => `/v1/admin/groups/${groupUuid}`,
   groupRoles: (groupUuid: string) => `/v1/admin/groups/${groupUuid}/roles`,
