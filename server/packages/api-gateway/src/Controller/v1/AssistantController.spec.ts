@@ -20,9 +20,17 @@ jest.mock('../../Service/Assistant/providers/factory', () => ({
 describe('AssistantController', () => {
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
-  let redis: { incr: jest.Mock; expire: jest.Mock; decr: jest.Mock; get: jest.Mock }
+  let redis: {
+    incr: jest.Mock
+    expire: jest.Mock
+    decr: jest.Mock
+    get: jest.Mock
+    zadd: jest.Mock
+    zrangebyscore: jest.Mock
+    zremrangebyscore: jest.Mock
+  }
 
-  const makeController = (globalLimit = 0) =>
+  const makeController = (globalLimit = 0, tokenLimits?: { fiveHour?: number; weekly?: number }) =>
     new AssistantController(
       {} as AssistantProviderConfig,
       'openai',
@@ -30,6 +38,10 @@ describe('AssistantController', () => {
       globalLimit,
       [],
       redis as never,
+      undefined,
+      undefined,
+      tokenLimits?.fiveHour ?? 0,
+      tokenLimits?.weekly ?? 0,
     )
 
   const responseWith = (settings?: Record<string, unknown>): Response => {
@@ -55,6 +67,10 @@ describe('AssistantController', () => {
       expire: jest.fn().mockResolvedValue(1),
       decr: jest.fn().mockResolvedValue(0),
       get: jest.fn().mockResolvedValue(null),
+      zadd: jest.fn().mockResolvedValue(1),
+      // Default: no prior token usage recorded.
+      zrangebyscore: jest.fn().mockResolvedValue([]),
+      zremrangebyscore: jest.fn().mockResolvedValue(0),
     }
   })
 
@@ -107,6 +123,73 @@ describe('AssistantController', () => {
       expect(statusMock).toHaveBeenCalledWith(429)
       expect(jsonMock).toHaveBeenCalledWith(
         expect.objectContaining({ error: expect.objectContaining({ tag: 'ai-rate-limited', limit: 5 }) }),
+      )
+    })
+  })
+
+  describe('rolling-window token metering', () => {
+    const now = Date.now()
+
+    it('rejects (429) naming the window + reset when the 5h token cap is already reached', async () => {
+      // 5000 tokens already spent inside the week; the 5h limit is 1000.
+      redis.zrangebyscore.mockResolvedValue([`${now}:5000:abc`])
+      const response = responseWith({})
+
+      await makeController(0, { fiveHour: 1000 }).streamCompletion(streamRequest(), response)
+
+      expect(statusMock).toHaveBeenCalledWith(429)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            tag: 'ai-token-limit-reached',
+            window: 'fiveHour',
+            limitTokens: 1000,
+            resetsAt: expect.any(String),
+          }),
+        }),
+      )
+    })
+
+    it('treats a 0 token limit as UNLIMITED (no token 429 even with heavy usage)', async () => {
+      redis.zrangebyscore.mockResolvedValue([`${now}:9999999:abc`])
+      const response = responseWith({})
+
+      await makeController(0, { fiveHour: 0, weekly: 0 }).streamCompletion(streamRequest(), response)
+
+      // The token gate never fires; the request proceeds to the mocked provider
+      // resolution (which fails), so no 429 is produced.
+      expect(statusMock).not.toHaveBeenCalledWith(429)
+    })
+
+    it('FAILS OPEN when the token meter read errors (request not blocked)', async () => {
+      redis.zrangebyscore.mockRejectedValue(new Error('redis down'))
+      const response = responseWith({})
+
+      await makeController(0, { fiveHour: 1000 }).streamCompletion(streamRequest(), response)
+
+      expect(statusMock).not.toHaveBeenCalledWith(429)
+    })
+  })
+
+  describe('usage endpoint', () => {
+    it('reports the daily request meter plus both token windows', async () => {
+      redis.get.mockResolvedValue('3')
+      redis.zrangebyscore.mockResolvedValue([`${Date.now()}:120:abc`])
+      const response = responseWith({})
+
+      await makeController(0, { fiveHour: 1000, weekly: 5000 }).usage(
+        { query: {} } as unknown as Request,
+        response,
+      )
+
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          used: 3,
+          tokens: expect.objectContaining({
+            fiveHour: expect.objectContaining({ usedTokens: 120, limitTokens: 1000 }),
+            weekly: expect.objectContaining({ usedTokens: 120, limitTokens: 5000 }),
+          }),
+        }),
       )
     })
   })

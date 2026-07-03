@@ -16,6 +16,21 @@ import { ChatMessage, Provider, ProviderEvent, ToolDescriptor } from '../../Serv
 import { resolveProfileProvider } from '../../Service/Assistant/profiles'
 import { SubscriptionCredentialProviderInterface } from '../../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import {
+  RedisTokenUsageStore,
+  SUBSCRIPTION_USAGE_SUBJECT,
+} from '../../Service/Assistant/RedisTokenUsageStore'
+import {
+  buildWindowUsage,
+  estimateTokensFromChars,
+  estimateTokensFromText,
+  FIVE_HOUR_WINDOW_MS,
+  isOverTokenLimit,
+  TokenWindowId,
+  unavailableWindowUsage,
+  WEEKLY_WINDOW_MS,
+  windowLabel,
+} from '../../Service/Assistant/tokenMetering'
 
 interface StreamRequestBody {
   provider?: string
@@ -73,8 +88,39 @@ export class AssistantController extends BaseHttpController {
     @inject(TYPES.ApiGateway_AssistantSubscriptionCredentialProvider)
     @optional()
     private subscriptionCredentialProvider?: SubscriptionCredentialProviderInterface,
+    // Standard Red Notes: env fallback for the per-user rolling-window TOKEN
+    // limits. Persisted admin overrides (ServerSettingsResolver) win over these;
+    // 0 = unlimited. Optional so unit tests that build the controller directly
+    // (no DI) default to unlimited and skip token enforcement.
+    @inject(TYPES.ApiGateway_ASSISTANT_5H_TOKEN_LIMIT)
+    @optional()
+    private fiveHourTokenLimitEnv: number = 0,
+    @inject(TYPES.ApiGateway_ASSISTANT_WEEKLY_TOKEN_LIMIT)
+    @optional()
+    private weeklyTokenLimitEnv: number = 0,
   ) {
     super()
+  }
+
+  /**
+   * Effective per-user rolling-window token limits: persisted admin values win
+   * (via the resolver), else the env fallback, else 0 (unlimited). Never throws.
+   */
+  private async effectiveTokenLimits(): Promise<{ fiveHour: number; weekly: number }> {
+    if (this.serverSettingsResolver) {
+      try {
+        return await this.serverSettingsResolver.resolveAssistantTokenLimits()
+      } catch {
+        // Fall through to the env fallback.
+      }
+    }
+
+    return { fiveHour: this.fiveHourTokenLimitEnv || 0, weekly: this.weeklyTokenLimitEnv || 0 }
+  }
+
+  /** The Redis-backed token counter, or undefined when Redis is not configured. */
+  private tokenStore(): RedisTokenUsageStore | undefined {
+    return this.redis ? new RedisTokenUsageStore(this.redis) : undefined
   }
 
   /**
@@ -183,16 +229,43 @@ export class AssistantController extends BaseHttpController {
     const limit = this.effectiveLimit(limits, await this.effectiveGlobalDailyLimit())
     const dayKey = this.currentDayKey()
 
+    // Existing daily REQUEST meter (kept working alongside the new token windows).
     let used = 0
     if (this.redis) {
-      const raw = await this.redis.get(this.usageKey(userUuid, dayKey))
-      used = raw ? parseInt(raw, 10) : 0
+      try {
+        const raw = await this.redis.get(this.usageKey(userUuid, dayKey))
+        used = raw ? parseInt(raw, 10) : 0
+      } catch {
+        // Fail-open: report 0 rather than error out the whole usage payload.
+      }
+    }
+
+    // New per-user rolling-window TOKEN meters (5h + weekly). Fail-open on Redis
+    // error: report the windows as `unavailable` (0 used) so the client never
+    // blocks on a metering read.
+    const tokenLimits = await this.effectiveTokenLimits()
+    const now = Date.now()
+    const store = this.tokenStore()
+    let fiveHour = unavailableWindowUsage(now, FIVE_HOUR_WINDOW_MS, tokenLimits.fiveHour)
+    let weekly = unavailableWindowUsage(now, WEEKLY_WINDOW_MS, tokenLimits.weekly)
+    if (store) {
+      try {
+        const entries = await store.entriesWithinWeek(userUuid, now)
+        fiveHour = buildWindowUsage(entries, now, FIVE_HOUR_WINDOW_MS, tokenLimits.fiveHour)
+        weekly = buildWindowUsage(entries, now, WEEKLY_WINDOW_MS, tokenLimits.weekly)
+      } catch {
+        // Keep the fail-open placeholders.
+      }
     }
 
     response.json({
+      // Back-compat top-level daily-request fields (older clients read these).
       used,
       limit,
       resetsAt: this.nextResetIso(),
+      // Structured breakdown: daily requests + the two token windows.
+      daily: { usedRequests: used, limitRequests: limit, resetsAt: this.nextResetIso() },
+      tokens: { fiveHour, weekly },
     })
   }
 
@@ -348,6 +421,47 @@ export class AssistantController extends BaseHttpController {
   }
 
   /**
+   * Standard Red Notes: SUBSCRIPTION USAGE (admin, read-only).
+   *
+   * HONESTY: ChatGPT/Codex subscriptions do NOT expose a documented, queryable
+   * usage/quota endpoint — the Codex backend only returns rate-limit state in
+   * per-response headers, not a pollable API. So this reports the tokens SRN has
+   * METERED LOCALLY for subscription-backed (`codex-subscription`) proxy calls,
+   * aggregated across all users over the same 5h + weekly rolling windows. It is
+   * clearly labelled `source: 'srn-local-metering'` and is NOT OpenAI's official
+   * quota. Fail-open: reports `unavailable` windows on a Redis error.
+   */
+  @httpGet('/subscription/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionUsage(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+
+    const now = Date.now()
+    const store = this.tokenStore()
+    // No configured limit on the aggregate — it reports consumption, not a cap.
+    let fiveHour = unavailableWindowUsage(now, FIVE_HOUR_WINDOW_MS, 0)
+    let weekly = unavailableWindowUsage(now, WEEKLY_WINDOW_MS, 0)
+    if (store) {
+      try {
+        const entries = await store.entriesWithinWeek(SUBSCRIPTION_USAGE_SUBJECT, now)
+        fiveHour = buildWindowUsage(entries, now, FIVE_HOUR_WINDOW_MS, 0)
+        weekly = buildWindowUsage(entries, now, WEEKLY_WINDOW_MS, 0)
+      } catch {
+        // Keep the fail-open placeholders.
+      }
+    }
+
+    const config = await this.effectiveProviderConfig()
+    response.json({
+      source: 'srn-local-metering',
+      subscriptionMode: config.openaiAuthMode === 'subscription',
+      tokens: { fiveHour, weekly },
+    })
+  }
+
+  /**
    * Minimal self-contained HTML for the OAuth callback window: it postMessages the
    * opener (best-effort success signal; the wizard also polls /status) and closes.
    * No secrets — only the success/failure boolean and a human message.
@@ -411,9 +525,54 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       }
     }
 
-    let provider
+    // 3) Meter per user per rolling TOKEN window (5h + weekly). We CHECK BEFORE
+    // starting — a request already in flight is never hard-broken mid-stream —
+    // and reject when the user is already at/over either configured window. We
+    // cannot know this request's token spend up front, so "would exceed" is
+    // enforced as "is already at the cap". Fail-open: any Redis error here lets
+    // the request through rather than blocking on a metering read.
+    const tokenLimits = await this.effectiveTokenLimits()
+    const tokenStore = this.tokenStore()
+    if (tokenStore && (tokenLimits.fiveHour > 0 || tokenLimits.weekly > 0)) {
+      try {
+        const now = Date.now()
+        const entries = await tokenStore.entriesWithinWeek(userUuid, now)
+        const fiveHour = buildWindowUsage(entries, now, FIVE_HOUR_WINDOW_MS, tokenLimits.fiveHour)
+        const weekly = buildWindowUsage(entries, now, WEEKLY_WINDOW_MS, tokenLimits.weekly)
+        const exceeded: { id: TokenWindowId; usedTokens: number; limitTokens: number; resetsAt: string } | undefined =
+          isOverTokenLimit(fiveHour.usedTokens, tokenLimits.fiveHour)
+            ? { id: 'fiveHour', ...fiveHour }
+            : isOverTokenLimit(weekly.usedTokens, tokenLimits.weekly)
+              ? { id: 'weekly', ...weekly }
+              : undefined
+
+        if (exceeded) {
+          // Refund the daily request meter we incremented above — this request
+          // is rejected before any upstream proxying happens.
+          await this.refundUsage(userUuid, dayKey, limit)
+          response.status(429).json({
+            error: {
+              tag: 'ai-token-limit-reached',
+              message: `Your ${windowLabel(exceeded.id)} AI token limit (${exceeded.limitTokens.toLocaleString()} tokens) has been reached. It resets at ${exceeded.resetsAt}.`,
+              window: exceeded.id,
+              usedTokens: exceeded.usedTokens,
+              limitTokens: exceeded.limitTokens,
+              resetsAt: exceeded.resetsAt,
+            },
+          })
+          return
+        }
+      } catch {
+        // Fail-open: never block a request because the token meter is unreadable.
+      }
+    }
+
+    let provider: Provider
+    let isSubscription = false
     try {
-      provider = await this.resolveStreamProvider(body, request)
+      const resolved = await this.resolveStreamProvider(body, request)
+      provider = resolved.provider
+      isSubscription = resolved.isSubscription
     } catch (error) {
       // The proxy never started, so refund the metered request.
       await this.refundUsage(userUuid, dayKey, limit)
@@ -447,6 +606,14 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       clientClosed = true
     })
 
+    // Token accounting for this request: prefer the provider's REAL usage tokens
+    // (OpenAI include_usage / Gemini / Cohere emit a `usage` event); otherwise
+    // fall back to an ESTIMATE from prompt + streamed-completion text length,
+    // flagged so the meter can be honest about the approximation.
+    let reportedTokens = 0
+    let sawUsageEvent = false
+    let completionChars = 0
+
     try {
       const stream = provider.send({
         system: body.system ?? '',
@@ -458,6 +625,18 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
         if (clientClosed) {
           break
         }
+        if (event.kind === 'usage') {
+          const total =
+            event.totalTokens && event.totalTokens > 0
+              ? event.totalTokens
+              : (event.promptTokens ?? 0) + (event.completionTokens ?? 0)
+          if (total > 0) {
+            reportedTokens += total
+            sawUsageEvent = true
+          }
+        } else if (event.kind === 'text-delta') {
+          completionChars += event.delta.length
+        }
         writeEvent(event)
       }
     } catch (error) {
@@ -465,6 +644,40 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       writeEvent({ kind: 'finish', stopReason: 'error' })
     } finally {
       response.end()
+      // Record the request's token spend AFTER it completes (best-effort, never
+      // affects the response). Real usage when the provider reported it, else an
+      // estimate. Subscription-backed calls also feed the admin aggregate meter.
+      const spentTokens = sawUsageEvent
+        ? reportedTokens
+        : this.estimateRequestTokens(body, completionChars)
+      await this.recordTokenUsage(userUuid, spentTokens, isSubscription)
+    }
+  }
+
+  /** Estimate a request's total tokens from prompt text + streamed completion length. */
+  private estimateRequestTokens(body: StreamRequestBody, completionChars: number): number {
+    const promptText = [body.system ?? '', ...(body.messages ?? []).map((message) => message.content ?? '')].join('\n')
+    return estimateTokensFromText(promptText) + estimateTokensFromChars(completionChars)
+  }
+
+  /**
+   * Persist a completed request's token spend to the rolling-window meter for the
+   * user and, when the call was subscription-backed, to the shared subscription
+   * aggregate the admin card reads. Best-effort: swallow Redis errors.
+   */
+  private async recordTokenUsage(userUuid: string, tokens: number, isSubscription: boolean): Promise<void> {
+    const store = this.tokenStore()
+    if (!store || tokens <= 0) {
+      return
+    }
+    const now = Date.now()
+    try {
+      await store.record(userUuid, tokens, now)
+      if (isSubscription) {
+        await store.record(SUBSCRIPTION_USAGE_SUBJECT, tokens, now)
+      }
+    } catch {
+      // Metering is best-effort and must never surface to the client.
     }
   }
 
@@ -479,7 +692,10 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
    *  - Otherwise (the client sent an explicit `provider`) the pre-existing legacy
    *    path is used unchanged, so every current client keeps working.
    */
-  private async resolveStreamProvider(body: StreamRequestBody, request: Request): Promise<Provider> {
+  private async resolveStreamProvider(
+    body: StreamRequestBody,
+    request: Request,
+  ): Promise<{ provider: Provider; isSubscription: boolean }> {
     const headerProfileId =
       typeof request.headers['x-assistant-profile'] === 'string'
         ? (request.headers['x-assistant-profile'] as string).trim()
@@ -509,7 +725,10 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
             }
           }
         }
-        return resolveProvider(resolution.providerId, resolution.model || this.defaultModel, resolution.config)
+        return {
+          provider: resolveProvider(resolution.providerId, resolution.model || this.defaultModel, resolution.config),
+          isSubscription: profile.provider === 'codex-subscription',
+        }
       }
 
       if (requestedProfileId) {
@@ -520,7 +739,13 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
     // Legacy path (fully back-compat): honor the client's chosen provider + model.
     const providerId = body.provider || this.defaultProvider
     const model = body.model || this.defaultModel
-    return resolveProvider(providerId, model, await this.effectiveProviderConfig())
+    const config = await this.effectiveProviderConfig()
+    return {
+      provider: resolveProvider(providerId, model, config),
+      // The legacy single-provider path is subscription-backed when the OpenAI
+      // provider is configured in subscription (Codex/ChatGPT) auth mode.
+      isSubscription: providerId === 'openai' && config.openaiAuthMode === 'subscription',
+    }
   }
 
   private usageKey(userUuid: string, dayKey: string): string {

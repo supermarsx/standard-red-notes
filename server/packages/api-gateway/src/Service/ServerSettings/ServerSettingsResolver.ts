@@ -28,6 +28,10 @@ export interface EnvSettingsBaseline {
   assistant: AssistantProviderConfig
   /** ASSISTANT_DAILY_REQUEST_LIMIT; undefined when the env var is unset. */
   assistantDailyRequestLimit?: number
+  /** ASSISTANT_5H_TOKEN_LIMIT; undefined when unset. 0 = unlimited. */
+  assistantFiveHourTokenLimit?: number
+  /** ASSISTANT_WEEKLY_TOKEN_LIMIT; undefined when unset. 0 = unlimited. */
+  assistantWeeklyTokenLimit?: number
   /** UPDATE_CHECK_URL; undefined when unset. */
   updateCheckUrl?: string
   /**
@@ -50,6 +54,9 @@ export interface ServerSettingsView {
       openaiBaseUrl: string | null
       ollamaUrl: string | null
       dailyRequestLimit: number | null
+      /** Per-user rolling-window TOKEN limits (0/unset = unlimited). */
+      fiveHourTokenLimit: number | null
+      weeklyTokenLimit: number | null
       subscriptionMode: string | null
       /** Masked named profiles (secrets replaced by keyConfigured booleans). */
       profiles: MaskedAiProfile[]
@@ -126,6 +133,20 @@ export class ServerSettingsResolver {
     return persisted.ai?.dailyRequestLimit ?? this.envBaseline.assistantDailyRequestLimit ?? 0
   }
 
+  /**
+   * Effective per-user rolling-window TOKEN limits. Persisted admin values win
+   * over the ASSISTANT_5H_TOKEN_LIMIT / ASSISTANT_WEEKLY_TOKEN_LIMIT env vars;
+   * 0 (the default) means the window is unlimited. Re-read per request.
+   */
+  async resolveAssistantTokenLimits(): Promise<{ fiveHour: number; weekly: number }> {
+    const persisted = (await this.safeRead()).ai ?? {}
+
+    return {
+      fiveHour: persisted.fiveHourTokenLimit ?? this.envBaseline.assistantFiveHourTokenLimit ?? 0,
+      weekly: persisted.weeklyTokenLimit ?? this.envBaseline.assistantWeeklyTokenLimit ?? 0,
+    }
+  }
+
   /** Effective UPDATE_CHECK_URL; undefined = feature not configured. */
   async resolveUpdateCheckUrl(): Promise<string | undefined> {
     const persisted = await this.safeRead()
@@ -151,6 +172,7 @@ export class ServerSettingsResolver {
     const config = await this.resolveAssistantConfig()
     const env = this.envBaseline
     const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
+    const tokenLimits = await this.resolveAssistantTokenLimits()
 
     const ai = persisted.ai ?? {}
     const sources: Record<string, ServerSettingSource> = {
@@ -159,6 +181,8 @@ export class ServerSettingsResolver {
       'ai.openaiBaseUrl': this.source(ai.openaiBaseUrl, env.assistant.openaiBaseURL),
       'ai.ollamaUrl': this.source(ai.ollamaUrl, env.assistant.ollamaUrl),
       'ai.dailyRequestLimit': this.source(ai.dailyRequestLimit, env.assistantDailyRequestLimit),
+      'ai.fiveHourTokenLimit': this.source(ai.fiveHourTokenLimit, env.assistantFiveHourTokenLimit),
+      'ai.weeklyTokenLimit': this.source(ai.weeklyTokenLimit, env.assistantWeeklyTokenLimit),
       // Profiles are gateway-persisted only (no env source); 'persisted' when the
       // admin has defined an explicit set, else 'default' (legacy-mapped).
       'ai.profiles': this.source(ai.profiles, undefined),
@@ -175,6 +199,8 @@ export class ServerSettingsResolver {
           openaiBaseUrl: config.openaiBaseURL ?? null,
           ollamaUrl: config.ollamaUrl ?? null,
           dailyRequestLimit: await this.resolveAssistantDailyRequestLimit(),
+          fiveHourTokenLimit: tokenLimits.fiveHour > 0 ? tokenLimits.fiveHour : 0,
+          weeklyTokenLimit: tokenLimits.weekly > 0 ? tokenLimits.weekly : 0,
           // env-only for now (ASSISTANT_OPENAI_AUTH_MODE); reported so the admin
           // pane can render the subscription-mode state truthfully.
           subscriptionMode: config.openaiAuthMode ?? null,

@@ -261,6 +261,8 @@ export type AdminServerSettings = {
     openaiBaseUrl?: string | null
     ollamaUrl?: string | null
     dailyRequestLimit?: number | null
+    fiveHourTokenLimit?: number | null
+    weeklyTokenLimit?: number | null
     subscriptionMode?: string | null
     // Standard Red Notes: MULTIPLE named profiles + the default selector.
     profiles?: AdminAiProfileView[]
@@ -372,6 +374,23 @@ export const buildDailyLimitSettingUpdate = (input: string): SettingUpdateResult
     return { ok: false, error: 'Enter a whole number of requests per day, or 0 / empty for unlimited.' }
   }
   // Any spelling of zero ("00", "0.0") is unlimited too.
+  return { ok: true, value: value === 0 ? null : value }
+}
+
+/**
+ * Validate + normalise a rolling-window TOKEN limit input. Same rules as the
+ * daily request limit: empty or 0 = unlimited (sent as null to clear any
+ * persisted cap), otherwise a positive integer number of tokens.
+ */
+export const buildTokenLimitSettingUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '' || trimmed === '0') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return { ok: false, error: 'Enter a whole number of tokens, or 0 / empty for unlimited.' }
+  }
   return { ok: true, value: value === 0 ? null : value }
 }
 

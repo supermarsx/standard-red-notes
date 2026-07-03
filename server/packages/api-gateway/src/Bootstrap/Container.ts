@@ -241,6 +241,12 @@ export class ContainerConfigLoader {
       assistantDailyRequestLimit: env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
         ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
         : undefined,
+      assistantFiveHourTokenLimit: env.get('ASSISTANT_5H_TOKEN_LIMIT', true)
+        ? +env.get('ASSISTANT_5H_TOKEN_LIMIT', true)
+        : undefined,
+      assistantWeeklyTokenLimit: env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true)
+        ? +env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true)
+        : undefined,
       updateCheckUrl: env.get('UPDATE_CHECK_URL', true) || undefined,
       nextcloudBackupsEnabled: env.get('NEXTCLOUD_BACKUPS_ENABLED', true)
         ? env.get('NEXTCLOUD_BACKUPS_ENABLED', true) === 'true'
@@ -278,6 +284,13 @@ export class ContainerConfigLoader {
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
       .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
+    // Per-user rolling-window AI TOKEN ceilings (env fallback; 0 = unlimited).
+    container
+      .bind<number>(TYPES.ApiGateway_ASSISTANT_5H_TOKEN_LIMIT)
+      .toConstantValue(env.get('ASSISTANT_5H_TOKEN_LIMIT', true) ? +env.get('ASSISTANT_5H_TOKEN_LIMIT', true) : 0)
+    container
+      .bind<number>(TYPES.ApiGateway_ASSISTANT_WEEKLY_TOKEN_LIMIT)
+      .toConstantValue(env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) ? +env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) : 0)
     // Standard Red Notes: comma-separated STT model ids the audio-recorder model
     // picker offers. Empty by default — clients then fall back to a free-text field.
     container.bind<string[]>(TYPES.ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS).toConstantValue(

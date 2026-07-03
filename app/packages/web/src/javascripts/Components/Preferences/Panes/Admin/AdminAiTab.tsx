@@ -16,6 +16,7 @@ import {
   AdminServerSettingsResponse,
   buildApiKeySettingUpdate,
   buildDailyLimitSettingUpdate,
+  buildTokenLimitSettingUpdate,
   buildUrlSettingUpdate,
   settingSource,
   settingSourceChipClass,
@@ -23,6 +24,7 @@ import {
 } from './adminHelpers'
 import AiProfilesSection from './AiProfilesSection'
 import CodexPairingWizard from './CodexPairingWizard'
+import AdminSubscriptionUsageCard from './AdminSubscriptionUsageCard'
 import { AiProfilePayload, MaskedAiProfile } from './aiProfiles'
 
 type Props = {
@@ -80,6 +82,9 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('')
   const [ollamaUrl, setOllamaUrl] = useState('')
   const [dailyLimit, setDailyLimit] = useState('')
+  // Standard Red Notes: per-user rolling-window TOKEN limits (0/empty = unlimited).
+  const [fiveHourTokenLimit, setFiveHourTokenLimit] = useState('')
+  const [weeklyTokenLimit, setWeeklyTokenLimit] = useState('')
   // Standard Red Notes: MULTIPLE named profiles (masked view) + default selector.
   const [profiles, setProfiles] = useState<MaskedAiProfile[]>([])
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null)
@@ -94,6 +99,10 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     setOllamaUrl(next?.ai?.ollamaUrl ?? '')
     const limit = next?.ai?.dailyRequestLimit
     setDailyLimit(limit != null && limit > 0 ? String(limit) : '')
+    const fiveHour = next?.ai?.fiveHourTokenLimit
+    setFiveHourTokenLimit(fiveHour != null && fiveHour > 0 ? String(fiveHour) : '')
+    const weekly = next?.ai?.weeklyTokenLimit
+    setWeeklyTokenLimit(weekly != null && weekly > 0 ? String(weekly) : '')
     setProfiles((next?.ai?.profiles ?? []) as AdminAiProfileView[] as MaskedAiProfile[])
     setDefaultProfileId(next?.ai?.defaultProfileId ?? null)
   }, [])
@@ -252,6 +261,32 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     )
   }, [dailyLimit, save])
 
+  const saveFiveHourTokenLimit = useCallback(async () => {
+    const update = buildTokenLimitSettingUpdate(fiveHourTokenLimit)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await save(
+      'five-hour-tokens',
+      { ai: { fiveHourTokenLimit: update.value } } as unknown as ServerSettingsPartial,
+      update.value === null ? '5-hour token limit removed (unlimited).' : '5-hour token limit saved.',
+    )
+  }, [fiveHourTokenLimit, save])
+
+  const saveWeeklyTokenLimit = useCallback(async () => {
+    const update = buildTokenLimitSettingUpdate(weeklyTokenLimit)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await save(
+      'weekly-tokens',
+      { ai: { weeklyTokenLimit: update.value } } as unknown as ServerSettingsPartial,
+      update.value === null ? 'Weekly token limit removed (unlimited).' : 'Weekly token limit saved.',
+    )
+  }, [weeklyTokenLimit, save])
+
   if (loading) {
     return (
       <PreferencesSegment>
@@ -316,6 +351,9 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       {/* Guided ChatGPT / Codex subscription pairing wizard */}
       <CodexPairingWizard application={application} />
+
+      {/* SRN-side metered subscription token usage (read-only, admin) */}
+      <AdminSubscriptionUsageCard application={application} />
 
       <HorizontalSeparator classes="my-4" />
 
@@ -492,6 +530,57 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
             onClick={() => void saveDailyLimit()}
             disabled={busy}
           />
+        </div>
+
+        <div className="mt-4 flex items-center gap-2">
+          <Subtitle>Token limits (per user)</Subtitle>
+          <SourceChip sources={sources} keys={['ai.fiveHourTokenLimit', 'fiveHourTokenLimit']} />
+          <SourceChip sources={sources} keys={['ai.weeklyTokenLimit', 'weeklyTokenLimit']} />
+        </div>
+        <Text className="mt-1">
+          Per-user AI token ceilings over rolling windows. A request is refused before it starts once the user is at or
+          over either window (an in-flight request is never cut off). 0 or empty means unlimited. Real provider usage
+          tokens are counted when the provider reports them; otherwise usage is estimated from message length.
+        </Text>
+        <div className="mt-3 flex flex-wrap items-end gap-4">
+          <div>
+            <div className="mb-1 text-sm text-passive-1">5-hour window (tokens)</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <DecoratedInput
+                className={{ container: 'w-40' }}
+                type="number"
+                placeholder="Unlimited"
+                value={fiveHourTokenLimit}
+                onChange={setFiveHourTokenLimit}
+                onEnter={() => void saveFiveHourTokenLimit()}
+                disabled={busy}
+              />
+              <Button
+                label={savingSection === 'five-hour-tokens' ? 'Saving…' : 'Save'}
+                onClick={() => void saveFiveHourTokenLimit()}
+                disabled={busy}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-sm text-passive-1">Weekly window (tokens)</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <DecoratedInput
+                className={{ container: 'w-40' }}
+                type="number"
+                placeholder="Unlimited"
+                value={weeklyTokenLimit}
+                onChange={setWeeklyTokenLimit}
+                onEnter={() => void saveWeeklyTokenLimit()}
+                disabled={busy}
+              />
+              <Button
+                label={savingSection === 'weekly-tokens' ? 'Saving…' : 'Save'}
+                onClick={() => void saveWeeklyTokenLimit()}
+                disabled={busy}
+              />
+            </div>
+          </div>
         </div>
       </PreferencesSegment>
 

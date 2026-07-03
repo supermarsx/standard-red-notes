@@ -35,6 +35,10 @@ export const TYPES = {
   ApiGateway_ASSISTANT_DEFAULT_PROVIDER: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_PROVIDER'),
   ApiGateway_ASSISTANT_DEFAULT_MODEL: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_MODEL'),
   ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT: Symbol.for('ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT'),
+  // Standard Red Notes: per-user rolling-window AI TOKEN limits (env fallback;
+  // persisted admin overrides win via ServerSettingsResolver). 0 = unlimited.
+  ApiGateway_ASSISTANT_5H_TOKEN_LIMIT: Symbol.for('ApiGateway_ASSISTANT_5H_TOKEN_LIMIT'),
+  ApiGateway_ASSISTANT_WEEKLY_TOKEN_LIMIT: Symbol.for('ApiGateway_ASSISTANT_WEEKLY_TOKEN_LIMIT'),
   // Standard Red Notes: ChatGPT/Codex subscription pairing credential provider
   // (PKCE OAuth lifecycle + encrypted token store). Optional — only bound when
   // ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is set so pairing fails closed.

@@ -18,6 +18,8 @@ import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tool
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
 import { composeSystemPromptWithPersona } from '@/Assistant/personaSettings'
 import ContextSelector from './ContextSelector'
+import AssistantUsageMeter from './AssistantUsageMeter'
+import { AssistantUsageResponse, TokenWindowUsage } from '@/Assistant/usageMeter'
 import { AssistantContextScope } from '@/Assistant/assistantContext'
 import { AssistantContextSelection, buildContextForSelection } from '@/Assistant/assistantContextSource'
 
@@ -82,6 +84,11 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null)
+  // Per-user rolling-window TOKEN usage (5h + weekly) for the in-chat meter.
+  const [tokenWindows, setTokenWindows] = useState<{
+    fiveHour?: TokenWindowUsage
+    weekly?: TokenWindowUsage
+  } | null>(null)
   const [queue, setQueue] = useState<string[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [noticeDismissed, setNoticeDismissed] = useState(() => readNoticeDismissed())
@@ -136,14 +143,20 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
   const refreshUsage = useCallback(async () => {
     if (connectionMode !== 'proxy') {
       setUsage(null)
+      setTokenWindows(null)
       return
     }
     try {
-      const result = await application.assistantConfigRequest<{ used: number; limit: number; resetsAt: string }>(
-        '/v1/assistant/usage',
-      )
+      const result = await application.assistantConfigRequest<AssistantUsageResponse>('/v1/assistant/usage')
       if (typeof result?.used === 'number' && typeof result?.limit === 'number') {
         setUsage({ used: result.used, limit: result.limit })
+      }
+      // Token windows are only present on servers that ship token metering; older
+      // servers omit them and the meter simply hides.
+      if (result?.tokens && (result.tokens.fiveHour || result.tokens.weekly)) {
+        setTokenWindows({ fiveHour: result.tokens.fiveHour, weekly: result.tokens.weekly })
+      } else {
+        setTokenWindows(null)
       }
     } catch {
       // Usage display is best-effort; ignore failures.
@@ -510,6 +523,13 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       </div>
 
       <div className="border-t border-border bg-contrast p-3">
+        {tokenWindows && (
+          <AssistantUsageMeter
+            fiveHour={tokenWindows.fiveHour}
+            weekly={tokenWindows.weekly}
+            className="mb-2 border-b border-border pb-2"
+          />
+        )}
         <div className="mb-2 text-xs text-warning">
           Messages and note content the assistant reads are sent to your configured AI provider. {contextSummary}
         </div>

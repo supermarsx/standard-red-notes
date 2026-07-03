@@ -1187,6 +1187,22 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }> {
     return this.serverJsonRequest<{ ok?: boolean }>('/v1/assistant/subscription/unpair', {})
   }
+
+  /**
+   * Read the SRN-side metered token usage attributable to subscription-backed
+   * (Codex/ChatGPT) proxy calls (admin-gated,
+   * GET /v1/assistant/subscription/usage). This is NOT OpenAI's official
+   * subscription quota — no such queryable endpoint exists — but the tokens SRN
+   * has metered locally, over the same 5h + weekly rolling windows. Returns the
+   * HTTP status so the card can distinguish an older server (404) from a payload.
+   */
+  public async assistantSubscriptionUsage(): Promise<{
+    status: number
+    ok: boolean
+    data: AssistantSubscriptionUsage
+  }> {
+    return this.serverGetJsonRequest<AssistantSubscriptionUsage>('/v1/assistant/subscription/usage')
+  }
 }
 
 /**
@@ -1208,6 +1224,27 @@ export type AssistantSubscriptionStatus = {
 export type AssistantSubscriptionStart = {
   authorizeUrl?: string
   state?: string
+}
+
+/** One rolling window of SRN-metered subscription token usage. */
+export type AssistantSubscriptionUsageWindow = {
+  usedTokens: number
+  limitTokens: number
+  resetsAt: string
+  unavailable?: boolean
+}
+
+/**
+ * SRN-side (NOT official OpenAI) metered token usage for subscription-backed
+ * calls. Response of GET /v1/assistant/subscription/usage.
+ */
+export type AssistantSubscriptionUsage = {
+  source?: string
+  subscriptionMode?: boolean
+  tokens?: {
+    fiveHour: AssistantSubscriptionUsageWindow
+    weekly: AssistantSubscriptionUsageWindow
+  }
 }
 
 function extractAccessToken(session: unknown): string | undefined {

@@ -680,6 +680,21 @@ export class AdminController extends BaseHttpController {
         changedSettings.push('ai.dailyRequestLimit')
       }
 
+      // Standard Red Notes: per-user rolling-window TOKEN limits. Same shape as
+      // dailyRequestLimit: integer >= 0 (0 = unlimited), or null to clear.
+      for (const key of ['fiveHourTokenLimit', 'weeklyTokenLimit'] as const) {
+        if (ai[key] !== undefined) {
+          if (ai[key] === null) {
+            patch.ai[key] = null
+          } else if (typeof ai[key] === 'number' && Number.isInteger(ai[key]) && (ai[key] as number) >= 0) {
+            patch.ai[key] = ai[key] as number
+          } else {
+            return { error: `ai.${key} must be an integer >= 0, or null to clear it.` }
+          }
+          changedSettings.push(`ai.${key}`)
+        }
+      }
+
       // Standard Red Notes: MULTIPLE named profiles + a default selector. The
       // heavy validation (provider kinds, URLs, write-only key preservation)
       // lives in the Assistant subsystem's validateProfilesPatch.

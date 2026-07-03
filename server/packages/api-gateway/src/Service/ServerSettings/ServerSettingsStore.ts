@@ -29,6 +29,12 @@ export interface PersistedAiSettings {
   ollamaUrl?: string
   dailyRequestLimit?: number
   /**
+   * Standard Red Notes: per-user AI TOKEN limits over rolling windows. 0/unset =
+   * unlimited. Enforced alongside (not instead of) dailyRequestLimit.
+   */
+  fiveHourTokenLimit?: number
+  weeklyTokenLimit?: number
+  /**
    * Standard Red Notes: MULTIPLE named assistant profiles. When present and
    * non-empty these take precedence; when absent the legacy single-provider
    * fields above are mapped into synthesized default profiles (back-compat).
@@ -56,6 +62,8 @@ export interface ServerSettingsPatch {
     openaiBaseUrl?: string | null
     ollamaUrl?: string | null
     dailyRequestLimit?: number | null
+    fiveHourTokenLimit?: number | null
+    weeklyTokenLimit?: number | null
     profiles?: PersistedAiProfile[] | null
     defaultProfileId?: string | null
   }
@@ -97,6 +105,8 @@ export class ServerSettingsStore {
         this.applyKey(data.ai, 'openaiBaseUrl', patch.ai.openaiBaseUrl)
         this.applyKey(data.ai, 'ollamaUrl', patch.ai.ollamaUrl)
         this.applyKey(data.ai, 'dailyRequestLimit', patch.ai.dailyRequestLimit)
+        this.applyKey(data.ai, 'fiveHourTokenLimit', patch.ai.fiveHourTokenLimit)
+        this.applyKey(data.ai, 'weeklyTokenLimit', patch.ai.weeklyTokenLimit)
         this.applyKey(data.ai, 'profiles', patch.ai.profiles)
         this.applyKey(data.ai, 'defaultProfileId', patch.ai.defaultProfileId)
         if (Object.keys(data.ai).length === 0) {
