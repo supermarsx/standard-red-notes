@@ -49,6 +49,22 @@ describe('controller bootstrap registration', () => {
     expect(missingFromStandalone).toEqual([])
   })
 
+  // Standard Red Notes: the REVERSE direction. A controller imported in
+  // bin/server.ts but NOT re-exported from this barrel registers on the
+  // standalone gateway yet 404s on the home-server bootstrap path (which imports
+  // the package root => `export * from './Controller'`). This exact gap shipped
+  // for /v1/assistant, /v1/ocr, /v1/collaboration, /v1/web, /v1/integrations and
+  // /v1/updates. Versioned route controllers MUST appear in both lists.
+  it('re-exports every bin/server.ts route controller from the barrel (home-server)', () => {
+    const missingFromHomeServer = binImports.filter((modulePath) => !barrelExports.includes(modulePath))
+
+    expect(missingFromHomeServer).toEqual([])
+  })
+
+  it('keeps the standalone and home-server versioned route controller lists identical', () => {
+    expect(binImports).toEqual(barrelExports)
+  })
+
   it('imports only controller modules that exist on disk in bin/server.ts', () => {
     const missingFiles = binImports.filter(
       (modulePath) => !fs.existsSync(path.join(controllerDir, `${modulePath}.ts`)),

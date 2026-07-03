@@ -36,6 +36,17 @@ export * from './v1/TokensController'
 export * from './v1/UsersController'
 export * from './v1/WebSocketsController'
 export * from './v1/WorkflowsController'
+// Standard Red Notes: these controllers were imported in bin/server.ts (standalone
+// gateway) but omitted from this barrel, so they registered on the standalone
+// gateway yet 404'd on the home-server bootstrap path (which imports the package
+// root => `export * from './Controller'`). Keep the two lists in sync — see
+// ControllerRegistration.spec.ts which now asserts equality in BOTH directions.
+export * from './v1/AssistantController'
+export * from './v1/OcrController'
+export * from './v1/CollaborationController'
+export * from './v1/WebController'
+export * from './v1/IntegrationsController'
+export * from './v1/UpdatesController'
 export * from './v2/ActionsControllerV2'
 export * from './v2/PaymentsControllerV2'
 export * from './v2/RevisionsControllerV2'
