@@ -7,11 +7,23 @@ import { ProofOfWorkScope } from '../../Domain/ProofOfWork/ProofOfWorkConfig'
 /**
  * DB-cache-table backed proof-of-work challenge store, used when the auth server
  * is configured for the in-memory (TypeORM cache) backend instead of Redis.
- * Mirrors TypeORMPKCERepository. Single-use is enforced by removing the entry on
- * consume; unlike the Redis backend it cannot atomically report a lost race, so
- * under the rare in-memory backend two truly-simultaneous submissions of the
- * same seed could both pass — replay AFTER consumption is still blocked because
- * the entry is gone.
+ *
+ * Single-use / replay protection: `consumeChallenge` first looks the entry up
+ * (unexpired-only) and returns `false` when it is already gone or expired, so it
+ * honours the same contract as the Redis backend (true iff THIS caller removed a
+ * live entry). Replay AFTER consumption is fully blocked — the entry is gone, so
+ * the lookup returns null and consume returns false.
+ *
+ * RESIDUAL ATOMICITY WINDOW: the shared CacheEntryRepositoryInterface exposes
+ * only save / findUnexpiredOneByKey / removeByKey — there is no atomic
+ * compare-and-delete or delete-returning-affected-rows — so the lookup and the
+ * delete are two statements. Two *truly simultaneous* submissions of the SAME
+ * seed can therefore both observe the live entry before either deletes it and
+ * both return true. This window is a single DB round-trip wide and only exists
+ * on the non-default in-memory backend (Redis uses an atomic DEL). The password
+ * and MFA checks downstream are unaffected; the practical impact is that a bot
+ * would, at worst, get one extra pass out of a single solved challenge under a
+ * precisely-timed race — not unlimited replay.
  */
 export class TypeORMProofOfWorkChallengeRepository implements ProofOfWorkChallengeRepositoryInterface {
   private readonly PREFIX = 'pow'
@@ -51,7 +63,19 @@ export class TypeORMProofOfWorkChallengeRepository implements ProofOfWorkChallen
   }
 
   async consumeChallenge(seed: string, scope: ProofOfWorkScope): Promise<boolean> {
-    await this.cacheEntryRepository.removeByKey(this.key(seed, scope))
+    const key = this.key(seed, scope)
+
+    // Only report success if a LIVE (unexpired) entry existed for THIS caller to
+    // remove — matching the Redis backend's `del === 1` contract so
+    // VerifyProofOfWork's single-use race guard is honoured. Without this an
+    // already-consumed or expired seed would still return true and defeat the
+    // guard. See the class doc for the residual (non-atomic) concurrency window.
+    const entry = await this.cacheEntryRepository.findUnexpiredOneByKey(key)
+    if (entry === null) {
+      return false
+    }
+
+    await this.cacheEntryRepository.removeByKey(key)
 
     return true
   }

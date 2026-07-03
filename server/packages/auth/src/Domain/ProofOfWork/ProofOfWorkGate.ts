@@ -103,9 +103,23 @@ export class ProofOfWorkGate {
       return { satisfied: true }
     }
 
+    // We only reach here when PoW is ENABLED for this scope, so a challenge MUST
+    // demand real work. A difficulty <= 0 (misconfiguration) would otherwise fail
+    // OPEN — proofOfWorkSolutionMeetsDifficulty treats <= 0 as "no work required",
+    // so any nonce would pass a challenge that looks enforced. Clamp to a minimum
+    // effective difficulty of 1 at the moment we mint the challenge, so the stored
+    // (authoritative) difficulty verification later reads is always >= 1.
+    const effectiveDifficulty = Math.max(1, Math.floor(config.difficulty))
+    if (effectiveDifficulty !== config.difficulty) {
+      this.logger.warn(
+        `Proof-of-work ${scope} is enabled with difficulty ${config.difficulty}; ` +
+          `enforcing a minimum effective difficulty of ${effectiveDifficulty} so it cannot fail open.`,
+      )
+    }
+
     const challengeResult = await this.requestChallenge.execute({
       scope,
-      difficulty: config.difficulty,
+      difficulty: effectiveDifficulty,
       ttlSeconds: config.ttlSeconds,
     })
 

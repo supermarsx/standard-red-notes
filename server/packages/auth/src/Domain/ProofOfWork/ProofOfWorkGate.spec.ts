@@ -76,6 +76,16 @@ describe('ProofOfWorkGate', () => {
       expect(requestChallenge.execute).toHaveBeenCalledWith({ scope: 'register', difficulty: 12, ttlSeconds: 600 })
     })
 
+    it('enforces a minimum effective difficulty of 1 when enabled but misconfigured to <= 0 (cannot fail open)', async () => {
+      config.register.difficulty = 0
+
+      const result = await createGate().enforceRegister({})
+
+      expect(result.satisfied).toBe(false)
+      expect(requestChallenge.execute).toHaveBeenCalledWith({ scope: 'register', difficulty: 1, ttlSeconds: 600 })
+      expect(logger.warn).toHaveBeenCalled()
+    })
+
     it('fails open when the config resolver throws', async () => {
       configResolver.resolve = jest.fn().mockRejectedValue(new Error('boom'))
 

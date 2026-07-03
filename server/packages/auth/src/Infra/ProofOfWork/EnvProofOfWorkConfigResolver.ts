@@ -1,9 +1,9 @@
 import { ProofOfWorkConfig, ProofOfWorkOverlay } from '../../Domain/ProofOfWork/ProofOfWorkConfig'
 import { ProofOfWorkConfigResolverInterface } from '../../Domain/ProofOfWork/ProofOfWorkConfigResolverInterface'
 
-const MAX_DIFFICULTY = 32
+export const MAX_DIFFICULTY = 32
 
-const clampDifficulty = (value: number): number => {
+export const clampDifficulty = (value: number): number => {
   if (Number.isNaN(value)) {
     return 0
   }

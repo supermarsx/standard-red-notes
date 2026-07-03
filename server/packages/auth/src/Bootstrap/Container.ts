@@ -446,7 +446,7 @@ import { RequestProofOfWorkChallenge } from '../Domain/UseCase/RequestProofOfWor
 import { VerifyProofOfWork } from '../Domain/UseCase/VerifyProofOfWork/VerifyProofOfWork'
 import { RedisProofOfWorkChallengeRepository } from '../Infra/Redis/RedisProofOfWorkChallengeRepository'
 import { TypeORMProofOfWorkChallengeRepository } from '../Infra/TypeORM/TypeORMProofOfWorkChallengeRepository'
-import { EnvProofOfWorkConfigResolver } from '../Infra/ProofOfWork/EnvProofOfWorkConfigResolver'
+import { clampDifficulty, EnvProofOfWorkConfigResolver } from '../Infra/ProofOfWork/EnvProofOfWorkConfigResolver'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -1298,21 +1298,31 @@ export class ContainerConfigLoader {
     // below stay gentle (register ~12 leading-zero bits, sign-in adaptive after 3
     // failed attempts at ~16 bits). Precedence is persisted -> env -> default,
     // resolved per request (no restart needed).
+    // Parse an env-supplied difficulty exactly like the persisted overlay does:
+    // a valid number is clamped to 0..32 (clampDifficulty); anything unset or
+    // non-numeric (NaN/invalid) falls back to the scope default. Without this an
+    // env such as `PROOF_OF_WORK_*_DIFFICULTY=abc` yielded NaN (stored "NaN" ->
+    // getChallengeDifficulty null -> re-issues forever, a DoS) and `=99` locked
+    // the endpoint (client solver throws past MAX_DIFFICULTY).
+    const baselineDifficulty = (rawValue: string, fallback: number): number => {
+      if (!rawValue) {
+        return fallback
+      }
+      const parsed = +rawValue
+
+      return Number.isFinite(parsed) ? clampDifficulty(parsed) : fallback
+    }
     const proofOfWorkBaseline: ProofOfWorkConfig = {
       register: {
         enabled: env.get('PROOF_OF_WORK_REGISTER_ENABLED', true) === 'true',
-        difficulty: env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
-          ? +env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
-          : 12,
+        difficulty: baselineDifficulty(env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true), 12),
         ttlSeconds: env.get('PROOF_OF_WORK_REGISTER_TTL_SECONDS', true)
           ? +env.get('PROOF_OF_WORK_REGISTER_TTL_SECONDS', true)
           : 600,
       },
       signIn: {
         enabled: env.get('PROOF_OF_WORK_SIGNIN_ENABLED', true) === 'true',
-        difficulty: env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
-          ? +env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
-          : 16,
+        difficulty: baselineDifficulty(env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true), 16),
         ttlSeconds: env.get('PROOF_OF_WORK_SIGNIN_TTL_SECONDS', true)
           ? +env.get('PROOF_OF_WORK_SIGNIN_TTL_SECONDS', true)
           : 600,
