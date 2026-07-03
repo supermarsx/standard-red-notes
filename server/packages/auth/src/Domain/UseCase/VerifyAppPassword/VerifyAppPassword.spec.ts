@@ -18,7 +18,10 @@ describe('VerifyAppPassword', () => {
 
   const createUseCase = () => new VerifyAppPassword(appPasswordRepository, userRepository)
 
-  const createAppPasswordWithHash = async (secret: string): Promise<AppPassword> => {
+  const createAppPasswordWithHash = async (
+    secret: string,
+    overrides: { expiresAt?: Date | null; revokedAt?: Date | null; id?: string } = {},
+  ): Promise<AppPassword> => {
     const hashedPassword = await bcrypt.hash(secret, User.PASSWORD_HASH_COST)
 
     return AppPassword.create(
@@ -28,8 +31,10 @@ describe('VerifyAppPassword', () => {
         hashedPassword,
         createdAt: new Date(),
         lastUsedAt: null,
+        expiresAt: overrides.expiresAt ?? null,
+        revokedAt: overrides.revokedAt ?? null,
       },
-      new UniqueEntityId('11111111-1111-1111-1111-111111111111'),
+      new UniqueEntityId(overrides.id ?? '11111111-1111-1111-1111-111111111111'),
     ).getValue()
   }
 
@@ -66,6 +71,56 @@ describe('VerifyAppPassword', () => {
     expect(result.isFailed()).toBe(false)
     expect(result.getValue()).toBe(false)
     expect(appPasswordRepository.updateLastUsedAt).not.toHaveBeenCalled()
+  })
+
+  it('should fail closed (return false) when the matching app password is expired', async () => {
+    const expiredAppPassword = await createAppPasswordWithHash(plaintext, {
+      expiresAt: new Date(Date.now() - 60_000),
+    })
+    appPasswordRepository.findByUserUuid = jest.fn().mockResolvedValue([expiredAppPassword])
+
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe(false)
+    expect(appPasswordRepository.updateLastUsedAt).not.toHaveBeenCalled()
+  })
+
+  it('should still accept a matching app password whose expiry is in the future', async () => {
+    const appPassword = await createAppPasswordWithHash(plaintext, {
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    appPasswordRepository.findByUserUuid = jest.fn().mockResolvedValue([appPassword])
+
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext })
+
+    expect(result.getValue()).toBe(true)
+  })
+
+  it('should fail closed (return false) when the matching app password is revoked', async () => {
+    const revokedAppPassword = await createAppPasswordWithHash(plaintext, {
+      revokedAt: new Date(Date.now() - 60_000),
+    })
+    appPasswordRepository.findByUserUuid = jest.fn().mockResolvedValue([revokedAppPassword])
+
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe(false)
+    expect(appPasswordRepository.updateLastUsedAt).not.toHaveBeenCalled()
+  })
+
+  it('should still match an active app password even when an expired/revoked one is present', async () => {
+    const revoked = await createAppPasswordWithHash('some-other-secret', {
+      revokedAt: new Date(Date.now() - 60_000),
+      id: '22222222-2222-2222-2222-222222222222',
+    })
+    const active = await createAppPasswordWithHash(plaintext)
+    appPasswordRepository.findByUserUuid = jest.fn().mockResolvedValue([revoked, active])
+
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext })
+
+    expect(result.getValue()).toBe(true)
   })
 
   it('should return false when the user has no app passwords', async () => {

@@ -23,7 +23,8 @@ export class EndpointResolver implements EndpointResolverInterface {
     // App Passwords Controller (Standard Red Notes)
     ['[GET]:app-passwords/', 'auth.appPasswords.list'],
     ['[POST]:app-passwords/', 'auth.appPasswords.create'],
-    ['[DELETE]:app-passwords/:appPasswordId', 'auth.appPasswords.delete'],
+    ['[DELETE]:app-passwords/:appPasswordId', 'auth.appPasswords.revoke'],
+    ['[DELETE]:app-passwords/:appPasswordId/permanent', 'auth.appPasswords.delete'],
     // MCP Tokens Controller (Standard Red Notes)
     ['[GET]:mcp-tokens/', 'auth.mcpTokens.list'],
     ['[POST]:mcp-tokens/', 'auth.mcpTokens.create'],

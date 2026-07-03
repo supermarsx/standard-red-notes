@@ -39,13 +39,26 @@ export class CreateAppPassword implements UseCaseInterface<CreateAppPasswordResu
       return Result.fail('Could not create app password: a label is required.')
     }
 
+    const createdAt = new Date()
+
+    const expiresAt = dto.expiresAt ?? null
+    if (expiresAt !== null) {
+      if (isNaN(expiresAt.getTime())) {
+        return Result.fail('Could not create app password: the expiry is not a valid date.')
+      }
+      if (expiresAt.getTime() <= createdAt.getTime()) {
+        return Result.fail('Could not create app password: the expiry must be in the future.')
+      }
+    }
+
     // High-entropy, server-generated secret. Stored only as a bcrypt hash; the
-    // plaintext is returned to the caller exactly once below.
-    const plaintextPassword = crypto.randomBytes(this.APP_PASSWORD_BYTE_LENGTH).toString('base64url')
+    // plaintext is returned to the caller exactly once below. The recognizable,
+    // non-secret `srn_ap_` prefix is part of the value that is hashed and later
+    // presented for verification, so it does not weaken the secret.
+    const randomMaterial = crypto.randomBytes(this.APP_PASSWORD_BYTE_LENGTH).toString('base64url')
+    const plaintextPassword = `${AppPassword.SECRET_PREFIX}${randomMaterial}`
 
     const hashedPassword = await bcrypt.hash(plaintextPassword, User.PASSWORD_HASH_COST)
-
-    const createdAt = new Date()
 
     const appPasswordOrError = AppPassword.create({
       userUuid: userUuid.value,
@@ -53,6 +66,8 @@ export class CreateAppPassword implements UseCaseInterface<CreateAppPasswordResu
       hashedPassword,
       createdAt,
       lastUsedAt: null,
+      expiresAt,
+      revokedAt: null,
     })
     if (appPasswordOrError.isFailed()) {
       return Result.fail(`Could not create app password: ${appPasswordOrError.getError()}`)
@@ -66,6 +81,7 @@ export class CreateAppPassword implements UseCaseInterface<CreateAppPasswordResu
       label,
       password: plaintextPassword,
       createdAt,
+      expiresAt,
     })
   }
 }

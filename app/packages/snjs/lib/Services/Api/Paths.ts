@@ -101,7 +101,10 @@ const AdminPaths = {
 // challenge without an interactive TOTP code.
 const AppPasswordPaths = {
   appPasswords: '/v1/app-passwords',
+  // Default DELETE soft-revokes (keeps the audit trail).
   appPassword: (appPasswordId: string) => `/v1/app-passwords/${appPasswordId}`,
+  // Explicit permanent hard-delete.
+  appPasswordPermanent: (appPasswordId: string) => `/v1/app-passwords/${appPasswordId}/permanent`,
 }
 
 // Standard Red Notes: trusted devices and push-MFA approvals. These hit the

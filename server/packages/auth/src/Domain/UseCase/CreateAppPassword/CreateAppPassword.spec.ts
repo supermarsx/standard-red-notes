@@ -70,4 +70,49 @@ describe('CreateAppPassword', () => {
 
     expect(first.password).not.toEqual(second.password)
   })
+
+  it('should carry the recognizable srn_ap_ prefix and still verify against the stored hash', async () => {
+    const result = await createUseCase().execute({ userUuid, label: 'MCP Bridge' })
+
+    const created = result.getValue()
+    expect(created.password.startsWith(AppPassword.SECRET_PREFIX)).toBe(true)
+    // The prefix carries no entropy but there is still high-entropy random material after it.
+    expect(created.password.length).toBeGreaterThan(AppPassword.SECRET_PREFIX.length + 20)
+
+    const saved = (appPasswordRepository.save as jest.Mock).mock.calls[0][0] as AppPassword
+    // Verification hashes the FULL presented string (prefix included), so it still matches.
+    await expect(bcrypt.compare(created.password, saved.props.hashedPassword)).resolves.toBe(true)
+    // The prefix must never let the raw secret leak into the hash.
+    expect(saved.props.hashedPassword).not.toContain(AppPassword.SECRET_PREFIX)
+  })
+
+  it('should persist a future expiry when one is provided', async () => {
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+
+    const result = await createUseCase().execute({ userUuid, label: 'MCP', expiresAt })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue().expiresAt).toEqual(expiresAt)
+    const saved = (appPasswordRepository.save as jest.Mock).mock.calls[0][0] as AppPassword
+    expect(saved.props.expiresAt).toEqual(expiresAt)
+    expect(saved.props.revokedAt).toBeNull()
+  })
+
+  it('should default to no expiry and not revoked', async () => {
+    const result = await createUseCase().execute({ userUuid, label: 'MCP' })
+
+    expect(result.getValue().expiresAt).toBeNull()
+    const saved = (appPasswordRepository.save as jest.Mock).mock.calls[0][0] as AppPassword
+    expect(saved.props.expiresAt).toBeNull()
+    expect(saved.props.revokedAt).toBeNull()
+  })
+
+  it('should fail if the provided expiry is in the past', async () => {
+    const expiresAt = new Date(Date.now() - 60_000)
+
+    const result = await createUseCase().execute({ userUuid, label: 'MCP', expiresAt })
+
+    expect(result.isFailed()).toBe(true)
+    expect(appPasswordRepository.save).not.toHaveBeenCalled()
+  })
 })

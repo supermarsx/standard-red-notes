@@ -221,6 +221,7 @@ import { AppPasswordHttpMapper } from '../Mapping/AppPasswordHttpMapper'
 import { CreateAppPassword } from '../Domain/UseCase/CreateAppPassword/CreateAppPassword'
 import { ListAppPasswords } from '../Domain/UseCase/ListAppPasswords/ListAppPasswords'
 import { DeleteAppPassword } from '../Domain/UseCase/DeleteAppPassword/DeleteAppPassword'
+import { RevokeAppPassword } from '../Domain/UseCase/RevokeAppPassword/RevokeAppPassword'
 import { VerifyAppPassword } from '../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
 import { AppPasswordsController } from '../Controller/AppPasswordsController'
 import { BaseAppPasswordsController } from '../Infra/InversifyExpressUtils/Base/BaseAppPasswordsController'
@@ -1699,6 +1700,9 @@ export class ContainerConfigLoader {
       .bind<DeleteAppPassword>(TYPES.Auth_DeleteAppPassword)
       .toConstantValue(new DeleteAppPassword(container.get(TYPES.Auth_AppPasswordRepository)))
     container
+      .bind<RevokeAppPassword>(TYPES.Auth_RevokeAppPassword)
+      .toConstantValue(new RevokeAppPassword(container.get(TYPES.Auth_AppPasswordRepository)))
+    container
       .bind<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword)
       .toConstantValue(
         new VerifyAppPassword(
@@ -2549,6 +2553,7 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_CreateAppPassword),
           container.get(TYPES.Auth_ListAppPasswords),
           container.get(TYPES.Auth_DeleteAppPassword),
+          container.get(TYPES.Auth_RevokeAppPassword),
           container.get(TYPES.Auth_AppPasswordHttpMapper),
         ),
       )

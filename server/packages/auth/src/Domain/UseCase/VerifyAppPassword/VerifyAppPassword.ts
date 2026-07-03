@@ -58,11 +58,16 @@ export class VerifyAppPassword implements UseCaseInterface<boolean> {
       return Result.ok(false)
     }
 
+    const now = new Date()
     let matchedId: string | null = null
     for (const appPassword of appPasswords) {
-      // bcrypt.compare is a constant-time comparison for a given hash.
+      // bcrypt.compare is a constant-time comparison for a given hash. We run it
+      // regardless of the password's state (so a revoked/expired secret that
+      // still matches costs the same as an active one — no timing oracle), and
+      // only accept the match when the password is still active. An expired or
+      // revoked app password is therefore treated exactly like a no-match.
       const matches = await bcrypt.compare(dto.appPassword, appPassword.props.hashedPassword)
-      if (matches) {
+      if (matches && appPassword.isActive(now)) {
         matchedId = appPassword.id.toString()
         break
       }

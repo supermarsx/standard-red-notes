@@ -1268,20 +1268,41 @@ export class LegacyApiService
     })
   }
 
-  async createAppPassword(label: string): Promise<HttpResponse> {
+  async createAppPassword(label: string, expiresInDays?: number | null): Promise<HttpResponse> {
+    const params: { label: string; expiresInDays?: number } = { label }
+    if (expiresInDays !== undefined && expiresInDays !== null) {
+      params.expiresInDays = expiresInDays
+    }
+
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Post,
       url: joinPaths(this.host, Paths.v1.appPasswords),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to create app password.',
-      params: { label },
+      params,
     })
   }
 
-  async deleteAppPassword(appPasswordId: string): Promise<HttpResponse> {
+  /**
+   * Soft-revoke (default). Keeps the record so there is an audit trail; the auth
+   * server rejects it immediately on sign-in.
+   */
+  async revokeAppPassword(appPasswordId: string): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Delete,
       url: joinPaths(this.host, Paths.v1.appPassword(appPasswordId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke app password.',
+    })
+  }
+
+  /**
+   * Permanent hard-delete. Purges the record entirely (no audit trail retained).
+   */
+  async deleteAppPassword(appPasswordId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.appPasswordPermanent(appPasswordId)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to delete app password.',
     })

@@ -12,6 +12,8 @@ export class AppPasswordPersistenceMapper implements MapperInterface<AppPassword
         hashedPassword: projection.hashedPassword,
         createdAt: projection.createdAt,
         lastUsedAt: projection.lastUsedAt,
+        expiresAt: projection.expiresAt ?? null,
+        revokedAt: projection.revokedAt ?? null,
       },
       new UniqueEntityId(projection.uuid),
     )
@@ -31,6 +33,8 @@ export class AppPasswordPersistenceMapper implements MapperInterface<AppPassword
     typeorm.hashedPassword = domain.props.hashedPassword
     typeorm.createdAt = domain.props.createdAt
     typeorm.lastUsedAt = domain.props.lastUsedAt
+    typeorm.expiresAt = domain.props.expiresAt
+    typeorm.revokedAt = domain.props.revokedAt
 
     return typeorm
   }

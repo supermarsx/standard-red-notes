@@ -22,7 +22,18 @@ type AppPassword = {
   label: string
   createdAt: string
   lastUsedAt: string | null
+  expiresAt: string | null
+  revokedAt: string | null
+  expired: boolean
+  revoked: boolean
 }
+
+const EXPIRY_OPTIONS: { label: string; days: number | null }[] = [
+  { label: 'Never', days: null },
+  { label: '7 days', days: 7 },
+  { label: '30 days', days: 30 },
+  { label: '90 days', days: 90 },
+]
 
 const formatDate = (value: string | null): string => {
   if (!value) {
@@ -32,10 +43,24 @@ const formatDate = (value: string | null): string => {
   return isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString()
 }
 
+const statusLabel = (appPassword: AppPassword): string => {
+  if (appPassword.revoked) {
+    return `Revoked ${formatDate(appPassword.revokedAt)}`
+  }
+  if (appPassword.expired) {
+    return `Expired ${formatDate(appPassword.expiresAt)}`
+  }
+  if (appPassword.expiresAt) {
+    return `Active · Expires ${formatDate(appPassword.expiresAt)}`
+  }
+  return 'Active'
+}
+
 const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
   const [appPasswords, setAppPasswords] = useState<AppPassword[]>([])
   const [loading, setLoading] = useState(false)
   const [label, setLabel] = useState('')
+  const [expiresInDays, setExpiresInDays] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const [createdSecret, setCreatedSecret] = useState<string | null>(null)
 
@@ -67,7 +92,7 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
 
     setCreating(true)
     try {
-      const response = await application.legacyApi.createAppPassword(trimmed)
+      const response = await application.legacyApi.createAppPassword(trimmed, expiresInDays)
       if (isErrorResponse(response)) {
         const data = response.data as { error?: { message?: string } } | undefined
         addToast({ type: ToastType.Error, message: data?.error?.message ?? 'Failed to create app password.' })
@@ -77,6 +102,7 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
       const data = (response as { data?: { password?: string } }).data
       setCreatedSecret(data?.password ?? null)
       setLabel('')
+      setExpiresInDays(null)
       await loadAppPasswords()
     } catch (error) {
       console.error(error)
@@ -84,12 +110,12 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
     } finally {
       setCreating(false)
     }
-  }, [application, label, loadAppPasswords])
+  }, [application, label, expiresInDays, loadAppPasswords])
 
-  const handleDelete = useCallback(
+  const handleRevoke = useCallback(
     async (appPasswordId: string) => {
       const confirmed = await application.alerts.confirm(
-        'Are you sure you want to revoke this app password? Any client using it will lose access.',
+        'Are you sure you want to revoke this app password? Any client using it will lose access immediately. The revocation is kept as an audit record.',
         'Revoke App Password',
         'Revoke',
       )
@@ -98,7 +124,7 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
       }
 
       try {
-        const response = await application.legacyApi.deleteAppPassword(appPasswordId)
+        const response = await application.legacyApi.revokeAppPassword(appPasswordId)
         if (isErrorResponse(response)) {
           addToast({ type: ToastType.Error, message: 'Failed to revoke app password.' })
           return
@@ -107,6 +133,32 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
       } catch (error) {
         console.error(error)
         addToast({ type: ToastType.Error, message: 'Failed to revoke app password.' })
+      }
+    },
+    [application, loadAppPasswords],
+  )
+
+  const handleDeletePermanently = useCallback(
+    async (appPasswordId: string) => {
+      const confirmed = await application.alerts.confirm(
+        'Permanently delete this app password record? This removes it entirely, including the revocation audit trail.',
+        'Delete Permanently',
+        'Delete',
+      )
+      if (!confirmed) {
+        return
+      }
+
+      try {
+        const response = await application.legacyApi.deleteAppPassword(appPasswordId)
+        if (isErrorResponse(response)) {
+          addToast({ type: ToastType.Error, message: 'Failed to delete app password.' })
+          return
+        }
+        await loadAppPasswords()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: 'Failed to delete app password.' })
       }
     },
     [application, loadAppPasswords],
@@ -149,6 +201,21 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
             onChange={(value) => setLabel(value)}
             disabled={creating}
           />
+          <label className="flex flex-shrink-0 items-center gap-2 text-sm text-passive-0">
+            Expires
+            <select
+              className="rounded border border-solid border-border bg-default px-2 py-1.5 text-sm text-foreground"
+              value={expiresInDays === null ? '' : String(expiresInDays)}
+              onChange={(event) => setExpiresInDays(event.target.value === '' ? null : Number(event.target.value))}
+              disabled={creating}
+            >
+              {EXPIRY_OPTIONS.map((option) => (
+                <option key={option.label} value={option.days === null ? '' : String(option.days)}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <Button className="flex-shrink-0" label="Create" primary disabled={creating} onClick={handleCreate} />
         </div>
 
@@ -178,12 +245,28 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
               className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="break-words text-base font-medium lg:text-sm">{appPassword.label}</span>
+                <span className="break-words text-base font-medium lg:text-sm">
+                  {appPassword.label}
+                  {(appPassword.revoked || appPassword.expired) && (
+                    <span className="ml-2 rounded bg-contrast px-1.5 py-0.5 align-middle text-xs text-passive-0">
+                      {appPassword.revoked ? 'Revoked' : 'Expired'}
+                    </span>
+                  )}
+                </span>
                 <span className="break-words text-sm text-passive-0 lg:text-xs">
-                  Created {formatDate(appPassword.createdAt)} · Last used {formatDate(appPassword.lastUsedAt)}
+                  {statusLabel(appPassword)} · Created {formatDate(appPassword.createdAt)} · Last used{' '}
+                  {formatDate(appPassword.lastUsedAt)}
                 </span>
               </div>
-              <Button className="flex-shrink-0" label="Revoke" onClick={() => handleDelete(appPassword.uuid)} />
+              {appPassword.revoked ? (
+                <Button
+                  className="flex-shrink-0"
+                  label="Delete permanently"
+                  onClick={() => handleDeletePermanently(appPassword.uuid)}
+                />
+              ) : (
+                <Button className="flex-shrink-0" label="Revoke" onClick={() => handleRevoke(appPassword.uuid)} />
+              )}
             </div>
           ))}
       </PreferencesSegment>

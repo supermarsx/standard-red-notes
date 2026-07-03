@@ -15,6 +15,10 @@ export class AppPasswordHttpMapper implements MapperInterface<AppPassword, AppPa
       label: domain.props.label,
       createdAt: domain.props.createdAt.toISOString(),
       lastUsedAt: domain.props.lastUsedAt ? domain.props.lastUsedAt.toISOString() : null,
+      expiresAt: domain.props.expiresAt ? domain.props.expiresAt.toISOString() : null,
+      revokedAt: domain.props.revokedAt ? domain.props.revokedAt.toISOString() : null,
+      expired: domain.isExpired(),
+      revoked: domain.isRevoked(),
     }
   }
 }

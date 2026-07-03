@@ -38,4 +38,18 @@ export class TypeORMAppPassword {
     nullable: true,
   })
   declare lastUsedAt: Date | null
+
+  @Column({
+    name: 'expires_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare expiresAt: Date | null
+
+  @Column({
+    name: 'revoked_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare revokedAt: Date | null
 }

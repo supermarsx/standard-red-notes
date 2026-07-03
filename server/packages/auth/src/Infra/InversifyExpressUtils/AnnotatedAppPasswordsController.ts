@@ -21,8 +21,15 @@ export class AnnotatedAppPasswordsController extends BaseAppPasswordsController 
     return super.create(request, response)
   }
 
+  // Default DELETE soft-revokes (keeps the audit trail). Permanent removal is a
+  // distinct, explicit route.
   @httpDelete('/:appPasswordId', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
-  override async delete(request: Request, response: Response): Promise<results.JsonResult> {
-    return super.delete(request, response)
+  override async revoke(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.revoke(request, response)
+  }
+
+  @httpDelete('/:appPasswordId/permanent', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async deletePermanently(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.deletePermanently(request, response)
   }
 }

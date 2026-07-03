@@ -219,6 +219,7 @@ const TYPES = {
   Auth_CreateAppPassword: Symbol.for('Auth_CreateAppPassword'),
   Auth_ListAppPasswords: Symbol.for('Auth_ListAppPasswords'),
   Auth_DeleteAppPassword: Symbol.for('Auth_DeleteAppPassword'),
+  Auth_RevokeAppPassword: Symbol.for('Auth_RevokeAppPassword'),
   Auth_VerifyAppPassword: Symbol.for('Auth_VerifyAppPassword'),
   Auth_RequestProofOfWorkChallenge: Symbol.for('Auth_RequestProofOfWorkChallenge'),
   Auth_VerifyProofOfWork: Symbol.for('Auth_VerifyProofOfWork'),

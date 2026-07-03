@@ -43,14 +43,30 @@ export class AppPasswordsController extends BaseHttpController {
     )
   }
 
+  // Default DELETE soft-revokes (keeps the audit trail).
   @httpDelete('/:appPasswordId', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async delete(request: Request, response: Response): Promise<void> {
+  async revoke(request: Request, response: Response): Promise<void> {
     await this.httpService.callAuthServer(
       request,
       response,
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'DELETE',
         'app-passwords/:appPasswordId',
+        request.params.appPasswordId as string,
+      ),
+      request.body,
+    )
+  }
+
+  // Explicit permanent hard-delete.
+  @httpDelete('/:appPasswordId/permanent', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async deletePermanently(request: Request, response: Response): Promise<void> {
+    await this.httpService.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'app-passwords/:appPasswordId/permanent',
         request.params.appPasswordId as string,
       ),
       request.body,
