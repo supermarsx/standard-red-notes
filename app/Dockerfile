@@ -91,8 +91,14 @@ COPY --from=build /opt/standard-red-notes/app/packages/web/dist /usr/share/nginx
 # script and index.html must be writable by it (handled while still root below).
 USER root
 COPY docker/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+# The entrypoint runs as the unprivileged `nginx` user and rewrites BOTH the
+# served index.html (OCR/SYNC templating) AND default.conf (self-healing CSP
+# inline-script hash). COPY lands default.conf as root:root, so hand it (and the
+# html) to nginx; conf.d itself is already nginx-writable in the base image, so
+# sed -i can write its temp file there.
 RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh \
-  && chown -R nginx:nginx /usr/share/nginx/html
+  && chown -R nginx:nginx /usr/share/nginx/html \
+  && chown nginx:nginx /etc/nginx/conf.d/default.conf
 USER nginx
 
 EXPOSE 8080
