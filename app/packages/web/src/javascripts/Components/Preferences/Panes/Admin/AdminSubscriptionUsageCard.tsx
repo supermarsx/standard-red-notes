@@ -54,21 +54,31 @@ const WindowRow: FunctionComponent<WindowRowProps> = ({ label, window }) => {
 const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application }) => {
   const [usage, setUsage] = useState<AssistantSubscriptionUsage | null>(null)
   const [available, setAvailable] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const response = await application.assistantSubscriptionUsage()
-      // 404 (or any non-ok) => the server predates subscription usage metering.
-      if (!response.ok || Number(response.status) === 404) {
+      // 404 => the server predates subscription usage metering: degrade silently.
+      if (Number(response.status) === 404) {
         setAvailable(false)
+        return
+      }
+      // Any other non-ok response (500 etc.) is a real failure — surface it
+      // rather than hiding the card and masking it as an absent endpoint.
+      if (!response.ok) {
+        setAvailable(true)
+        setError(`Couldn't load usage (server responded ${response.status || 'error'}).`)
         return
       }
       setAvailable(true)
       setUsage(response.data ?? null)
     } catch {
-      setAvailable(false)
+      setAvailable(true)
+      setError("Couldn't load usage. Please try again.")
     } finally {
       setLoading(false)
     }
@@ -94,10 +104,14 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application }) =
           all users, over rolling windows. This is <strong>SRN-side metering, not OpenAI's official quota</strong> —
           ChatGPT/Codex subscriptions do not expose a usage endpoint we can poll.
         </Text>
-        <div className="mt-3 divide-y divide-border">
-          <WindowRow label="Last 5 hours" window={usage?.tokens?.fiveHour} />
-          <WindowRow label="Last 7 days" window={usage?.tokens?.weekly} />
-        </div>
+        {error ? (
+          <Text className="mt-3 text-danger">{error}</Text>
+        ) : (
+          <div className="mt-3 divide-y divide-border">
+            <WindowRow label="Last 5 hours" window={usage?.tokens?.fiveHour} />
+            <WindowRow label="Last 7 days" window={usage?.tokens?.weekly} />
+          </div>
+        )}
       </div>
     </PreferencesSegment>
   )

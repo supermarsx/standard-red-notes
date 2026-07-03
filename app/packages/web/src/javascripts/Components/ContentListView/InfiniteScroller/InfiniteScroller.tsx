@@ -167,10 +167,19 @@ export const InfinteScroller = forwardRef<InfiniteScrollerInterface, Props>(
     )
 
     useEffect(() => {
-      if (frontSentinel.current) {
-        frontObserver.observe(frontSentinel.current)
+      const observer = frontObserver
+      const sentinel = frontSentinel.current
+      if (sentinel) {
+        observer.observe(sentinel)
       }
-    }, [frontObserver, frontSentinel])
+
+      return () => {
+        if (sentinel) {
+          observer.unobserve(sentinel)
+        }
+        observer.disconnect()
+      }
+    }, [frontObserver])
 
     const endObserver = useMemo(
       () =>
@@ -186,10 +195,19 @@ export const InfinteScroller = forwardRef<InfiniteScrollerInterface, Props>(
     )
 
     useEffect(() => {
-      if (endSentinel.current) {
-        endObserver.observe(endSentinel.current)
+      const observer = endObserver
+      const sentinel = endSentinel.current
+      if (sentinel) {
+        observer.observe(sentinel)
       }
-    }, [endObserver, endSentinel])
+
+      return () => {
+        if (sentinel) {
+          observer.unobserve(sentinel)
+        }
+        observer.disconnect()
+      }
+    }, [endObserver])
 
     return (
       <div

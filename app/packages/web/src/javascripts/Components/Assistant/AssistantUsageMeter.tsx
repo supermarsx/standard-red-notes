@@ -57,7 +57,7 @@ const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => 
         ) : (
           <>
             <span className={model.textColorClass}>{model.percentLabel}</span>
-            {resetIn && <span title={window?.resetsAt}>resets in {resetIn}</span>}
+            {resetIn && resetIn !== 'now' && <span title={window?.resetsAt}>resets in {resetIn}</span>}
           </>
         )}
       </div>
