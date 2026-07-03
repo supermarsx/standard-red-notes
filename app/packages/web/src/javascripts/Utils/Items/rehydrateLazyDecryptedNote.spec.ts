@@ -2,7 +2,10 @@ import { ContentType } from '@standardnotes/domain-core'
 import {
   DecryptedPayload,
   FillItemContent,
+  LitePayloadSafetyError,
+  MutationType,
   NoteContent,
+  NoteMutator,
   PayloadSource,
   PayloadTimestampDefaults,
   SNNote,
@@ -207,6 +210,64 @@ describe('rehydrateLazyDecryptedNote', () => {
         findItem: jest.fn().mockReturnValue({ payload: { ...lite.payload, dirtyIndex: 10 }, dirty: false }),
       }
       expect(isRehydrateEmitStillSafe(items, lite.uuid, 5)).toBe(false)
+    })
+  })
+
+  /**
+   * CALL-SITE FIX (list/context-menu metadata action on a cold-loaded lite note):
+   * NotesController re-hydrates a lite note BEFORE the dirtying metadata mutation. This block proves
+   * the exact mechanic the fix relies on end-to-end: a dirtying mutation on the raw lite payload is
+   * refused by the model safety guard (the silent-failure), whereas after re-hydration the LIVE item
+   * — re-read by uuid exactly as `MutatorService.changeItems` does — is FULL, so the same mutation
+   * succeeds and never emits a body-less payload.
+   */
+  describe('metadata mutation on a lite note (rehydrate-then-mutate)', () => {
+    // A minimal item store keyed by uuid, mirroring how changeItems re-looks-up the LIVE item:
+    // rehydrate emits the full payload here, and the subsequent mutation reads it back by uuid.
+    const makeStore = (initial: SNNote) => {
+      const store = new Map<string, SNNote>([[initial.uuid, initial]])
+      return {
+        store,
+        app: {
+          sync: { getFullContentPayload: jest.fn() },
+          items: { findItem: (uuid: string) => store.get(uuid) },
+          mutator: {
+            emitItemFromPayload: jest.fn(async (payload) => {
+              const item = new SNNote(payload)
+              store.set(payload.uuid, item)
+              return item
+            }),
+          },
+        },
+      }
+    }
+
+    it('a dirtying metadata mutation THROWS on the raw lite note (the silent-failure the fix prevents)', () => {
+      const lite = createLiteNote('BODY')
+      const mutator = new NoteMutator(lite, MutationType.NoUpdateUserTimestamps)
+      mutator.pinned = true
+      expect(() => mutator.getResult()).toThrow(LitePayloadSafetyError)
+    })
+
+    it('after rehydrate the re-looked-up live item is FULL and the same mutation succeeds with the body preserved', async () => {
+      const lite = createLiteNote('BODY')
+      const fullPayload = createFullNote('BODY', lite.uuid).payload
+      const { store, app } = makeStore(lite)
+      app.sync.getFullContentPayload.mockResolvedValue(fullPayload)
+
+      await rehydrateNoteForEditing(app, lite)
+
+      // As changeItems does, re-read the LIVE item by uuid — it is now the re-hydrated full note.
+      const live = store.get(lite.uuid) as SNNote
+      expect(isLiteNote(live)).toBe(false)
+
+      const mutator = new NoteMutator(live, MutationType.NoUpdateUserTimestamps)
+      mutator.pinned = true
+      const result = mutator.getResult()
+
+      expect(result.dirty).toBe(true)
+      expect((result.content as NoteContent).text).toEqual('BODY')
+      expect(result.content).not.toHaveProperty('__lazyLite')
     })
   })
 })

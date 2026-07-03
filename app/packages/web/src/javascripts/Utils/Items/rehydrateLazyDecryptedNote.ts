@@ -26,10 +26,16 @@ export interface LazyRehydrationSync {
   getFullContentPayload(uuid: string): Promise<DecryptedPayloadInterface | undefined>
 }
 
-/** The minimal live-item shape the rehydrate guard inspects. */
+/**
+ * The minimal live-item shape the rehydrate guard inspects. `payload` is typed as the generic
+ * decrypted payload (not `SNNote['payload']`) so a broad `items` slice (e.g. the application's
+ * `ItemManagerInterface`, whose `findItem` returns `DecryptedItemInterface<ItemContent>`)
+ * structurally satisfies {@link LazyRehydrationItems}. The guard only reads `isLitePayload`,
+ * `dirty`, and `dirtyIndex`, none of which need note-specific content.
+ */
 export interface LazyRehydrationLiveItem {
-  payload: SNNote['payload']
-  dirty: boolean
+  payload: DecryptedPayloadInterface
+  dirty: boolean | undefined
 }
 
 /** The (read-only) items slice used to re-read the LIVE item before emitting. */

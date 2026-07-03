@@ -36,6 +36,7 @@ import { NotesControllerInterface } from './NotesControllerInterface'
 import { CrossControllerEvent } from '../CrossControllerEvent'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { createNoteExport } from '../../Utils/NoteExportUtils'
+import { rehydrateNoteForEditing } from '../../Utils/Items/rehydrateLazyDecryptedNote'
 import { NoteCustomBackgroundColorKey, NoteCustomTextColorKey } from '../../Utils/NoteAppearance'
 import {
   NoteHeroHeaderKey,
@@ -292,7 +293,40 @@ export class NotesController
     this.contextMenuClickLocation = location
   }
 
+  /**
+   * LAZY-DECRYPT SAFETY (list / context-menu metadata actions).
+   *
+   * A metadata action (pin/star/archive/trash/protect/change-color/...) can target a note the
+   * user has never opened. Under `lazyDecryptEnabled` such a cold-loaded note is a body-less
+   * "lite" payload, and a dirtying mutation on it is deliberately refused by the model safety
+   * guard (LitePayloadSafetyError) — so the action would otherwise SILENTLY FAIL. Re-hydrate the
+   * full on-disk body FIRST (reusing the exact editor-open re-hydration path), so the mutation
+   * runs against real content and the body is never dropped.
+   *
+   * `mutator.changeItem(s)` re-reads the LIVE item by uuid, so emitting the full payload here is
+   * enough — the subsequent mutation picks up the re-hydrated (full) item. No-op and
+   * byte-identical when the flag is off (no note is ever lite) or the note is already full.
+   */
+  private async rehydrateLiteNotesForMutation(notes: SNNote[]): Promise<void> {
+    for (const note of notes) {
+      await rehydrateNoteForEditing(this.application, note)
+    }
+  }
+
+  /**
+   * Single-note metadata write that is SAFE under lazy-decrypt: re-hydrate a lite (body-stripped)
+   * note before mutating so the dirtying write is not refused by the model safety guard, then
+   * apply the mutation and sync. See {@link rehydrateLiteNotesForMutation}. Callers keep their own
+   * pre-flight guards (e.g. `note.locked`).
+   */
+  private async changeNoteMetadata(note: SNNote, mutate: (mutator: NoteMutator) => void): Promise<void> {
+    await this.rehydrateLiteNotesForMutation([note])
+    await this.application.mutator.changeItem<NoteMutator>(note, mutate, MutationType.NoUpdateUserTimestamps)
+    this.application.sync.sync().catch(console.error)
+  }
+
   async changeSelectedNotes(mutate: (mutator: NoteMutator) => void): Promise<void> {
+    await this.rehydrateLiteNotesForMutation(this.getSelectedNotesList())
     await this.application.mutator.changeItems(this.getSelectedNotesList(), mutate, MutationType.NoUpdateUserTimestamps)
     this.application.sync.sync().catch(console.error)
   }
@@ -466,6 +500,9 @@ export class NotesController
 
   async setProtectSelectedNotes(protect: boolean): Promise<void> {
     const selectedNotes = this.getSelectedNotesList()
+    // Protect/unprotect dirties each note (mutator.protected). Re-hydrate any cold-loaded lite
+    // notes first so the mutation is not refused for a note the user hasn't opened.
+    await this.rehydrateLiteNotesForMutation(selectedNotes)
     if (protect) {
       await this.application.protections.protectNotes(selectedNotes)
       this.setShowProtectedWarning(true)
@@ -486,14 +523,9 @@ export class NotesController
   }
 
   async toggleGlobalSpellcheckForNote(note: SNNote) {
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.toggleSpellcheck()
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.toggleSpellcheck()
+    })
   }
 
   getEditorWidthForNote(note: SNNote) {
@@ -507,14 +539,9 @@ export class NotesController
   }
 
   async setNoteEditorWidth(note: SNNote, editorWidth: EditorLineWidth) {
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.editorWidth = editorWidth
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.editorWidth = editorWidth
+    })
   }
 
   /**
@@ -526,19 +553,14 @@ export class NotesController
     note: SNNote,
     colors: { backgroundColor?: string | undefined; textColor?: string | undefined },
   ) {
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        if ('backgroundColor' in colors) {
-          mutator.setAppDataItem(NoteCustomBackgroundColorKey, colors.backgroundColor)
-        }
-        if ('textColor' in colors) {
-          mutator.setAppDataItem(NoteCustomTextColorKey, colors.textColor)
-        }
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      if ('backgroundColor' in colors) {
+        mutator.setAppDataItem(NoteCustomBackgroundColorKey, colors.backgroundColor)
+      }
+      if ('textColor' in colors) {
+        mutator.setAppDataItem(NoteCustomTextColorKey, colors.textColor)
+      }
+    })
   }
 
   async resetNoteAppearance(note: SNNote) {
@@ -556,14 +578,9 @@ export class NotesController
     if (note.locked) {
       return
     }
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.setAppDataItem(NoteHeroHeaderKey, hero)
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.setAppDataItem(NoteHeroHeaderKey, hero)
+    })
   }
 
   /** Set (or replace) the note's cover image from an already-bounded data URL. */
@@ -610,14 +627,9 @@ export class NotesController
    * use the pure helpers in `Reminders/reminders` to compute the next array.
    */
   private async writeNoteReminders(note: SNNote, reminders: Reminder[]) {
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.setAppDataItem(NoteRemindersKey, reminders.length > 0 ? reminders : undefined)
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.setAppDataItem(NoteRemindersKey, reminders.length > 0 ? reminders : undefined)
+    })
   }
 
   /**
@@ -676,14 +688,9 @@ export class NotesController
     if (note.locked) {
       return
     }
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.setAppDataItem(NoteBookmarksKey, bookmarks.length > 0 ? bookmarks : undefined)
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.setAppDataItem(NoteBookmarksKey, bookmarks.length > 0 ? bookmarks : undefined)
+    })
   }
 
   /** Add or replace a bookmark on a note (matched by id). */
@@ -724,14 +731,9 @@ export class NotesController
     if (note.locked) {
       return
     }
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.setAppDataItem(NoteCommentsKey, comments.length > 0 ? comments : undefined)
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.setAppDataItem(NoteCommentsKey, comments.length > 0 ? comments : undefined)
+    })
   }
 
   /** Add or replace a comment on a note (matched by id). */
@@ -1161,14 +1163,9 @@ export class NotesController
     if (note.locked) {
       return
     }
-    await this.application.mutator.changeItem<NoteMutator>(
-      note,
-      (mutator) => {
-        mutator.setAppDataItem(NoteIsTemplateKey, isTemplate ? true : undefined)
-      },
-      MutationType.NoUpdateUserTimestamps,
-    )
-    this.application.sync.sync().catch(console.error)
+    await this.changeNoteMetadata(note, (mutator) => {
+      mutator.setAppDataItem(NoteIsTemplateKey, isTemplate ? true : undefined)
+    })
   }
 
   /**
