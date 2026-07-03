@@ -23,6 +23,7 @@ import { VerifyAppPassword } from '../../Domain/UseCase/VerifyAppPassword/Verify
 import { VerifyTrustedDevice } from '../../Domain/UseCase/VerifyTrustedDevice/VerifyTrustedDevice'
 import { CreatePendingMfaApproval } from '../../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
+import { ProofOfWorkGate } from '../../Domain/ProofOfWork/ProofOfWorkGate'
 
 @controller('/auth')
 export class AnnotatedAuthController extends BaseAuthController {
@@ -47,6 +48,7 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_VerifyTrustedDevice) override verifyTrustedDevice: VerifyTrustedDevice,
     @inject(TYPES.Auth_CreatePendingMfaApproval) override createPendingMfaApproval: CreatePendingMfaApproval,
     @inject(TYPES.Auth_UserRepository) override userRepository: UserRepositoryInterface,
+    @inject(TYPES.Auth_ProofOfWorkGate) override proofOfWorkGate: ProofOfWorkGate,
   ) {
     super(
       verifyMFA,
@@ -69,6 +71,7 @@ export class AnnotatedAuthController extends BaseAuthController {
       verifyTrustedDevice,
       createPendingMfaApproval,
       userRepository,
+      proofOfWorkGate,
     )
   }
 

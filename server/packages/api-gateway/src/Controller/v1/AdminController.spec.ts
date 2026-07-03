@@ -406,6 +406,72 @@ describe('AdminController server-status', () => {
       const payload = jsonMock.mock.calls[0][0]
       expect(payload.sources['updateCheck.url']).toEqual('env')
     })
+
+    it('PUT accepts valid proof-of-work settings, persists them, and audit-logs the NAMES', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            security: {
+              proofOfWork: {
+                registerEnabled: true,
+                registerDifficulty: 12,
+                signInEnabled: true,
+                signInMode: 'adaptive',
+                signInDifficulty: 16,
+                signInAdaptiveThreshold: 3,
+              },
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+      )
+
+      const config = await resolver.resolveProofOfWorkConfig()
+      expect(config).toEqual({
+        registerEnabled: true,
+        registerDifficulty: 12,
+        signInEnabled: true,
+        signInMode: 'adaptive',
+        signInDifficulty: 16,
+        signInAdaptiveThreshold: 3,
+      })
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          audit: 'admin.server-settings.update',
+          changedSettings: expect.arrayContaining([
+            'security.proofOfWork.registerEnabled',
+            'security.proofOfWork.registerDifficulty',
+            'security.proofOfWork.signInMode',
+            'security.proofOfWork.signInAdaptiveThreshold',
+          ]),
+        }),
+      )
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.settings.security.proofOfWork.signInDifficulty).toBe(16)
+      expect(payload.sources['security.proofOfWork.signInMode']).toBe('persisted')
+    })
+
+    it('PUT rejects out-of-range difficulty and a bad signInMode as 400s that persist nothing', async () => {
+      const cases = [
+        { security: { proofOfWork: { registerDifficulty: 33 } } },
+        { security: { proofOfWork: { signInDifficulty: -1 } } },
+        { security: { proofOfWork: { signInAdaptiveThreshold: 101 } } },
+        { security: { proofOfWork: { registerDifficulty: 4.5 } } },
+        { security: { proofOfWork: { signInMode: 'sometimes' } } },
+        { security: { proofOfWork: { registerEnabled: 'yes' } } },
+      ]
+      for (const body of cases) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      // Nothing persisted — the resolver still returns the hardcoded defaults.
+      expect(await resolver.resolveProofOfWorkConfig()).toMatchObject({ registerDifficulty: 12, signInMode: 'adaptive' })
+      expect(logger.info).not.toHaveBeenCalled()
+    })
   })
 })
 

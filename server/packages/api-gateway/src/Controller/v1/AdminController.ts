@@ -976,6 +976,74 @@ export class AdminController extends BaseHttpController {
       }
     }
 
+    // Standard Red Notes: PROOF-OF-WORK anti-bot knobs. The gateway only
+    // PERSISTS these (admin pane); the AUTH server reads the same overlay file
+    // and does the actual gating. Booleans (or null to clear); difficulties are
+    // integers 0..32; the adaptive threshold is an integer 0..100; signInMode is
+    // 'always' | 'adaptive' (or null to clear).
+    if (root.security !== undefined) {
+      if (!root.security || typeof root.security !== 'object' || Array.isArray(root.security)) {
+        return { error: 'security must be an object.' }
+      }
+      const security = root.security as Record<string, unknown>
+      if (security.proofOfWork !== undefined) {
+        if (!security.proofOfWork || typeof security.proofOfWork !== 'object' || Array.isArray(security.proofOfWork)) {
+          return { error: 'security.proofOfWork must be an object.' }
+        }
+        const pow = security.proofOfWork as Record<string, unknown>
+        patch.security = { proofOfWork: {} }
+        const powPatch = patch.security.proofOfWork as Record<string, unknown>
+
+        for (const key of ['registerEnabled', 'signInEnabled'] as const) {
+          if (pow[key] !== undefined) {
+            if (pow[key] !== null && typeof pow[key] !== 'boolean') {
+              return { error: `security.proofOfWork.${key} must be a boolean, or null to clear it.` }
+            }
+            powPatch[key] = pow[key]
+            changedSettings.push(`security.proofOfWork.${key}`)
+          }
+        }
+
+        const boundedInt = (
+          key: 'registerDifficulty' | 'signInDifficulty' | 'signInAdaptiveThreshold',
+          max: number,
+        ): { error: string } | undefined => {
+          if (pow[key] === undefined) {
+            return undefined
+          }
+          if (pow[key] === null) {
+            powPatch[key] = null
+          } else if (typeof pow[key] === 'number' && Number.isInteger(pow[key]) && (pow[key] as number) >= 0 && (pow[key] as number) <= max) {
+            powPatch[key] = pow[key] as number
+          } else {
+            return { error: `security.proofOfWork.${key} must be an integer between 0 and ${max}, or null to clear it.` }
+          }
+          changedSettings.push(`security.proofOfWork.${key}`)
+
+          return undefined
+        }
+
+        for (const [key, max] of [
+          ['registerDifficulty', 32],
+          ['signInDifficulty', 32],
+          ['signInAdaptiveThreshold', 100],
+        ] as const) {
+          const invalid = boundedInt(key, max)
+          if (invalid) {
+            return invalid
+          }
+        }
+
+        if (pow.signInMode !== undefined) {
+          if (pow.signInMode !== null && pow.signInMode !== 'always' && pow.signInMode !== 'adaptive') {
+            return { error: "security.proofOfWork.signInMode must be 'always' or 'adaptive', or null to clear it." }
+          }
+          powPatch.signInMode = pow.signInMode
+          changedSettings.push('security.proofOfWork.signInMode')
+        }
+      }
+    }
+
     return { patch, changedSettings }
   }
 

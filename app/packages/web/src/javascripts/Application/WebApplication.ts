@@ -57,6 +57,7 @@ import { VisibilityObserver } from './VisibilityObserver'
 import { DevMode } from './DevMode'
 import { ToastType, addToast, dismissToast } from '@standardnotes/toast'
 import { WebDependencies } from './Dependencies/WebDependencies'
+import { WebProofOfWorkSolver } from '../Utils/ProofOfWork/WebProofOfWorkSolver'
 import { Web_TYPES } from './Dependencies/Types'
 import { ApplicationEventObserver } from '@/Event/ApplicationEventObserver'
 import { PaneController } from '@/Controllers/PaneController/PaneController'
@@ -137,6 +138,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // ItemsEncryptionService so bulk decrypts (esp. cold-loading a large vault)
   // parallelize across CPU cores instead of blocking the main thread.
   private _decryptionPool?: DecryptionPool
+  // Standard Red Notes: web/desktop proof-of-work solver, registered on the
+  // session manager so a `proof-of-work-required` challenge during register /
+  // sign-in is solved off the UI thread (Web Worker). Torn down in deinit.
+  private _proofOfWorkSolver?: WebProofOfWorkSolver
 
   // Standard Red Notes: per-workspace cross-tab coordinator for SAVE INVALIDATION. Emits
   // the uuids this tab saves to the shared IndexedDB and, on a peer's save broadcast,
@@ -209,6 +214,13 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   private createBackgroundServices(): void {
+    // Standard Red Notes: register the proof-of-work solver so a
+    // `proof-of-work-required` challenge during register / sign-in is solved in a
+    // Web Worker (off the UI thread). No-op unless the server has PoW enabled
+    // (opt-in; disabled by default), since the challenge is never issued.
+    this._proofOfWorkSolver = new WebProofOfWorkSolver()
+    this.sessions.setProofOfWorkSolver(this._proofOfWorkSolver)
+
     void this.mobileWebReceiver
     void this.autolockService
     void this.persistence
@@ -451,6 +463,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: terminate the decryption worker pool.
     this._decryptionPool?.destroy()
     this._decryptionPool = undefined
+
+    // Standard Red Notes: terminate the proof-of-work solver worker.
+    this._proofOfWorkSolver?.destroy()
+    this._proofOfWorkSolver = undefined
 
     // Standard Red Notes: close the per-workspace save coordination channel. (The keychain
     // coordinator is closed by WebDevice.deinit via removeApplication above.)

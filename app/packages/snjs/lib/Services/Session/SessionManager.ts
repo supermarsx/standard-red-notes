@@ -29,6 +29,7 @@ import {
   UserKeyPairChangedEventData,
   InternalFeatureService,
   InternalFeature,
+  ProofOfWorkSolverInterface,
   ApplicationEvent,
   ApplicationStageChangedEventPayload,
   ApplicationStage,
@@ -82,6 +83,16 @@ export const MissingAccountParams = 'missing-params'
 const ThirtyMinutes = 30 * 60 * 1000
 
 /**
+ * Standard Red Notes: how many times we will solve-and-resubmit a proof-of-work
+ * challenge for a single register / sign-in-params request before giving up and
+ * surfacing an error. The server mints a FRESH challenge in every unsolved
+ * response, so a second pass transparently replaces one that expired or was
+ * consumed between fetch and submit; beyond that we stop rather than loop.
+ */
+const MAX_PROOF_OF_WORK_ATTEMPTS = 2
+const PROOF_OF_WORK_FAILED_MESSAGE = 'Could not complete the anti-bot verification challenge. Please try again.'
+
+/**
  * The session manager is responsible for loading initial user state, and any relevant
  * server credentials, such as the session token. It also exposes methods for registering
  * for a new account, signing into an existing one, or changing an account password.
@@ -93,6 +104,14 @@ export class SessionManager
   private user?: User
   private isSessionRenewChallengePresented = false
   private session?: Session | LegacySession
+  /**
+   * Standard Red Notes: platform solver for the proof-of-work anti-bot
+   * challenge, registered by the host app (the web/desktop build wires a
+   * Web-Worker-backed solver). Left unset on platforms that have not wired one;
+   * a proof-of-work challenge is then surfaced to the caller unchanged, which is
+   * safe because the server feature is opt-in (disabled by default).
+   */
+  private proofOfWorkSolver?: ProofOfWorkSolverInterface
 
   constructor(
     private storage: DiskStorageService,
@@ -119,6 +138,35 @@ export class SessionManager
         void this.reauthenticateInvalidSession()
       }
     })
+  }
+
+  setProofOfWorkSolver(solver: ProofOfWorkSolverInterface): void {
+    this.proofOfWorkSolver = solver
+  }
+
+  /**
+   * Standard Red Notes: pull a proof-of-work challenge out of a server error
+   * response. Returns undefined for any response that is not a well-formed
+   * `proof-of-work-required` challenge, so callers fall through to their normal
+   * error handling unchanged.
+   */
+  private extractProofOfWorkChallenge(
+    error: { tag?: string; payload?: Record<string, unknown> } | undefined,
+  ): { seed: string; difficulty: number; algorithm: string } | undefined {
+    if (error?.tag !== ErrorTag.ProofOfWorkRequired) {
+      return undefined
+    }
+    const pow = error.payload?.['pow'] as Record<string, unknown> | undefined
+    if (!pow || typeof pow !== 'object') {
+      return undefined
+    }
+    const seed = pow['seed']
+    const difficulty = pow['difficulty']
+    const algorithm = pow['algorithm']
+    if (typeof seed !== 'string' || typeof difficulty !== 'number' || typeof algorithm !== 'string') {
+      return undefined
+    }
+    return { seed, difficulty, algorithm }
   }
 
   async handleEvent(event: InternalEventInterface): Promise<void> {
@@ -566,27 +614,54 @@ export class SessionManager
     const serverPassword = rootKey.serverPassword as string
     const keyParams = rootKey.keyParams
 
-    const registerResponse = await this.userApiService.register({
-      email,
-      serverPassword,
-      hvmToken,
-      keyParams,
-      ephemeral,
-      workspaceIdentifier,
-    })
+    // Standard Red Notes: proof-of-work anti-bot loop. The first attempt carries
+    // no proof; if the server has registration PoW enabled it answers with a
+    // `proof-of-work-required` challenge, which we solve off the UI thread and
+    // resubmit. Each unsolved response embeds a fresh challenge, so a bounded
+    // number of passes transparently handles one that expired/was consumed. When
+    // PoW is disabled (the default) the first attempt already succeeds and none
+    // of this runs.
+    let powSeed: string | undefined
+    let powNonce: string | undefined
+    let proofOfWorkAttempts = 0
 
-    if (isErrorResponse(registerResponse)) {
-      throw new ApiCallError(getErrorFromErrorResponse(registerResponse).message)
+    for (;;) {
+      const registerResponse = await this.userApiService.register({
+        email,
+        serverPassword,
+        hvmToken,
+        keyParams,
+        ephemeral,
+        workspaceIdentifier,
+        powSeed,
+        powNonce,
+      })
+
+      if (isErrorResponse(registerResponse)) {
+        const error = getErrorFromErrorResponse(registerResponse)
+        const challenge = this.extractProofOfWorkChallenge(error)
+        if (challenge && this.proofOfWorkSolver && proofOfWorkAttempts < MAX_PROOF_OF_WORK_ATTEMPTS) {
+          proofOfWorkAttempts++
+          try {
+            powNonce = await this.proofOfWorkSolver.solve(challenge.seed, challenge.difficulty, challenge.algorithm)
+            powSeed = challenge.seed
+          } catch {
+            throw new ApiCallError(PROOF_OF_WORK_FAILED_MESSAGE)
+          }
+          continue
+        }
+        throw new ApiCallError(error.message)
+      }
+
+      await this.handleAuthentication({
+        rootKey,
+        wrappingKey,
+        session: registerResponse.data.session,
+        user: registerResponse.data.user,
+      })
+
+      return registerResponse.data
     }
-
-    await this.handleAuthentication({
-      rootKey,
-      wrappingKey,
-      session: registerResponse.data.session,
-      user: registerResponse.data.user,
-    })
-
-    return registerResponse.data
   }
 
   private async retrieveKeyParams(dto: {
@@ -603,6 +678,14 @@ export class SessionManager
      * code prompt (with an explanatory heading) instead of polling again.
      */
     disallowPushApproval?: boolean
+    /**
+     * Standard Red Notes: proof-of-work solution echoed back on the resubmit
+     * after a `proof-of-work-required` challenge, plus the attempt counter that
+     * bounds the solve-and-retry loop.
+     */
+    powSeed?: string
+    powNonce?: string
+    proofOfWorkAttempts?: number
   }): Promise<{
     keyParams?: SNRootKeyParams
     response: HttpResponse<KeyParamsResponse>
@@ -611,11 +694,46 @@ export class SessionManager
     const response = await this.apiService.getAccountKeyParams(dto)
 
     if (isErrorResponse(response) || !response.data) {
+      const error = isErrorResponse(response) ? response.data.error : undefined
+
+      // Standard Red Notes: proof-of-work anti-bot challenge. When sign-in PoW is
+      // enabled the server returns this (BEFORE the MFA gate) with a fresh
+      // challenge. Solve it off the UI thread and resubmit; each unsolved
+      // response carries a new challenge, so an expired/consumed one is replaced
+      // on the next bounded pass. Must run before the MFA handling below, whose
+      // tag list would otherwise fall through and surface the raw error. When PoW
+      // is disabled (the default) or no solver is registered, we skip this and
+      // handle the response exactly as before.
+      const challenge = this.extractProofOfWorkChallenge(error)
+      if (challenge) {
+        const attempts = dto.proofOfWorkAttempts ?? 0
+        if (this.proofOfWorkSolver && attempts < MAX_PROOF_OF_WORK_ATTEMPTS) {
+          let nonce: string
+          try {
+            nonce = await this.proofOfWorkSolver.solve(challenge.seed, challenge.difficulty, challenge.algorithm)
+          } catch {
+            return { response: this.apiService.createErrorResponse(PROOF_OF_WORK_FAILED_MESSAGE) }
+          }
+
+          return this.retrieveKeyParams({
+            email: dto.email,
+            mfaCode: dto.mfaCode,
+            authenticatorResponse: dto.authenticatorResponse,
+            workspaceIdentifier: dto.workspaceIdentifier,
+            disallowPushApproval: dto.disallowPushApproval,
+            powSeed: challenge.seed,
+            powNonce: nonce,
+            proofOfWorkAttempts: attempts + 1,
+          })
+        }
+
+        // No solver, or attempts exhausted: surface the challenge error as-is.
+        return { response }
+      }
+
       if (dto.mfaCode) {
         await this.alertService.alert(SignInStrings.IncorrectMfa)
       }
-
-      const error = isErrorResponse(response) ? response.data.error : undefined
 
       if (response.data && [ErrorTag.U2FRequired, ErrorTag.MfaRequired].includes(error?.tag as ErrorTag)) {
         const isU2FRequired = error?.tag === ErrorTag.U2FRequired

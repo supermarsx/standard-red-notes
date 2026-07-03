@@ -11,11 +11,19 @@ import {
 } from '@standardnotes/responses'
 import { Base64String } from '@standardnotes/sncrypto-common'
 
+import { ProofOfWorkSolverInterface } from './ProofOfWorkSolverInterface'
 import { SessionManagerResponse } from './SessionManagerResponse'
 
 export interface SessionsClientInterface {
   getWorkspaceDisplayIdentifier(): string
   populateSessionFromDemoShareToken(token: Base64String): Promise<void>
+  /**
+   * Standard Red Notes: register the platform proof-of-work solver used to
+   * answer a `proof-of-work-required` challenge during register / sign-in. When
+   * unset, such a challenge is surfaced to the caller unchanged (safe: a stock
+   * server never requires a proof — the feature is opt-in, disabled by default).
+   */
+  setProofOfWorkSolver(solver: ProofOfWorkSolverInterface): void
 
   getUser(): User | undefined
   isSignedIn(): boolean

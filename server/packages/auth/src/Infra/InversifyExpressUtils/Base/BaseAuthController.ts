@@ -28,6 +28,9 @@ import { CreatePendingMfaApproval } from '../../../Domain/UseCase/CreatePendingM
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { Username } from '@standardnotes/domain-core'
 import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
+import { ProofOfWorkGate, ProofOfWorkChallengePayload } from '../../../Domain/ProofOfWork/ProofOfWorkGate'
+
+const PROOF_OF_WORK_REQUIRED_TAG = 'proof-of-work-required'
 
 export class BaseAuthController extends BaseHttpController {
   constructor(
@@ -51,6 +54,7 @@ export class BaseAuthController extends BaseHttpController {
     protected verifyTrustedDevice: VerifyTrustedDevice,
     protected createPendingMfaApproval: CreatePendingMfaApproval,
     protected userRepository: UserRepositoryInterface,
+    protected proofOfWorkGate: ProofOfWorkGate,
     protected controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -64,6 +68,26 @@ export class BaseAuthController extends BaseHttpController {
       this.controllerContainer.register('auth.recoveryKeyParams', this.recoveryParams.bind(this))
       this.controllerContainer.register('auth.signOut', this.signOut.bind(this))
     }
+  }
+
+  private proofOfWorkRequiredResponse(challenge: ProofOfWorkChallengePayload, status: number): results.JsonResult {
+    return this.json(
+      {
+        error: {
+          tag: PROOF_OF_WORK_REQUIRED_TAG,
+          message: 'Please complete the verification challenge and try again.',
+          payload: {
+            pow: {
+              seed: challenge.seed,
+              difficulty: challenge.difficulty,
+              algorithm: challenge.algorithm,
+              ttl_seconds: challenge.ttlSeconds,
+            },
+          },
+        },
+      },
+      status,
+    )
   }
 
   async pkceParams(request: Request, response: Response): Promise<results.JsonResult> {
@@ -141,6 +165,23 @@ export class BaseAuthController extends BaseHttpController {
         })
         trustedDeviceSatisfiesMfa = !trustedDeviceResult.isFailed() && trustedDeviceResult.getValue() === true
       }
+    }
+
+    // Standard Red Notes: privacy-preserving proof-of-work anti-bot gate.
+    // A valid app password or trusted device pre-authorizes the client and skips
+    // the challenge entirely (the legit-automation escape hatch). Otherwise, when
+    // proof-of-work is required for sign-in (config: always, or adaptively after
+    // N failed attempts) and no valid solution is presented, we return a fresh
+    // challenge for the client to solve and resubmit. This is cheap for the
+    // server (a single hash to verify) and burns ~2^difficulty hashes for a bot.
+    const proofOfWorkBypass = appPasswordSatisfiesMfa || trustedDeviceSatisfiesMfa
+    const signInProofOfWork = await this.proofOfWorkGate.enforceSignInParams(
+      request.body.email as string,
+      request.body,
+      proofOfWorkBypass,
+    )
+    if (!signInProofOfWork.satisfied) {
+      return this.proofOfWorkRequiredResponse(signInProofOfWork.challenge, 401)
     }
 
     const verifyMFAResponse: VerifyMFAResponse = appPasswordSatisfiesMfa || trustedDeviceSatisfiesMfa
@@ -464,6 +505,16 @@ export class BaseAuthController extends BaseHttpController {
         },
         HttpStatusCode.BadRequest,
       )
+    }
+
+    // Standard Red Notes: privacy-preserving proof-of-work anti-bot gate for
+    // registration (defaults to always-on at a low difficulty). When enabled and
+    // no valid solution is presented, return a fresh challenge for the client to
+    // solve and resubmit. Disabled server-side => this is a no-op and the client
+    // never sees a challenge.
+    const registerProofOfWork = await this.proofOfWorkGate.enforceRegister(request.body)
+    if (!registerProofOfWork.satisfied) {
+      return this.proofOfWorkRequiredResponse(registerProofOfWork.challenge, HttpStatusCode.BadRequest)
     }
 
     const registerResult = await this.registerUser.execute({

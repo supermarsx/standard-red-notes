@@ -277,6 +277,15 @@ export class LegacyApiService
      * when unset, keeping the request identical to today.
      */
     workspaceIdentifier?: string
+    /**
+     * Standard Red Notes: proof-of-work solution (seed echoed from the server's
+     * challenge + the solved nonce). Sent as pow_seed/pow_nonce only when
+     * resubmitting after a `proof-of-work-required` response; omitted entirely
+     * otherwise so the request is byte-for-byte identical to today when the
+     * feature is unused.
+     */
+    powSeed?: string
+    powNonce?: string
   }): Promise<HttpResponse<KeyParamsResponse>> {
     const codeVerifier = this.crypto.generateRandomKey(256)
     this.inMemoryStore.setValue(StorageKey.CodeVerifier, codeVerifier)
@@ -298,6 +307,13 @@ export class LegacyApiService
 
     if (dto.authenticatorResponse) {
       params.authenticator_response = dto.authenticatorResponse
+    }
+
+    // Standard Red Notes: proof-of-work anti-bot solution. Present only on a
+    // resubmit after a `proof-of-work-required` challenge; absent otherwise.
+    if (dto.powSeed !== undefined && dto.powNonce !== undefined) {
+      params['pow_seed'] = dto.powSeed
+      params['pow_nonce'] = dto.powNonce
     }
 
     if (dto.appPassword !== undefined && dto.appPassword.length > 0) {

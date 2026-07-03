@@ -45,10 +45,35 @@ export interface PersistedAiSettings {
   defaultProfileId?: string
 }
 
+/**
+ * Standard Red Notes: PROOF-OF-WORK anti-bot knobs for register/sign-in. The
+ * api-gateway PERSISTS these (admin pane) but does NOT enforce them — the AUTH
+ * server reads the SAME overlay file (SERVER_SETTINGS_PATH) and does the actual
+ * PoW gating. This shape is therefore a CONTRACT shared with auth: keep the key
+ * names/nesting exactly as the auth side expects. Every field is optional;
+ * absence means "fall back to auth's env/default".
+ */
+export interface PersistedProofOfWorkSettings {
+  registerEnabled?: boolean
+  /** Integer 0..32. */
+  registerDifficulty?: number
+  signInEnabled?: boolean
+  signInMode?: 'always' | 'adaptive'
+  /** Integer 0..32. */
+  signInDifficulty?: number
+  /** Integer 0..100. */
+  signInAdaptiveThreshold?: number
+}
+
+export interface PersistedSecuritySettings {
+  proofOfWork?: PersistedProofOfWorkSettings
+}
+
 export interface PersistedServerSettings {
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
   nextcloudBackups?: { enabled?: boolean }
+  security?: PersistedSecuritySettings
 }
 
 /**
@@ -69,6 +94,16 @@ export interface ServerSettingsPatch {
   }
   updateCheck?: { url?: string | null }
   nextcloudBackups?: { enabled?: boolean | null }
+  security?: {
+    proofOfWork?: {
+      registerEnabled?: boolean | null
+      registerDifficulty?: number | null
+      signInEnabled?: boolean | null
+      signInMode?: 'always' | 'adaptive' | null
+      signInDifficulty?: number | null
+      signInAdaptiveThreshold?: number | null
+    }
+  }
 }
 
 export class ServerSettingsStore {
@@ -125,6 +160,23 @@ export class ServerSettingsStore {
         this.applyKey(data.nextcloudBackups, 'enabled', patch.nextcloudBackups.enabled)
         if (Object.keys(data.nextcloudBackups).length === 0) {
           delete data.nextcloudBackups
+        }
+      }
+      if (patch.security?.proofOfWork) {
+        data.security = data.security ?? {}
+        data.security.proofOfWork = data.security.proofOfWork ?? {}
+        const pow = patch.security.proofOfWork
+        this.applyKey(data.security.proofOfWork, 'registerEnabled', pow.registerEnabled)
+        this.applyKey(data.security.proofOfWork, 'registerDifficulty', pow.registerDifficulty)
+        this.applyKey(data.security.proofOfWork, 'signInEnabled', pow.signInEnabled)
+        this.applyKey(data.security.proofOfWork, 'signInMode', pow.signInMode)
+        this.applyKey(data.security.proofOfWork, 'signInDifficulty', pow.signInDifficulty)
+        this.applyKey(data.security.proofOfWork, 'signInAdaptiveThreshold', pow.signInAdaptiveThreshold)
+        if (Object.keys(data.security.proofOfWork).length === 0) {
+          delete data.security.proofOfWork
+        }
+        if (Object.keys(data.security).length === 0) {
+          delete data.security
         }
       }
       result = data

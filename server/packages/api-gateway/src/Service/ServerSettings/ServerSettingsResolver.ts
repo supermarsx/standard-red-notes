@@ -43,6 +43,45 @@ export interface EnvSettingsBaseline {
    * file via SERVER_SETTINGS_PATH); this value only feeds the admin view.
    */
   nextcloudBackupsEnabled?: boolean
+  /**
+   * Standard Red Notes: PROOF-OF-WORK anti-bot env baseline (PROOF_OF_WORK_*).
+   * The gateway PERSISTS + VIEWS these; the auth server ENFORCES them by reading
+   * the same overlay file. undefined = env var unset (falls through to default).
+   */
+  proofOfWorkRegisterEnabled?: boolean
+  proofOfWorkRegisterDifficulty?: number
+  proofOfWorkSignInEnabled?: boolean
+  proofOfWorkSignInMode?: 'always' | 'adaptive'
+  proofOfWorkSignInDifficulty?: number
+  proofOfWorkSignInAdaptiveThreshold?: number
+}
+
+/**
+ * The fully-resolved PoW config (persisted -> env -> default), every field
+ * populated. Mirrors the persisted contract the auth server reads.
+ */
+export interface ResolvedProofOfWorkConfig {
+  registerEnabled: boolean
+  registerDifficulty: number
+  signInEnabled: boolean
+  signInMode: 'always' | 'adaptive'
+  signInDifficulty: number
+  signInAdaptiveThreshold: number
+}
+
+/**
+ * Hardcoded PoW defaults (apply last, after persisted then env). Both scopes
+ * default to DISABLED so this admin view matches the auth server's enforcement
+ * default (see auth Container): a stock deploy requires no proof and can never
+ * lock out a client that attaches none. An admin opts in per scope.
+ */
+const PROOF_OF_WORK_DEFAULTS: ResolvedProofOfWorkConfig = {
+  registerEnabled: false,
+  registerDifficulty: 12,
+  signInEnabled: false,
+  signInMode: 'adaptive',
+  signInDifficulty: 16,
+  signInAdaptiveThreshold: 3,
 }
 
 /** The masked admin view returned by GET/PUT /v1/admin/server-settings. */
@@ -65,6 +104,7 @@ export interface ServerSettingsView {
     }
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
+    security: { proofOfWork: ResolvedProofOfWorkConfig }
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -162,6 +202,32 @@ export class ServerSettingsResolver {
   }
 
   /**
+   * The effective PROOF-OF-WORK anti-bot config: persisted admin values win over
+   * the PROOF_OF_WORK_* env baseline, which falls back to hardcoded defaults.
+   * Re-read per call so admin changes take effect without a restart. NOTE: the
+   * gateway does not enforce PoW — the auth server reads the same persisted
+   * overlay and gates register/sign-in; this method feeds the admin view.
+   */
+  async resolveProofOfWorkConfig(): Promise<ResolvedProofOfWorkConfig> {
+    const pow = (await this.safeRead()).security?.proofOfWork ?? {}
+    const env = this.envBaseline
+
+    return {
+      registerEnabled: pow.registerEnabled ?? env.proofOfWorkRegisterEnabled ?? PROOF_OF_WORK_DEFAULTS.registerEnabled,
+      registerDifficulty:
+        pow.registerDifficulty ?? env.proofOfWorkRegisterDifficulty ?? PROOF_OF_WORK_DEFAULTS.registerDifficulty,
+      signInEnabled: pow.signInEnabled ?? env.proofOfWorkSignInEnabled ?? PROOF_OF_WORK_DEFAULTS.signInEnabled,
+      signInMode: pow.signInMode ?? env.proofOfWorkSignInMode ?? PROOF_OF_WORK_DEFAULTS.signInMode,
+      signInDifficulty:
+        pow.signInDifficulty ?? env.proofOfWorkSignInDifficulty ?? PROOF_OF_WORK_DEFAULTS.signInDifficulty,
+      signInAdaptiveThreshold:
+        pow.signInAdaptiveThreshold ??
+        env.proofOfWorkSignInAdaptiveThreshold ??
+        PROOF_OF_WORK_DEFAULTS.signInAdaptiveThreshold,
+    }
+  }
+
+  /**
    * The masked admin view: configured booleans for secrets (API keys are NEVER
    * returned), plain values for non-secrets, plus a per-setting source map
    * ('persisted' | 'env' | 'default') so the admin pane can show where each
@@ -175,6 +241,8 @@ export class ServerSettingsResolver {
     const tokenLimits = await this.resolveAssistantTokenLimits()
 
     const ai = persisted.ai ?? {}
+    const pow = persisted.security?.proofOfWork ?? {}
+    const proofOfWork = await this.resolveProofOfWorkConfig()
     const sources: Record<string, ServerSettingSource> = {
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
@@ -189,6 +257,15 @@ export class ServerSettingsResolver {
       'ai.defaultProfileId': this.source(ai.defaultProfileId, undefined),
       'updateCheck.url': this.source(persisted.updateCheck?.url, env.updateCheckUrl),
       'nextcloudBackups.enabled': this.source(persisted.nextcloudBackups?.enabled, env.nextcloudBackupsEnabled),
+      'security.proofOfWork.registerEnabled': this.source(pow.registerEnabled, env.proofOfWorkRegisterEnabled),
+      'security.proofOfWork.registerDifficulty': this.source(pow.registerDifficulty, env.proofOfWorkRegisterDifficulty),
+      'security.proofOfWork.signInEnabled': this.source(pow.signInEnabled, env.proofOfWorkSignInEnabled),
+      'security.proofOfWork.signInMode': this.source(pow.signInMode, env.proofOfWorkSignInMode),
+      'security.proofOfWork.signInDifficulty': this.source(pow.signInDifficulty, env.proofOfWorkSignInDifficulty),
+      'security.proofOfWork.signInAdaptiveThreshold': this.source(
+        pow.signInAdaptiveThreshold,
+        env.proofOfWorkSignInAdaptiveThreshold,
+      ),
     }
 
     return {
@@ -210,6 +287,7 @@ export class ServerSettingsResolver {
         },
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
+        security: { proofOfWork },
       },
       sources,
     }

@@ -211,4 +211,87 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(raw?.[0].apiKey).toBe('sk-a')
     })
   })
+
+  describe('proof-of-work (security.proofOfWork)', () => {
+    it('falls back to hardcoded defaults when nothing is persisted or in env', async () => {
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveProofOfWorkConfig()).toEqual({
+        registerEnabled: false,
+        registerDifficulty: 12,
+        signInEnabled: false,
+        signInMode: 'adaptive',
+        signInDifficulty: 16,
+        signInAdaptiveThreshold: 3,
+      })
+    })
+
+    it('uses the env baseline over the defaults', async () => {
+      const resolver = makeResolver({
+        proofOfWorkRegisterEnabled: false,
+        proofOfWorkRegisterDifficulty: 8,
+        proofOfWorkSignInMode: 'always',
+        proofOfWorkSignInDifficulty: 20,
+        proofOfWorkSignInAdaptiveThreshold: 5,
+      })
+
+      const config = await resolver.resolveProofOfWorkConfig()
+      expect(config.registerEnabled).toBe(false)
+      expect(config.registerDifficulty).toBe(8)
+      expect(config.signInMode).toBe('always')
+      expect(config.signInDifficulty).toBe(20)
+      expect(config.signInAdaptiveThreshold).toBe(5)
+      // Unset env falls through to the default (disabled).
+      expect(config.signInEnabled).toBe(false)
+    })
+
+    it('lets persisted admin values WIN over env', async () => {
+      const resolver = makeResolver({
+        proofOfWorkRegisterDifficulty: 8,
+        proofOfWorkSignInMode: 'always',
+      })
+      await resolver.applyPatch({
+        security: { proofOfWork: { registerDifficulty: 14, signInMode: 'adaptive', signInAdaptiveThreshold: 2 } },
+      })
+
+      const config = await resolver.resolveProofOfWorkConfig()
+      expect(config.registerDifficulty).toBe(14)
+      expect(config.signInMode).toBe('adaptive')
+      expect(config.signInAdaptiveThreshold).toBe(2)
+    })
+
+    it('persists, prunes empty sections on null, and clears back to env/default', async () => {
+      const store = new ServerSettingsStore(filePath)
+
+      await store.update({ security: { proofOfWork: { registerEnabled: true, signInDifficulty: 18 } } })
+      expect(await store.read()).toEqual({
+        security: { proofOfWork: { registerEnabled: true, signInDifficulty: 18 } },
+      })
+
+      await store.update({ security: { proofOfWork: { registerEnabled: null } } })
+      expect(await store.read()).toEqual({ security: { proofOfWork: { signInDifficulty: 18 } } })
+
+      // Clearing the last key prunes proofOfWork AND the empty security section.
+      await store.update({ security: { proofOfWork: { signInDifficulty: null } } })
+      expect(await store.read()).toEqual({})
+    })
+
+    it('reports the resolved config + per-setting sources in the view', async () => {
+      const resolver = makeResolver({ proofOfWorkRegisterDifficulty: 8 })
+      await resolver.applyPatch({ security: { proofOfWork: { signInDifficulty: 22 } } })
+
+      const view = await resolver.view()
+      expect(view.settings.security.proofOfWork).toMatchObject({
+        registerDifficulty: 8, // env
+        signInDifficulty: 22, // persisted
+        signInMode: 'adaptive', // default
+      })
+      expect(view.sources).toMatchObject({
+        'security.proofOfWork.registerDifficulty': 'env',
+        'security.proofOfWork.signInDifficulty': 'persisted',
+        'security.proofOfWork.registerEnabled': 'default',
+        'security.proofOfWork.signInMode': 'default',
+      })
+    })
+  })
 })

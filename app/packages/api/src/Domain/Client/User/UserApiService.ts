@@ -77,6 +77,11 @@ export class UserApiService implements UserApiServiceInterface {
     ephemeral: boolean
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string
+    // Standard Red Notes: optional Proof-of-Work fields, only present when the
+    // server previously answered with a `proof-of-work-required` challenge and
+    // the client is resubmitting with the echoed seed and solved nonce.
+    powSeed?: string
+    powNonce?: string
   }): Promise<HttpResponse<UserRegistrationResponseBody>> {
     this.lockOperation(UserApiOperations.Registering)
 
@@ -91,6 +96,11 @@ export class UserApiService implements UserApiServiceInterface {
         // was provided, so the request body is byte-for-byte identical to today
         // when the feature is unused.
         ...(registerDTO.workspaceIdentifier ? { workspace_identifier: registerDTO.workspaceIdentifier } : {}),
+        // Standard Red Notes: only include the PoW fields when solving a
+        // challenge, so the request body is byte-for-byte identical to today
+        // when the feature is unused.
+        ...(registerDTO.powSeed ? { pow_seed: registerDTO.powSeed } : {}),
+        ...(registerDTO.powNonce ? { pow_nonce: registerDTO.powNonce } : {}),
         ...registerDTO.keyParams.getPortableValue(),
       })
 

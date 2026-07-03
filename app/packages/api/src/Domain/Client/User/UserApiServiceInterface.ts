@@ -18,6 +18,10 @@ export interface UserApiServiceInterface {
     // email" (WORKSPACES_PER_EMAIL_ENABLED). Sent as workspace_identifier; the
     // server ignores it unless the feature flag is on.
     workspaceIdentifier?: string
+    // Standard Red Notes: optional Proof-of-Work fields sent as pow_seed/pow_nonce
+    // when resubmitting after a `proof-of-work-required` challenge.
+    powSeed?: string
+    powNonce?: string
   }): Promise<HttpResponse<UserRegistrationResponseBody>>
   updateUser(updateDTO: { userUuid: string }): Promise<HttpResponse<UserUpdateResponse>>
 

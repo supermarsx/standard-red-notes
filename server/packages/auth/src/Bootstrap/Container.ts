@@ -438,6 +438,15 @@ import { TriggerEmailBackupForAllUsers } from '../Domain/UseCase/TriggerEmailBac
 import { TriggerNextcloudBackupForUser } from '../Domain/UseCase/TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
 import { TriggerNextcloudBackupForAllUsers } from '../Domain/UseCase/TriggerNextcloudBackupForAllUsers/TriggerNextcloudBackupForAllUsers'
 import { ServerSettingsOverlayReader } from '../Infra/FS/ServerSettingsOverlayReader'
+import { ProofOfWorkChallengeRepositoryInterface } from '../Domain/ProofOfWork/ProofOfWorkChallengeRepositoryInterface'
+import { ProofOfWorkConfig } from '../Domain/ProofOfWork/ProofOfWorkConfig'
+import { ProofOfWorkConfigResolverInterface } from '../Domain/ProofOfWork/ProofOfWorkConfigResolverInterface'
+import { ProofOfWorkGate } from '../Domain/ProofOfWork/ProofOfWorkGate'
+import { RequestProofOfWorkChallenge } from '../Domain/UseCase/RequestProofOfWorkChallenge/RequestProofOfWorkChallenge'
+import { VerifyProofOfWork } from '../Domain/UseCase/VerifyProofOfWork/VerifyProofOfWork'
+import { RedisProofOfWorkChallengeRepository } from '../Infra/Redis/RedisProofOfWorkChallengeRepository'
+import { TypeORMProofOfWorkChallengeRepository } from '../Infra/TypeORM/TypeORMProofOfWorkChallengeRepository'
+import { EnvProofOfWorkConfigResolver } from '../Infra/ProofOfWork/EnvProofOfWorkConfigResolver'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -1191,6 +1200,14 @@ export class ContainerConfigLoader {
           ),
         )
       container
+        .bind<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository)
+        .toConstantValue(
+          new TypeORMProofOfWorkChallengeRepository(
+            container.get(TYPES.Auth_CacheEntryRepository),
+            container.get(TYPES.Auth_Timer),
+          ),
+        )
+      container
         .bind<LockRepositoryInterface>(TYPES.Auth_LockRepository)
         .toConstantValue(
           new TypeORMLockRepository(
@@ -1240,6 +1257,9 @@ export class ContainerConfigLoader {
     } else {
       container.bind<PKCERepositoryInterface>(TYPES.Auth_PKCERepository).to(RedisPKCERepository)
       container
+        .bind<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository)
+        .to(RedisProofOfWorkChallengeRepository)
+      container
         .bind<LockRepositoryInterface>(TYPES.Auth_LockRepository)
         .toConstantValue(
           new RedisLockRepository(
@@ -1263,6 +1283,77 @@ export class ContainerConfigLoader {
         .bind<SessionTokensCooldownRepositoryInterface>(TYPES.Auth_SessionTokensCooldownRepository)
         .toConstantValue(new RedisSessionTokensCooldownRepository(container.get<Redis>(TYPES.Auth_Redis)))
     }
+
+    // Standard Red Notes: proof-of-work anti-bot challenge wiring.
+    //
+    // SAFETY: both scopes default to DISABLED (opt-in). A stock deploy therefore
+    // NEVER requires a proof, so any client that attaches none — the web/desktop
+    // build before it is updated, mobile, the CLI, curl, third-party apps — can
+    // always register and sign in. PoW is enabled deliberately by an admin, per
+    // scope, via env (`PROOF_OF_WORK_*_ENABLED=true`) or the persisted overlay
+    // (security.proofOfWork.*). The web/desktop client fully solves-and-attaches
+    // the challenge when a deployment turns it on (see SessionManager); other
+    // clients would need their own solver, which is why enabling is an explicit,
+    // informed choice rather than the default. When enabled the difficulty knobs
+    // below stay gentle (register ~12 leading-zero bits, sign-in adaptive after 3
+    // failed attempts at ~16 bits). Precedence is persisted -> env -> default,
+    // resolved per request (no restart needed).
+    const proofOfWorkBaseline: ProofOfWorkConfig = {
+      register: {
+        enabled: env.get('PROOF_OF_WORK_REGISTER_ENABLED', true) === 'true',
+        difficulty: env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
+          ? +env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
+          : 12,
+        ttlSeconds: env.get('PROOF_OF_WORK_REGISTER_TTL_SECONDS', true)
+          ? +env.get('PROOF_OF_WORK_REGISTER_TTL_SECONDS', true)
+          : 600,
+      },
+      signIn: {
+        enabled: env.get('PROOF_OF_WORK_SIGNIN_ENABLED', true) === 'true',
+        difficulty: env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
+          ? +env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
+          : 16,
+        ttlSeconds: env.get('PROOF_OF_WORK_SIGNIN_TTL_SECONDS', true)
+          ? +env.get('PROOF_OF_WORK_SIGNIN_TTL_SECONDS', true)
+          : 600,
+        mode: env.get('PROOF_OF_WORK_SIGNIN_MODE', true) === 'always' ? 'always' : 'adaptive',
+        adaptiveThreshold: env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
+          ? +env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
+          : 3,
+      },
+    }
+    const proofOfWorkOverlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
+    container
+      .bind<ProofOfWorkConfigResolverInterface>(TYPES.Auth_ProofOfWorkConfigResolver)
+      .toConstantValue(
+        new EnvProofOfWorkConfigResolver(proofOfWorkBaseline, () => proofOfWorkOverlayReader.proofOfWork()),
+      )
+    container
+      .bind<RequestProofOfWorkChallenge>(TYPES.Auth_RequestProofOfWorkChallenge)
+      .toConstantValue(
+        new RequestProofOfWorkChallenge(
+          container.get<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository),
+        ),
+      )
+    container
+      .bind<VerifyProofOfWork>(TYPES.Auth_VerifyProofOfWork)
+      .toConstantValue(
+        new VerifyProofOfWork(
+          container.get<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository),
+        ),
+      )
+    container
+      .bind<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate)
+      .toConstantValue(
+        new ProofOfWorkGate(
+          container.get<RequestProofOfWorkChallenge>(TYPES.Auth_RequestProofOfWorkChallenge),
+          container.get<VerifyProofOfWork>(TYPES.Auth_VerifyProofOfWork),
+          container.get<ProofOfWorkConfigResolverInterface>(TYPES.Auth_ProofOfWorkConfigResolver),
+          container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
 
     container
       .bind<TraceSession>(TYPES.Auth_TraceSession)
@@ -2852,6 +2943,7 @@ export class ContainerConfigLoader {
           container.get<VerifyTrustedDevice>(TYPES.Auth_VerifyTrustedDevice),
           container.get<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval),
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate),
           container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
         ),
       )

@@ -1,5 +1,7 @@
 import { promises as fs } from 'fs'
 
+import { ProofOfWorkOverlay } from '../../Domain/ProofOfWork/ProofOfWorkConfig'
+
 /**
  * Standard Red Notes: read-only view of the api-gateway's persisted runtime
  * server-settings overlay (the atomic JSON file the gateway's
@@ -29,6 +31,42 @@ export class ServerSettingsOverlayReader {
     const enabled = (overlay?.nextcloudBackups as { enabled?: unknown } | undefined)?.enabled
 
     return typeof enabled === 'boolean' ? enabled : undefined
+  }
+
+  /**
+   * Reads the admin-set proof-of-work overrides from `security.proofOfWork.*`.
+   * Returns only the fields an admin has actually persisted (each is undefined
+   * when unset, so the caller falls through to env then default). Never throws.
+   */
+  async proofOfWork(): Promise<ProofOfWorkOverlay | undefined> {
+    const overlay = await this.read()
+    const security = overlay?.security as { proofOfWork?: Record<string, unknown> } | undefined
+    const pow = security?.proofOfWork
+    if (!pow || typeof pow !== 'object') {
+      return undefined
+    }
+
+    const result: ProofOfWorkOverlay = {}
+    if (typeof pow.registerEnabled === 'boolean') {
+      result.registerEnabled = pow.registerEnabled
+    }
+    if (typeof pow.registerDifficulty === 'number') {
+      result.registerDifficulty = pow.registerDifficulty
+    }
+    if (typeof pow.signInEnabled === 'boolean') {
+      result.signInEnabled = pow.signInEnabled
+    }
+    if (pow.signInMode === 'always' || pow.signInMode === 'adaptive') {
+      result.signInMode = pow.signInMode
+    }
+    if (typeof pow.signInDifficulty === 'number') {
+      result.signInDifficulty = pow.signInDifficulty
+    }
+    if (typeof pow.signInAdaptiveThreshold === 'number') {
+      result.signInAdaptiveThreshold = pow.signInAdaptiveThreshold
+    }
+
+    return result
   }
 
   private async read(): Promise<Record<string, unknown> | undefined> {

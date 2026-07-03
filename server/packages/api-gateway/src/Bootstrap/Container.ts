@@ -252,6 +252,34 @@ export class ContainerConfigLoader {
       nextcloudBackupsEnabled: env.get('NEXTCLOUD_BACKUPS_ENABLED', true)
         ? env.get('NEXTCLOUD_BACKUPS_ENABLED', true) === 'true'
         : undefined,
+      // Standard Red Notes: PROOF-OF-WORK anti-bot env baseline. The gateway
+      // persists + views these; the AUTH server reads the SAME overlay file and
+      // enforces the gating. undefined when the env var is unset so the source
+      // map reports 'default' (the resolver applies the hardcoded fallbacks:
+      // registerEnabled=false, registerDifficulty=12, signInEnabled=false,
+      // signInMode='adaptive', signInDifficulty=16, signInAdaptiveThreshold=3 —
+      // both scopes DISABLED by default so a stock deploy locks nobody out).
+      proofOfWorkRegisterEnabled: env.get('PROOF_OF_WORK_REGISTER_ENABLED', true)
+        ? env.get('PROOF_OF_WORK_REGISTER_ENABLED', true) === 'true'
+        : undefined,
+      proofOfWorkRegisterDifficulty: env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
+        ? +env.get('PROOF_OF_WORK_REGISTER_DIFFICULTY', true)
+        : undefined,
+      proofOfWorkSignInEnabled: env.get('PROOF_OF_WORK_SIGNIN_ENABLED', true)
+        ? env.get('PROOF_OF_WORK_SIGNIN_ENABLED', true) === 'true'
+        : undefined,
+      proofOfWorkSignInMode:
+        env.get('PROOF_OF_WORK_SIGNIN_MODE', true) === 'always'
+          ? 'always'
+          : env.get('PROOF_OF_WORK_SIGNIN_MODE', true) === 'adaptive'
+            ? 'adaptive'
+            : undefined,
+      proofOfWorkSignInDifficulty: env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
+        ? +env.get('PROOF_OF_WORK_SIGNIN_DIFFICULTY', true)
+        : undefined,
+      proofOfWorkSignInAdaptiveThreshold: env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
+        ? +env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
+        : undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container
