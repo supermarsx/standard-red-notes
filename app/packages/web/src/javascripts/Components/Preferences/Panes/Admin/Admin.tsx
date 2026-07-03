@@ -15,6 +15,7 @@ import AdminServerTab from './AdminServerTab'
 import AdminAiTab from './AdminAiTab'
 import AdminAuditTab from './AdminAuditTab'
 import AdminLogsTab from './AdminLogsTab'
+import AdminSecurityTab from './AdminSecurityTab'
 
 type Props = {
   application: WebApplication
@@ -93,12 +94,13 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
       <TabsContainer
         className="mb-4 bg-default"
         tabs={[
-          { id: 'users', title: 'Users' },
-          { id: 'groups', title: 'Groups & roles' },
-          { id: 'server', title: 'Server' },
-          { id: 'ai', title: 'AI' },
-          { id: 'logs', title: 'Logs' },
-          { id: 'audit', title: 'Audit log' },
+          { id: 'users', title: 'Users', icon: 'user' },
+          { id: 'groups', title: 'Groups & roles', icon: 'group' },
+          { id: 'server', title: 'Server', icon: 'server' },
+          { id: 'ai', title: 'AI', icon: 'dashboard' },
+          { id: 'logs', title: 'Logs', icon: 'list-bulleted' },
+          { id: 'audit', title: 'Audit log', icon: 'history' },
+          { id: 'security', title: 'Security', icon: 'security' },
         ]}
         state={tabState}
       >
@@ -126,6 +128,13 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         </TabPanel>
         <TabPanel state={tabState} id="audit" className="p-6">
           <AdminAuditTab application={application} noteIfForbidden={noteIfForbidden} />
+        </TabPanel>
+        <TabPanel state={tabState} id="security" className="p-6">
+          <AdminSecurityTab
+            application={application}
+            noteIfForbidden={noteIfForbidden}
+            goToTab={tabState.setActiveTab}
+          />
         </TabPanel>
       </TabsContainer>
     </PreferencesPane>
