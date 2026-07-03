@@ -564,6 +564,44 @@ describe('CreateCrossServiceToken', () => {
     })
   })
 
+  describe('server-side OCR gating (ocr_server_allowed)', () => {
+    it('does NOT embed ocr_server_allowed when the setting is unset (fail-closed)', async () => {
+      // Default mock: findLastByNameAndUserUuid resolves to null for every setting.
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.ocr_server_allowed).toBeUndefined()
+    })
+
+    it('does NOT embed ocr_server_allowed when the setting is literally "false"', async () => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.OcrServerAllowed) {
+          return Promise.resolve({ props: { value: 'false' } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.ocr_server_allowed).toBeUndefined()
+    })
+
+    it('embeds ocr_server_allowed === true ONLY when the setting is literally "true"', async () => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.OcrServerAllowed) {
+          return Promise.resolve({ props: { value: 'true' } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.ocr_server_allowed).toBe(true)
+    })
+  })
+
   describe('version determination', () => {
     describe('when no threshold is configured', () => {
       it('should set version to 1 when no application version is provided', async () => {

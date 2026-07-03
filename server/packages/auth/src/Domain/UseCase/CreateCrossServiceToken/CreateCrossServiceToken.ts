@@ -142,6 +142,15 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       authTokenData.workflows_enabled = true
     }
 
+    // Standard Red Notes: SERVER-SIDE OCR is OPT-IN (default-off), same shape as
+    // WORKFLOWS above — the field is emitted ONLY when the admin-managed
+    // OcrServerAllowed setting is literally 'true'. Absent means not allowed, so
+    // the api-gateway OcrController FAILS CLOSED (server OCR is an E2E downgrade)
+    // and pre-existing tokens for non-entitled users stay byte-identical.
+    if (await this.readOptInGatingFlag(user.uuid, SettingName.NAMES.OcrServerAllowed)) {
+      authTokenData.ocr_server_allowed = true
+    }
+
     if (dto.sharedVaultOwnerContext !== undefined) {
       const regularSubscriptionOrError = await this.getRegularSubscription.execute({
         userUuid: dto.sharedVaultOwnerContext,

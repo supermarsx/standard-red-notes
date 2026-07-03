@@ -66,4 +66,15 @@ export type CrossServiceTokenData = {
    * as disabled, which also keeps every pre-existing token valid unchanged.
    */
   workflows_enabled?: boolean
+  /**
+   * Standard Red Notes: per-user SERVER-SIDE OCR gate, read from the auth
+   * settings store at token-mint time (SettingName.OcrServerAllowed).
+   *
+   * OPT-IN (default-off), mirroring `workflows_enabled`: the field is EMITTED
+   * ONLY WHEN the admin-managed setting is literally 'true'. Absent MUST be
+   * treated as NOT allowed — the OcrController FAILS CLOSED because server OCR
+   * sends decrypted page images off-device (an E2E downgrade). Keeping it
+   * optional also leaves every pre-existing token valid unchanged.
+   */
+  ocr_server_allowed?: boolean
 }

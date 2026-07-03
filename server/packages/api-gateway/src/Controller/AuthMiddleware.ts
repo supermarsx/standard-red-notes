@@ -196,6 +196,16 @@ export abstract class AuthMiddleware extends BaseMiddleware {
       settings[SettingName.NAMES.WorkflowsEnabled] = 'true'
     }
 
+    // OCR_SERVER_ALLOWED is OPT-IN (default-off) like WORKFLOWS_ENABLED: auth
+    // emits `ocr_server_allowed` ONLY when the admin-managed setting is literally
+    // 'true', so the key is projected only in that case. An absent key means "not
+    // entitled" and the OcrController FAILS CLOSED, which is the correct default
+    // for this privacy-sensitive E2E downgrade (decrypted page images leave the
+    // device). The projected value matches the string shape OcrController reads.
+    if (decodedToken.ocr_server_allowed === true) {
+      settings[SettingName.NAMES.OcrServerAllowed] = 'true'
+    }
+
     return settings
   }
 
