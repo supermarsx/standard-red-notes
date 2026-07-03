@@ -280,6 +280,13 @@ export class ItemListController
   private pendingIndexChanges: Map<string, IndexableNote> = new Map()
   private pendingIndexRemovals: Set<string> = new Set()
   private flushIndexUpdates = debounce(() => {
+    // The custom debounce (Utils.ts) has no `.cancel()`, so a trailing flush can
+    // fire AFTER deinit(), where destroyAllObjectProperties has deleted every field
+    // (including `searchIndex`). Guard against the post-destroy state so the flush is
+    // a safe no-op instead of throwing on `undefined.isBuilt`.
+    if (!this.searchIndex) {
+      return
+    }
     if (!this.searchIndex.isBuilt) {
       this.pendingIndexChanges.clear()
       this.pendingIndexRemovals.clear()
@@ -2208,8 +2215,15 @@ export class ItemListController
     const lastSelectedItemIndex = startingIndex ?? items.findIndex((item) => item.uuid == this.lastSelectedItem?.uuid)
     const selectedItemIndex = endingIndex ?? items.findIndex((item) => item.uuid == selectedItem?.uuid)
 
-    let itemsToSelect = []
-    if (selectedItemIndex > lastSelectedItemIndex) {
+    let itemsToSelect: ListableContentItem[] = []
+    if (lastSelectedItemIndex < 0 || selectedItemIndex < 0) {
+      // The shift-range anchor (lastSelectedItem) can be removed by a delta sync
+      // between clicks; then findIndex returns -1 and `items.slice(-1, n)` selects a
+      // bogus range (starting from the last item). Fall back to selecting just the
+      // clicked item instead of producing a garbage range.
+      const clickedItem = selectedItem ?? (selectedItemIndex >= 0 ? items[selectedItemIndex] : undefined)
+      itemsToSelect = clickedItem ? [clickedItem] : []
+    } else if (selectedItemIndex > lastSelectedItemIndex) {
       itemsToSelect = items.slice(lastSelectedItemIndex, selectedItemIndex + 1)
     } else {
       itemsToSelect = items.slice(selectedItemIndex, lastSelectedItemIndex + 1)

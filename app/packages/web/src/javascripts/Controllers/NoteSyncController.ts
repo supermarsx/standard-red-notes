@@ -212,6 +212,13 @@ export class NoteSyncController {
   private async undebouncedMutateAndSync(params: NoteSaveFunctionParams & { localOnly: boolean }): Promise<void> {
     if (!this.items.findItem(this.item.uuid)) {
       void this.alerts.alert(InfoStrings.InvalidNote)
+      /**
+       * Standard Red Notes (hang fix): resolve the save promise before bailing.
+       * Without this the resolver wired in saveAndAwaitLocalPropagation
+       * (onLocalPropagationComplete) never runs, so `savingLocallyPromise` never
+       * resolves and any note-switch/deinit awaiting it hangs and leaks.
+       */
+      params.onLocalPropagationComplete?.()
       return
     }
 

@@ -12,6 +12,7 @@ import exportOverridesCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"ap
 import { getBase64FromBlob } from './Utils'
 import { buildDocxBlobFromHtml, DOCX_MIME_TYPE } from './DocxExport'
 import { parseFileName, parseAndCreateZippableFileName, sanitizeFileName } from '@standardnotes/utils'
+import { getFullNoteText } from './Items/rehydrateLazyDecryptedNote'
 
 export const getNoteFormat = (application: WebApplicationInterface, note: SNNote) => {
   if (note.noteType === NoteType.Super) {
@@ -66,6 +67,13 @@ export const getNoteBlob = async (
   application: WebApplication,
   note: SNNote,
   superEmbedBehavior: PrefValue[PrefKey.SuperNoteExportEmbedBehavior],
+  /**
+   * LAZY-DECRYPT: the full note body. Under lazy-decrypt an un-opened note is a
+   * body-less "lite" projection (`note.text === ''`), so callers MUST pass the
+   * re-hydrated body here — reading raw `note.text` would export a blank file.
+   * Defaults to `note.text` for the flag-off / already-full case.
+   */
+  noteText: string = note.text,
 ) => {
   const format = getNoteFormat(application, note)
   let type: string
@@ -93,7 +101,7 @@ export const getNoteBlob = async (
     const isDocx = (format as string) === 'docx'
     // A Word document is produced from the HTML export, embedded as an altChunk.
     const converterFormat = (isDocx ? 'html' : format) as 'txt' | 'md' | 'html' | 'json' | 'pdf'
-    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(note.text, converterFormat, {
+    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(noteText, converterFormat, {
       embedBehavior: superEmbedBehavior,
       getFileItem: (id) => application.items.findItem<FileItem>(id),
       getFileBase64: async (id) => {
@@ -134,7 +142,7 @@ export const getNoteBlob = async (
           })
     return blob
   }
-  const blob = new Blob([note.text], {
+  const blob = new Blob([noteText], {
     type,
   })
   return blob
@@ -144,14 +152,15 @@ const isSuperNote = (note: SNNote) => {
   return note.noteType === NoteType.Super
 }
 
-export const noteHasEmbeddedFiles = (note: SNNote) => {
-  return note.text.includes('"type":"snfile"')
+export const noteHasEmbeddedFiles = (note: SNNote, noteText: string = note.text) => {
+  return noteText.includes('"type":"snfile"')
 }
 
 const noteRequiresFolder = (
   note: SNNote,
   superExportFormat: PrefValue[PrefKey.SuperNoteExportFormat],
   superEmbedBehavior: PrefValue[PrefKey.SuperNoteExportEmbedBehavior],
+  noteText: string = note.text,
 ) => {
   if (!isSuperNote(note)) {
     return false
@@ -167,13 +176,18 @@ const noteRequiresFolder = (
   if (superEmbedBehavior !== 'separate') {
     return false
   }
-  return noteHasEmbeddedFiles(note)
+  return noteHasEmbeddedFiles(note, noteText)
 }
 
-const addEmbeddedFilesToFolder = async (application: WebApplication, note: SNNote, folder: ZipDirectoryEntry) => {
+const addEmbeddedFilesToFolder = async (
+  application: WebApplication,
+  note: SNNote,
+  folder: ZipDirectoryEntry,
+  noteText: string = note.text,
+) => {
   try {
     const filenameCounts: Record<string, number> = {}
-    const embeddedFileIDs = headlessSuperConverter.getEmbeddedFileIDsFromSuperString(note.text)
+    const embeddedFileIDs = headlessSuperConverter.getEmbeddedFileIDsFromSuperString(noteText)
     for (const embeddedFileID of embeddedFileIDs) {
       const fileItem = application.items.findItem<FileItem>(embeddedFileID)
       if (!fileItem) {
@@ -223,25 +237,32 @@ export const createNoteExport = async (
           PrefDefaults[PrefKey.SuperNoteExportEmbedBehavior],
         )
 
-  if (notes.length === 1 && !noteRequiresFolder(notes[0], superExportFormatPref, superEmbedBehaviorPref)) {
-    const blob = await getNoteBlob(application, notes[0], superEmbedBehaviorPref)
-    const fileName = getNoteFileName(application, notes[0])
-    return {
-      blob,
-      fileName,
+  if (notes.length === 1) {
+    // LAZY-DECRYPT: an un-opened note is a body-less "lite" projection
+    // (`note.text === ''`); re-hydrate the full body from IndexedDB before reading
+    // it, or the export writes a blank file and silently drops embedded files.
+    // No-op / byte-identical when the flag is off (note is never lite).
+    const singleNote = notes[0]
+    const singleNoteText = await getFullNoteText(application.sync, singleNote)
+
+    if (!noteRequiresFolder(singleNote, superExportFormatPref, superEmbedBehaviorPref, singleNoteText)) {
+      const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText)
+      const fileName = getNoteFileName(application, singleNote)
+      return {
+        blob,
+        fileName,
+      }
     }
-  }
 
-  const zip = await import('@zip.js/zip.js')
-  const zipFS = new zip.fs.FS()
-  const { root } = zipFS
+    const zip = await import('@zip.js/zip.js')
+    const zipFS = new zip.fs.FS()
+    const { root } = zipFS
 
-  if (notes.length === 1 && noteRequiresFolder(notes[0], superExportFormatPref, superEmbedBehaviorPref)) {
-    const blob = await getNoteBlob(application, notes[0], superEmbedBehaviorPref)
-    const fileName = parseAndCreateZippableFileName(getNoteFileName(application, notes[0]))
+    const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText)
+    const fileName = parseAndCreateZippableFileName(getNoteFileName(application, singleNote))
     root.addBlob(fileName, blob)
 
-    await addEmbeddedFilesToFolder(application, notes[0], root)
+    await addEmbeddedFilesToFolder(application, singleNote, root, singleNoteText)
 
     const zippedBlob = await zipFS.exportBlob()
     return {
@@ -250,10 +271,16 @@ export const createNoteExport = async (
     }
   }
 
+  const zip = await import('@zip.js/zip.js')
+  const zipFS = new zip.fs.FS()
+  const { root } = zipFS
+
   const filenameCounts: Record<string, number> = {}
 
   for (const note of notes) {
-    const blob = await getNoteBlob(application, note, superEmbedBehaviorPref)
+    // LAZY-DECRYPT: re-hydrate each note's body before it is read (see above).
+    const noteText = await getFullNoteText(application.sync, note)
+    const blob = await getNoteBlob(application, note, superEmbedBehaviorPref, noteText)
     const _name = parseAndCreateZippableFileName(getNoteFileName(application, note))
 
     filenameCounts[_name] = filenameCounts[_name] == undefined ? 0 : filenameCounts[_name] + 1
@@ -262,7 +289,7 @@ export const createNoteExport = async (
 
     const fileName = parseAndCreateZippableFileName(_name, currentFileNameIndex > 0 ? ` - ${currentFileNameIndex}` : '')
 
-    if (!noteRequiresFolder(note, superExportFormatPref, superEmbedBehaviorPref)) {
+    if (!noteRequiresFolder(note, superExportFormatPref, superEmbedBehaviorPref, noteText)) {
       root.addBlob(fileName, blob)
       continue
     }
@@ -270,7 +297,7 @@ export const createNoteExport = async (
     const { name } = parseFileName(fileName)
     const folder = root.addDirectory(name)
     folder.addBlob(fileName, blob)
-    await addEmbeddedFilesToFolder(application, note, folder)
+    await addEmbeddedFilesToFolder(application, note, folder, noteText)
   }
 
   const zippedBlob = await zipFS.exportBlob()

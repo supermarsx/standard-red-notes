@@ -232,4 +232,47 @@ test.describe('Super editor — last-edit loss', () => {
     await page.waitForTimeout(1200)
     await expect.poll(() => noteSavedText(page, uuid), { timeout: 10_000 }).toContain(token)
   })
+
+  /**
+   * TEST 4 — TAB-CLOSE (beforeunload) actually FIRES the native warning mid-debounce.
+   *
+   * Test 3 checked the underlying signal; this exercises the REAL beforeunload handler
+   * (useUnsavedChangesWarning) end-to-end by dispatching a cancelable 'beforeunload'
+   * event at the window and asserting it was cancelled (defaultPrevented === true) —
+   * i.e. the browser WOULD show "Leave site? Changes may not be saved".
+   *
+   * REGRESSION GUARD for the reorder fix: the handler flushes the editor debounce,
+   * which synchronously CLEARS the pending-editor signal. Pre-fix it checked
+   * hasPendingUnsavedChanges AFTER the flush, saw nothing pending (the flush's save is
+   * deferred), and returned WITHOUT warning → the tab closed silently and the edit was
+   * lost. The fix captures the warn decision BEFORE flushing, so the warning still
+   * fires. This test types mid-debounce (edit not yet dirty), fires beforeunload, and
+   * requires the event to be cancelled.
+   *
+   * A clean workspace (no edit) must NOT be warned — asserted first as the control.
+   */
+  test('4) tab-close mid-debounce triggers the beforeunload warning (fires despite the flush)', async ({ page }) => {
+    const dispatchBeforeUnload = () =>
+      page.evaluate(() => {
+        const event = new Event('beforeunload', { cancelable: true })
+        window.dispatchEvent(event)
+        // defaultPrevented reflects the app handler calling event.preventDefault().
+        return event.defaultPrevented
+      })
+
+    const uuid = await createSuperNote(page, `T-${Date.now()}`)
+    await openNoteByClick(page, uuid)
+
+    // CONTROL: clean + idle → the handler must be silent (no warning).
+    await expect.poll(() => appHasPendingUnsavedChanges(page), { timeout: 10_000 }).toBe(false)
+    expect(await dispatchBeforeUnload(), 'a clean tab must close without a warning').toBe(false)
+
+    // Type and IMMEDIATELY (inside the 350ms serialize debounce) fire beforeunload.
+    // The edit is not yet a dirty item, so ONLY the pre-flush decision (the reorder
+    // fix) makes the handler warn. Poll to absorb keystroke-timing jitter.
+    await focusEditorAndType(page, `TABCLOSE${Date.now()}`)
+    await expect
+      .poll(() => dispatchBeforeUnload(), { timeout: 1_000, intervals: [25, 50, 100] })
+      .toBe(true)
+  })
 })

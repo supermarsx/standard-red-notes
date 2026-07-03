@@ -150,8 +150,12 @@ export class NoteHistoryController {
 
   /**
    * Resolves the content to diff against, based on the active compare target,
-   * and stores it on `comparisonContent`. For "previous" we fetch the
-   * next-older remote revision relative to the current selection.
+   * and stores it on `comparisonContent`. For "previous" we resolve the
+   * next-older revision relative to the current selection WITHIN THE ACTIVE TAB's
+   * own entry list — session and legacy entries have no top-level `uuid`, so the
+   * previous entry must be derived by POSITION in that tab's list, not by looking
+   * the selection up in the remote list by uuid (which always missed for
+   * session/legacy → "No previous revision available").
    */
   refreshComparisonContent = async () => {
     if (this.compareTarget === 'current') {
@@ -161,14 +165,40 @@ export class NoteHistoryController {
 
     this.setComparisonContent(undefined)
 
+    if (!this.note || !this.selectedEntry) {
+      return
+    }
+
+    switch (this.currentTab) {
+      case RevisionType.Remote:
+        await this.refreshRemotePreviousComparison()
+        break
+      case RevisionType.Session:
+        this.refreshSessionPreviousComparison()
+        break
+      case RevisionType.Legacy:
+        await this.refreshLegacyPreviousComparison()
+        break
+    }
+  }
+
+  /**
+   * Remote tab: the entries are RevisionMetadata (uuid-identified) and their
+   * content lives on the server, so the previous entry (next-older = index + 1 in
+   * the newest-first list) is fetched on demand.
+   */
+  private refreshRemotePreviousComparison = async () => {
     const selectedUuid = (this.selectedEntry as RevisionMetadata | undefined)?.uuid
-    if (!selectedUuid || !this.note) {
+    if (!selectedUuid) {
       return
     }
 
     const currentIndex = this.flattenedRemoteHistory.findIndex((entry) => entry?.uuid === selectedUuid)
-    const previousEntry = this.flattenedRemoteHistory[currentIndex + 1]
+    if (currentIndex === -1) {
+      return
+    }
 
+    const previousEntry = this.flattenedRemoteHistory[currentIndex + 1]
     if (!previousEntry) {
       return
     }
@@ -186,6 +216,60 @@ export class NoteHistoryController {
         throw new Error(previousRevisionOrError.getError())
       }
       this.setComparisonContent(previousRevisionOrError.getValue().payload.content as NoteContent)
+    } catch (err) {
+      console.error(err)
+      this.setComparisonContent(undefined)
+    }
+  }
+
+  /**
+   * Session tab: entries are NoteHistoryEntry and already carry their content
+   * in-memory (`payload.content`), so the previous entry (index + 1 in the
+   * newest-first list) is resolved synchronously with no fetch.
+   */
+  private refreshSessionPreviousComparison = () => {
+    const entries = this.flattenedSessionHistory
+    const currentIndex = entries.findIndex((entry) => entry === this.selectedEntry)
+    if (currentIndex === -1) {
+      return
+    }
+
+    const previousEntry = entries[currentIndex + 1]
+    if (!previousEntry) {
+      return
+    }
+
+    this.setComparisonContent(previousEntry.payload.content as NoteContent)
+  }
+
+  /**
+   * Legacy tab: entries are Actions identified by their subaction URL, and their
+   * content must be fetched by running the action (as when a legacy revision is
+   * selected). The previous entry is index + 1 in the list.
+   */
+  private refreshLegacyPreviousComparison = async () => {
+    const selectedUrl = (this.selectedEntry as Action | undefined)?.subactions?.[0]?.url
+    if (!selectedUrl) {
+      return
+    }
+
+    const currentIndex = this.legacyHistory.findIndex((entry) => entry.subactions?.[0]?.url === selectedUrl)
+    if (currentIndex === -1) {
+      return
+    }
+
+    const previousEntry = this.legacyHistory[currentIndex + 1]
+    if (!previousEntry?.subactions?.[0]) {
+      return
+    }
+
+    try {
+      const response = await this.actions.runAction(previousEntry.subactions[0], this.note)
+      if (!response) {
+        return
+      }
+      const content = (response.item as unknown as HistoryEntry | undefined)?.payload?.content
+      this.setComparisonContent((content as NoteContent | undefined) ?? undefined)
     } catch (err) {
       console.error(err)
       this.setComparisonContent(undefined)

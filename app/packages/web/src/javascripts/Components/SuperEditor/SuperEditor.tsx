@@ -258,6 +258,18 @@ export const SuperEditor: FunctionComponent<Props> = ({
       }
 
       if (isPayloadSourceRetrieved(source)) {
+        /**
+         * Standard Red Notes (last-edit-loss fix): a retrieved sync payload is about
+         * to REPLACE the editor contents. If a local keystroke is still sitting in the
+         * serialize debounce (not yet dirty), applying the retrieved state here would
+         * swallow that pending edit with no conflict copy. Flush the pending local
+         * serialize FIRST so it dirties the item and the conflict system preserves it
+         * as a conflicted copy, instead of silently discarding it. No-op when there is
+         * no pending local edit, so the normal retrieved-update path is unchanged.
+         */
+        if (controller.editorHasPendingChanges()) {
+          controller.flushEditorSerialize()
+        }
         ignoreNextChange.current = true
         changeEditorFunction.current?.(updatedNote.text)
       }

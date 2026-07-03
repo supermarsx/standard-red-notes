@@ -100,9 +100,19 @@ export const useUnsavedChangesWarning = (application: WebApplication): void => {
        * truly last-instant edit may still not finish — a large improvement over the
        * prior silent no-warning loss.)
        */
+      /**
+       * Capture the warn decision BEFORE flushing. The flush synchronously CLEARS
+       * the pending-editor-debounce signal (it dirties the item and kicks off a
+       * save), but the actual local IDB write is deferred (setTimeout). If we
+       * re-checked hasPendingUnsavedChanges AFTER the flush, the just-cleared
+       * debounce plus not-yet-started save could read as "nothing pending" → no
+       * native warning → the edit is lost on unload. So decide first, then flush.
+       */
+      const shouldWarn = hasPendingUnsavedChanges(application)
+
       flushPendingEditorDebounces(application)
 
-      if (!hasPendingUnsavedChanges(application)) {
+      if (!shouldWarn) {
         return
       }
 

@@ -35,7 +35,7 @@ const ModalContent = observer(() => {
     }
   }, [application, superNoteExportEmbedBehavior, superNoteExportFormat])
 
-  const someNotesHaveEmbeddedFiles = notes.some(noteHasEmbeddedFiles)
+  const someNotesHaveEmbeddedFiles = notes.some((note) => noteHasEmbeddedFiles(note))
 
   // json/pdf bundle everything in one file; docx embeds inline; txt strips files.
   const canShowEmbeddedFileOptions = !['json', 'pdf', 'docx', 'txt'].includes(superNoteExportFormat)
