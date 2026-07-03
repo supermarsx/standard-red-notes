@@ -10,6 +10,7 @@ import {
 } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { Logger } from 'winston'
 
 import { Item } from '../../../Item/Item'
 import { SaveNewItemDTO } from './SaveNewItemDTO'
@@ -27,6 +28,7 @@ export class SaveNewItem implements UseCaseInterface<Item> {
     private domainEventPublisher: DomainEventPublisherInterface,
     private domainEventFactory: DomainEventFactoryInterface,
     private metricsStore: MetricsStoreInterface,
+    private logger: Logger,
   ) {}
 
   async execute(dto: SaveNewItemDTO): Promise<Result<Item>> {
@@ -139,34 +141,48 @@ export class SaveNewItem implements UseCaseInterface<Item> {
 
     await this.itemRepository.insert(newItem)
 
-    await this.metricsStore.storeUserBasedMetric(
-      Metric.create({
-        name: Metric.NAMES.ContentSizeUtilized,
-        timestamp: this.timer.getTimestampInMicroseconds(),
-      }).getValue(),
-      newItem.props.contentSize,
-      userUuid,
-    )
-
-    await this.metricsStore.storeMetric(
-      Metric.create({ name: Metric.NAMES.ItemCreated, timestamp: this.timer.getTimestampInMicroseconds() }).getValue(),
-    )
-
-    if (contentType.value !== null && [ContentType.TYPES.Note, ContentType.TYPES.File].includes(contentType.value)) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createItemRevisionCreationRequested({
-          itemUuid: newItem.id.toString(),
-          userUuid: newItem.props.userUuid.value,
-        }),
+    // Standard Red Notes: the item is now durably persisted. The metric stores
+    // (RedisMetricStore pipeline.exec) and event publishes below are best-effort
+    // POST-PERSIST side effects. A transient throw here would otherwise unwind
+    // into SaveItems and be misreported as a ConflictType.UuidConflict — telling
+    // the client a COMMITTED save failed and causing duplicate / uuid-regenerated
+    // items. Swallow-and-log; only PRE-persist failures (above) map to conflicts.
+    try {
+      await this.metricsStore.storeUserBasedMetric(
+        Metric.create({
+          name: Metric.NAMES.ContentSizeUtilized,
+          timestamp: this.timer.getTimestampInMicroseconds(),
+        }).getValue(),
+        newItem.props.contentSize,
+        userUuid,
       )
-    }
 
-    if (duplicateOf) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createDuplicateItemSyncedEvent({
-          itemUuid: newItem.id.toString(),
-          userUuid: newItem.props.userUuid.value,
-        }),
+      await this.metricsStore.storeMetric(
+        Metric.create({ name: Metric.NAMES.ItemCreated, timestamp: this.timer.getTimestampInMicroseconds() }).getValue(),
+      )
+
+      if (contentType.value !== null && [ContentType.TYPES.Note, ContentType.TYPES.File].includes(contentType.value)) {
+        await this.domainEventPublisher.publish(
+          this.domainEventFactory.createItemRevisionCreationRequested({
+            itemUuid: newItem.id.toString(),
+            userUuid: newItem.props.userUuid.value,
+          }),
+        )
+      }
+
+      if (duplicateOf) {
+        await this.domainEventPublisher.publish(
+          this.domainEventFactory.createDuplicateItemSyncedEvent({
+            itemUuid: newItem.id.toString(),
+            userUuid: newItem.props.userUuid.value,
+          }),
+        )
+      }
+    } catch (error) {
+      this.logger.error(
+        `[${userUuid.value}] Post-persist side effects threw for new item ${newItem.id.toString()} (item already saved). Error: ${
+          (error as Error).message
+        }`,
       )
     }
 

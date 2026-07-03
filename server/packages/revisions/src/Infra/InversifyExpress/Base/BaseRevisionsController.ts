@@ -81,6 +81,20 @@ export class BaseRevisionsController extends BaseHttpController {
   }
 
   async deleteRevision(request: Request, response: Response): Promise<results.JsonResult> {
+    // A read-only session (e.g. a shared read-only access) must never be able to
+    // permanently delete revision history. The middleware decodes readOnlyAccess
+    // from the session token; enforce it here before touching the delete path.
+    if (response.locals.readOnlyAccess) {
+      return this.json(
+        {
+          error: {
+            message: 'Your account is in read-only mode. Cannot delete revisions.',
+          },
+        },
+        HttpStatusCode.Forbidden,
+      )
+    }
+
     const revisionOrError = await this.doDeleteRevision.execute({
       revisionUuid: request.params.uuid as string,
       userUuid: response.locals.user.uuid,

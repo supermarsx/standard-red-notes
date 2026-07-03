@@ -21,6 +21,7 @@ import { RemoveNotificationsForUser } from '../../Messaging/RemoveNotificationsF
 import { SharedVaultOperationOnItem } from '../../../SharedVault/SharedVaultOperationOnItem'
 import { AddNotificationsForUsers } from '../../Messaging/AddNotificationsForUsers/AddNotificationsForUsers'
 import { MetricsStoreInterface } from '../../../Metrics/MetricsStoreInterface'
+import { Logger } from 'winston'
 
 describe('UpdateExistingItem', () => {
   let itemRepository: ItemRepositoryInterface
@@ -33,6 +34,7 @@ describe('UpdateExistingItem', () => {
   let addNotificationsForUsers: AddNotificationsForUsers
   let removeNotificationsForUser: RemoveNotificationsForUser
   let metricsStore: MetricsStoreInterface
+  let logger: Logger
 
   const createUseCase = () =>
     new UpdateExistingItem(
@@ -46,6 +48,7 @@ describe('UpdateExistingItem', () => {
       addNotificationsForUsers,
       removeNotificationsForUser,
       metricsStore,
+      logger,
     )
 
   beforeEach(() => {
@@ -54,6 +57,10 @@ describe('UpdateExistingItem', () => {
     metricsStore = {} as jest.Mocked<MetricsStoreInterface>
     metricsStore.storeMetric = jest.fn()
     metricsStore.storeUserBasedMetric = jest.fn()
+
+    logger = {} as jest.Mocked<Logger>
+    logger.error = jest.fn()
+    logger.debug = jest.fn()
 
     item1 = Item.create(
       {
@@ -151,6 +158,44 @@ describe('UpdateExistingItem', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(itemRepository.update).toHaveBeenCalled()
+  })
+
+  it('still returns the SAVED item (not a failure) when a POST-persist metric store throws', async () => {
+    // The update has already committed; a transient metric-store throw must not
+    // be surfaced as a failure (which SaveItems would map to a UuidConflict).
+    metricsStore.storeMetric = jest.fn().mockRejectedValue(new Error('redis pipeline blip'))
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      existingItem: item1,
+      itemHash: itemHash1,
+      sessionUuid: '00000000-0000-0000-0000-000000000000',
+      performingUserUuid: '00000000-0000-0000-0000-000000000000',
+      isFreeUser: false,
+    })
+
+    expect(itemRepository.update).toHaveBeenCalled()
+    expect(result.isFailed()).toBeFalsy()
+    expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('still returns the SAVED item (not a failure) when a POST-persist event publish throws', async () => {
+    domainEventPublisher.publish = jest.fn().mockRejectedValue(new Error('publish blip'))
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      existingItem: item1,
+      itemHash: itemHash1,
+      sessionUuid: '00000000-0000-0000-0000-000000000000',
+      performingUserUuid: '00000000-0000-0000-0000-000000000000',
+      isFreeUser: false,
+    })
+
+    expect(itemRepository.update).toHaveBeenCalled()
+    expect(result.isFailed()).toBeFalsy()
+    expect(logger.error).toHaveBeenCalled()
   })
 
   it('should return error if session uuid is invalid', async () => {
@@ -521,7 +566,7 @@ describe('UpdateExistingItem', () => {
       expect(result.isFailed()).toBeTruthy()
     })
 
-    it('should return error if it fails to add notification for user', async () => {
+    it('does not fail the committed save if adding notification for user fails (post-persist)', async () => {
       determineSharedVaultOperationOnItem.execute = jest.fn().mockReturnValue(
         Result.ok(
           SharedVaultOperationOnItem.create({
@@ -550,10 +595,13 @@ describe('UpdateExistingItem', () => {
         performingUserUuid: '00000000-0000-0000-0000-000000000000',
         isFreeUser: false,
       })
-      expect(result.isFailed()).toBeTruthy()
+      // The item already persisted; a notification failure is post-persist and
+      // must be logged, not surfaced (which SaveItems would map to a conflict).
+      expect(result.isFailed()).toBeFalsy()
+      expect(logger.error).toHaveBeenCalled()
     })
 
-    it('should return error if it fails to create notification payload for user', async () => {
+    it('does not fail the committed save if creating the notification payload fails (post-persist)', async () => {
       determineSharedVaultOperationOnItem.execute = jest.fn().mockReturnValue(
         Result.ok(
           SharedVaultOperationOnItem.create({
@@ -585,12 +633,13 @@ describe('UpdateExistingItem', () => {
         performingUserUuid: '00000000-0000-0000-0000-000000000000',
         isFreeUser: false,
       })
-      expect(result.isFailed()).toBeTruthy()
+      expect(result.isFailed()).toBeFalsy()
+      expect(logger.error).toHaveBeenCalled()
 
       mock.mockRestore()
     })
 
-    it('should return error if it fails to remove notifications for user', async () => {
+    it('does not fail the committed save if removing notifications for user fails (post-persist)', async () => {
       const useCase = createUseCase()
 
       removeNotificationsForUser.execute = jest.fn().mockReturnValue(Result.fail('Oops'))
@@ -607,7 +656,8 @@ describe('UpdateExistingItem', () => {
         performingUserUuid: '00000000-0000-0000-0000-000000000000',
         isFreeUser: false,
       })
-      expect(result.isFailed()).toBeTruthy()
+      expect(result.isFailed()).toBeFalsy()
+      expect(logger.error).toHaveBeenCalled()
     })
   })
 

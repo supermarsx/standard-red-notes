@@ -76,7 +76,13 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
 
     let cursorToken = undefined
     const thereAreStillMoreItemsToFetch = await this.stillMoreItemsToFetch(itemQuery, upperBoundLimit)
-    if (transferLimitBreachedBeforeEndOfItems || thereAreStillMoreItemsToFetch) {
+    // Standard Red Notes: only derive a cursor from the last fetched item when we
+    // actually fetched something. The more-items flag can be set while `items` is
+    // empty (e.g. descriptor rows hard-deleted between the transfer-limit
+    // computation and findAll), and dereferencing items[-1] on an empty array
+    // throws `undefined.props`, failing the entire sync. When empty, return
+    // without a bogus cursor; the client re-syncs from its existing token.
+    if ((transferLimitBreachedBeforeEndOfItems || thereAreStillMoreItemsToFetch) && items.length > 0) {
       const lastSyncTime = items[items.length - 1].props.timestamps.updatedAt / Time.MicrosecondsInASecond
       cursorToken = Buffer.from(`${this.SYNC_TOKEN_VERSION}:${lastSyncTime}`, 'utf-8').toString('base64')
     }

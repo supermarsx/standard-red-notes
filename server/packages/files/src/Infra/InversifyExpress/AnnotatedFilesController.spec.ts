@@ -47,6 +47,8 @@ describe('AnnotatedFilesController', () => {
 
     readStream = {} as jest.Mocked<Readable>
     readStream.pipe = jest.fn().mockReturnValue(new Writable())
+    readStream.on = jest.fn().mockReturnThis()
+    readStream.destroy = jest.fn().mockReturnThis()
 
     streamDownloadFile = {} as jest.Mocked<StreamDownloadFile>
     streamDownloadFile.execute = jest.fn().mockReturnValue({ success: true, readStream })
@@ -81,6 +83,9 @@ describe('AnnotatedFilesController', () => {
       },
     ]
     response.writeHead = jest.fn()
+    response.on = jest.fn().mockReturnThis()
+    response.destroy = jest.fn().mockReturnThis()
+    response.end = jest.fn().mockReturnValue(new Writable())
   })
 
   it('should return a writable stream upon file download', async () => {
@@ -93,7 +98,7 @@ describe('AnnotatedFilesController', () => {
     expect(response.writeHead).toHaveBeenCalledWith(206, {
       'Accept-Ranges': 'bytes',
       'Content-Length': 100000,
-      'Content-Range': 'bytes 0-99999/555554',
+      'Content-Range': 'bytes 0-99999/555555',
       'Content-Type': 'application/octet-stream',
     })
 
@@ -110,6 +115,69 @@ describe('AnnotatedFilesController', () => {
     expect(result).toBeInstanceOf(BadRequestErrorMessageResult)
   })
 
+  it('attaches an error handler that destroys the response without throwing on a mid-transfer stream error', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=0-'
+
+    const result = (await createController().download(request, response)) as () => Writable
+
+    // Invoking the returned pipe function must register the 'error' listener.
+    expect(() => result()).not.toThrow()
+    expect(readStream.on).toHaveBeenCalledWith('error', expect.any(Function))
+
+    // Simulate the storage stream erroring mid-transfer.
+    const onCalls = (readStream.on as jest.Mock).mock.calls
+    const errorHandler = onCalls.find((call) => call[0] === 'error')[1]
+    expect(() => errorHandler(new Error('S3 stream blew up'))).not.toThrow()
+
+    expect(logger.error).toHaveBeenCalled()
+    expect(readStream.destroy).toHaveBeenCalled()
+    expect(response.destroy).toHaveBeenCalled()
+  })
+
+  it('destroys the read stream when the client disconnects (response close)', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=0-'
+
+    const result = (await createController().download(request, response)) as () => Writable
+    result()
+
+    const closeCall = (response.on as jest.Mock).mock.calls.find((call) => call[0] === 'close')
+    expect(closeCall).toBeDefined()
+    closeCall[1]()
+    expect(readStream.destroy).toHaveBeenCalled()
+  })
+
+  it('responds 416 with a Content-Range and does not send a 206 for an out-of-bounds range', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    // fileSize is 555_555, so a start beyond the file is unsatisfiable.
+    request.headers['range'] = 'bytes=999999999-'
+
+    const result = (await createController().download(request, response)) as () => Writable
+    // Invoking the returned function ends the (already-headed) 416 response.
+    result()
+
+    expect(response.writeHead).toHaveBeenCalledWith(416, {
+      'Content-Range': 'bytes */555555',
+      'Accept-Ranges': 'bytes',
+      'Content-Type': 'application/octet-stream',
+    })
+    expect(response.end).toHaveBeenCalled()
+    expect(response.writeHead).not.toHaveBeenCalledWith(206, expect.anything())
+    // The storage stream must never be opened for an invalid range.
+    expect(streamDownloadFile.execute).not.toHaveBeenCalled()
+  })
+
+  it('responds 416 for a malformed range header', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'not-a-range'
+
+    await createController().download(request, response)
+
+    expect(response.writeHead).toHaveBeenCalledWith(416, expect.objectContaining({ 'Content-Range': 'bytes */555555' }))
+    expect(streamDownloadFile.execute).not.toHaveBeenCalled()
+  })
+
   it('should return proper byte range on consecutive calls', async () => {
     response.locals.permittedOperation = ValetTokenOperation.Read
 
@@ -122,14 +190,14 @@ describe('AnnotatedFilesController', () => {
     expect(response.writeHead).toHaveBeenNthCalledWith(1, 206, {
       'Accept-Ranges': 'bytes',
       'Content-Length': 100000,
-      'Content-Range': 'bytes 0-99999/555554',
+      'Content-Range': 'bytes 0-99999/555555',
       'Content-Type': 'application/octet-stream',
     })
 
     expect(response.writeHead).toHaveBeenNthCalledWith(2, 206, {
       'Accept-Ranges': 'bytes',
       'Content-Length': 100000,
-      'Content-Range': 'bytes 100000-199999/555554',
+      'Content-Range': 'bytes 100000-199999/555555',
       'Content-Type': 'application/octet-stream',
     })
   })
@@ -145,7 +213,7 @@ describe('AnnotatedFilesController', () => {
     expect(response.writeHead).toHaveBeenCalledWith(206, {
       'Accept-Ranges': 'bytes',
       'Content-Length': 50000,
-      'Content-Range': 'bytes 0-49999/555554',
+      'Content-Range': 'bytes 0-49999/555555',
       'Content-Type': 'application/octet-stream',
     })
 
@@ -163,7 +231,7 @@ describe('AnnotatedFilesController', () => {
     expect(response.writeHead).toHaveBeenCalledWith(206, {
       'Accept-Ranges': 'bytes',
       'Content-Length': 100000,
-      'Content-Range': 'bytes 0-99999/555554',
+      'Content-Range': 'bytes 0-99999/555555',
       'Content-Type': 'application/octet-stream',
     })
 

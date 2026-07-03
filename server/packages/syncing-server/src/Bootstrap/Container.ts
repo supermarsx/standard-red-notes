@@ -662,6 +662,7 @@ export class ContainerConfigLoader {
           container.get(TYPES.Sync_DomainEventPublisher),
           container.get(TYPES.Sync_DomainEventFactory),
           container.get<MetricsStoreInterface>(TYPES.Sync_MetricsStore),
+          container.get<Logger>(TYPES.Sync_Logger),
         ),
       )
     container
@@ -718,6 +719,7 @@ export class ContainerConfigLoader {
           container.get<AddNotificationsForUsers>(TYPES.Sync_AddNotificationsForUsers),
           container.get<RemoveNotificationsForUser>(TYPES.Sync_RemoveNotificationsForUser),
           container.get<MetricsStoreInterface>(TYPES.Sync_MetricsStore),
+          container.get<Logger>(TYPES.Sync_Logger),
         ),
       )
     container

@@ -83,6 +83,13 @@ export class FSFileUploader implements FileUploaderInterface {
     return fullPath
   }
 
+  async abortUploadSession(uploadId: string, _filePath: string): Promise<void> {
+    // Discard the buffered chunks. The FS uploader only writes the destination
+    // file at finish time, so an aborted-before-finish session leaves no partial
+    // object on disk to remove — just free the in-memory buffers.
+    this.inMemoryChunks.delete(uploadId)
+  }
+
   private accumulatedEncryptedFileSize(fileChunks: Map<number, Uint8Array>): number {
     let accumulatedSize = 0
 

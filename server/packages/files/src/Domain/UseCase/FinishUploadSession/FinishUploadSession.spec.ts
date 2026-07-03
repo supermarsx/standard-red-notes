@@ -34,6 +34,7 @@ describe('FinishUploadSession', () => {
 
     fileUploader = {} as jest.Mocked<FileUploaderInterface>
     fileUploader.finishUploadSession = jest.fn().mockReturnValue('ETag123')
+    fileUploader.abortUploadSession = jest.fn().mockResolvedValue(undefined)
 
     uploadRepository = {} as jest.Mocked<UploadRepositoryInterface>
     uploadRepository.retrieveUploadSessionId = jest.fn().mockReturnValue('123')
@@ -161,6 +162,8 @@ describe('FinishUploadSession', () => {
 
     expect(fileUploader.finishUploadSession).not.toHaveBeenCalled()
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+    // The rejected session must abort so uploaded parts are not orphaned.
+    expect(fileUploader.abortUploadSession).toHaveBeenCalledWith('123', '00000000-0000-0000-0000-000000000000/2-3-4')
   })
 
   it('should ignore the storage quota if user has unlimited storage', async () => {
@@ -220,6 +223,7 @@ describe('FinishUploadSession', () => {
     )
     expect(fileUploader.finishUploadSession).not.toHaveBeenCalled()
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+    expect(fileUploader.abortUploadSession).toHaveBeenCalledWith('123', '00000000-0000-0000-0000-000000000000/2-3-4')
   })
 
   it('should treat a per-file cap of 0 as unlimited', async () => {

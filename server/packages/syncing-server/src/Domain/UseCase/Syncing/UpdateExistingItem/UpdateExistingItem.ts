@@ -12,6 +12,7 @@ import {
 } from '@standardnotes/domain-core'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
+import { Logger } from 'winston'
 
 import { Item } from '../../../Item/Item'
 import { UpdateExistingItemDTO } from './UpdateExistingItemDTO'
@@ -39,6 +40,7 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
     private addNotificationForUsers: AddNotificationsForUsers,
     private removeNotificationsForUser: RemoveNotificationsForUser,
     private metricsStore: MetricsStoreInterface,
+    private logger: Logger,
   ) {}
 
   async execute(dto: UpdateExistingItemDTO): Promise<Result<Item>> {
@@ -176,57 +178,79 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
 
     await this.itemRepository.update(dto.existingItem)
 
-    await this.metricsStore.storeMetric(
-      Metric.create({ name: Metric.NAMES.ItemUpdated, timestamp: this.timer.getTimestampInMicroseconds() }).getValue(),
-    )
+    // Standard Red Notes: the item is now durably persisted. Everything below —
+    // metric stores (RedisMetricStore pipeline.exec), revision/duplicate/deletion
+    // event publishes, and notifications — is a best-effort POST-PERSIST side
+    // effect. If any of it throws (a transient Redis/metric/publish blip), that
+    // rejection would otherwise unwind into SaveItems and be misreported as a
+    // ConflictType.UuidConflict, telling the client a COMMITTED save failed and
+    // triggering uuid regeneration / duplicate items. Swallow-and-log instead:
+    // only PRE-persist failures (above) map to conflicts.
+    try {
+      await this.metricsStore.storeMetric(
+        Metric.create({
+          name: Metric.NAMES.ItemUpdated,
+          timestamp: this.timer.getTimestampInMicroseconds(),
+        }).getValue(),
+      )
 
-    await this.metricsStore.storeUserBasedMetric(
-      Metric.create({
-        name: Metric.NAMES.ContentSizeUtilized,
-        timestamp: this.timer.getTimestampInMicroseconds(),
-      }).getValue(),
-      dto.existingItem.props.contentSize,
-      userUuid,
-    )
+      await this.metricsStore.storeUserBasedMetric(
+        Metric.create({
+          name: Metric.NAMES.ContentSizeUtilized,
+          timestamp: this.timer.getTimestampInMicroseconds(),
+        }).getValue(),
+        dto.existingItem.props.contentSize,
+        userUuid,
+      )
 
-    /* istanbul ignore next */
-    const revisionsFrequency = dto.isFreeUser ? this.freeRevisionFrequency : this.premiumRevisionFrequency
+      /* istanbul ignore next */
+      const revisionsFrequency = dto.isFreeUser ? this.freeRevisionFrequency : this.premiumRevisionFrequency
 
-    if (secondsFromLastUpdate >= revisionsFrequency) {
-      if (
-        dto.existingItem.props.contentType.value !== null &&
-        [ContentType.TYPES.Note, ContentType.TYPES.File].includes(dto.existingItem.props.contentType.value)
-      ) {
+      if (secondsFromLastUpdate >= revisionsFrequency) {
+        if (
+          dto.existingItem.props.contentType.value !== null &&
+          [ContentType.TYPES.Note, ContentType.TYPES.File].includes(dto.existingItem.props.contentType.value)
+        ) {
+          await this.domainEventPublisher.publish(
+            this.domainEventFactory.createItemRevisionCreationRequested({
+              itemUuid: dto.existingItem.id.toString(),
+              userUuid: dto.existingItem.props.userUuid.value,
+            }),
+          )
+        }
+      }
+
+      if (wasMarkedAsDuplicate) {
         await this.domainEventPublisher.publish(
-          this.domainEventFactory.createItemRevisionCreationRequested({
+          this.domainEventFactory.createDuplicateItemSyncedEvent({
             itemUuid: dto.existingItem.id.toString(),
             userUuid: dto.existingItem.props.userUuid.value,
           }),
         )
       }
-    }
 
-    if (wasMarkedAsDuplicate) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createDuplicateItemSyncedEvent({
-          itemUuid: dto.existingItem.id.toString(),
-          userUuid: dto.existingItem.props.userUuid.value,
-        }),
+      if (wasMarkedAsDeleted) {
+        await this.domainEventPublisher.publish(
+          this.domainEventFactory.createItemDeletedEvent({
+            itemUuid: dto.existingItem.id.toString(),
+            userUuid: dto.existingItem.props.userUuid.value,
+          }),
+        )
+      }
+
+      const notificationsResult = await this.addNotificationsAndPublishEvents(userUuid, sharedVaultOperation, dto)
+      if (notificationsResult.isFailed()) {
+        // Post-persist: a notification failure must NOT be reported as a conflict.
+        this.logger.error(
+          `[${userUuid.value}] Post-persist notifications failed for updated item ${dto.existingItem.id.toString()} (item already saved). Error: ${notificationsResult.getError()}`,
+        )
+      }
+    } catch (error) {
+      this.logger.error(
+        `[${userUuid.value}] Post-persist side effects threw for updated item ${dto.existingItem.id.toString()} (item already saved). Error: ${
+          (error as Error).message
+        }`,
       )
-    }
-
-    if (wasMarkedAsDeleted) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createItemDeletedEvent({
-          itemUuid: dto.existingItem.id.toString(),
-          userUuid: dto.existingItem.props.userUuid.value,
-        }),
-      )
-    }
-
-    const notificationsResult = await this.addNotificationsAndPublishEvents(userUuid, sharedVaultOperation, dto)
-    if (notificationsResult.isFailed()) {
-      return Result.fail(notificationsResult.getError())
     }
 
     return Result.ok(dto.existingItem)

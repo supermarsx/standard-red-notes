@@ -9,6 +9,7 @@ import { Item } from '../../../Item/Item'
 import { SharedVaultAssociation } from '../../../SharedVault/SharedVaultAssociation'
 import { KeySystemAssociation } from '../../../KeySystem/KeySystemAssociation'
 import { MetricsStoreInterface } from '../../../Metrics/MetricsStoreInterface'
+import { Logger } from 'winston'
 
 describe('SaveNewItem', () => {
   let itemRepository: ItemRepositoryInterface
@@ -18,9 +19,10 @@ describe('SaveNewItem', () => {
   let itemHash1: ItemHash
   let item1: Item
   let metricsStore: MetricsStoreInterface
+  let logger: Logger
 
   const createUseCase = () =>
-    new SaveNewItem(itemRepository, timer, domainEventPublisher, domainEventFactory, metricsStore)
+    new SaveNewItem(itemRepository, timer, domainEventPublisher, domainEventFactory, metricsStore, logger)
 
   beforeEach(() => {
     const timeHelper = new Timer()
@@ -28,6 +30,10 @@ describe('SaveNewItem', () => {
     metricsStore = {} as jest.Mocked<MetricsStoreInterface>
     metricsStore.storeMetric = jest.fn()
     metricsStore.storeUserBasedMetric = jest.fn()
+
+    logger = {} as jest.Mocked<Logger>
+    logger.error = jest.fn()
+    logger.debug = jest.fn()
 
     item1 = Item.create(
       {
@@ -98,6 +104,40 @@ describe('SaveNewItem', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(itemRepository.insert).toHaveBeenCalled()
+  })
+
+  it('still returns the SAVED item (not a failure) when a POST-persist metric store throws', async () => {
+    // The insert has already committed; a transient metric-store throw must not
+    // be surfaced as a failure (which SaveItems would map to a UuidConflict).
+    metricsStore.storeUserBasedMetric = jest.fn().mockRejectedValue(new Error('redis pipeline blip'))
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      sessionUuid: '00000000-0000-0000-0000-000000000001',
+      itemHash: itemHash1,
+    })
+
+    expect(itemRepository.insert).toHaveBeenCalled()
+    expect(result.isFailed()).toBeFalsy()
+    expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('still returns the SAVED item (not a failure) when a POST-persist event publish throws', async () => {
+    domainEventPublisher.publish = jest.fn().mockRejectedValue(new Error('publish blip'))
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      sessionUuid: '00000000-0000-0000-0000-000000000001',
+      itemHash: itemHash1,
+    })
+
+    expect(itemRepository.insert).toHaveBeenCalled()
+    expect(result.isFailed()).toBeFalsy()
+    expect(logger.error).toHaveBeenCalled()
   })
 
   it('saves a new empty item', async () => {

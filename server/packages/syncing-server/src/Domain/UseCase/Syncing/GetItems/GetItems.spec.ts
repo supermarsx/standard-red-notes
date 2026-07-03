@@ -99,6 +99,34 @@ describe('GetItems', () => {
     })
   })
 
+  it('does not dereference an empty result set when the more-items flag is set', async () => {
+    // Reachable when descriptor rows are hard-deleted between the transfer-limit
+    // computation and findAll: uuids resolve to nothing, yet countAll still
+    // reports more items. The old code did items[items.length - 1].props and
+    // threw, failing the whole sync. Now it must return no cursor and not throw.
+    itemTransferCalculator.computeItemUuidsToFetch = jest
+      .fn()
+      .mockResolvedValue({ uuids: [], transferLimitBreachedBeforeEndOfItems: true })
+    itemRepository.findAll = jest.fn().mockResolvedValue([])
+    itemRepository.countAll = jest.fn().mockResolvedValue(101)
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      cursorToken: undefined,
+      contentType: undefined,
+      limit: undefined,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue()).toEqual({
+      items: [],
+      cursorToken: undefined,
+      lastSyncTime: null,
+    })
+  })
+
   it('should return items based on the cursort token passed', async () => {
     const useCase = createUseCase()
 

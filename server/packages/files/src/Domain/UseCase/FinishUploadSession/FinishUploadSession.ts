@@ -55,6 +55,10 @@ export class FinishUploadSession implements UseCaseInterface<void> {
 
       // Absolute per-file cap enforced regardless of subscription/unlimited status.
       if (this.maxAttachmentByteSize > 0 && totalFileSize > this.maxAttachmentByteSize) {
+        // Rejecting the session: abort so the already-uploaded parts are not left
+        // orphaned in storage (S3 bills for incomplete multipart uploads).
+        await this.safelyAbortUploadSession(uploadId, filePath)
+
         return Result.fail(
           `Could not finish upload session. The file exceeds the maximum allowed size of ` +
             `${this.maxAttachmentByteSize} bytes.`,
@@ -64,6 +68,8 @@ export class FinishUploadSession implements UseCaseInterface<void> {
       const userHasUnlimitedStorage = dto.uploadBytesLimit === -1
       const remainingSpaceLeft = dto.uploadBytesLimit - dto.uploadBytesUsed
       if (!userHasUnlimitedStorage && remainingSpaceLeft < totalFileSize) {
+        await this.safelyAbortUploadSession(uploadId, filePath)
+
         return Result.fail('Could not finish upload session. You are out of space.')
       }
 
@@ -95,6 +101,16 @@ export class FinishUploadSession implements UseCaseInterface<void> {
       return Result.ok()
     } catch (_error) {
       return Result.fail('Could not finish upload session')
+    }
+  }
+
+  // Best-effort abort of a rejected upload session. Never throws: a failed abort
+  // must not mask the original rejection reason surfaced to the client.
+  private async safelyAbortUploadSession(uploadId: string, filePath: string): Promise<void> {
+    try {
+      await this.fileUploader.abortUploadSession(uploadId, filePath)
+    } catch (_error) {
+      // swallow: orphaned parts are undesirable but not worth failing the response over
     }
   }
 }

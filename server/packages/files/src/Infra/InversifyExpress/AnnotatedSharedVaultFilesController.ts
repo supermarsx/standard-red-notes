@@ -201,18 +201,25 @@ export class AnnotatedSharedVaultFilesController extends BaseHttpController {
     const fileSize = fileMetadataOrError.getValue()
     const endRangeOfFile = fileSize - 1
 
-    const startRange = Number(range.replace(/\D/g, ''))
-    const endRange = Math.min(startRange + chunkSize - 1, endRangeOfFile)
+    // Parse "bytes=start-end" properly. The previous Number(range.replace(/\D/g, ''))
+    // stripped ALL non-digits, so bytes=100-200 collapsed to 100200 and any bound
+    // check was skipped. Validate 0 <= start <= end < fileSize and respond 416 on
+    // an unsatisfiable range BEFORE any 206 header is written.
+    const parsedRange = parseByteRange(range, fileSize, chunkSize)
+    if (parsedRange === null) {
+      response.writeHead(416, {
+        'Content-Range': `bytes */${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Type': 'application/octet-stream',
+      })
 
-    const headers = {
-      'Content-Range': `bytes ${startRange}-${endRange}/${endRangeOfFile}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': endRange - startRange + 1,
-      'Content-Type': 'application/octet-stream',
+      return () => response.end() as unknown as Writable
     }
+    const { startRange, endRange } = parsedRange
 
-    response.writeHead(206, headers)
-
+    // Open/validate the storage read stream BEFORE writing the 206 headers.
+    // Previously writeHead(206) was sent first, so a subsequent this.badRequest
+    // threw ERR_HTTP_HEADERS_SENT (headers already flushed).
     const result = await this.streamDownloadFile.execute({
       ownerUuid: locals.valetTokenData.sharedVaultUuid,
       resourceRemoteIdentifier: locals.valetTokenData.remoteIdentifier,
@@ -226,6 +233,69 @@ export class AnnotatedSharedVaultFilesController extends BaseHttpController {
       return this.badRequest(result.message)
     }
 
-    return () => result.readStream.pipe(response)
+    // Content-Range total is the FULL file size, not the last byte index.
+    const headers = {
+      'Content-Range': `bytes ${startRange}-${endRange}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': endRange - startRange + 1,
+      'Content-Type': 'application/octet-stream',
+    }
+
+    response.writeHead(206, headers)
+
+    const readStream = result.readStream
+
+    return () => {
+      // A mid-transfer S3/FS read error emits 'error' on the source; without a
+      // listener that is an unhandled exception that crashes the process. Log it
+      // and tear both streams down. Also destroy the read stream if the client
+      // disconnects, so we do not leak storage sockets.
+      readStream.on('error', (error: Error) => {
+        this.logger.error(`Error while streaming file download: ${error.message}`)
+        readStream.destroy()
+        response.destroy(error)
+      })
+      response.on('close', () => {
+        readStream.destroy()
+      })
+
+      return readStream.pipe(response)
+    }
   }
+}
+
+// Parses an HTTP Range header of the form "bytes=start-end" (end optional) and
+// clamps the served window to `chunkSize` and the file bounds. Returns null when
+// the range is malformed or unsatisfiable (start out of [0, fileSize)), which the
+// caller maps to a 416 response.
+function parseByteRange(
+  rangeHeader: string | string[],
+  fileSize: number,
+  chunkSize: number,
+): { startRange: number; endRange: number } | null {
+  const value = Array.isArray(rangeHeader) ? rangeHeader[0] : rangeHeader
+  const match = /^bytes=(\d+)-(\d*)$/.exec(value)
+  if (!match) {
+    return null
+  }
+
+  const startRange = Number(match[1])
+  const explicitEnd = match[2] === '' ? undefined : Number(match[2])
+
+  if (!Number.isFinite(startRange) || startRange < 0 || startRange >= fileSize) {
+    return null
+  }
+
+  const endRangeOfFile = fileSize - 1
+  let endRange = startRange + chunkSize - 1
+  if (explicitEnd !== undefined) {
+    endRange = Math.min(endRange, explicitEnd)
+  }
+  endRange = Math.min(endRange, endRangeOfFile)
+
+  if (endRange < startRange) {
+    return null
+  }
+
+  return { startRange, endRange }
 }
