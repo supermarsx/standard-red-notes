@@ -25,10 +25,21 @@ export class CreateEncryptedBackupFile implements UseCaseInterface<BackupFile> {
      * encrypting them into the backup. Without this, a backup created while lazy-decrypt is on
      * would contain body-less notes. Pass-through when the flag is off.
      */
-    const payloads = await rehydrateLiteBackupPayloads(
+    const { payloads, excludedUuids } = await rehydrateLiteBackupPayloads(
       this.items.items.map((item) => item.payload),
       this.sync,
     )
+
+    if (excludedUuids.length > 0) {
+      /**
+       * These lite notes could not be re-hydrated and were omitted rather than written body-less.
+       * The UI (ArchiveManager / DataBackups pane / desktop auto-backup notifier) should surface
+       * this count to the user; at minimum record it so the omission is not fully silent.
+       */
+      console.warn(
+        `CreateEncryptedBackupFile: omitted ${excludedUuids.length} note(s) whose content could not be re-hydrated locally.`,
+      )
+    }
 
     const split = SplitPayloadsByEncryptionType(payloads)
 

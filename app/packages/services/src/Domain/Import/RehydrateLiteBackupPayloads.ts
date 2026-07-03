@@ -14,17 +14,33 @@ import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
  * EXCLUDED from the backup rather than written body-less: a missing item is recoverable from the
  * server/on-disk ciphertext, a truncated one masquerading as complete is not.
  *
- * With the flag off, no payload is lite and this is a pass-through (returns the same array).
+ * With the flag off, no payload is lite and this is a pass-through (the returned `payloads` is the
+ * same array reference and `excludedUuids` is empty).
  */
+export interface RehydratedBackupPayloads<T extends FullyFormedPayloadInterface> {
+  payloads: (T | DecryptedPayloadInterface)[]
+  /**
+   * UUIDs of lite notes that could NOT be re-hydrated and were therefore EXCLUDED from the backup
+   * (rather than written body-less). Empty when the flag is off or when every lite note re-hydrated.
+   *
+   * The exclusion is otherwise silent, so callers should SURFACE this to the user. The web backup
+   * paths (CreateEncryptedBackupFile / CreateDecryptedBackupFile) flow up to the ArchiveManager /
+   * DataBackups preferences pane and the desktop auto-backup notifier — those UI consumers should
+   * warn e.g. "N note(s) could not be included because their content isn't available locally."
+   */
+  excludedUuids: string[]
+}
+
 export async function rehydrateLiteBackupPayloads<T extends FullyFormedPayloadInterface>(
   payloads: T[],
   sync: Pick<SyncServiceInterface, 'getFullContentPayload'>,
-): Promise<(T | DecryptedPayloadInterface)[]> {
+): Promise<RehydratedBackupPayloads<T>> {
   if (!payloads.some((payload) => isLitePayload(payload))) {
-    return payloads
+    return { payloads, excludedUuids: [] }
   }
 
   const result: (T | DecryptedPayloadInterface)[] = []
+  const excludedUuids: string[] = []
 
   for (const payload of payloads) {
     if (!isLitePayload(payload)) {
@@ -34,6 +50,7 @@ export async function rehydrateLiteBackupPayloads<T extends FullyFormedPayloadIn
 
     const full = await sync.getFullContentPayload(payload.uuid)
     if (!full || isLitePayload(full)) {
+      excludedUuids.push(payload.uuid)
       console.error(
         `rehydrateLiteBackupPayloads: excluding note ${payload.uuid} from backup — could not re-hydrate full ` +
           'content; refusing to write a body-less payload into a backup',
@@ -44,5 +61,5 @@ export async function rehydrateLiteBackupPayloads<T extends FullyFormedPayloadIn
     result.push(full)
   }
 
-  return result
+  return { payloads: result, excludedUuids }
 }

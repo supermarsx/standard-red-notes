@@ -2,9 +2,11 @@ import { ContentType } from '@standardnotes/domain-core'
 import { FillItemContent, ItemContent } from '../../Abstract/Content/ItemContent'
 import { ConflictStrategy } from '../../Abstract/Item'
 import {
+  createLitePayloadFromDecrypted,
   DecryptedPayload,
   EncryptedPayload,
   FullyFormedPayloadInterface,
+  isLitePayload,
   PayloadTimestampDefaults,
 } from '../../Abstract/Payload'
 import { ItemsKeyContent } from '../../Syncable/ItemsKey/ItemsKeyInterface'
@@ -12,6 +14,9 @@ import { ImmutablePayloadCollection } from '../Collection/Payload/ImmutablePaylo
 import { PayloadCollection } from '../Collection/Payload/PayloadCollection'
 import { HistoryMap } from '../History'
 import { ConflictDelta } from './Conflict'
+import { UuidGenerator } from '@standardnotes/utils'
+
+UuidGenerator.SetGenerator(() => String(Math.random()))
 
 describe('conflict delta', () => {
   const historyMap = {} as HistoryMap
@@ -156,6 +161,65 @@ describe('conflict delta', () => {
 
     // No existing conflict equals the incoming content => not KeepBase-by-dedupe.
     expect(delta.getConflictStrategy()).not.toBe(ConflictStrategy.KeepBase)
+  })
+
+  const createDecryptedNoteWithText = (uuid: string, title: string, text: string, timestamp = 0) => {
+    return new DecryptedPayload({
+      uuid: uuid,
+      content_type: ContentType.TYPES.Note,
+      content: FillItemContent({ title, text } as Partial<ItemContent>),
+      ...PayloadTimestampDefaults(),
+      updated_at_timestamp: timestamp,
+    })
+  }
+
+  describe('LAZY-DECRYPT data-loss guard at the conflict seam', () => {
+    it('finalizes a lite base from the server full payload instead of running the conflict strategy', () => {
+      const baseUuid = 'lite-note'
+      const fullBase = createDecryptedNoteWithText(baseUuid, 'title', 'local body')
+      const liteBase = createLitePayloadFromDecrypted(fullBase)
+      expect(isLitePayload(liteBase)).toBe(true)
+
+      const baseCollection = createBaseCollection(liteBase)
+      const applyPayload = createDecryptedNoteWithText(baseUuid, 'title', 'server body', 5)
+
+      const delta = new ConflictDelta(baseCollection, liteBase, applyPayload, historyMap)
+      const strategySpy = jest.spyOn(delta, 'getConflictStrategy')
+
+      const result = delta.result()
+
+      // The conflict strategy is short-circuited for a lite base.
+      expect(strategySpy).not.toHaveBeenCalled()
+
+      // Exactly one emit: the server's full payload, finalized (clean, not a duplicate).
+      expect(result.emits).toHaveLength(1)
+      const emit = result.emits[0]
+      expect(emit.uuid).toEqual(baseUuid)
+      expect(isLitePayload(emit)).toBe(false)
+      expect(emit.dirty).toBe(false)
+      expect((emit.content as { text?: string }).text).toEqual('server body')
+
+      // No phantom body-less duplicate / conflicted-copy is produced.
+      expect((emit.content as { conflict_of?: string }).conflict_of).toBeUndefined()
+      expect((emit as { duplicate_of?: string }).duplicate_of).toBeUndefined()
+    })
+
+    it('leaves a normal (non-lite) base on the ordinary conflict-strategy path', () => {
+      const baseUuid = 'normal-note'
+      const basePayload = createDecryptedNoteWithText(baseUuid, 'title', 'local body')
+      expect(isLitePayload(basePayload)).toBe(false)
+
+      const baseCollection = createBaseCollection(basePayload)
+      const applyPayload = createDecryptedNoteWithText(baseUuid, 'title', 'server body', 5)
+
+      const delta = new ConflictDelta(baseCollection, basePayload, applyPayload, historyMap)
+      const strategySpy = jest.spyOn(delta, 'getConflictStrategy')
+
+      delta.result()
+
+      // A non-lite base is unaffected by the guard: the strategy is consulted as before.
+      expect(strategySpy).toHaveBeenCalled()
+    })
   })
 
   it('if keep base strategy, always use the apply payloads updated_at_timestamp', () => {

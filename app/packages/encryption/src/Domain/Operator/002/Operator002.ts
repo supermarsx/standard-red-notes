@@ -234,7 +234,11 @@ export class SNProtocolOperator002 extends SNProtocolOperator001 {
       itemKeyComponents.authKey as string,
     )
     if (!itemKey) {
-      console.error('Error decrypting item_key parameters', encrypted)
+      /**
+       * CRYPTO-2 (log hygiene): never log the full encrypted payload (IV, ciphertext, auth hash,
+       * enc_item_key, embedded key_params/salt). Log only the item uuid, mirroring the 004 wrapper.
+       */
+      console.error('Error decrypting item_key parameters', { uuid: encrypted.uuid })
       return {
         uuid: encrypted.uuid,
         errorDecrypting: true,

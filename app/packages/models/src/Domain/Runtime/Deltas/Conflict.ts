@@ -12,9 +12,11 @@ import {
   isErrorDecryptingPayload,
   isDeletedPayload,
 } from '../../Abstract/Payload/Interfaces/TypeCheck'
+import { isLitePayload } from '../../Abstract/Payload/Lite/LitePayload'
 import { SyncResolvedPayload } from './Utilities/SyncResolvedPayload'
 import { ItemsKeyDelta } from './ItemsKeyDelta'
 import { SourcelessSyncDeltaEmit } from './Abstract/DeltaEmit'
+import { payloadByFinalizingSyncState } from './Utilities/ApplyDirtyState'
 import { getIncrementedDirtyIndex } from '../DirtyCounter/DirtyCounter'
 
 export class ConflictDelta {
@@ -30,6 +32,23 @@ export class ConflictDelta {
       const keyDelta = new ItemsKeyDelta(this.baseCollection, [this.applyPayload])
 
       return keyDelta.result()
+    }
+
+    /**
+     * LAZY-DECRYPT DATA-LOSS GUARD (defense-in-depth): a content-stripped ("lite") base payload is a
+     * body-less in-memory projection of the real on-disk item and is NEVER locally dirty, so there is
+     * no genuine local edit to conflict-resolve. Running the normal conflict strategy could route the
+     * lite base through PayloadsByDuplicating and emit a dirty, body-less duplicate still carrying the
+     * lite marker (a phantom empty conflicted-copy that the downstream sync tripwire would reject).
+     * Instead, finalize directly from the server's full payload — the authoritative complete copy of
+     * this uuid — discarding the lite projection. Not reachable today (lite payloads are dirty:false
+     * and never enter the `conflicted` set), but this is the one otherwise-unguarded conflict seam.
+     */
+    if (isLitePayload(this.basePayload)) {
+      return {
+        emits: [payloadByFinalizingSyncState(this.applyPayload, this.baseCollection)],
+        ignored: [],
+      }
     }
 
     const strategy = this.getConflictStrategy()

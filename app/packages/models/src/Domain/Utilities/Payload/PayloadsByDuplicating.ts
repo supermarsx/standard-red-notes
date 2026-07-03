@@ -4,6 +4,7 @@ import { ImmutablePayloadCollection } from '../../Runtime/Collection/Payload/Imm
 import { ItemContent } from '../../Abstract/Content/ItemContent'
 import { PayloadsByUpdatingReferencingPayloadReferences } from './PayloadsByUpdatingReferencingPayloadReferences'
 import { isDecryptedPayload } from '../../Abstract/Payload/Interfaces/TypeCheck'
+import { isLitePayload } from '../../Abstract/Payload/Lite/LitePayload'
 import { FullyFormedPayloadInterface } from '../../Abstract/Payload/Interfaces/UnionTypes'
 import { SyncResolvedPayload } from '../../Runtime/Deltas/Utilities/SyncResolvedPayload'
 import { getIncrementedDirtyIndex } from '../../Runtime/DirtyCounter/DirtyCounter'
@@ -20,6 +21,18 @@ export function PayloadsByDuplicating<C extends ItemContent = ItemContent>(dto: 
   source?: PayloadSource
 }): SyncResolvedPayload[] {
   const { payload, baseCollection, isConflict, additionalContent, source } = dto
+
+  /**
+   * LAZY-DECRYPT DATA-LOSS GUARD (defense-in-depth): never duplicate a content-stripped ("lite")
+   * note. Its body was dropped in memory, so a copy would be a dirty, body-less payload still
+   * carrying the lite marker — a phantom empty conflicted-copy that trips the sync tripwire.
+   * Refuse: emit NO duplicate rather than an empty one. Callers no longer reach here with a lite
+   * base once the ConflictDelta seam finalizes lite bases from the server payload; this is
+   * belt-and-suspenders for any future caller.
+   */
+  if (isLitePayload(payload)) {
+    return []
+  }
 
   const results: SyncResolvedPayload[] = []
 

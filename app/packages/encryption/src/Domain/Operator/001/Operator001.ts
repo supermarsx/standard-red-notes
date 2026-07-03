@@ -175,7 +175,11 @@ export class SNProtocolOperator001 implements OperatorInterface, AsyncOperatorIn
 
     const itemKey = await this.decryptString(itemKeyComponents.ciphertext, itemKeyComponents.key)
     if (!itemKey) {
-      console.error('Error decrypting parameters', encrypted)
+      /**
+       * CRYPTO-2 (log hygiene): never log the full encrypted payload (IV/nonce, ciphertext,
+       * enc_item_key, embedded key_params/salt). Log only the item uuid, mirroring the 004 wrapper.
+       */
+      console.error('Error decrypting parameters', { uuid: encrypted.uuid })
       return {
         uuid: encrypted.uuid,
         errorDecrypting: true,

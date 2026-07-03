@@ -2,8 +2,10 @@ import { WebApplication } from '@/Application/WebApplication'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
 import { FileItem, NoteType, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
+import { addToast, ToastType } from '@standardnotes/toast'
+import { c } from 'ttag'
 import { getBase64FromBlob } from './Utils'
-import { getFullNoteText } from './Items/rehydrateLazyDecryptedNote'
+import { getFullNoteText, isLiteNote } from './Items/rehydrateLazyDecryptedNote'
 
 const headlessSuperConverter = new HeadlessSuperConverter()
 
@@ -46,10 +48,18 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
   }
 
   const data: { name: string; content: Blob }[] = []
+  let unavailableCount = 0
   for (const note of notes) {
     // LAZY-DECRYPT: notes may be body-less "lite" projections on cold-load; pull
     // the full body on demand from IndexedDB (no-op / unchanged with the flag off).
     const text = await getFullNoteText(application.sync, note)
+    // If a lite note's on-disk body can't be re-hydrated it falls back to an empty body,
+    // which would otherwise be written as a silent zero-byte .md file. Count it so the user
+    // is warned rather than getting truncated notes with no signal. (An intentionally empty
+    // note also yields '', so this may slightly over-count; the toast is phrased accordingly.)
+    if (text.length === 0 && isLiteNote(note)) {
+      unavailableCount++
+    }
     const markdown = await noteToMarkdown(application, { noteType: note.noteType, text, uuid: note.uuid })
     const title = sanitizeFileName(note.title || 'Untitled')
     data.push({
@@ -65,5 +75,13 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
     blob,
     `Standard Red Notes Markdown Export - ${application.archiveService.formattedDateForExports()}.zip`,
   )
+
+  if (unavailableCount > 0) {
+    addToast({
+      type: ToastType.Error,
+      message: c('Warning').t`${unavailableCount} note(s) may not have been fully exported because their content isn't available locally.`,
+    })
+  }
+
   return notes.length
 }
