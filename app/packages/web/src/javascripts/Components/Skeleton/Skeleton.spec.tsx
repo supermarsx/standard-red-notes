@@ -54,6 +54,19 @@ describe('Skeleton primitives', () => {
     expect(line.className).toContain('animate-pulse')
   })
 
+  it('every primitive root carries animate-pulse (the class the reduced-motion allowlist keeps looping)', () => {
+    // A frozen skeleton reads as broken; the _animation.scss allowlist exempts
+    // `animate-pulse` from the reduced-motion clamp and re-asserts it as an
+    // infinite loop. This is the DOM half of that contract.
+    ;[SkeletonLine, SkeletonBlock, SkeletonCircle].forEach((Primitive) => {
+      act(() => {
+        root.render(createElement(Primitive))
+      })
+      const el = container.firstElementChild as HTMLElement
+      expect(el.className).toContain('animate-pulse')
+    })
+  })
+
   it('applies width/height/size via inline style', () => {
     act(() => {
       root.render(createElement(SkeletonCircle, { size: '3rem' }))
