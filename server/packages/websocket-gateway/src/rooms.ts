@@ -136,6 +136,15 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /**
+   * True iff `conn` is currently a member of `room`. O(1); used to gate the
+   * yjs/awareness SEND path so a connection can only inject frames into a room
+   * it actually joined (and was therefore authorized into).
+   */
+  isMember(room: string, conn: Conn<S>): boolean {
+    return this.byRoom.get(room)?.has(conn) ?? false
+  }
+
+  /**
    * Number of rooms currently held. Should return to 0 once every member has
    * left — a lingering empty room would be a memory leak.
    */
@@ -192,11 +201,14 @@ export type RoomJoinAuthorizer = (
  *
  * AUTHORIZATION: `room-join` is gated on `authorize(userUuid, room)` so an
  * authenticated socket cannot join (and therefore cannot receive OR inject
- * yjs/awareness frames for) an arbitrary note it has no membership in. Because
- * yjs/awareness frames only ever broadcast to `members(room)` — and you only
- * become a member via an authorized join — gating the join is sufficient to stop
- * both the metadata leak and the junk-injection vector. The authorizer FAILS
- * CLOSED: a thrown/rejected check rejects the join.
+ * yjs/awareness frames for) an arbitrary note it has no membership in. The
+ * authorizer FAILS CLOSED: a thrown/rejected check rejects the join.
+ *
+ * The yjs/awareness SEND path is independently gated on `rooms.isMember(...)`:
+ * a frame is dropped unless its sender is a current member of the room. This
+ * closes the case where a connection is no longer authorized (e.g. removed from
+ * the shared vault) but still holds the note uuid + room key — it can no longer
+ * inject edits or fake presence, because it is not a member.
  */
 export async function handleRelayFrame<S extends SendableSocket>(
   rooms: RoomRegistry<S>,
@@ -235,6 +247,14 @@ export async function handleRelayFrame<S extends SendableSocket>(
       return 0
     case 'yjs':
     case 'awareness':
+      // Fail closed on the SEND path too: only a current member of the room may
+      // inject edit/awareness frames. Membership is only ever granted through an
+      // authorized room-join, so a collaborator removed from the vault (whose
+      // join would now DENY) cannot keep pushing edits or faking presence even
+      // if it still knows the note uuid and holds the room key.
+      if (!rooms.isMember(frame.room, conn)) {
+        return 0
+      }
       return rooms.broadcast(frame.room, JSON.stringify(frame), conn)
   }
 }

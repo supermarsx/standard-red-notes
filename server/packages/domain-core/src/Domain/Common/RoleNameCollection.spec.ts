@@ -102,6 +102,22 @@ describe('RoleNameCollection', () => {
     ).toBeTruthy()
   })
 
+  it('should be reflexive for a VaultsUser-only collection', () => {
+    const roleNames = RoleNameCollection.create([RoleName.NAMES.VaultsUser]).getValue()
+
+    // A [VAULTS_USER] collection has a role with power >= VaultsUser (reflexive).
+    expect(
+      roleNames.hasARoleNameWithMoreOrEqualPowerTo(RoleName.create(RoleName.NAMES.VaultsUser).getValue()),
+    ).toBeTruthy()
+    // ...and still covers CoreUser, but not the paid roles.
+    expect(
+      roleNames.hasARoleNameWithMoreOrEqualPowerTo(RoleName.create(RoleName.NAMES.CoreUser).getValue()),
+    ).toBeTruthy()
+    expect(
+      roleNames.hasARoleNameWithMoreOrEqualPowerTo(RoleName.create(RoleName.NAMES.PlusUser).getValue()),
+    ).toBeFalsy()
+  })
+
   it('should fail to create a collection if a role name is invalid', () => {
     const valueOrError = RoleNameCollection.create(['invalid-role-name'])
 

@@ -42,4 +42,29 @@ describe('RoleName', () => {
     expect(coreUser.hasMoreOrEqualPowerTo(plusUserRole)).toBeFalsy()
     expect(coreUser.hasMoreOrEqualPowerTo(coreUser)).toBeTruthy()
   })
+
+  it('should be reflexive for VaultsUser (has power >= itself)', () => {
+    const vaultsUser = RoleName.create(RoleName.NAMES.VaultsUser).getValue()
+    const coreUser = RoleName.create(RoleName.NAMES.CoreUser).getValue()
+    const plusUserRole = RoleName.create(RoleName.NAMES.PlusUser).getValue()
+    const proUserRole = RoleName.create(RoleName.NAMES.ProUser).getValue()
+    const internalTeamUser = RoleName.create(RoleName.NAMES.InternalTeamUser).getValue()
+
+    // Reflexivity: a VaultsUser must have power >= a VaultsUser.
+    expect(vaultsUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeTruthy()
+
+    // Existing sibling relation to CoreUser is preserved.
+    expect(vaultsUser.hasMoreOrEqualPowerTo(coreUser)).toBeTruthy()
+
+    // VaultsUser does not outrank the paid/internal roles.
+    expect(vaultsUser.hasMoreOrEqualPowerTo(plusUserRole)).toBeFalsy()
+    expect(vaultsUser.hasMoreOrEqualPowerTo(proUserRole)).toBeFalsy()
+    expect(vaultsUser.hasMoreOrEqualPowerTo(internalTeamUser)).toBeFalsy()
+
+    // CoreUser remains a sibling: it does not gain power over VaultsUser.
+    expect(coreUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeFalsy()
+    // Higher roles still outrank VaultsUser via their CoreUser-inclusive arms
+    // (Pro/Plus include CoreUser but not VaultsUser); InternalTeamUser outranks all.
+    expect(internalTeamUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeTruthy()
+  })
 })

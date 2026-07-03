@@ -143,3 +143,44 @@ describe('handleRelayFrame room-join authorization', () => {
     expect(b.sent).toContain(JSON.stringify({ t: 'yjs', room: 'n1', payload: 'AQID' }))
   })
 })
+
+describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
+  it('drops a non-member connection\'s yjs frame (no broadcast), but delivers a member\'s', async () => {
+    const rooms = new RoomRegistry()
+    const member = fakeConn('member')
+    const outsider = fakeConn('outsider')
+
+    // `member` joins the room; `outsider` never joins (or was removed).
+    await handleRelayFrame(rooms, member, { t: 'room-join', room: 'n1' })
+
+    // The outsider knows the note uuid + room key and tries to inject an edit
+    // WITHOUT being a member. It must be dropped and never reach the member.
+    const outsiderReach = await handleRelayFrame(rooms, outsider, { t: 'yjs', room: 'n1', payload: 'AQID' })
+    expect(outsiderReach).toBe(0)
+    expect(member.sent.some((m) => m.includes('AQID'))).toBe(false)
+
+    // A genuine member's frame IS broadcast to the other member.
+    const other = fakeConn('other')
+    await handleRelayFrame(rooms, other, { t: 'room-join', room: 'n1' })
+    const memberReach = await handleRelayFrame(rooms, member, { t: 'yjs', room: 'n1', payload: 'BQYH' })
+    expect(memberReach).toBe(1)
+    expect(other.sent).toContain(JSON.stringify({ t: 'yjs', room: 'n1', payload: 'BQYH' }))
+  })
+
+  it('drops a non-member connection\'s awareness frame (fake presence)', async () => {
+    const rooms = new RoomRegistry()
+    const member = fakeConn('member')
+    const removed = fakeConn('removed')
+
+    await handleRelayFrame(rooms, member, { t: 'room-join', room: 'n1' })
+
+    // `removed` was in the room but left (membership revoked); its subsequent
+    // awareness frame must not be relayed as presence.
+    await handleRelayFrame(rooms, removed, { t: 'room-join', room: 'n1' })
+    await handleRelayFrame(rooms, removed, { t: 'room-leave', room: 'n1' })
+
+    const reach = await handleRelayFrame(rooms, removed, { t: 'awareness', room: 'n1', payload: 'QQ' })
+    expect(reach).toBe(0)
+    expect(member.sent).not.toContain(JSON.stringify({ t: 'awareness', room: 'n1', payload: 'QQ' }))
+  })
+})

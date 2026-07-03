@@ -23,8 +23,12 @@ export class RoleName extends ValueObject<RoleNameProps> {
         return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser].includes(roleName.value)
       case RoleName.NAMES.PlusUser:
         return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser].includes(roleName.value)
-      case RoleName.NAMES.CoreUser:
       case RoleName.NAMES.VaultsUser:
+        // Reflexive: VaultsUser has power >= itself. CoreUser and VaultsUser are
+        // siblings (each only has power >= itself and, historically, VaultsUser
+        // has been treated as >= CoreUser), so include both here.
+        return [RoleName.NAMES.CoreUser, RoleName.NAMES.VaultsUser].includes(roleName.value)
+      case RoleName.NAMES.CoreUser:
         return [RoleName.NAMES.CoreUser].includes(roleName.value)
       /*istanbul ignore next*/
       default:
