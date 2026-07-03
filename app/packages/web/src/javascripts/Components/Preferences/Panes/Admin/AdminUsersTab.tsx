@@ -1,5 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
-import { isErrorResponse } from '@standardnotes/snjs'
+import { HttpResponse, isErrorResponse } from '@standardnotes/snjs'
 import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   AdminUserRow,
@@ -13,6 +13,16 @@ import {
   formatAdminUserSubscription,
 } from './adminHelpers'
 import { describeAdminUsersActiveFilters } from './adminUsersUi'
+import {
+  BulkItemResult,
+  excludeSelfTarget,
+  pageSelectionState,
+  runBulkWithConcurrency,
+  selectedUuidsOnPage,
+  setPageSelection,
+  summarizeBulkOutcome,
+  toggleSelected,
+} from './adminUsersBulk'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -67,6 +77,24 @@ const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
 // The admin (internal team) role name — must match the server's
 // RoleName.NAMES.InternalTeamUser value.
 const INTERNAL_TEAM_USER = 'INTERNAL_TEAM_USER'
+
+// Bulk actions run the per-user admin calls a handful at a time (a bounded
+// worker pool) rather than all-at-once, to avoid hammering the server.
+const BULK_CONCURRENCY = 5
+
+// The boolean per-user feature flags the bulk "Set feature flag" control can
+// toggle. Each maps to the SAME adminSetUserFeatureFlag('true'|'false') call
+// the single-user switches above use, so bulk composes cleanly with them.
+const BULK_FLAG_OPTIONS: { label: string; value: string }[] = [
+  { label: 'AI access', value: AI_ENABLED },
+  { label: 'Collaboration', value: COLLABORATION_ENABLED },
+  { label: 'Live sync', value: LIVE_SYNC_ENABLED },
+  { label: 'Server-side OCR', value: OCR_SERVER_ALLOWED },
+  { label: 'Workflows', value: WORKFLOWS_ENABLED },
+  { label: 'Nextcloud backups', value: NEXTCLOUD_BACKUP_ALLOWED },
+]
+
+const pluralizeUsers = (count: number): string => (count === 1 ? 'user' : 'users')
 
 type StorageInfo = {
   hasSubscription: boolean
@@ -296,9 +324,24 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [emailSearchInput, setEmailSearchInput] = useState('')
   const [availableRoles, setAvailableRoles] = useState<string[]>([])
 
+  // -------------------------------------------------------------------------
+  // Bulk selection + actions over the CURRENT page. The selected set holds
+  // uuids from the currently loaded page only; it is cleared on every list
+  // reload (page/filter/page-size change, manual Refresh and the post-action
+  // refresh), so what is checked is exactly what a bulk action targets.
+  // -------------------------------------------------------------------------
+  const [selectedUuids, setSelectedUuids] = useState<Set<string>>(() => new Set())
+  const [bulkInProgress, setBulkInProgress] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null)
+  const [bulkFailures, setBulkFailures] = useState<BulkItemResult[] | null>(null)
+  const [bulkFlagName, setBulkFlagName] = useState<string>(BULK_FLAG_OPTIONS[0].value)
+  const [bulkFlagValue, setBulkFlagValue] = useState<'true' | 'false'>('true')
+
   const loadUsers = useCallback(async () => {
     setListLoading(true)
     setListError(null)
+    // Selection belongs to the page being replaced — drop it on every reload.
+    setSelectedUuids(new Set())
     try {
       const params = buildAdminListUsersParams(filters, page, pageSize)
       const response = await application.legacyApi.adminListUsers(params)
@@ -394,6 +437,164 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const firstShown = total === 0 ? 0 : page * pageSize + 1
   const lastShown = page * pageSize + rows.length
+
+  // ---- Bulk selection derived state -------------------------------------
+  const pageUuids = rows.map((row) => row.uuid)
+  const selectedOnPage = selectedUuidsOnPage(selectedUuids, pageUuids)
+  const selectionCount = selectedOnPage.length
+  const headerSelectionState = pageSelectionState(selectedUuids, pageUuids)
+
+  const toggleRowSelected = useCallback((uuid: string) => {
+    setSelectedUuids((prev) => toggleSelected(prev, uuid))
+  }, [])
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedUuids((prev) => setPageSelection(prev, pageUuids, pageSelectionState(prev, pageUuids) !== 'all'))
+  }, [pageUuids])
+
+  const clearSelection = useCallback(() => {
+    setSelectedUuids(new Set())
+    setBulkFailures(null)
+  }, [])
+
+  const emailForUuid = useCallback((uuid: string) => rows.find((row) => row.uuid === uuid)?.email ?? uuid, [rows])
+
+  // Shared executor: run a per-user worker over the targets with bounded
+  // concurrency + live progress, collect partial failures, summarise, then
+  // refresh the list. A single failing user never aborts the batch.
+  const executeBulk = useCallback(
+    async (targets: string[], pastVerb: string, worker: (uuid: string) => Promise<void>) => {
+      if (targets.length === 0) {
+        return
+      }
+      setBulkFailures(null)
+      setBulkInProgress(true)
+      setBulkProgress({ completed: 0, total: targets.length })
+      try {
+        const summary = await runBulkWithConcurrency(targets, (uuid) => uuid, worker, {
+          concurrency: BULK_CONCURRENCY,
+          onProgress: (completed, total) => setBulkProgress({ completed, total }),
+        })
+        const { message, hasFailures } = summarizeBulkOutcome(pastVerb, summary)
+        addToast({ type: hasFailures ? ToastType.Error : ToastType.Success, message })
+        setBulkFailures(hasFailures ? summary.failed : null)
+        // Refresh so ban/role/flag changes are reflected; this also clears the
+        // selection (loadUsers drops it), matching the documented behaviour.
+        await loadUsers()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: 'The bulk action could not be completed.' })
+      } finally {
+        setBulkInProgress(false)
+        setBulkProgress(null)
+      }
+    },
+    [loadUsers],
+  )
+
+  const throwIfError = (response: HttpResponse): void => {
+    if (isErrorResponse(response)) {
+      const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+      throw new Error(message ?? 'Request failed')
+    }
+  }
+
+  const bulkSetBan = useCallback(
+    async (nextBanned: boolean) => {
+      const targets = selectedUuidsOnPage(
+        selectedUuids,
+        rows.map((row) => row.uuid),
+      )
+      if (targets.length === 0) {
+        return
+      }
+      const confirmed = await confirmDialog({
+        title: nextBanned ? 'Ban selected users' : 'Unban selected users',
+        text: nextBanned
+          ? `Ban ${targets.length} selected ${pluralizeUsers(targets.length)}? They will be signed out and blocked from accessing their accounts until unbanned.`
+          : `Unban ${targets.length} selected ${pluralizeUsers(targets.length)}? They will regain access to their accounts.`,
+        confirmButtonText: nextBanned ? 'Ban users' : 'Unban users',
+        confirmButtonStyle: nextBanned ? 'danger' : 'info',
+      })
+      if (!confirmed) {
+        return
+      }
+      await executeBulk(targets, nextBanned ? 'Banned' : 'Unbanned', async (uuid) => {
+        throwIfError(await application.legacyApi.adminSetUserBanStatus(uuid, nextBanned))
+      })
+    },
+    [application, rows, selectedUuids, executeBulk],
+  )
+
+  const bulkSetAdminRole = useCallback(
+    async (granting: boolean) => {
+      let targets = selectedUuidsOnPage(
+        selectedUuids,
+        rows.map((row) => row.uuid),
+      )
+      if (targets.length === 0) {
+        return
+      }
+      // Mirror the single self-revoke guard: never let the admin bulk-revoke
+      // their OWN admin role (the server refuses it anyway).
+      let selfNote = ''
+      if (!granting) {
+        const selfUuid = application.sessions.getUser()?.uuid
+        const { targets: filtered, excludedSelf } = excludeSelfTarget(targets, selfUuid)
+        targets = filtered
+        if (excludedSelf) {
+          selfNote = ' (Your own account is excluded — admins cannot revoke their own admin role.)'
+        }
+        if (targets.length === 0) {
+          addToast({
+            type: ToastType.Regular,
+            message: 'Only your own account was selected; you cannot bulk-revoke your own admin role.',
+          })
+          return
+        }
+      }
+      const confirmed = await confirmDialog({
+        title: granting ? 'Grant admin to selected' : 'Revoke admin from selected',
+        text: granting
+          ? `Grant the admin (internal team) role to ${targets.length} selected ${pluralizeUsers(targets.length)}? They will gain FULL administrative access to this instance: managing users, bans, groups, server settings and the audit log.`
+          : `Revoke the admin (internal team) role from ${targets.length} selected ${pluralizeUsers(targets.length)}? They will lose access to this admin panel.${selfNote}`,
+        confirmButtonText: granting ? 'Grant admin' : 'Revoke admin',
+        confirmButtonStyle: 'danger',
+      })
+      if (!confirmed) {
+        return
+      }
+      await executeBulk(targets, granting ? 'Granted admin to' : 'Revoked admin from', async (uuid) => {
+        throwIfError(await application.legacyApi.adminSetUserAdminRole(uuid, granting))
+      })
+    },
+    [application, rows, selectedUuids, executeBulk],
+  )
+
+  const bulkSetFlag = useCallback(async () => {
+    const targets = selectedUuidsOnPage(
+      selectedUuids,
+      rows.map((row) => row.uuid),
+    )
+    if (targets.length === 0) {
+      return
+    }
+    const option = BULK_FLAG_OPTIONS.find((item) => item.value === bulkFlagName)
+    const label = option?.label ?? bulkFlagName
+    const enable = bulkFlagValue === 'true'
+    const confirmed = await confirmDialog({
+      title: 'Set feature flag for selected',
+      text: `${enable ? 'Enable' : 'Disable'} "${label}" for ${targets.length} selected ${pluralizeUsers(targets.length)}?`,
+      confirmButtonText: enable ? 'Enable flag' : 'Disable flag',
+      confirmButtonStyle: 'info',
+    })
+    if (!confirmed) {
+      return
+    }
+    await executeBulk(targets, `${enable ? 'Enabled' : 'Disabled'} ${label} for`, async (uuid) => {
+      throwIfError(await application.legacyApi.adminSetUserFeatureFlag(uuid, bulkFlagName, bulkFlagValue))
+    })
+  }, [application, rows, selectedUuids, bulkFlagName, bulkFlagValue, executeBulk])
 
   const toggleAiEnabled = useCallback(
     async (nextValue: boolean) => {
@@ -823,12 +1024,125 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           </div>
         ) : (
           <>
+            {/* Bulk action bar — unobtrusive, appears above the table only when
+                at least one row on the page is selected. Acts on the current
+                selection with bounded concurrency + partial-failure handling. */}
+            {selectionCount > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-info bg-info-backdrop p-3">
+                <Text className="font-semibold text-foreground">{selectionCount} selected</Text>
+                <button
+                  className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline disabled:opacity-50"
+                  onClick={clearSelection}
+                  disabled={bulkInProgress}
+                >
+                  Clear selection
+                </button>
+
+                <div className="mx-1 h-5 w-px bg-border" />
+
+                <Button
+                  small
+                  label="Ban selected"
+                  colorStyle="danger"
+                  onClick={() => void bulkSetBan(true)}
+                  disabled={bulkInProgress}
+                />
+                <Button small label="Unban selected" onClick={() => void bulkSetBan(false)} disabled={bulkInProgress} />
+                <Button
+                  small
+                  label="Grant admin"
+                  onClick={() => void bulkSetAdminRole(true)}
+                  disabled={bulkInProgress}
+                />
+                <Button
+                  small
+                  label="Revoke admin"
+                  colorStyle="danger"
+                  onClick={() => void bulkSetAdminRole(false)}
+                  disabled={bulkInProgress}
+                />
+
+                <div className="mx-1 h-5 w-px bg-border" />
+
+                {/* Bulk feature flag: reuses the per-user adminSetUserFeatureFlag
+                    call, so it composes cleanly with the single-user switches. */}
+                <Text className="text-xs text-passive-1">Flag:</Text>
+                <Dropdown
+                  label="Bulk feature flag"
+                  items={BULK_FLAG_OPTIONS}
+                  value={bulkFlagName}
+                  onChange={setBulkFlagName}
+                  disabled={bulkInProgress}
+                />
+                <Dropdown
+                  label="Bulk feature flag value"
+                  items={[
+                    { label: 'Enable', value: 'true' },
+                    { label: 'Disable', value: 'false' },
+                  ]}
+                  value={bulkFlagValue}
+                  onChange={(value) => setBulkFlagValue(value as 'true' | 'false')}
+                  disabled={bulkInProgress}
+                />
+                <Button small label="Apply flag" onClick={() => void bulkSetFlag()} disabled={bulkInProgress} />
+
+                {bulkInProgress && bulkProgress && (
+                  <div className="ml-auto flex items-center gap-2">
+                    <Spinner className="h-4 w-4" />
+                    <Text className="text-xs text-passive-1">
+                      Processing {bulkProgress.completed}/{bulkProgress.total}…
+                    </Text>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Partial-failure detail — survives the post-action refresh (which
+                clears the selection) so the admin can see which users failed. */}
+            {bulkFailures && bulkFailures.length > 0 && (
+              <div className="mb-3 rounded-md border border-danger p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <Text className="font-semibold text-danger">
+                    {bulkFailures.length} {pluralizeUsers(bulkFailures.length)} failed
+                  </Text>
+                  <button
+                    className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline"
+                    onClick={() => setBulkFailures(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <ul className="mt-2 max-h-40 list-disc overflow-auto pl-5 text-xs text-passive-1">
+                  {bulkFailures.map((failure) => (
+                    <li key={failure.uuid}>
+                      {emailForUuid(failure.uuid)}
+                      {failure.error ? ` — ${failure.error}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Vertical max-height makes the sticky header useful on tall
                 pages; horizontal overflow keeps narrow widths scrollable. */}
             <div className="max-h-[32rem] overflow-auto rounded-md border border-border">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr>
+                    <th className="sticky top-0 z-10 w-10 border-b border-border bg-contrast px-3 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all users on this page"
+                        className="cursor-pointer align-middle"
+                        checked={headerSelectionState === 'all'}
+                        ref={(el) => {
+                          if (el) {
+                            el.indeterminate = headerSelectionState === 'partial'
+                          }
+                        }}
+                        onChange={toggleSelectAllOnPage}
+                      />
+                    </th>
                     <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
                       Email
                     </th>
@@ -858,9 +1172,20 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       key={row.uuid}
                       onClick={() => selectRow(row)}
                       className={`cursor-pointer hover:bg-info-backdrop ${
-                        user?.uuid === row.uuid ? 'bg-info-backdrop' : ''
+                        selectedUuids.has(row.uuid) || user?.uuid === row.uuid ? 'bg-info-backdrop' : ''
                       }`}
                     >
+                      {/* Stop propagation so ticking the box does not also open
+                          the row's manage flow. */}
+                      <td className="px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${row.email}`}
+                          className="cursor-pointer align-middle"
+                          checked={selectedUuids.has(row.uuid)}
+                          onChange={() => toggleRowSelected(row.uuid)}
+                        />
+                      </td>
                       <td className="px-3 py-2.5">{row.email}</td>
                       <td className="whitespace-nowrap px-3 py-2.5">{formatAdminUserDate(row.createdAt)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserRoles(row.roles)}</td>
