@@ -55,6 +55,9 @@ import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
 import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
+import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
+import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
+import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
 import * as path from 'path'
 
 export class ContainerConfigLoader {
@@ -247,6 +250,23 @@ export class ContainerConfigLoader {
     container
       .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
       .toConstantValue(serverSettingsResolver)
+
+    // Standard Red Notes: ChatGPT/Codex subscription pairing credential provider.
+    // Bound only when an encryption key is present (the token store fails closed
+    // without one, never persisting a credential in plaintext). The PKCE OAuth
+    // config is fully env-overridable (see oauthConfig.ts). The AssistantController
+    // injects this @optional so pairing routes degrade to 503 when it is absent.
+    const subscriptionEncryptionKey = env.get('ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY', true) || undefined
+    if (subscriptionEncryptionKey) {
+      const subscriptionTokenPath =
+        env.get('ASSISTANT_SUBSCRIPTION_TOKEN_PATH', true) ||
+        path.resolve(process.cwd(), 'data', 'assistant-subscription.json')
+      const subscriptionTokenStore = new SubscriptionTokenStore(subscriptionTokenPath, subscriptionEncryptionKey)
+      const oauthConfig = buildDefaultOAuthConfig((key: string) => env.get(key, true) || undefined)
+      container
+        .bind<SubscriptionCredentialProvider>(TYPES.ApiGateway_AssistantSubscriptionCredentialProvider)
+        .toConstantValue(new SubscriptionCredentialProvider(subscriptionTokenStore, oauthConfig))
+    }
 
     container
       .bind<string>(TYPES.ApiGateway_ASSISTANT_DEFAULT_PROVIDER)

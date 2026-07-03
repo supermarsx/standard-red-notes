@@ -2,7 +2,8 @@ import { Request, Response } from 'express'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import * as IORedis from 'ioredis'
-import { SettingName } from '@standardnotes/domain-core'
+import { RoleName, SettingName } from '@standardnotes/domain-core'
+import { Role } from '@standardnotes/security'
 
 import { TYPES } from '../../Bootstrap/Types'
 import {
@@ -11,12 +12,16 @@ import {
   listProviderModels,
   resolveProvider,
 } from '../../Service/Assistant/providers/factory'
-import { ChatMessage, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
+import { ChatMessage, Provider, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
+import { resolveProfileProvider } from '../../Service/Assistant/profiles'
+import { SubscriptionCredentialProviderInterface } from '../../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 
 interface StreamRequestBody {
   provider?: string
   model?: string
+  /** Standard Red Notes: select a named profile by id (overrides `provider`). */
+  profileId?: string
   system?: string
   messages?: ChatMessage[]
   tools?: ToolDescriptor[]
@@ -62,8 +67,25 @@ export class AssistantController extends BaseHttpController {
     @inject(TYPES.ApiGateway_ServerSettingsResolver)
     @optional()
     private serverSettingsResolver?: ServerSettingsResolver,
+    // Standard Red Notes: ChatGPT/Codex subscription pairing lifecycle. Optional
+    // — only bound when ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is set; the pairing
+    // routes degrade to 503 when it is absent.
+    @inject(TYPES.ApiGateway_AssistantSubscriptionCredentialProvider)
+    @optional()
+    private subscriptionCredentialProvider?: SubscriptionCredentialProviderInterface,
   ) {
     super()
+  }
+
+  /**
+   * Standard Red Notes: same admin gate the auth server enforces (InternalTeamUser
+   * role from the verified cross-service token), applied to the gateway-local
+   * subscription pairing routes since they manage a server-held credential.
+   */
+  private requestorIsAdmin(response: Response): boolean {
+    const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
+
+    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
   }
 
   /** Effective provider config: persisted admin overrides win over env. */
@@ -117,6 +139,27 @@ export class AssistantController extends BaseHttpController {
   // API key, so it must not be reachable without a session.
   @httpGet('/models', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async models(request: Request, response: Response): Promise<void> {
+    // Standard Red Notes: when a saved profile id is supplied, discover models
+    // against THAT profile's provider config (its own base URL + key), not the
+    // default provider. Lets the admin AI tab populate a per-profile model list.
+    const requestedProfileId = typeof request.query.profileId === 'string' ? request.query.profileId.trim() : ''
+    if (requestedProfileId && this.serverSettingsResolver) {
+      let profile
+      try {
+        profile = await this.serverSettingsResolver.resolveActiveProfile(requestedProfileId)
+      } catch {
+        profile = undefined
+      }
+      if (!profile) {
+        response.status(400).json({ error: { message: 'Requested profile is not configured on this server.' } })
+        return
+      }
+      const resolution = resolveProfileProvider(profile)
+      const models = await listProviderModels(resolution.providerId, resolution.config)
+      response.json({ provider: resolution.providerId, profileId: profile.id, models })
+      return
+    }
+
     const providerConfig = await this.effectiveProviderConfig()
     const requested = typeof request.query.provider === 'string' ? request.query.provider : ''
     const providers = configuredProviders(providerConfig)
@@ -151,6 +194,175 @@ export class AssistantController extends BaseHttpController {
       limit,
       resetsAt: this.nextResetIso(),
     })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Standard Red Notes: ChatGPT / Codex SUBSCRIPTION PAIRING routes.
+  //
+  // These wire the pre-existing subscription service (PKCE OAuth lifecycle +
+  // encrypted token store) into HTTP. The guided pairing wizard drives:
+  //   status -> start (get authorize URL) -> user authorizes ->
+  //   callback (redirect) OR complete (pasted code) -> status = paired.
+  //
+  // status/start/complete/unpair are admin-gated (they manage a server-held
+  // credential) and require a session; /callback is the PUBLIC OAuth redirect
+  // landing (the browser arrives without a session — its `state` is the CSRF
+  // protection, single-use and consumed server-side). NO token is ever returned.
+  // ---------------------------------------------------------------------------
+
+  @httpGet('/subscription/status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionStatus(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+
+    const config = await this.effectiveProviderConfig()
+    const usingEnvFallback = config.openaiAuthMode === 'subscription' && Boolean(config.openaiSubscriptionToken)
+
+    if (!this.subscriptionCredentialProvider) {
+      // Not wired (no encryption key). Report the non-secret truth so the wizard
+      // can explain that server-managed pairing is unavailable on this deployment.
+      response.json({
+        paired: false,
+        mode: config.openaiAuthMode ?? undefined,
+        usingEnvFallback,
+        reason: 'Subscription pairing is not configured on this server (ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY unset).',
+      })
+      return
+    }
+
+    try {
+      const status = await this.subscriptionCredentialProvider.getStatus()
+      response.json({
+        paired: status.paired,
+        mode: config.openaiAuthMode ?? undefined,
+        accountId: status.accountId,
+        accountLabel: status.accountLabel,
+        expiresAt: status.expiresAt,
+        needsRepair: status.needsRepair,
+        usingEnvFallback: !status.paired && usingEnvFallback,
+      })
+    } catch (error) {
+      response.json({ paired: false, reason: (error as Error).message })
+    }
+  }
+
+  @httpPost('/subscription/start', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionStart(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.subscriptionCredentialProvider) {
+      response.status(503).json({ error: { message: 'Subscription pairing is not configured on this server.' } })
+      return
+    }
+
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? 'admin'
+    try {
+      const { authorizeUrl, state } = this.subscriptionCredentialProvider.beginPairing(adminUuid)
+      response.json({ authorizeUrl, state })
+    } catch (error) {
+      response.status(500).json({ error: { message: (error as Error).message } })
+    }
+  }
+
+  // Manual completion for the guided wizard's paste-the-code step (used when the
+  // OAuth provider only permits a localhost/out-of-band redirect that cannot reach
+  // this server). Exchanges the code for tokens and persists the credential.
+  @httpPost('/subscription/complete', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionComplete(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.subscriptionCredentialProvider) {
+      response.status(503).json({ error: { message: 'Subscription pairing is not configured on this server.' } })
+      return
+    }
+
+    const body = (request.body ?? {}) as { state?: unknown; code?: unknown }
+    const state = typeof body.state === 'string' ? body.state.trim() : ''
+    const code = typeof body.code === 'string' ? body.code.trim() : ''
+    if (!state || !code) {
+      response.status(400).json({ error: { message: 'Both `state` and `code` are required to complete pairing.' } })
+      return
+    }
+
+    try {
+      const record = await this.subscriptionCredentialProvider.completePairing(state, code)
+      response.json({ ok: true, paired: true, accountLabel: record.accountLabel, accountId: record.accountId })
+    } catch (error) {
+      response.status(400).json({ ok: false, error: { message: (error as Error).message } })
+    }
+  }
+
+  // PUBLIC OAuth redirect landing. The browser arrives here (no session) after the
+  // user authorizes; `state` is the single-use CSRF token. Returns a tiny HTML page
+  // that notifies the opener and closes — never JSON, never a token.
+  @httpGet('/subscription/callback')
+  async subscriptionCallback(request: Request, response: Response): Promise<void> {
+    const query = request.query as Record<string, string | undefined>
+    const state = (query.state ?? '').trim()
+    const code = (query.code ?? '').trim()
+
+    if (!this.subscriptionCredentialProvider) {
+      response.status(503).type('html').send(this.pairingResultHtml(false, 'Subscription pairing is not configured.'))
+      return
+    }
+    if (query.error) {
+      response.status(400).type('html').send(this.pairingResultHtml(false, `Authorization failed: ${query.error}`))
+      return
+    }
+    if (!state || !code) {
+      response.status(400).type('html').send(this.pairingResultHtml(false, 'Missing authorization code or state.'))
+      return
+    }
+
+    try {
+      await this.subscriptionCredentialProvider.completePairing(state, code)
+      response.type('html').send(this.pairingResultHtml(true, 'Pairing complete. You can close this window.'))
+    } catch (error) {
+      response.status(400).type('html').send(this.pairingResultHtml(false, (error as Error).message))
+    }
+  }
+
+  @httpPost('/subscription/unpair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionUnpair(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.subscriptionCredentialProvider) {
+      response.status(503).json({ error: { message: 'Subscription pairing is not configured on this server.' } })
+      return
+    }
+
+    try {
+      await this.subscriptionCredentialProvider.unpair()
+      response.json({ ok: true })
+    } catch (error) {
+      response.status(500).json({ ok: false, error: { message: (error as Error).message } })
+    }
+  }
+
+  /**
+   * Minimal self-contained HTML for the OAuth callback window: it postMessages the
+   * opener (best-effort success signal; the wizard also polls /status) and closes.
+   * No secrets — only the success/failure boolean and a human message.
+   */
+  private pairingResultHtml(success: boolean, message: string): string {
+    const safeMessage = message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string))
+    return `<!doctype html><html><head><meta charset="utf-8"><title>ChatGPT pairing</title></head>
+<body style="font-family: system-ui, sans-serif; padding: 2rem; text-align: center;">
+<h2>${success ? 'Pairing complete' : 'Pairing failed'}</h2>
+<p>${safeMessage}</p>
+<script>
+try { if (window.opener) { window.opener.postMessage({ type: 'chatgpt-paired', success: ${success ? 'true' : 'false'} }, '*') } } catch (e) {}
+setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 : 4000})
+</script>
+</body></html>`
   }
 
   @httpPost('/stream', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
@@ -199,12 +411,9 @@ export class AssistantController extends BaseHttpController {
       }
     }
 
-    const providerId = body.provider || this.defaultProvider
-    const model = body.model || this.defaultModel
-
     let provider
     try {
-      provider = resolveProvider(providerId, model, await this.effectiveProviderConfig())
+      provider = await this.resolveStreamProvider(body, request)
     } catch (error) {
       // The proxy never started, so refund the metered request.
       await this.refundUsage(userUuid, dayKey, limit)
@@ -257,6 +466,61 @@ export class AssistantController extends BaseHttpController {
     } finally {
       response.end()
     }
+  }
+
+  /**
+   * Standard Red Notes: resolves the concrete provider for a /stream request,
+   * honoring MULTIPLE named profiles.
+   *
+   *  - When the client selects a profile (body.profileId or the x-assistant-profile
+   *    header), or sends NO explicit provider, the active profile (requested, else
+   *    the default) is resolved into a provider. A codex-subscription profile with
+   *    no inline token draws a fresh token from the paired subscription credential.
+   *  - Otherwise (the client sent an explicit `provider`) the pre-existing legacy
+   *    path is used unchanged, so every current client keeps working.
+   */
+  private async resolveStreamProvider(body: StreamRequestBody, request: Request): Promise<Provider> {
+    const headerProfileId =
+      typeof request.headers['x-assistant-profile'] === 'string'
+        ? (request.headers['x-assistant-profile'] as string).trim()
+        : undefined
+    const requestedProfileId = (body.profileId && body.profileId.trim()) || headerProfileId || undefined
+
+    if (this.serverSettingsResolver && (requestedProfileId || !body.provider)) {
+      let profile
+      try {
+        profile = await this.serverSettingsResolver.resolveActiveProfile(requestedProfileId)
+      } catch {
+        profile = undefined
+      }
+
+      if (profile) {
+        const resolution = resolveProfileProvider(profile, body.model)
+        if (
+          profile.provider === 'codex-subscription' &&
+          !resolution.config.openaiSubscriptionToken &&
+          this.subscriptionCredentialProvider
+        ) {
+          const credential = await this.subscriptionCredentialProvider.getFreshCredential()
+          if (credential) {
+            resolution.config.openaiSubscriptionToken = credential.token
+            if (credential.accountId) {
+              resolution.config.openaiAccountId = credential.accountId
+            }
+          }
+        }
+        return resolveProvider(resolution.providerId, resolution.model || this.defaultModel, resolution.config)
+      }
+
+      if (requestedProfileId) {
+        throw new Error(`Requested assistant profile "${requestedProfileId}" is not configured or is disabled.`)
+      }
+    }
+
+    // Legacy path (fully back-compat): honor the client's chosen provider + model.
+    const providerId = body.provider || this.defaultProvider
+    const model = body.model || this.defaultModel
+    return resolveProvider(providerId, model, await this.effectiveProviderConfig())
   }
 
   private usageKey(userUuid: string, dayKey: string): string {

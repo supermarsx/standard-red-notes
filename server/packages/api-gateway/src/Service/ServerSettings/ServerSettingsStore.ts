@@ -1,6 +1,8 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
 
+import { PersistedAiProfile } from '../Assistant/profiles'
+
 /**
  * Standard Red Notes: runtime-configurable SERVER settings (admin pane).
  *
@@ -26,6 +28,15 @@ export interface PersistedAiSettings {
   openaiBaseUrl?: string
   ollamaUrl?: string
   dailyRequestLimit?: number
+  /**
+   * Standard Red Notes: MULTIPLE named assistant profiles. When present and
+   * non-empty these take precedence; when absent the legacy single-provider
+   * fields above are mapped into synthesized default profiles (back-compat).
+   * Each profile's apiKey is a secret persisted in plaintext but never returned.
+   */
+  profiles?: PersistedAiProfile[]
+  /** Id of the profile used when the client does not select one. */
+  defaultProfileId?: string
 }
 
 export interface PersistedServerSettings {
@@ -45,6 +56,8 @@ export interface ServerSettingsPatch {
     openaiBaseUrl?: string | null
     ollamaUrl?: string | null
     dailyRequestLimit?: number | null
+    profiles?: PersistedAiProfile[] | null
+    defaultProfileId?: string | null
   }
   updateCheck?: { url?: string | null }
   nextcloudBackups?: { enabled?: boolean | null }
@@ -84,6 +97,8 @@ export class ServerSettingsStore {
         this.applyKey(data.ai, 'openaiBaseUrl', patch.ai.openaiBaseUrl)
         this.applyKey(data.ai, 'ollamaUrl', patch.ai.ollamaUrl)
         this.applyKey(data.ai, 'dailyRequestLimit', patch.ai.dailyRequestLimit)
+        this.applyKey(data.ai, 'profiles', patch.ai.profiles)
+        this.applyKey(data.ai, 'defaultProfileId', patch.ai.defaultProfileId)
         if (Object.keys(data.ai).length === 0) {
           delete data.ai
         }

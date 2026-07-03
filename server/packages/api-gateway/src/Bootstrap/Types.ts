@@ -35,6 +35,10 @@ export const TYPES = {
   ApiGateway_ASSISTANT_DEFAULT_PROVIDER: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_PROVIDER'),
   ApiGateway_ASSISTANT_DEFAULT_MODEL: Symbol.for('ApiGateway_ASSISTANT_DEFAULT_MODEL'),
   ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT: Symbol.for('ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT'),
+  // Standard Red Notes: ChatGPT/Codex subscription pairing credential provider
+  // (PKCE OAuth lifecycle + encrypted token store). Optional — only bound when
+  // ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is set so pairing fails closed.
+  ApiGateway_AssistantSubscriptionCredentialProvider: Symbol.for('ApiGateway_AssistantSubscriptionCredentialProvider'),
   // Standard Red Notes: operator-configured list of speech-to-text (STT) model ids
   // advertised to clients for the audio-recorder transcription model picker.
   ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS: Symbol.for('ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS'),

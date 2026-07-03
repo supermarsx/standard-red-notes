@@ -1,7 +1,7 @@
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
 import { isErrorResponse } from '@standardnotes/snjs'
 
-import { AssistantSubscriptionStatus, WebApplication } from '@/Application/WebApplication'
+import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
@@ -11,6 +11,7 @@ import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
 import {
+  AdminAiProfileView,
   AdminServerSettings,
   AdminServerSettingsResponse,
   buildApiKeySettingUpdate,
@@ -20,6 +21,9 @@ import {
   settingSourceChipClass,
   settingSourceLabel,
 } from './adminHelpers'
+import AiProfilesSection from './AiProfilesSection'
+import CodexPairingWizard from './CodexPairingWizard'
+import { AiProfilePayload, MaskedAiProfile } from './aiProfiles'
 
 type Props = {
   application: WebApplication
@@ -76,12 +80,11 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('')
   const [ollamaUrl, setOllamaUrl] = useState('')
   const [dailyLimit, setDailyLimit] = useState('')
+  // Standard Red Notes: MULTIPLE named profiles (masked view) + default selector.
+  const [profiles, setProfiles] = useState<MaskedAiProfile[]>([])
+  const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null)
 
   const [savingSection, setSavingSection] = useState<string | null>(null)
-
-  // Read-only context: the ChatGPT/Codex subscription pairing status (managed
-  // in Preferences → Assistant; surfaced here so the whole AI picture is on one page).
-  const [pairingStatus, setPairingStatus] = useState<AssistantSubscriptionStatus | null>(null)
 
   const applyView = useCallback((data: AdminServerSettingsResponse | undefined) => {
     const next = data?.settings ?? null
@@ -91,6 +94,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     setOllamaUrl(next?.ai?.ollamaUrl ?? '')
     const limit = next?.ai?.dailyRequestLimit
     setDailyLimit(limit != null && limit > 0 ? String(limit) : '')
+    setProfiles((next?.ai?.profiles ?? []) as AdminAiProfileView[] as MaskedAiProfile[])
+    setDefaultProfileId(next?.ai?.defaultProfileId ?? null)
   }, [])
 
   const load = useCallback(async () => {
@@ -120,8 +125,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
   useEffect(() => {
     void load()
-    void application.assistantSubscriptionStatus().then(setPairingStatus)
-  }, [load, application])
+  }, [load])
 
   /**
    * Send a partial update and re-apply the returned view. Returns true on
@@ -149,6 +153,16 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
       }
     },
     [application, noteIfForbidden, applyView],
+  )
+
+  // Standard Red Notes: persist the whole named-profiles set + default via the
+  // existing server-settings PUT (ai.profiles / ai.defaultProfileId). The payload
+  // type on legacyApi predates profiles, so we widen it at the call boundary.
+  const saveProfiles = useCallback(
+    async (update: { profiles: AiProfilePayload[]; defaultProfileId: string | null }): Promise<boolean> => {
+      return save('profiles', { ai: update } as unknown as ServerSettingsPartial, 'Assistant profiles saved.')
+    },
+    [save],
   )
 
   const saveAnthropicKey = useCallback(async () => {
@@ -290,6 +304,28 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
       </PreferencesSegment>
 
       <HorizontalSeparator classes="my-4" />
+
+      {/* Standard Red Notes: MULTIPLE named profiles */}
+      <AiProfilesSection
+        application={application}
+        profiles={profiles}
+        defaultProfileId={defaultProfileId}
+        busy={busy}
+        onSave={saveProfiles}
+      />
+
+      {/* Guided ChatGPT / Codex subscription pairing wizard */}
+      <CodexPairingWizard application={application} />
+
+      <HorizontalSeparator classes="my-4" />
+
+      <PreferencesSegment>
+        <Subtitle>Single-provider settings (back-compatible)</Subtitle>
+        <Text className="mt-1 text-passive-1">
+          The original per-provider fields below still work and map to a default profile when no named profiles are
+          defined. Prefer the profiles above for multiple providers.
+        </Text>
+      </PreferencesSegment>
 
       {/* Anthropic */}
       <PreferencesSegment>
@@ -459,30 +495,6 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
         </div>
       </PreferencesSegment>
 
-      <HorizontalSeparator classes="my-4" />
-
-      {/* Read-only context */}
-      <PreferencesSegment>
-        <Title>Subscription pairing</Title>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <Text>
-            ChatGPT/Codex subscription pairing
-            {ai?.subscriptionMode ? ` — mode: ${ai.subscriptionMode}` : ''}
-            {pairingStatus?.paired && pairingStatus.accountLabel ? ` (${pairingStatus.accountLabel})` : ''}
-          </Text>
-          <span
-            className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${
-              pairingStatus?.paired ? 'bg-success text-success-contrast' : 'bg-passive-4 text-foreground'
-            }`}
-          >
-            {pairingStatus === null ? 'Unknown' : pairingStatus.paired ? 'Paired' : 'Not paired'}
-          </span>
-        </div>
-        <Text className="mt-2 text-xs">
-          Pairing is managed in Preferences → Assistant. Per-user AI access (the AI enabled flag and per-user request
-          limits) is managed on this pane's Users tab.
-        </Text>
-      </PreferencesSegment>
     </>
   )
 }

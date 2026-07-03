@@ -11,6 +11,7 @@ import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
+import { PersistedAiProfile, validateProfilesPatch } from '../../Service/Assistant/profiles'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -224,6 +225,33 @@ export class AdminController extends BaseHttpController {
       request,
       response,
       this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/roles'),
+      request.body,
+    )
+  }
+
+  // Standard Red Notes: RBAC role management (read all roles with permissions +
+  // edit a role's permission assignments). Proxied to the auth admin controller,
+  // which re-gates on the INTERNAL_TEAM_USER role.
+  @httpGet('/roles/detailed', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async listRolesWithPermissions(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/roles/detailed'),
+      request.body,
+    )
+  }
+
+  @httpPut('/roles/:roleUuid/permissions', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async setRolePermissions(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'PUT',
+        'admin/roles/:roleUuid/permissions',
+        request.params.roleUuid as string,
+      ),
       request.body,
     )
   }
@@ -533,7 +561,16 @@ export class AdminController extends BaseHttpController {
       return
     }
 
-    const parsed = this.parseServerSettingsBody(request.body)
+    // Read the raw persisted profiles first so the validator can preserve a
+    // profile's write-only key when the UI resubmits it without the secret.
+    let existingProfiles: PersistedAiProfile[] | undefined
+    try {
+      existingProfiles = await this.serverSettingsResolver.getPersistedAiProfiles()
+    } catch {
+      existingProfiles = undefined
+    }
+
+    const parsed = this.parseServerSettingsBody(request.body, existingProfiles)
     if ('error' in parsed) {
       response.status(400).json({ error: { message: parsed.error } })
 
@@ -566,6 +603,7 @@ export class AdminController extends BaseHttpController {
    */
   private parseServerSettingsBody(
     body: unknown,
+    existingProfiles?: PersistedAiProfile[],
   ): { patch: ServerSettingsPatch; changedSettings: string[] } | { error: string } {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return { error: 'Request body must be a JSON object.' }
@@ -640,6 +678,24 @@ export class AdminController extends BaseHttpController {
           return { error: 'ai.dailyRequestLimit must be an integer >= 0, or null to clear it.' }
         }
         changedSettings.push('ai.dailyRequestLimit')
+      }
+
+      // Standard Red Notes: MULTIPLE named profiles + a default selector. The
+      // heavy validation (provider kinds, URLs, write-only key preservation)
+      // lives in the Assistant subsystem's validateProfilesPatch.
+      if (ai.profiles !== undefined || ai.defaultProfileId !== undefined) {
+        const validated = validateProfilesPatch(ai.profiles, ai.defaultProfileId, existingProfiles)
+        if ('error' in validated) {
+          return { error: validated.error }
+        }
+        if (validated.profiles !== undefined) {
+          patch.ai.profiles = validated.profiles
+          changedSettings.push('ai.profiles')
+        }
+        if (validated.defaultProfileId !== undefined) {
+          patch.ai.defaultProfileId = validated.defaultProfileId
+          changedSettings.push('ai.defaultProfileId')
+        }
       }
     }
 

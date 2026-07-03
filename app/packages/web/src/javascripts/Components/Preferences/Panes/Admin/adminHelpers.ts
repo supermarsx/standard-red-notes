@@ -242,6 +242,18 @@ export const serviceStatusLabel = (status: string | null | undefined): string =>
 /** Where the currently-active value of a setting comes from. */
 export type SettingSource = 'env' | 'persisted' | 'default'
 
+/** A masked named assistant profile from the server view (no secret returned). */
+export type AdminAiProfileView = {
+  id: string
+  name: string
+  provider: 'anthropic' | 'openai-compatible' | 'ollama' | 'codex-subscription'
+  baseUrl?: string | null
+  model?: string | null
+  models?: string[]
+  enabled: boolean
+  keyConfigured: boolean
+}
+
 export type AdminServerSettings = {
   ai?: {
     anthropicConfigured?: boolean
@@ -250,6 +262,9 @@ export type AdminServerSettings = {
     ollamaUrl?: string | null
     dailyRequestLimit?: number | null
     subscriptionMode?: string | null
+    // Standard Red Notes: MULTIPLE named profiles + the default selector.
+    profiles?: AdminAiProfileView[]
+    defaultProfileId?: string | null
   }
   updateCheck?: {
     url?: string | null

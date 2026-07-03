@@ -1,5 +1,12 @@
 import { AssistantProviderConfig } from '../Assistant/providers/factory'
 import { openAiCompatibleConfigured } from '../Assistant/providers/openaiAuth'
+import {
+  effectiveProfiles,
+  MaskedAiProfile,
+  maskProfiles,
+  PersistedAiProfile,
+  selectActiveProfile,
+} from '../Assistant/profiles'
 import { PersistedServerSettings, ServerSettingsPatch, ServerSettingsStore } from './ServerSettingsStore'
 
 /**
@@ -44,6 +51,10 @@ export interface ServerSettingsView {
       ollamaUrl: string | null
       dailyRequestLimit: number | null
       subscriptionMode: string | null
+      /** Masked named profiles (secrets replaced by keyConfigured booleans). */
+      profiles: MaskedAiProfile[]
+      /** Id of the active/default profile, or null when none is set. */
+      defaultProfileId: string | null
     }
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
@@ -80,6 +91,34 @@ export class ServerSettingsResolver {
     }
   }
 
+  /**
+   * The effective named-profile set + default id: explicit persisted profiles
+   * win; otherwise the effective legacy single-provider config is mapped into
+   * synthesized default profiles (back-compat). Re-read per call.
+   */
+  async resolveAssistantProfiles(): Promise<{ profiles: PersistedAiProfile[]; defaultProfileId: string | undefined }> {
+    const persisted = await this.safeRead()
+    const legacyConfig = await this.resolveAssistantConfig()
+
+    return effectiveProfiles(persisted.ai?.profiles, persisted.ai?.defaultProfileId, legacyConfig)
+  }
+
+  /**
+   * The RAW persisted profiles (not legacy-mapped). Used by the settings PUT
+   * validator to preserve a profile's write-only key when the UI resubmits the
+   * profile without resending its secret.
+   */
+  async getPersistedAiProfiles(): Promise<PersistedAiProfile[] | undefined> {
+    return (await this.safeRead()).ai?.profiles
+  }
+
+  /** Selects the active profile for a request (requested id, else default). */
+  async resolveActiveProfile(requestedId?: string): Promise<PersistedAiProfile | undefined> {
+    const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
+
+    return selectActiveProfile(profiles, defaultProfileId, requestedId)
+  }
+
   /** Effective global daily AI request ceiling. 0 = unlimited (the default). */
   async resolveAssistantDailyRequestLimit(): Promise<number> {
     const persisted = await this.safeRead()
@@ -111,6 +150,7 @@ export class ServerSettingsResolver {
     const persisted = await this.safeRead()
     const config = await this.resolveAssistantConfig()
     const env = this.envBaseline
+    const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
 
     const ai = persisted.ai ?? {}
     const sources: Record<string, ServerSettingSource> = {
@@ -119,6 +159,10 @@ export class ServerSettingsResolver {
       'ai.openaiBaseUrl': this.source(ai.openaiBaseUrl, env.assistant.openaiBaseURL),
       'ai.ollamaUrl': this.source(ai.ollamaUrl, env.assistant.ollamaUrl),
       'ai.dailyRequestLimit': this.source(ai.dailyRequestLimit, env.assistantDailyRequestLimit),
+      // Profiles are gateway-persisted only (no env source); 'persisted' when the
+      // admin has defined an explicit set, else 'default' (legacy-mapped).
+      'ai.profiles': this.source(ai.profiles, undefined),
+      'ai.defaultProfileId': this.source(ai.defaultProfileId, undefined),
       'updateCheck.url': this.source(persisted.updateCheck?.url, env.updateCheckUrl),
       'nextcloudBackups.enabled': this.source(persisted.nextcloudBackups?.enabled, env.nextcloudBackupsEnabled),
     }
@@ -134,6 +178,9 @@ export class ServerSettingsResolver {
           // env-only for now (ASSISTANT_OPENAI_AUTH_MODE); reported so the admin
           // pane can render the subscription-mode state truthfully.
           subscriptionMode: config.openaiAuthMode ?? null,
+          // Masked named profiles — secrets replaced by keyConfigured booleans.
+          profiles: maskProfiles(profiles),
+          defaultProfileId: defaultProfileId ?? null,
         },
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },

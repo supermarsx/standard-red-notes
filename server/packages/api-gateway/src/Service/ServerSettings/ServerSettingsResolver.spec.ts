@@ -152,4 +152,63 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect((await resolver.view()).settings.nextcloudBackups.enabled).toBe(true)
     })
   })
+
+  describe('named profiles (multiple)', () => {
+    it('back-compat: maps legacy single-provider env into synthesized default profiles', async () => {
+      const resolver = makeResolver({ assistant: { anthropicApiKey: 'env-key', ollamaUrl: 'http://localhost:11434' } })
+
+      const { profiles, defaultProfileId } = await resolver.resolveAssistantProfiles()
+      expect(profiles.map((p) => p.provider)).toEqual(['anthropic', 'ollama'])
+      expect(defaultProfileId).toBe(profiles[0].id)
+
+      // resolveActiveProfile selects the default when none is requested.
+      expect((await resolver.resolveActiveProfile())?.provider).toBe('anthropic')
+    })
+
+    it('explicit persisted profiles win over legacy mapping and are selectable by id', async () => {
+      const resolver = makeResolver({ assistant: { anthropicApiKey: 'env-key' } })
+      await resolver.applyPatch({
+        ai: {
+          profiles: [
+            { id: 'a', name: 'Claude', provider: 'anthropic', enabled: true, apiKey: 'sk-a' },
+            { id: 'b', name: 'Router', provider: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1', enabled: true, apiKey: 'sk-b' },
+          ],
+          defaultProfileId: 'b',
+        },
+      })
+
+      const { profiles, defaultProfileId } = await resolver.resolveAssistantProfiles()
+      expect(profiles).toHaveLength(2)
+      expect(defaultProfileId).toBe('b')
+      expect((await resolver.resolveActiveProfile('a'))?.name).toBe('Claude')
+      expect((await resolver.resolveActiveProfile())?.id).toBe('b')
+    })
+
+    it('masks profile secrets in the view (keyConfigured only, never the key)', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({
+        ai: {
+          profiles: [{ id: 'a', name: 'Claude', provider: 'anthropic', enabled: true, apiKey: 'super-secret-key' }],
+          defaultProfileId: 'a',
+        },
+      })
+
+      const view = await resolver.view()
+      expect(JSON.stringify(view)).not.toContain('super-secret-key')
+      expect(view.settings.ai.profiles).toEqual([
+        { id: 'a', name: 'Claude', provider: 'anthropic', baseUrl: null, model: null, enabled: true, keyConfigured: true },
+      ])
+      expect(view.settings.ai.defaultProfileId).toBe('a')
+      expect(view.sources['ai.profiles']).toBe('persisted')
+    })
+
+    it('getPersistedAiProfiles returns the raw persisted set (with keys) for key preservation', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({
+        ai: { profiles: [{ id: 'a', name: 'Claude', provider: 'anthropic', enabled: true, apiKey: 'sk-a' }] },
+      })
+      const raw = await resolver.getPersistedAiProfiles()
+      expect(raw?.[0].apiKey).toBe('sk-a')
+    })
+  })
 })
