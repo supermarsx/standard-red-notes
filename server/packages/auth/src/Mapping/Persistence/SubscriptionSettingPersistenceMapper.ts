@@ -26,7 +26,11 @@ export class SubscriptionSettingPersistenceMapper implements MapperInterface<
         name: projection.name,
         value: projection.value,
         serverEncryptionVersion: projection.serverEncryptionVersion,
-        sensitive: projection.sensitive,
+        // The `sensitive` column is a tinyint(1): TypeORM hydrates it as the
+        // NUMBER 0/1, not a boolean. Coerce so `props.sensitive` is a real
+        // boolean (mirrors SettingPersistenceMapper) — otherwise a numeric 1
+        // leaks into HTTP projections and `=== true` comparisons silently fail.
+        sensitive: !!projection.sensitive,
         userSubscriptionUuid,
         timestamps,
       },
@@ -50,6 +54,10 @@ export class SubscriptionSettingPersistenceMapper implements MapperInterface<
     projection.createdAt = domain.props.timestamps.createdAt
     projection.updatedAt = domain.props.timestamps.updatedAt
     projection.userSubscriptionUuid = domain.props.userSubscriptionUuid.value
+    // Persist the `sensitive` flag (mirrors SettingPersistenceMapper). Without
+    // this the column was never written and every subscription setting was saved
+    // with the DB default (0/false), silently dropping the domain flag.
+    projection.sensitive = !!domain.props.sensitive
 
     return projection
   }
