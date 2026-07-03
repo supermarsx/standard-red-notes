@@ -60,6 +60,12 @@ import {
   resolveSharedServerAccessKeyConfig,
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
+import { decideCorsOrigin, resolveCorsStrictMode } from '../src/Controller/CorsOriginResolver'
+import {
+  buildDefaultRateLimitRules,
+  createRateLimitMiddleware,
+  RateLimitRedis,
+} from '../src/Controller/RateLimitMiddleware'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { registerWorkflowsUiProxy } from '../src/Workflows/registerWorkflowsUiProxy'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
@@ -125,6 +131,34 @@ void container
       response.setHeader('X-API-Gateway-Version', container.get(TYPES.ApiGateway_VERSION))
       next()
     })
+
+    // Standard Red Notes: Redis-backed IP rate limiting on the unauthenticated,
+    // auth-adjacent endpoints (login, registration, MCP-token authenticate,
+    // magic-link request, recovery). Reuses the gateway's existing ioredis client
+    // (present unless CACHE_TYPE is in-memory); fail-open when Redis is down so a
+    // cache outage never locks users out of auth. Keyed by req.ip, which honors
+    // the configured TRUST_PROXY (set above), so a direct client cannot spoof it.
+    // Tunable via RATE_LIMIT_* env; disable entirely with RATE_LIMIT_ENABLED=false.
+    const rateLimitRedis = container.isBound(TYPES.ApiGateway_Redis)
+      ? (container.get(TYPES.ApiGateway_Redis) as RateLimitRedis)
+      : undefined
+    const rateLimitNumber = (key: string, fallback: number): number =>
+      env.get(key, true) ? +env.get(key, true) : fallback
+    app.use(
+      createRateLimitMiddleware({
+        redis: rateLimitRedis,
+        logger: { warn: (message: string) => logger.warn(message) },
+        config: {
+          enabled: env.get('RATE_LIMIT_ENABLED', true) !== 'false',
+          rules: buildDefaultRateLimitRules({
+            windowSeconds: rateLimitNumber('RATE_LIMIT_WINDOW_SECONDS', 60),
+            loginMax: rateLimitNumber('RATE_LIMIT_LOGIN_MAX', 10),
+            registrationMax: rateLimitNumber('RATE_LIMIT_REGISTRATION_MAX', 5),
+          }),
+        },
+      }),
+    )
+
     app.use(
       helmet({
         contentSecurityPolicy: {
@@ -157,45 +191,39 @@ void container
       }),
     )
     const corsAllowedOrigins = container.get<string[]>(TYPES.ApiGateway_CORS_ALLOWED_ORIGINS)
+    // Standard Red Notes: CORS defaults to STRICT for self-host safety. When
+    // CORS_ORIGIN_STRICT_MODE_ENABLED is unset we now only reflect origins that
+    // legitimately need credentialed cross-origin access (desktop app, the
+    // Firefox/Chromium/Safari clippers, a localhost self-host, and anything the
+    // operator lists in CORS_ALLOWED_ORIGINS) — NOT any Origin as before. Set
+    // CORS_ORIGIN_STRICT_MODE_ENABLED=false to restore the legacy permissive
+    // "reflect any Origin" behavior. See CorsOriginResolver for the full model.
+    const corsStrictMode = resolveCorsStrictMode(env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true))
     app.use(
       cors({
         credentials: true,
         exposedHeaders: ['x-captcha-required'],
-        origin: (requestOrigin: string | undefined, callback: (err: Error | null, origin?: string[]) => void) => {
-          const originStrictModeEnabled = env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true)
-            ? env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true) === 'true'
-            : false
+        origin: (
+          requestOrigin: string | undefined,
+          callback: (err: Error | null, origin?: boolean | string | string[]) => void,
+        ) => {
+          const decision = decideCorsOrigin(requestOrigin, {
+            strictMode: corsStrictMode,
+            allowedOrigins: corsAllowedOrigins,
+          })
 
-          if (!originStrictModeEnabled) {
+          if (decision.allow) {
             callback(null, [requestOrigin as string])
-
             return
           }
 
-          const requstOriginIsNotFilled = !requestOrigin || requestOrigin === 'null'
-          const requestOriginatesFromTheDesktopApp = requestOrigin?.startsWith('file://')
-          const requestOriginatesFromClipperForFirefox = requestOrigin?.startsWith('moz-extension://')
-          const requestOriginatesFromSelfHostedAppOnHttpPort = requestOrigin === 'http://localhost'
-          const requestOriginatesFromSelfHostedAppOnCustomPort = requestOrigin?.match(/http:\/\/localhost:\d+/) !== null
-          const requestOriginatesFromSelfHostedApp =
-            requestOriginatesFromSelfHostedAppOnHttpPort || requestOriginatesFromSelfHostedAppOnCustomPort
-
-          const requestIsWhitelisted =
-            corsAllowedOrigins.length === 0 ||
-            requstOriginIsNotFilled ||
-            requestOriginatesFromTheDesktopApp ||
-            requestOriginatesFromClipperForFirefox ||
-            requestOriginatesFromSelfHostedApp
-
-          if (requestIsWhitelisted) {
-            callback(null, [requestOrigin as string])
-          } else {
-            if (corsAllowedOrigins.includes(requestOrigin)) {
-              callback(null, [requestOrigin])
-            } else {
-              callback(new Error('Not allowed by CORS', { cause: 'origin not allowed' }))
-            }
-          }
+          // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
+          // header (the cors package treats a falsy origin as "no CORS headers,
+          // continue"). The browser then blocks the cross-origin RESPONSE, while
+          // SAME-ORIGIN requests — which need no ACAO — keep working on any
+          // custom domain. We deliberately do NOT throw here (throwing would 500
+          // the request and break same-origin deployments).
+          callback(null, false)
         },
       }),
     )

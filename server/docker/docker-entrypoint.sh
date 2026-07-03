@@ -203,6 +203,15 @@ fi
 INSECURE_ENCRYPTION_DEFAULT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 INSECURE_JWT_DEFAULT="dev-auth-jwt-secret-change-me"
 INSECURE_VALET_DEFAULT="dev-valet-token-secret-change-me"
+# Same published defaults for the realtime-gateway signing keys and the DB
+# password (all shipped in docker-compose.yml). WEB_SOCKET_CONNECTION_TOKEN_SECRET
+# signs the short-lived tokens the browser presents to open the realtime socket,
+# so a known value lets anyone forge realtime access; WEBSOCKET_GATEWAY_INTERNAL_
+# SECRET authenticates the in-process gateway bridge; MYSQL_PASSWORD is the
+# database account password. They are just as public as the three above.
+INSECURE_WS_CONN_TOKEN_DEFAULT="dev-ws-conn-token-secret-change-me"
+INSECURE_WS_INTERNAL_DEFAULT="dev-ws-internal-secret-change-me"
+INSECURE_MYSQL_PASSWORD_DEFAULT="changeme123"
 
 case "$(printf '%s' "${ALLOW_INSECURE_DEFAULTS:-}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) ALLOW_INSECURE_DEFAULTS_NORM="true" ;;
@@ -219,6 +228,18 @@ if [ "$ALLOW_INSECURE_DEFAULTS_NORM" != "true" ]; then
   fi
   if [ "$VALET_TOKEN_SECRET" = "$INSECURE_VALET_DEFAULT" ]; then
     insecure_found="${insecure_found} VALET_TOKEN_SECRET"
+  fi
+  if [ "${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-}" = "$INSECURE_WS_CONN_TOKEN_DEFAULT" ]; then
+    insecure_found="${insecure_found} WEB_SOCKET_CONNECTION_TOKEN_SECRET"
+  fi
+  if [ "${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-}" = "$INSECURE_WS_INTERNAL_DEFAULT" ]; then
+    insecure_found="${insecure_found} WEBSOCKET_GATEWAY_INTERNAL_SECRET"
+  fi
+  # In the server container the DB password arrives as DB_PASSWORD (compose maps
+  # MYSQL_PASSWORD -> DB_PASSWORD). Report it under the MYSQL_PASSWORD name the
+  # operator actually sets.
+  if [ "${DB_PASSWORD:-}" = "$INSECURE_MYSQL_PASSWORD_DEFAULT" ]; then
+    insecure_found="${insecure_found} MYSQL_PASSWORD"
   fi
   if [ -n "$insecure_found" ]; then
     echo >&2 "==============================================================================="

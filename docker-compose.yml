@@ -145,6 +145,27 @@ x-server-env: &server-env
   # sign-ups). The container healthcheck path (/healthcheck) is always exempt.
   SHARED_SERVER_ACCESS_KEY: ${SHARED_SERVER_ACCESS_KEY:-}
   SHARED_SERVER_ACCESS_KEY_MODE: ${SHARED_SERVER_ACCESS_KEY_MODE:-all}
+  # CORS. The gateway now defaults to STRICT (safe for self-host): it reflects
+  # only known origins — the desktop app (file://), the Firefox/Chromium/Safari
+  # clippers (…-extension://), a localhost self-host (http(s)://localhost[:port])
+  # and anything listed in CORS_ALLOWED_ORIGINS. SAME-ORIGIN requests (the
+  # standard nginx front-door setup) are unaffected. Set
+  # CORS_ORIGIN_STRICT_MODE_ENABLED=false to restore the legacy permissive
+  # "reflect ANY Origin" behavior; add extra cross-origin front-ends (comma-
+  # separated) to CORS_ALLOWED_ORIGINS.
+  CORS_ORIGIN_STRICT_MODE_ENABLED: ${CORS_ORIGIN_STRICT_MODE_ENABLED:-}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+  # Rate limiting for the UNAUTHENTICATED auth-adjacent endpoints (login,
+  # registration, MCP-token authenticate, magic-link request, recovery).
+  # Redis-backed, keyed by client IP (honors TRUST_PROXY), and FAIL-OPEN if Redis
+  # is unavailable so an outage never blocks legitimate sign-ins. Defaults:
+  # 10 logins/min/IP and 5/min/IP for registration + mcp-authenticate + magic-link
+  # (a shared window of RATE_LIMIT_WINDOW_SECONDS). Set RATE_LIMIT_ENABLED=false
+  # to turn it off. The authenticated sync/proxy paths are never rate-limited.
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-}
+  RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+  RATE_LIMIT_LOGIN_MAX: ${RATE_LIMIT_LOGIN_MAX:-10}
+  RATE_LIMIT_REGISTRATION_MAX: ${RATE_LIMIT_REGISTRATION_MAX:-5}
 
 services:
   app:
