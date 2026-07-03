@@ -67,7 +67,12 @@ export abstract class AuthMiddleware extends BaseMiddleware {
             method: request.method,
             userAgent: request.headers['user-agent'],
             secChUa: request.headers['sec-ch-ua'] as string,
-            ip: this.clientIpFromRequest(request),
+            // Standard Red Notes: use request.ip (Express resolves it honoring the
+            // configured TRUST_PROXY) rather than hand-parsing the leftmost
+            // X-Forwarded-For, which a direct client can spoof. This matches how the
+            // RateLimitMiddleware keys its buckets, so session/security IP and rate
+            // limiting agree on the same trusted client address.
+            ip: request.ip ?? request.socket?.remoteAddress ?? '',
           },
           cookies: cookiesFromHeaders,
         })
@@ -207,19 +212,6 @@ export abstract class AuthMiddleware extends BaseMiddleware {
     }
 
     return settings
-  }
-
-  private clientIpFromRequest(request: Request): string {
-    const forwardedFor = request.headers['x-forwarded-for']
-    if (forwardedFor) {
-      const value = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
-      const leftmost = value.split(',')[0]?.trim()
-      if (leftmost) {
-        return leftmost
-      }
-    }
-
-    return request.socket?.remoteAddress ?? request.ip ?? ''
   }
 
   private getCrossServiceTokenCacheExpireTimestamp(token: CrossServiceTokenData): number {

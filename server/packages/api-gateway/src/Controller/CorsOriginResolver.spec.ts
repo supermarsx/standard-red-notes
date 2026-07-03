@@ -43,6 +43,9 @@ describe('CorsOriginResolver', () => {
       // A look-alike host that merely contains "localhost" must not slip through.
       expect(decideCorsOrigin('https://localhost.evil.com', strict).allow).toBe(false)
       expect(decideCorsOrigin('http://notlocalhost', strict).allow).toBe(false)
+      // The unanchored-regex bypass the home-server inline block had: a "port" that
+      // is actually a subdomain label must be rejected by the anchored regex.
+      expect(decideCorsOrigin('http://localhost:1.evil.com', strict).allow).toBe(false)
     })
 
     it('allows origins explicitly configured in CORS_ALLOWED_ORIGINS', () => {

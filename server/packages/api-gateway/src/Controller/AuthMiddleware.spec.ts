@@ -99,3 +99,75 @@ describe('AuthMiddleware settings projection', () => {
     expect(settings[SettingName.NAMES.OcrServerAllowed]).toBe('true')
   })
 })
+
+describe('AuthMiddleware client IP for session validation', () => {
+  const mockedVerify = verify as unknown as jest.Mock
+
+  let serviceProxy: ServiceProxyInterface
+  let crossServiceTokenCache: CrossServiceTokenCacheInterface
+  let timer: { getTimestampInSeconds: jest.Mock; convertStringDateToSeconds: jest.Mock }
+  let logger: { debug: jest.Mock; error: jest.Mock }
+
+  const createMiddleware = () =>
+    // crossServiceTokenCacheTTL = 0 forces the validateSession path (no cache hit).
+    new RequiredCrossServiceTokenMiddleware(
+      serviceProxy,
+      'jwt-secret',
+      0,
+      crossServiceTokenCache,
+      timer as never,
+      logger as never,
+    )
+
+  beforeEach(() => {
+    mockedVerify.mockReturnValue({
+      user: { uuid: '1-2-3', email: 'test@test.te' },
+      roles: [{ uuid: 'r-1', name: 'CORE_USER' }],
+    })
+
+    serviceProxy = {
+      validateSession: jest.fn().mockResolvedValue({ status: 200, data: { authToken: 'encoded' }, headers: {} }),
+    } as unknown as ServiceProxyInterface
+
+    crossServiceTokenCache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+    } as unknown as CrossServiceTokenCacheInterface
+
+    timer = {
+      getTimestampInSeconds: jest.fn().mockReturnValue(0),
+      convertStringDateToSeconds: jest.fn().mockReturnValue(0),
+    }
+
+    logger = { debug: jest.fn(), error: jest.fn() }
+  })
+
+  const runWithRequest = async (request: Partial<Request>): Promise<string | undefined> => {
+    const response = { locals: {} } as unknown as Response
+    const next = jest.fn() as unknown as NextFunction
+
+    await createMiddleware().handler(request as Request, response, next)
+
+    const call = (serviceProxy.validateSession as jest.Mock).mock.calls[0]?.[0]
+    return call?.requestMetadata?.ip as string | undefined
+  }
+
+  it('uses request.ip (TRUST_PROXY-resolved) and ignores a spoofed X-Forwarded-For', async () => {
+    const ip = await runWithRequest({
+      headers: { authorization: 'Bearer token', 'x-forwarded-for': '9.9.9.9, 8.8.8.8' } as never,
+      socket: { remoteAddress: '1.1.1.1' } as never,
+      ip: '2.2.2.2',
+    })
+
+    expect(ip).toBe('2.2.2.2')
+  })
+
+  it('falls back to the socket remote address when request.ip is undefined', async () => {
+    const ip = await runWithRequest({
+      headers: { authorization: 'Bearer token' } as never,
+      socket: { remoteAddress: '1.1.1.1' } as never,
+    })
+
+    expect(ip).toBe('1.1.1.1')
+  })
+})

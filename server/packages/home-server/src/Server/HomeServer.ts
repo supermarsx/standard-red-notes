@@ -9,6 +9,12 @@ import {
   registerCaldavRoutes,
   registerWorkflowsUiProxy,
   startReminderDeliveryScheduler,
+  decideCorsOrigin,
+  resolveCorsStrictMode,
+  buildDefaultRateLimitRules,
+  createRateLimitMiddleware,
+  RateLimitRedis,
+  TYPES as ApiGatewayTypes,
 } from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
@@ -134,6 +140,35 @@ export class HomeServer implements HomeServerInterface {
         // remote client cannot spoof the forwarded headers.
         configureTrustProxy(app, env.get('TRUST_PROXY', true))
 
+        // Standard Red Notes: Redis-backed IP rate limiting on the unauthenticated,
+        // auth-adjacent endpoints (login, registration, MCP-token authenticate,
+        // magic-link request, recovery) — the same brute-force throttle the
+        // standalone api-gateway installs (bin/server.ts). Reuses the gateway's
+        // ioredis client, which is only bound when CACHE_TYPE is NOT in-memory, so
+        // when the home-server runs without Redis the middleware is a no-op (the
+        // factory returns a pass-through when redis is undefined). Keyed by
+        // req.ip, which honors the TRUST_PROXY set above so a direct client cannot
+        // spoof it. Tunable via RATE_LIMIT_* env; disable with RATE_LIMIT_ENABLED=false.
+        const rateLimitRedis = container.isBound(ApiGatewayTypes.ApiGateway_Redis)
+          ? (container.get(ApiGatewayTypes.ApiGateway_Redis) as RateLimitRedis)
+          : undefined
+        const rateLimitNumber = (key: string, fallback: number): number =>
+          env.get(key, true) ? +env.get(key, true) : fallback
+        app.use(
+          createRateLimitMiddleware({
+            redis: rateLimitRedis,
+            logger: { warn: (message: string) => winston.loggers.get('home-server').warn(message) },
+            config: {
+              enabled: env.get('RATE_LIMIT_ENABLED', true) !== 'false',
+              rules: buildDefaultRateLimitRules({
+                windowSeconds: rateLimitNumber('RATE_LIMIT_WINDOW_SECONDS', 60),
+                loginMax: rateLimitNumber('RATE_LIMIT_LOGIN_MAX', 10),
+                registrationMax: rateLimitNumber('RATE_LIMIT_REGISTRATION_MAX', 5),
+              }),
+            },
+          }),
+        )
+
         /* eslint-disable */
         app.use(
           helmet({
@@ -172,49 +207,44 @@ export class HomeServer implements HomeServerInterface {
 
         app.use(cookieParser() as never)
 
+        // Standard Red Notes: route the self-hosted home-server CORS through the
+        // SAME resolver the standalone api-gateway uses (CorsOriginResolver), instead
+        // of the former inline block that defaulted to PERMISSIVE (reflecting ANY
+        // Origin with credentials when CORS_ORIGIN_STRICT_MODE_ENABLED was unset) and
+        // used an UNANCHORED localhost regex (so http://localhost:1.evil.com matched).
+        // The resolver defaults to STRICT and only allows origins that legitimately
+        // need credentialed cross-origin access (desktop app, the browser clippers, a
+        // localhost self-host via the anchored ^https?://localhost(:\d+)?$ regex, and
+        // anything the operator lists in CORS_ALLOWED_ORIGINS). Set
+        // CORS_ORIGIN_STRICT_MODE_ENABLED=false to restore the legacy permissive mode.
         const corsAllowedOrigins = env.get('CORS_ALLOWED_ORIGINS', true)
           ? env.get('CORS_ALLOWED_ORIGINS', true).split(',')
           : []
+        const corsStrictMode = resolveCorsStrictMode(env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true))
         app.use(
           cors({
             credentials: true,
             exposedHeaders: ['Content-Range', 'Accept-Ranges', 'x-captcha-required'],
-            origin: (requestOrigin: string | undefined, callback: (err: Error | null, origin?: string[]) => void) => {
-              const originStrictModeEnabled = env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true)
-                ? env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true) === 'true'
-                : false
+            origin: (
+              requestOrigin: string | undefined,
+              callback: (err: Error | null, origin?: boolean | string | string[]) => void,
+            ) => {
+              const decision = decideCorsOrigin(requestOrigin, {
+                strictMode: corsStrictMode,
+                allowedOrigins: corsAllowedOrigins,
+              })
 
-              if (!originStrictModeEnabled) {
+              if (decision.allow) {
                 callback(null, [requestOrigin as string])
-
                 return
               }
 
-              const requstOriginIsNotFilled = !requestOrigin || requestOrigin === 'null'
-              const requestOriginatesFromTheDesktopApp = requestOrigin?.startsWith('file://')
-              const requestOriginatesFromClipperForFirefox = requestOrigin?.startsWith('moz-extension://')
-              const requestOriginatesFromSelfHostedAppOnHttpPort = requestOrigin === 'http://localhost'
-              const requestOriginatesFromSelfHostedAppOnCustomPort =
-                requestOrigin?.match(/http:\/\/localhost:\d+/) !== null
-              const requestOriginatesFromSelfHostedApp =
-                requestOriginatesFromSelfHostedAppOnHttpPort || requestOriginatesFromSelfHostedAppOnCustomPort
-
-              const requestIsWhitelisted =
-                corsAllowedOrigins.length === 0 ||
-                requstOriginIsNotFilled ||
-                requestOriginatesFromTheDesktopApp ||
-                requestOriginatesFromClipperForFirefox ||
-                requestOriginatesFromSelfHostedApp
-
-              if (requestIsWhitelisted) {
-                callback(null, [requestOrigin as string])
-              } else {
-                if (corsAllowedOrigins.includes(requestOrigin)) {
-                  callback(null, [requestOrigin])
-                } else {
-                  callback(new Error('Not allowed by CORS', { cause: 'origin not allowed' }))
-                }
-              }
+              // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
+              // header (a falsy origin tells the cors package to skip CORS headers and
+              // continue). The browser blocks the cross-origin RESPONSE while
+              // SAME-ORIGIN requests — which need no ACAO — keep working on any custom
+              // domain. We deliberately do NOT throw (throwing 500s same-origin deploys).
+              callback(null, false)
             },
           }),
         )

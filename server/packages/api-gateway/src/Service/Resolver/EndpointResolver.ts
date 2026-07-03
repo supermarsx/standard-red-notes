@@ -165,7 +165,17 @@ export class EndpointResolver implements EndpointResolverInterface {
   resolveEndpointOrMethodIdentifier(method: string, endpoint: string, ...params: string[]): string {
     if (!this.isConfiguredForHomeServer) {
       if (params.length > 0) {
-        return params.reduce((acc, param) => acc.replace(/:[a-zA-Z0-9]+/, param), endpoint)
+        // Standard Red Notes: substitute ":placeholder" tokens positionally in a
+        // SINGLE left-to-right pass over the original endpoint. The previous
+        // `reduce(... replace(/:[a-zA-Z0-9]+/, param))` re-scanned the string each
+        // iteration, so a param value containing a ":word" (e.g. a userUuid) got
+        // mis-matched as the next placeholder and clobbered. A global replace with
+        // a positional replacer inserts each param at the k-th placeholder and
+        // never re-scans inserted text, keeping single-param routes identical.
+        let paramIndex = 0
+        return endpoint.replace(/:[a-zA-Z0-9]+/g, (match) =>
+          paramIndex < params.length ? params[paramIndex++] : match,
+        )
       }
 
       return endpoint
