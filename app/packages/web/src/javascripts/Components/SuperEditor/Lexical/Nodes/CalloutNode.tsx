@@ -21,7 +21,7 @@ const VARIANT_STYLES: Record<CalloutVariant, { border: string; bar: string; labe
   info: { border: 'border-info', bar: 'bg-info', label: 'Info' },
   success: { border: 'border-success', bar: 'bg-success', label: 'Success' },
   warning: { border: 'border-warning', bar: 'bg-warning', label: 'Warning' },
-  danger: { border: 'border-danger', bar: 'bg-danger', label: 'Warning' },
+  danger: { border: 'border-danger', bar: 'bg-danger', label: 'Danger' },
 }
 
 const VARIANTS: CalloutVariant[] = ['info', 'success', 'warning', 'danger']

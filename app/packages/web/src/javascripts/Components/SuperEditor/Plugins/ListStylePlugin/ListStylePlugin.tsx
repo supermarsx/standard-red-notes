@@ -26,9 +26,12 @@ export default function ListStylePlugin(): null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
-    // One-time stamp of the initial deserialized state.
+    // One-time stamp of the initial deserialized state. We pass `editor`
+    // explicitly: a bare `editorState.read()` binds the editor state but leaves
+    // `activeEditor` null, so the helpers' internal `$getEditor()` would throw
+    // (and was silently swallowed, so markers never re-stamped on load).
     editor.getEditorState().read(() => {
-      applyPersistedListStyles()
+      applyPersistedListStyles(editor)
     })
 
     return editor.registerMutationListener(ListNode, (mutations) => {
@@ -56,7 +59,7 @@ export default function ListStylePlugin(): null {
           toStamp.add(top)
         }
         for (const list of toStamp) {
-          applyListStyleToDOM(list)
+          applyListStyleToDOM(list, editor)
         }
       })
     })

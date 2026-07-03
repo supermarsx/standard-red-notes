@@ -28,6 +28,7 @@ import {
   $setListStyle,
   $setCustomListStyle,
   $setMultilevelListStyle,
+  applyPersistedListStyles,
   sanitizeCustomGlyph,
   CUSTOM_MARKER_VALUE,
   BULLET_STYLES,
@@ -571,5 +572,41 @@ describe('applyListStyleToDOM multilevel stale-marker clearing (BUG 3)', () => {
 
     // The stale `square` marker class must have been cleared (BUG 3 fix).
     expect(level2El.classList.contains('Lexical__listStyle--square')).toBe(false)
+  })
+})
+
+describe('applyPersistedListStyles re-applies under a bare editorState.read (ListStylePlugin context)', () => {
+  /**
+   * Regression for the silent-no-op bug: `ListStylePlugin` re-stamps persisted
+   * markers from inside `editor.getEditorState().read(...)`. A *bare* editorState
+   * read binds `activeEditorState` but leaves `activeEditor` null, so the helpers'
+   * internal `$getEditor()` threw — and the throw was swallowed, so custom /
+   * multilevel markers never re-appeared after a fresh render / reload. The fix
+   * threads the editor explicitly. This test reproduces that exact context: stamp
+   * a marker, wipe the class to simulate a reconciler rebuild, then re-apply the
+   * way the plugin does and assert the marker class is restored.
+   */
+  afterEach(() => jest.restoreAllMocks())
+
+  it('restores the persisted marker class when passed the editor from a read', () => {
+    const editor = makeEditor()
+    const listKey = seedListAndSelect(editor)
+    const ul = document.createElement('ul')
+    jest.spyOn(editor, 'getElementByKey').mockImplementation((key: string) => (key === listKey ? ul : null))
+
+    // Persist a custom-glyph marker (this also live-stamps `ul` during the update).
+    editor.update(() => $setListStyle($getSelection(), 'arrow'), { discrete: true })
+    expect(ul.classList.contains('Lexical__listStyle--arrow')).toBe(true)
+
+    // Simulate a fresh render: the reconciler rebuilt the <ul> without our class.
+    ul.className = ''
+    expect(ul.classList.contains('Lexical__listStyle--arrow')).toBe(false)
+
+    // Re-apply exactly as ListStylePlugin does: from a bare editorState.read(),
+    // passing the editor. Before the fix this no-op'd ($getEditor threw here).
+    editor.getEditorState().read(() => {
+      applyPersistedListStyles(editor)
+    })
+    expect(ul.classList.contains('Lexical__listStyle--arrow')).toBe(true)
   })
 })

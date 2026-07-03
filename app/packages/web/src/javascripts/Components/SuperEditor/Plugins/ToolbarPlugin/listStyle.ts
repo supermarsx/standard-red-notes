@@ -36,6 +36,7 @@ import {
   $getRoot,
   $isElementNode,
   BaseSelection,
+  LexicalEditor,
   LexicalNode,
 } from 'lexical'
 import { $getNearestNodeOfType } from '@lexical/utils'
@@ -436,20 +437,57 @@ const stampMarker = (element: HTMLElement, styleValue: string | null, customGlyp
 }
 
 /**
+ * Resolve the editor to stamp DOM through: prefer an explicitly-passed instance,
+ * else fall back to the ambient `$getEditor()`. Returns `null` when neither is
+ * available.
+ *
+ * WHY EXPLICIT: this is called from `ListStylePlugin` inside
+ * `editor.getEditorState().read(...)` — a *bare* editorState read binds
+ * `activeEditorState` but leaves `activeEditor` null, so `$getEditor()` THROWS
+ * there. The previous code swallowed that throw and silently no-op'd, which meant
+ * persisted custom/multilevel list markers were never re-stamped after a fresh
+ * render (they vanished on reload). Passing the editor the plugin already holds
+ * makes stamping independent of the read/update context.
+ */
+const resolveEditor = (editor?: LexicalEditor): LexicalEditor | null => {
+  if (editor) {
+    return editor
+  }
+  try {
+    return $getEditor()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `getElementByKey` returns the live DOM element for a node key, or `null` when
+ * it has not rendered. In headless mode (and when no editor is bound) it THROWS
+ * instead; we treat every such case as "no element to style".
+ */
+const safeGetElementByKey = (editor: LexicalEditor, key: string): HTMLElement | null => {
+  try {
+    return editor.getElementByKey(key)
+  } catch {
+    return null
+  }
+}
+
+/**
  * Push a `ListNode`'s persisted styling onto its rendered DOM element — both the
  * single marker (`list-style-type`/class) and, when present, the multilevel map
  * stamped onto each descendant list by depth. No-op when the node has no live
- * element yet. Must run where `$getEditor()` is available.
+ * element yet. Pass the `editor` when calling from a bare `editorState.read()`
+ * (e.g. `ListStylePlugin`); otherwise the ambient `$getEditor()` is used.
  */
-export const applyListStyleToDOM = (listNode: ListNode): void => {
-  let element: HTMLElement | null
-  try {
-    // `getElementByKey` is unavailable in headless mode and returns null before
-    // the node has rendered — in both cases there is simply nothing to style.
-    element = $getEditor().getElementByKey(listNode.getKey())
-  } catch {
+export const applyListStyleToDOM = (listNode: ListNode, editor?: LexicalEditor): void => {
+  const activeEditor = resolveEditor(editor)
+  if (activeEditor === null) {
     return
   }
+  // `getElementByKey` is unavailable in headless mode and returns null before the
+  // node has rendered — in both cases there is simply nothing to style.
+  const element = safeGetElementByKey(activeEditor, listNode.getKey())
   if (element === null) {
     return
   }
@@ -484,8 +522,8 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
     let levelHere = parentLevel
     if ($isListNode(node)) {
       levelHere = parentLevel + 1
-      try {
-        const el = $getEditor().getElementByKey(node.getKey())
+      {
+        const el = safeGetElementByKey(activeEditor, node.getKey())
         if (el) {
           // This descendant list is part of THIS multilevel tree being re-applied,
           // so it is always safe to (re)stamp it. When `levels[levelHere]` is
@@ -495,8 +533,6 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
           const value = levels[levelHere]
           stampMarker(el, value ?? null, customGlyph)
         }
-      } catch {
-        /* not rendered */
       }
     }
     if ($isElementNode(node)) {
@@ -516,13 +552,14 @@ export const applyListStyleToDOM = (listNode: ListNode): void => {
  * Re-apply every persisted list style in the document to the DOM. Call this from
  * an editor update/registerUpdateListener after the editor (re)rendered list
  * DOM from a deserialized state, since the reconciler does not copy ElementNode
- * `__style` onto `<ol>`/`<ul>` in this Lexical build. Must run where
- * `$getEditor()` is available.
+ * `__style` onto `<ol>`/`<ul>` in this Lexical build. Pass the `editor` when
+ * calling from a bare `editorState.read()` (e.g. `ListStylePlugin`); otherwise the
+ * ambient `$getEditor()` is used.
  */
-export const applyPersistedListStyles = (): void => {
+export const applyPersistedListStyles = (editor?: LexicalEditor): void => {
   const visit = (node: LexicalNode): void => {
     if ($isListNode(node)) {
-      applyListStyleToDOM(node)
+      applyListStyleToDOM(node, editor)
     }
     if ($isElementNode(node)) {
       for (const child of node.getChildren()) {
