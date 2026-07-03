@@ -295,6 +295,11 @@ import { ListGroupMembers } from '../Domain/UseCase/ListGroupMembers/ListGroupMe
 import { GetUserEffectivePermissions } from '../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 import { ListRolesWithPermissions } from '../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
 import { SetRolePermissions } from '../Domain/UseCase/SetRolePermissions/SetRolePermissions'
+import { CreateCustomRole } from '../Domain/UseCase/CreateCustomRole/CreateCustomRole'
+import { DeleteCustomRole } from '../Domain/UseCase/DeleteCustomRole/DeleteCustomRole'
+import { GetPermissionCatalog } from '../Domain/UseCase/GetPermissionCatalog/GetPermissionCatalog'
+import { GetRoleHolders } from '../Domain/UseCase/GetRoleHolders/GetRoleHolders'
+import { ResolveRoleSetPermissions } from '../Domain/UseCase/ResolveRoleSetPermissions/ResolveRoleSetPermissions'
 import { BaseSharesController } from '../Infra/InversifyExpressUtils/Base/BaseSharesController'
 import { DeadManSwitch } from '../Domain/DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../Domain/DeadManSwitch/DeadManSwitchRepositoryInterface'
@@ -1645,7 +1650,9 @@ export class ContainerConfigLoader {
       .toConstantValue(new GetShare(container.get(TYPES.Auth_ShareRepository)))
     container
       .bind<CreateGroup>(TYPES.Auth_CreateGroup)
-      .toConstantValue(new CreateGroup(container.get(TYPES.Auth_GroupRepository)))
+      .toConstantValue(
+        new CreateGroup(container.get(TYPES.Auth_GroupRepository), container.get(TYPES.Auth_RoleRepository)),
+      )
     container
       .bind<ListGroups>(TYPES.Auth_ListGroups)
       .toConstantValue(new ListGroups(container.get(TYPES.Auth_GroupRepository)))
@@ -1665,7 +1672,9 @@ export class ContainerConfigLoader {
       .toConstantValue(new RemoveUserFromGroup(container.get(TYPES.Auth_GroupRepository)))
     container
       .bind<SetGroupRoles>(TYPES.Auth_SetGroupRoles)
-      .toConstantValue(new SetGroupRoles(container.get(TYPES.Auth_GroupRepository)))
+      .toConstantValue(
+        new SetGroupRoles(container.get(TYPES.Auth_GroupRepository), container.get(TYPES.Auth_RoleRepository)),
+      )
     container
       .bind<ListGroupMembers>(TYPES.Auth_ListGroupMembers)
       .toConstantValue(
@@ -1699,6 +1708,39 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_PermissionRepository),
         ),
       )
+    container
+      .bind<CreateCustomRole>(TYPES.Auth_CreateCustomRole)
+      .toConstantValue(
+        new CreateCustomRole(
+          container.get(TYPES.Auth_RoleRepository),
+          container.get(TYPES.Auth_PermissionRepository),
+        ),
+      )
+    container
+      .bind<DeleteCustomRole>(TYPES.Auth_DeleteCustomRole)
+      .toConstantValue(
+        new DeleteCustomRole(container.get(TYPES.Auth_RoleRepository), container.get(TYPES.Auth_GroupRepository)),
+      )
+    container
+      .bind<GetPermissionCatalog>(TYPES.Auth_GetPermissionCatalog)
+      .toConstantValue(
+        new GetPermissionCatalog(
+          container.get(TYPES.Auth_RoleRepository),
+          container.get(TYPES.Auth_PermissionRepository),
+        ),
+      )
+    container
+      .bind<GetRoleHolders>(TYPES.Auth_GetRoleHolders)
+      .toConstantValue(
+        new GetRoleHolders(
+          container.get(TYPES.Auth_RoleRepository),
+          container.get(TYPES.Auth_GroupRepository),
+          container.get(TYPES.Auth_UserRepository),
+        ),
+      )
+    container
+      .bind<ResolveRoleSetPermissions>(TYPES.Auth_ResolveRoleSetPermissions)
+      .toConstantValue(new ResolveRoleSetPermissions(container.get(TYPES.Auth_RoleRepository)))
     container
       .bind<CreateDeadManSwitch>(TYPES.Auth_CreateDeadManSwitch)
       .toConstantValue(

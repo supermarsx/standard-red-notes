@@ -22,6 +22,11 @@ import { ListGroupMembers } from '../../../Domain/UseCase/ListGroupMembers/ListG
 import { GetUserEffectivePermissions } from '../../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 import { ListRolesWithPermissions } from '../../../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
 import { SetRolePermissions } from '../../../Domain/UseCase/SetRolePermissions/SetRolePermissions'
+import { CreateCustomRole } from '../../../Domain/UseCase/CreateCustomRole/CreateCustomRole'
+import { DeleteCustomRole } from '../../../Domain/UseCase/DeleteCustomRole/DeleteCustomRole'
+import { GetPermissionCatalog } from '../../../Domain/UseCase/GetPermissionCatalog/GetPermissionCatalog'
+import { GetRoleHolders } from '../../../Domain/UseCase/GetRoleHolders/GetRoleHolders'
+import { ResolveRoleSetPermissions } from '../../../Domain/UseCase/ResolveRoleSetPermissions/ResolveRoleSetPermissions'
 
 import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOfflineSubscriptionToken/CreateOfflineSubscriptionToken'
 import { CreateSubscriptionToken } from '../../../Domain/UseCase/CreateSubscriptionToken/CreateSubscriptionToken'
@@ -42,6 +47,7 @@ import { GetRegularSubscriptionForUser } from '../../../Domain/UseCase/GetRegula
 import { GetSubscriptionSetting } from '../../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 import { RoleServiceInterface } from '../../../Domain/Role/RoleServiceInterface'
+import { CANONICAL_ADMIN_ROLES, CANONICAL_ADMIN_ROLE_NAMES } from '../../../Domain/Role/CanonicalRoles'
 import { FixStorageQuotaForUser } from '../../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
 
 /**
@@ -159,6 +165,20 @@ export class BaseAdminController extends BaseHttpController {
     // server, tests) keep compiling; the endpoints fail gracefully when absent.
     protected doListRolesWithPermissions?: ListRolesWithPermissions,
     protected doSetRolePermissions?: SetRolePermissions,
+    // Standard Red Notes: EXTENSIVE RBAC management. Additive + optional so every
+    // existing construction (home server, tests) keeps compiling and the
+    // endpoints fail gracefully (500 "not available") when a dep is absent.
+    //   - custom ROLE TYPES (create/delete) — the SAFE subset: a custom role is a
+    //     plain roles-table row conferred ONLY via groups (group -> effective-
+    //     permissions -> token resolves role NAMES against the DB, never the
+    //     RoleName enum). Built-ins are guarded server-side.
+    //   - the permission CATALOG browser, role-holders inspector and role-set
+    //     effective-permissions simulator (all read-only).
+    protected doCreateCustomRole?: CreateCustomRole,
+    protected doDeleteCustomRole?: DeleteCustomRole,
+    protected doGetPermissionCatalog?: GetPermissionCatalog,
+    protected doGetRoleHolders?: GetRoleHolders,
+    protected doResolveRoleSetPermissions?: ResolveRoleSetPermissions,
   ) {
     super()
 
@@ -187,6 +207,11 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.getAvailableRoles', this.getAvailableRoles.bind(this))
       this.controllerContainer.register('admin.listRolesWithPermissions', this.listRolesWithPermissions.bind(this))
       this.controllerContainer.register('admin.setRolePermissions', this.setRolePermissions.bind(this))
+      this.controllerContainer.register('admin.createCustomRole', this.createCustomRole.bind(this))
+      this.controllerContainer.register('admin.deleteCustomRole', this.deleteCustomRole.bind(this))
+      this.controllerContainer.register('admin.getPermissionCatalog', this.getPermissionCatalog.bind(this))
+      this.controllerContainer.register('admin.getRoleHolders', this.getRoleHolders.bind(this))
+      this.controllerContainer.register('admin.resolveRoleSetPermissions', this.resolveRoleSetPermissions.bind(this))
       this.controllerContainer.register(
         'admin.getUserEffectivePermissions',
         this.getUserEffectivePermissions.bind(this),
@@ -1093,16 +1118,20 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   /**
-   * Standard Red Notes: list every known role name so the admin panel can present
-   * the roles a group may confer. Backed by the canonical RoleName.NAMES so it
-   * stays in sync with the role model.
+   * Standard Red Notes: the DEFINITIVE role taxonomy the admin panel exposes —
+   * exactly the canonical four (Admin / Full / Core / Vaults users), with their
+   * human labels, in display order. This is what a group may confer. PLUS_USER
+   * and any legacy seeded role are intentionally NOT listed here.
    */
   async getAvailableRoles(_request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
       return this.json({ error: { message: 'Admin role required.' } }, 403)
     }
 
-    return this.json({ roleNames: Object.values(RoleName.NAMES) })
+    return this.json({
+      roleNames: CANONICAL_ADMIN_ROLE_NAMES,
+      roles: CANONICAL_ADMIN_ROLES,
+    })
   }
 
   /**
@@ -1177,6 +1206,164 @@ export class BaseAdminController extends BaseHttpController {
     })
 
     return this.json({ role })
+  }
+
+  /**
+   * Standard Red Notes: create an admin-defined CUSTOM role. Body:
+   * { name, description?, permissionNames? }. The SAFE subset of custom roles —
+   * a custom role is a plain roles-table row conferred ONLY through groups.
+   * Server-side guards (in the use case): the name is normalized, can never
+   * shadow a built-in role, must be unique, and every permission must exist in
+   * the catalog. Audit-logged as a role change (targetType 'role').
+   */
+  async createCustomRole(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doCreateCustomRole === undefined) {
+      return this.json({ error: { message: 'Custom role management is not available.' } }, 500)
+    }
+
+    const { name, description, permissionNames } = request.body as {
+      name?: string
+      description?: string | null
+      permissionNames?: string[]
+    }
+
+    const result = await this.doCreateCustomRole.execute({
+      name: name ?? '',
+      description: description ?? null,
+      permissionNames: permissionNames ?? [],
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const role = result.getValue()
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetType: 'role',
+      targetUuid: role.uuid,
+      ip: this.clientIp(request),
+      metadata: { role: role.name, created: true, permissionNames: role.permissionNames },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetUuid: role.uuid,
+      metadata: { role: role.name, created: true },
+    })
+
+    return this.json({ role })
+  }
+
+  /**
+   * Standard Red Notes: delete an admin-created CUSTOM role. The use case guards
+   * that a built-in role can never be deleted and that the role is unused (no
+   * group confers it, no user holds it directly). Audit-logged.
+   */
+  async deleteCustomRole(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doDeleteCustomRole === undefined) {
+      return this.json({ error: { message: 'Custom role management is not available.' } }, 500)
+    }
+
+    const { roleUuid } = request.params as Record<string, string>
+
+    const result = await this.doDeleteCustomRole.execute({ roleUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const deleted = result.getValue()
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetType: 'role',
+      targetUuid: deleted.uuid,
+      ip: this.clientIp(request),
+      metadata: { role: deleted.name, deleted: true },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.RoleChanged,
+      targetUuid: deleted.uuid,
+      metadata: { role: deleted.name, deleted: true },
+    })
+
+    return this.json({ success: true, roleUuid: deleted.uuid, name: deleted.name })
+  }
+
+  /**
+   * Standard Red Notes: the permission CATALOG browser — every seeded permission
+   * with its derived category and the roles that grant it. Read-only.
+   */
+  async getPermissionCatalog(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doGetPermissionCatalog === undefined) {
+      return this.json({ error: { message: 'Permission catalog is not available.' } }, 500)
+    }
+
+    const result = await this.doGetPermissionCatalog.execute()
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json(result.getValue())
+  }
+
+  /**
+   * Standard Red Notes: role INSPECTOR — who holds a role: the count of users
+   * assigned it directly plus the groups that confer it. Read-only.
+   */
+  async getRoleHolders(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doGetRoleHolders === undefined) {
+      return this.json({ error: { message: 'Role inspector is not available.' } }, 500)
+    }
+
+    const { roleUuid } = request.params as Record<string, string>
+
+    const result = await this.doGetRoleHolders.execute({ roleUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json(result.getValue())
+  }
+
+  /**
+   * Standard Red Notes: effective-permissions SIMULATOR — resolve an arbitrary
+   * set of role names to the union of the permissions they grant. Body:
+   * { roleNames: string[] }. Read-only.
+   */
+  async resolveRoleSetPermissions(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doResolveRoleSetPermissions === undefined) {
+      return this.json({ error: { message: 'Permission simulator is not available.' } }, 500)
+    }
+
+    const { roleNames } = request.body as { roleNames?: string[] }
+
+    const result = await this.doResolveRoleSetPermissions.execute({ roleNames: roleNames ?? [] })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    return this.json(result.getValue())
   }
 
   /**

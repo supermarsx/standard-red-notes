@@ -8,8 +8,18 @@
 export interface RolePermissionsView {
   uuid: string
   name: string
+  /** Standard Red Notes: the canonical human label ('Admin user', 'Full user', …). */
+  label: string
   version: number
   isBuiltIn: boolean
+  /**
+   * Standard Red Notes: the inverse of isBuiltIn — a role that is NOT a member of
+   * the canonical RoleName enum, i.e. an admin-created CUSTOM role. Custom roles
+   * may be renamed/deleted (when unused) and are only conferred through groups.
+   */
+  isCustom: boolean
+  /** Standard Red Notes: optional human description (custom roles only). */
+  description: string | null
   permissionNames: string[]
 }
 

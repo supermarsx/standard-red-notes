@@ -55,6 +55,7 @@ import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
 import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
+import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
@@ -416,6 +417,23 @@ export class ContainerConfigLoader {
         `http://localhost:${probePort('REVISIONS_SERVER_PORT', 3105)}`,
     }
     container.bind<Record<string, string>>(TYPES.ApiGateway_SERVICE_PROBE_URLS).toConstantValue(serviceProbeUrls)
+
+    // Standard Red Notes: admin-panel SERVICE LIFECYCLE control. Shells out to
+    // `supervisorctl` to restart/stop/start the sibling server processes running
+    // under supervisord in the single-container image. Program names are an
+    // ALLOWLIST (never interpolated into a shell) so a malicious :name path
+    // segment can never inject a command. SUPERVISORCTL_CONFIG_PATH overrides the
+    // conf the CLI talks through (default /etc/supervisord.conf, where the
+    // [supervisorctl] unix-socket sections live). Always bound; when supervisorctl
+    // cannot reach supervisord (older image without the socket conf) the service
+    // degrades to an "unavailable" outcome rather than throwing.
+    container
+      .bind<ServiceControlService>(TYPES.ApiGateway_ServiceControlService)
+      .toConstantValue(
+        new ServiceControlService({
+          configPath: env.get('SUPERVISORCTL_CONFIG_PATH', true) || '/etc/supervisord.conf',
+        }),
+      )
 
     // Standard Red Notes: OPT-IN read-only CalDAV feed.
     //

@@ -961,6 +961,46 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: list the controllable supervisord programs plus whether
+   * service control is available on this server. `available` is false on an older
+   * image whose supervisord conf lacks the [supervisorctl] socket sections. A 404
+   * means the endpoint predates this feature — the caller then hides the controls.
+   * Returns { available, programs }.
+   */
+  async adminListServices(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.adminServices),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list controllable services.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: restart/stop/start a single supervisord-managed program.
+   * The server enforces an ALLOWLIST of program names and forbids stopping the
+   * api-gateway. Restarting the api-gateway requires `confirmSelfInterrupt` (the
+   * admin's connection drops briefly); the server replies 202 before the restart
+   * lands. Returns { program, action, status } on success.
+   */
+  async adminControlService(
+    name: string,
+    action: 'restart' | 'stop' | 'start',
+    options: { confirmSelfInterrupt?: boolean } = {},
+  ): Promise<HttpResponse> {
+    let url = joinPaths(this.host, Paths.v1.adminServiceAction(name, action))
+    if (options.confirmSelfInterrupt) {
+      url = `${url}?confirmSelfInterrupt=true`
+    }
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url,
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: `Failed to ${action} service.`,
+    })
+  }
+
   /** Standard Red Notes: grant or revoke the admin (internal team) role. */
   async adminSetUserAdminRole(userUuid: string, granted: boolean): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
@@ -1031,6 +1071,78 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to set role permissions.',
       params: { permissionNames },
+    })
+  }
+
+  /**
+   * Standard Red Notes: the permission CATALOG browser — every seeded permission
+   * with its category and the roles that grant it.
+   */
+  async adminGetPermissionCatalog(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.permissionsCatalog),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get permission catalog.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: effective-permissions SIMULATOR — resolve a set of role
+   * names to the union of the permissions they grant.
+   */
+  async adminResolveRoleSetPermissions(roleNames: string[]): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.rolesResolvePermissions),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to resolve role permissions.',
+      params: { roleNames },
+    })
+  }
+
+  /**
+   * Standard Red Notes: role INSPECTOR — who holds a role (direct user count +
+   * the groups conferring it).
+   */
+  async adminGetRoleHolders(roleUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.roleHolders(roleUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get role holders.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: create an admin-defined CUSTOM role (group-conferrable).
+   * The server normalizes the name, guards against shadowing a built-in, and
+   * validates every permission against the catalog.
+   */
+  async adminCreateCustomRole(
+    name: string,
+    description: string | null,
+    permissionNames: string[],
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.roles),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create custom role.',
+      params: { name, description, permissionNames },
+    })
+  }
+
+  /**
+   * Standard Red Notes: delete an admin-created CUSTOM role. The server refuses
+   * to delete a built-in role or a role that is still in use.
+   */
+  async adminDeleteCustomRole(roleUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.role(roleUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete custom role.',
     })
   }
 

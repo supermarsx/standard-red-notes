@@ -2,6 +2,7 @@ import { Result, RoleName, UseCaseInterface, Uuid } from '@standardnotes/domain-
 
 import { RoleRepositoryInterface } from '../../Role/RoleRepositoryInterface'
 import { PermissionRepositoryInterface } from '../../Permission/PermissionRepositoryInterface'
+import { canonicalAdminRoleLabel } from '../../Role/CanonicalRoles'
 import { RolePermissionsView } from '../ListRolesWithPermissions/RolePermissionsView'
 
 import { SetRolePermissionsDTO } from './SetRolePermissionsDTO'
@@ -51,11 +52,16 @@ export class SetRolePermissions implements UseCaseInterface<RolePermissionsView>
     role.permissions = Promise.resolve(permissions)
     await this.roleRepository.save(role)
 
+    const isBuiltIn = Object.values(RoleName.NAMES).includes(role.name)
+
     return Result.ok({
       uuid: role.uuid,
       name: role.name,
+      label: canonicalAdminRoleLabel(role.name) ?? role.name,
       version: role.version,
-      isBuiltIn: Object.values(RoleName.NAMES).includes(role.name),
+      isBuiltIn,
+      isCustom: !isBuiltIn,
+      description: role.description ?? null,
       permissionNames: Array.from(resolvedNames).sort((a, b) => a.localeCompare(b)),
     })
   }

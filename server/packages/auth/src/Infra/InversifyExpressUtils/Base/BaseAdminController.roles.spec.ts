@@ -12,6 +12,11 @@ import { CreateOfflineSubscriptionToken } from '../../../Domain/UseCase/CreateOf
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { ListRolesWithPermissions } from '../../../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
 import { SetRolePermissions } from '../../../Domain/UseCase/SetRolePermissions/SetRolePermissions'
+import { CreateCustomRole } from '../../../Domain/UseCase/CreateCustomRole/CreateCustomRole'
+import { DeleteCustomRole } from '../../../Domain/UseCase/DeleteCustomRole/DeleteCustomRole'
+import { GetPermissionCatalog } from '../../../Domain/UseCase/GetPermissionCatalog/GetPermissionCatalog'
+import { GetRoleHolders } from '../../../Domain/UseCase/GetRoleHolders/GetRoleHolders'
+import { ResolveRoleSetPermissions } from '../../../Domain/UseCase/ResolveRoleSetPermissions/ResolveRoleSetPermissions'
 import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
 import { BaseAdminController } from './BaseAdminController'
@@ -19,6 +24,11 @@ import { BaseAdminController } from './BaseAdminController'
 describe('BaseAdminController role endpoints', () => {
   let doListRolesWithPermissions: ListRolesWithPermissions
   let doSetRolePermissions: SetRolePermissions
+  let doCreateCustomRole: CreateCustomRole
+  let doDeleteCustomRole: DeleteCustomRole
+  let doGetPermissionCatalog: GetPermissionCatalog
+  let doGetRoleHolders: GetRoleHolders
+  let doResolveRoleSetPermissions: ResolveRoleSetPermissions
   let auditLogWriter: AuditLogWriterInterface
   let request: Request
   let adminResponse: Response
@@ -27,9 +37,10 @@ describe('BaseAdminController role endpoints', () => {
   const roleUuid = '00000000-0000-0000-0000-000000000001'
 
   // Construct the controller with only the parameters these tests exercise:
-  // the audit-log writer (position 10) and the two trailing role use cases.
-  const createController = (options?: { withRoleUseCases?: boolean }) =>
-    new BaseAdminController(
+  // the audit-log writer (position 10) and the trailing role management use cases.
+  const createController = (options?: { withRoleUseCases?: boolean }) => {
+    const on = options?.withRoleUseCases !== false
+    return new BaseAdminController(
       {} as DeleteSetting,
       {} as GetSetting,
       {} as UserRepositoryInterface,
@@ -58,9 +69,15 @@ describe('BaseAdminController role endpoints', () => {
       undefined,
       undefined,
       undefined,
-      options?.withRoleUseCases === false ? undefined : doListRolesWithPermissions,
-      options?.withRoleUseCases === false ? undefined : doSetRolePermissions,
+      on ? doListRolesWithPermissions : undefined,
+      on ? doSetRolePermissions : undefined,
+      on ? doCreateCustomRole : undefined,
+      on ? doDeleteCustomRole : undefined,
+      on ? doGetPermissionCatalog : undefined,
+      on ? doGetRoleHolders : undefined,
+      on ? doResolveRoleSetPermissions : undefined,
     )
+  }
 
   beforeEach(() => {
     doListRolesWithPermissions = {} as jest.Mocked<ListRolesWithPermissions>
@@ -76,6 +93,41 @@ describe('BaseAdminController role endpoints', () => {
     doSetRolePermissions.execute = jest.fn().mockResolvedValue(
       Result.ok({ uuid: roleUuid, name: 'CORE_USER', version: 1, isBuiltIn: true, permissionNames: ['SYNC_ITEMS'] }),
     )
+
+    doCreateCustomRole = {} as jest.Mocked<CreateCustomRole>
+    doCreateCustomRole.execute = jest.fn().mockResolvedValue(
+      Result.ok({
+        uuid: roleUuid,
+        name: 'SUPPORT_AGENT',
+        version: 1,
+        isBuiltIn: false,
+        isCustom: true,
+        description: null,
+        permissionNames: ['SYNC_ITEMS'],
+      }),
+    )
+
+    doDeleteCustomRole = {} as jest.Mocked<DeleteCustomRole>
+    doDeleteCustomRole.execute = jest.fn().mockResolvedValue(Result.ok({ uuid: roleUuid, name: 'SUPPORT_AGENT' }))
+
+    doGetPermissionCatalog = {} as jest.Mocked<GetPermissionCatalog>
+    doGetPermissionCatalog.execute = jest
+      .fn()
+      .mockResolvedValue(
+        Result.ok({ permissions: [{ name: 'SYNC_ITEMS', category: 'general', grantedByRoleNames: ['CORE_USER'] }], categories: ['general'] }),
+      )
+
+    doGetRoleHolders = {} as jest.Mocked<GetRoleHolders>
+    doGetRoleHolders.execute = jest
+      .fn()
+      .mockResolvedValue(Result.ok({ uuid: roleUuid, name: 'CORE_USER', directUserCount: 2, groups: [] }))
+
+    doResolveRoleSetPermissions = {} as jest.Mocked<ResolveRoleSetPermissions>
+    doResolveRoleSetPermissions.execute = jest
+      .fn()
+      .mockResolvedValue(
+        Result.ok({ roleNames: ['CORE_USER'], unknownRoleNames: [], effectivePermissionNames: ['SYNC_ITEMS'], perRole: [] }),
+      )
 
     auditLogWriter = {} as jest.Mocked<AuditLogWriterInterface>
     auditLogWriter.write = jest.fn().mockResolvedValue(undefined)
@@ -145,5 +197,114 @@ describe('BaseAdminController role endpoints', () => {
     const result = await createController({ withRoleUseCases: false }).setRolePermissions(request, adminResponse)
 
     expect(result.statusCode).toEqual(500)
+  })
+
+  // ---- Custom role create -----------------------------------------------------
+  it('createCustomRole rejects a non-admin with 403', async () => {
+    const result = await createController().createCustomRole(
+      { params: {}, body: { name: 'Support' }, headers: {} } as unknown as Request,
+      nonAdminResponse,
+    )
+
+    expect(result.statusCode).toEqual(403)
+    expect(doCreateCustomRole.execute).not.toHaveBeenCalled()
+  })
+
+  it('createCustomRole creates a role and writes an audit entry for an admin', async () => {
+    const result = await createController().createCustomRole(
+      { params: {}, body: { name: 'Support Agent', permissionNames: ['SYNC_ITEMS'] }, headers: {} } as unknown as Request,
+      adminResponse,
+    )
+
+    expect(result.json).toMatchObject({ role: { name: 'SUPPORT_AGENT', isCustom: true } })
+    expect(auditLogWriter.write).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AuditAction.RoleChanged, targetType: 'role' }),
+    )
+  })
+
+  it('createCustomRole surfaces a use case failure (e.g. reserved name) as 400', async () => {
+    doCreateCustomRole.execute = jest.fn().mockResolvedValue(Result.fail('reserved built-in role name'))
+
+    const result = await createController().createCustomRole(
+      { params: {}, body: { name: 'CORE_USER' }, headers: {} } as unknown as Request,
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(auditLogWriter.write).not.toHaveBeenCalled()
+  })
+
+  it('createCustomRole reports 500 when not wired', async () => {
+    const result = await createController({ withRoleUseCases: false }).createCustomRole(
+      { params: {}, body: { name: 'Support' }, headers: {} } as unknown as Request,
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(500)
+  })
+
+  // ---- Custom role delete -----------------------------------------------------
+  it('deleteCustomRole rejects a non-admin with 403', async () => {
+    const result = await createController().deleteCustomRole(request, nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(doDeleteCustomRole.execute).not.toHaveBeenCalled()
+  })
+
+  it('deleteCustomRole removes the role and audits it for an admin', async () => {
+    const result = await createController().deleteCustomRole(request, adminResponse)
+
+    expect(doDeleteCustomRole.execute).toHaveBeenCalledWith({ roleUuid })
+    expect(result.json).toMatchObject({ success: true, name: 'SUPPORT_AGENT' })
+    expect(auditLogWriter.write).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AuditAction.RoleChanged, targetType: 'role' }),
+    )
+  })
+
+  it('deleteCustomRole surfaces a guard failure (built-in / in use) as 400', async () => {
+    doDeleteCustomRole.execute = jest.fn().mockResolvedValue(Result.fail('is a built-in role and cannot be deleted'))
+
+    const result = await createController().deleteCustomRole(request, adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(auditLogWriter.write).not.toHaveBeenCalled()
+  })
+
+  // ---- Permission catalog / inspector / simulator ----------------------------
+  it('getPermissionCatalog rejects a non-admin with 403', async () => {
+    const result = await createController().getPermissionCatalog(request, nonAdminResponse)
+
+    expect(result.statusCode).toEqual(403)
+    expect(doGetPermissionCatalog.execute).not.toHaveBeenCalled()
+  })
+
+  it('getPermissionCatalog returns the catalog for an admin', async () => {
+    const result = await createController().getPermissionCatalog(request, adminResponse)
+
+    expect(result.json).toMatchObject({ permissions: expect.any(Array), categories: ['general'] })
+  })
+
+  it('getRoleHolders returns holders for an admin and 403 for a non-admin', async () => {
+    expect((await createController().getRoleHolders(request, nonAdminResponse)).statusCode).toEqual(403)
+
+    const result = await createController().getRoleHolders(request, adminResponse)
+    expect(result.json).toMatchObject({ directUserCount: 2 })
+  })
+
+  it('resolveRoleSetPermissions unions permissions for an admin and 403 for a non-admin', async () => {
+    expect((await createController().resolveRoleSetPermissions(request, nonAdminResponse)).statusCode).toEqual(403)
+
+    const result = await createController().resolveRoleSetPermissions(
+      { params: {}, body: { roleNames: ['CORE_USER'] }, headers: {} } as unknown as Request,
+      adminResponse,
+    )
+    expect(result.json).toMatchObject({ effectivePermissionNames: ['SYNC_ITEMS'] })
+  })
+
+  it('the new read/simulator endpoints report 500 when not wired', async () => {
+    const controller = createController({ withRoleUseCases: false })
+    expect((await controller.getPermissionCatalog(request, adminResponse)).statusCode).toEqual(500)
+    expect((await controller.getRoleHolders(request, adminResponse)).statusCode).toEqual(500)
+    expect((await controller.resolveRoleSetPermissions(request, adminResponse)).statusCode).toEqual(500)
   })
 })

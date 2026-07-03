@@ -101,4 +101,8 @@ export const TYPES = {
   // persisted→env→default read path consumers go through.
   ApiGateway_ServerSettingsStore: Symbol.for('ApiGateway_ServerSettingsStore'),
   ApiGateway_ServerSettingsResolver: Symbol.for('ApiGateway_ServerSettingsResolver'),
+  // Standard Red Notes: admin-panel service lifecycle control. Shells out to
+  // `supervisorctl` (allowlisted program names only) to restart/stop/start the
+  // sibling server processes in the single-container image.
+  ApiGateway_ServiceControlService: Symbol.for('ApiGateway_ServiceControlService'),
 }

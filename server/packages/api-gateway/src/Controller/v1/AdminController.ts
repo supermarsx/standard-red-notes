@@ -12,6 +12,7 @@ import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
 import { PersistedAiProfile, validateProfilesPatch } from '../../Service/Assistant/profiles'
+import { API_GATEWAY_PROGRAM, ServiceAction, ServiceControlService } from '../../Service/ServiceControl/ServiceControlService'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -90,6 +91,13 @@ export class AdminController extends BaseHttpController {
     // Structured audit line for settings changes (setting NAMES only, never
     // values) — the gateway has no reachable audit-log store of its own.
     @inject(TYPES.ApiGateway_Logger) @optional() private logger?: { info(message: string, meta?: unknown): void },
+    // Standard Red Notes: service lifecycle control (restart/stop/start of the
+    // supervisord-managed sibling processes). Optional so the routes degrade to a
+    // clear 503 when the service is not bound, and so the controller still
+    // constructs in unit tests without it.
+    @inject(TYPES.ApiGateway_ServiceControlService)
+    @optional()
+    private serviceControlService?: ServiceControlService,
   ) {
     super()
   }
@@ -250,6 +258,70 @@ export class AdminController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'PUT',
         'admin/roles/:roleUuid/permissions',
+        request.params.roleUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  // Standard Red Notes: EXTENSIVE RBAC management — the permission CATALOG
+  // browser, effective-permissions SIMULATOR, custom-role create/delete and the
+  // role-holders INSPECTOR. All proxied to the auth admin controller, which
+  // re-gates on the INTERNAL_TEAM_USER role.
+  @httpGet('/permissions', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getPermissionCatalog(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/permissions'),
+      request.body,
+    )
+  }
+
+  // NOTE: static '/roles/resolve-permissions' — declared before the ':roleUuid'
+  // param routes so it is never shadowed by them.
+  @httpPost('/roles/resolve-permissions', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async resolveRoleSetPermissions(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'admin/roles/resolve-permissions'),
+      request.body,
+    )
+  }
+
+  @httpPost('/roles', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async createCustomRole(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'admin/roles'),
+      request.body,
+    )
+  }
+
+  @httpGet('/roles/:roleUuid/holders', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getRoleHolders(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'admin/roles/:roleUuid/holders',
+        request.params.roleUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpDelete('/roles/:roleUuid', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async deleteCustomRole(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'admin/roles/:roleUuid',
         request.params.roleUuid as string,
       ),
       request.body,
@@ -470,6 +542,167 @@ export class AdminController extends BaseHttpController {
       },
       services,
     })
+  }
+
+  /**
+   * Standard Red Notes: list the supervisord programs the admin panel may control
+   * plus whether service control is actually usable on this server. Admin-gated
+   * HARD (403 for non-admins). `available` is false on an older image whose
+   * supervisord conf lacks the [supervisorctl] socket sections (supervisorctl
+   * cannot reach supervisord) — the UI then hides the lifecycle controls. When
+   * the service is not bound at all it also degrades to available:false rather
+   * than 404, so the whole feature is a single clean signal for the UI.
+   */
+  @httpGet('/services', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async listControllableServices(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    if (!this.serviceControlService) {
+      response.json({ available: false, programs: [] })
+
+      return
+    }
+
+    const available = await this.serviceControlService.isAvailable()
+
+    response.json({ available, programs: this.serviceControlService.getControllablePrograms() })
+  }
+
+  /**
+   * Standard Red Notes: restart a supervisord-managed program. For the special
+   * api-gateway program (the process serving THIS request) a restart requires
+   * `?confirmSelfInterrupt=true`; the response is sent (202) BEFORE the restart
+   * is fired, since supervisord terminates this process mid-restart and the
+   * admin's connection drops for a few seconds.
+   */
+  @httpPost('/services/:name/restart', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async restartService(request: Request, response: Response): Promise<void> {
+    await this.handleServiceControl(request, response, 'restart')
+  }
+
+  /**
+   * Standard Red Notes: stop a supervisord-managed program. Stopping the
+   * api-gateway is FORBIDDEN (it would take the whole server offline and kill the
+   * responder) — that returns 409, never actually stopping the gateway.
+   */
+  @httpPost('/services/:name/stop', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async stopService(request: Request, response: Response): Promise<void> {
+    await this.handleServiceControl(request, response, 'stop')
+  }
+
+  /** Standard Red Notes: start a stopped supervisord-managed program. */
+  @httpPost('/services/:name/start', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async startService(request: Request, response: Response): Promise<void> {
+    await this.handleServiceControl(request, response, 'start')
+  }
+
+  /**
+   * Shared handler for the three lifecycle actions. Admin-gated, allowlist-gated
+   * (invalid names 400 BEFORE any process spawn), audit-logged on every attempt
+   * (action + target program + outcome, never any secret), and self-interrupt
+   * safe for the api-gateway program. Fails soft: an unavailable supervisorctl
+   * degrades to 503, an action failure to 502 — never a 500 crash.
+   */
+  private async handleServiceControl(request: Request, response: Response, action: ServiceAction): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    if (!this.serviceControlService) {
+      response.status(503).json({ error: { message: 'Service control is not available on this server.' } })
+
+      return
+    }
+
+    const name = String(request.params.name ?? '')
+    const confirmSelfInterrupt =
+      String((request.query as Record<string, unknown>).confirmSelfInterrupt ?? '') === 'true'
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+
+    const audit = (outcome: string): void => {
+      this.logger?.info('admin service-control', {
+        audit: 'admin.service-control',
+        adminUuid,
+        program: name,
+        action,
+        outcome,
+        confirmSelfInterrupt,
+      })
+    }
+
+    // Reject non-allowlisted names up front — before the gateway self-restart
+    // fast path — so a bogus :name can never trigger a real restart.
+    if (!this.serviceControlService.isControllable(name)) {
+      audit('invalid-program')
+      response.status(400).json({ error: { message: `Unknown or non-controllable service: ${name}.` } })
+
+      return
+    }
+
+    // api-gateway self-restart: answer FIRST (202), then fire the restart. We do
+    // not await it — supervisord kills this process during the restart, so the
+    // promise would never resolve to write a response.
+    if (name === API_GATEWAY_PROGRAM && action === 'restart') {
+      if (!confirmSelfInterrupt) {
+        audit('forbidden:requires-confirmation')
+        response.status(409).json({
+          error: {
+            message:
+              'Restarting the API gateway will drop your admin connection for a few seconds. Retry with confirmSelfInterrupt=true to proceed.',
+          },
+          requiresConfirmation: true,
+        })
+
+        return
+      }
+
+      audit('accepted:self-interrupt')
+      response.status(202).json({
+        program: name,
+        action,
+        selfInterrupt: true,
+        status: 'restarting',
+        message: 'API gateway restart requested. Your connection will drop briefly while it restarts.',
+      })
+
+      void this.serviceControlService.control(name, 'restart', { confirmSelfInterrupt: true })
+
+      return
+    }
+
+    const outcome = await this.serviceControlService.control(name, action, { confirmSelfInterrupt })
+    audit(outcome.kind)
+
+    switch (outcome.kind) {
+      case 'ok':
+        response.json({ program: outcome.program, action: outcome.action, status: outcome.status })
+
+        return
+      case 'invalid-program':
+        response.status(400).json({ error: { message: `Unknown or non-controllable service: ${outcome.program}.` } })
+
+        return
+      case 'forbidden':
+        response
+          .status(409)
+          .json({ error: { message: outcome.reason }, requiresConfirmation: outcome.requiresConfirmation ?? false })
+
+        return
+      case 'unavailable':
+        response.status(503).json({ error: { message: outcome.message } })
+
+        return
+      case 'error':
+        response.status(502).json({ error: { message: outcome.message } })
+
+        return
+    }
   }
 
   /**

@@ -14,6 +14,7 @@ import { observer } from 'mobx-react-lite'
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import ContentList from '@/Components/ContentListView/ContentList'
+import Spinner from '@/Components/Spinner/Spinner'
 import { ElementIds } from '@/Constants/ElementIDs'
 import ContentListHeader from './Header/ContentListHeader'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
@@ -437,7 +438,10 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
           )
         ) : null}
         {!dailyMode && !completedFullSync && !filteredItems.length ? (
-          <p className="empty-items-list opacity-50">{t('loading')}</p>
+          <div className="empty-items-list gap-2 opacity-50" role="status" aria-busy="true" aria-live="polite">
+            <Spinner className="h-5 w-5" />
+            <span>{t('loading')}</span>
+          </div>
         ) : null}
         {!dailyMode && filteredItems.length ? (
           shouldUseTableView ? (

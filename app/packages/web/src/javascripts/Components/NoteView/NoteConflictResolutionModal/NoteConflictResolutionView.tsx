@@ -322,7 +322,7 @@ const NoteConflictResolutionView = ({
           >
             {isPerformingAction ? (
               <>
-                <Spinner className="h-4 w-4 border-info-contrast" />
+                <Spinner contrast className="h-4 w-4" />
               </>
             ) : (
               <>Keep selected, {selectedAction === 'move-to-trash' ? 'trash others' : 'delete others'}</>

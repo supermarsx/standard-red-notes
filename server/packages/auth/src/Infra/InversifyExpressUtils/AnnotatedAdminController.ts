@@ -28,6 +28,11 @@ import { ListGroupMembers } from '../../Domain/UseCase/ListGroupMembers/ListGrou
 import { GetUserEffectivePermissions } from '../../Domain/UseCase/GetUserEffectivePermissions/GetUserEffectivePermissions'
 import { ListRolesWithPermissions } from '../../Domain/UseCase/ListRolesWithPermissions/ListRolesWithPermissions'
 import { SetRolePermissions } from '../../Domain/UseCase/SetRolePermissions/SetRolePermissions'
+import { CreateCustomRole } from '../../Domain/UseCase/CreateCustomRole/CreateCustomRole'
+import { DeleteCustomRole } from '../../Domain/UseCase/DeleteCustomRole/DeleteCustomRole'
+import { GetPermissionCatalog } from '../../Domain/UseCase/GetPermissionCatalog/GetPermissionCatalog'
+import { GetRoleHolders } from '../../Domain/UseCase/GetRoleHolders/GetRoleHolders'
+import { ResolveRoleSetPermissions } from '../../Domain/UseCase/ResolveRoleSetPermissions/ResolveRoleSetPermissions'
 import { GetRegularSubscriptionForUser } from '../../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSubscriptionSetting } from '../../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
@@ -77,6 +82,13 @@ export class AnnotatedAdminController extends BaseAdminController {
     // permission assignments). See BaseAdminController.
     @inject(TYPES.Auth_ListRolesWithPermissions) override doListRolesWithPermissions: ListRolesWithPermissions,
     @inject(TYPES.Auth_SetRolePermissions) override doSetRolePermissions: SetRolePermissions,
+    // Standard Red Notes: EXTENSIVE RBAC management use cases (custom roles +
+    // catalog browser + role inspector + effective-permissions simulator).
+    @inject(TYPES.Auth_CreateCustomRole) override doCreateCustomRole: CreateCustomRole,
+    @inject(TYPES.Auth_DeleteCustomRole) override doDeleteCustomRole: DeleteCustomRole,
+    @inject(TYPES.Auth_GetPermissionCatalog) override doGetPermissionCatalog: GetPermissionCatalog,
+    @inject(TYPES.Auth_GetRoleHolders) override doGetRoleHolders: GetRoleHolders,
+    @inject(TYPES.Auth_ResolveRoleSetPermissions) override doResolveRoleSetPermissions: ResolveRoleSetPermissions,
   ) {
     super(
       doDeleteSetting,
@@ -109,6 +121,11 @@ export class AnnotatedAdminController extends BaseAdminController {
       groupHttpMapper,
       doListRolesWithPermissions,
       doSetRolePermissions,
+      doCreateCustomRole,
+      doDeleteCustomRole,
+      doGetPermissionCatalog,
+      doGetRoleHolders,
+      doResolveRoleSetPermissions,
     )
   }
 
@@ -213,6 +230,38 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPut('/roles/:roleUuid/permissions', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setRolePermissions(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setRolePermissions(request, response)
+  }
+
+  // Standard Red Notes: the permission CATALOG browser (grouped + granted-by).
+  @httpGet('/permissions', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async getPermissionCatalog(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getPermissionCatalog(request, response)
+  }
+
+  // Standard Red Notes: effective-permissions SIMULATOR for a set of role names.
+  // NOTE: static '/roles/resolve-permissions' — declared before the '/roles'
+  // create route and distinct from the ':roleUuid' param routes.
+  @httpPost('/roles/resolve-permissions', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async resolveRoleSetPermissions(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.resolveRoleSetPermissions(request, response)
+  }
+
+  // Standard Red Notes: create an admin-defined CUSTOM role (group-conferrable).
+  @httpPost('/roles', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async createCustomRole(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.createCustomRole(request, response)
+  }
+
+  // Standard Red Notes: role INSPECTOR — who holds a role (direct users + groups).
+  @httpGet('/roles/:roleUuid/holders', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async getRoleHolders(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getRoleHolders(request, response)
+  }
+
+  // Standard Red Notes: delete an admin-created CUSTOM role (built-ins guarded).
+  @httpDelete('/roles/:roleUuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async deleteCustomRole(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.deleteCustomRole(request, response)
   }
 
   @httpGet('/groups', TYPES.Auth_RequiredCrossServiceTokenMiddleware)

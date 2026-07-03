@@ -38,5 +38,27 @@ export class TypeORMRoleRepository implements RoleRepositoryInterface {
 
   async save(role: Role): Promise<void> {
     await this.ormRepository.save(role)
+    await this.invalidateNameCache(role.name)
+  }
+
+  async remove(role: Role): Promise<void> {
+    const name = role.name
+    await this.ormRepository.remove(role)
+    await this.invalidateNameCache(name)
+  }
+
+  /**
+   * Standard Red Notes: findOneByName caches per name for 10 minutes. When a
+   * custom role is created or deleted, best-effort drop that cache key so
+   * group-conferred effective-permission resolution (which resolves group role
+   * names via findOneByName) sees the change immediately rather than after the
+   * TTL. No-op when query caching is not enabled.
+   */
+  private async invalidateNameCache(name: string): Promise<void> {
+    try {
+      await this.ormRepository.manager.connection.queryResultCache?.remove([`role_${name}`])
+    } catch {
+      // Caching is optional; a cache-clear failure must never break the write.
+    }
   }
 }

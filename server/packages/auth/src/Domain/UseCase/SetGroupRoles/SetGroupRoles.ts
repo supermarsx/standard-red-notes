@@ -1,7 +1,9 @@
-import { Result, RoleName, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { Result, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { Group } from '../../Group/Group'
 import { GroupRepositoryInterface } from '../../Group/GroupRepositoryInterface'
+import { RoleRepositoryInterface } from '../../Role/RoleRepositoryInterface'
+import { resolveConferrableRoleName } from '../CreateGroup/CreateGroup'
 
 import { SetGroupRolesDTO } from './SetGroupRolesDTO'
 
@@ -13,7 +15,13 @@ import { SetGroupRolesDTO } from './SetGroupRolesDTO'
  * known RoleName.NAMES.
  */
 export class SetGroupRoles implements UseCaseInterface<Group> {
-  constructor(private groupRepository: GroupRepositoryInterface) {}
+  constructor(
+    private groupRepository: GroupRepositoryInterface,
+    // Standard Red Notes: optional role repository so a group can confer
+    // admin-created CUSTOM roles (a role name that exists in the DB but is not a
+    // built-in enum role). Absent -> built-in enum only (previous behaviour).
+    private roleRepository?: RoleRepositoryInterface,
+  ) {}
 
   async execute(dto: SetGroupRolesDTO): Promise<Result<Group>> {
     const groupUuidOrError = Uuid.create(dto.groupUuid)
@@ -27,11 +35,11 @@ export class SetGroupRoles implements UseCaseInterface<Group> {
 
     const sanitized: string[] = []
     for (const roleName of dto.roleNames) {
-      const roleNameOrError = RoleName.create(roleName)
-      if (roleNameOrError.isFailed()) {
-        return Result.fail(`Could not set group roles: ${roleNameOrError.getError()}`)
+      const resolved = await resolveConferrableRoleName(roleName, this.roleRepository)
+      if (resolved.isFailed()) {
+        return Result.fail(`Could not set group roles: ${resolved.getError()}`)
       }
-      sanitized.push(roleNameOrError.getValue().value)
+      sanitized.push(resolved.getValue())
     }
 
     const group = await this.groupRepository.findById(new UniqueEntityId(dto.groupUuid))

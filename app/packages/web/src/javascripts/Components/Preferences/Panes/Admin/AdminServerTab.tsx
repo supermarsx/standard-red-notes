@@ -1,5 +1,6 @@
 import { FunctionComponent, ReactNode, useCallback, useEffect, useState } from 'react'
 import { isErrorResponse } from '@standardnotes/snjs'
+import { confirmDialog } from '@standardnotes/ui-services'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -14,7 +15,11 @@ import {
   AdminServerSettings,
   AdminServerSettingsResponse,
   ServerService,
+  ServiceControlAction,
   buildUrlSettingUpdate,
+  serviceActionDialogCopy,
+  serviceActionIsSelfInterrupting,
+  serviceActionPastTense,
   serviceStatusChipClass,
   serviceStatusLabel,
   settingSource,
@@ -114,6 +119,16 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
 
+  // Service lifecycle control (restart/stop/start). `supported` is false when the
+  // endpoint 404s (older image without the feature); `available` is false when the
+  // endpoint exists but supervisorctl cannot reach supervisord (image predates the
+  // supervisord socket conf). Controls are only shown for programs in `programs`.
+  const [controllablePrograms, setControllablePrograms] = useState<string[]>([])
+  const [serviceControlAvailable, setServiceControlAvailable] = useState(false)
+  const [serviceControlSupported, setServiceControlSupported] = useState(true)
+  // Key of the in-flight action, `${name}:${action}`, or null. Disables that row.
+  const [serviceActionInFlight, setServiceActionInFlight] = useState<string | null>(null)
+
   // Editable server settings (update-check URL, Nextcloud backups master
   // switch) from /v1/admin/server-settings. A 404 (older server) hides the
   // whole section behind a "not available" note.
@@ -172,6 +187,78 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     }
   }, [application, noteIfForbidden])
 
+  const loadControllableServices = useCallback(async () => {
+    try {
+      const response = await application.legacyApi.adminListServices()
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        // A 404 means the server predates the feature — hide controls entirely.
+        if (Number(response.status) === 404) {
+          setServiceControlSupported(false)
+          setServiceControlAvailable(false)
+          setControllablePrograms([])
+        }
+        return
+      }
+      const data = (response as { data?: { available?: boolean; programs?: string[] } }).data
+      setServiceControlSupported(true)
+      setServiceControlAvailable(Boolean(data?.available))
+      setControllablePrograms(Array.isArray(data?.programs) ? (data?.programs as string[]) : [])
+    } catch (error) {
+      console.error(error)
+    }
+  }, [application, noteIfForbidden])
+
+  const runServiceAction = useCallback(
+    async (name: string, action: ServiceControlAction) => {
+      const { title, text, confirmButtonText } = serviceActionDialogCopy(name, action)
+      const confirmed = await confirmDialog({ title, text, confirmButtonText, confirmButtonStyle: 'danger' })
+      if (!confirmed) {
+        return
+      }
+
+      const selfInterrupt = serviceActionIsSelfInterrupting(name, action)
+      const key = `${name}:${action}`
+      setServiceActionInFlight(key)
+      try {
+        const response = await application.legacyApi.adminControlService(name, action, {
+          confirmSelfInterrupt: selfInterrupt,
+        })
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          if (Number(response.status) === 404) {
+            setServiceControlSupported(false)
+            addToast({ type: ToastType.Error, message: 'Service control is not available on this server.' })
+            return
+          }
+          const message =
+            (response as { data?: { error?: { message?: string } } }).data?.error?.message ??
+            `Failed to ${action} ${name}.`
+          addToast({ type: ToastType.Error, message })
+          return
+        }
+
+        if (selfInterrupt) {
+          addToast({
+            type: ToastType.Success,
+            message: 'API gateway restart requested — your connection will drop briefly. Reload the page in a moment.',
+          })
+        } else {
+          addToast({ type: ToastType.Success, message: `${serviceActionPastTense(action)} ${name}.` })
+          // Refresh the status + availability now that the process changed state.
+          void loadServerStatus()
+          void loadControllableServices()
+        }
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: `Failed to ${action} ${name}.` })
+      } finally {
+        setServiceActionInFlight(null)
+      }
+    },
+    [application, noteIfForbidden, loadServerStatus, loadControllableServices],
+  )
+
   const applySettingsView = useCallback((data: AdminServerSettingsResponse | undefined) => {
     setServerSettings(data?.settings ?? null)
     setSettingsSources(data?.sources ?? null)
@@ -207,7 +294,8 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     void loadRegistrationFlag()
     void loadServerStatus()
     void loadServerSettings()
-  }, [loadRegistrationFlag, loadServerStatus, loadServerSettings])
+    void loadControllableServices()
+  }, [loadRegistrationFlag, loadServerStatus, loadServerSettings, loadControllableServices])
 
   /** PUT a partial server-settings update and re-apply the returned view. */
   const saveServerSettings = useCallback(
@@ -351,23 +439,89 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               <>
                 <Subtitle className="mb-2 mt-4">All services</Subtitle>
                 <div className="divide-y divide-border rounded border border-border px-3">
-                  {services.map((service) => (
-                    <StatusRow
-                      key={service.name}
-                      name={service.name}
-                      detail={service.detail}
-                      chip={
-                        <span
-                          className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
-                            service.status,
-                          )}`}
-                        >
-                          {serviceStatusLabel(service.status)}
-                        </span>
-                      }
-                    />
-                  ))}
+                  {services.map((service) => {
+                    const chip = (
+                      <span
+                        className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
+                          service.status,
+                        )}`}
+                      >
+                        {serviceStatusLabel(service.status)}
+                      </span>
+                    )
+
+                    // Controls only for allowlisted programs when supervisorctl is
+                    // actually reachable. websocket-gateway (not a program) and any
+                    // unknown row simply render without controls.
+                    const canControl =
+                      serviceControlSupported &&
+                      serviceControlAvailable &&
+                      controllablePrograms.includes(service.name)
+                    const isGateway = service.name === 'api-gateway'
+                    const isDown = service.status === 'down'
+                    const rowBusy = serviceActionInFlight !== null && serviceActionInFlight.startsWith(`${service.name}:`)
+
+                    return (
+                      <div key={service.name} className="flex items-center justify-between gap-4 py-2">
+                        <div className="flex min-w-0 flex-col">
+                          <Text>{service.name}</Text>
+                          {service.detail ? <Text className="text-xs text-passive-1">{service.detail}</Text> : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {chip}
+                          {canControl && (
+                            <div className="flex items-center gap-1">
+                              {rowBusy && <Spinner className="h-4 w-4" />}
+                              {/* Start only when the program is down/stopped. */}
+                              {isDown && (
+                                <Button
+                                  small
+                                  colorStyle="success"
+                                  label="Start"
+                                  disabled={rowBusy}
+                                  onClick={() => void runServiceAction(service.name, 'start')}
+                                />
+                              )}
+                              <Button
+                                small
+                                colorStyle="warning"
+                                label="Restart"
+                                disabled={rowBusy}
+                                onClick={() => void runServiceAction(service.name, 'restart')}
+                              />
+                              {/* Stopping the gateway is forbidden server-side; hide it. */}
+                              {!isGateway && !isDown && (
+                                <Button
+                                  small
+                                  colorStyle="danger"
+                                  label="Stop"
+                                  disabled={rowBusy}
+                                  onClick={() => void runServiceAction(service.name, 'stop')}
+                                />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
+                {!serviceControlSupported ? (
+                  <Text className="mt-2 text-xs text-passive-1">
+                    Service lifecycle controls are not available on this server (the /v1/admin/services endpoint is
+                    missing). Update the server image to restart/stop/start services from here.
+                  </Text>
+                ) : !serviceControlAvailable ? (
+                  <Text className="mt-2 text-xs text-passive-1">
+                    Service lifecycle controls require a newer server image: supervisorctl cannot reach supervisord on
+                    this deployment, so restart/stop/start are disabled.
+                  </Text>
+                ) : (
+                  <Text className="mt-2 text-xs text-passive-1">
+                    Restarting a service briefly interrupts what it powers. Restarting the API gateway will drop your
+                    admin connection for a few seconds.
+                  </Text>
+                )}
               </>
             )}
           </div>

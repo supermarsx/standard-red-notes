@@ -16,6 +16,9 @@ import {
   formatLogTimestamp,
   logLevelColorClass,
   logMatchesText,
+  serviceActionDialogCopy,
+  serviceActionIsSelfInterrupting,
+  serviceActionPastTense,
   serviceStatusChipClass,
   serviceStatusLabel,
   settingSource,
@@ -265,5 +268,35 @@ describe('buildDailyLimitSettingUpdate', () => {
     expect(buildDailyLimitSettingUpdate('1.5').ok).toBe(false)
     expect(buildDailyLimitSettingUpdate('abc').ok).toBe(false)
     expect(buildDailyLimitSettingUpdate('1e999').ok).toBe(false)
+  })
+})
+
+describe('service lifecycle control helpers', () => {
+  it('flags only an api-gateway restart as self-interrupting', () => {
+    expect(serviceActionIsSelfInterrupting('api-gateway', 'restart')).toBe(true)
+    expect(serviceActionIsSelfInterrupting('api-gateway', 'stop')).toBe(false)
+    expect(serviceActionIsSelfInterrupting('auth', 'restart')).toBe(false)
+  })
+
+  it('gives past-tense verbs for success toasts', () => {
+    expect(serviceActionPastTense('restart')).toBe('Restarted')
+    expect(serviceActionPastTense('stop')).toBe('Stopped')
+    expect(serviceActionPastTense('start')).toBe('Started')
+  })
+
+  it('names the service and warns of the interruption in the confirm dialog', () => {
+    const restartAuth = serviceActionDialogCopy('auth', 'restart')
+    expect(restartAuth.text).toContain('auth')
+    expect(restartAuth.text.toLowerCase()).toContain('interrupt')
+
+    const stopFiles = serviceActionDialogCopy('files', 'stop')
+    expect(stopFiles.text).toContain('files')
+    expect(stopFiles.text.toLowerCase()).toContain('offline')
+  })
+
+  it('gives the api-gateway restart the strongest (connection-drop) warning', () => {
+    const copy = serviceActionDialogCopy('api-gateway', 'restart')
+    expect(copy.text.toLowerCase()).toContain('drop your admin connection')
+    expect(copy.confirmButtonText).toBe('Restart gateway')
   })
 })

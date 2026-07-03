@@ -105,7 +105,7 @@ const ClippedNoteView = ({
             disabled={isDiscarding}
           >
             {isDiscarding ? (
-              <Spinner className="h-6 w-6 text-danger-contrast" />
+              <Spinner contrast className="h-6 w-6" />
             ) : (
               <>
                 <Icon type="trash-filled" className="mr-2" />

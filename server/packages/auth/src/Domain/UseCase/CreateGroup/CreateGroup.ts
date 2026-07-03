@@ -2,11 +2,20 @@ import { Result, RoleName, UseCaseInterface } from '@standardnotes/domain-core'
 
 import { Group } from '../../Group/Group'
 import { GroupRepositoryInterface } from '../../Group/GroupRepositoryInterface'
+import { RoleRepositoryInterface } from '../../Role/RoleRepositoryInterface'
 
 import { CreateGroupDTO } from './CreateGroupDTO'
 
 export class CreateGroup implements UseCaseInterface<Group> {
-  constructor(private groupRepository: GroupRepositoryInterface) {}
+  constructor(
+    private groupRepository: GroupRepositoryInterface,
+    // Standard Red Notes: optional role repository enabling groups to confer
+    // admin-created CUSTOM roles too. When present, a role name that is not a
+    // built-in (enum) role is accepted as long as a role row of that name exists
+    // in the database. When absent, validation falls back to the built-in enum
+    // only (previous behaviour), so existing constructions keep working.
+    private roleRepository?: RoleRepositoryInterface,
+  ) {}
 
   async execute(dto: CreateGroupDTO): Promise<Result<Group>> {
     const name = typeof dto.name === 'string' ? dto.name.trim() : ''
@@ -24,7 +33,7 @@ export class CreateGroup implements UseCaseInterface<Group> {
         ? dto.description.trim()
         : null
 
-    const roleNames = this.sanitizeRoleNames(dto.roleNames)
+    const roleNames = await this.sanitizeRoleNames(dto.roleNames)
     if (roleNames.isFailed()) {
       return Result.fail(`Could not create group: ${roleNames.getError()}`)
     }
@@ -48,7 +57,7 @@ export class CreateGroup implements UseCaseInterface<Group> {
     return Result.ok(group)
   }
 
-  private sanitizeRoleNames(roleNames?: string[]): Result<string[]> {
+  private async sanitizeRoleNames(roleNames?: string[]): Promise<Result<string[]>> {
     if (roleNames === undefined || roleNames === null) {
       return Result.ok([])
     }
@@ -59,13 +68,39 @@ export class CreateGroup implements UseCaseInterface<Group> {
 
     const sanitized: string[] = []
     for (const roleName of roleNames) {
-      const roleNameOrError = RoleName.create(roleName)
-      if (roleNameOrError.isFailed()) {
-        return Result.fail(roleNameOrError.getError())
+      const resolved = await resolveConferrableRoleName(roleName, this.roleRepository)
+      if (resolved.isFailed()) {
+        return Result.fail(resolved.getError())
       }
-      sanitized.push(roleNameOrError.getValue().value)
+      sanitized.push(resolved.getValue())
     }
 
     return Result.ok(Array.from(new Set(sanitized)))
   }
+}
+
+/**
+ * Standard Red Notes: validate a role name a GROUP may confer. A built-in (enum)
+ * role validates exactly as before. Otherwise, when a role repository is
+ * available, an admin-created CUSTOM role is accepted iff a role row of that
+ * name exists — so a group can only ever confer a role that really resolves to
+ * permissions. Shared by CreateGroup and SetGroupRoles.
+ */
+export const resolveConferrableRoleName = async (
+  roleName: string,
+  roleRepository?: RoleRepositoryInterface,
+): Promise<Result<string>> => {
+  const builtInOrError = RoleName.create(roleName)
+  if (!builtInOrError.isFailed()) {
+    return Result.ok(builtInOrError.getValue().value)
+  }
+
+  if (roleRepository !== undefined && typeof roleName === 'string' && roleName.length > 0) {
+    const role = await roleRepository.findOneByName(roleName)
+    if (role !== null) {
+      return Result.ok(role.name)
+    }
+  }
+
+  return Result.fail(builtInOrError.getError())
 }

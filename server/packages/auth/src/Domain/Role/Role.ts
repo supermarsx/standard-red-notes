@@ -19,6 +19,20 @@ export class Role {
   })
   declare version: number
 
+  /**
+   * Standard Red Notes: optional human description for a role. Built-in roles
+   * leave this null; admin-created CUSTOM roles carry the description entered in
+   * the admin panel. Nullable + additive so it never affects the migration-seeded
+   * built-in roles.
+   */
+  @Column({
+    type: 'varchar',
+    length: 512,
+    nullable: true,
+    default: null,
+  })
+  declare description: string | null
+
   @Column({
     name: 'created_at',
     type: 'datetime',

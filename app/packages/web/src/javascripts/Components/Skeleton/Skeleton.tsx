@@ -9,9 +9,12 @@ import { CSSProperties, FunctionComponent, HTMLAttributes } from 'react'
  * `animate-pulse` over `bg-passive-3` rounded divs, using CSS-var color tokens
  * so they look right in both the light and dark themes.
  *
- * Motion is CSS-only (`animate-pulse`) and is globally gated for
- * `prefers-reduced-motion` users by the safety net in `_animation.scss`, so no
- * per-component JS is needed here.
+ * Motion is CSS-only (`animate-pulse`). It is essential loading feedback, not
+ * decoration, so under `prefers-reduced-motion` it is deliberately NOT frozen:
+ * the reduced-motion allowlist in `_animation.scss` exempts `animate-pulse` from
+ * the universal clamp and re-asserts it as an infinite loop (slowed to a gentle
+ * ~2s breathe). A frozen skeleton looks broken; a gentle loop still reads as
+ * "loading". No per-component JS is needed here.
  */
 
 const BASE = 'animate-pulse rounded bg-passive-3'

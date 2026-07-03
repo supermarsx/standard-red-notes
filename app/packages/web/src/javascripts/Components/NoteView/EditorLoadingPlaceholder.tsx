@@ -10,8 +10,13 @@ type Props = {
  * Tasteful animated loading state for lazy-loaded editors. Instead of a blank
  * flash while the editor chunk downloads, we show a soft shimmering skeleton
  * that roughly mirrors the shape of editor content (a title line plus a few
- * paragraph lines) with a subtle spinner + caption. The `animate-pulse` shimmer
- * keeps it feeling alive and smooth rather than appearing frozen.
+ * paragraph lines) with a subtle spinner + caption.
+ *
+ * The `animate-pulse` shimmer is essential loading feedback, so under
+ * `prefers-reduced-motion` it keeps looping (gently, ~2s) rather than freezing:
+ * the reduced-motion allowlist in `_animation.scss` exempts `animate-pulse` from
+ * the universal clamp instead of collapsing it to a single static frame. That
+ * keeps it feeling alive rather than appearing frozen/broken.
  */
 const SkeletonLine: FunctionComponent<{ className?: string }> = ({ className }) => (
   <div className={`h-3.5 rounded bg-passive-3 ${className ?? ''}`} />

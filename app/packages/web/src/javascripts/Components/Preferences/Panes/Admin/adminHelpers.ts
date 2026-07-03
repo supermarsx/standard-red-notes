@@ -235,6 +235,70 @@ export const serviceStatusLabel = (status: string | null | undefined): string =>
 }
 
 // ---------------------------------------------------------------------------
+// Server tab — service lifecycle controls (restart/stop/start)
+// ---------------------------------------------------------------------------
+
+export type ServiceControlAction = 'restart' | 'stop' | 'start'
+
+/** The supervisord program whose restart interrupts the admin's own connection. */
+export const SERVICE_CONTROL_SELF_PROGRAM = 'api-gateway'
+
+/** True when this action on this service will drop the admin's own connection. */
+export const serviceActionIsSelfInterrupting = (name: string, action: ServiceControlAction): boolean =>
+  name === SERVICE_CONTROL_SELF_PROGRAM && action === 'restart'
+
+/** Past-tense verb for a success toast ("Restarted auth"). */
+export const serviceActionPastTense = (action: ServiceControlAction): string => {
+  switch (action) {
+    case 'restart':
+      return 'Restarted'
+    case 'stop':
+      return 'Stopped'
+    case 'start':
+      return 'Started'
+  }
+}
+
+/**
+ * Copy for the DANGER confirm dialog shown before a lifecycle action. Names the
+ * service and warns about the interruption; the api-gateway restart gets the
+ * strongest warning because it drops the admin's own connection.
+ */
+export const serviceActionDialogCopy = (
+  name: string,
+  action: ServiceControlAction,
+): { title: string; text: string; confirmButtonText: string } => {
+  if (serviceActionIsSelfInterrupting(name, action)) {
+    return {
+      title: 'Restart the API gateway?',
+      text: `Restarting "${name}" will drop your admin connection for a few seconds while it comes back up. You may need to reload this page afterwards. Continue?`,
+      confirmButtonText: 'Restart gateway',
+    }
+  }
+
+  switch (action) {
+    case 'restart':
+      return {
+        title: `Restart ${name}?`,
+        text: `Restarting "${name}" will briefly interrupt anything it is serving (for example, restarting auth will briefly interrupt sign-ins). Continue?`,
+        confirmButtonText: 'Restart',
+      }
+    case 'stop':
+      return {
+        title: `Stop ${name}?`,
+        text: `Stopping "${name}" takes it OFFLINE until you start it again. Features it powers will fail while it is stopped. Continue?`,
+        confirmButtonText: 'Stop',
+      }
+    case 'start':
+      return {
+        title: `Start ${name}?`,
+        text: `Start the stopped "${name}" service so it can serve requests again?`,
+        confirmButtonText: 'Start',
+      }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Server settings (AI tab + Server tab rows) — types, source chips, payload
 // validation. Mirrors the fixed /v1/admin/server-settings contract.
 // ---------------------------------------------------------------------------

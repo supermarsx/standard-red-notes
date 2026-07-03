@@ -1,4 +1,15 @@
-import { permissionPickerOptions, permissionSetsEqual, togglePermissionName } from './adminRolesUi'
+import {
+  AdminRole,
+  canonicalRoleLabel,
+  conferrableRoleNames,
+  filterPermissionNames,
+  groupPermissionsByCategory,
+  permissionCategory,
+  permissionLabel,
+  permissionPickerOptions,
+  permissionSetsEqual,
+  togglePermissionName,
+} from './adminRolesUi'
 
 describe('adminRolesUi', () => {
   describe('togglePermissionName', () => {
@@ -37,6 +48,72 @@ describe('adminRolesUi', () => {
     it('is false for different sets', () => {
       expect(permissionSetsEqual(['A'], ['A', 'B'])).toBe(false)
       expect(permissionSetsEqual(['A', 'B'], ['A', 'C'])).toBe(false)
+    })
+  })
+
+  describe('permissionCategory', () => {
+    it('uses the prefix before the first colon', () => {
+      expect(permissionCategory('server:files')).toBe('server')
+      expect(permissionCategory('vault:read:write')).toBe('vault')
+    })
+
+    it('falls back to general when there is no prefix', () => {
+      expect(permissionCategory('standalone')).toBe('general')
+      expect(permissionCategory(':leading')).toBe('general')
+    })
+  })
+
+  describe('permissionLabel', () => {
+    it('drops the category and title-cases the remainder', () => {
+      expect(permissionLabel('server:files_read')).toBe('Files Read')
+      expect(permissionLabel('SYNC_ITEMS')).toBe('Sync Items')
+    })
+  })
+
+  describe('groupPermissionsByCategory', () => {
+    it('buckets by category, sorts members and orders categories', () => {
+      expect(groupPermissionsByCategory(['server:b', 'auth:x', 'server:a'])).toEqual([
+        { category: 'auth', permissions: ['auth:x'] },
+        { category: 'server', permissions: ['server:a', 'server:b'] },
+      ])
+    })
+  })
+
+  describe('filterPermissionNames', () => {
+    it('matches by raw name or human label, case-insensitively', () => {
+      expect(filterPermissionNames(['server:files', 'auth:login'], 'files')).toEqual(['server:files'])
+      expect(filterPermissionNames(['server:files_read'], 'read')).toEqual(['server:files_read'])
+    })
+
+    it('returns the input unchanged for an empty query', () => {
+      expect(filterPermissionNames(['a', 'b'], '   ')).toEqual(['a', 'b'])
+    })
+  })
+
+  describe('canonicalRoleLabel', () => {
+    it('maps the four canonical role names to their friendly labels', () => {
+      expect(canonicalRoleLabel('INTERNAL_TEAM_USER')).toBe('Admin user')
+      expect(canonicalRoleLabel('PRO_USER')).toBe('Full user')
+      expect(canonicalRoleLabel('CORE_USER')).toBe('Core user')
+      expect(canonicalRoleLabel('VAULTS_USER')).toBe('Vaults user')
+    })
+
+    it('falls back to the raw name for anything else (e.g. legacy roles)', () => {
+      expect(canonicalRoleLabel('PLUS_USER')).toBe('PLUS_USER')
+    })
+  })
+
+  describe('conferrableRoleNames', () => {
+    it('unions built-in names with every role name (incl. custom), sorted + deduped', () => {
+      const roles = [
+        { uuid: '1', name: 'SUPPORT_AGENT', version: 1, isBuiltIn: false, permissionNames: [] },
+        { uuid: '2', name: 'CORE_USER', version: 1, isBuiltIn: true, permissionNames: [] },
+      ] as AdminRole[]
+      expect(conferrableRoleNames(['CORE_USER', 'PRO_USER'], roles)).toEqual([
+        'CORE_USER',
+        'PRO_USER',
+        'SUPPORT_AGENT',
+      ])
     })
   })
 })

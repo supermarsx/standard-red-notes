@@ -3,6 +3,12 @@ import { Result, RoleName, UseCaseInterface } from '@standardnotes/domain-core'
 import { Role } from '../../Role/Role'
 import { RoleRepositoryInterface } from '../../Role/RoleRepositoryInterface'
 import { PermissionRepositoryInterface } from '../../Permission/PermissionRepositoryInterface'
+import {
+  CANONICAL_ADMIN_ROLE_NAMES,
+  canonicalAdminRoleLabel,
+  canonicalAdminRoleOrder,
+  isCanonicalAdminRole,
+} from '../../Role/CanonicalRoles'
 
 import { RolePermissionsView, RolesWithPermissions } from './RolePermissionsView'
 
@@ -27,7 +33,7 @@ export class ListRolesWithPermissions implements UseCaseInterface<RolesWithPermi
   ) {}
 
   async execute(): Promise<Result<RolesWithPermissions>> {
-    const builtInRoleNames = Object.values(RoleName.NAMES)
+    const enumRoleNames = Object.values(RoleName.NAMES)
 
     const allRoles = await this.roleRepository.findAll()
 
@@ -42,20 +48,31 @@ export class ListRolesWithPermissions implements UseCaseInterface<RolesWithPermi
 
     const roles: RolePermissionsView[] = []
     for (const role of activeByName.values()) {
+      // DEFINITIVE TAXONOMY: the admin surface exposes ONLY the canonical four
+      // roles. PLUS_USER and any legacy seeded role are hidden here (they remain
+      // in the DB/enum so subscription mapping + existing user_roles are intact).
+      if (!isCanonicalAdminRole(role.name)) {
+        continue
+      }
       const permissions = await role.permissions
+      const isBuiltIn = enumRoleNames.includes(role.name)
       roles.push({
         uuid: role.uuid,
         name: role.name,
+        label: canonicalAdminRoleLabel(role.name) ?? role.name,
         version: role.version,
-        isBuiltIn: builtInRoleNames.includes(role.name),
+        isBuiltIn,
+        isCustom: !isBuiltIn,
+        description: role.description ?? null,
         permissionNames: permissions.map((permission) => permission.name).sort((a, b) => a.localeCompare(b)),
       })
     }
-    roles.sort((a, b) => a.name.localeCompare(b.name))
+    // Canonical display order (Admin, Full, Core, Vaults), not alphabetical.
+    roles.sort((a, b) => canonicalAdminRoleOrder(a.name) - canonicalAdminRoleOrder(b.name))
 
     const catalog = await this.permissionRepository.findAll()
     const permissions = catalog.map((permission) => permission.name).sort((a, b) => a.localeCompare(b))
 
-    return Result.ok({ roles, permissions, builtInRoleNames })
+    return Result.ok({ roles, permissions, builtInRoleNames: CANONICAL_ADMIN_ROLE_NAMES })
   }
 }

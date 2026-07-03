@@ -63,6 +63,11 @@ const AdminPaths = {
   auditLog: '/v1/admin/audit-log',
   // Standard Red Notes: read-only gateway server status (master switches + health).
   serverStatus: '/v1/admin/server-status',
+  // Standard Red Notes: service lifecycle control — list controllable programs
+  // (+ availability) and restart/stop/start a single supervisord program.
+  adminServices: '/v1/admin/services',
+  adminServiceAction: (name: string, action: 'restart' | 'stop' | 'start') =>
+    `/v1/admin/services/${encodeURIComponent(name)}/${action}`,
   // Standard Red Notes: admin-editable server settings (AI providers, update
   // check URL, Nextcloud backups master switch). Secrets are write-only.
   serverSettings: '/v1/admin/server-settings',
@@ -76,6 +81,12 @@ const AdminPaths = {
   // catalog (read), and a role's editable permission assignments (write).
   rolesDetailed: '/v1/admin/roles/detailed',
   rolePermissions: (roleUuid: string) => `/v1/admin/roles/${roleUuid}/permissions`,
+  // Standard Red Notes: EXTENSIVE RBAC management — permission catalog browser,
+  // effective-permissions simulator, custom-role create/delete, role inspector.
+  permissionsCatalog: '/v1/admin/permissions',
+  rolesResolvePermissions: '/v1/admin/roles/resolve-permissions',
+  role: (roleUuid: string) => `/v1/admin/roles/${roleUuid}`,
+  roleHolders: (roleUuid: string) => `/v1/admin/roles/${roleUuid}/holders`,
   groups: '/v1/admin/groups',
   group: (groupUuid: string) => `/v1/admin/groups/${groupUuid}`,
   groupRoles: (groupUuid: string) => `/v1/admin/groups/${groupUuid}/roles`,
