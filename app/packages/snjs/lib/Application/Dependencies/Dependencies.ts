@@ -323,6 +323,7 @@ export class Dependencies {
       return new CreateDecryptedBackupFile(
         this.get<PayloadManager>(TYPES.PayloadManager),
         this.get<ProtectionService>(TYPES.ProtectionService),
+        this.get<SyncService>(TYPES.SyncService),
       )
     })
 
@@ -331,6 +332,7 @@ export class Dependencies {
         this.get<ItemManager>(TYPES.ItemManager),
         this.get<ProtectionService>(TYPES.ProtectionService),
         this.get<EncryptionService>(TYPES.EncryptionService),
+        this.get<SyncService>(TYPES.SyncService),
       )
     })
 

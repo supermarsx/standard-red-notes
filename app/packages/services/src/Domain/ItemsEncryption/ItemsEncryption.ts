@@ -19,6 +19,7 @@ import {
   EncryptedPayloadInterface,
   KeySystemRootKeyInterface,
   isEncryptedPayload,
+  isLitePayload,
   ItemContent,
   ItemsKeyInterface,
   PayloadEmitSource,
@@ -100,7 +101,25 @@ export class ItemsEncryptionService extends AbstractService {
   async repersistAllItems(): Promise<void> {
     const items = this.items.items
     const payloads = items.map((item) => item.payload)
-    return this.storage.savePayloads(payloads)
+
+    /**
+     * DATA-LOSS GUARD (lazy-decrypt): under `lazyDecryptEnabled`, in-memory note payloads are
+     * content-stripped ("lite") projections whose body (`text`) was discarded on cold-load. This
+     * seam persists in-memory payloads straight to disk (bypassing every SyncService lite-safety
+     * seam), so saving a lite payload here would OVERWRITE the real on-disk ciphertext with a
+     * body-less version = irreversible loss of the note text. A lite item's on-disk copy already
+     * holds the full, correctly-encrypted body, so it does NOT need re-persisting — skip it (and
+     * log) rather than clobber it. In normal (flag-off) operation nothing is skipped.
+     */
+    const persistable = payloads.filter((payload) => !isLitePayload(payload))
+    if (persistable.length !== payloads.length) {
+      console.error(
+        `repersistAllItems: skipped ${payloads.length - persistable.length} content-stripped (lite) payload(s) ` +
+          'to avoid overwriting real on-disk bodies with body-less versions',
+      )
+    }
+
+    return this.storage.savePayloads(persistable)
   }
 
   public getItemsKeys(): ItemsKeyInterface[] {

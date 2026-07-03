@@ -200,6 +200,31 @@ describe('ItemsEncryptionService', () => {
     expect(mockStorage.savePayloads).toHaveBeenCalledWith([{ uuid: '123' }])
   })
 
+  it('repersistAllItems must never persist content-stripped (lite) payloads', async () => {
+    /**
+     * Under lazyDecryptEnabled, in-memory note payloads are body-stripped ("lite"). Persisting
+     * one here would overwrite the real on-disk ciphertext with a body-less version = data loss.
+     * The lite item must be excluded; the full item must still be persisted.
+     */
+    const fullPayload = { uuid: 'full', content: { text: 'real body' } }
+    const litePayload = { uuid: 'lite', content: { __lazyLite: true } }
+
+    Object.defineProperty(mockItems, 'items', {
+      get: jest.fn().mockReturnValue([{ payload: fullPayload }, { payload: litePayload }]),
+    })
+
+    mockStorage.savePayloads = jest.fn().mockResolvedValue(undefined)
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await itemsEncryptionService.repersistAllItems()
+
+    expect(mockStorage.savePayloads).toHaveBeenCalledWith([fullPayload])
+    expect(mockStorage.savePayloads).not.toHaveBeenCalledWith(expect.arrayContaining([litePayload]))
+    expect(consoleErrorSpy).toHaveBeenCalled()
+
+    consoleErrorSpy.mockRestore()
+  })
+
   it('encryptPayloadWithKeyLookup', async () => {
     const mockPayload: DecryptedPayloadInterface = {
       key_system_identifier: 'test-identifier',

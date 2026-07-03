@@ -10,11 +10,14 @@ import {
 } from '@standardnotes/models'
 import { PayloadManagerInterface } from '../Payloads/PayloadManagerInterface'
 import { isNotUndefined } from '@standardnotes/utils'
+import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
+import { rehydrateLiteBackupPayloads } from './RehydrateLiteBackupPayloads'
 
 export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {
   constructor(
     private payloads: PayloadManagerInterface,
     private protections: ProtectionsClientInterface,
+    private sync: Pick<SyncServiceInterface, 'getFullContentPayload'>,
   ) {}
 
   async execute(): Promise<Result<BackupFile>> {
@@ -22,7 +25,15 @@ export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {
       return Result.fail('Failed to authorize backup creation')
     }
 
-    const payloads = this.payloads.nonDeletedItems.filter((item) => item.content_type !== ContentType.TYPES.ItemsKey)
+    /**
+     * Re-hydrate any content-stripped (lite) note payloads to their full on-disk body so the
+     * decrypted backup contains real note text, not the body-less in-memory projection. Pass-
+     * through when lazy-decrypt is off.
+     */
+    const payloads = await rehydrateLiteBackupPayloads(
+      this.payloads.nonDeletedItems.filter((item) => item.content_type !== ContentType.TYPES.ItemsKey),
+      this.sync,
+    )
 
     const data: BackupFile = {
       version: ProtocolVersionLatest,
