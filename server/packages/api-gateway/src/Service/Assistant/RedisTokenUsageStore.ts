@@ -21,6 +21,15 @@ import { TokenUsageEntry, WEEKLY_WINDOW_MS } from './tokenMetering'
 /** Reserved subject id: the AGGREGATE of all subscription-backed (Codex) calls. */
 export const SUBSCRIPTION_USAGE_SUBJECT = '__subscription__'
 
+/**
+ * Per-subscription metering subject: usage attributed to ONE paired subscription
+ * (by its credential id), so each pairing's consumption can be polled on its own
+ * alongside the cross-subscription aggregate above.
+ */
+export function subscriptionUsageSubject(subscriptionId: string): string {
+  return `${SUBSCRIPTION_USAGE_SUBJECT}:${subscriptionId}`
+}
+
 // Keep pruned keys a little past the weekly window so a slightly-late request
 // still finds its history, then let Redis expire the whole set.
 const KEY_TTL_SECONDS = Math.ceil(WEEKLY_WINDOW_MS / 1000) + 60 * 60

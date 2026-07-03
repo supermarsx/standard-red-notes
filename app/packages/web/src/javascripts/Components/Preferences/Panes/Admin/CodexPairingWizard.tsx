@@ -58,6 +58,9 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
   const [step, setStep] = useState<WizardStep>('idle')
   const [authorizeUrl, setAuthorizeUrl] = useState('')
   const [state, setState] = useState('')
+  // Standard Red Notes: MULTIPLE pairings — an optional slot id this pairing
+  // lands in, so adding another never drops the existing ones. Empty = 'default'.
+  const [subscriptionId, setSubscriptionId] = useState('')
   const [pastedCode, setPastedCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [polling, setPolling] = useState(false)
@@ -141,7 +144,11 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
     setError(null)
     setLoading(true)
     try {
-      const { ok, status: httpStatus, data } = await application.assistantSubscriptionStart()
+      // Send the (optional) target slot id so multiple subscriptions can be paired.
+      const { ok, status: httpStatus, data } = await application.serverJsonRequest<{
+        authorizeUrl?: string
+        state?: string
+      }>('/v1/assistant/subscription/start', subscriptionId.trim() !== '' ? { subscriptionId: subscriptionId.trim() } : {})
       if (!ok || !data?.authorizeUrl) {
         throw new Error(
           httpStatus === 503
@@ -163,7 +170,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
         setLoading(false)
       }
     }
-  }, [application])
+  }, [application, subscriptionId])
 
   const handleOpenAuthorize = useCallback(() => {
     window.open(authorizeUrl, 'chatgpt-pairing', 'width=520,height=760')
@@ -289,7 +296,14 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
         <div className="flex-1">
           <Subtitle>Generate the authorization link</Subtitle>
           <Text className="mt-1">The server creates a PKCE challenge and a one-time state. No secret leaves the server.</Text>
-          <div className="mt-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <DecoratedInput
+              className={{ container: 'w-64' }}
+              placeholder="Subscription id (optional, e.g. team-a)"
+              value={subscriptionId}
+              onChange={setSubscriptionId}
+              disabled={loading}
+            />
             <Button
               label={loading && step === 'idle' ? 'Generating…' : 'Generate authorization link'}
               primary
@@ -297,6 +311,10 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
               disabled={loading}
             />
           </div>
+          <Text className="mt-1 text-xs text-passive-1">
+            Leave the id empty for the default subscription, or set one (matching a subscription backend profile) to add
+            an additional pairing without dropping the existing ones.
+          </Text>
         </div>
       </div>
 

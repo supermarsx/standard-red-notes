@@ -177,6 +177,37 @@ describe('SubscriptionCredentialProvider', () => {
       expect((await provider.getStatus()).paired).toBe(false)
     })
   })
+
+  // Standard Red Notes: MULTIPLE paired subscriptions (id-keyed lifecycle).
+  describe('multiple pairings', () => {
+    it('completes a pairing into a named slot and adds another without dropping it', async () => {
+      mockFetch(() => ({ ok: true, status: 200, body: { access_token: 'tok', expires_in: 3600 } }))
+      const provider = new SubscriptionCredentialProvider(store, config)
+
+      const first = provider.beginPairing('admin', 'team-a')
+      await provider.completePairing(first.state, 'code-a')
+      const second = provider.beginPairing('admin', 'team-b')
+      await provider.completePairing(second.state, 'code-b')
+
+      const statuses = await provider.listStatuses()
+      expect(statuses.map((s) => s.id).sort()).toEqual(['team-a', 'team-b'])
+      expect((await provider.getFreshCredential('team-a'))?.token).toBe('tok')
+      expect((await provider.getFreshCredential('team-b'))?.token).toBe('tok')
+    })
+
+    it('removes one pairing by id and leaves the rest', async () => {
+      mockFetch(() => ({ ok: true, status: 200, body: { access_token: 'tok', expires_in: 3600 } }))
+      const provider = new SubscriptionCredentialProvider(store, config)
+      const a = provider.beginPairing('admin', 'team-a')
+      await provider.completePairing(a.state, 'code-a')
+      const b = provider.beginPairing('admin', 'team-b')
+      await provider.completePairing(b.state, 'code-b')
+
+      await provider.unpair('team-a')
+      expect((await provider.listStatuses()).map((s) => s.id)).toEqual(['team-b'])
+      expect(await provider.getFreshCredential('team-a')).toBeNull()
+    })
+  })
 })
 
 describe('PairingStateStore', () => {

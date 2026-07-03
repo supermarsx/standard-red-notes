@@ -19,6 +19,7 @@ import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSetti
 import {
   RedisTokenUsageStore,
   SUBSCRIPTION_USAGE_SUBJECT,
+  subscriptionUsageSubject,
 } from '../../Service/Assistant/RedisTokenUsageStore'
 import {
   buildWindowUsage,
@@ -132,6 +133,27 @@ export class AssistantController extends BaseHttpController {
     const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
 
     return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
+  }
+
+  /**
+   * Standard Red Notes: the requesting principal (uuid + optional email + role
+   * names) used to resolve the EFFECTIVE assistant profile via the assignment
+   * map (USER > ROLE > default). Read entirely from response.locals — the same
+   * verified-cross-service-token channel per-user AI flags already ride on — so
+   * no extra round trip and no auth-side change is needed.
+   */
+  private resolvePrincipal(response: Response): { userIdentifiers: string[]; roleNames: string[] } {
+    const user = (response.locals as { user?: { uuid?: string; email?: string } }).user ?? {}
+    const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
+    const userIdentifiers: string[] = []
+    if (user.uuid) {
+      userIdentifiers.push(user.uuid)
+    }
+    if (typeof user.email === 'string' && user.email.trim() !== '') {
+      userIdentifiers.push(user.email.trim())
+    }
+
+    return { userIdentifiers, roleNames: roles.map((role) => role.name).filter((name): name is string => Boolean(name)) }
   }
 
   /** Effective provider config: persisted admin overrides win over env. */
@@ -322,7 +344,7 @@ export class AssistantController extends BaseHttpController {
   }
 
   @httpPost('/subscription/start', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async subscriptionStart(_request: Request, response: Response): Promise<void> {
+  async subscriptionStart(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -332,10 +354,39 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
+    // Standard Red Notes: MULTIPLE pairings — an optional subscriptionId names the
+    // slot this pairing lands in, so adding another never drops the existing ones.
+    const body = (request.body ?? {}) as { subscriptionId?: unknown }
+    const subscriptionId = typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
+      ? body.subscriptionId.trim()
+      : undefined
     const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? 'admin'
     try {
-      const { authorizeUrl, state } = this.subscriptionCredentialProvider.beginPairing(adminUuid)
-      response.json({ authorizeUrl, state })
+      const { authorizeUrl, state } = this.subscriptionCredentialProvider.beginPairing(adminUuid, subscriptionId)
+      response.json({ authorizeUrl, state, subscriptionId: subscriptionId ?? null })
+    } catch (error) {
+      response.status(500).json({ error: { message: (error as Error).message } })
+    }
+  }
+
+  /**
+   * Standard Red Notes: list EVERY paired subscription (non-secret status only —
+   * never a token). Admin-gated. Backs the multi-pairing wizard + per-subscription
+   * usage cards.
+   */
+  @httpGet('/subscription/list', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionList(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.subscriptionCredentialProvider) {
+      response.json({ subscriptions: [] })
+      return
+    }
+    try {
+      const subscriptions = await this.subscriptionCredentialProvider.listStatuses()
+      response.json({ subscriptions })
     } catch (error) {
       response.status(500).json({ error: { message: (error as Error).message } })
     }
@@ -402,7 +453,7 @@ export class AssistantController extends BaseHttpController {
   }
 
   @httpPost('/subscription/unpair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async subscriptionUnpair(_request: Request, response: Response): Promise<void> {
+  async subscriptionUnpair(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -412,8 +463,14 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
+    // Standard Red Notes: an explicit subscriptionId removes ONE pairing; omitting
+    // it clears ALL (back-compat with the original single-pairing unpair button).
+    const body = (request.body ?? {}) as { subscriptionId?: unknown }
+    const subscriptionId = typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
+      ? body.subscriptionId.trim()
+      : undefined
     try {
-      await this.subscriptionCredentialProvider.unpair()
+      await this.subscriptionCredentialProvider.unpair(subscriptionId)
       response.json({ ok: true })
     } catch (error) {
       response.status(500).json({ ok: false, error: { message: (error as Error).message } })
@@ -432,11 +489,20 @@ export class AssistantController extends BaseHttpController {
    * quota. Fail-open: reports `unavailable` windows on a Redis error.
    */
   @httpGet('/subscription/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async subscriptionUsage(_request: Request, response: Response): Promise<void> {
+  async subscriptionUsage(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
     }
+
+    // Standard Red Notes: an optional subscriptionId scopes usage to ONE paired
+    // subscription; omitting it reports the cross-subscription aggregate (as
+    // before). Each paired subscription is metered under its own subject too.
+    const requestedId =
+      typeof request.query.subscriptionId === 'string' && request.query.subscriptionId.trim() !== ''
+        ? request.query.subscriptionId.trim()
+        : undefined
+    const subject = requestedId ? subscriptionUsageSubject(requestedId) : SUBSCRIPTION_USAGE_SUBJECT
 
     const now = Date.now()
     const store = this.tokenStore()
@@ -445,7 +511,7 @@ export class AssistantController extends BaseHttpController {
     let weekly = unavailableWindowUsage(now, WEEKLY_WINDOW_MS, 0)
     if (store) {
       try {
-        const entries = await store.entriesWithinWeek(SUBSCRIPTION_USAGE_SUBJECT, now)
+        const entries = await store.entriesWithinWeek(subject, now)
         fiveHour = buildWindowUsage(entries, now, FIVE_HOUR_WINDOW_MS, 0)
         weekly = buildWindowUsage(entries, now, WEEKLY_WINDOW_MS, 0)
       } catch {
@@ -457,6 +523,7 @@ export class AssistantController extends BaseHttpController {
     response.json({
       source: 'srn-local-metering',
       subscriptionMode: config.openaiAuthMode === 'subscription',
+      subscriptionId: requestedId ?? null,
       tokens: { fiveHour, weekly },
     })
   }
@@ -569,10 +636,12 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
 
     let provider: Provider
     let isSubscription = false
+    let subscriptionId: string | undefined
     try {
-      const resolved = await this.resolveStreamProvider(body, request)
+      const resolved = await this.resolveStreamProvider(body, request, response)
       provider = resolved.provider
       isSubscription = resolved.isSubscription
+      subscriptionId = resolved.subscriptionId
     } catch (error) {
       // The proxy never started, so refund the metered request.
       await this.refundUsage(userUuid, dayKey, limit)
@@ -650,7 +719,7 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       const spentTokens = sawUsageEvent
         ? reportedTokens
         : this.estimateRequestTokens(body, completionChars)
-      await this.recordTokenUsage(userUuid, spentTokens, isSubscription)
+      await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
     }
   }
 
@@ -665,7 +734,12 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
    * user and, when the call was subscription-backed, to the shared subscription
    * aggregate the admin card reads. Best-effort: swallow Redis errors.
    */
-  private async recordTokenUsage(userUuid: string, tokens: number, isSubscription: boolean): Promise<void> {
+  private async recordTokenUsage(
+    userUuid: string,
+    tokens: number,
+    isSubscription: boolean,
+    subscriptionId?: string,
+  ): Promise<void> {
     const store = this.tokenStore()
     if (!store || tokens <= 0) {
       return
@@ -674,7 +748,13 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
     try {
       await store.record(userUuid, tokens, now)
       if (isSubscription) {
+        // The cross-subscription aggregate (existing) …
         await store.record(SUBSCRIPTION_USAGE_SUBJECT, tokens, now)
+        // … plus a PER-SUBSCRIPTION meter so each paired subscription's usage can
+        // be polled individually (see the ?subscriptionId= usage query).
+        if (subscriptionId) {
+          await store.record(subscriptionUsageSubject(subscriptionId), tokens, now)
+        }
       }
     } catch {
       // Metering is best-effort and must never surface to the client.
@@ -695,7 +775,8 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
   private async resolveStreamProvider(
     body: StreamRequestBody,
     request: Request,
-  ): Promise<{ provider: Provider; isSubscription: boolean }> {
+    response: Response,
+  ): Promise<{ provider: Provider; isSubscription: boolean; subscriptionId?: string }> {
     const headerProfileId =
       typeof request.headers['x-assistant-profile'] === 'string'
         ? (request.headers['x-assistant-profile'] as string).trim()
@@ -705,7 +786,13 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
     if (this.serverSettingsResolver && (requestedProfileId || !body.provider)) {
       let profile
       try {
-        profile = await this.serverSettingsResolver.resolveActiveProfile(requestedProfileId)
+        // Resolve the EFFECTIVE profile for this principal: an explicit client
+        // selection wins; otherwise the assignment map (USER > ROLE > default)
+        // decides. The referenced backend profile's credentials are merged in.
+        profile = await this.serverSettingsResolver.resolveActiveProfile(
+          requestedProfileId,
+          this.resolvePrincipal(response),
+        )
       } catch {
         profile = undefined
       }
@@ -717,7 +804,9 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
           !resolution.config.openaiSubscriptionToken &&
           this.subscriptionCredentialProvider
         ) {
-          const credential = await this.subscriptionCredentialProvider.getFreshCredential()
+          // Draw a fresh token for the SPECIFIC paired subscription the backend
+          // profile names (falls back to the default/first pairing).
+          const credential = await this.subscriptionCredentialProvider.getFreshCredential(profile.subscriptionId)
           if (credential) {
             resolution.config.openaiSubscriptionToken = credential.token
             if (credential.accountId) {
@@ -728,6 +817,7 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
         return {
           provider: resolveProvider(resolution.providerId, resolution.model || this.defaultModel, resolution.config),
           isSubscription: profile.provider === 'codex-subscription',
+          subscriptionId: profile.provider === 'codex-subscription' ? profile.subscriptionId : undefined,
         }
       }
 

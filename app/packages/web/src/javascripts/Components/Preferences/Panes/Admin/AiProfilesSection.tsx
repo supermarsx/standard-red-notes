@@ -19,11 +19,15 @@ import {
   providerOption,
   validateProfileRows,
 } from './aiProfiles'
+import { AdminBackendProfileView } from './adminHelpers'
+import { backendOptionLabel } from './aiBackendProfiles'
 
 type Props = {
   application: WebApplication
   profiles: MaskedAiProfile[]
   defaultProfileId: string | null
+  /** Standard Red Notes: backend profiles a profile may reference by id. */
+  backendProfiles: AdminBackendProfileView[]
   busy: boolean
   /** Persist the whole profiles list + default via the server-settings PUT. */
   onSave: (update: { profiles: AiProfilePayload[]; defaultProfileId: string | null }) => Promise<boolean>
@@ -40,7 +44,14 @@ const viewSignature = (profiles: MaskedAiProfile[], defaultProfileId: string | n
  * write-only API key. Secrets are never prefilled; the server reports only a
  * "configured" boolean.
  */
-const AiProfilesSection: FunctionComponent<Props> = ({ application, profiles, defaultProfileId, busy, onSave }) => {
+const AiProfilesSection: FunctionComponent<Props> = ({
+  application,
+  profiles,
+  defaultProfileId,
+  backendProfiles,
+  busy,
+  onSave,
+}) => {
   const signature = useMemo(() => viewSignature(profiles, defaultProfileId), [profiles, defaultProfileId])
   const [rows, setRows] = useState<ProfileRow[]>(() => profiles.map(maskedProfileToRow))
   const [defaultId, setDefaultId] = useState<string | null>(defaultProfileId)
@@ -214,6 +225,28 @@ const AiProfilesSection: FunctionComponent<Props> = ({ application, profiles, de
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold">Backend profile</label>
+                <select
+                  className="mt-1 w-full rounded border border-border bg-default px-2 py-1.5 text-foreground"
+                  value={row.backendProfileId}
+                  onChange={(event) => mutateRow(row.id, { backendProfileId: event.target.value })}
+                  disabled={busy}
+                >
+                  <option value="">— use fields below (embedded) —</option>
+                  {backendProfiles.map((backend) => (
+                    <option key={backend.id} value={backend.id}>
+                      {backendOptionLabel(backend)}
+                    </option>
+                  ))}
+                </select>
+                {row.backendProfileId !== '' && (
+                  <Text className="mt-1 text-xs text-passive-1">
+                    Credentials/connection come from the selected backend profile; the fields below are ignored.
+                  </Text>
+                )}
               </div>
 
               {option.supportsBaseUrl && (

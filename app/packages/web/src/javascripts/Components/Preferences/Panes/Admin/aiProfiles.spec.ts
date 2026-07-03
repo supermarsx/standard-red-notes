@@ -21,6 +21,7 @@ const baseRow = (overrides: Partial<ProfileRow> = {}): ProfileRow => ({
   keyConfigured: false,
   newKey: '',
   clearKey: false,
+  backendProfileId: '',
   ...overrides,
 })
 

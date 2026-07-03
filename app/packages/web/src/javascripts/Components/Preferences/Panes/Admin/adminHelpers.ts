@@ -318,6 +318,25 @@ export type AdminAiProfileView = {
   keyConfigured: boolean
 }
 
+/** A masked backend (provider/connection) profile from the server view. */
+export type AdminBackendProfileView = {
+  id: string
+  name: string
+  type: 'api-key' | 'subscription'
+  provider?: 'anthropic' | 'openai-compatible' | 'ollama' | null
+  baseUrl?: string | null
+  model?: string | null
+  models?: string[]
+  subscriptionId?: string | null
+  keyConfigured: boolean
+}
+
+/** Assistant-profile assignments from the server view (user/role -> profile id). */
+export type AdminAssignmentsView = {
+  users: Record<string, string>
+  roles: Record<string, string>
+}
+
 export type AdminServerSettings = {
   ai?: {
     anthropicConfigured?: boolean
@@ -331,6 +350,9 @@ export type AdminServerSettings = {
     // Standard Red Notes: MULTIPLE named profiles + the default selector.
     profiles?: AdminAiProfileView[]
     defaultProfileId?: string | null
+    // Standard Red Notes: decoupled backend profiles + user/role assignments.
+    backendProfiles?: AdminBackendProfileView[]
+    assignments?: AdminAssignmentsView
   }
   updateCheck?: {
     url?: string | null

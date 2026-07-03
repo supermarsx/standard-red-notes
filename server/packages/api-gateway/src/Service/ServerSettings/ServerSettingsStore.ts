@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
 
-import { PersistedAiProfile } from '../Assistant/profiles'
+import { AssistantProfileAssignments, PersistedAiProfile, PersistedBackendProfile } from '../Assistant/profiles'
 
 /**
  * Standard Red Notes: runtime-configurable SERVER settings (admin pane).
@@ -43,6 +43,18 @@ export interface PersistedAiSettings {
   profiles?: PersistedAiProfile[]
   /** Id of the profile used when the client does not select one. */
   defaultProfileId?: string
+  /**
+   * Standard Red Notes: DECOUPLED backend (provider/connection) profiles that
+   * assistant profiles reference by id. When absent the effective set is
+   * synthesized from the assistant/legacy profiles (back-compat). Each api-key
+   * backend's apiKey is a secret persisted in plaintext but never returned.
+   */
+  backendProfiles?: PersistedBackendProfile[]
+  /**
+   * Standard Red Notes: assistant-profile assignments (user/role -> profile id).
+   * Resolved at request time with precedence USER > ROLE > default.
+   */
+  assignments?: AssistantProfileAssignments
 }
 
 /**
@@ -91,6 +103,8 @@ export interface ServerSettingsPatch {
     weeklyTokenLimit?: number | null
     profiles?: PersistedAiProfile[] | null
     defaultProfileId?: string | null
+    backendProfiles?: PersistedBackendProfile[] | null
+    assignments?: AssistantProfileAssignments | null
   }
   updateCheck?: { url?: string | null }
   nextcloudBackups?: { enabled?: boolean | null }
@@ -144,6 +158,8 @@ export class ServerSettingsStore {
         this.applyKey(data.ai, 'weeklyTokenLimit', patch.ai.weeklyTokenLimit)
         this.applyKey(data.ai, 'profiles', patch.ai.profiles)
         this.applyKey(data.ai, 'defaultProfileId', patch.ai.defaultProfileId)
+        this.applyKey(data.ai, 'backendProfiles', patch.ai.backendProfiles)
+        this.applyKey(data.ai, 'assignments', patch.ai.assignments)
         if (Object.keys(data.ai).length === 0) {
           delete data.ai
         }

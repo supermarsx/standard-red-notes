@@ -2,7 +2,13 @@ import { injectable } from 'inversify'
 
 import { ChatGptOAuthConfig, buildAuthorizeUrl } from './oauthConfig'
 import { codeChallengeS256, generateCodeVerifier, generateState } from './pkce'
-import { SubscriptionStatus, SubscriptionTokenRecord, SubscriptionTokenStore } from './SubscriptionTokenStore'
+import {
+  DEFAULT_SUBSCRIPTION_ID,
+  SubscriptionStatus,
+  SubscriptionStatusEntry,
+  SubscriptionTokenRecord,
+  SubscriptionTokenStore,
+} from './SubscriptionTokenStore'
 import { exchangeCodeForToken, refreshAccessToken } from './tokenExchange'
 
 /**
@@ -32,31 +38,41 @@ export interface BeginPairingResult {
 
 export interface SubscriptionCredentialProviderInterface {
   /**
-   * Returns a currently-valid credential, refreshing if it is within the skew
-   * window, or null when unpaired / in need of repair (caller falls back to the
-   * env token or reports "re-pair needed").
+   * Returns a currently-valid credential for a paired subscription (the DEFAULT
+   * one when no id is given), refreshing if it is within the skew window, or null
+   * when unpaired / in need of repair (caller falls back to the env token or
+   * reports "re-pair needed").
    */
-  getFreshCredential(): Promise<SubscriptionCredential | null>
+  getFreshCredential(subscriptionId?: string): Promise<SubscriptionCredential | null>
 
-  /** Generates PKCE + state (tied to the admin uuid) and the authorize URL. */
-  beginPairing(adminUuid: string): BeginPairingResult
+  /**
+   * Generates PKCE + state (tied to the admin uuid) and the authorize URL. The
+   * optional subscriptionId names WHICH pairing slot the completed exchange is
+   * saved under (default when omitted), enabling MULTIPLE paired subscriptions.
+   */
+  beginPairing(adminUuid: string, subscriptionId?: string): BeginPairingResult
 
   /**
    * Verifies+consumes the state, exchanges the code, and persists the encrypted
-   * credential. Throws on invalid/expired/replayed state or a failed exchange.
+   * credential under the pairing's target subscription id. Throws on
+   * invalid/expired/replayed state or a failed exchange.
    */
   completePairing(state: string, code: string): Promise<SubscriptionTokenRecord>
 
-  /** Clears the stored credential (unpair). */
-  unpair(): Promise<void>
+  /** Removes a stored credential (a specific id, or ALL when no id is given). */
+  unpair(subscriptionId?: string): Promise<void>
 
-  /** Non-secret pairing status. Never returns a token. */
-  getStatus(): Promise<SubscriptionStatus>
+  /** Non-secret pairing status for one subscription (DEFAULT when omitted). */
+  getStatus(subscriptionId?: string): Promise<SubscriptionStatus>
+
+  /** Non-secret status for EVERY paired subscription. Never returns a token. */
+  listStatuses(): Promise<SubscriptionStatusEntry[]>
 }
 
 interface PendingPairing {
   verifier: string
   adminUuid: string
+  subscriptionId: string
   expiresAt: number
 }
 
@@ -69,9 +85,9 @@ export class PairingStateStore {
 
   constructor(private readonly ttlMs: number = 10 * 60 * 1000) {}
 
-  put(state: string, verifier: string, adminUuid: string): void {
+  put(state: string, verifier: string, adminUuid: string, subscriptionId: string = DEFAULT_SUBSCRIPTION_ID): void {
     this.prune()
-    this.pending.set(state, { verifier, adminUuid, expiresAt: Date.now() + this.ttlMs })
+    this.pending.set(state, { verifier, adminUuid, subscriptionId, expiresAt: Date.now() + this.ttlMs })
   }
 
   /** Returns and REMOVES the pending pairing if present and unexpired. */
@@ -109,10 +125,10 @@ export class SubscriptionCredentialProvider implements SubscriptionCredentialPro
     private readonly pairingState: PairingStateStore = new PairingStateStore(),
   ) {}
 
-  beginPairing(adminUuid: string): BeginPairingResult {
+  beginPairing(adminUuid: string, subscriptionId: string = DEFAULT_SUBSCRIPTION_ID): BeginPairingResult {
     const verifier = generateCodeVerifier()
     const state = generateState()
-    this.pairingState.put(state, verifier, adminUuid)
+    this.pairingState.put(state, verifier, adminUuid, subscriptionId)
     const authorizeUrl = buildAuthorizeUrl(this.config, {
       state,
       codeChallenge: codeChallengeS256(verifier),
@@ -137,22 +153,31 @@ export class SubscriptionCredentialProvider implements SubscriptionCredentialPro
       pairedAt: Date.now(),
       needsRepair: false,
     }
-    await this.store.save(record)
+    await this.store.saveRecord(pending.subscriptionId, record)
     return record
   }
 
-  async unpair(): Promise<void> {
-    await this.store.clear()
+  async unpair(subscriptionId?: string): Promise<void> {
+    if (subscriptionId === undefined) {
+      // No-arg: clear ALL pairings (back-compat with the single-pairing flow).
+      await this.store.clear()
+      return
+    }
+    await this.store.removeRecord(subscriptionId)
   }
 
-  getStatus(): Promise<SubscriptionStatus> {
-    return this.store.getStatus()
+  getStatus(subscriptionId: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionStatus> {
+    return this.store.getStatus(subscriptionId)
   }
 
-  async getFreshCredential(): Promise<SubscriptionCredential | null> {
+  listStatuses(): Promise<SubscriptionStatusEntry[]> {
+    return this.store.listStatuses()
+  }
+
+  async getFreshCredential(subscriptionId: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionCredential | null> {
     let record: SubscriptionTokenRecord | null
     try {
-      record = await this.store.load()
+      record = await this.store.loadRecord(subscriptionId)
     } catch {
       // Undecryptable store — treat as unusable; status surfaces needsRepair.
       return null
@@ -167,7 +192,7 @@ export class SubscriptionCredentialProvider implements SubscriptionCredentialPro
 
     // Near or past expiry — attempt a refresh.
     if (!record.refreshToken) {
-      await this.markNeedsRepair(record)
+      await this.markNeedsRepair(subscriptionId, record)
       return null
     }
 
@@ -182,18 +207,18 @@ export class SubscriptionCredentialProvider implements SubscriptionCredentialPro
         accountId: refreshed.accountId ?? record.accountId,
         needsRepair: false,
       }
-      await this.store.save(rotated)
+      await this.store.saveRecord(subscriptionId, rotated)
       return { token: rotated.accessToken, accountId: rotated.accountId }
     } catch {
-      await this.markNeedsRepair(record)
+      await this.markNeedsRepair(subscriptionId, record)
       return null
     }
   }
 
-  /** Best-effort: mark the stored record as needing a re-pair. */
-  private async markNeedsRepair(record: SubscriptionTokenRecord): Promise<void> {
+  /** Best-effort: mark a stored record as needing a re-pair. */
+  private async markNeedsRepair(subscriptionId: string, record: SubscriptionTokenRecord): Promise<void> {
     try {
-      await this.store.save({ ...record, needsRepair: true })
+      await this.store.saveRecord(subscriptionId, { ...record, needsRepair: true })
     } catch {
       // Persisting the flag is best-effort; never let it mask the refresh failure.
     }

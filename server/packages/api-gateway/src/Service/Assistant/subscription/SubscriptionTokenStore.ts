@@ -53,7 +53,12 @@ export interface SubscriptionStatus {
   needsRepair?: boolean
 }
 
-/** On-disk envelope: an authenticated AES-256-GCM ciphertext of the record JSON. */
+/** A status entry tagged with the paired-subscription id it belongs to. */
+export interface SubscriptionStatusEntry extends SubscriptionStatus {
+  id: string
+}
+
+/** On-disk envelope: an authenticated AES-256-GCM ciphertext of the payload JSON. */
 interface EncryptedEnvelope {
   v: 1
   iv: string
@@ -61,8 +66,21 @@ interface EncryptedEnvelope {
   data: string
 }
 
+/**
+ * The decrypted payload. Standard Red Notes: to hold MULTIPLE paired
+ * subscriptions the payload is a map of id -> record. LEGACY files hold a bare
+ * record (a single subscription); those are migrated on read into the map under
+ * the reserved DEFAULT id, so an existing single-pairing deployment keeps working.
+ */
+interface MultiRecordPayload {
+  records: Record<string, SubscriptionTokenRecord>
+}
+
 const ALGORITHM = 'aes-256-gcm'
 const IV_BYTES = 12
+
+/** The reserved id of the first/legacy paired subscription credential. */
+export const DEFAULT_SUBSCRIPTION_ID = 'default'
 
 @injectable()
 export class SubscriptionTokenStore {
@@ -78,28 +96,24 @@ export class SubscriptionTokenStore {
     private readonly encryptionKeyHex: string | undefined,
   ) {}
 
-  /** Encrypts and atomically persists the record. Throws if the key is unusable. */
+  /**
+   * Encrypts and atomically persists a record under the DEFAULT id. Throws if
+   * the key is unusable. Back-compat single-record API (used by the legacy
+   * single-pairing flow).
+   */
   async save(record: SubscriptionTokenRecord): Promise<void> {
-    const key = this.requireKey()
-    const envelope = this.encrypt(record, key)
-    await this.atomicWrite(envelope)
+    await this.saveRecord(DEFAULT_SUBSCRIPTION_ID, record)
   }
 
   /**
-   * Decrypts and returns the stored record, or null if nothing is paired.
-   * Throws if a record exists but cannot be authenticated/decrypted (wrong key
-   * or tampering) — fail closed.
+   * Decrypts and returns the DEFAULT stored record, or null if nothing is
+   * paired. Throws if the store cannot be authenticated/decrypted — fail closed.
    */
   async load(): Promise<SubscriptionTokenRecord | null> {
-    const envelope = await this.readEnvelope()
-    if (!envelope) {
-      return null
-    }
-    const key = this.requireKey()
-    return this.decrypt(envelope, key)
+    return this.loadRecord(DEFAULT_SUBSCRIPTION_ID)
   }
 
-  /** Removes the stored credential. Best-effort; missing file is not an error. */
+  /** Removes ALL stored credentials. Best-effort; missing file is not an error. */
   async clear(): Promise<void> {
     await this.runExclusive(async () => {
       try {
@@ -112,18 +126,86 @@ export class SubscriptionTokenStore {
     })
   }
 
-  /**
-   * Non-secret status derived from the stored record. Never returns a token.
-   * If the record cannot be decrypted, reports paired+needsRepair so the UI can
-   * prompt a re-pair rather than crashing.
-   */
-  async getStatus(): Promise<SubscriptionStatus> {
-    let record: SubscriptionTokenRecord | null
+  /** Non-secret status for the DEFAULT subscription. Never returns a token. */
+  async getStatus(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionStatus> {
+    let records: Record<string, SubscriptionTokenRecord>
     try {
-      record = await this.load()
+      records = await this.loadAll()
     } catch {
       return { paired: true, needsRepair: true }
     }
+    return this.statusOf(records[id])
+  }
+
+  // -------------------------------------------------------------------------
+  // Standard Red Notes: MULTIPLE subscription pairings (id-keyed).
+  // -------------------------------------------------------------------------
+
+  /** Encrypts and persists a record under an explicit subscription id. */
+  async saveRecord(id: string, record: SubscriptionTokenRecord): Promise<void> {
+    const key = this.requireKey()
+    await this.runExclusive(async () => {
+      const records = await this.readRecordsMap()
+      records[id] = record
+      const envelope = this.encrypt({ records }, key)
+      await this.writeEnvelope(envelope)
+    })
+  }
+
+  /** Returns one record by id, or null. Throws (fail closed) on decrypt failure. */
+  async loadRecord(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionTokenRecord | null> {
+    const records = await this.loadAll()
+    return records[id] ?? null
+  }
+
+  /** Returns the whole id -> record map. Throws (fail closed) on decrypt failure. */
+  async loadAll(): Promise<Record<string, SubscriptionTokenRecord>> {
+    return this.readRecordsMap()
+  }
+
+  /**
+   * Removes ONE record by id. When it was the last one the file is deleted.
+   * Best-effort: a missing store is a no-op.
+   */
+  async removeRecord(id: string): Promise<void> {
+    const key = this.requireKey()
+    await this.runExclusive(async () => {
+      let records: Record<string, SubscriptionTokenRecord>
+      try {
+        records = await this.readRecordsMap()
+      } catch {
+        // Undecryptable store — clearing one id is meaningless; drop the file.
+        await this.unlinkQuietly()
+        return
+      }
+      if (!(id in records)) {
+        return
+      }
+      delete records[id]
+      if (Object.keys(records).length === 0) {
+        await this.unlinkQuietly()
+        return
+      }
+      const envelope = this.encrypt({ records }, key)
+      await this.writeEnvelope(envelope)
+    })
+  }
+
+  /**
+   * Non-secret status for EVERY paired subscription. Never returns a token. On a
+   * decrypt failure reports a single needs-repair entry so the UI can prompt.
+   */
+  async listStatuses(): Promise<SubscriptionStatusEntry[]> {
+    let records: Record<string, SubscriptionTokenRecord>
+    try {
+      records = await this.loadAll()
+    } catch {
+      return [{ id: DEFAULT_SUBSCRIPTION_ID, paired: true, needsRepair: true }]
+    }
+    return Object.entries(records).map(([id, record]) => ({ id, ...this.statusOf(record) }))
+  }
+
+  private statusOf(record: SubscriptionTokenRecord | undefined): SubscriptionStatus {
     if (!record) {
       return { paired: false }
     }
@@ -133,6 +215,36 @@ export class SubscriptionTokenStore {
       accountLabel: record.accountLabel,
       expiresAt: record.expiresAt,
       needsRepair: record.needsRepair,
+    }
+  }
+
+  /**
+   * Reads + decrypts the store into an id -> record map. Missing file => empty
+   * map. A LEGACY bare-record payload is migrated into the map under DEFAULT.
+   * Throws (fail closed) when a stored payload cannot be authenticated.
+   */
+  private async readRecordsMap(): Promise<Record<string, SubscriptionTokenRecord>> {
+    const envelope = await this.readEnvelope()
+    if (!envelope) {
+      return {}
+    }
+    const key = this.requireKey()
+    const payload = this.decrypt(envelope, key)
+    if (payload && typeof payload === 'object' && 'records' in (payload as MultiRecordPayload)) {
+      const records = (payload as MultiRecordPayload).records
+      return records && typeof records === 'object' ? records : {}
+    }
+    // Legacy bare record → migrate under the default id.
+    return { [DEFAULT_SUBSCRIPTION_ID]: payload as SubscriptionTokenRecord }
+  }
+
+  private async unlinkQuietly(): Promise<void> {
+    try {
+      await fs.unlink(this.filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
     }
   }
 
@@ -150,10 +262,10 @@ export class SubscriptionTokenStore {
     return Buffer.from(hex, 'hex')
   }
 
-  private encrypt(record: SubscriptionTokenRecord, key: Buffer): EncryptedEnvelope {
+  private encrypt(payload: unknown, key: Buffer): EncryptedEnvelope {
     const iv = crypto.randomBytes(IV_BYTES)
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-    const plaintext = Buffer.from(JSON.stringify(record), 'utf8')
+    const plaintext = Buffer.from(JSON.stringify(payload), 'utf8')
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
     const tag = cipher.getAuthTag()
     return {
@@ -164,14 +276,14 @@ export class SubscriptionTokenStore {
     }
   }
 
-  private decrypt(envelope: EncryptedEnvelope, key: Buffer): SubscriptionTokenRecord {
+  private decrypt(envelope: EncryptedEnvelope, key: Buffer): unknown {
     try {
       const iv = Buffer.from(envelope.iv, 'hex')
       const tag = Buffer.from(envelope.tag, 'hex')
       const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
       decipher.setAuthTag(tag)
       const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'hex')), decipher.final()])
-      return JSON.parse(plaintext.toString('utf8')) as SubscriptionTokenRecord
+      return JSON.parse(plaintext.toString('utf8')) as unknown
     } catch {
       // Wrong key or tampering — GCM authentication failed. Fail closed.
       throw new Error('Could not decrypt the stored subscription credential (wrong encryption key or corrupted store).')
@@ -194,13 +306,15 @@ export class SubscriptionTokenStore {
     }
   }
 
-  private async atomicWrite(envelope: EncryptedEnvelope): Promise<void> {
-    await this.runExclusive(async () => {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-      const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-      await fs.writeFile(tmp, JSON.stringify(envelope, null, 2), 'utf8')
-      await fs.rename(tmp, this.filePath)
-    })
+  /**
+   * Atomic tmp+rename write of the envelope. NOTE: callers already hold the
+   * write lock (runExclusive) — this must NOT re-acquire it or it would deadlock.
+   */
+  private async writeEnvelope(envelope: EncryptedEnvelope): Promise<void> {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
+    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
+    await fs.writeFile(tmp, JSON.stringify(envelope, null, 2), 'utf8')
+    await fs.rename(tmp, this.filePath)
   }
 
   /** Serializes writes so concurrent save/clear never interleave a tmp+rename. */

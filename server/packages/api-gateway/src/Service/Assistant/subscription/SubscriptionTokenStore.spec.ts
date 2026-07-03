@@ -123,4 +123,52 @@ describe('SubscriptionTokenStore', () => {
       expect((await store.getStatus()).needsRepair).toBe(true)
     })
   })
+
+  // Standard Red Notes: MULTIPLE paired subscriptions keyed by id.
+  describe('multiple subscriptions (id-keyed)', () => {
+    it('stores, lists, and removes independent pairings', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await store.saveRecord('team-a', sampleRecord({ accountLabel: 'a@team.test' }))
+      await store.saveRecord('team-b', sampleRecord({ accountLabel: 'b@team.test' }))
+
+      const statuses = await store.listStatuses()
+      expect(statuses.map((s) => s.id).sort()).toEqual(['team-a', 'team-b'])
+      expect(statuses.every((s) => s.paired)).toBe(true)
+
+      expect((await store.loadRecord('team-a'))?.accountLabel).toBe('a@team.test')
+      expect((await store.loadRecord('team-b'))?.accountLabel).toBe('b@team.test')
+
+      // Removing one leaves the other intact.
+      await store.removeRecord('team-a')
+      expect(await store.loadRecord('team-a')).toBeNull()
+      expect((await store.loadRecord('team-b'))?.accountLabel).toBe('b@team.test')
+      expect((await store.listStatuses()).map((s) => s.id)).toEqual(['team-b'])
+
+      // Removing the last deletes the store entirely.
+      await store.removeRecord('team-b')
+      expect(await store.listStatuses()).toEqual([])
+    })
+
+    it('adding a second pairing never drops the first (no plaintext on disk)', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await store.saveRecord('one', sampleRecord())
+      await store.saveRecord('two', sampleRecord())
+      const raw = await fs.readFile(filePath, 'utf8')
+      expect(raw).not.toContain('access-secret-token')
+      expect(Object.keys(await store.loadAll()).sort()).toEqual(['one', 'two'])
+    })
+
+    it('migrates a legacy bare-record file into the default id', async () => {
+      // A legacy single-record store written via save().
+      const legacy = new SubscriptionTokenStore(filePath, key)
+      await legacy.save(sampleRecord({ accountLabel: 'legacy@team.test' }))
+
+      const store = new SubscriptionTokenStore(filePath, key)
+      const all = await store.loadAll()
+      expect(Object.keys(all)).toEqual(['default'])
+      expect((await store.loadRecord('default'))?.accountLabel).toBe('legacy@team.test')
+      // And it is listed with the default id.
+      expect((await store.listStatuses())[0].id).toBe('default')
+    })
+  })
 })

@@ -22,6 +22,8 @@ export type MaskedAiProfile = {
   models?: string[]
   enabled: boolean
   keyConfigured: boolean
+  /** Standard Red Notes: optional reference to a named backend profile. */
+  backendProfileId?: string | null
 }
 
 /** A profile as sent in a PUT server-settings body (secret handling per header). */
@@ -35,6 +37,8 @@ export type AiProfilePayload = {
   enabled: boolean
   /** string = set new key; null = clear; omitted = preserve existing. */
   apiKey?: string | null
+  /** Reference to a named backend profile; '' clears the link. */
+  backendProfileId?: string
 }
 
 /** Editable row state in the UI: masked fields + transient key edits. */
@@ -51,6 +55,8 @@ export type ProfileRow = {
   newKey: string
   /** When true, send apiKey:null to clear the stored key. */
   clearKey: boolean
+  /** Standard Red Notes: referenced backend profile id ('' = none/embedded). */
+  backendProfileId: string
 }
 
 export type ProviderOption = {
@@ -135,6 +141,7 @@ export const maskedProfileToRow = (profile: MaskedAiProfile): ProfileRow => ({
   keyConfigured: profile.keyConfigured,
   newKey: '',
   clearKey: false,
+  backendProfileId: profile.backendProfileId ?? '',
 })
 
 /** A blank new-profile row with a fresh id, defaulting to OpenAI-compatible. */
@@ -149,6 +156,7 @@ export const emptyProfileRow = (): ProfileRow => ({
   keyConfigured: false,
   newKey: '',
   clearKey: false,
+  backendProfileId: '',
 })
 
 export type ProfileValidation = { ok: true } | { ok: false; error: string }
@@ -206,6 +214,9 @@ export const rowToPayload = (row: ProfileRow): AiProfilePayload => {
   if (row.models.length > 0) {
     payload.models = row.models
   }
+  // Standard Red Notes: backend reference. A non-empty id links the profile; ''
+  // is sent so the server clears any prior link (falls back to embedded fields).
+  payload.backendProfileId = row.backendProfileId.trim()
   // Secret: new key wins; explicit clear sends null; otherwise omit to preserve.
   if (row.newKey.trim() !== '') {
     payload.apiKey = row.newKey.trim()

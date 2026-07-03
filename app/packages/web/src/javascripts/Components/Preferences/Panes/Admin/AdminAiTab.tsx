@@ -12,6 +12,8 @@ import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
 import {
   AdminAiProfileView,
+  AdminAssignmentsView,
+  AdminBackendProfileView,
   AdminServerSettings,
   AdminServerSettingsResponse,
   buildApiKeySettingUpdate,
@@ -23,9 +25,12 @@ import {
   settingSourceLabel,
 } from './adminHelpers'
 import AiProfilesSection from './AiProfilesSection'
+import BackendProfilesSection from './BackendProfilesSection'
+import ProfileAssignmentsSection from './ProfileAssignmentsSection'
 import CodexPairingWizard from './CodexPairingWizard'
 import AdminSubscriptionUsageCard from './AdminSubscriptionUsageCard'
 import { AiProfilePayload, MaskedAiProfile } from './aiProfiles'
+import { BackendProfilePayload } from './aiBackendProfiles'
 
 type Props = {
   application: WebApplication
@@ -88,6 +93,9 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
   // Standard Red Notes: MULTIPLE named profiles (masked view) + default selector.
   const [profiles, setProfiles] = useState<MaskedAiProfile[]>([])
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null)
+  // Standard Red Notes: decoupled backend profiles + user/role assignments.
+  const [backendProfiles, setBackendProfiles] = useState<AdminBackendProfileView[]>([])
+  const [assignments, setAssignments] = useState<AdminAssignmentsView>({ users: {}, roles: {} })
 
   const [savingSection, setSavingSection] = useState<string | null>(null)
 
@@ -105,6 +113,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     setWeeklyTokenLimit(weekly != null && weekly > 0 ? String(weekly) : '')
     setProfiles((next?.ai?.profiles ?? []) as AdminAiProfileView[] as MaskedAiProfile[])
     setDefaultProfileId(next?.ai?.defaultProfileId ?? null)
+    setBackendProfiles((next?.ai?.backendProfiles ?? []) as AdminBackendProfileView[])
+    setAssignments(next?.ai?.assignments ?? { users: {}, roles: {} })
   }, [])
 
   const load = useCallback(async () => {
@@ -170,6 +180,23 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
   const saveProfiles = useCallback(
     async (update: { profiles: AiProfilePayload[]; defaultProfileId: string | null }): Promise<boolean> => {
       return save('profiles', { ai: update } as unknown as ServerSettingsPartial, 'Assistant profiles saved.')
+    },
+    [save],
+  )
+
+  // Standard Red Notes: persist the decoupled backend profiles + assignments via
+  // the same server-settings PUT. The legacyApi payload type predates them, so we
+  // widen at the call boundary (as elsewhere in this tab).
+  const saveBackendProfiles = useCallback(
+    async (update: { backendProfiles: BackendProfilePayload[] }): Promise<boolean> => {
+      return save('backend-profiles', { ai: update } as unknown as ServerSettingsPartial, 'Backend profiles saved.')
+    },
+    [save],
+  )
+
+  const saveAssignments = useCallback(
+    async (update: { assignments: AdminAssignmentsView }): Promise<boolean> => {
+      return save('assignments', { ai: update } as unknown as ServerSettingsPartial, 'Profile assignments saved.')
     },
     [save],
   )
@@ -340,20 +367,27 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       <HorizontalSeparator classes="my-4" />
 
-      {/* Standard Red Notes: MULTIPLE named profiles */}
+      {/* Standard Red Notes: decoupled backend (provider/connection) profiles */}
+      <BackendProfilesSection backendProfiles={backendProfiles} busy={busy} onSave={saveBackendProfiles} />
+
+      {/* Standard Red Notes: MULTIPLE named profiles (may reference a backend) */}
       <AiProfilesSection
         application={application}
         profiles={profiles}
         defaultProfileId={defaultProfileId}
+        backendProfiles={backendProfiles}
         busy={busy}
         onSave={saveProfiles}
       />
 
-      {/* Guided ChatGPT / Codex subscription pairing wizard */}
-      <CodexPairingWizard application={application} />
+      {/* Standard Red Notes: assign profiles to users/roles (user > role > default) */}
+      <ProfileAssignmentsSection profiles={profiles} assignments={assignments} busy={busy} onSave={saveAssignments} />
 
-      {/* SRN-side metered subscription token usage (read-only, admin) */}
-      <AdminSubscriptionUsageCard application={application} />
+      {/* Guided ChatGPT / Codex subscription pairing wizard (supports MULTIPLE) */}
+      <CodexPairingWizard application={application} onStatusChange={() => void load()} />
+
+      {/* SRN-side metered subscription token usage per subscription (admin) */}
+      <AdminSubscriptionUsageCard application={application} onChange={() => void load()} />
 
       <HorizontalSeparator classes="my-4" />
 

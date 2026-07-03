@@ -1,10 +1,17 @@
 import { AssistantProviderConfig } from '../Assistant/providers/factory'
 import { openAiCompatibleConfigured } from '../Assistant/providers/openaiAuth'
 import {
+  AssistantProfileAssignments,
+  effectiveBackendProfiles,
   effectiveProfiles,
   MaskedAiProfile,
+  MaskedBackendProfile,
+  maskBackendProfiles,
   maskProfiles,
   PersistedAiProfile,
+  PersistedBackendProfile,
+  resolveAssignedProfileId,
+  resolveEffectiveAssistantProfile,
   selectActiveProfile,
 } from '../Assistant/profiles'
 import { PersistedServerSettings, ServerSettingsPatch, ServerSettingsStore } from './ServerSettingsStore'
@@ -101,6 +108,10 @@ export interface ServerSettingsView {
       profiles: MaskedAiProfile[]
       /** Id of the active/default profile, or null when none is set. */
       defaultProfileId: string | null
+      /** Masked backend (provider/connection) profiles the profiles reference. */
+      backendProfiles: MaskedBackendProfile[]
+      /** Assistant-profile assignments (user/role -> profile id). */
+      assignments: AssistantProfileAssignments
     }
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
@@ -159,11 +170,58 @@ export class ServerSettingsResolver {
     return (await this.safeRead()).ai?.profiles
   }
 
-  /** Selects the active profile for a request (requested id, else default). */
-  async resolveActiveProfile(requestedId?: string): Promise<PersistedAiProfile | undefined> {
-    const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
+  /**
+   * The effective backend-profile set: explicit persisted backend profiles win;
+   * otherwise they are synthesized from the effective assistant profiles so an
+   * embedded-only (legacy) deployment resolves unchanged. Re-read per call.
+   */
+  async resolveBackendProfiles(): Promise<PersistedBackendProfile[]> {
+    const persisted = await this.safeRead()
+    const { profiles } = await this.resolveAssistantProfiles()
 
-    return selectActiveProfile(profiles, defaultProfileId, requestedId)
+    return effectiveBackendProfiles(persisted.ai?.backendProfiles, profiles)
+  }
+
+  /**
+   * The RAW persisted backend profiles (not synthesized). Used by the settings
+   * PUT validator to preserve a backend's write-only key on resubmit.
+   */
+  async getPersistedBackendProfiles(): Promise<PersistedBackendProfile[] | undefined> {
+    return (await this.safeRead()).ai?.backendProfiles
+  }
+
+  /** The persisted assistant-profile assignments (user/role -> profile id). */
+  async resolveAssignments(): Promise<AssistantProfileAssignments | undefined> {
+    return (await this.safeRead()).ai?.assignments
+  }
+
+  /**
+   * Selects the active profile for a request and merges its referenced backend
+   * profile (provider/connection/credential) on top. When `principal` is given,
+   * the effective DEFAULT is resolved from the assignments with precedence
+   * USER > ROLE > server default (an explicit `requestedId` from the client still
+   * wins over that default, mirroring the pre-existing selection behavior).
+   */
+  async resolveActiveProfile(
+    requestedId?: string,
+    principal?: { userIdentifiers?: string[]; roleNames?: string[] },
+  ): Promise<PersistedAiProfile | undefined> {
+    const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
+    const backendProfiles = effectiveBackendProfiles((await this.safeRead()).ai?.backendProfiles, profiles)
+
+    const effectiveDefaultId = principal
+      ? resolveAssignedProfileId(
+          await this.resolveAssignments(),
+          defaultProfileId,
+          principal.userIdentifiers ?? [],
+          principal.roleNames ?? [],
+          profiles,
+        )
+      : defaultProfileId
+
+    const selected = selectActiveProfile(profiles, effectiveDefaultId, requestedId)
+
+    return selected ? resolveEffectiveAssistantProfile(selected, backendProfiles) : undefined
   }
 
   /** Effective global daily AI request ceiling. 0 = unlimited (the default). */
@@ -238,6 +296,8 @@ export class ServerSettingsResolver {
     const config = await this.resolveAssistantConfig()
     const env = this.envBaseline
     const { profiles, defaultProfileId } = await this.resolveAssistantProfiles()
+    const backendProfiles = effectiveBackendProfiles(persisted.ai?.backendProfiles, profiles)
+    const assignments = persisted.ai?.assignments ?? { users: {}, roles: {} }
     const tokenLimits = await this.resolveAssistantTokenLimits()
 
     const ai = persisted.ai ?? {}
@@ -255,6 +315,8 @@ export class ServerSettingsResolver {
       // admin has defined an explicit set, else 'default' (legacy-mapped).
       'ai.profiles': this.source(ai.profiles, undefined),
       'ai.defaultProfileId': this.source(ai.defaultProfileId, undefined),
+      'ai.backendProfiles': this.source(ai.backendProfiles, undefined),
+      'ai.assignments': this.source(ai.assignments, undefined),
       'updateCheck.url': this.source(persisted.updateCheck?.url, env.updateCheckUrl),
       'nextcloudBackups.enabled': this.source(persisted.nextcloudBackups?.enabled, env.nextcloudBackupsEnabled),
       'security.proofOfWork.registerEnabled': this.source(pow.registerEnabled, env.proofOfWorkRegisterEnabled),
@@ -284,6 +346,9 @@ export class ServerSettingsResolver {
           // Masked named profiles — secrets replaced by keyConfigured booleans.
           profiles: maskProfiles(profiles),
           defaultProfileId: defaultProfileId ?? null,
+          // Masked backend (provider/connection) profiles — secrets masked too.
+          backendProfiles: maskBackendProfiles(backendProfiles),
+          assignments: { users: assignments.users ?? {}, roles: assignments.roles ?? {} },
         },
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },

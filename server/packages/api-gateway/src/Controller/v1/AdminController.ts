@@ -11,7 +11,13 @@ import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
-import { PersistedAiProfile, validateProfilesPatch } from '../../Service/Assistant/profiles'
+import {
+  PersistedAiProfile,
+  PersistedBackendProfile,
+  validateAssignmentsPatch,
+  validateBackendProfilesPatch,
+  validateProfilesPatch,
+} from '../../Service/Assistant/profiles'
 import { API_GATEWAY_PROGRAM, ServiceAction, ServiceControlService } from '../../Service/ServiceControl/ServiceControlService'
 
 /**
@@ -795,15 +801,22 @@ export class AdminController extends BaseHttpController {
     }
 
     // Read the raw persisted profiles first so the validator can preserve a
-    // profile's write-only key when the UI resubmits it without the secret.
+    // profile's (and a backend profile's) write-only key when the UI resubmits
+    // it without the secret.
     let existingProfiles: PersistedAiProfile[] | undefined
+    let existingBackendProfiles: PersistedBackendProfile[] | undefined
     try {
       existingProfiles = await this.serverSettingsResolver.getPersistedAiProfiles()
     } catch {
       existingProfiles = undefined
     }
+    try {
+      existingBackendProfiles = await this.serverSettingsResolver.getPersistedBackendProfiles()
+    } catch {
+      existingBackendProfiles = undefined
+    }
 
-    const parsed = this.parseServerSettingsBody(request.body, existingProfiles)
+    const parsed = this.parseServerSettingsBody(request.body, existingProfiles, existingBackendProfiles)
     if ('error' in parsed) {
       response.status(400).json({ error: { message: parsed.error } })
 
@@ -837,6 +850,7 @@ export class AdminController extends BaseHttpController {
   private parseServerSettingsBody(
     body: unknown,
     existingProfiles?: PersistedAiProfile[],
+    existingBackendProfiles?: PersistedBackendProfile[],
   ): { patch: ServerSettingsPatch; changedSettings: string[] } | { error: string } {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return { error: 'Request body must be a JSON object.' }
@@ -943,6 +957,31 @@ export class AdminController extends BaseHttpController {
         if (validated.defaultProfileId !== undefined) {
           patch.ai.defaultProfileId = validated.defaultProfileId
           changedSettings.push('ai.defaultProfileId')
+        }
+      }
+
+      // Standard Red Notes: DECOUPLED backend (provider/connection) profiles.
+      // Same write-only key preservation as assistant profiles (by backend id).
+      if (ai.backendProfiles !== undefined) {
+        const validated = validateBackendProfilesPatch(ai.backendProfiles, existingBackendProfiles)
+        if ('error' in validated) {
+          return { error: validated.error }
+        }
+        if (validated.backendProfiles !== undefined) {
+          patch.ai.backendProfiles = validated.backendProfiles
+          changedSettings.push('ai.backendProfiles')
+        }
+      }
+
+      // Standard Red Notes: assistant-profile assignments (user/role -> profile).
+      if (ai.assignments !== undefined) {
+        const validated = validateAssignmentsPatch(ai.assignments)
+        if ('error' in validated) {
+          return { error: validated.error }
+        }
+        if (validated.assignments !== undefined) {
+          patch.ai.assignments = validated.assignments
+          changedSettings.push('ai.assignments')
         }
       }
     }

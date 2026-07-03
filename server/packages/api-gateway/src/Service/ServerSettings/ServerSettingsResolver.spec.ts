@@ -212,6 +212,67 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     })
   })
 
+  // Standard Red Notes: decoupled backend profiles + assignments.
+  describe('backend profiles + assignments', () => {
+    it('back-compat: synthesizes backend profiles from embedded profiles when none are persisted', async () => {
+      const resolver = makeResolver({ assistant: { anthropicApiKey: 'env-key' } })
+      const backends = await resolver.resolveBackendProfiles()
+      expect(backends).toHaveLength(1)
+      expect(backends[0]).toMatchObject({ type: 'api-key', provider: 'anthropic' })
+    })
+
+    it('an assistant profile referencing a backend resolves with the backend credential', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({
+        ai: {
+          backendProfiles: [
+            { id: 'be1', name: 'Anthropic', type: 'api-key', provider: 'anthropic', apiKey: 'sk-backend' },
+          ],
+          profiles: [{ id: 'p1', name: 'Assistant', provider: 'openai-compatible', enabled: true, backendProfileId: 'be1' }],
+          defaultProfileId: 'p1',
+        },
+      })
+
+      const active = await resolver.resolveActiveProfile()
+      expect(active?.provider).toBe('anthropic')
+      expect(active?.apiKey).toBe('sk-backend')
+    })
+
+    it('masks backend-profile secrets in the view and reports a source', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({
+        ai: {
+          backendProfiles: [{ id: 'be1', name: 'A', type: 'api-key', provider: 'anthropic', apiKey: 'super-backend-secret' }],
+        },
+      })
+      const view = await resolver.view()
+      expect(JSON.stringify(view)).not.toContain('super-backend-secret')
+      expect(view.settings.ai.backendProfiles[0]).toMatchObject({ id: 'be1', type: 'api-key', keyConfigured: true })
+      expect(view.sources['ai.backendProfiles']).toBe('persisted')
+    })
+
+    it('resolves the effective profile for a principal (USER > ROLE > default)', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({
+        ai: {
+          profiles: [
+            { id: 'user-p', name: 'U', provider: 'anthropic', enabled: true, apiKey: 'a' },
+            { id: 'role-p', name: 'R', provider: 'anthropic', enabled: true, apiKey: 'b' },
+            { id: 'default-p', name: 'D', provider: 'anthropic', enabled: true, apiKey: 'c' },
+          ],
+          defaultProfileId: 'default-p',
+          assignments: { users: { 'uuid-1': 'user-p' }, roles: { CORE_USER: 'role-p' } },
+        },
+      })
+
+      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-1'], roleNames: ['CORE_USER'] }))?.id).toBe('user-p')
+      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['CORE_USER'] }))?.id).toBe('role-p')
+      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['PRO_USER'] }))?.id).toBe('default-p')
+      // An explicit client selection still wins over the assignment default.
+      expect((await resolver.resolveActiveProfile('role-p', { userIdentifiers: ['uuid-1'], roleNames: [] }))?.id).toBe('role-p')
+    })
+  })
+
   describe('proof-of-work (security.proofOfWork)', () => {
     it('falls back to hardcoded defaults when nothing is persisted or in env', async () => {
       const resolver = makeResolver()
