@@ -172,40 +172,50 @@ export class MomentsService extends AbstractViewController implements InternalEv
 
     const filename = `Moment ${dateToStringStyle1(new Date())}.png`
     const camera = new PhotoRecorder()
-    await camera.initialize()
+    try {
+      await camera.initialize()
 
-    if (this._isMobileDevice.execute().getValue()) {
-      await sleep(DELAY_AFTER_STARTING_CAMERA_TO_ALLOW_MOBILE_AUTOFOCUS)
-    }
+      if (this._isMobileDevice.execute().getValue()) {
+        await sleep(DELAY_AFTER_STARTING_CAMERA_TO_ALLOW_MOBILE_AUTOFOCUS)
+      }
 
-    let file = await camera.takePhoto(filename)
-    if (!file) {
-      await sleep(1000)
-      file = await camera.takePhoto(filename)
+      let file = await camera.takePhoto(filename)
       if (!file) {
-        return undefined
-      }
-    }
-
-    if (toastId) {
-      dismissToast(toastId)
-    }
-
-    const uploadedFile = await this.filesController.uploadNewFile(file)
-
-    if (uploadedFile) {
-      if (isAppInForeground) {
-        void this.linkingController.linkItemToSelectedItem(uploadedFile)
+        await sleep(1000)
+        file = await camera.takePhoto(filename)
+        if (!file) {
+          return undefined
+        }
       }
 
-      const defaultTag = this.getDefaultTag()
-      if (defaultTag) {
-        void this.linkingController.linkItems(uploadedFile, defaultTag)
+      if (toastId) {
+        dismissToast(toastId)
+        toastId = undefined
       }
+
+      const uploadedFile = await this.filesController.uploadNewFile(file)
+
+      if (uploadedFile) {
+        if (isAppInForeground) {
+          void this.linkingController.linkItemToSelectedItem(uploadedFile)
+        }
+
+        const defaultTag = this.getDefaultTag()
+        if (defaultTag) {
+          void this.linkingController.linkItems(uploadedFile, defaultTag)
+        }
+      }
+
+      return uploadedFile
+    } finally {
+      // Always release the camera stream (stops the OS camera indicator) and clear
+      // the capture toast — even when a capture attempt fails, an upload throws, or
+      // we return early. Otherwise the camera would be left streaming until the next
+      // hourly Moment, and the "Capturing Moment..." toast would linger forever.
+      if (toastId) {
+        dismissToast(toastId)
+      }
+      camera.finish()
     }
-
-    camera.finish()
-
-    return uploadedFile
   }
 }

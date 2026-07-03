@@ -44,6 +44,37 @@ describe('i18n foundation', () => {
     }
   })
 
+  // CLDR plural categories. i18next appends these as `_one`/`_many`/… suffixes and
+  // picks the right one at runtime per the active locale's plural rules. English only
+  // uses `_one`/`_other`, but richer locales (Romance `_many`, Slavic `_few`/`_many`,
+  // Arabic `_zero`/`_two`/…) legitimately declare more variants of the SAME base. The
+  // type system already models this (see CldrPluralKeys in en.ts); the runtime guard
+  // must match, so it checks the plural BASE rather than the exact suffixed key.
+  const CLDR_PLURAL_CATEGORIES = ['zero', 'one', 'two', 'few', 'many', 'other']
+
+  /** `dayWithCount_many` → `dayWithCount`; undefined when there is no plural suffix. */
+  const pluralBase = (key: string): string | undefined => {
+    const idx = key.lastIndexOf('_')
+    if (idx === -1) {
+      return undefined
+    }
+    return CLDR_PLURAL_CATEGORIES.includes(key.slice(idx + 1)) ? key.slice(0, idx) : undefined
+  }
+
+  /** English declares the key directly, or (for a plural key) some variant of its base. */
+  const englishHasKeyOrPluralBase = (enNamespace: Record<string, unknown>, key: string): boolean => {
+    if (Object.prototype.hasOwnProperty.call(enNamespace, key)) {
+      return true
+    }
+    const base = pluralBase(key)
+    if (!base) {
+      return false
+    }
+    return CLDR_PLURAL_CATEGORIES.some((category) =>
+      Object.prototype.hasOwnProperty.call(enNamespace, `${base}_${category}`),
+    )
+  }
+
   it('never defines a surface-namespace key that does not exist in English (typo/extra guard)', () => {
     for (const { code } of SUPPORTED_LOCALES) {
       const resource = LOCALE_RESOURCES[code] as Record<string, Record<string, string> | undefined>
@@ -51,9 +82,12 @@ describe('i18n foundation', () => {
         const enNamespace = (en as Record<string, Record<string, string>>)[ns]
         // Every namespace a locale provides must exist in English…
         expect(enNamespace).toBeDefined()
-        // …and every key it provides must exist in the English base.
+        // …and every key it provides must exist in the English base — allowing richer
+        // CLDR plural-category variants of a base English declares (e.g. `_many`).
         for (const key of Object.keys(resource[ns] ?? {})) {
-          expect(enNamespace).toHaveProperty(key)
+          if (!englishHasKeyOrPluralBase(enNamespace, key)) {
+            throw new Error(`Locale "${code}" namespace "${ns}" defines key "${key}" absent from English`)
+          }
         }
       }
     }

@@ -17,6 +17,8 @@ import { createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { act } from 'react'
 import NoteTabBar from '@/Components/NoteGroupView/NoteTabBar'
+import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
+import ApplicationProvider from '@/Components/ApplicationProvider'
 import { setViewport, TARGET_WIDTHS } from '@/TestUtils/viewport'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -31,13 +33,48 @@ const makeController = (runtimeId: string, title?: string): FakeController => ({
   item: title === undefined ? undefined : { title },
 })
 
+/**
+ * Defaults for the view-tab / split / close-menu props NoteTabBar requires but
+ * that these controller-focused tests don't exercise. Spread first so each test
+ * only specifies the props it asserts on. (Without `viewTabs` the component reads
+ * `.length` off undefined and throws before rendering.)
+ */
+const tabBarDefaults = {
+  viewTabs: [],
+  activeViewTabId: undefined,
+  onSelectViewTab: () => undefined,
+  onCloseViewTab: () => undefined,
+  onToggleSplit: () => undefined,
+  isSplit: false,
+  canSplit: false,
+  onCloseTab: () => undefined,
+  onCloseOtherTabs: () => undefined,
+  onCloseTabsToRight: () => undefined,
+  onCloseAllTabs: () => undefined,
+}
+
 let container: HTMLElement
 let root: Root
 let cleanupViewport: () => void = () => undefined
 
+// NoteTabBar always renders its (closed) right-click context-menu Popover, whose
+// subtree unconditionally reads the ApplicationProvider + AndroidBackHandler
+// contexts (they throw when absent). Wrap every mount in both, backed by a minimal
+// fake app — the closed Popover only touches the two back-handler methods.
+const fakeApp = {
+  addAndroidBackHandlerEventListener: () => () => undefined,
+  setAndroidBackHandlerFallbackListener: () => undefined,
+  addNativeMobileEventListener: () => () => undefined,
+} as never
+
 const mount = (element: React.ReactElement) => {
   act(() => {
-    root.render(element)
+    root.render(
+      createElement(ApplicationProvider, {
+        application: fakeApp,
+        children: createElement(AndroidBackHandlerProvider, { application: fakeApp, children: element }),
+      }),
+    )
   })
 }
 
@@ -65,6 +102,7 @@ describe('NoteTabBar structure', () => {
       const controllers = [makeController('a', 'Alpha'), makeController('b', 'Beta')]
       mount(
         createElement(NoteTabBar as never, {
+          ...tabBarDefaults,
           controllers,
           activeControllerRuntimeId: 'a',
           onSelect: () => undefined,
@@ -87,6 +125,7 @@ describe('NoteTabBar structure', () => {
       const controllers = [makeController('a', 'Alpha'), makeController('b', 'Beta')]
       mount(
         createElement(NoteTabBar as never, {
+          ...tabBarDefaults,
           controllers,
           activeControllerRuntimeId: 'b',
           onSelect: () => undefined,
@@ -104,6 +143,7 @@ describe('NoteTabBar structure', () => {
     it('falls back to "Untitled" for an empty title', () => {
       mount(
         createElement(NoteTabBar as never, {
+          ...tabBarDefaults,
           controllers: [makeController('a', '   '), makeController('b')],
           activeControllerRuntimeId: 'a',
           onSelect: () => undefined,
@@ -129,6 +169,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
     const controllers = [makeController('a', 'Alpha'), makeController('b', 'Beta')]
     mount(
       createElement(NoteTabBar as never, {
+        ...tabBarDefaults,
         controllers,
         activeControllerRuntimeId: 'a',
         onSelect: (c: FakeController) => selected.push(c.runtimeId),
@@ -151,6 +192,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
     const controllers = [makeController('a', 'Alpha'), makeController('b', 'Beta')]
     mount(
       createElement(NoteTabBar as never, {
+        ...tabBarDefaults,
         controllers,
         activeControllerRuntimeId: 'a',
         onSelect: (c: FakeController) => selected.push(c.runtimeId),
@@ -174,6 +216,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
     const controllers = [makeController('a', 'Alpha'), makeController('b', 'Beta')]
     mount(
       createElement(NoteTabBar as never, {
+        ...tabBarDefaults,
         controllers,
         activeControllerRuntimeId: 'a',
         onSelect: (c: FakeController) => selected.push(c.runtimeId),
@@ -199,6 +242,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
 
     mount(
       createElement(NoteTabBar as never, {
+        ...tabBarDefaults,
         controllers,
         activeControllerRuntimeId: 'a',
         onSelect: () => undefined,
@@ -216,6 +260,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
 
     mount(
       createElement(NoteTabBar as never, {
+        ...tabBarDefaults,
         controllers,
         activeControllerRuntimeId: 'a',
         onSelect: () => undefined,

@@ -113,6 +113,11 @@ const IframeFeatureView: FunctionComponent<Props> = ({
       if (loadTimeout) {
         clearTimeout(loadTimeout)
       }
+      // The timeout may have registered a `visibilitychange` listener on document
+      // (the reload-on-revisit fallback). Remove it on unmount / componentViewer
+      // change — otherwise it leaks, holding the componentViewer + requestReload
+      // closures alive for every editor that ever failed to load.
+      document.removeEventListener(VisibilityChangeKey, onVisibilityChange)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [componentViewer])

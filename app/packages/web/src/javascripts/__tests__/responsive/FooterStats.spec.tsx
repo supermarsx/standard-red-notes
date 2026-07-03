@@ -56,6 +56,12 @@ const makeConnectionApp = (overrides: { online?: boolean; signedOut?: boolean } 
     sessions: {
       isSignedOut: () => overrides.signedOut ?? true,
     },
+    // useConnectionStatus consults the account-menu controller's re-login flag to
+    // decide the actionable `login-needed` state (and reacts to it). In production
+    // this controller always exists; the minimal fake must provide it too.
+    accountMenuController: {
+      reloginPromptDismissed: false,
+    },
     addEventObserver: () => () => undefined,
   }) as never
 

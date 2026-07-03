@@ -116,7 +116,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // opens from app start, even while the preferences modal is closed.
   private _recentNotesState?: RecentNotesState
   // Standard Red Notes: background search-index runner (enable/disable, start/stop,
-  // scheduler). Lazily instantiated; drives WHEN the off-thread index is rebuilt.
+  // scheduler). Created on LocalDataLoaded (see wireSearchIndexRunner) so its
+  // auto-start-on-launch fires app-wide; the getter caches it. Drives WHEN the
+  // off-thread index is rebuilt.
   private _searchIndexRunner?: SearchIndexRunner
   // Standard Red Notes: auto-empty-trash maintenance service. Created in
   // createBackgroundServices() so it can react to the first full sync and
@@ -262,6 +264,31 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this.wireManualSyncMode()
 
     this.installDecryptionPool()
+
+    this.wireSearchIndexRunner()
+  }
+
+  /**
+   * Standard Red Notes: bring the background search-index runner to life once local
+   * storage is available.
+   *
+   * The runner's constructor auto-starts the scheduler when the user left indexing
+   * enabled (see SearchIndexRunner) — but only if the runner is actually created.
+   * Unlike the other background services (recent-notes, auto-empty-trash, etc.) it
+   * cannot be instantiated eagerly in createBackgroundServices(): its settings live
+   * in app storage, which throws "before loading local storage" until LocalDataLoaded.
+   * So we defer creation to that event. Without this, the runner was only ever created
+   * when the Search & Indexing preferences pane was first opened, so "auto-start on
+   * launch" never happened for users who never visited that pane.
+   *
+   * Merely touching the (idempotent, caching) getter constructs and self-starts it.
+   */
+  private wireSearchIndexRunner(): void {
+    this.disposers.push(
+      this.addEventObserver(async () => {
+        void this.searchIndexRunner
+      }, ApplicationEvent.LocalDataLoaded),
+    )
   }
 
   /**

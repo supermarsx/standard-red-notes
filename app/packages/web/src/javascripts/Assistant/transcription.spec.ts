@@ -117,8 +117,10 @@ describe('getSttAvailability', () => {
 })
 
 describe('resolveTranscriptionModel', () => {
-  it('defaults to whisper-1 when nothing relevant is configured', () => {
-    expect(resolveTranscriptionModel(fakeApplication())).toBe('whisper-1')
+  it('returns an empty id (defer to the server default) when nothing relevant is configured', () => {
+    // Empty => buildTranscriptionRequest omits the `model` param so the server's own
+    // default transcription model is used (see resolveTranscriptionModel doc comment).
+    expect(resolveTranscriptionModel(fakeApplication())).toBe('')
   })
 
   it('uses a chat model that looks like an STT model', () => {
@@ -127,8 +129,8 @@ describe('resolveTranscriptionModel', () => {
     )
   })
 
-  it('does not use a chat model that is not an STT model', () => {
-    expect(resolveTranscriptionModel(fakeApplication({ [PrefKey.AssistantModel]: 'gpt-4o' }))).toBe('whisper-1')
+  it('does not use a chat model that is not an STT model (defers to the server default)', () => {
+    expect(resolveTranscriptionModel(fakeApplication({ [PrefKey.AssistantModel]: 'gpt-4o' }))).toBe('')
   })
 
   it('prefers the locally-configured STT model override', () => {
