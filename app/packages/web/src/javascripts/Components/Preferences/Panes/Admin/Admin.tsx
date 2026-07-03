@@ -1,14 +1,17 @@
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback, useState } from 'react'
+import { VectorIconNameOrEmoji } from '@standardnotes/snjs'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
-import TabsContainer from '@/Components/Tabs/TabsContainer'
+import TabList from '@/Components/Tabs/TabList'
+import Tab from '@/Components/Tabs/Tab'
 import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
+import Icon from '@/Components/Icon/Icon'
 import AdminUsersTab, { LookedUpUser } from './AdminUsersTab'
 import AdminGroupsTab from './AdminGroupsTab'
 import AdminServerTab from './AdminServerTab'
@@ -20,6 +23,16 @@ import AdminSecurityTab from './AdminSecurityTab'
 type Props = {
   application: WebApplication
 }
+
+const ADMIN_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }[] = [
+  { id: 'users', title: 'Users', icon: 'user' },
+  { id: 'groups', title: 'Groups & roles', icon: 'group' },
+  { id: 'server', title: 'Server', icon: 'server' },
+  { id: 'ai', title: 'AI', icon: 'dashboard' },
+  { id: 'logs', title: 'Logs', icon: 'list-bulleted' },
+  { id: 'audit', title: 'Audit log', icon: 'history' },
+  { id: 'security', title: 'Security', icon: 'security' },
+]
 
 /**
  * Admin pane shell: role gate + the "admin role missing on the server" notice,
@@ -91,19 +104,24 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         </PreferencesSegment>
       </PreferencesGroup>
 
-      <TabsContainer
-        className="mb-4 bg-default"
-        tabs={[
-          { id: 'users', title: 'Users', icon: 'user' },
-          { id: 'groups', title: 'Groups & roles', icon: 'group' },
-          { id: 'server', title: 'Server', icon: 'server' },
-          { id: 'ai', title: 'AI', icon: 'dashboard' },
-          { id: 'logs', title: 'Logs', icon: 'list-bulleted' },
-          { id: 'audit', title: 'Audit log', icon: 'history' },
-          { id: 'security', title: 'Security', icon: 'security' },
-        ]}
-        state={tabState}
-      >
+      {/* Sub-tab bar. Built from the raw TabList/Tab primitives (instead of
+          TabsContainer, whose `overflow-hidden` wrapper would trap sticky) so
+          `position: sticky` actually works: its nearest scrolling ancestor is
+          the PreferencesPane's `overflow-y-auto` column, with no overflow-hidden
+          box in between. It stays pinned to the top of that scroll container as
+          the tab content scrolls under it. */}
+      <div className="sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border border-border bg-default shadow-sm">
+        <TabList state={tabState} className="flex min-w-max">
+          {ADMIN_TABS.map(({ id, title, icon }) => (
+            <Tab key={id} id={id} className="inline-flex items-center gap-1.5 whitespace-nowrap first:rounded-tl-md">
+              <Icon type={icon} size="medium" />
+              {title}
+            </Tab>
+          ))}
+        </TabList>
+      </div>
+
+      <div className="bg-default">
         <TabPanel state={tabState} id="users" className="p-6">
           <AdminUsersTab
             application={application}
@@ -136,7 +154,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
             goToTab={tabState.setActiveTab}
           />
         </TabPanel>
-      </TabsContainer>
+      </div>
     </PreferencesPane>
   )
 }

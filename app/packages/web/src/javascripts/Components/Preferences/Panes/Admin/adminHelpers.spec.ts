@@ -182,6 +182,14 @@ describe('log helpers', () => {
     expect(formatLogTimestamp('2026-01-01T00:00:00.000Z')).not.toBe('')
   })
 
+  it('renders a full local YYYY-MM-DD HH:MM:SS timestamp with seconds', () => {
+    // Local-time constructor so the assertion is timezone-independent: the value
+    // is serialised to an instant, then formatLogTimestamp renders it back in the
+    // same local zone.
+    const local = new Date(2026, 0, 2, 3, 4, 5)
+    expect(formatLogTimestamp(local.toISOString())).toBe('2026-01-02 03:04:05')
+  })
+
   it('filters over the message case-insensitively', () => {
     const entry: LogEntry = { timestamp: null, service: 'auth', level: 'info', message: 'User Signed In' }
     expect(logMatchesText(entry, '')).toBe(true)

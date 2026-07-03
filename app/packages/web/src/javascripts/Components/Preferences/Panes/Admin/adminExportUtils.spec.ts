@@ -93,6 +93,31 @@ describe('csvEscape', () => {
     expect(csvEscape(null)).toBe('')
     expect(csvEscape(undefined)).toBe('')
   })
+
+  it('neutralises spreadsheet formula injection by prefixing a leading =,+,-,@ (or tab/CR)', () => {
+    // Leading formula triggers are prefixed with a single quote so a spreadsheet
+    // renders them as text rather than evaluating them.
+    expect(csvEscape('=1+2')).toBe("'=1+2")
+    expect(csvEscape('+1')).toBe("'+1")
+    expect(csvEscape('-1')).toBe("'-1")
+    expect(csvEscape('@SUM(A1:A9)')).toBe("'@SUM(A1:A9)")
+    expect(csvEscape('\tstart')).toBe("'\tstart")
+    // The classic exfiltration payload: neutralised AND RFC-4180 quoted (comma).
+    expect(csvEscape('=cmd|"/c calc"!A1,x')).toBe('"\'=cmd|""/c calc""!A1,x"')
+    // A value that only becomes dangerous mid-string is left untouched.
+    expect(csvEscape('user=admin')).toBe('user=admin')
+    expect(csvEscape('203.0.113.7')).toBe('203.0.113.7')
+  })
+})
+
+describe('auditEntryToCSVRow formula-injection safety', () => {
+  it('prefixes a quote when an attacker-influenced action/ip begins with a formula trigger', () => {
+    const row = auditEntryToCSVRow(
+      auditEntry({ action: '=HYPERLINK("evil")', ip: '-1', metadata: null, targetType: null, targetUuid: null }),
+    )
+    // action is quoted (contains a comma) and formula-neutralised; ip is only neutralised.
+    expect(row).toBe('2026-07-02T14:35:00.000Z,actor-1,"\'=HYPERLINK(""evil"")",,\'-1,')
+  })
 })
 
 describe('auditEntryToCSVRow / auditEntriesToCSV', () => {

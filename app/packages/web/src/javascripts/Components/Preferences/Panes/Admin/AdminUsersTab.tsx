@@ -13,6 +13,7 @@ import {
   formatAdminUserSubscription,
 } from './adminHelpers'
 import { describeAdminUsersActiveFilters } from './adminUsersUi'
+import AdminPagination from './AdminPagination'
 import {
   BulkItemResult,
   excludeSelfTarget,
@@ -434,6 +435,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     [setEmail, setUser],
   )
 
+  // Keep the paginated table row in sync after a SINGLE-user mutation without a
+  // full reload (which would clear the selection and flash a spinner). Patches
+  // only the row for `uuid` if it is currently on the page; a no-op otherwise.
+  const patchUserRow = useCallback((uuid: string, patch: Partial<AdminUserRow>) => {
+    setRows((current) => current.map((row) => (row.uuid === uuid ? { ...row, ...patch } : row)))
+  }, [])
+
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const firstShown = total === 0 ? 0 : page * pageSize + 1
   const lastShown = page * pageSize + rows.length
@@ -753,6 +761,8 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           type: ToastType.Success,
           message: nextBanned ? 'User has been banned.' : 'User has been unbanned.',
         })
+        // Keep the table's Banned column in sync with the detail editor.
+        patchUserRow(user.uuid, { banned: nextBanned })
       } catch (error) {
         console.error(error)
         setBanned(previous)
@@ -761,7 +771,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         setBanningInProgress(false)
       }
     },
-    [application, user, banned],
+    [application, user, banned, patchUserRow],
   )
 
   const userIsAdmin = permissions?.directRoleNames.includes(INTERNAL_TEAM_USER) ?? false
@@ -798,6 +808,19 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           ? 'Admin role granted. It takes effect when their session refreshes.'
           : 'Admin role revoked. It takes effect when their session refreshes.',
       })
+      // Keep the table's Roles column in sync with the detail editor.
+      setRows((current) =>
+        current.map((row) =>
+          row.uuid === user.uuid
+            ? {
+                ...row,
+                roles: granting
+                  ? Array.from(new Set([...row.roles, INTERNAL_TEAM_USER]))
+                  : row.roles.filter((name) => name !== INTERNAL_TEAM_USER),
+              }
+            : row,
+        ),
+      )
       await loadPermissions(user.uuid)
     } catch (error) {
       console.error(error)
@@ -830,13 +853,15 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         return
       }
       addToast({ type: ToastType.Success, message: '2FA has been reset for this user.' })
+      // 2FA is now cleared — keep the table's MFA column in sync.
+      patchUserRow(user.uuid, { mfaEnabled: false })
     } catch (error) {
       console.error(error)
       addToast({ type: ToastType.Error, message: 'Failed to reset 2FA.' })
     } finally {
       setResettingMfa(false)
     }
-  }, [application, user])
+  }, [application, user, patchUserRow])
 
   const fixQuota = useCallback(async () => {
     if (!user) {
@@ -1205,23 +1230,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               <Text className="text-xs text-passive-1">
                 Showing {firstShown}&ndash;{lastShown} of {total.toLocaleString()}
               </Text>
-              <div className="flex items-center gap-2">
-                <Button
-                  small
-                  label="Previous"
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  disabled={page === 0}
-                />
-                <Text className="text-xs">
+              <AdminPagination
+                previousDisabled={page === 0}
+                nextDisabled={page + 1 >= pageCount || lastShown >= total}
+                onPrevious={() => setPage((p) => Math.max(0, p - 1))}
+                onNext={() => setPage((p) => p + 1)}
+              >
+                <Text className="whitespace-nowrap text-xs">
                   Page {page + 1} of {pageCount}
                 </Text>
-                <Button
-                  small
-                  label="Next"
-                  onClick={() => setPage((p) => p + 1)}
-                  disabled={page + 1 >= pageCount || lastShown >= total}
-                />
-              </div>
+              </AdminPagination>
             </div>
           </>
         )}
@@ -1511,7 +1529,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 )}
 
                 <div className="mt-2 flex items-center justify-between gap-2">
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col">
                     <Subtitle>Administrator access</Subtitle>
                     <Text>
                       {userIsAdmin
@@ -1520,38 +1538,56 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     </Text>
                   </div>
                   <Button
-                    label={userIsAdmin ? 'Revoke admin' : 'Grant admin'}
+                    className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
                     colorStyle={userIsAdmin ? 'danger' : 'default'}
                     onClick={() => void toggleAdminRole()}
                     disabled={adminRoleInProgress || !permissions}
-                  />
+                  >
+                    <Icon type="accessibility" size="small" />
+                    {userIsAdmin ? 'Revoke admin' : 'Grant admin'}
+                  </Button>
                 </div>
               </div>
 
               <HorizontalSeparator classes="my-3" />
 
               <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-col">
+                <div className="flex min-w-0 flex-col">
                   <Subtitle>Reset two-factor authentication</Subtitle>
                   <Text>
                     Clears this user's authenticator secret (and recovery requirement) so they can sign in with their
                     password alone and re-enroll 2FA. Verify a reset request out-of-band before using this.
                   </Text>
                 </div>
-                <Button label="Reset 2FA" colorStyle="danger" onClick={() => void resetMfa()} disabled={resettingMfa} />
+                <Button
+                  className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
+                  colorStyle="danger"
+                  onClick={() => void resetMfa()}
+                  disabled={resettingMfa}
+                >
+                  <Icon type="authenticator" size="small" />
+                  Reset 2FA
+                </Button>
               </div>
 
               <HorizontalSeparator classes="my-3" />
 
               <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-col">
+                <div className="flex min-w-0 flex-col">
                   <Subtitle>Recalculate storage quota</Subtitle>
                   <Text>
                     Recomputes the "storage used" counter from this user's actually stored files. Use when the usage
                     shown above looks wrong (e.g. after interrupted uploads). Runs asynchronously on the server.
                   </Text>
                 </div>
-                <Button label="Fix quota" onClick={() => void fixQuota()} disabled={fixingQuota} />
+                <Button
+                  className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
+                  onClick={() => void fixQuota()}
+                  disabled={fixingQuota}
+                >
+                  <Icon type="tune" size="small" />
+                  Fix quota
+                </Button>
               </div>
             </>
           )}

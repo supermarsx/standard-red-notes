@@ -8,6 +8,11 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Spinner from '@/Components/Spinner/Spinner'
+import Icon from '@/Components/Icon/Icon'
+import TabList from '@/Components/Tabs/TabList'
+import Tab from '@/Components/Tabs/Tab'
+import TabPanel from '@/Components/Tabs/TabPanel'
+import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
 import { rolePickerOptions, toggleRoleName } from './adminGroupsUi'
@@ -82,6 +87,10 @@ type Props = {
 }
 
 const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
+  // Second-level tabs inside this pane, subordinate to the main admin sub-tab
+  // bar: split the (heavy) role-management and group-management surfaces.
+  const subTab = useTabState({ defaultTab: 'roles' })
+
   // ---- Groups state ---------------------------------------------------------
   const [availableRoles, setAvailableRoles] = useState<string[]>([])
   const [groups, setGroups] = useState<AdminGroup[]>([])
@@ -104,9 +113,9 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [draftPermissions, setDraftPermissions] = useState<string[]>([])
   const [editorSearch, setEditorSearch] = useState('')
   const [savingRole, setSavingRole] = useState(false)
-  // Role inspector: role uuid -> who holds it.
+  // Role inspector: role uuid -> who holds it. Loaded for all roles up-front so
+  // the Roles table can show the "who has it" counts.
   const [holders, setHolders] = useState<Record<string, RoleHolders>>({})
-  const [holdersLoadingUuid, setHoldersLoadingUuid] = useState<string | null>(null)
 
   // ---- Permission catalog browser ------------------------------------------
   const [catalog, setCatalog] = useState<PermissionCatalogEntry[]>([])
@@ -222,27 +231,45 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     [application, draftPermissions, loadRoles, loadCatalog],
   )
 
-  const loadRoleHolders = useCallback(
-    async (role: AdminRole) => {
-      setHoldersLoadingUuid(role.uuid)
+  // Load holder counts for every role in parallel so the Roles table can show a
+  // "who has it" column without a per-row click. Best-effort: a failed role is
+  // simply left without counts. Merges into the same `holders` map the inspector
+  // uses, so the group chips stay available.
+  const loadAllRoleHolders = useCallback(
+    async (rolesToLoad: AdminRole[]) => {
       try {
-        const response = await application.legacyApi.adminGetRoleHolders(role.uuid)
-        if (isErrorResponse(response)) {
-          addToast({ type: ToastType.Error, message: 'Failed to load role holders.' })
-          return
-        }
-        const data = response as { data?: RoleHolders }
-        if (data.data) {
-          setHolders((current) => ({ ...current, [role.uuid]: data.data as RoleHolders }))
-        }
+        const results = await Promise.all(
+          rolesToLoad.map(async (role) => {
+            const response = await application.legacyApi.adminGetRoleHolders(role.uuid)
+            if (isErrorResponse(response)) {
+              return null
+            }
+            const data = (response as { data?: RoleHolders }).data
+            return data ? { uuid: role.uuid, holders: data } : null
+          }),
+        )
+        setHolders((current) => {
+          const next = { ...current }
+          for (const result of results) {
+            if (result) {
+              next[result.uuid] = result.holders
+            }
+          }
+          return next
+        })
       } catch (error) {
         console.error(error)
-      } finally {
-        setHoldersLoadingUuid(null)
       }
     },
     [application],
   )
+
+  // Refresh holder counts whenever the role list (re)loads.
+  useEffect(() => {
+    if (roles.length > 0) {
+      void loadAllRoleHolders(roles)
+    }
+  }, [roles, loadAllRoleHolders])
 
   // ---- Simulator ------------------------------------------------------------
   const runSimulation = useCallback(
@@ -495,180 +522,216 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     return map
   }, [catalog])
 
+  // The role currently open in the permission editor (rendered below the table).
+  const editingRole = roles.find((role) => role.uuid === editingRoleUuid) ?? null
+  // Groups whose expandable panels are open (rendered below the groups table).
+  const editingRolesGroup = groups.find((group) => group.uuid === editingRolesUuid) ?? null
+  const membersGroup = groups.find((group) => group.uuid === selectedGroupUuid) ?? null
+
   return (
     <>
-      {/* ================= ROLES ================= */}
+      {/* ================= SECOND-LEVEL TABS ================= */}
       <PreferencesSegment>
-        <Title>Roles &amp; permissions</Title>
+        <Title>Groups &amp; roles</Title>
         <Text>
-          The system exposes exactly four roles — Admin, Full, Core and Vaults users. Each grants a set of permissions;
-          use the Edit permissions button on a role to change which permissions it grants, drawing from the server&apos;s
-          permission catalog.
+          Manage the four canonical roles (which permissions each grants) and the groups that confer roles on their
+          members. A user&apos;s effective permissions are the union of their own roles and the roles their groups
+          confer.
         </Text>
-
-        <div className="mt-3 flex items-center gap-2">
-          <Button small label="Refresh" onClick={() => void Promise.all([loadRoles(), loadCatalog()])} />
+        <div className="mt-3 border-b border-border">
+          <TabList state={subTab} className="flex">
+            <Tab id="roles" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="accessibility" size="medium" />
+              Roles
+            </Tab>
+            <Tab id="groups" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="group" size="medium" />
+              Groups
+            </Tab>
+          </TabList>
         </div>
-
-        {rolesLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : roles.length === 0 ? (
-          <Text className="mt-3">No roles reported by this server.</Text>
-        ) : (
-          <div className="mt-3 flex flex-col gap-3">
-            {roles.map((role) => {
-              const isEditing = editingRoleUuid === role.uuid
-              const pickerOptions = permissionPickerOptions(
-                permissionCatalogNames,
-                isEditing ? draftPermissions : role.permissionNames,
-              )
-              const visibleOptions = filterPermissionNames(pickerOptions, editorSearch)
-              const groupedOptions = groupPermissionsByCategory(visibleOptions)
-              const unchanged = permissionSetsEqual(draftPermissions, role.permissionNames)
-              const holderInfo = holders[role.uuid]
-              return (
-                <div key={role.uuid} className="rounded-md border border-border p-3">
-                  {/* Header: label + permission preview on the left; the Edit
-                      permissions control is pinned TOP-RIGHT of every card. */}
-                  <div className="flex items-start justify-between gap-x-3 gap-y-2">
-                    <div className="flex min-w-0 flex-grow flex-col">
-                      <div className="flex flex-wrap items-center gap-x-2">
-                        <Subtitle>{role.label ?? canonicalRoleLabel(role.name)}</Subtitle>
-                        <Text className="text-xs text-passive-1">{role.name}</Text>
-                        <Text className="text-xs text-passive-1">
-                          · {role.permissionNames.length} permission{role.permissionNames.length === 1 ? '' : 's'}
-                        </Text>
-                      </div>
-                      {role.description && <Text className="mt-0.5 text-passive-1">{role.description}</Text>}
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        {role.permissionNames.length > 0 ? (
-                          role.permissionNames.map((permission) => (
-                            <Chip key={permission} name={permission} title={permissionLabel(permission)} />
-                          ))
-                        ) : (
-                          <Text className="text-xs italic text-passive-1">No permissions granted</Text>
-                        )}
-                      </div>
-                      <div className="mt-2">
-                        <Button
-                          small
-                          label={holderInfo ? 'Refresh holders' : 'Who has it'}
-                          disabled={holdersLoadingUuid === role.uuid}
-                          onClick={() => void loadRoleHolders(role)}
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-shrink-0 items-start">
-                      <Button
-                        label={isEditing ? 'Close' : 'Edit permissions'}
-                        onClick={() => (isEditing ? setEditingRoleUuid(null) : beginEditingRole(role))}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Role inspector: who has it */}
-                  {holderInfo && (
-                    <div className="mt-3 rounded border border-border p-3">
-                      <Text className="text-xs text-passive-1">
-                        Held directly by <strong>{holderInfo.directUserCount}</strong> user
-                        {holderInfo.directUserCount === 1 ? '' : 's'}; conferred by{' '}
-                        <strong>{holderInfo.groups.length}</strong> group
-                        {holderInfo.groups.length === 1 ? '' : 's'}.
-                      </Text>
-                      {holderInfo.groups.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {holderInfo.groups.map((group) => (
-                            <Chip key={group.uuid} name={group.name} />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Richer permission editor: grouped, searchable, per-group select-all */}
-                  {isEditing && (
-                    <div className="mt-3 rounded border border-border p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Text className="text-xs text-passive-1">
-                          Toggle permissions, then Save. {draftPermissions.length} selected
-                          {unchanged ? '' : ' — unsaved changes'}.
-                        </Text>
-                        <DecoratedInput
-                          className={{ container: 'min-w-[180px]' }}
-                          placeholder="Filter permissions…"
-                          value={editorSearch}
-                          onChange={setEditorSearch}
-                        />
-                      </div>
-                      {groupedOptions.length === 0 ? (
-                        <Text className="mt-2">No matching permissions.</Text>
-                      ) : (
-                        <div className="mt-2 flex flex-col gap-3">
-                          {groupedOptions.map(({ category, permissions }) => {
-                            const allSelected = permissions.every((p) => draftPermissions.includes(p))
-                            return (
-                              <div key={category}>
-                                <div className="flex items-center gap-2">
-                                  <Text className="text-xs font-semibold uppercase text-passive-1">{category}</Text>
-                                  <button
-                                    type="button"
-                                    className="cursor-pointer text-xs text-info hover:underline"
-                                    onClick={() =>
-                                      setDraftPermissions((current) => {
-                                        let next = current
-                                        for (const permission of permissions) {
-                                          next = togglePermissionName(next, permission, !allSelected)
-                                        }
-                                        return next
-                                      })
-                                    }
-                                  >
-                                    {allSelected ? 'Clear all' : 'Select all'}
-                                  </button>
-                                </div>
-                                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                                  {permissions.map((permission) => {
-                                    const selected = draftPermissions.includes(permission)
-                                    return (
-                                      <ToggleChip
-                                        key={permission}
-                                        name={permission}
-                                        title={permissionLabel(permission)}
-                                        selected={selected}
-                                        onToggle={() =>
-                                          setDraftPermissions((current) =>
-                                            togglePermissionName(current, permission, !selected),
-                                          )
-                                        }
-                                      />
-                                    )
-                                  })}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                      <div className="mt-3 flex items-center gap-2">
-                        <Button
-                          small
-                          label={savingRole ? 'Saving…' : 'Save permissions'}
-                          disabled={savingRole || unchanged}
-                          onClick={() => void saveRolePermissions(role)}
-                        />
-                        <Button small label="Cancel" onClick={() => setEditingRoleUuid(null)} />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
       </PreferencesSegment>
 
-      {/* ================= PERMISSION CATALOG ================= */}
-      <PreferencesSegment>
+      {/* ================= ROLES TAB ================= */}
+      <TabPanel state={subTab} id="roles">
+        {/* ---- Roles table ---- */}
+        <PreferencesSegment>
+          <Title>Roles</Title>
+          <Text>
+            The system exposes exactly four roles — Admin, Full, Core and Vaults users. Each grants a set of
+            permissions; use the Edit permissions row action to change which permissions a role grants, drawing from the
+            server&apos;s permission catalog below.
+          </Text>
+
+          <div className="mt-3 flex items-center gap-2">
+            <Button small label="Refresh" onClick={() => void Promise.all([loadRoles(), loadCatalog()])} />
+          </div>
+
+          {rolesLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : roles.length === 0 ? (
+            <Text className="mt-3">No roles reported by this server.</Text>
+          ) : (
+            <div className="mt-3 overflow-auto rounded-md border border-border">
+              <table className="w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr>
+                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Role</th>
+                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Permissions</th>
+                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Who has it</th>
+                    <th className="border-b border-border bg-contrast px-3 py-2 text-right font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {roles.map((role) => {
+                    const isEditing = editingRoleUuid === role.uuid
+                    const holderInfo = holders[role.uuid]
+                    return (
+                      <tr key={role.uuid} className={isEditing ? 'bg-info-backdrop' : ''}>
+                        <td className="px-3 py-2.5">
+                          <div className="flex min-w-0 flex-col">
+                            <Subtitle>{role.label ?? canonicalRoleLabel(role.name)}</Subtitle>
+                            <Text className="text-xs text-passive-1">{role.name}</Text>
+                            {role.description && (
+                              <Text className="mt-0.5 text-xs text-passive-1">{role.description}</Text>
+                            )}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 tabular-nums">
+                          {role.permissionNames.length} permission{role.permissionNames.length === 1 ? '' : 's'}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5">
+                          {holderInfo ? (
+                            <span className="tabular-nums">
+                              {holderInfo.directUserCount} direct · {holderInfo.groups.length} group
+                              {holderInfo.groups.length === 1 ? '' : 's'}
+                            </span>
+                          ) : (
+                            <span className="text-passive-1">…</span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                          <Button
+                            small
+                            label={isEditing ? 'Close' : 'Edit permissions'}
+                            onClick={() => (isEditing ? setEditingRoleUuid(null) : beginEditingRole(role))}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Permission editor + role inspector for the role being edited. */}
+          {editingRole &&
+            (() => {
+              const pickerOptions = permissionPickerOptions(permissionCatalogNames, draftPermissions)
+              const visibleOptions = filterPermissionNames(pickerOptions, editorSearch)
+              const groupedOptions = groupPermissionsByCategory(visibleOptions)
+              const unchanged = permissionSetsEqual(draftPermissions, editingRole.permissionNames)
+              const holderInfo = holders[editingRole.uuid]
+              return (
+                <div className="mt-3 rounded-md border border-info p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Subtitle>
+                      Editing: {editingRole.label ?? canonicalRoleLabel(editingRole.name)}{' '}
+                      <span className="text-xs font-normal text-passive-1">{editingRole.name}</span>
+                    </Subtitle>
+                    <Button small label="Close" onClick={() => setEditingRoleUuid(null)} />
+                  </div>
+
+                  {/* Role inspector: who has it (group chips) */}
+                  {holderInfo && holderInfo.groups.length > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <Text className="text-xs text-passive-1">Conferred by groups:</Text>
+                      {holderInfo.groups.map((group) => (
+                        <Chip key={group.uuid} name={group.name} />
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="mt-3 rounded border border-border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Text className="text-xs text-passive-1">
+                        Toggle permissions, then Save. {draftPermissions.length} selected
+                        {unchanged ? '' : ' — unsaved changes'}.
+                      </Text>
+                      <DecoratedInput
+                        className={{ container: 'min-w-[180px]' }}
+                        placeholder="Filter permissions…"
+                        value={editorSearch}
+                        onChange={setEditorSearch}
+                      />
+                    </div>
+                    {groupedOptions.length === 0 ? (
+                      <Text className="mt-2">No matching permissions.</Text>
+                    ) : (
+                      <div className="mt-2 flex flex-col gap-3">
+                        {groupedOptions.map(({ category, permissions }) => {
+                          const allSelected = permissions.every((p) => draftPermissions.includes(p))
+                          return (
+                            <div key={category}>
+                              <div className="flex items-center gap-2">
+                                <Text className="text-xs font-semibold uppercase text-passive-1">{category}</Text>
+                                <button
+                                  type="button"
+                                  className="cursor-pointer text-xs text-info hover:underline"
+                                  onClick={() =>
+                                    setDraftPermissions((current) => {
+                                      let next = current
+                                      for (const permission of permissions) {
+                                        next = togglePermissionName(next, permission, !allSelected)
+                                      }
+                                      return next
+                                    })
+                                  }
+                                >
+                                  {allSelected ? 'Clear all' : 'Select all'}
+                                </button>
+                              </div>
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {permissions.map((permission) => {
+                                  const selected = draftPermissions.includes(permission)
+                                  return (
+                                    <ToggleChip
+                                      key={permission}
+                                      name={permission}
+                                      title={permissionLabel(permission)}
+                                      selected={selected}
+                                      onToggle={() =>
+                                        setDraftPermissions((current) =>
+                                          togglePermissionName(current, permission, !selected),
+                                        )
+                                      }
+                                    />
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        small
+                        label={savingRole ? 'Saving…' : 'Save permissions'}
+                        disabled={savingRole || unchanged}
+                        onClick={() => void saveRolePermissions(editingRole)}
+                      />
+                      <Button small label="Cancel" onClick={() => setEditingRoleUuid(null)} />
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+        </PreferencesSegment>
+
+        {/* ================= PERMISSION CATALOG ================= */}
+        <PreferencesSegment>
         <Title>Permission catalog</Title>
         <Text>
           Every permission the server knows about, grouped by category, with the roles that currently grant each one.
@@ -830,172 +893,204 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         </div>
       </PreferencesSegment>
 
-      {/* ================= GROUPS ================= */}
-      <PreferencesSegment>
-        <Title>Groups</Title>
-        <Text>
-          Groups confer a set of roles on every member. A user&apos;s effective permissions are the union of their own
-          roles and the roles granted by their groups. Groups may confer built-in <em>and</em> custom roles.
-        </Text>
+      </TabPanel>
 
-        <div className="mt-3 rounded-md border border-border p-3">
-          <Subtitle>Create a group</Subtitle>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <DecoratedInput
-              className={{ container: 'min-w-[220px] flex-grow' }}
-              placeholder="Group name"
-              value={newGroupName}
-              onChange={setNewGroupName}
-              onEnter={() => void createGroup()}
-            />
-            <DecoratedInput
-              className={{ container: 'min-w-[220px] flex-grow' }}
-              placeholder="Description (optional)"
-              value={newGroupDescription}
-              onChange={setNewGroupDescription}
-              onEnter={() => void createGroup()}
-            />
-            <Button
-              label="Create group"
-              onClick={() => void createGroup()}
-              disabled={creatingGroup || newGroupName.trim() === ''}
-            />
+      {/* ================= GROUPS TAB ================= */}
+      <TabPanel state={subTab} id="groups">
+        <PreferencesSegment>
+          <Title>Groups</Title>
+          <Text>
+            Groups confer a set of roles on every member. A user&apos;s effective permissions are the union of their own
+            roles and the roles granted by their groups. Groups may confer built-in <em>and</em> custom roles.
+          </Text>
+
+          <div className="mt-3 rounded-md border border-border p-3">
+            <Subtitle>Create a group</Subtitle>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <DecoratedInput
+                className={{ container: 'min-w-[220px] flex-grow' }}
+                placeholder="Group name"
+                value={newGroupName}
+                onChange={setNewGroupName}
+                onEnter={() => void createGroup()}
+              />
+              <DecoratedInput
+                className={{ container: 'min-w-[220px] flex-grow' }}
+                placeholder="Description (optional)"
+                value={newGroupDescription}
+                onChange={setNewGroupDescription}
+                onEnter={() => void createGroup()}
+              />
+              <Button
+                label="Create group"
+                onClick={() => void createGroup()}
+                disabled={creatingGroup || newGroupName.trim() === ''}
+              />
+            </div>
+            {groupRolePickerBase.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <Text className="mr-1 text-xs text-passive-1">Confer roles:</Text>
+                {groupRolePickerBase.map((roleName) => (
+                  <ToggleChip
+                    key={roleName}
+                    name={canonicalRoleLabel(roleName)}
+                    title={roleName}
+                    selected={newGroupRoles.includes(roleName)}
+                    onToggle={() =>
+                      setNewGroupRoles((current) => toggleRoleName(current, roleName, !current.includes(roleName)))
+                    }
+                  />
+                ))}
+              </div>
+            )}
           </div>
-          {groupRolePickerBase.length > 0 && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <Text className="mr-1 text-xs text-passive-1">Confer roles:</Text>
-              {groupRolePickerBase.map((roleName) => (
-                <ToggleChip
-                  key={roleName}
-                  name={canonicalRoleLabel(roleName)}
-                  title={roleName}
-                  selected={newGroupRoles.includes(roleName)}
-                  onToggle={() =>
-                    setNewGroupRoles((current) => toggleRoleName(current, roleName, !current.includes(roleName)))
-                  }
-                />
-              ))}
+
+          <HorizontalSeparator classes="my-4" />
+
+          {groupsLoading ? (
+            <Spinner className="h-5 w-5" />
+          ) : groups.length === 0 ? (
+            <Text>No groups yet.</Text>
+          ) : (
+            <div className="overflow-auto rounded-md border border-border">
+              <table className="w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr>
+                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Group</th>
+                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Conferred roles</th>
+                    <th className="border-b border-border bg-contrast px-3 py-2 text-right font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {groups.map((group) => {
+                    const isEditingRoles = editingRolesUuid === group.uuid
+                    const isShowingMembers = selectedGroupUuid === group.uuid
+                    return (
+                      <tr key={group.uuid} className={isEditingRoles || isShowingMembers ? 'bg-info-backdrop' : ''}>
+                        <td className="px-3 py-2.5">
+                          <div className="flex min-w-0 flex-col">
+                            <Subtitle>{group.name}</Subtitle>
+                            {group.description && <Text className="text-passive-1">{group.description}</Text>}
+                            <Text className="mt-0.5 text-xs text-passive-1">{group.uuid}</Text>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {group.roleNames.length > 0 ? (
+                              group.roleNames.map((roleName) => (
+                                <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
+                              ))
+                            ) : (
+                              <Text className="text-xs italic text-passive-1">No roles conferred</Text>
+                            )}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                          <div className="inline-flex items-center gap-2">
+                            <Button
+                              small
+                              label={isEditingRoles ? 'Done' : 'Edit roles'}
+                              onClick={() => setEditingRolesUuid(isEditingRoles ? null : group.uuid)}
+                            />
+                            <Button
+                              small
+                              label={isShowingMembers ? 'Hide members' : 'Members'}
+                              onClick={() => {
+                                if (isShowingMembers) {
+                                  setSelectedGroupUuid(null)
+                                } else {
+                                  void loadGroupMembers(group.uuid)
+                                }
+                              }}
+                            />
+                            <Button small colorStyle="danger" label="Delete" onClick={() => void deleteGroup(group)} />
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-        </div>
 
-        <HorizontalSeparator classes="my-4" />
-
-        {groupsLoading ? (
-          <Spinner className="h-5 w-5" />
-        ) : groups.length === 0 ? (
-          <Text>No groups yet.</Text>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {groups.map((group) => {
-              const pickerOptions = rolePickerOptions(groupRolePickerBase, group.roleNames)
-              const isEditingRoles = editingRolesUuid === group.uuid
-              const isShowingMembers = selectedGroupUuid === group.uuid
+          {/* Edit-roles panel for the group whose roles are being edited. */}
+          {editingRolesGroup &&
+            (() => {
+              const pickerOptions = rolePickerOptions(groupRolePickerBase, editingRolesGroup.roleNames)
               return (
-                <div key={group.uuid} className="rounded-md border border-border p-3">
-                  <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-                    <div className="flex min-w-0 flex-grow flex-col">
-                      <div className="flex flex-wrap items-baseline gap-x-2">
-                        <Subtitle>{group.name}</Subtitle>
-                        {group.description && <Text className="text-passive-1">{group.description}</Text>}
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        {group.roleNames.length > 0 ? (
-                          group.roleNames.map((roleName) => (
-                            <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
-                          ))
-                        ) : (
-                          <Text className="text-xs italic text-passive-1">No roles conferred</Text>
-                        )}
-                      </div>
-                      <Text className="mt-1 text-xs text-passive-1">{group.uuid}</Text>
-                    </div>
-                    <div className="flex flex-shrink-0 items-center gap-2">
-                      <Button
-                        small
-                        label={isEditingRoles ? 'Done' : 'Edit roles'}
-                        onClick={() => setEditingRolesUuid(isEditingRoles ? null : group.uuid)}
-                      />
-                      <Button
-                        small
-                        label={isShowingMembers ? 'Hide members' : 'Members'}
-                        onClick={() => {
-                          if (isShowingMembers) {
-                            setSelectedGroupUuid(null)
-                          } else {
-                            void loadGroupMembers(group.uuid)
-                          }
-                        }}
-                      />
-                      <Button small colorStyle="danger" label="Delete" onClick={() => void deleteGroup(group)} />
-                    </div>
+                <div className="mt-3 rounded-md border border-info p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Subtitle>Roles conferred by: {editingRolesGroup.name}</Subtitle>
+                    <Button small label="Done" onClick={() => setEditingRolesUuid(null)} />
                   </div>
-
-                  {isEditingRoles && (
-                    <div className="mt-3 rounded border border-border p-3">
-                      <Text className="text-xs text-passive-1">
-                        Toggle the roles this group confers on every member. Changes are saved immediately.
-                      </Text>
-                      {pickerOptions.length === 0 ? (
-                        <Text className="mt-2">This server does not report any assignable roles.</Text>
-                      ) : (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {pickerOptions.map((roleName) => {
-                            const conferred = group.roleNames.includes(roleName)
-                            return (
-                              <ToggleChip
-                                key={roleName}
-                                name={canonicalRoleLabel(roleName)}
-                                title={roleName}
-                                selected={conferred}
-                                onToggle={() => void toggleGroupRole(group, roleName, !conferred)}
-                              />
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {isShowingMembers && (
-                    <div className="mt-3 rounded border border-border p-3">
-                      <Subtitle>Members{membersLoading ? '' : ` (${groupMembers.length})`}</Subtitle>
-                      {membersLoading ? (
-                        <Spinner className="mt-2 h-5 w-5" />
-                      ) : (
-                        <>
-                          {groupMembers.length === 0 ? (
-                            <Text className="mt-2 italic text-passive-1">No members yet.</Text>
-                          ) : (
-                            <div className="mt-2 divide-y divide-border">
-                              {groupMembers.map((member) => (
-                                <div key={member.uuid} className="flex items-center justify-between gap-2 py-1.5">
-                                  <Text>{member.email ?? member.uuid}</Text>
-                                  <Button small label="Remove" onClick={() => void removeMember(member.uuid)} />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className="mt-3 flex items-center gap-2">
-                            <DecoratedInput
-                              className={{ container: 'flex-grow' }}
-                              placeholder="User UUID to add"
-                              value={newMemberUuid}
-                              onChange={setNewMemberUuid}
-                              onEnter={() => void addMember()}
-                            />
-                            <Button small label="Add" onClick={() => void addMember()} />
-                          </div>
-                        </>
-                      )}
+                  <Text className="mt-1 text-xs text-passive-1">
+                    Toggle the roles this group confers on every member. Changes are saved immediately.
+                  </Text>
+                  {pickerOptions.length === 0 ? (
+                    <Text className="mt-2">This server does not report any assignable roles.</Text>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {pickerOptions.map((roleName) => {
+                        const conferred = editingRolesGroup.roleNames.includes(roleName)
+                        return (
+                          <ToggleChip
+                            key={roleName}
+                            name={canonicalRoleLabel(roleName)}
+                            title={roleName}
+                            selected={conferred}
+                            onToggle={() => void toggleGroupRole(editingRolesGroup, roleName, !conferred)}
+                          />
+                        )
+                      })}
                     </div>
                   )}
                 </div>
               )
-            })}
-          </div>
-        )}
-      </PreferencesSegment>
+            })()}
+
+          {/* Members panel for the group whose members are shown. */}
+          {membersGroup && (
+            <div className="mt-3 rounded-md border border-info p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Subtitle>
+                  Members of {membersGroup.name}
+                  {membersLoading ? '' : ` (${groupMembers.length})`}
+                </Subtitle>
+                <Button small label="Hide members" onClick={() => setSelectedGroupUuid(null)} />
+              </div>
+              {membersLoading ? (
+                <Spinner className="mt-2 h-5 w-5" />
+              ) : (
+                <>
+                  {groupMembers.length === 0 ? (
+                    <Text className="mt-2 italic text-passive-1">No members yet.</Text>
+                  ) : (
+                    <div className="mt-2 divide-y divide-border">
+                      {groupMembers.map((member) => (
+                        <div key={member.uuid} className="flex items-center justify-between gap-2 py-1.5">
+                          <Text>{member.email ?? member.uuid}</Text>
+                          <Button small label="Remove" onClick={() => void removeMember(member.uuid)} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'flex-grow' }}
+                      placeholder="User UUID to add"
+                      value={newMemberUuid}
+                      onChange={setNewMemberUuid}
+                      onEnter={() => void addMember()}
+                    />
+                    <Button small label="Add" onClick={() => void addMember()} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </PreferencesSegment>
+      </TabPanel>
     </>
   )
 }

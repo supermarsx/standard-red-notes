@@ -204,39 +204,64 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
         server) or type to filter the fetched lines. Logs may contain operational detail; treat them as sensitive.
       </Text>
 
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Dropdown
-          label="Log service filter"
-          items={serviceOptions}
-          value={service}
-          onChange={setService}
-          disabled={loading}
-        />
-        <Dropdown label="Log level filter" items={LEVEL_OPTIONS} value={level} onChange={setLevel} disabled={loading} />
-        <Dropdown label="Log limit" items={LIMIT_OPTIONS} value={limit} onChange={setLimit} disabled={loading} />
-        <DecoratedInput
-          className={{ container: 'w-56' }}
-          placeholder="Filter messages…"
-          value={textFilter}
-          onChange={setTextFilter}
-        />
-        <Button label="Refresh" onClick={() => void load({ limit, service, level })} disabled={loading} />
-      </div>
+      {/* Compact, aligned toolbar: the server-side query controls (service /
+          level / limit) group on the left, the client-side message search grows
+          to fill, and Refresh anchors the right — wrapping gracefully on narrow
+          widths. The export controls sit on a lighter second row. */}
+      <div className="mt-3 rounded-md border border-border p-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Service</Text>
+            <Dropdown
+              label="Log service filter"
+              items={serviceOptions}
+              value={service}
+              onChange={setService}
+              disabled={loading}
+            />
+          </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Level</Text>
+            <Dropdown
+              label="Log level filter"
+              items={LEVEL_OPTIONS}
+              value={level}
+              onChange={setLevel}
+              disabled={loading}
+            />
+          </div>
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Limit</Text>
+            <Dropdown label="Log limit" items={LIMIT_OPTIONS} value={limit} onChange={setLimit} disabled={loading} />
+          </div>
+          <div className="flex min-w-[220px] flex-grow flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Filter messages</Text>
+            <DecoratedInput
+              className={{ container: 'w-full' }}
+              placeholder="Type to filter fetched lines…"
+              value={textFilter}
+              onChange={setTextFilter}
+            />
+          </div>
+          <Button label="Refresh" onClick={() => void load({ limit, service, level })} disabled={loading} />
+        </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Dropdown
-          label="Log export format"
-          items={FORMAT_OPTIONS}
-          value={exportFormat}
-          onChange={(value) => setExportFormat(value as LogExportFormat)}
-          disabled={loading}
-        />
-        <Button
-          label="Download"
-          onClick={downloadLogs}
-          disabled={loading || visibleEntries.length === 0}
-        />
-        <Text className="text-xs text-passive-1">Exports the lines currently shown (service, level and text filters applied).</Text>
+        <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-border pt-3">
+          <div className="flex flex-col">
+            <Text className="mb-1 text-xs font-medium text-passive-1">Export format</Text>
+            <Dropdown
+              label="Log export format"
+              items={FORMAT_OPTIONS}
+              value={exportFormat}
+              onChange={(value) => setExportFormat(value as LogExportFormat)}
+              disabled={loading}
+            />
+          </div>
+          <Button label="Download" onClick={downloadLogs} disabled={loading || visibleEntries.length === 0} />
+          <Text className="ml-auto max-w-xs pb-1.5 text-xs text-passive-1">
+            Exports the lines currently shown (service, level and text filters applied).
+          </Text>
+        </div>
       </div>
 
       {truncated && !loading && !loadError && (

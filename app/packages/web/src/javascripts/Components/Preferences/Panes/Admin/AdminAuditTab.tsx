@@ -7,7 +7,10 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Dropdown from '@/Components/Dropdown/Dropdown'
+import Switch from '@/Components/Switch/Switch'
 import Spinner from '@/Components/Spinner/Spinner'
+import AdminPagination from './AdminPagination'
+import { ADMIN_USERS_MAX_LIMIT } from './adminHelpers'
 import {
   AuditExportEntry,
   AuditExportFormat,
@@ -55,6 +58,12 @@ type Props = {
  * audit-log endpoint (sign-ins, role/ban/setting changes, webhook management,
  * MFA resets, quota recalculations...). Loaded lazily — this component only
  * mounts when the Audit log tab is opened.
+ *
+ * The audit payload carries only uuids for the actor and target. When "Show
+ * friendly names" is on, uuids are resolved to emails via a best-effort
+ * uuid->email map built from the existing admin users-list endpoint (no new
+ * server route). A uuid the map does not cover degrades gracefully to the raw
+ * identifier.
  */
 const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
@@ -63,6 +72,14 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [exportFormat, setExportFormat] = useState<AuditExportFormat>('csv')
+
+  // Filter state (persisted for the life of the tab): render friendly
+  // names/emails for actor & target uuids, or the raw identifiers.
+  const [showFriendlyNames, setShowFriendlyNames] = useState(true)
+  // Best-effort uuid -> email map, loaded once (lazily, when friendly names are
+  // first requested) from the admin users list. `null` = not yet attempted.
+  const [emailByUuid, setEmailByUuid] = useState<Record<string, string> | null>(null)
+  const [namesLoading, setNamesLoading] = useState(false)
 
   const loadPage = useCallback(
     async (pageOffset: number) => {
@@ -97,6 +114,56 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
     void loadPage(0)
   }, [loadPage])
 
+  // Build the uuid->email map once, lazily, the first time friendly names are
+  // wanted. Uses the existing admin users-list endpoint (best-effort: covers up
+  // to the server's page cap of the most-recent users). No new server route.
+  const loadEmailMap = useCallback(async () => {
+    setNamesLoading(true)
+    try {
+      const response = await application.legacyApi.adminListUsers({
+        limit: ADMIN_USERS_MAX_LIMIT,
+        offset: 0,
+        sort: '-createdAt',
+      })
+      if (isErrorResponse(response)) {
+        // Degrade gracefully: leave the map empty so uuids render raw.
+        setEmailByUuid({})
+        return
+      }
+      const users = (response as { data?: { users?: Array<{ uuid: string; email: string }> } }).data?.users ?? []
+      const map: Record<string, string> = {}
+      for (const user of users) {
+        if (user.uuid && user.email) {
+          map[user.uuid] = user.email
+        }
+      }
+      setEmailByUuid(map)
+    } catch (error) {
+      console.error(error)
+      setEmailByUuid({})
+    } finally {
+      setNamesLoading(false)
+    }
+  }, [application])
+
+  useEffect(() => {
+    if (showFriendlyNames && emailByUuid === null && !namesLoading) {
+      void loadEmailMap()
+    }
+  }, [showFriendlyNames, emailByUuid, namesLoading, loadEmailMap])
+
+  // Resolve a uuid to its email when friendly names are on and the uuid is
+  // covered by the map; otherwise fall back to the raw uuid.
+  const friendlyFor = useCallback(
+    (uuid: string): string => {
+      if (!showFriendlyNames || !emailByUuid) {
+        return uuid
+      }
+      return emailByUuid[uuid] ?? uuid
+    },
+    [showFriendlyNames, emailByUuid],
+  )
+
   const downloadAudit = useCallback(() => {
     if (entries.length === 0) {
       return
@@ -128,6 +195,10 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
             Showing {entries.length === 0 ? 0 : offset + 1}&ndash;{offset + entries.length} of {total}
           </Text>
         )}
+        <div className="ml-auto flex items-center gap-2">
+          <Text className="text-xs text-passive-1">Show friendly names{namesLoading ? ' (loading…)' : ''}</Text>
+          <Switch checked={showFriendlyNames} onChange={setShowFriendlyNames} />
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -140,8 +211,8 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
         />
         <Button label="Download" onClick={downloadAudit} disabled={loading || entries.length === 0} />
         <Text className="text-xs text-passive-1">
-          Exports the current page ({entries.length} {entries.length === 1 ? 'entry' : 'entries'}). Use Newer/Older to
-          move through pages and download each.
+          Exports the current page ({entries.length} {entries.length === 1 ? 'entry' : 'entries'}). Use the pager to move
+          through pages and download each.
         </Text>
       </div>
 
@@ -157,6 +228,11 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
         <div className="flex flex-col gap-2">
           {entries.map((entry) => {
             const metadataSummary = describeMetadata(entry.metadata)
+            const actorLabel = entry.actorUuid ? friendlyFor(entry.actorUuid) : 'anonymous'
+            // Only a "user" target is a person to resolve; other target types
+            // (webhook, setting, …) keep their raw identifier.
+            const targetLabel =
+              entry.targetUuid && entry.targetType === 'user' ? friendlyFor(entry.targetUuid) : entry.targetUuid
             return (
               <div key={entry.uuid} className="rounded border border-border p-2">
                 <div className="flex items-center justify-between gap-2">
@@ -164,11 +240,11 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
                   <Text className="text-xs">{formatTimestamp(entry.createdAt)}</Text>
                 </div>
                 <Text className="text-xs">
-                  Actor: {entry.actorUuid ?? 'anonymous'}
+                  Actor: {actorLabel}
                   {entry.targetUuid ? (
                     <>
                       {' '}
-                      &rarr; {entry.targetType ?? 'target'} {entry.targetUuid}
+                      &rarr; {entry.targetType ?? 'target'} {targetLabel}
                     </>
                   ) : null}
                   {entry.ip ? <> &middot; from {entry.ip}</> : null}
@@ -181,14 +257,15 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
       )}
 
       {(hasNewer || hasOlder) && !loading && !loadError && (
-        <div className="mt-3 flex items-center gap-3">
-          <Button
-            label="Newer"
-            onClick={() => void loadPage(Math.max(0, offset - PAGE_SIZE))}
-            disabled={!hasNewer || loading}
-          />
-          <Button label="Older" onClick={() => void loadPage(offset + PAGE_SIZE)} disabled={!hasOlder || loading} />
-        </div>
+        <AdminPagination
+          className="mt-3"
+          previousLabel="Newer entries"
+          nextLabel="Older entries"
+          previousDisabled={!hasNewer || loading}
+          nextDisabled={!hasOlder || loading}
+          onPrevious={() => void loadPage(Math.max(0, offset - PAGE_SIZE))}
+          onNext={() => void loadPage(offset + PAGE_SIZE)}
+        />
       )}
     </PreferencesSegment>
   )

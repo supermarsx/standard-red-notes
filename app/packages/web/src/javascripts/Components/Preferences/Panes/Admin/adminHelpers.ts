@@ -490,13 +490,24 @@ export const logLevelColorClass = (level: string | null | undefined): string => 
   }
 }
 
-/** Compact log timestamp; passes through non-ISO strings, blank -> ''. */
+/**
+ * Full, aligned log timestamp in LOCAL time: `YYYY-MM-DD HH:MM:SS` (seconds
+ * included) so the exact timeframe of a line is unambiguous. Every value is the
+ * same fixed width, which keeps the monospaced log column aligned. Passes
+ * through non-ISO strings unchanged; blank/null -> ''.
+ */
 export const formatLogTimestamp = (value: string | null | undefined): string => {
   if (!value) {
     return ''
   }
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  const pad = (n: number): string => n.toString().padStart(2, '0')
+  const datePart = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  const timePart = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `${datePart} ${timePart}`
 }
 
 /**

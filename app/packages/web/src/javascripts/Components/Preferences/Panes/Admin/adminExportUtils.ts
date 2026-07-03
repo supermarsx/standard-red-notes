@@ -96,9 +96,19 @@ const AUDIT_CSV_COLUMNS = ['timestamp', 'actor', 'action', 'target', 'ip', 'meta
  * Escape a single CSV field per RFC 4180: wrap in double quotes when the value
  * contains a comma, quote, CR or LF, and double any embedded quotes. Non-string
  * input is coerced to a string first.
+ *
+ * Additionally neutralises SPREADSHEET FORMULA INJECTION: audit exports include
+ * attacker-influenceable fields (ip, action, metadata) that could begin with a
+ * formula trigger (`=`, `+`, `-`, `@`) or a control character (tab/CR) some
+ * parsers treat as one. Excel/Sheets would then evaluate the cell as a formula.
+ * Any such value is prefixed with a single quote `'` (the spreadsheet
+ * "treat-as-text" marker) BEFORE the RFC-4180 quoting is applied.
  */
 export const csvEscape = (value: unknown): string => {
-  const str = value == null ? '' : String(value)
+  let str = value == null ? '' : String(value)
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`
+  }
   if (/[",\r\n]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`
   }
