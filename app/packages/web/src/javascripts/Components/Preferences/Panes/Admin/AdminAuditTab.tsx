@@ -6,20 +6,25 @@ import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesCompo
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
+import Dropdown from '@/Components/Dropdown/Dropdown'
 import Spinner from '@/Components/Spinner/Spinner'
+import {
+  AuditExportEntry,
+  AuditExportFormat,
+  auditEntriesToCSV,
+  auditEntriesToJSON,
+  auditExportFilename,
+  triggerBlobDownload,
+} from './adminExportUtils'
 
-type AuditLogEntry = {
-  uuid: string
-  actorUuid: string | null
-  action: string
-  targetType: string | null
-  targetUuid: string | null
-  ip: string | null
-  metadata: Record<string, unknown> | null
-  createdAt: string
-}
+type AuditLogEntry = AuditExportEntry
 
 const PAGE_SIZE = 50
+
+const FORMAT_OPTIONS = [
+  { label: 'CSV (.csv)', value: 'csv' },
+  { label: 'JSON (.json)', value: 'json' },
+]
 
 /**
  * Compact, E2E-safe one-liner for an entry's metadata (the server already
@@ -57,6 +62,7 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [exportFormat, setExportFormat] = useState<AuditExportFormat>('csv')
 
   const loadPage = useCallback(
     async (pageOffset: number) => {
@@ -91,6 +97,18 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
     void loadPage(0)
   }, [loadPage])
 
+  const downloadAudit = useCallback(() => {
+    if (entries.length === 0) {
+      return
+    }
+    const filename = auditExportFilename(exportFormat)
+    if (exportFormat === 'json') {
+      triggerBlobDownload(filename, auditEntriesToJSON(entries), 'application/json;charset=utf-8')
+    } else {
+      triggerBlobDownload(filename, auditEntriesToCSV(entries), 'text/csv;charset=utf-8')
+    }
+  }, [entries, exportFormat])
+
   const hasNewer = offset > 0
   const hasOlder = offset + PAGE_SIZE < total
 
@@ -103,13 +121,28 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
         which setting changed.
       </Text>
 
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button label="Refresh" onClick={() => void loadPage(offset)} disabled={loading} />
         {total > 0 && (
           <Text>
             Showing {entries.length === 0 ? 0 : offset + 1}&ndash;{offset + entries.length} of {total}
           </Text>
         )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Dropdown
+          label="Audit export format"
+          items={FORMAT_OPTIONS}
+          value={exportFormat}
+          onChange={(value) => setExportFormat(value as AuditExportFormat)}
+          disabled={loading}
+        />
+        <Button label="Download" onClick={downloadAudit} disabled={loading || entries.length === 0} />
+        <Text className="text-xs text-passive-1">
+          Exports the current page ({entries.length} {entries.length === 1 ? 'entry' : 'entries'}). Use Newer/Older to
+          move through pages and download each.
+        </Text>
       </div>
 
       <HorizontalSeparator classes="my-3" />
