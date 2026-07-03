@@ -20,6 +20,12 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     private itemTransferCalculator: ItemTransferCalculatorInterface,
     private timer: TimerInterface,
     private maxItemsSyncLimit: number,
+    // Standard Red Notes: SHADOW-BAN caps. A shadow-banned user's per-sync page
+    // size and content-transfer allowance are clamped to (at most) these values.
+    // Trailing optional params (with sane defaults) so existing constructions
+    // and specs keep their arity; the Container passes the env-configured values.
+    private shadowBannedMaxItemsSyncLimit: number = 25,
+    private shadowBannedContentSizeTransferLimit: number = 1_048_576,
   ) {}
 
   async execute(dto: GetItemsDTO): Promise<Result<GetItemsResult>> {
@@ -35,9 +41,20 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     }
     const userUuid = userUuidOrError.getValue()
 
+    // Standard Red Notes: SHADOW-BAN degradation. For a shadow-banned user, clamp
+    // both the max page size and the content-transfer allowance to the (smaller)
+    // shadow limits, silently reducing how much they can pull per sync. Never
+    // exceeds the normal limits, so it can only ever reduce, never widen.
+    const effectiveMaxItemsSyncLimit = dto.shadowBanned
+      ? Math.min(this.maxItemsSyncLimit, this.shadowBannedMaxItemsSyncLimit)
+      : this.maxItemsSyncLimit
+    const effectiveContentSizeTransferLimit = dto.shadowBanned
+      ? Math.min(this.contentSizeTransferLimit, this.shadowBannedContentSizeTransferLimit)
+      : this.contentSizeTransferLimit
+
     const syncTimeComparison = dto.cursorToken ? '>=' : '>'
     const limit = dto.limit === undefined || dto.limit < 1 ? this.DEFAULT_ITEMS_LIMIT : dto.limit
-    const upperBoundLimit = limit < this.maxItemsSyncLimit ? limit : this.maxItemsSyncLimit
+    const upperBoundLimit = limit < effectiveMaxItemsSyncLimit ? limit : effectiveMaxItemsSyncLimit
 
     const sharedVaultUsers = await this.sharedVaultUserRepository.findByUserUuid(userUuid)
     const userSharedVaultUuids = sharedVaultUsers.map((sharedVaultUser) => sharedVaultUser.props.sharedVaultUuid.value)
@@ -62,7 +79,7 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     const itemContentSizeDescriptors = await this.itemRepository.findContentSizeForComputingTransferLimit(itemQuery)
     const { uuids, transferLimitBreachedBeforeEndOfItems } = await this.itemTransferCalculator.computeItemUuidsToFetch(
       itemContentSizeDescriptors,
-      this.contentSizeTransferLimit,
+      effectiveContentSizeTransferLimit,
       userUuid,
     )
     let items: Array<Item> = []

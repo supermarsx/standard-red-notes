@@ -77,4 +77,18 @@ export type CrossServiceTokenData = {
    * optional also leaves every pre-existing token valid unchanged.
    */
   ocr_server_allowed?: boolean
+  /**
+   * Standard Red Notes: SHADOW-BAN marker. A shadow-banned user is allowed to
+   * sign in and connect normally (unlike a permanent / active-temporary ban,
+   * which is rejected before a token is ever minted), but their service is
+   * silently DEGRADED downstream (see the syncing-server InversifyExpressAuthMiddleware
+   * + GetItems: reduced sync page size, reduced content-transfer allowance and
+   * disabled real-time live-sync push).
+   *
+   * OPT-IN shape, mirroring `workflows_enabled` / `ocr_server_allowed`: the field
+   * is EMITTED ONLY WHEN the user is actively shadow-banned. Absent MUST be
+   * treated as "not shadow-banned", which also keeps every pre-existing token
+   * byte-identical. The user is NEVER told they are shadow-banned (silent).
+   */
+  shadow_banned?: boolean
 }

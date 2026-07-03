@@ -98,6 +98,29 @@ describe('AuthMiddleware settings projection', () => {
     expect(settings[SettingName.NAMES.WorkflowsEnabled]).toBe('true')
     expect(settings[SettingName.NAMES.OcrServerAllowed]).toBe('true')
   })
+
+  const runReturningLocals = async (decoded: CrossServiceTokenData): Promise<Record<string, unknown>> => {
+    mockedVerify.mockReturnValue(decoded)
+    const request = {
+      headers: { authorization: 'Bearer token' },
+      socket: { remoteAddress: '1.1.1.1' },
+    } as unknown as Request
+    const locals: Record<string, unknown> = {}
+    const response = { locals } as unknown as Response
+    const next = jest.fn() as unknown as NextFunction
+    await createMiddleware().handler(request, response, next)
+    return locals
+  }
+
+  it('projects shadowBanned=true onto locals when the token carries shadow_banned', async () => {
+    const locals = await runReturningLocals({ ...baseToken(), shadow_banned: true })
+    expect(locals.shadowBanned).toBe(true)
+  })
+
+  it('projects shadowBanned=false when the token omits shadow_banned', async () => {
+    const locals = await runReturningLocals(baseToken())
+    expect(locals.shadowBanned).toBe(false)
+  })
 })
 
 describe('AuthMiddleware client IP for session validation', () => {

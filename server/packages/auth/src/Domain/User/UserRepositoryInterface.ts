@@ -1,7 +1,7 @@
 import { Email, Username, Uuid } from '@standardnotes/domain-core'
 
 import { ReadStream } from 'fs'
-import { User } from './User'
+import { BanType, User } from './User'
 
 /**
  * Standard Red Notes: sort key for the admin user-list finder. Direction is
@@ -42,6 +42,10 @@ export interface AdminUserRow {
   roles: string[]
   subscription: { plan: string | null; active: boolean } | null
   banned: boolean
+  // Standard Red Notes: the effective ban KIND for an actively-banned row
+  // ('temporary' | 'permanent' | 'shadow'), or null when not banned. Lets the
+  // admin list render a per-row ban badge without a per-user round trip.
+  banType: BanType | null
   mfaEnabled: boolean
   storageUsedBytes: number | null
   storageLimitBytes: number | null

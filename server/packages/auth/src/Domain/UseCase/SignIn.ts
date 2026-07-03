@@ -131,11 +131,15 @@ export class SignIn implements UseCaseInterface {
     }
 
     /**
-     * Standard Red Notes: a banned user (set by an admin) cannot sign in even
-     * with valid credentials. Checked after the password verifies so the ban
-     * status is never disclosed to an attacker who does not know the password.
+     * Standard Red Notes: a HARD-banned user (permanent or a not-yet-expired
+     * temporary ban) cannot sign in even with valid credentials. Checked after
+     * the password verifies so the ban status is never disclosed to an attacker
+     * who does not know the password. A SHADOW-banned user (isAccessBlocked is
+     * false for shadow) signs in normally — they are silently degraded once
+     * connected, never told they are banned. An expired temporary ban likewise
+     * no longer blocks sign-in.
      */
-    if (user.isBanned()) {
+    if (user.isAccessBlocked()) {
       this.logger.debug(`[sign-in][${user.uuid}] Banned user attempted to sign in.`)
 
       await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, 'banned')

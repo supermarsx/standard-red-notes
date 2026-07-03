@@ -29,6 +29,15 @@ export interface ResponseLocals {
   hasContentLimit: boolean
   authTokenVersion?: number
   /**
+   * Standard Red Notes: SHADOW-BAN marker carried by the cross-service token. A
+   * shadow-banned user is passed THROUGH the gateway (never rejected — hard bans
+   * are rejected earlier, at auth's AuthenticateUser, before a token is minted),
+   * but the flag is projected here so gateway-side controllers can apply tighter
+   * treatment if needed. The concrete, enforced degradation lives in the
+   * syncing-server, which reads the same `shadow_banned` field off the token.
+   */
+  shadowBanned?: boolean
+  /**
    * Standard Red Notes: per-user feature settings projected from the cross-service
    * token (e.g. AI_ENABLED / AI_REQUEST_LIMIT / OCR_SERVER_ALLOWED). Populated by
    * AuthMiddleware so feature controllers (AssistantController, OcrController) can

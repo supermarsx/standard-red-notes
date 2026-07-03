@@ -151,6 +151,16 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       authTokenData.ocr_server_allowed = true
     }
 
+    // Standard Red Notes: SHADOW-BAN projection. A shadow-banned user is NOT
+    // rejected (SignIn / AuthenticateUser let them through — isAccessBlocked is
+    // false for shadow), but we ride the marker along so downstream services
+    // (syncing-server) can SILENTLY degrade their service. OPT-IN shape: the
+    // field is emitted ONLY when the user is actively shadow-banned, so every
+    // pre-existing token stays byte-identical. Never surfaced to the user.
+    if (user.isShadowBanned()) {
+      authTokenData.shadow_banned = true
+    }
+
     if (dto.sharedVaultOwnerContext !== undefined) {
       const regularSubscriptionOrError = await this.getRegularSubscription.execute({
         userUuid: dto.sharedVaultOwnerContext,

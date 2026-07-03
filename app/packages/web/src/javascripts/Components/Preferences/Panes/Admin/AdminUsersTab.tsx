@@ -162,6 +162,17 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
   const [banned, setBanned] = useState(false)
   const [banningInProgress, setBanningInProgress] = useState(false)
+  // Richer ban form: reason, kind (permanent | temporary | shadow) and, for a
+  // temporary ban, an expiry. `currentBan` reflects the persisted ban so the
+  // detail view can show the active reason/type/expiry.
+  const [banReasonInput, setBanReasonInput] = useState('')
+  const [banTypeInput, setBanTypeInput] = useState<'permanent' | 'temporary' | 'shadow'>('permanent')
+  const [banUntilInput, setBanUntilInput] = useState('')
+  const [currentBan, setCurrentBan] = useState<{
+    banType: string | null
+    banReason: string | null
+    bannedUntil: string | null
+  } | null>(null)
 
   // Effective roles/permissions readout + the direct admin-role toggle.
   const [permissions, setPermissions] = useState<EffectivePermissions | null>(null)
@@ -231,8 +242,25 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         if (isErrorResponse(response)) {
           return
         }
-        const data = (response as { data?: { banned?: boolean } }).data
-        setBanned(Boolean(data?.banned))
+        const data = (
+          response as {
+            data?: { banned?: boolean; banType?: string | null; banReason?: string | null; bannedUntil?: string | null }
+          }
+        ).data
+        const isBanned = Boolean(data?.banned)
+        setBanned(isBanned)
+        if (isBanned) {
+          const type = (data?.banType as 'permanent' | 'temporary' | 'shadow' | null) ?? 'permanent'
+          setCurrentBan({
+            banType: type,
+            banReason: data?.banReason ?? null,
+            bannedUntil: data?.bannedUntil ?? null,
+          })
+          setBanReasonInput(data?.banReason ?? '')
+          setBanTypeInput(type ?? 'permanent')
+        } else {
+          setCurrentBan(null)
+        }
       } catch (error) {
         console.error(error)
       }
@@ -276,6 +304,10 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       return
     }
     setBanned(false)
+    setCurrentBan(null)
+    setBanReasonInput('')
+    setBanTypeInput('permanent')
+    setBanUntilInput('')
     setPermissions(null)
     setPermissionsVisible(false)
     void Promise.all([loadFlags(user.uuid), loadBanStatus(user.email), loadPermissions(user.uuid)])
@@ -729,50 +761,106 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
   }, [application, user, storageLimitUnit, storageLimitValue, loadFlags])
 
-  const toggleBan = useCallback(
-    async (nextBanned: boolean) => {
-      if (!user) {
+  const applyBan = useCallback(async () => {
+    if (!user) {
+      return
+    }
+
+    // A temporary ban needs a valid future expiry.
+    let bannedUntilIso: string | undefined = undefined
+    if (banTypeInput === 'temporary') {
+      if (!banUntilInput) {
+        addToast({ type: ToastType.Error, message: 'Choose an expiry date/time for a temporary ban.' })
         return
       }
+      const until = new Date(banUntilInput)
+      if (Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
+        addToast({ type: ToastType.Error, message: 'The temporary ban expiry must be a valid future date/time.' })
+        return
+      }
+      bannedUntilIso = until.toISOString()
+    }
 
-      const confirmed = await confirmDialog({
-        title: nextBanned ? 'Ban user' : 'Unban user',
-        text: nextBanned
-          ? `Ban ${user.email}? They will be signed out and blocked from accessing their account until unbanned.`
-          : `Unban ${user.email}? They will regain access to their account.`,
-        confirmButtonText: nextBanned ? 'Ban user' : 'Unban user',
-        confirmButtonStyle: nextBanned ? 'danger' : 'info',
+    const confirmed = await confirmDialog({
+      title: 'Ban user',
+      text:
+        banTypeInput === 'shadow'
+          ? `Shadow-ban ${user.email}? They can still sign in and sync, but their service is SILENTLY degraded (reduced sync page size and content transfer, and no real-time updates). They are never told they are shadow-banned.`
+          : banTypeInput === 'temporary'
+            ? `Temporarily ban ${user.email} until ${new Date(banUntilInput).toLocaleString()}? They will be signed out and blocked from their account until then, after which access is automatically restored.`
+            : `Permanently ban ${user.email}? They will be signed out and blocked from accessing their account until unbanned.`,
+      confirmButtonText: 'Ban user',
+      confirmButtonStyle: 'danger',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setBanningInProgress(true)
+    try {
+      const response = await application.legacyApi.adminSetUserBanStatus(
+        user.uuid,
+        true,
+        banReasonInput.trim() === '' ? null : banReasonInput.trim(),
+        { banType: banTypeInput, bannedUntil: bannedUntilIso },
+      )
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to update ban status.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'User has been banned.' })
+      setBanned(true)
+      setCurrentBan({
+        banType: banTypeInput,
+        banReason: banReasonInput.trim() === '' ? null : banReasonInput.trim(),
+        bannedUntil: bannedUntilIso ?? null,
       })
-      if (!confirmed) {
+      // Keep the table's Banned column in sync with the detail editor.
+      patchUserRow(user.uuid, { banned: true, banType: banTypeInput })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+    } finally {
+      setBanningInProgress(false)
+    }
+  }, [application, user, banTypeInput, banUntilInput, banReasonInput, patchUserRow])
+
+  const liftBan = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Unban user',
+      text: `Unban ${user.email}? They will regain full access to their account.`,
+      confirmButtonText: 'Unban user',
+      confirmButtonStyle: 'info',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setBanningInProgress(true)
+    try {
+      const response = await application.legacyApi.adminSetUserBanStatus(user.uuid, false)
+      if (isErrorResponse(response)) {
+        addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
         return
       }
-
-      const previous = banned
-      setBanned(nextBanned)
-      setBanningInProgress(true)
-      try {
-        const response = await application.legacyApi.adminSetUserBanStatus(user.uuid, nextBanned)
-        if (isErrorResponse(response)) {
-          setBanned(previous)
-          addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
-          return
-        }
-        addToast({
-          type: ToastType.Success,
-          message: nextBanned ? 'User has been banned.' : 'User has been unbanned.',
-        })
-        // Keep the table's Banned column in sync with the detail editor.
-        patchUserRow(user.uuid, { banned: nextBanned })
-      } catch (error) {
-        console.error(error)
-        setBanned(previous)
-        addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
-      } finally {
-        setBanningInProgress(false)
-      }
-    },
-    [application, user, banned, patchUserRow],
-  )
+      addToast({ type: ToastType.Success, message: 'User has been unbanned.' })
+      setBanned(false)
+      setCurrentBan(null)
+      setBanReasonInput('')
+      setBanTypeInput('permanent')
+      setBanUntilInput('')
+      patchUserRow(user.uuid, { banned: false, banType: null })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to update ban status.' })
+    } finally {
+      setBanningInProgress(false)
+    }
+  }, [application, user, patchUserRow])
 
   const userIsAdmin = permissions?.directRoleNames.includes(INTERNAL_TEAM_USER) ?? false
 
@@ -1215,7 +1303,25 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       <td className="whitespace-nowrap px-3 py-2.5">{formatAdminUserDate(row.createdAt)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserRoles(row.roles)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserSubscription(row.subscription)}</td>
-                      <td className="px-3 py-2.5">{row.banned ? 'Yes' : 'No'}</td>
+                      <td className="px-3 py-2.5">
+                        {row.banned ? (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                              (row.banType ?? 'permanent') === 'shadow'
+                                ? 'border-warning text-warning'
+                                : 'border-danger text-danger'
+                            }`}
+                          >
+                            {(row.banType ?? 'permanent') === 'shadow'
+                              ? 'Shadow'
+                              : (row.banType ?? 'permanent') === 'temporary'
+                                ? 'Temporary'
+                                : 'Permanent'}
+                          </span>
+                        ) : (
+                          'No'
+                        )}
+                      </td>
                       <td className="px-3 py-2.5">{row.mfaEnabled ? 'On' : 'Off'}</td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
                         {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
@@ -1481,16 +1587,81 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <HorizontalSeparator classes="my-3" />
 
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-col">
-                  <Subtitle>Account banned</Subtitle>
+              <div className="flex flex-col gap-2">
+                <Subtitle>Account ban</Subtitle>
+                {banned && currentBan ? (
                   <Text>
-                    {banned
-                      ? 'This account is banned. The user is blocked from signing in and any existing session is rejected.'
-                      : "Ban this user to block sign-in and revoke access from this user's existing sessions."}
+                    This account is currently{' '}
+                    <strong>
+                      {currentBan.banType === 'shadow'
+                        ? 'shadow-banned'
+                        : currentBan.banType === 'temporary'
+                          ? 'temporarily banned'
+                          : 'permanently banned'}
+                    </strong>
+                    {currentBan.banType === 'temporary' && currentBan.bannedUntil
+                      ? ` until ${new Date(currentBan.bannedUntil).toLocaleString()}`
+                      : ''}
+                    {currentBan.banReason ? ` — reason: "${currentBan.banReason}"` : ''}.
+                    {currentBan.banType === 'shadow'
+                      ? ' The user can still sign in and sync, but their service is silently degraded (reduced sync, no real-time updates). They are not told.'
+                      : ' The user is blocked from signing in and any existing session is rejected.'}
                   </Text>
+                ) : (
+                  <Text>
+                    Ban this user. A <strong>permanent</strong> ban blocks sign-in until lifted; a{' '}
+                    <strong>temporary</strong> ban expires automatically; a <strong>shadow</strong> ban lets the user
+                    connect but silently degrades their sync (they are never told).
+                  </Text>
+                )}
+
+                <div className="mt-1 flex flex-wrap items-end gap-3">
+                  <div className="flex flex-col">
+                    <Text className="mb-1 text-xs font-medium text-passive-1">Type</Text>
+                    <Dropdown
+                      label="Ban type"
+                      items={[
+                        { label: 'Permanent', value: 'permanent' },
+                        { label: 'Temporary', value: 'temporary' },
+                        { label: 'Shadow', value: 'shadow' },
+                      ]}
+                      value={banTypeInput}
+                      onChange={(value) => setBanTypeInput(value as 'permanent' | 'temporary' | 'shadow')}
+                    />
+                  </div>
+                  {banTypeInput === 'temporary' && (
+                    <div className="flex flex-col">
+                      <Text className="mb-1 text-xs font-medium text-passive-1">Banned until</Text>
+                      <DecoratedInput
+                        className={{ container: 'w-56' }}
+                        value={banUntilInput}
+                        onChange={setBanUntilInput}
+                        type="datetime-local"
+                      />
+                    </div>
+                  )}
+                  <div className="flex flex-grow flex-col">
+                    <Text className="mb-1 text-xs font-medium text-passive-1">Reason (optional)</Text>
+                    <DecoratedInput
+                      className={{ container: 'w-full' }}
+                      placeholder="e.g. spam / abuse report #123"
+                      value={banReasonInput}
+                      onChange={setBanReasonInput}
+                    />
+                  </div>
                 </div>
-                <Switch checked={banned} disabled={banningInProgress} onChange={(checked) => void toggleBan(checked)} />
+
+                <div className="mt-1 flex items-center gap-3">
+                  <Button
+                    label={banned ? 'Update ban' : 'Ban user'}
+                    colorStyle="danger"
+                    onClick={() => void applyBan()}
+                    disabled={banningInProgress}
+                  />
+                  {banned && (
+                    <Button label="Unban user" onClick={() => void liftBan()} disabled={banningInProgress} />
+                  )}
+                </div>
               </div>
 
               <HorizontalSeparator classes="my-3" />

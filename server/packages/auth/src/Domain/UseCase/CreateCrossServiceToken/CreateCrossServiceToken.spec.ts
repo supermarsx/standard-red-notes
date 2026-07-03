@@ -86,7 +86,8 @@ describe('CreateCrossServiceToken', () => {
     user = {
       uuid: '00000000-0000-0000-0000-000000000000',
       email: 'test@test.te',
-    } as jest.Mocked<User>
+      isShadowBanned: () => false,
+    } as unknown as jest.Mocked<User>
     user.roles = Promise.resolve([role])
 
     userProjector = {} as jest.Mocked<ProjectorInterface<User>>
@@ -599,6 +600,26 @@ describe('CreateCrossServiceToken', () => {
 
       const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
       expect(payload.ocr_server_allowed).toBe(true)
+    })
+  })
+
+  describe('shadow-ban projection (shadow_banned)', () => {
+    it('does NOT embed shadow_banned for a user who is not shadow-banned', async () => {
+      user.isShadowBanned = () => false
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.shadow_banned).toBeUndefined()
+    })
+
+    it('embeds shadow_banned === true when the user is actively shadow-banned', async () => {
+      user.isShadowBanned = () => true
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.shadow_banned).toBe(true)
     })
   })
 

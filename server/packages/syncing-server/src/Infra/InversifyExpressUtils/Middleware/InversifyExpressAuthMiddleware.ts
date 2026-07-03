@@ -37,6 +37,11 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
       const collaborationEnabled = decodedToken.collaboration_enabled !== false
       const liveSyncEnabled = decodedToken.live_sync_enabled !== false
 
+      // Standard Red Notes: SHADOW-BAN. The flag is optional on the token; absent
+      // means NOT shadow-banned. When true the sync path silently degrades this
+      // user's service (see GetItems + SyncItems). Never surfaced to the client.
+      const shadowBanned = decodedToken.shadow_banned === true
+
       Object.assign(response.locals, {
         user: decodedToken.user,
         roles: decodedToken.roles,
@@ -46,6 +51,7 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
         mcpScope,
         collaborationEnabled,
         liveSyncEnabled,
+        shadowBanned,
         sharedVaultOwnerContext: decodedToken.shared_vault_owner_context,
         hasContentLimit: decodedToken.hasContentLimit,
       } as ResponseLocals)

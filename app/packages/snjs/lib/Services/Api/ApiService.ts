@@ -778,13 +778,28 @@ export class LegacyApiService
     userUuid: UuidString,
     banned: boolean,
     banReason?: string | null,
+    // Standard Red Notes: richer bans. `banType` selects permanent (default) |
+    // temporary | shadow; a temporary ban carries EITHER `bannedUntil` (ISO
+    // date) or `durationMinutes`. Omitting the options keeps the legacy
+    // permanent-ban behavior for existing callers (e.g. the bulk ban action).
+    options?: {
+      banType?: 'temporary' | 'permanent' | 'shadow'
+      bannedUntil?: string | null
+      durationMinutes?: number | null
+    },
   ): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,
       url: joinPaths(this.host, Paths.v1.setUserBanStatus(userUuid)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to set user ban status.',
-      params: { banned, banReason: banReason ?? null },
+      params: {
+        banned,
+        banReason: banReason ?? null,
+        banType: options?.banType,
+        bannedUntil: options?.bannedUntil ?? undefined,
+        durationMinutes: options?.durationMinutes ?? undefined,
+      },
     })
   }
 

@@ -55,7 +55,8 @@ describe('SignIn', () => {
       email: 'test@test.com',
       version: ProtocolVersion.V004,
       isBanned: () => false,
-    } as jest.Mocked<User>
+      isAccessBlocked: () => false,
+    } as unknown as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
 
     userRepository = {} as jest.Mocked<UserRepositoryInterface>
@@ -267,7 +268,8 @@ describe('SignIn', () => {
       email: 'test@test.com',
       version: ProtocolVersion.V004,
       isBanned: () => true,
-    } as jest.Mocked<User>
+      isAccessBlocked: () => true,
+    } as unknown as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
     userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
 

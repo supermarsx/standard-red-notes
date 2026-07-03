@@ -108,6 +108,10 @@ export abstract class AuthMiddleware extends BaseMiddleware {
         isFreeUser: decodedToken.roles.length === 1 && decodedToken.roles[0].name === RoleName.NAMES.CoreUser,
         belongsToSharedVaults: decodedToken.belongs_to_shared_vaults ?? [],
         authTokenVersion: decodedToken.version,
+        // Standard Red Notes: SHADOW-BAN pass-through. Projected onto locals so
+        // gateway controllers can see it; the enforced degradation is applied by
+        // the syncing-server off the same token field. Absent ⇒ not shadow-banned.
+        shadowBanned: decodedToken.shadow_banned === true,
         // Standard Red Notes: project per-user feature settings carried by the
         // cross-service token onto response.locals.settings so feature controllers
         // (AssistantController, OcrController) can enforce per-user gates/limits.

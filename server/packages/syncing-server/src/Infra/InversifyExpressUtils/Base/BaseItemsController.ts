@@ -183,6 +183,8 @@ export class BaseItemsController extends BaseHttpController {
       hasContentLimit: !!locals.hasContentLimit,
       // Standard Red Notes: per-user live-sync gating. Absent ⇒ enabled.
       liveSyncEnabled: locals.liveSyncEnabled !== false,
+      // Standard Red Notes: SHADOW-BAN — silently degrade this user's sync.
+      shadowBanned: locals.shadowBanned === true,
     })
     if (syncResult.isFailed()) {
       return this.json({ error: { message: syncResult.getError() } }, HttpStatusCode.BadRequest)

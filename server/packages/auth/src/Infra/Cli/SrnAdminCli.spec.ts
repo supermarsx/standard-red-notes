@@ -8,6 +8,7 @@ import {
   helpFor,
   matchGroupUuidInList,
   parseArgs,
+  parseBanOptions,
   parseDateFilter,
   parseEnvFileContent,
   parseStorageLimitInput,
@@ -64,6 +65,63 @@ describe('SrnAdminCli helpers', () => {
       expect(stringOption({ a: true }, 'a')).toBeUndefined()
       expect(stringOption({ a: '  ' }, 'a')).toBeUndefined()
       expect(stringOption({}, 'a')).toBeUndefined()
+    })
+  })
+
+  describe('parseBanOptions', () => {
+    const now = Date.parse('2026-07-01T00:00:00.000Z')
+
+    it('defaults to a permanent ban with no expiry', () => {
+      const result = parseBanOptions({}, now)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.value.banType).toBe('permanent')
+        expect(result.value.bannedUntil).toBeNull()
+      }
+    })
+
+    it('parses a shadow ban (no expiry)', () => {
+      const result = parseBanOptions({ type: 'shadow' }, now)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.value.banType).toBe('shadow')
+        expect(result.value.bannedUntil).toBeNull()
+      }
+    })
+
+    it('rejects an unknown ban type', () => {
+      const result = parseBanOptions({ type: 'nope' }, now)
+      expect(result.ok).toBe(false)
+    })
+
+    it('computes bannedUntil from --duration minutes', () => {
+      const result = parseBanOptions({ type: 'temporary', duration: '60' }, now)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.value.bannedUntil?.toISOString()).toEqual('2026-07-01T01:00:00.000Z')
+      }
+    })
+
+    it('accepts an ISO --until date', () => {
+      const result = parseBanOptions({ type: 'temporary', until: '2026-12-31T00:00:00.000Z' }, now)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.value.bannedUntil?.toISOString()).toEqual('2026-12-31T00:00:00.000Z')
+      }
+    })
+
+    it('requires an expiry for a temporary ban', () => {
+      const result = parseBanOptions({ type: 'temporary' }, now)
+      expect(result.ok).toBe(false)
+    })
+
+    it('rejects a non-positive --duration', () => {
+      expect(parseBanOptions({ type: 'temporary', duration: '0' }, now).ok).toBe(false)
+      expect(parseBanOptions({ type: 'temporary', duration: 'abc' }, now).ok).toBe(false)
+    })
+
+    it('rejects an invalid --until date', () => {
+      expect(parseBanOptions({ type: 'temporary', until: 'not-a-date' }, now).ok).toBe(false)
     })
   })
 

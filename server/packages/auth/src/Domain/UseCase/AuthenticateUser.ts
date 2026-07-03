@@ -53,11 +53,14 @@ export class AuthenticateUser implements UseCaseInterface {
     }
 
     /**
-     * Standard Red Notes: a banned user (set by an admin) is treated as
-     * unauthorized on every request, so an already-signed-in banned user
-     * immediately loses access on the next authenticated call.
+     * Standard Red Notes: a HARD-banned user (permanent or a not-yet-expired
+     * temporary ban) is treated as unauthorized on every request, so an
+     * already-signed-in banned user immediately loses access on the next
+     * authenticated call. A SHADOW-banned user is deliberately allowed through
+     * here (isAccessBlocked is false for shadow) — they connect and are silently
+     * degraded downstream instead. An expired temporary ban is also allowed.
      */
-    if (user.isBanned()) {
+    if (user.isAccessBlocked()) {
       this.logger.debug(`[authenticate-user][${user.uuid}] Banned user attempted to authenticate.`)
 
       return {

@@ -34,6 +34,7 @@ import { GetSetting } from './../../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { AdminUserSort, UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
+import { BanType } from '../../../Domain/User/User'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { QueryAuditLog } from '../../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
@@ -654,14 +655,23 @@ export class BaseAdminController extends BaseHttpController {
       banned: user.isBanned(),
       bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
       banReason: user.banReason ?? null,
+      banType: user.effectiveBanType(),
+      bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
+      shadowBanned: user.isShadowBanned(),
     })
   }
 
   /**
    * Standard Red Notes: ban or unban a user by uuid. Admin-only. The body must
-   * carry a boolean `banned` flag and may include an optional `banReason`.
-   * Enforcement happens in SignIn (new sign-ins) and AuthenticateUser (existing
-   * sessions), so a ban takes effect on the user's next authenticated request.
+   * carry a boolean `banned` flag and may include:
+   *   - `banReason` (text),
+   *   - `banType` ('temporary' | 'permanent' | 'shadow'; default 'permanent'),
+   *   - for a temporary ban, EITHER `bannedUntil` (an ISO-8601 timestamp) OR
+   *     `durationMinutes` (a positive number of minutes from now).
+   * The plain legacy body ({ banned, banReason }) keeps producing a permanent
+   * ban unchanged. Enforcement of permanent / active-temporary bans happens in
+   * SignIn + AuthenticateUser; a shadow ban lets the user connect but silently
+   * degrades their sync (projected via the cross-service token).
    */
   async setUserBanStatusEndpoint(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
@@ -669,16 +679,56 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     const { userUuid } = request.params as Record<string, string>
-    const { banned, banReason } = request.body as { banned?: boolean; banReason?: string | null }
+    const { banned, banReason, banType, bannedUntil, durationMinutes } = request.body as {
+      banned?: boolean
+      banReason?: string | null
+      banType?: string | null
+      bannedUntil?: string | null
+      durationMinutes?: number | string | null
+    }
 
     if (typeof banned !== 'boolean') {
       return this.json({ error: { message: 'A boolean `banned` flag is required.' } }, 400)
+    }
+
+    let resolvedBanType: BanType | undefined = undefined
+    let resolvedBannedUntil: Date | null = null
+    if (banned) {
+      resolvedBanType = (banType ?? 'permanent') as BanType
+      if (resolvedBanType !== 'permanent' && resolvedBanType !== 'temporary' && resolvedBanType !== 'shadow') {
+        return this.json(
+          { error: { message: `Invalid ban type '${banType}'. Use 'temporary', 'permanent' or 'shadow'.` } },
+          400,
+        )
+      }
+
+      if (resolvedBanType === 'temporary') {
+        if (durationMinutes !== undefined && durationMinutes !== null && durationMinutes !== '') {
+          const minutes = Number(durationMinutes)
+          if (!Number.isFinite(minutes) || minutes <= 0) {
+            return this.json({ error: { message: '`durationMinutes` must be a positive number.' } }, 400)
+          }
+          resolvedBannedUntil = new Date(Date.now() + minutes * 60_000)
+        } else if (bannedUntil) {
+          resolvedBannedUntil = new Date(bannedUntil)
+          if (Number.isNaN(resolvedBannedUntil.getTime())) {
+            return this.json({ error: { message: '`bannedUntil` is not a valid date.' } }, 400)
+          }
+        } else {
+          return this.json(
+            { error: { message: 'A temporary ban requires `bannedUntil` (ISO date) or `durationMinutes`.' } },
+            400,
+          )
+        }
+      }
     }
 
     const result = await this.setUserBanStatus.execute({
       userUuid,
       banned,
       banReason: banReason ?? null,
+      banType: resolvedBanType ?? null,
+      bannedUntil: resolvedBannedUntil,
     })
 
     if (result.isFailed()) {
@@ -687,20 +737,27 @@ export class BaseAdminController extends BaseHttpController {
 
     const user = result.getValue()
 
+    const auditMetadata = {
+      banned,
+      banReason: banReason ?? null,
+      banType: user.effectiveBanType(),
+      bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
+    }
+
     await this.auditLogWriter?.write({
       actorUuid: this.actorUuid(response),
       action: AuditAction.BanChanged,
       targetType: 'user',
       targetUuid: userUuid,
       ip: this.clientIp(request),
-      metadata: { banned, banReason: banReason ?? null },
+      metadata: auditMetadata,
     })
 
     await this.dispatchAdminActionWebhook({
       actorUuid: this.actorUuid(response),
       action: AuditAction.BanChanged,
       targetUuid: userUuid,
-      metadata: { banned, banReason: banReason ?? null },
+      metadata: auditMetadata,
     })
 
     return this.json({
@@ -709,6 +766,9 @@ export class BaseAdminController extends BaseHttpController {
       banned: user.isBanned(),
       bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
       banReason: user.banReason ?? null,
+      banType: user.effectiveBanType(),
+      bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
+      shadowBanned: user.isShadowBanned(),
     })
   }
 

@@ -37,6 +37,7 @@ describe('AuthenticateUser - session freshness buffer', () => {
     user = {} as jest.Mocked<User>
     user.supportsSessions = jest.fn().mockReturnValue(true)
     user.isBanned = jest.fn().mockReturnValue(false)
+    user.isAccessBlocked = jest.fn().mockReturnValue(false)
 
     session = {} as jest.Mocked<Session>
     session.accessExpiration = new Date(123)

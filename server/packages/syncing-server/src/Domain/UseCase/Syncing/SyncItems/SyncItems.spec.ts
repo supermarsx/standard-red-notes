@@ -178,6 +178,7 @@ describe('SyncItems', () => {
       limit: 10,
       syncToken: 'foo',
       userUuid: '1-2-3',
+      shadowBanned: false,
     })
     expect(saveItemsUseCase.execute).toHaveBeenCalledWith({
       itemHashes: [itemHash],
@@ -190,6 +191,31 @@ describe('SyncItems', () => {
       hasContentLimit: false,
       liveSyncEnabled: true,
     })
+  })
+
+  it('propagates shadow-ban to GetItems and forces live-sync off for the save', async () => {
+    await createUseCase().execute({
+      userUuid: '1-2-3',
+      itemHashes: [itemHash],
+      computeIntegrityHash: false,
+      syncToken: 'foo',
+      cursorToken: 'bar',
+      limit: 10,
+      readOnlyAccess: false,
+      contentType: 'Note',
+      apiVersion: ApiVersion.v20200115,
+      sessionUuid: null,
+      snjsVersion: '1.2.3',
+      isFreeUser: false,
+      hasContentLimit: false,
+      // The user has live-sync enabled, but a shadow ban must still silence it.
+      liveSyncEnabled: true,
+      shadowBanned: true,
+    })
+
+    expect(getItemsUseCase.execute).toHaveBeenCalledWith(expect.objectContaining({ shadowBanned: true }))
+    // Real-time push is silently disabled for a shadow-banned user.
+    expect(saveItemsUseCase.execute).toHaveBeenCalledWith(expect.objectContaining({ liveSyncEnabled: false }))
   })
 
   it('should log error if sync items throws an error', async () => {

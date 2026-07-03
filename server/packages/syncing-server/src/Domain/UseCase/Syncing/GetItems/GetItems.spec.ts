@@ -201,6 +201,60 @@ describe('GetItems', () => {
     })
   })
 
+  it('silently reduces page size and content-transfer allowance for a shadow-banned user', async () => {
+    // Shadow caps smaller than the normal limits (100 / 100).
+    const useCase = new GetItems(
+      itemRepository,
+      sharedVaultUserRepository,
+      contentSizeTransferLimit,
+      itemTransferCalculator,
+      timer,
+      maxItemsSyncLimit,
+      2, // shadowBannedMaxItemsSyncLimit
+      30, // shadowBannedContentSizeTransferLimit
+    )
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      cursorToken: undefined,
+      contentType: undefined,
+      limit: 50,
+      shadowBanned: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    // Page size clamped to the shadow cap (2), not the requested 50.
+    const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock.calls[0][0]
+    expect(itemQuery.limit).toBe(2)
+    // Content-transfer allowance clamped to the shadow cap (30), not 100.
+    expect((itemTransferCalculator.computeItemUuidsToFetch as jest.Mock).mock.calls[0][1]).toBe(30)
+  })
+
+  it('does NOT reduce limits for a normal (non-shadow-banned) user', async () => {
+    const useCase = new GetItems(
+      itemRepository,
+      sharedVaultUserRepository,
+      contentSizeTransferLimit,
+      itemTransferCalculator,
+      timer,
+      maxItemsSyncLimit,
+      2,
+      30,
+    )
+
+    await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      cursorToken: undefined,
+      contentType: undefined,
+      limit: 50,
+      shadowBanned: false,
+    })
+
+    const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock.calls[0][0]
+    expect(itemQuery.limit).toBe(50)
+    expect((itemTransferCalculator.computeItemUuidsToFetch as jest.Mock).mock.calls[0][1]).toBe(100)
+  })
+
   it('should return error for invalid user uuid', async () => {
     const useCase = createUseCase()
 

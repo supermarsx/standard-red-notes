@@ -53,7 +53,10 @@ describe('BaseAdminController ban endpoints', () => {
       email: 'test@test.com',
       banReason: null,
       bannedAt: null,
+      bannedUntil: null,
       isBanned: () => false,
+      isShadowBanned: () => false,
+      effectiveBanType: () => null,
     } as unknown as User)
 
     setUserBanStatus = {} as jest.Mocked<SetUserBanStatus>
@@ -62,7 +65,10 @@ describe('BaseAdminController ban endpoints', () => {
         uuid: '1-2-3',
         bannedAt: null,
         banReason: null,
+        bannedUntil: null,
         isBanned: () => true,
+        isShadowBanned: () => false,
+        effectiveBanType: () => 'permanent',
       } as unknown as User),
     )
 
@@ -100,7 +106,13 @@ describe('BaseAdminController ban endpoints', () => {
   it('setUserBanStatusEndpoint should ban a user for an admin requestor', async () => {
     const result = await createController().setUserBanStatusEndpoint(request, adminResponse)
 
-    expect(setUserBanStatus.execute).toHaveBeenCalledWith({ userUuid: '1-2-3', banned: true, banReason: null })
+    expect(setUserBanStatus.execute).toHaveBeenCalledWith({
+      userUuid: '1-2-3',
+      banned: true,
+      banReason: null,
+      banType: 'permanent',
+      bannedUntil: null,
+    })
     expect(result.json).toMatchObject({ success: true, banned: true })
   })
 

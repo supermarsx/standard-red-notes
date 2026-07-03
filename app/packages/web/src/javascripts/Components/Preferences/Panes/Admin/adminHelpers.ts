@@ -131,6 +131,9 @@ export type AdminUserRow = {
   roles: string[]
   subscription: { plan: string | null; active: boolean } | null
   banned: boolean
+  // Standard Red Notes: the effective ban KIND for a banned row, or null. Older
+  // servers omit it, so the row badge falls back to a generic "Banned".
+  banType?: 'temporary' | 'permanent' | 'shadow' | null
   mfaEnabled: boolean
   storageUsedBytes: number | null
   storageLimitBytes: number | null

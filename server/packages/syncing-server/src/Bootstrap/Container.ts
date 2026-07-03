@@ -181,6 +181,11 @@ export class ContainerConfigLoader {
   private readonly DEFAULT_FREE_USER_CONTENT_LIMIT_BYTES = 100_000_000
   private readonly DEFAULT_CONTENT_SIZE_TRANSFER_LIMIT = 10_000_000
   private readonly DEFAULT_MAX_ITEMS_LIMIT = 300
+  // Standard Red Notes: SHADOW-BAN sync caps. A shadow-banned user's per-sync
+  // page size and content-transfer allowance are clamped to (at most) these,
+  // silently reducing throughput. Overridable via env (see the bindings below).
+  private readonly DEFAULT_SHADOW_BANNED_MAX_ITEMS_LIMIT = 25
+  private readonly DEFAULT_SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT = 1_000_000
   private readonly DEFAULT_FILE_UPLOAD_PATH = `${__dirname}/../../uploads`
 
   constructor(private mode: 'server' | 'worker' = 'server') {}
@@ -561,6 +566,20 @@ export class ContainerConfigLoader {
         env.get('MAX_ITEMS_LIMIT', true) ? +env.get('MAX_ITEMS_LIMIT', true) : this.DEFAULT_MAX_ITEMS_LIMIT,
       )
     container
+      .bind(TYPES.Sync_SHADOW_BANNED_MAX_ITEMS_LIMIT)
+      .toConstantValue(
+        env.get('SHADOW_BANNED_MAX_ITEMS_LIMIT', true)
+          ? +env.get('SHADOW_BANNED_MAX_ITEMS_LIMIT', true)
+          : this.DEFAULT_SHADOW_BANNED_MAX_ITEMS_LIMIT,
+      )
+    container
+      .bind(TYPES.Sync_SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT)
+      .toConstantValue(
+        env.get('SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT', true)
+          ? +env.get('SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT', true)
+          : this.DEFAULT_SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT,
+      )
+    container
       .bind<number>(TYPES.Sync_FREE_USER_CONTENT_LIMIT_BYTES)
       .toConstantValue(
         env.get('FREE_USER_CONTENT_LIMIT_BYTES', true)
@@ -651,6 +670,8 @@ export class ContainerConfigLoader {
           container.get(TYPES.Sync_ItemTransferCalculator),
           container.get(TYPES.Sync_Timer),
           container.get(TYPES.Sync_MAX_ITEMS_LIMIT),
+          container.get(TYPES.Sync_SHADOW_BANNED_MAX_ITEMS_LIMIT),
+          container.get(TYPES.Sync_SHADOW_BANNED_CONTENT_SIZE_TRANSFER_LIMIT),
         ),
       )
     container

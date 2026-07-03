@@ -61,6 +61,62 @@ export function parseArgs(argv: string[], booleanFlags: ReadonlySet<string> = BO
 /** Flags that never take a value. */
 export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['json', 'help'])
 
+/* ------------------------------------------------------------------------- *
+ * Ban option parsing (pure — used by the `ban` command in bin/srn_admin.ts)
+ * ------------------------------------------------------------------------- */
+
+export type CliBanType = 'permanent' | 'temporary' | 'shadow'
+
+export interface ParsedBanOptions {
+  banType: CliBanType
+  bannedUntil: Date | null
+}
+
+/**
+ * Parse the `ban` command's --type / --until / --duration options into a
+ * concrete ban kind + optional expiry. Kept dependency-free and deterministic
+ * (`now` is injected) so it is unit-testable without the DI container.
+ *
+ *   - --type defaults to 'permanent'; only permanent|temporary|shadow are valid.
+ *   - a 'temporary' ban REQUIRES exactly one of --duration <positive minutes>
+ *     or --until <ISO-8601 date in the future-ish>; --duration wins if both are
+ *     supplied.
+ *   - permanent / shadow ignore --until / --duration (bannedUntil = null).
+ */
+export function parseBanOptions(
+  options: Record<string, string | boolean>,
+  now: number = Date.now(),
+): { ok: true; value: ParsedBanOptions } | { ok: false; error: string } {
+  const typeRaw = (stringOption(options, 'type') ?? 'permanent').toLowerCase()
+  if (typeRaw !== 'permanent' && typeRaw !== 'temporary' && typeRaw !== 'shadow') {
+    return { ok: false, error: "--type takes 'permanent', 'temporary' or 'shadow'" }
+  }
+  const banType = typeRaw as CliBanType
+
+  if (banType !== 'temporary') {
+    return { ok: true, value: { banType, bannedUntil: null } }
+  }
+
+  const durationRaw = stringOption(options, 'duration')
+  const untilRaw = stringOption(options, 'until')
+  if (durationRaw !== undefined) {
+    const minutes = Number(durationRaw)
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return { ok: false, error: '--duration takes a positive number of minutes' }
+    }
+    return { ok: true, value: { banType, bannedUntil: new Date(now + minutes * 60_000) } }
+  }
+  if (untilRaw !== undefined) {
+    const bannedUntil = new Date(untilRaw)
+    if (Number.isNaN(bannedUntil.getTime())) {
+      return { ok: false, error: '--until takes an ISO-8601 date (e.g. 2026-12-31T00:00:00Z)' }
+    }
+    return { ok: true, value: { banType, bannedUntil } }
+  }
+
+  return { ok: false, error: 'a temporary ban requires --until <ISO date> or --duration <minutes>' }
+}
+
 /** Read an option as a trimmed non-empty string, else undefined. */
 export function stringOption(options: Record<string, string | boolean>, name: string): string | undefined {
   const value = options[name]
@@ -772,7 +828,11 @@ USERS
   users list [filters]               Paginated, filtered user table
   user <user>                        Rich whois: roles, ban, MFA, storage, flags
                                      (aliases: whois, list-roles)
-  ban <user> [--reason TEXT]         Ban a user (takes effect on next request)
+  ban <user> [--reason TEXT] [--type permanent|temporary|shadow]
+             [--until ISO | --duration MINUTES]
+                                     Ban a user (permanent by default; a
+                                     temporary ban needs --until/--duration; a
+                                     shadow ban lets them connect but degrades sync)
   unban <user>                       Lift a ban
   reset-mfa <user>                   Clear a user's 2FA (and recovery codes)
   fix-quota <user>                   Recalculate a user's storage quota
@@ -835,10 +895,20 @@ USAGE
 Shows uuid/email/created, direct + group-conferred + effective roles,
 effective permissions, ban status, MFA on/off, storage used/limit and the
 admin-manageable feature flags. --json for machine-readable output.`,
-  ban: `ban <user> [--reason TEXT]
+  ban: `ban <user> [--reason TEXT] [--type permanent|temporary|shadow]
+          [--until ISO-DATE | --duration MINUTES]
 
-Sets the banned flag (enforced in SignIn and AuthenticateUser, so it takes
-effect on the user's next authenticated request). 'unban <user>' lifts it.`,
+Bans a user. --type selects the KIND (default 'permanent'):
+  - permanent: blocks sign-in and rejects existing sessions (the historical
+    behavior), now carrying the optional --reason.
+  - temporary: same hard block, but ONLY until the deadline. Provide EITHER
+    --until <ISO-8601 date> OR --duration <minutes from now>. Once expired the
+    user is treated as not banned automatically.
+  - shadow: the user CAN still sign in and connect, but their service is
+    SILENTLY degraded (reduced sync page size + content-transfer allowance and
+    disabled real-time push in the syncing-server). They are never told.
+Permanent/temporary take effect on the next authenticated request; a shadow ban
+takes effect once the session token refreshes. 'unban <user>' lifts any ban.`,
   'roles grant': `roles grant|revoke <user> <ROLE>
 
 ROLE is validated against the known role names (see 'roles list').

@@ -67,7 +67,30 @@ describe('InversifyExpressAuthMiddleware', () => {
     ])
     expect(response.locals.session).toEqual({ uuid: '234' })
     expect(response.locals.readOnlyAccess).toBeFalsy()
+    // Absent shadow_banned ⇒ not shadow-banned.
+    expect(response.locals.shadowBanned).toBe(false)
 
+    expect(next).toHaveBeenCalled()
+  })
+
+  it('reads shadow_banned off the token onto locals', async () => {
+    const authToken = sign(
+      {
+        user: { uuid: '123' },
+        session: { uuid: '234' },
+        roles: [{ uuid: '1-2-3', name: RoleName.NAMES.CoreUser }],
+        permissions: [],
+        shadow_banned: true,
+      },
+      jwtSecret,
+      { algorithm: 'HS256' },
+    )
+
+    request.header = jest.fn().mockReturnValue(authToken)
+
+    await createMiddleware().handler(request, response, next)
+
+    expect(response.locals.shadowBanned).toBe(true)
     expect(next).toHaveBeenCalled()
   })
 

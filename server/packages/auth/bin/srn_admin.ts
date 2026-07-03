@@ -33,7 +33,7 @@ import type { AuditLogEntry } from '../src/Domain/AuditLog/AuditLogEntry'
 import type { AuditLogEntryHttpProjection } from '../src/Infra/Http/Projection/AuditLogEntryHttpProjection'
 import type { RoleServiceInterface } from '../src/Domain/Role/RoleServiceInterface'
 import type { SettingRepositoryInterface } from '../src/Domain/Setting/SettingRepositoryInterface'
-import type { User } from '../src/Domain/User/User'
+import type { BanType, User } from '../src/Domain/User/User'
 import type { AdminUserRow, UserRepositoryInterface } from '../src/Domain/User/UserRepositoryInterface'
 import type { Webhook } from '../src/Domain/Webhook/Webhook'
 import type { WebhookRepositoryInterface } from '../src/Domain/Webhook/WebhookRepositoryInterface'
@@ -51,6 +51,7 @@ import {
   helpFor,
   matchGroupUuidInList,
   parseArgs,
+  parseBanOptions,
   parseDateFilter,
   parseEnvFileContent,
   parseStorageLimitInput,
@@ -398,6 +399,9 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
       banned: user.isBanned(),
       bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
       banReason: user.banReason ?? null,
+      banType: user.effectiveBanType(),
+      bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
+      shadowBanned: user.isShadowBanned(),
       mfaEnabled: row?.mfaEnabled ?? null,
       roles: {
         direct: directRoles,
@@ -420,7 +424,11 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
   outLine(
     `banned:   ${
       user.isBanned()
-        ? `yes (since ${user.bannedAt?.toISOString() ?? '?'}${user.banReason ? `, reason: ${user.banReason}` : ''})`
+        ? `yes [${user.effectiveBanType()}] (since ${user.bannedAt?.toISOString() ?? '?'}${
+            user.effectiveBanType() === 'temporary' && user.bannedUntil
+              ? `, until ${new Date(user.bannedUntil).toISOString()}`
+              : ''
+          }${user.banReason ? `, reason: ${user.banReason}` : ''})`
         : 'no'
     }`,
   )
@@ -453,20 +461,58 @@ async function cmdBan(args: ParsedArgs, banned: boolean): Promise<number> {
   }
   const banReason = stringOption(args.options, 'reason') ?? null
 
+  // Standard Red Notes: richer bans. --type selects permanent (default) |
+  // temporary | shadow; a temporary ban needs --until <ISO date> or
+  // --duration <minutes>. The legacy `ban <user> [--reason]` form is unchanged.
+  let banType: BanType = 'permanent'
+  let bannedUntil: Date | null = null
+  if (banned) {
+    const parsed = parseBanOptions(args.options)
+    if (!parsed.ok) {
+      throw new UsageError(parsed.error)
+    }
+    banType = parsed.value.banType
+    bannedUntil = parsed.value.bannedUntil
+  }
+
   const container = await loadContainer()
   const user = await resolveUser(container, identifier)
 
-  const setUserBanStatus = container.get<UseCase<{ userUuid: string; banned: boolean; banReason: string | null }, User>>(
-    TYPES.Auth_SetUserBanStatus,
+  const setUserBanStatus = container.get<
+    UseCase<
+      { userUuid: string; banned: boolean; banReason: string | null; banType?: BanType | null; bannedUntil?: Date | null },
+      User
+    >
+  >(TYPES.Auth_SetUserBanStatus)
+  requireResult(
+    await setUserBanStatus.execute({
+      userUuid: user.uuid,
+      banned,
+      banReason,
+      banType: banned ? banType : null,
+      bannedUntil,
+    }),
   )
-  requireResult(await setUserBanStatus.execute({ userUuid: user.uuid, banned, banReason }))
 
-  await writeAudit(container, AuditAction.BanChanged, { type: 'user', uuid: user.uuid }, { banned, banReason })
+  await writeAudit(
+    container,
+    AuditAction.BanChanged,
+    { type: 'user', uuid: user.uuid },
+    { banned, banReason, banType: banned ? banType : null, bannedUntil: bannedUntil?.toISOString() ?? null },
+  )
 
   if (banned) {
-    outLine(
-      `Banned ${user.email} (${user.uuid})${banReason ? ` — reason: ${banReason}` : ''}. Takes effect on their next authenticated request.`,
-    )
+    const typeNote =
+      banType === 'temporary'
+        ? ` [temporary until ${bannedUntil?.toISOString()}]`
+        : banType === 'shadow'
+          ? ' [shadow: user still connects but sync is silently degraded]'
+          : ' [permanent]'
+    const effect =
+      banType === 'shadow'
+        ? ' Takes effect once their session token refreshes.'
+        : ' Takes effect on their next authenticated request.'
+    outLine(`Banned ${user.email} (${user.uuid})${banReason ? ` — reason: ${banReason}` : ''}${typeNote}.${effect}`)
   } else {
     outLine(`Unbanned ${user.email} (${user.uuid}).`)
   }

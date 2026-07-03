@@ -29,6 +29,7 @@ describe('AuthenticateUser', () => {
     user = {} as jest.Mocked<User>
     user.supportsSessions = jest.fn().mockReturnValue(false)
     user.isBanned = jest.fn().mockReturnValue(false)
+    user.isAccessBlocked = jest.fn().mockReturnValue(false)
 
     session = {} as jest.Mocked<Session>
     session.accessExpiration = new Date(123)
@@ -67,6 +68,7 @@ describe('AuthenticateUser', () => {
   it('should not authenticate a banned user', async () => {
     user.encryptedPassword = 'test'
     user.isBanned = jest.fn().mockReturnValue(true)
+    user.isAccessBlocked = jest.fn().mockReturnValue(true)
 
     authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
       type: 'jwt',

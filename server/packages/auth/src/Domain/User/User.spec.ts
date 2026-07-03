@@ -59,4 +59,61 @@ describe('User', () => {
     user.banned = 0 as unknown as boolean
     expect(user.isBanned()).toBe(false)
   })
+
+  // Standard Red Notes: richer ban semantics.
+  it('treats a legacy banned row with no ban_type as a permanent, access-blocking ban', () => {
+    const user = createUser()
+    user.banned = true
+    user.banType = null
+
+    expect(user.effectiveBanType()).toBe('permanent')
+    expect(user.isBanned()).toBe(true)
+    expect(user.isAccessBlocked()).toBe(true)
+    expect(user.isShadowBanned()).toBe(false)
+  })
+
+  it('permanent ban is access-blocking', () => {
+    const user = createUser()
+    user.banned = true
+    user.banType = 'permanent'
+    user.banReason = 'abuse'
+
+    expect(user.isAccessBlocked()).toBe(true)
+    expect(user.banReason).toBe('abuse')
+  })
+
+  it('temporary ban blocks access only until it expires', () => {
+    const user = createUser()
+    user.banned = true
+    user.banType = 'temporary'
+
+    const future = new Date('2026-07-10T00:00:00.000Z')
+    const past = new Date('2026-06-01T00:00:00.000Z')
+    user.bannedUntil = future
+
+    // Before the deadline: banned + access-blocked.
+    const beforeDeadline = new Date('2026-07-01T00:00:00.000Z')
+    expect(user.isBanned(beforeDeadline)).toBe(true)
+    expect(user.isAccessBlocked(beforeDeadline)).toBe(true)
+
+    // After the deadline: treated as NOT banned.
+    const afterDeadline = new Date('2026-07-20T00:00:00.000Z')
+    expect(user.isBanned(afterDeadline)).toBe(false)
+    expect(user.isAccessBlocked(afterDeadline)).toBe(false)
+
+    // A past deadline is already expired.
+    user.bannedUntil = past
+    expect(user.isBanned(beforeDeadline)).toBe(false)
+  })
+
+  it('shadow ban is active but NOT access-blocking', () => {
+    const user = createUser()
+    user.banned = true
+    user.banType = 'shadow'
+
+    expect(user.isBanned()).toBe(true)
+    expect(user.isShadowBanned()).toBe(true)
+    expect(user.isAccessBlocked()).toBe(false)
+    expect(user.effectiveBanType()).toBe('shadow')
+  })
 })

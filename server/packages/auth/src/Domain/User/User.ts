@@ -4,6 +4,17 @@ import { Role } from '../Role/Role'
 import { ProtocolVersion } from '@standardnotes/common'
 import { TypeORMEmergencyAccessInvitation } from '../../Infra/TypeORM/TypeORMEmergencyAccessInvitation'
 
+/**
+ * Standard Red Notes: the kinds of ban an admin can apply.
+ *   - 'permanent': access is blocked indefinitely (the historical behavior; a
+ *     legacy `banned=1` row with no explicit type is treated as permanent).
+ *   - 'temporary': access is blocked only while `now < bannedUntil`; once the
+ *     deadline passes the ban is inert and the user is treated as NOT banned.
+ *   - 'shadow': the user CAN sign in and connect, but service is silently
+ *     degraded downstream (reduced sync etc). Never disclosed to the user.
+ */
+export type BanType = 'temporary' | 'permanent' | 'shadow'
+
 @Entity({ name: 'users' })
 export class User {
   static readonly PASSWORD_HASH_COST = 11
@@ -177,6 +188,32 @@ export class User {
   })
   declare banReason: string | null
 
+  /**
+   * Standard Red Notes: the ban KIND ('temporary' | 'permanent' | 'shadow').
+   * Nullable so legacy rows (and every non-banned user) leave it unset; an unset
+   * value on a `banned=1` row is interpreted as 'permanent' (see
+   * effectiveBanType), preserving the historical simple-ban behavior exactly.
+   */
+  @Column({
+    name: 'ban_type',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  declare banType: BanType | null
+
+  /**
+   * Standard Red Notes: expiry for a 'temporary' ban. Once `now >= bannedUntil`
+   * the ban is inert (the user is treated as not banned). Null for permanent /
+   * shadow bans and for every non-banned user.
+   */
+  @Column({
+    name: 'banned_until',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare bannedUntil: Date | null
+
   @OneToMany(
     /* istanbul ignore next */
     () => RevokedSession,
@@ -230,12 +267,65 @@ export class User {
     return this.email.length === 64 && !this.email.includes('@')
   }
 
-  isBanned(): boolean {
+  /**
+   * The EFFECTIVE ban kind, or null when the user carries no ban flag. A
+   * `banned=1` row with no explicit `banType` is a legacy simple ban and reads
+   * as 'permanent'. (Does NOT consider temporary expiry — see isBanned.)
+   */
+  effectiveBanType(): BanType | null {
     // The column is a tinyint(1): TypeORM hydrates it from MySQL/MariaDB as the
     // NUMBER 0/1, while SetUserBanStatus assigns a real boolean before saving.
     // A strict `=== true` comparison therefore reported every persisted ban as
     // "not banned" (numeric 1 !== true) and bans were silently never enforced.
     // Coerce so both representations count.
-    return Number(this.banned) === 1
+    if (Number(this.banned) !== 1) {
+      return null
+    }
+    if (this.banType === 'temporary' || this.banType === 'shadow' || this.banType === 'permanent') {
+      return this.banType
+    }
+
+    return 'permanent'
+  }
+
+  /**
+   * True once a 'temporary' ban's deadline has passed — the ban is then inert.
+   */
+  private banHasExpired(now: Date): boolean {
+    if (this.effectiveBanType() !== 'temporary' || this.bannedUntil === null || this.bannedUntil === undefined) {
+      return false
+    }
+
+    return now.getTime() >= new Date(this.bannedUntil).getTime()
+  }
+
+  /**
+   * Whether the user currently carries an ACTIVE ban of ANY kind (permanent,
+   * shadow, or a not-yet-expired temporary ban). This is the reporting predicate
+   * (admin panel / CLI / user list). Enforcement of ACCESS uses isAccessBlocked.
+   */
+  isBanned(now: Date = new Date()): boolean {
+    if (Number(this.banned) !== 1) {
+      return false
+    }
+
+    return !this.banHasExpired(now)
+  }
+
+  /**
+   * Whether the user is actively SHADOW-banned: allowed to connect but degraded.
+   */
+  isShadowBanned(now: Date = new Date()): boolean {
+    return this.isBanned(now) && this.effectiveBanType() === 'shadow'
+  }
+
+  /**
+   * Whether access must be HARD-blocked (rejected at sign-in and on every
+   * authenticated request): an active permanent or not-yet-expired temporary
+   * ban. A shadow ban is deliberately NOT access-blocking — the shadow user
+   * connects and is degraded silently instead.
+   */
+  isAccessBlocked(now: Date = new Date()): boolean {
+    return this.isBanned(now) && this.effectiveBanType() !== 'shadow'
   }
 }

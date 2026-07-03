@@ -34,6 +34,8 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
         limit: dto.limit,
         contentType: dto.contentType,
         sharedVaultUuids: dto.sharedVaultUuids,
+        // Standard Red Notes: SHADOW-BAN — GetItems caps page size + transfer.
+        shadowBanned: dto.shadowBanned === true,
       })
       if (getItemsResultOrError.isFailed()) {
         return Result.fail(getItemsResultOrError.getError())
@@ -49,7 +51,10 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
         snjsVersion: dto.snjsVersion,
         isFreeUser: dto.isFreeUser,
         hasContentLimit: dto.hasContentLimit,
-        liveSyncEnabled: dto.liveSyncEnabled,
+        // Standard Red Notes: SHADOW-BAN silently disables real-time push for
+        // the user (their other devices fall back to slower manual/HTTP sync).
+        // Achieved by forcing live-sync off here — SaveItems needs no change.
+        liveSyncEnabled: dto.liveSyncEnabled && dto.shadowBanned !== true,
       })
       if (saveItemsResultOrError.isFailed()) {
         return Result.fail(saveItemsResultOrError.getError())

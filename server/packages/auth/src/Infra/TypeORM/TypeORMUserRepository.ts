@@ -65,6 +65,7 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
       roles: rolesByUser.get(user.uuid) ?? [],
       subscription: subscriptionByUser.get(user.uuid) ?? null,
       banned: user.isBanned(),
+      banType: user.isBanned() ? user.effectiveBanType() : null,
       mfaEnabled: mfaEnabledUuids.has(user.uuid),
       storageUsedBytes: storageByUser.get(user.uuid)?.used ?? null,
       storageLimitBytes: storageByUser.get(user.uuid)?.limit ?? null,
