@@ -268,6 +268,11 @@ describe('Item', () => {
       new UniqueEntityId('00000000-0000-0000-0000-000000000000'),
     ).getValue()
 
-    expect(entity.calculateContentSize()).toEqual(943)
+    // NOTE: this size tracks the JSON serialization of the whole Item aggregate,
+    // which includes the ContentType value object's static displayNamesMap. When a
+    // new ContentType is added in @standardnotes/domain-core the serialized map
+    // grows and this constant must be updated to match (e.g. adding the "Folder"
+    // content type added 18 bytes: 943 -> 961).
+    expect(entity.calculateContentSize()).toEqual(961)
   })
 })

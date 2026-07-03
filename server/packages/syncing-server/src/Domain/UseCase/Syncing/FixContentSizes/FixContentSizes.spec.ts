@@ -46,7 +46,9 @@ describe('FixContentSizes', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(itemRepository.updateContentSize).toHaveBeenCalledTimes(1)
-    expect(itemRepository.updateContentSize).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000000', 947)
+    // See Item.spec.ts: this size tracks the serialized ContentType displayNamesMap
+    // and must be bumped when a new domain-core ContentType is added (947 -> 965).
+    expect(itemRepository.updateContentSize).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000000', 965)
   })
 
   it('should return an error if user uuid is invalid', async () => {
@@ -67,7 +69,7 @@ describe('FixContentSizes', () => {
         updatedWithSession: null,
         content: 'foobar',
         contentType: ContentType.create(ContentType.TYPES.Note).getValue(),
-        contentSize: 947,
+        contentSize: 965,
         encItemKey: null,
         authHash: null,
         itemsKeyId: null,
