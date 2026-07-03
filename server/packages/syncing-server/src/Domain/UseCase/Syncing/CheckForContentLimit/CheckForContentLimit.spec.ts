@@ -13,6 +13,8 @@ describe('CheckForContentLimit', () => {
 
   beforeEach(() => {
     itemRepository = {} as ItemRepositoryInterface
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(0)
+    itemRepository.findContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue([])
 
     itemHash = ItemHash.create({
       uuid: '00000000-0000-0000-0000-000000000000',
@@ -34,6 +36,7 @@ describe('CheckForContentLimit', () => {
   })
 
   it('should return a failure result if user has exceeded their content limit', async () => {
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(101)
     itemRepository.findContentSizeForComputingTransferLimit = jest
       .fn()
       .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 101).getValue()])
@@ -48,9 +51,7 @@ describe('CheckForContentLimit', () => {
   })
 
   it('should return a success result if user has not exceeded their content limit', async () => {
-    itemRepository.findContentSizeForComputingTransferLimit = jest
-      .fn()
-      .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 99).getValue()])
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(99)
 
     const useCase = createUseCase()
     const result = await useCase.execute({
@@ -61,9 +62,74 @@ describe('CheckForContentLimit', () => {
     expect(result.isFailed()).toBe(false)
   })
 
+  it('should not perform a per-item lookup when the content limit is not exceeded', async () => {
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(99)
+
+    const useCase = createUseCase()
+    await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemsBeingModified: [itemHash],
+    })
+
+    expect(itemRepository.findContentSizeForComputingTransferLimit).not.toHaveBeenCalled()
+  })
+
+  it('should treat the limit boundary identically (equal total is not exceeded)', async () => {
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(100)
+
+    const useCase = createUseCase()
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemsBeingModified: [itemHash],
+    })
+
+    expect(result.isFailed()).toBe(false)
+  })
+
+  it('should use the summed total returned by the repository to make the quota decision', async () => {
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(101)
+    itemRepository.findContentSizeForComputingTransferLimit = jest
+      .fn()
+      .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 1).getValue()])
+
+    const useCase = createUseCase()
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemsBeingModified: [itemHash],
+    })
+
+    // The summed total (101) exceeds the limit even though the individual modified
+    // item descriptor is tiny (1), and the modification increases its size, so it fails.
+    expect(itemRepository.sumContentSizeForComputingTransferLimit).toHaveBeenCalledWith({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      deleted: false,
+    })
+    expect(result.isFailed()).toBe(true)
+  })
+
+  it('should only fetch descriptors for the items being modified', async () => {
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(101)
+    itemRepository.findContentSizeForComputingTransferLimit = jest
+      .fn()
+      .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 101).getValue()])
+
+    const useCase = createUseCase()
+    await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemsBeingModified: [itemHash],
+    })
+
+    expect(itemRepository.findContentSizeForComputingTransferLimit).toHaveBeenCalledWith({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      deleted: false,
+      uuids: ['00000000-0000-0000-0000-000000000000'],
+    })
+  })
+
   it('should return a success result if user has exceeded their content limit but user modifications are not increasing content size', async () => {
     itemHash.calculateContentSize = jest.fn().mockReturnValue(99)
 
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(101)
     itemRepository.findContentSizeForComputingTransferLimit = jest
       .fn()
       .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 101).getValue()])
@@ -80,9 +146,8 @@ describe('CheckForContentLimit', () => {
   it('should treat items with no content size defined as 0', async () => {
     itemHash.calculateContentSize = jest.fn().mockReturnValue(99)
 
-    itemRepository.findContentSizeForComputingTransferLimit = jest
-      .fn()
-      .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', null).getValue()])
+    // The whole account sums to 0 (all content sizes null/absent), so the limit is not exceeded.
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(0)
 
     const useCase = createUseCase()
     const result = await useCase.execute({
@@ -94,7 +159,7 @@ describe('CheckForContentLimit', () => {
   })
 
   it('should ignore deleted items when computing total content size', async () => {
-    itemRepository.findContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue([])
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(0)
 
     const useCase = createUseCase()
     await useCase.execute({
@@ -102,7 +167,7 @@ describe('CheckForContentLimit', () => {
       itemsBeingModified: [itemHash],
     })
 
-    expect(itemRepository.findContentSizeForComputingTransferLimit).toHaveBeenCalledWith({
+    expect(itemRepository.sumContentSizeForComputingTransferLimit).toHaveBeenCalledWith({
       userUuid: '00000000-0000-0000-0000-000000000000',
       deleted: false,
     })

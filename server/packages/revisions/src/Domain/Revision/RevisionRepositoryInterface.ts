@@ -5,6 +5,7 @@ import { RevisionMetadata } from './RevisionMetadata'
 
 export interface RevisionRepositoryInterface {
   countByUserUuid(userUuid: Uuid): Promise<number>
+  countByItemUuid(itemUuid: Uuid): Promise<number>
   removeByUserUuid(userUuid: Uuid): Promise<void>
   removeByItemUuid(itemUuid: Uuid): Promise<void>
   removeOneByUuid(revisionUuid: Uuid, userUuid: Uuid): Promise<void>
@@ -14,6 +15,7 @@ export interface RevisionRepositoryInterface {
   updateUserUuid(itemUuid: Uuid, userUuid: Uuid): Promise<void>
   findByUserUuid(dto: { userUuid: Uuid; offset?: number; limit?: number }): Promise<Array<Revision>>
   insert(revision: Revision): Promise<boolean>
+  insertMany(revisions: Array<Revision>): Promise<boolean>
   update(revision: Revision): Promise<boolean>
   removeByItemUuidOlderThan(itemUuid: Uuid, cutoffDate: Date): Promise<void>
   removeByItemUuidBeyondCount(itemUuid: Uuid, maxCount: number): Promise<void>

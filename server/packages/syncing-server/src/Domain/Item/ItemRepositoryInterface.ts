@@ -11,6 +11,7 @@ export interface ItemRepositoryInterface {
   findAll(query: ItemQuery): Promise<Item[]>
   countAll(query: ItemQuery): Promise<number>
   findContentSizeForComputingTransferLimit(query: ItemQuery): Promise<Array<ItemContentSizeDescriptor>>
+  sumContentSizeForComputingTransferLimit(query: ItemQuery): Promise<number>
   findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>>
   findItemsForComputingIntegrityPayloads(userUuid: string): Promise<ExtendedIntegrityPayload[]>
   findByUuidAndUserUuid(uuid: string, userUuid: string): Promise<Item | null>

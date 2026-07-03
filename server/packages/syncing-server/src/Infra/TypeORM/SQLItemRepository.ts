@@ -129,6 +129,19 @@ export class SQLItemRepository implements ItemRepositoryInterface {
     return itemContentSizeDescriptors
   }
 
+  async sumContentSizeForComputingTransferLimit(query: ItemQuery): Promise<number> {
+    const queryBuilder = this.createFindAllQueryBuilder(query)
+    queryBuilder.select('SUM(item.content_size)', 'total')
+
+    const result = await queryBuilder.getRawOne<{ total: string | number | null }>()
+
+    if (!result || result.total === null || result.total === undefined) {
+      return 0
+    }
+
+    return +result.total
+  }
+
   async findByUuid(uuid: Uuid): Promise<Item | null> {
     const persistence = await this.ormRepository
       .createQueryBuilder('item')

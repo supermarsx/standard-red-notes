@@ -21,8 +21,18 @@ export class CopyRevisions implements UseCaseInterface<string> {
     }
     const newItemUuid = newItemUuidOrError.getValue()
 
+    // Idempotency guard: event delivery is at-least-once, so a redelivered copy
+    // request must not duplicate revisions. If the target item already has any
+    // revisions, a previous copy already completed (mid-copy failures roll back the
+    // whole batch below, leaving the target empty), so treat this as a no-op.
+    const existingCopiesCount = await this.revisionRepository.countByItemUuid(newItemUuid)
+    if (existingCopiesCount > 0) {
+      return Result.ok<string>('Revisions already copied')
+    }
+
     const revisions = await this.revisionRepository.findByItemUuid(originalItemUuid)
 
+    const revisionCopies: Revision[] = []
     for (const existingRevision of revisions) {
       const revisionCopyOrError = Revision.create({
         ...existingRevision.props,
@@ -33,10 +43,11 @@ export class CopyRevisions implements UseCaseInterface<string> {
         return Result.fail<string>(`Could not create revision copy: ${revisionCopyOrError.getError()}`)
       }
 
-      const revisionCopy = revisionCopyOrError.getValue()
-
-      await this.revisionRepository.insert(revisionCopy)
+      revisionCopies.push(revisionCopyOrError.getValue())
     }
+
+    // Transactional, batched insert: all copies land atomically or none do.
+    await this.revisionRepository.insertMany(revisionCopies)
 
     return Result.ok<string>('Revisions copied')
   }

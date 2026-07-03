@@ -147,6 +147,13 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
       .getCount()
   }
 
+  async countByItemUuid(itemUuid: Uuid): Promise<number> {
+    return this.ormRepository
+      .createQueryBuilder()
+      .where('item_uuid = :itemUuid', { itemUuid: itemUuid.value })
+      .getCount()
+  }
+
   async findByUserUuid(dto: { userUuid: Uuid; offset?: number; limit?: number }): Promise<Revision[]> {
     const queryBuilder = this.ormRepository
       .createQueryBuilder('revision')
@@ -200,6 +207,26 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
     const projection = this.revisionMapper.toProjection(revision)
 
     await this.ormRepository.insert(projection)
+
+    return true
+  }
+
+  async insertMany(revisions: Array<Revision>): Promise<boolean> {
+    if (revisions.length === 0) {
+      return true
+    }
+
+    const projections = revisions.map((revision) => this.revisionMapper.toProjection(revision))
+
+    // All-or-nothing: a mid-copy failure rolls the whole batch back so no partial
+    // copy is left behind. Inserts are chunked to keep individual statements bounded.
+    const batchSize = 100
+    await this.ormRepository.manager.transaction(async (transactionalEntityManager) => {
+      for (let offset = 0; offset < projections.length; offset += batchSize) {
+        const batch = projections.slice(offset, offset + batchSize)
+        await transactionalEntityManager.insert(SQLRevision, batch)
+      }
+    })
 
     return true
   }
