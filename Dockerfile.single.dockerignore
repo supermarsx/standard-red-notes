@@ -1,0 +1,42 @@
+# Build context for Dockerfile.single = the REPO ROOT (it needs BOTH app/ and
+# server/). The default root .dockerignore excludes app/ and server/ (that context
+# only builds mcp/), so this per-Dockerfile ignore RE-INCLUDES them while still
+# dropping the heavy, rebuildable, or secret bits.
+.git
+.git-backups
+.github
+.vscode
+.idea
+.orchestration
+.claude
+
+# Rebuilt inside the image — never ship host copies.
+node_modules
+**/node_modules
+**/dist
+**/build
+**/coverage
+*.tsbuildinfo
+.eslintcache
+
+# Yarn: keep releases/plugins/patches (needed by PnP install), drop the caches.
+**/.yarn/cache
+**/.yarn/unplugged
+**/.yarn/build-state.yml
+**/.yarn/install-state.gz
+
+# Not needed by the single-container build.
+mcp
+cli
+openclaw
+e2e
+docs
+deploy
+
+# Runtime data / local envs / secrets.
+server/data
+server/logs
+server/packages/files/uploads
+.env
+.env.*
+!.env.sample

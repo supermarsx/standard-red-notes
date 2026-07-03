@@ -1,0 +1,33 @@
+[Unit]
+Description=Standard Red Notes (single-process home-server)
+Documentation=https://github.com/standardnotes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__WORKING_DIR__
+# Launches: node --require <repo>/server/.pnp.cjs dist/bin/server.js
+# (dotenv reads the .env in WorkingDirectory; sqlite + in-memory cache, no
+# external services). The installer templates the paths in.
+ExecStart=__LAUNCHER__
+Restart=on-failure
+RestartSec=5
+# Give the sqlite schema build room on first boot.
+TimeoutStartSec=120
+
+# Hardening — the service only needs to read its checkout and write its data dir.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

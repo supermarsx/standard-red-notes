@@ -1,0 +1,111 @@
+# =============================================================================
+# Standard Red Notes — ALL-IN-ONE single container (local / small self-hosting).
+#
+# ONE container, ZERO external services: the home-server (single-process backend)
+# with embedded sqlite + in-memory cache + in-process events, plus nginx serving
+# the web app. No MySQL, no Redis, no SNS/SQS emulator.
+#
+#   docker compose -f docker-compose.single.yml up -d --build
+#   open http://localhost:3001
+#
+# This is SEPARATE from the full multi-container docker-compose.yml (which stays
+# the default for production-grade, horizontally-scalable deploys). See
+# docs/DEPLOYMENT.md for when to use which.
+#
+# Secrets: with NONE supplied, the container generates strong per-instance secrets
+# on first boot and PERSISTS them to the data volume (so sessions/encryption stay
+# valid across restarts). Set them explicitly in .env for backup/restore control —
+# copy .env.single.example to .env and fill in `openssl rand -hex 32` values.
+# =============================================================================
+name: standard-red-notes-single
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.single
+    image: standard-red-notes/single:local
+    restart: unless-stopped
+
+    # Hardening: unprivileged user (uid 10001) inside; drop all caps + block
+    # privilege escalation. Proper PID 1 to reap zombies + forward signals.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    init: true
+    mem_limit: ${SINGLE_MEM_LIMIT:-2g}
+    pids_limit: 2048
+
+    environment:
+      # --- Secrets (optional) --------------------------------------------------
+      # Leave unset to auto-generate + persist per-instance secrets on first boot.
+      # Set them (openssl rand -hex 32; ENCRYPTION_SERVER_KEY must be 64 hex chars)
+      # to control them for backup/restore or a reproducible deploy.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      ENCRYPTION_SERVER_KEY: ${ENCRYPTION_SERVER_KEY:-}
+      PSEUDO_KEY_PARAMS_KEY: ${PSEUDO_KEY_PARAMS_KEY:-}
+      VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-}
+
+      # --- Core -----------------------------------------------------------------
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Comma-separated emails granted the admin role (in-app Admin panel).
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+
+      # Public URL the browser uses for file up/downloads, served same-origin via
+      # nginx /files. Defaults to this container's published origin; override for a
+      # real domain, e.g. https://notes.example.com/files.
+      PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-3001}/files}
+
+      # Cookies. Defaults suit an http://localhost self-host. Behind HTTPS on a
+      # domain, set COOKIE_DOMAIN and COOKIE_SECURE=true.
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Trust a reverse proxy on loopback/private nets (see docker-compose.yml).
+      TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+
+      # Full-feature entitlement, same defaults as the multi-container stack.
+      STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
+      STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
+      STANDARD_RED_FULL_FEATURE_DURATION_DAYS: ${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
+      STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT: ${STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT:--1}
+
+      # --- Web app runtime flags (templated into the served index.html) --------
+      # Client-side PDF OCR (off by default). SYNC_SERVER unset => the app syncs to
+      # its own origin (this container).
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
+      SYNC_SERVER: ${SYNC_SERVER:-}
+
+      # --- Optional access gating / rate limiting ------------------------------
+      CORS_ORIGIN_STRICT_MODE_ENABLED: ${CORS_ORIGIN_STRICT_MODE_ENABLED:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      SHARED_SERVER_ACCESS_KEY: ${SHARED_SERVER_ACCESS_KEY:-}
+      SHARED_SERVER_ACCESS_KEY_MODE: ${SHARED_SERVER_ACCESS_KEY_MODE:-all}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-}
+
+      # --- Optional AI assistant proxy -----------------------------------------
+      ASSISTANT_ANTHROPIC_API_KEY: ${ASSISTANT_ANTHROPIC_API_KEY:-}
+      ASSISTANT_OPENAI_API_KEY: ${ASSISTANT_OPENAI_API_KEY:-}
+      ASSISTANT_OPENAI_BASE_URL: ${ASSISTANT_OPENAI_BASE_URL:-}
+      ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
+
+    ports:
+      - "${APP_PORT:-3001}:8080"
+
+    # Persistent state: sqlite DB, uploaded files, generated secrets, admin
+    # overrides + feature JSON stores all live under /data.
+    volumes:
+      - single-data:/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthcheck >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  single-data:

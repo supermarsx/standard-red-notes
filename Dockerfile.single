@@ -1,0 +1,144 @@
+# syntax=docker/dockerfile:1.7
+#
+# =============================================================================
+# Standard Red Notes — ALL-IN-ONE single-container image.
+#
+# ONE image that runs the whole app for local / small self-hosting:
+#   * the home-server  — a SINGLE Node process that mounts auth + syncing + files
+#     + revisions + api-gateway on one port, with embedded sqlite + in-memory
+#     cache + in-process events (NO external MySQL / Redis / SNS-SQS); and
+#   * nginx            — serves the built web SPA and reverse-proxies the API
+#     same-origin, reusing the app image's CSP inline-script self-heal VERBATIM.
+# Both run under supervisord as the unprivileged `srn` user.
+#
+# This is ADDITIVE — the multi-container docker-compose.yml + server/Dockerfile +
+# app/Dockerfile are untouched. Build context is the REPO ROOT so both the server
+# and app workspaces are available; see Dockerfile.single.dockerignore.
+#
+#   docker compose -f docker-compose.single.yml up -d --build
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# STAGE 1 — build the server workspace (produces the compiled home-server under
+# /opt/server, incl. the PnP .yarn cache + native addons). Mirrors server/Dockerfile.
+# -----------------------------------------------------------------------------
+FROM node:24-alpine AS server-build
+
+ENV NODE_ENV=production
+
+RUN apk add --update --no-cache bash g++ make py3-pip python3
+RUN npm install -g corepack@latest && corepack enable
+
+WORKDIR /opt/server
+
+COPY server/ ./
+RUN yarn install --immutable
+RUN CI=true yarn build
+
+# -----------------------------------------------------------------------------
+# STAGE 2 — build the web SPA bundle (packages/web/dist). Mirrors app/Dockerfile.
+# -----------------------------------------------------------------------------
+FROM node:24-bookworm-slim AS app-build
+
+WORKDIR /opt/app
+
+ENV CI=true
+ENV NODE_OPTIONS=--no-deprecation
+
+# Insurance for git-sourced deps that pack via bundled Yarn 1 (see app/Dockerfile).
+RUN printf -- '--ignore-engines true\n' > /root/.yarnrc
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g corepack@latest && corepack enable
+
+COPY app/ ./
+
+# Focus only the web workspace's dependency closure (skips desktop/mobile git deps
+# whose native builds don't compile on Node 24), then build the static bundle.
+RUN --mount=type=cache,target=/opt/app/.yarn/cache,sharing=locked \
+  yarn workspaces focus @standardnotes/web
+RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
+  yarn build:web
+
+# -----------------------------------------------------------------------------
+# RUNTIME — node + nginx + supervisord, no compiler toolchain. Runs as `srn`.
+# -----------------------------------------------------------------------------
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production
+
+# nginx + openssl (secret gen) + the CSP self-heal tools (sha256sum/base64/xxd/awk
+# are already in busybox) + python/supervisor. curl for the healthcheck.
+RUN apk add --update --no-cache \
+  bash \
+  curl \
+  nginx \
+  openssl \
+  py3-pip \
+  python3 \
+  && pip install --no-cache-dir --break-system-packages supervisor
+
+RUN npm install -g corepack@latest && corepack enable
+
+WORKDIR /opt/server
+
+# The fully built server workspace (home-server + PnP runtime + native addons).
+COPY --from=server-build /opt/server /opt/server
+
+# The built SPA, served by nginx at the standard path the reused app entrypoint
+# rewrites.
+COPY --from=app-build /opt/app/packages/web/dist /usr/share/nginx/html
+
+# nginx config: our main conf (non-root, listens 8080) + the single-container
+# server block at conf.d/default.conf (where the reused CSP entrypoint edits it).
+COPY app/docker/single/nginx.main.conf /etc/nginx/nginx.conf
+COPY app/docker/single/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Reuse the app image's runtime-config + CSP self-heal entrypoint VERBATIM.
+COPY app/docker/docker-entrypoint.sh /usr/local/bin/csp-runtime-config.sh
+
+# Single-container process supervisor + launch scripts.
+COPY server/docker/single/supervisord.conf /etc/supervisord.conf
+COPY server/docker/single/entrypoint.sh /usr/local/bin/srn-entrypoint.sh
+COPY server/docker/single/home-server-run.sh /usr/local/bin/home-server-run.sh
+COPY server/docker/single/fix-sqlite-migrations.js /usr/local/bin/fix-sqlite-migrations.js
+
+# Normalize line endings (CRLF checkout), make scripts executable, create the
+# unprivileged user, create the writable runtime dirs and hand ownership to it.
+# nginx needs conf.d/default.conf + the served html writable (the entrypoint
+# rewrites both); /tmp holds nginx's pid + temp paths; /data holds sqlite+uploads.
+RUN sed -i 's/\r$//' \
+      /usr/local/bin/csp-runtime-config.sh \
+      /usr/local/bin/srn-entrypoint.sh \
+      /usr/local/bin/home-server-run.sh \
+      /etc/supervisord.conf \
+  && chmod +x \
+      /usr/local/bin/csp-runtime-config.sh \
+      /usr/local/bin/srn-entrypoint.sh \
+      /usr/local/bin/home-server-run.sh \
+  && addgroup -g 10001 -S srn \
+  && adduser -u 10001 -S srn -G srn \
+  && mkdir -p /data /var/lib/nginx /var/log/nginx \
+  && chown -R srn:srn \
+      /opt/server \
+      /usr/share/nginx/html \
+      /etc/nginx/conf.d \
+      /var/lib/nginx \
+      /var/log/nginx \
+      /data
+
+USER srn:srn
+
+VOLUME ["/data"]
+
+# Only the SPA/API front door is published; the home-server's :3000 is internal.
+EXPOSE 8080
+
+# Verifies BOTH tiers: nginx is up AND it can reach the home-server's API.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=10 \
+  CMD curl -fsS http://127.0.0.1:8080/healthcheck >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/srn-entrypoint.sh"]
