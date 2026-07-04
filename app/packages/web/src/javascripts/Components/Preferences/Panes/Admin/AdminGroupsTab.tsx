@@ -22,6 +22,7 @@ import {
   RoleHolders,
   RoleSetResolution,
   canonicalRoleLabel,
+  canonicalRoleDescription,
   conferrableRoleNames,
   filterPermissionNames,
   groupPermissionsByCategory,
@@ -586,14 +587,17 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   {roles.map((role) => {
                     const isEditing = editingRoleUuid === role.uuid
                     const holderInfo = holders[role.uuid]
+                    // DB description wins (server already resolves that); fall back
+                    // to the canonical default so the built-in four always show one.
+                    const description = role.description || canonicalRoleDescription(role.name)
                     return (
                       <tr key={role.uuid} className={isEditing ? 'bg-info-backdrop' : ''}>
                         <td className="px-3 py-2.5">
                           <div className="flex min-w-0 flex-col">
                             <Subtitle>{role.label ?? canonicalRoleLabel(role.name)}</Subtitle>
                             <Text className="text-xs text-passive-1">{role.name}</Text>
-                            {role.description && (
-                              <Text className="mt-0.5 text-xs text-passive-1">{role.description}</Text>
+                            {description && (
+                              <Text className="mt-0.5 text-xs text-passive-1">{description}</Text>
                             )}
                           </div>
                         </td>

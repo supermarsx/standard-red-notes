@@ -38,6 +38,28 @@ export const CANONICAL_ROLE_LABELS: Record<string, string> = {
 /** Friendly label for a role name; falls back to the raw name (e.g. legacy roles). */
 export const canonicalRoleLabel = (name: string): string => CANONICAL_ROLE_LABELS[name] ?? name
 
+/**
+ * Canonical DEFAULT description per role, grounded in what each role actually
+ * grants (the server's RoleName power hierarchy + seeded permissions). Mirrors
+ * the server's CanonicalRoles descriptions and is used as the fallback when a
+ * role has no DB description of its own (the built-in four). A custom role's own
+ * description always wins — the server resolves that precedence before this map
+ * is ever consulted.
+ */
+export const CANONICAL_ROLE_DESCRIPTIONS: Record<string, string> = {
+  INTERNAL_TEAM_USER: 'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
+  PRO_USER: 'Every end-user feature unlocked — notes, files, vaults, and the premium editors, at the highest tier.',
+  CORE_USER: 'A standard account — core note-taking and sync with baseline limits.',
+  VAULTS_USER: 'Collaboration-focused — shared vaults and team features on top of core note-taking.',
+}
+
+/**
+ * Canonical default description for a role name; empty string for anything the
+ * taxonomy doesn't know (e.g. legacy roles), so callers can render it directly
+ * without printing a stray line. Mirrors canonicalRoleLabel().
+ */
+export const canonicalRoleDescription = (name: string): string => CANONICAL_ROLE_DESCRIPTIONS[name] ?? ''
+
 /** One permission entry as returned by the catalog browser endpoint. */
 export type PermissionCatalogEntry = {
   name: string

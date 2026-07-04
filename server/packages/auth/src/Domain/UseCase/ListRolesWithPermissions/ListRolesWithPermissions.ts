@@ -5,6 +5,7 @@ import { RoleRepositoryInterface } from '../../Role/RoleRepositoryInterface'
 import { PermissionRepositoryInterface } from '../../Permission/PermissionRepositoryInterface'
 import {
   CANONICAL_ADMIN_ROLE_NAMES,
+  canonicalAdminRoleDescription,
   canonicalAdminRoleLabel,
   canonicalAdminRoleOrder,
   isCanonicalAdminRole,
@@ -56,6 +57,14 @@ export class ListRolesWithPermissions implements UseCaseInterface<RolesWithPermi
       }
       const permissions = await role.permissions
       const isBuiltIn = enumRoleNames.includes(role.name)
+      // Effective description: a role's OWN DB description (set for custom roles)
+      // WINS; when it's null/empty (the built-in four today), fall back to the
+      // canonical default so every canonical role shows a meaningful description.
+      const ownDescription = role.description?.trim()
+      const effectiveDescription =
+        ownDescription !== undefined && ownDescription.length > 0
+          ? role.description
+          : canonicalAdminRoleDescription(role.name)
       roles.push({
         uuid: role.uuid,
         name: role.name,
@@ -63,7 +72,7 @@ export class ListRolesWithPermissions implements UseCaseInterface<RolesWithPermi
         version: role.version,
         isBuiltIn,
         isCustom: !isBuiltIn,
-        description: role.description ?? null,
+        description: effectiveDescription ?? null,
         permissionNames: permissions.map((permission) => permission.name).sort((a, b) => a.localeCompare(b)),
       })
     }

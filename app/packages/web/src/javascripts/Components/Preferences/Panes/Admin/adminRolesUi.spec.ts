@@ -1,6 +1,7 @@
 import {
   AdminRole,
   canonicalRoleLabel,
+  canonicalRoleDescription,
   conferrableRoleNames,
   filterPermissionNames,
   groupPermissionsByCategory,
@@ -100,6 +101,26 @@ describe('adminRolesUi', () => {
 
     it('falls back to the raw name for anything else (e.g. legacy roles)', () => {
       expect(canonicalRoleLabel('PLUS_USER')).toBe('PLUS_USER')
+    })
+  })
+
+  describe('canonicalRoleDescription', () => {
+    it('returns a non-empty description for each of the four canonical roles', () => {
+      for (const name of ['INTERNAL_TEAM_USER', 'PRO_USER', 'CORE_USER', 'VAULTS_USER']) {
+        expect(canonicalRoleDescription(name).length).toBeGreaterThan(0)
+      }
+    })
+
+    it('describes each role accurately to what it grants', () => {
+      expect(canonicalRoleDescription('INTERNAL_TEAM_USER')).toMatch(/administrative/i)
+      expect(canonicalRoleDescription('PRO_USER')).toMatch(/every end-user feature/i)
+      expect(canonicalRoleDescription('CORE_USER')).toMatch(/standard account/i)
+      expect(canonicalRoleDescription('VAULTS_USER')).toMatch(/collaboration/i)
+    })
+
+    it('returns an empty string for anything else (e.g. legacy/unknown roles)', () => {
+      expect(canonicalRoleDescription('PLUS_USER')).toBe('')
+      expect(canonicalRoleDescription('SUPPORT_AGENT')).toBe('')
     })
   })
 

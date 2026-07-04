@@ -22,23 +22,56 @@ import { RoleName } from '@standardnotes/domain-core'
 export interface CanonicalRoleDefinition {
   name: string
   label: string
+  /**
+   * A concise, friendly one-liner describing what this role actually grants.
+   * Grounded in the real entitlements: the RoleName power hierarchy
+   * (hasMoreOrEqualPowerTo) and the seeded role_permissions —
+   *   - InternalTeamUser outranks every role (admin / full server control)
+   *   - ProUser >= Core/Plus/Pro (every paid end-user feature + editors)
+   *   - VaultsUser is a Core sibling with the shared-vault / collaboration grant
+   *   - CoreUser is the baseline account (sync + core note-taking)
+   * Used as the DEFAULT description for the built-in roles, whose DB
+   * `description` column is null; a custom role's own DB description wins.
+   */
+  description: string
 }
 
 export const CANONICAL_ADMIN_ROLES: CanonicalRoleDefinition[] = [
-  { name: RoleName.NAMES.InternalTeamUser, label: 'Admin user' },
-  { name: RoleName.NAMES.ProUser, label: 'Full user' },
-  { name: RoleName.NAMES.CoreUser, label: 'Core user' },
-  { name: RoleName.NAMES.VaultsUser, label: 'Vaults user' },
+  {
+    name: RoleName.NAMES.InternalTeamUser,
+    label: 'Admin user',
+    description:
+      'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
+  },
+  {
+    name: RoleName.NAMES.ProUser,
+    label: 'Full user',
+    description:
+      'Every end-user feature unlocked — notes, files, vaults, and the premium editors, at the highest tier.',
+  },
+  {
+    name: RoleName.NAMES.CoreUser,
+    label: 'Core user',
+    description: 'A standard account — core note-taking and sync with baseline limits.',
+  },
+  {
+    name: RoleName.NAMES.VaultsUser,
+    label: 'Vaults user',
+    description: 'Collaboration-focused — shared vaults and team features on top of core note-taking.',
+  },
 ]
 
 export const CANONICAL_ADMIN_ROLE_NAMES: string[] = CANONICAL_ADMIN_ROLES.map((role) => role.name)
 
 const orderByName = new Map<string, number>(CANONICAL_ADMIN_ROLES.map((role, index) => [role.name, index]))
 const labelByName = new Map<string, string>(CANONICAL_ADMIN_ROLES.map((role) => [role.name, role.label]))
+const descriptionByName = new Map<string, string>(CANONICAL_ADMIN_ROLES.map((role) => [role.name, role.description]))
 
 export const isCanonicalAdminRole = (name: string): boolean => orderByName.has(name)
 
 export const canonicalAdminRoleLabel = (name: string): string | null => labelByName.get(name) ?? null
+
+export const canonicalAdminRoleDescription = (name: string): string | null => descriptionByName.get(name) ?? null
 
 export const canonicalAdminRoleOrder = (name: string): number =>
   orderByName.has(name) ? (orderByName.get(name) as number) : Number.MAX_SAFE_INTEGER

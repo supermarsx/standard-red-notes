@@ -14,8 +14,8 @@ describe('ListRolesWithPermissions', () => {
   let permissionRepository: PermissionRepositoryInterface
 
   const permission = (name: string): Permission => ({ name }) as Permission
-  const role = (name: string, version = 1): Role =>
-    ({ uuid: `${name}-uuid`, name, version, description: null, permissions: Promise.resolve([]) }) as unknown as Role
+  const role = (name: string, version = 1, description: string | null = null): Role =>
+    ({ uuid: `${name}-uuid`, name, version, description, permissions: Promise.resolve([]) }) as unknown as Role
 
   const createUseCase = () => new ListRolesWithPermissions(roleRepository, permissionRepository)
 
@@ -59,5 +59,43 @@ describe('ListRolesWithPermissions', () => {
       RoleName.NAMES.CoreUser,
       RoleName.NAMES.VaultsUser,
     ])
+  })
+
+  it('gives each canonical role a non-empty description (canonical default when DB is null)', async () => {
+    const result = await createUseCase().execute()
+
+    const { roles } = result.getValue()
+
+    // The built-in four seed a null DB description, so each must fall back to a
+    // non-empty canonical default.
+    expect(roles).toHaveLength(4)
+    for (const r of roles) {
+      expect(typeof r.description).toBe('string')
+      expect((r.description as string).length).toBeGreaterThan(0)
+    }
+
+    const byName = new Map(roles.map((r) => [r.name, r.description]))
+    expect(byName.get(RoleName.NAMES.InternalTeamUser)).toMatch(/administrative/i)
+    expect(byName.get(RoleName.NAMES.CoreUser)).toMatch(/standard account/i)
+  })
+
+  it("lets a role's own DB description win over the canonical default", async () => {
+    roleRepository.findAll = jest
+      .fn()
+      .mockResolvedValue([role(RoleName.NAMES.CoreUser, 1, 'A bespoke description for this deployment.')])
+
+    const result = await createUseCase().execute()
+
+    const core = result.getValue().roles.find((r) => r.name === RoleName.NAMES.CoreUser)
+    expect(core?.description).toBe('A bespoke description for this deployment.')
+  })
+
+  it('falls back to the canonical default when the DB description is blank whitespace', async () => {
+    roleRepository.findAll = jest.fn().mockResolvedValue([role(RoleName.NAMES.CoreUser, 1, '   ')])
+
+    const result = await createUseCase().execute()
+
+    const core = result.getValue().roles.find((r) => r.name === RoleName.NAMES.CoreUser)
+    expect(core?.description).toMatch(/standard account/i)
   })
 })
