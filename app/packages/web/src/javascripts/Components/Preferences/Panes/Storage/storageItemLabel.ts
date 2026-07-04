@@ -14,6 +14,7 @@ import {
   DecryptedItemInterface,
   IconType,
   ItemInterface,
+  isContentTypeExportable,
   isFile,
   isNote,
   isTag,
@@ -106,6 +107,17 @@ export function storageItemIconType(contentType: string | undefined): IconType {
  */
 export function isOpenableStorageItem(contentType: string | undefined): boolean {
   return contentType === ContentType.TYPES.Note || contentType === ContentType.TYPES.File
+}
+
+/**
+ * Whether a largest-items row may be EXPORTED. Unlike "openable" (Note/File only), a row is
+ * exportable for EVERY content type EXCEPT an items key or user preferences — a decrypted items
+ * key is key-material leak and user preferences are private noise. This is the single shared
+ * exportability rule (`isContentTypeExportable`), so a non-openable item (tag, component, theme,
+ * smart view, …) is now exportable while items key / user preferences stay non-exportable.
+ */
+export function isExportableStorageItem(contentType: string | undefined): boolean {
+  return isContentTypeExportable(contentType)
 }
 
 /**

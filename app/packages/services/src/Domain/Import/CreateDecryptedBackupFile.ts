@@ -1,11 +1,12 @@
 import { ProtectionsClientInterface } from './../Protection/ProtectionClientInterface'
-import { ContentType, Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import {
   BackupFile,
   CreateDecryptedBackupFileContextPayload,
   CreateEncryptedBackupFileContextPayload,
   isDecryptedPayload,
   isEncryptedPayload,
+  isItemExportable,
   ProtocolVersionLatest,
 } from '@standardnotes/models'
 import { PayloadManagerInterface } from '../Payloads/PayloadManagerInterface'
@@ -30,8 +31,15 @@ export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {
      * decrypted backup contains real note text, not the body-less in-memory projection. Pass-
      * through when lazy-decrypt is off.
      */
+    /**
+     * A DECRYPTED backup is human-consumable / plaintext, so exclude anything that must never
+     * ship in the clear: the items key (a plaintext key is KEY-MATERIAL LEAK — already excluded
+     * previously) AND user preferences (private settings noise). `isItemExportable` is the single
+     * shared rule; the ENCRYPTED backup path (CreateEncryptedBackupFile) does NOT apply it, so a
+     * full-account encrypted backup stays complete and restorable.
+     */
     const { payloads, excludedUuids } = await rehydrateLiteBackupPayloads(
-      this.payloads.nonDeletedItems.filter((item) => item.content_type !== ContentType.TYPES.ItemsKey),
+      this.payloads.nonDeletedItems.filter((item) => isItemExportable(item)),
       this.sync,
     )
 

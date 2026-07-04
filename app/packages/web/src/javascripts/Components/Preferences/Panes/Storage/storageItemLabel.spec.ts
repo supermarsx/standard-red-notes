@@ -1,5 +1,6 @@
 import { ContentType } from '@standardnotes/snjs'
 import {
+  isExportableStorageItem,
   isOpenableStorageItem,
   isRiskySystemStorageItem,
   resolveStorageItemLabel,
@@ -93,6 +94,31 @@ describe('isOpenableStorageItem', () => {
     expect(isOpenableStorageItem(ContentType.TYPES.Theme)).toBe(false)
     expect(isOpenableStorageItem('SN|Nonexistent')).toBe(false)
     expect(isOpenableStorageItem(undefined)).toBe(false)
+  })
+})
+
+describe('isExportableStorageItem', () => {
+  it('now shows Export for previously-non-openable items (tags, smart views, themes, components)', () => {
+    // These are NOT openable, but they ARE exportable under the unified rule (Request 2).
+    expect(isOpenableStorageItem(ContentType.TYPES.Tag)).toBe(false)
+    expect(isExportableStorageItem(ContentType.TYPES.Tag)).toBe(true)
+    expect(isExportableStorageItem(ContentType.TYPES.SmartView)).toBe(true)
+    expect(isExportableStorageItem(ContentType.TYPES.Theme)).toBe(true)
+    expect(isExportableStorageItem(ContentType.TYPES.Component)).toBe(true)
+  })
+
+  it('still shows Export for notes and files', () => {
+    expect(isExportableStorageItem(ContentType.TYPES.Note)).toBe(true)
+    expect(isExportableStorageItem(ContentType.TYPES.File)).toBe(true)
+  })
+
+  it('does NOT show Export for an items key or user preferences (Request 1)', () => {
+    expect(isExportableStorageItem(ContentType.TYPES.ItemsKey)).toBe(false)
+    expect(isExportableStorageItem(ContentType.TYPES.UserPrefs)).toBe(false)
+  })
+
+  it('does not show Export for an absent content type', () => {
+    expect(isExportableStorageItem(undefined)).toBe(false)
   })
 })
 

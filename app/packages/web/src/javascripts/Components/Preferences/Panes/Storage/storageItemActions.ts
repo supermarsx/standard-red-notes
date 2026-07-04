@@ -15,7 +15,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { createNoteExport } from '@/Utils/NoteExportUtils'
 import { confirmDialog } from '@standardnotes/ui-services'
-import { FileItem, isFile, isNote, SNNote } from '@standardnotes/snjs'
+import { DecryptedItemInterface, FileItem, isDecryptedItem, isFile, isItemExportable, isNote, SNNote } from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
@@ -85,17 +85,39 @@ function formatBytesForExport(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`
 }
 
-/** Resolve largest-list rows to live note/file items, dropping anything no longer present. */
+/**
+ * A generic exportable item (anything that isn't a Note or File but is still allowed to be
+ * exported — tags, components, themes, smart views, etc.). We can't render these in a "native"
+ * editor format, so they're exported as their DECRYPTED content in JSON.
+ */
+function serializeItemToJsonBlob(item: DecryptedItemInterface): Blob {
+  const serialized = {
+    uuid: item.uuid,
+    content_type: item.content_type,
+    created_at: item.created_at,
+    updated_at: item.serverUpdatedAt,
+    content: item.content,
+  }
+  return new Blob([JSON.stringify(serialized, null, 2)], { type: 'application/json' })
+}
+
+/**
+ * Resolve largest-list rows to live items, dropping anything no longer present OR not permitted
+ * in a decrypted export (items key / user preferences — `isItemExportable`). Notes and files get
+ * their native-format export; every other exportable decrypted item is bucketed into `others`
+ * for a JSON export so the Storage pane can offer Export for non-openable items too.
+ */
 function resolveExportableItems(
   application: WebApplication,
   rows: StorageLargestItem[],
-): { notes: SNNote[]; files: FileItem[]; totalBytes: number } {
+): { notes: SNNote[]; files: FileItem[]; others: DecryptedItemInterface[]; totalBytes: number } {
   const notes: SNNote[] = []
   const files: FileItem[] = []
+  const others: DecryptedItemInterface[] = []
   let totalBytes = 0
   for (const row of rows) {
     const item = application.items.findItem(row.uuid)
-    if (!item) {
+    if (!item || !isItemExportable(item)) {
       continue
     }
     if (isNote(item)) {
@@ -104,9 +126,12 @@ function resolveExportableItems(
     } else if (isFile(item)) {
       files.push(item)
       totalBytes += row.bytes
+    } else if (isDecryptedItem(item)) {
+      others.push(item)
+      totalBytes += row.bytes
     }
   }
-  return { notes, files, totalBytes }
+  return { notes, files, others, totalBytes }
 }
 
 /**
@@ -120,9 +145,10 @@ function resolveExportableItems(
  * downloaded).
  */
 export async function exportLargestItems(application: WebApplication, rows: StorageLargestItem[]): Promise<number> {
-  const { notes, files, totalBytes } = resolveExportableItems(application, rows)
-  if (notes.length === 0 && files.length === 0) {
-    addToast({ type: ToastType.Regular, message: 'Selected items can’t be exported (only notes and files).' })
+  const { notes, files, others, totalBytes } = resolveExportableItems(application, rows)
+  if (notes.length === 0 && files.length === 0 && others.length === 0) {
+    // Everything selected was unavailable or non-exportable (an items key / user preferences).
+    addToast({ type: ToastType.Regular, message: 'Selected items can’t be exported.' })
     return 0
   }
 
@@ -161,6 +187,15 @@ export async function exportLargestItems(application: WebApplication, rows: Stor
       if (blob) {
         data.push({ name: sanitizeFileName(file.name) || file.uuid, content: blob })
       }
+    }
+
+    // Other exportable items (tags, components, themes, smart views, …): their decrypted
+    // content as JSON. Named by title when present, else the uuid; the uuid keeps entries unique.
+    for (const item of others) {
+      const rawTitle = (item as { title?: unknown }).title
+      const baseName = typeof rawTitle === 'string' && rawTitle.trim().length > 0 ? rawTitle.trim() : item.uuid
+      const name = `${sanitizeFileName(baseName) || item.uuid}-${item.uuid}.json`
+      data.push({ name, content: serializeItemToJsonBlob(item) })
     }
 
     if (data.length === 0) {

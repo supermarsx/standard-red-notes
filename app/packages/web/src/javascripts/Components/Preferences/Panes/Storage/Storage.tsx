@@ -23,6 +23,7 @@ import { BYTES_PER_GB, BYTES_PER_MB, resolveStorageCapState, STORAGE_CAP_UNLIMIT
 import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
 import {
+  isExportableStorageItem,
   isOpenableStorageItem,
   isRiskySystemStorageItem,
   resolveStorageItemLabel,
@@ -595,21 +596,23 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                       </span>
                     </label>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      {/* Only Notes and Files can be opened in a view / exported in a
-                          native format; system items (keys, prefs, tags, …) offer Delete only. */}
+                      {/* Open: only Notes and Files can be opened in a view. */}
                       {isOpenableStorageItem(item.contentType) && (
-                        <>
-                          <StyledTooltip label="Open">
-                            <Button small disabled={busy} onClick={() => handleOpen(item.uuid)} aria-label="Open">
-                              <Icon type="open-in" size="small" />
-                            </Button>
-                          </StyledTooltip>
-                          <StyledTooltip label="Export">
-                            <Button small disabled={busy} onClick={() => handleExport([item])} aria-label="Export">
-                              <Icon type="download" size="small" />
-                            </Button>
-                          </StyledTooltip>
-                        </>
+                        <StyledTooltip label="Open">
+                          <Button small disabled={busy} onClick={() => handleOpen(item.uuid)} aria-label="Open">
+                            <Icon type="open-in" size="small" />
+                          </Button>
+                        </StyledTooltip>
+                      )}
+                      {/* Export: offered for EVERY item except an items key / user preferences
+                          (a decrypted items key is key-material leak; prefs are private noise) —
+                          so non-openable items (tags, components, themes, …) are exportable too. */}
+                      {isExportableStorageItem(item.contentType) && (
+                        <StyledTooltip label="Export">
+                          <Button small disabled={busy} onClick={() => handleExport([item])} aria-label="Export">
+                            <Icon type="download" size="small" />
+                          </Button>
+                        </StyledTooltip>
                       )}
                       <StyledTooltip label="Delete">
                         <Button

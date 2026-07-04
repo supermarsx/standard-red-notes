@@ -1,6 +1,6 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
-import { NoteType, PrefKey, SNNote, PrefDefaults, FileItem, PrefValue } from '@standardnotes/snjs'
+import { NoteType, PrefKey, SNNote, PrefDefaults, FileItem, PrefValue, isItemExportable } from '@standardnotes/snjs'
 import { WebApplicationInterface } from '@standardnotes/ui-services'
 import { type ZipDirectoryEntry } from '@zip.js/zip.js'
 // @ts-ignore inline webpack loader imports
@@ -221,6 +221,9 @@ export const createNoteExport = async (
     }
   | undefined
 > => {
+  // A note export is human-consumable / decrypted output, so never emit an items key or user
+  // preferences even if a caller passes one in (shared rule with the bulk + storage exports).
+  notes = notes.filter((note) => isItemExportable(note))
   if (notes.length === 0) {
     return
   }

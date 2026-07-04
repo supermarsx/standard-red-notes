@@ -1,6 +1,6 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
-import { FileItem, NoteType, PrefDefaults, PrefKey } from '@standardnotes/snjs'
+import { FileItem, NoteType, PrefDefaults, PrefKey, isItemExportable } from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
 import { addToast, ToastType } from '@standardnotes/toast'
 import { c } from 'ttag'
@@ -42,7 +42,9 @@ async function noteToMarkdown(application: WebApplication, note: { noteType?: st
  * notes, nothing downloaded).
  */
 export async function exportAllNotesAsMarkdown(application: WebApplication): Promise<number> {
-  const notes = application.items.getDisplayableNotes()
+  // Displayable notes only, and never an items key / user preferences: this is decrypted,
+  // human-consumable output (shared exportability rule with the other export paths).
+  const notes = application.items.getDisplayableNotes().filter((note) => isItemExportable(note))
   if (notes.length === 0) {
     return 0
   }
