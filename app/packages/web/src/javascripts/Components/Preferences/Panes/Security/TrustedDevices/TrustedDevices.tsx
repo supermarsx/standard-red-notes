@@ -76,6 +76,16 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
   }, [loadTrustedDevices])
 
   const handleTrustThisDevice = useCallback(async () => {
+    // Trusting a device weakens the second factor for this browser, so require
+    // the user to re-verify their account password first. Reuses the existing
+    // validated account-password challenge — it resolves only on a correct
+    // password and returns null on cancel/incorrect, at which point we abort
+    // without trusting. The password is never logged or persisted.
+    const password = await application.challenges.promptForAccountPassword()
+    if (!password) {
+      return
+    }
+
     setTrusting(true)
     try {
       const response = await application.legacyApi.createTrustedDevice(deriveDeviceLabel())

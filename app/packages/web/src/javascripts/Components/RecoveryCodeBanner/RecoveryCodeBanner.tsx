@@ -38,8 +38,8 @@ const RecoveryCodeBanner = ({ application }: { application: WebApplication }) =>
       </p>
       {errorMessage && <div>{errorMessage}</div>}
       {!recoveryCode && (
-        <Button primary small className="col-start-1 col-end-3 mt-3 justify-self-start uppercase" onClick={onClickShow}>
-          Show Recovery Code
+        <Button primary small className="col-start-1 col-end-3 mt-3 justify-self-start" onClick={onClickShow}>
+          Show recovery code
         </Button>
       )}
       {recoveryCode && (
