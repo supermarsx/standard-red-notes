@@ -48,6 +48,12 @@ const RESTART_BACKOFF_MS = 1_000
 
 type PendingResolver = (response: SearchIndexWorkerResponse) => void
 
+/** Live "current job" heartbeat surfaced to the settings UI while a rebuild runs. */
+export type SearchIndexProgress = { processed: number; total: number }
+
+/** Subscriber for progress heartbeats; see setProgressListener. */
+export type SearchIndexProgressListener = (progress: SearchIndexProgress) => void
+
 /**
  * Omit that distributes over a union, so each member of the discriminated
  * SearchIndexWorkerRequest union keeps its own shape minus `requestId` (a plain
@@ -66,6 +72,14 @@ export class ThreadedSearchIndex {
   private readonly options: SearchIndexOptions
   private destroyed = false
   private workerRestarts = 0
+  /**
+   * True after an explicit, user-initiated killWorker(). Distinct from a crash/hang
+   * teardown: while set, the worker is deliberately absent and must NOT auto-restart
+   * (search degrades to the already-built local index / substring fallback) until
+   * restartWorker() clears it. Distinct from `destroyed`, which is permanent.
+   */
+  private killed = false
+  private progressListener: SearchIndexProgressListener | null = null
 
   constructor(options: SearchIndexOptions = {}) {
     this.options = options
@@ -78,6 +92,20 @@ export class ThreadedSearchIndex {
     return this.worker !== null
   }
 
+  /** True after an explicit killWorker() and before restartWorker() re-spawns it. */
+  get isKilled(): boolean {
+    return this.killed
+  }
+
+  /**
+   * Subscribe to live rebuild progress ("current job") heartbeats. Pass null to
+   * unsubscribe. Survives worker restarts (the listener lives on this client, not on
+   * the Worker), so callers set it once.
+   */
+  setProgressListener(listener: SearchIndexProgressListener | null): void {
+    this.progressListener = listener
+  }
+
   get isBuilt(): boolean {
     return this.local.isBuilt
   }
@@ -87,12 +115,18 @@ export class ThreadedSearchIndex {
   }
 
   private tryStartWorker(): void {
-    if (typeof Worker === 'undefined' || this.destroyed) {
+    if (typeof Worker === 'undefined' || this.destroyed || this.killed) {
       return
     }
     try {
       this.worker = new SearchIndexWorker()
       this.worker.onmessage = (event: MessageEvent<SearchIndexWorkerResponse>) => {
+        // Progress heartbeats stream under the rebuild's requestId but must NOT settle
+        // (or delete) the pending request — only the final 'rebuilt' does that.
+        if (event.data.type === 'progress') {
+          this.progressListener?.({ processed: event.data.processed, total: event.data.total })
+          return
+        }
         const resolver = this.pending.get(event.data.requestId)
         if (resolver) {
           this.pending.delete(event.data.requestId)
@@ -111,6 +145,10 @@ export class ThreadedSearchIndex {
 
   private teardownWorker(): void {
     if (this.worker) {
+      // Drop the handlers before terminating so a late-queued message/error can't fire
+      // into a torn-down client (belt-and-braces; terminate() already stops delivery).
+      this.worker.onmessage = null
+      this.worker.onerror = null
       this.worker.terminate()
       this.worker = null
     }
@@ -128,7 +166,7 @@ export class ThreadedSearchIndex {
   }
 
   private scheduleRestart(): void {
-    if (this.destroyed || typeof Worker === 'undefined') {
+    if (this.destroyed || this.killed || typeof Worker === 'undefined') {
       return
     }
     if (this.workerRestarts >= MAX_WORKER_RESTARTS) {
@@ -229,6 +267,47 @@ export class ThreadedSearchIndex {
 
   refresh(): void {
     this.flush()
+  }
+
+  /**
+   * User-initiated HARD STOP of the worker thread. Terminates the Web Worker,
+   * settles every in-flight send (so nothing hangs), clears its handlers + our
+   * reference, and — unlike a crash teardown — does NOT auto-restart. Search keeps
+   * working against whatever the local index already holds (and the substring
+   * fallback); the index can still be rebuilt on the main thread. Reversible via
+   * restartWorker(). Idempotent.
+   */
+  killWorker(): void {
+    this.killed = true
+    if (this.worker) {
+      this.worker.onmessage = null
+      this.worker.onerror = null
+      this.worker.terminate()
+      this.worker = null
+    }
+    // Settle in-flight sends so no rebuild()/updateMany() is left awaiting forever.
+    for (const [requestId, resolver] of this.pending) {
+      resolver({ type: 'error', requestId, message: 'search index worker killed' })
+    }
+    this.pending.clear()
+  }
+
+  /**
+   * Re-spawn the worker after a killWorker() (a no-op if it is already live or the
+   * client was destroyed). Clears the killed flag, resets the restart budget so a
+   * FUTURE crash can still self-heal, and re-configures the fresh worker. The
+   * progress listener persists on this client, so live progress resumes cleanly with
+   * no leak and no double-worker.
+   */
+  restartWorker(): void {
+    if (this.destroyed) {
+      return
+    }
+    this.killed = false
+    this.workerRestarts = 0
+    if (!this.worker) {
+      this.tryStartWorker()
+    }
   }
 
   /** Release the worker. Call when the owning controller is torn down. */

@@ -9,7 +9,9 @@ import PreferencesPane from '@/Components/Preferences/PreferencesComponents/Pref
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
+import Icon from '@/Components/Icon/Icon'
 import Switch from '@/Components/Switch/Switch'
+import { IconType } from '@standardnotes/snjs'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import usePreference from '@/Hooks/usePreference'
@@ -37,7 +39,9 @@ const SCOPE_ITEMS: DropdownItem[] = [
   { label: 'Exclude notes with selected tags (blacklist)', value: 'exclude' },
 ]
 
-const statusLabel = (status: 'disabled' | 'idle' | 'indexing'): string => {
+type RunnerStatus = 'disabled' | 'idle' | 'indexing' | 'stopped'
+
+const statusLabel = (status: RunnerStatus): string => {
   switch (status) {
     case 'disabled':
       return 'Disabled'
@@ -45,6 +49,22 @@ const statusLabel = (status: 'disabled' | 'idle' | 'indexing'): string => {
       return 'Indexing…'
     case 'idle':
       return 'Idle'
+    case 'stopped':
+      return 'Worker stopped'
+  }
+}
+
+/** Icon + tint that visually mirrors the current runner status. */
+const statusIcon = (status: RunnerStatus): { type: IconType; className: string } => {
+  switch (status) {
+    case 'indexing':
+      return { type: 'sync', className: 'animate-spin text-info' }
+    case 'idle':
+      return { type: 'check-circle', className: 'text-success' }
+    case 'stopped':
+      return { type: 'close', className: 'text-danger' }
+    case 'disabled':
+      return { type: 'eye-off', className: 'text-passive-1' }
   }
 }
 
@@ -98,7 +118,7 @@ const NumberPref: FunctionComponent<{
  */
 const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
   const runner = application.searchIndexRunner
-  const { settings, status, isRunning, isIndexing } = runner
+  const { settings, status, isRunning, isIndexing, isWorkerKilled, currentJob } = runner
   const indexState = application.itemListController.searchIndexState
 
   const tags = application.items.getDisplayableTags()
@@ -117,6 +137,16 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
       runner.purgeIndex()
     }
   }, [runner])
+  const handleKillWorker = useCallback(() => {
+    if (
+      window.confirm(
+        'Stop the search indexer worker thread? Indexing halts and search falls back to what is already indexed (and substring search). You can restart the worker at any time.',
+      )
+    ) {
+      runner.killWorker()
+    }
+  }, [runner])
+  const handleRestartWorker = useCallback(() => runner.restartWorker(), [runner])
 
   const handleSchedulerModeChange = useCallback(
     (value: string) => runner.setSchedulerMode(value as SearchIndexSchedulerMode),
@@ -175,13 +205,26 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
 
       <PreferencesGroup>
         <PreferencesSegment>
-          <Subtitle>Status</Subtitle>
-          <Text className="mt-1">
+          <div className="flex items-center gap-2">
+            <Icon type="search" className="text-info" />
+            <Subtitle>Status</Subtitle>
+          </div>
+
+          <Text className="mt-1 flex items-center gap-1.5">
+            <Icon type={statusIcon(status).type} size="small" className={statusIcon(status).className} />
             State: <span className="font-bold">{statusLabel(status)}</span>
             {isRunning ? ' · running' : ' · stopped'}
-            {indexState.isThreaded ? ' · worker thread' : ' · main thread (fallback)'}
+            {isWorkerKilled ? (
+              ' · worker killed'
+            ) : indexState.isThreaded ? (
+              ' · worker thread'
+            ) : (
+              ' · main thread (fallback)'
+            )}
           </Text>
-          <Text className="mt-1">
+
+          <Text className="mt-1 flex items-center gap-1.5">
+            <Icon type="notes" size="small" className="text-passive-1" />
             Index:{' '}
             {indexState.isBuilt ? (
               <span className="font-bold">{indexState.size} notes indexed</span>
@@ -191,16 +234,73 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
             {isIndexing ? ' · rebuilding…' : ''}
           </Text>
 
+          {/* Live "current job": what the indexer is chewing through right now. */}
+          {isIndexing && currentJob && (
+            <Text className="mt-1 flex items-center gap-1.5">
+              <Icon type="sync" size="small" className="animate-spin text-info" />
+              Current job:{' '}
+              <span className="font-bold">
+                indexing {currentJob.processed.toLocaleString()} / {currentJob.total.toLocaleString()} notes
+              </span>
+              {currentJob.total > 0 ? ` · ${Math.round((currentJob.processed / currentJob.total) * 100)}%` : ''}
+            </Text>
+          )}
+
+          {isWorkerKilled && (
+            <Text className="mt-1 flex items-center gap-1.5 text-danger">
+              <Icon type="warning" size="small" className="text-danger" />
+              The indexer worker thread is stopped. Search uses the existing index / substring fallback until you restart
+              it.
+            </Text>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button label="Start" onClick={handleStart} disabled={!settings.enabled || isRunning} />
-            <Button label="Stop" onClick={handleStop} disabled={!isRunning} />
-            <Button
-              label={isIndexing ? 'Rebuilding…' : 'Rebuild now'}
-              primary
-              onClick={handleRebuild}
-              disabled={!settings.enabled || isIndexing}
-            />
-            <Button label="Purge index" colorStyle="danger" onClick={handlePurge} disabled={isIndexing} />
+            <Button onClick={handleStart} disabled={!settings.enabled || isRunning || isWorkerKilled}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="sync" size="small" />
+                Start
+              </span>
+            </Button>
+            <Button onClick={handleStop} disabled={!isRunning}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="close" size="small" />
+                Stop
+              </span>
+            </Button>
+            <Button primary onClick={handleRebuild} disabled={!settings.enabled || isIndexing || isWorkerKilled}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="sync" size="small" className={isIndexing ? 'animate-spin' : ''} />
+                {isIndexing ? 'Rebuilding…' : 'Rebuild now'}
+              </span>
+            </Button>
+            <Button colorStyle="danger" onClick={handlePurge} disabled={isIndexing}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="trash" size="small" />
+                Purge index
+              </span>
+            </Button>
+          </div>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Worker thread</Subtitle>
+          <Text>
+            The heavy indexing runs in a background Web Worker so it never freezes the UI. Kill it to hard-stop indexing
+            (search keeps working against whatever is already indexed); restart it to resume and rebuild.
+          </Text>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button colorStyle="danger" onClick={handleKillWorker} disabled={isWorkerKilled}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="close" size="small" />
+                Kill worker
+              </span>
+            </Button>
+            <Button primary onClick={handleRestartWorker} disabled={!isWorkerKilled}>
+              <span className="flex items-center gap-1.5">
+                <Icon type="restore" size="small" />
+                Restart worker
+              </span>
+            </Button>
           </div>
         </PreferencesSegment>
       </PreferencesGroup>

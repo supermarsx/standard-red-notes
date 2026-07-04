@@ -5,11 +5,19 @@ type StoredValue = Partial<SearchIndexSettings> | undefined
 
 const makeApplication = () => {
   let stored: StoredValue
+  // Capture the progress subscriber the runner registers so tests can simulate a
+  // worker progress heartbeat by invoking it directly.
+  let progressListener: ((progress: { processed: number; total: number }) => void) | null = null
   const itemListController = {
     rebuildSearchIndex: jest.fn().mockResolvedValue(undefined),
     flushSearchIndex: jest.fn(),
     setSearchIndexScope: jest.fn(),
-    searchIndexState: { isBuilt: false, size: 0, isThreaded: false },
+    setSearchIndexProgressListener: jest.fn((listener: typeof progressListener) => {
+      progressListener = listener
+    }),
+    killSearchIndexWorker: jest.fn(),
+    restartSearchIndexWorker: jest.fn(),
+    searchIndexState: { isBuilt: false, size: 0, isThreaded: false, isKilled: false },
   }
   const application = {
     getValue: jest.fn(() => stored),
@@ -19,7 +27,12 @@ const makeApplication = () => {
     setPreference: jest.fn().mockResolvedValue(undefined),
     itemListController,
   }
-  return { application, itemListController, getStored: () => stored }
+  return {
+    application,
+    itemListController,
+    getStored: () => stored,
+    emitProgress: (processed: number, total: number) => progressListener?.({ processed, total }),
+  }
 }
 
 describe('SearchIndexRunner', () => {
@@ -109,5 +122,69 @@ describe('SearchIndexRunner', () => {
     expect(getStored()?.scope).toEqual({ mode: 'exclude', tagIds: ['secret'] })
     expect(itemListController.setSearchIndexScope).toHaveBeenCalledWith({ mode: 'exclude', tagIds: ['secret'] })
     expect(itemListController.rebuildSearchIndex).toHaveBeenCalled()
+  })
+
+  it('killWorker terminates the worker via the controller, stops the runner, and reports stopped', () => {
+    jest.useFakeTimers()
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval')
+    const { application, itemListController } = makeApplication()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = new SearchIndexRunner(application as any)
+    runner.setSchedulerMode('interval')
+    runner.setIntervalMinutes(1)
+
+    runner.killWorker()
+
+    expect(itemListController.killSearchIndexWorker).toHaveBeenCalledTimes(1)
+    expect(runner.isWorkerKilled).toBe(true)
+    expect(runner.isRunning).toBe(false)
+    expect(runner.status).toBe('stopped')
+    expect(runner.currentJob).toBeNull()
+    // The scheduler was cleared so no fresh work is handed to the dead worker.
+    expect(clearIntervalSpy).toHaveBeenCalled()
+
+    clearIntervalSpy.mockRestore()
+    jest.useRealTimers()
+  })
+
+  it('restartWorker re-spawns the worker via the controller and resumes running', () => {
+    const { application, itemListController } = makeApplication()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = new SearchIndexRunner(application as any)
+
+    runner.killWorker()
+    expect(runner.isWorkerKilled).toBe(true)
+
+    runner.restartWorker()
+
+    expect(itemListController.restartSearchIndexWorker).toHaveBeenCalledTimes(1)
+    expect(runner.isWorkerKilled).toBe(false)
+    expect(runner.isRunning).toBe(true)
+    expect(runner.status).not.toBe('stopped')
+  })
+
+  it('surfaces the worker current-job progress heartbeat as observable currentJob', () => {
+    const { application, emitProgress } = makeApplication()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = new SearchIndexRunner(application as any)
+
+    expect(runner.currentJob).toBeNull()
+
+    emitProgress(200, 1000)
+    expect(runner.currentJob).toEqual({ processed: 200, total: 1000 })
+
+    emitProgress(1000, 1000)
+    expect(runner.currentJob).toEqual({ processed: 1000, total: 1000 })
+  })
+
+  it('clears the progress subscription on deinit', () => {
+    const { application, itemListController } = makeApplication()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = new SearchIndexRunner(application as any)
+    itemListController.setSearchIndexProgressListener.mockClear()
+
+    runner.deinit()
+
+    expect(itemListController.setSearchIndexProgressListener).toHaveBeenCalledWith(null)
   })
 })

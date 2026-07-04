@@ -30,6 +30,9 @@ jest.mock('./searchIndex.worker', () => {
           // Hang: accept the batch, never respond, never error.
           return
         }
+        // Emit a progress heartbeat BEFORE the terminal 'rebuilt' so tests can assert
+        // that progress is surfaced without prematurely settling the request.
+        respond({ type: 'progress', processed: 1, total: 2 })
         respond({ type: 'rebuilt', size: 0, snapshot: null })
         return
       }
@@ -38,7 +41,8 @@ jest.mock('./searchIndex.worker', () => {
     }
 
     terminate(): void {
-      /* no-op */
+      ;(globalThis as { __terminateCount?: number }).__terminateCount =
+        ((globalThis as { __terminateCount?: number }).__terminateCount ?? 0) + 1
     }
   }
 
@@ -51,6 +55,7 @@ describe('ThreadedSearchIndex hung-worker hardening', () => {
 
   beforeEach(() => {
     ;(globalThis as { __hangRebuild?: boolean }).__hangRebuild = false
+    ;(globalThis as { __terminateCount?: number }).__terminateCount = 0
     // typeof Worker !== 'undefined' gates the worker path; the actual constructor used
     // is the mocked module, not this stub.
     ;(global as { Worker?: unknown }).Worker = function () {} as unknown
@@ -115,6 +120,79 @@ describe('ThreadedSearchIndex hung-worker hardening', () => {
       expect(index.isBuilt).toBe(true)
       expect(index.size).toBe(1)
 
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('killWorker terminates the worker, clears its reference, and does NOT auto-restart', async () => {
+    jest.useFakeTimers()
+    try {
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      expect(index.isThreaded).toBe(true)
+      const terminatesBefore = (globalThis as { __terminateCount?: number }).__terminateCount ?? 0
+
+      index.killWorker()
+
+      expect(index.isKilled).toBe(true)
+      expect(index.isThreaded).toBe(false)
+      expect((globalThis as { __terminateCount?: number }).__terminateCount).toBe(terminatesBefore + 1)
+
+      // Give any (unwanted) restart backoff a chance to fire — it must NOT re-spawn.
+      await jest.advanceTimersByTimeAsync(10_000)
+      expect(index.isThreaded).toBe(false)
+
+      index.destroy()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('restartWorker re-spawns a single fresh worker after a kill (no leak / no double-worker)', async () => {
+    jest.useFakeTimers()
+    try {
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+      index.killWorker()
+      expect(index.isThreaded).toBe(false)
+
+      index.restartWorker()
+      await jest.advanceTimersByTimeAsync(1)
+
+      expect(index.isKilled).toBe(false)
+      expect(index.isThreaded).toBe(true)
+
+      // Idempotent: a second restart while already live must not spawn a second worker.
+      const terminatesBefore = (globalThis as { __terminateCount?: number }).__terminateCount ?? 0
+      index.restartWorker()
+      index.destroy()
+      // destroy() terminates exactly the one live worker (no orphaned second one).
+      expect((globalThis as { __terminateCount?: number }).__terminateCount).toBe(terminatesBefore + 1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('surfaces rebuild progress heartbeats without settling the rebuild request', async () => {
+    jest.useFakeTimers()
+    try {
+      const index = new ThreadedSearchIndex()
+      await jest.advanceTimersByTimeAsync(1)
+
+      const progress: Array<{ processed: number; total: number }> = []
+      index.setProgressListener((p) => progress.push(p))
+
+      const rebuildPromise = index.rebuild([
+        { uuid: 'a', title: 'A', text: 'one two' },
+        { uuid: 'b', title: 'B', text: 'three four' },
+      ])
+      await jest.advanceTimersByTimeAsync(1)
+      await rebuildPromise
+
+      // The progress heartbeat came through AND the rebuild still resolved normally.
+      expect(progress).toContainEqual({ processed: 1, total: 2 })
       index.destroy()
     } finally {
       jest.useRealTimers()

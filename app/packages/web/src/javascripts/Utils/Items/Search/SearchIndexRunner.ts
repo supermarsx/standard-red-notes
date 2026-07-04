@@ -44,6 +44,17 @@ export class SearchIndexRunner {
   isIndexing = false
   /** True once start() has been called and the runner is active. */
   isRunning = false
+  /**
+   * True after the user KILLED the worker thread (killWorker()) and before a
+   * restartWorker(). Distinct from stop(): the worker OS thread is terminated, not
+   * just the scheduler. Drives the "stopped" status + restart affordance in the UI.
+   */
+  isWorkerKilled = false
+  /**
+   * Live "current job" the indexer is working on: processed/total notes of the
+   * in-flight rebuild, or null when idle. Fed by the worker's progress heartbeats.
+   */
+  currentJob: { processed: number; total: number } | null = null
 
   private intervalHandle: ReturnType<typeof setInterval> | null = null
   private idleHandle: IdleHandle | null = null
@@ -56,10 +67,14 @@ export class SearchIndexRunner {
       status: observable,
       isIndexing: observable,
       isRunning: observable,
+      isWorkerKilled: observable,
+      currentJob: observable,
       setSettings: action,
       setStatus: action,
       setIsIndexing: action,
       setIsRunning: action,
+      setIsWorkerKilled: action,
+      setCurrentJob: action,
     })
 
     this.settings = this.readSettings()
@@ -68,6 +83,11 @@ export class SearchIndexRunner {
     // Push the persisted scope into the controller before any (re)build so the
     // very first index respects the configured whitelist/blacklist.
     this.syncScopeToController()
+
+    // Subscribe to the worker's live rebuild progress so the settings UI can show
+    // the "current job" (processed / total). Best-effort: the controller may not be
+    // constructed during very early launch (mirrors syncScopeToController).
+    this.subscribeToProgress()
 
     // Auto-start the scheduler on launch when the user left it enabled.
     if (this.settings.enabled) {
@@ -110,6 +130,26 @@ export class SearchIndexRunner {
 
   setIsRunning = (value: boolean): void => {
     this.isRunning = value
+  }
+
+  setIsWorkerKilled = (value: boolean): void => {
+    this.isWorkerKilled = value
+  }
+
+  setCurrentJob = (job: { processed: number; total: number } | null): void => {
+    this.currentJob = job
+  }
+
+  /** Wire the controller's worker-progress heartbeats into observable currentJob. */
+  private subscribeToProgress(): void {
+    try {
+      this.application.itemListController.setSearchIndexProgressListener((progress) => {
+        runInAction(() => this.setCurrentJob(progress))
+      })
+    } catch {
+      // Controller not ready yet; the runner is created on LocalDataLoaded (after the
+      // controller exists), so in practice this path is never taken.
+    }
   }
 
   // --- public controls -----------------------------------------------------
@@ -224,8 +264,46 @@ export class SearchIndexRunner {
     } finally {
       runInAction(() => {
         this.setIsIndexing(false)
-        this.setStatus(this.settings.enabled ? 'idle' : 'disabled')
+        this.setCurrentJob(null)
+        this.setStatus(this.workerKilledStatus() ?? (this.settings.enabled ? 'idle' : 'disabled'))
       })
+    }
+  }
+
+  /** 'stopped' iff the worker was killed by the user; otherwise null (caller decides). */
+  private workerKilledStatus(): SearchIndexRunnerStatus | null {
+    return this.isWorkerKilled ? 'stopped' : null
+  }
+
+  /**
+   * Hard-KILL the background index Web Worker thread (user action). Terminates the OS
+   * thread via the controller, stops the scheduler, and transitions to a clear
+   * "stopped" state. Search still works against the already-built index / substring
+   * fallback; the index can be rebuilt and the worker restarted via restartWorker().
+   */
+  killWorker(): void {
+    this.application.itemListController.killSearchIndexWorker()
+    this.setIsWorkerKilled(true)
+    // Stop scheduling rebuilds too — a killed worker shouldn't be handed fresh work.
+    this.clearScheduler()
+    this.setIsRunning(false)
+    this.setCurrentJob(null)
+    this.setStatus('stopped')
+  }
+
+  /**
+   * Restart the worker after killWorker(): re-spawn the thread (cleanly, no leak /
+   * double-worker) and, when the indexer is enabled, resume the runner + do a fresh
+   * rebuild so the index is warm again.
+   */
+  restartWorker(): void {
+    this.application.itemListController.restartSearchIndexWorker()
+    this.setIsWorkerKilled(false)
+    if (this.settings.enabled) {
+      this.setStatus('idle')
+      this.start()
+    } else {
+      this.setStatus('disabled')
     }
   }
 
@@ -302,8 +380,13 @@ export class SearchIndexRunner {
     }
   }
 
-  /** Release timers; call when the owning application is torn down. */
+  /** Release timers + the progress subscription; call on application teardown. */
   deinit(): void {
     this.clearScheduler()
+    try {
+      this.application.itemListController.setSearchIndexProgressListener(null)
+    } catch {
+      // Controller may already be torn down; nothing to detach.
+    }
   }
 }

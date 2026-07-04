@@ -20,4 +20,11 @@ export type SearchIndexWorkerResponse =
   | { type: 'updated'; requestId: number; size: number; snapshot: SearchIndexSnapshot | null }
   | { type: 'searched'; requestId: number; result: string[] | null }
   | { type: 'flushed'; requestId: number }
+  // Lightweight, batched progress heartbeat emitted WHILE a rebuild is running so the
+  // main thread can surface the "current job" (processed / total notes) live. Unlike
+  // every other response it does NOT settle the pending request — many progress
+  // messages share the rebuild's requestId, then a final 'rebuilt' resolves it. Kept
+  // cheap: the worker only posts one every SEARCH_INDEX_PROGRESS_BATCH notes, never
+  // per-item.
+  | { type: 'progress'; requestId: number; processed: number; total: number }
   | { type: 'error'; requestId: number; message: string }

@@ -12,7 +12,7 @@ import {
   RerankCandidate,
 } from '@/Assistant/contextualSearchRanking'
 import { IndexableNote } from '@/Utils/Items/Search/SearchIndex'
-import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
+import { SearchIndexProgressListener, ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
 import {
   DEFAULT_SEARCH_INDEX_SCOPE,
   filterNotesByScope,
@@ -267,6 +267,13 @@ export class ItemListController
    * substring fallback) when the SearchIndexEnabled pref is off.
    */
   private searchIndex = new ThreadedSearchIndex()
+  /**
+   * Progress ("current job") subscriber the SearchIndexRunner registers so it can
+   * surface live rebuild progress in the settings UI. Stored here because
+   * reconcileSearchIndexOptions() may swap the ThreadedSearchIndex instance, and the
+   * listener must be re-attached to each fresh one.
+   */
+  private searchIndexProgressListener: SearchIndexProgressListener | null = null
   private searchIndexCacheSize = 50
   /** Current per-note body cap wired into the index (PrefKey.MaxIndexedBodyLength). */
   private searchIndexMaxBodyLength = 50000
@@ -1158,11 +1165,19 @@ export class ItemListController
     if (cacheSize !== this.searchIndexCacheSize || maxBodyLength !== this.searchIndexMaxBodyLength) {
       this.searchIndexCacheSize = cacheSize
       this.searchIndexMaxBodyLength = maxBodyLength
+      const wasKilled = this.searchIndex.isKilled
       this.searchIndex.destroy()
       this.searchIndex = new ThreadedSearchIndex({
         queryCacheSize: cacheSize,
         maxTextLengthPerNote: maxBodyLength,
       })
+      // The fresh instance spawns a live worker; preserve a prior user "kill" so a
+      // pref change doesn't silently revive a thread the user deliberately stopped.
+      if (wasKilled) {
+        this.searchIndex.killWorker()
+      }
+      // Re-attach the progress subscriber to the new instance (it lived on the old one).
+      this.searchIndex.setProgressListener(this.searchIndexProgressListener)
     }
   }
 
@@ -1171,12 +1186,37 @@ export class ItemListController
     this.searchIndex.flush()
   }
 
+  /**
+   * Register (or clear, with null) the "current job" progress subscriber. Kept on the
+   * controller so it can be re-attached across ThreadedSearchIndex swaps. Used by the
+   * SearchIndexRunner to drive the live progress readout in the settings UI.
+   */
+  setSearchIndexProgressListener(listener: SearchIndexProgressListener | null): void {
+    this.searchIndexProgressListener = listener
+    this.searchIndex.setProgressListener(listener)
+  }
+
+  /**
+   * Hard-stop the background index Web Worker (user action). Terminates the thread
+   * and prevents auto-restart; search degrades to the already-built local index /
+   * substring fallback. Reversible via restartSearchIndexWorker().
+   */
+  killSearchIndexWorker(): void {
+    this.searchIndex.killWorker()
+  }
+
+  /** Re-spawn the background index Web Worker after a kill; safe if already live. */
+  restartSearchIndexWorker(): void {
+    this.searchIndex.restartWorker()
+  }
+
   /** Snapshot of the background index's current state for the settings UI. */
-  get searchIndexState(): { isBuilt: boolean; size: number; isThreaded: boolean } {
+  get searchIndexState(): { isBuilt: boolean; size: number; isThreaded: boolean; isKilled: boolean } {
     return {
       isBuilt: this.searchIndex.isBuilt,
       size: this.searchIndex.size,
       isThreaded: this.searchIndex.isThreaded,
+      isKilled: this.searchIndex.isKilled,
     }
   }
 

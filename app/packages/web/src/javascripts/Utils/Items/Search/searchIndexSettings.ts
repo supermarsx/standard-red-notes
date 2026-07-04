@@ -153,5 +153,12 @@ export function filterNotesByScope<T extends { uuid: string }>(
   return notes.filter((note) => isNoteInSearchIndexScope(scope, tagIdsForNote(note)))
 }
 
-/** The runner's externally-observable state, surfaced to the settings UI. */
-export type SearchIndexRunnerStatus = 'disabled' | 'idle' | 'indexing'
+/**
+ * The runner's externally-observable state, surfaced to the settings UI:
+ *  - 'disabled' the background indexer master toggle is off;
+ *  - 'idle'     enabled + running, no rebuild in flight;
+ *  - 'indexing' a rebuild is currently running;
+ *  - 'stopped'  the worker thread was explicitly KILLED by the user (search degrades
+ *               to the already-built index / substring fallback until it is restarted).
+ */
+export type SearchIndexRunnerStatus = 'disabled' | 'idle' | 'indexing' | 'stopped'

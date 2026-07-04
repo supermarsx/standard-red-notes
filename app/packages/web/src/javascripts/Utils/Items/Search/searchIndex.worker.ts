@@ -33,7 +33,12 @@ ctx.onmessage = (event: MessageEvent<SearchIndexWorkerRequest>): void => {
         break
       }
       case 'rebuild': {
-        index.rebuild(request.notes)
+        // Stream a cheap, batched progress heartbeat while the O(n) tokenization runs
+        // so the settings UI can show the "current job" (processed / total notes). The
+        // final 'rebuilt' below is what actually settles the request on the main thread.
+        index.rebuild(request.notes, (processed, total) => {
+          post({ type: 'progress', requestId: request.requestId, processed, total })
+        })
         post({ type: 'rebuilt', requestId: request.requestId, size: index.size, snapshot: index.toSnapshot() })
         break
       }
