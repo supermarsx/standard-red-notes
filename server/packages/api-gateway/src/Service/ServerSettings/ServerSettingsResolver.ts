@@ -62,6 +62,19 @@ export interface EnvSettingsBaseline {
   proofOfWorkSignInDifficulty?: number
   proofOfWorkSignInAdaptiveThreshold?: number
   /**
+   * Standard Red Notes: RATE-LIMIT env baseline (RATE_LIMIT_*). Unlike PoW/
+   * registration these are enforced BY the gateway (RateLimitMiddleware). The
+   * resolver merges persisted admin values over these, over the hardcoded safe
+   * defaults. undefined = env var unset (falls through to default).
+   */
+  rateLimitEnabled?: boolean
+  rateLimitWindowSeconds?: number
+  rateLimitLoginMax?: number
+  rateLimitRegistrationMax?: number
+  rateLimitUserWindowSeconds?: number
+  rateLimitUserMax?: number
+  rateLimitAdaptiveEscalation?: boolean
+  /**
    * Standard Red Notes: REGISTRATION policy env baseline (REGISTRATION_DEFAULT_ROLE
    * / REGISTRATION_DOMAIN_MODE / REGISTRATION_DOMAINS). The gateway PERSISTS +
    * VIEWS these; the auth server ENFORCES them by reading the same overlay file.
@@ -154,6 +167,52 @@ const PROOF_OF_WORK_DEFAULTS: ResolvedProofOfWorkConfig = {
 }
 
 /**
+ * The fully-resolved RATE-LIMIT config (persisted -> env -> default). Consumed by
+ * the gateway RateLimitMiddleware per request.
+ */
+export interface ResolvedRateLimitConfig {
+  enabled: boolean
+  windowSeconds: number
+  loginMax: number
+  registrationMax: number
+  userWindowSeconds: number
+  userMax: number
+  adaptiveEscalation: boolean
+}
+
+/**
+ * Hardcoded RATE-LIMIT defaults (apply last). These EXACTLY reproduce the
+ * historical hardcoded behavior (window 60s, login 10, registration 5) so a
+ * stock deploy is unchanged until an admin edits. The per-user tier is OFF by
+ * default (userMax 0), and adaptive escalation is off.
+ */
+const RATE_LIMIT_DEFAULTS: ResolvedRateLimitConfig = {
+  enabled: true,
+  windowSeconds: 60,
+  loginMax: 10,
+  registrationMax: 5,
+  userWindowSeconds: 60,
+  userMax: 0,
+  adaptiveEscalation: false,
+}
+
+/** Clamp an integer-ish overlay/env value into [min, max]; undefined passes through. */
+const boundedInt = (value: number | undefined, min: number, max: number): number | undefined => {
+  if (value === undefined || typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  const int = Math.floor(value)
+  if (int < min) {
+    return min
+  }
+  if (int > max) {
+    return max
+  }
+
+  return int
+}
+
+/**
  * Normalizes a registration domain list the same way the auth server does
  * (lowercase, trim, strip a leading '@'/'.', drop empties, de-dupe) so the admin
  * VIEW matches exactly what auth will enforce.
@@ -200,7 +259,7 @@ export interface ServerSettingsView {
     }
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
-    security: { proofOfWork: ResolvedProofOfWorkConfig }
+    security: { proofOfWork: ResolvedProofOfWorkConfig; rateLimit: ResolvedRateLimitConfig }
     registration: ResolvedRegistrationConfig & {
       assignableRoles: string[]
       gatingModes: EmailConfirmationGatingMode[]
@@ -375,6 +434,41 @@ export class ServerSettingsResolver {
   }
 
   /**
+   * The effective RATE-LIMIT config: persisted admin values win over the
+   * RATE_LIMIT_* env baseline, which falls back to the hardcoded safe defaults
+   * (which reproduce the historical hardcoded behavior). Re-read per request so
+   * admin changes take effect without a restart. Integer knobs are clamped to
+   * sane bounds so a bad value can never disable protection unexpectedly.
+   */
+  async resolveRateLimitConfig(): Promise<ResolvedRateLimitConfig> {
+    const rl = (await this.safeRead()).security?.rateLimit ?? {}
+    const env = this.envBaseline
+    const d = RATE_LIMIT_DEFAULTS
+
+    const pick = (
+      persisted: number | undefined,
+      envValue: number | undefined,
+      fallback: number,
+      min: number,
+      max: number,
+    ): number => boundedInt(persisted, min, max) ?? boundedInt(envValue, min, max) ?? fallback
+
+    return {
+      enabled:
+        typeof rl.enabled === 'boolean' ? rl.enabled : env.rateLimitEnabled ?? d.enabled,
+      windowSeconds: pick(rl.windowSeconds, env.rateLimitWindowSeconds, d.windowSeconds, 1, 3600),
+      loginMax: pick(rl.loginMax, env.rateLimitLoginMax, d.loginMax, 0, 100000),
+      registrationMax: pick(rl.registrationMax, env.rateLimitRegistrationMax, d.registrationMax, 0, 100000),
+      userWindowSeconds: pick(rl.userWindowSeconds, env.rateLimitUserWindowSeconds, d.userWindowSeconds, 1, 3600),
+      userMax: pick(rl.userMax, env.rateLimitUserMax, d.userMax, 0, 100000),
+      adaptiveEscalation:
+        typeof rl.adaptiveEscalation === 'boolean'
+          ? rl.adaptiveEscalation
+          : env.rateLimitAdaptiveEscalation ?? d.adaptiveEscalation,
+    }
+  }
+
+  /**
    * The effective REGISTRATION policy: persisted admin values win over the
    * REGISTRATION_* env baseline, which falls back to hardcoded defaults. The
    * default role is coerced to an assignable (canonical non-admin) role; the mode
@@ -449,6 +543,8 @@ export class ServerSettingsResolver {
     const ai = persisted.ai ?? {}
     const pow = persisted.security?.proofOfWork ?? {}
     const proofOfWork = await this.resolveProofOfWorkConfig()
+    const rl = persisted.security?.rateLimit ?? {}
+    const rateLimit = await this.resolveRateLimitConfig()
     const registration = persisted.registration ?? {}
     const registrationConfig = await this.resolveRegistrationConfig()
     const sources: Record<string, ServerSettingSource> = {
@@ -476,6 +572,13 @@ export class ServerSettingsResolver {
         pow.signInAdaptiveThreshold,
         env.proofOfWorkSignInAdaptiveThreshold,
       ),
+      'security.rateLimit.enabled': this.source(rl.enabled, env.rateLimitEnabled),
+      'security.rateLimit.windowSeconds': this.source(rl.windowSeconds, env.rateLimitWindowSeconds),
+      'security.rateLimit.loginMax': this.source(rl.loginMax, env.rateLimitLoginMax),
+      'security.rateLimit.registrationMax': this.source(rl.registrationMax, env.rateLimitRegistrationMax),
+      'security.rateLimit.userWindowSeconds': this.source(rl.userWindowSeconds, env.rateLimitUserWindowSeconds),
+      'security.rateLimit.userMax': this.source(rl.userMax, env.rateLimitUserMax),
+      'security.rateLimit.adaptiveEscalation': this.source(rl.adaptiveEscalation, env.rateLimitAdaptiveEscalation),
       'registration.defaultRole': this.source(registration.defaultRole, env.registrationDefaultRole),
       'registration.domainMode': this.source(registration.domainMode, env.registrationDomainMode),
       'registration.domainList': this.source(registration.domainList, env.registrationDomains),
@@ -523,7 +626,7 @@ export class ServerSettingsResolver {
         },
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
-        security: { proofOfWork },
+        security: { proofOfWork, rateLimit },
         registration: {
           ...registrationConfig,
           assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,

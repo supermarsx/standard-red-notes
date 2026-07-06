@@ -628,3 +628,123 @@ describe('AdminLogsService', () => {
     expect(result).toEqual({ entries: [], truncated: false })
   })
 })
+
+/**
+ * Standard Red Notes: the gateway-LOCAL anti-abuse admin surface — the live view
+ * plus the four IP-list mutations. Admin-gated + audited on mutations, validated
+ * (only a valid IP/CIDR is ever stored), and degrading to 503 when the Redis-
+ * backed store is not bound.
+ */
+describe('AdminController anti-abuse', () => {
+  let jsonMock: jest.Mock
+  let statusMock: jest.Mock
+
+  const buildController = (
+    ipAccessListStore?: unknown,
+    rateLimitMetricsStore?: unknown,
+    serverSettingsResolver?: ServerSettingsResolver,
+    logger?: { info: jest.Mock },
+  ): AdminController =>
+    new AdminController(
+      {} as ServiceProxyInterface,
+      {} as EndpointResolverInterface,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      serverSettingsResolver,
+      logger as never,
+      undefined,
+      ipAccessListStore as never,
+      rateLimitMetricsStore as never,
+    )
+
+  const responseWith = (roles: Array<{ name: string }>): Response => {
+    jsonMock = jest.fn()
+    statusMock = jest.fn(() => ({ json: jsonMock }))
+    return {
+      locals: { user: { uuid: 'admin-1' }, roles },
+      status: statusMock,
+      json: jsonMock,
+    } as unknown as Response
+  }
+
+  const admin = [{ name: RoleName.NAMES.AdminUser }]
+  const nonAdmin = [{ name: RoleName.NAMES.CoreUser }]
+
+  it('rejects a non-admin with 403 on the view', async () => {
+    await buildController().getAntiAbuse({} as Request, responseWith(nonAdmin))
+    expect(statusMock).toHaveBeenCalledWith(403)
+  })
+
+  it('returns config + lists + metrics for an admin, degrading when the store is absent', async () => {
+    const resolver = { resolveRateLimitConfig: jest.fn().mockResolvedValue({ enabled: true, loginMax: 10 }) }
+    const response = responseWith(admin)
+    await buildController(undefined, undefined, resolver as unknown as ServerSettingsResolver).getAntiAbuse(
+      {} as Request,
+      response,
+    )
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        available: false,
+        config: { enabled: true, loginMax: 10 },
+        ipLists: { allow: [], block: [] },
+        metrics: { tierHits: {}, blockHits: 0, recent: [] },
+      }),
+    )
+  })
+
+  it('blocks an IP, validates it, and audits the mutation', async () => {
+    const store = {
+      add: jest.fn().mockResolvedValue({ ok: true, value: '10.0.0.0/8' }),
+      remove: jest.fn(),
+      list: jest.fn().mockResolvedValue([]),
+    }
+    const logger = { info: jest.fn() }
+    const response = responseWith(admin)
+    const request = { body: { entry: ' 10.0.0.0/8 ' } } as unknown as Request
+    await buildController(store, undefined, undefined, logger).blockIp(request, response)
+
+    expect(store.add).toHaveBeenCalledWith('block', ' 10.0.0.0/8 ')
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ list: 'block', action: 'add', entry: '10.0.0.0/8' }),
+    )
+    expect(logger.info).toHaveBeenCalledWith(
+      'admin anti-abuse ip-list update',
+      expect.objectContaining({ audit: 'admin.anti-abuse.ip-list', list: 'block', action: 'add', entry: '10.0.0.0/8' }),
+    )
+  })
+
+  it('rejects an invalid IP entry with 400', async () => {
+    const store = {
+      add: jest.fn().mockResolvedValue({ ok: false, error: '"bad" is not a valid IP or CIDR.' }),
+      remove: jest.fn(),
+      list: jest.fn().mockResolvedValue([]),
+    }
+    const response = responseWith(admin)
+    await buildController(store).blockIp({ body: { entry: 'bad' } } as unknown as Request, response)
+    expect(statusMock).toHaveBeenCalledWith(400)
+  })
+
+  it('requires a non-empty entry', async () => {
+    const store = { add: jest.fn(), remove: jest.fn(), list: jest.fn() }
+    const response = responseWith(admin)
+    await buildController(store).allowIp({ body: {} } as unknown as Request, response)
+    expect(statusMock).toHaveBeenCalledWith(400)
+    expect(store.add).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 for a mutation when the store is not bound', async () => {
+    const response = responseWith(admin)
+    await buildController().unblockIp({ body: { entry: '1.2.3.4' } } as unknown as Request, response)
+    expect(statusMock).toHaveBeenCalledWith(503)
+  })
+})

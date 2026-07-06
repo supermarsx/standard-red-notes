@@ -105,4 +105,9 @@ export const TYPES = {
   // `supervisorctl` (allowlisted program names only) to restart/stop/start the
   // sibling server processes in the single-container image.
   ApiGateway_ServiceControlService: Symbol.for('ApiGateway_ServiceControlService'),
+  // Standard Red Notes: anti-abuse infrastructure — admin-managed IP allow/block
+  // lists (Redis sets) enforced before rate-limit tiers, and best-effort throttle
+  // telemetry for the admin Anti-abuse view. Bound only when Redis is configured.
+  ApiGateway_IpAccessListStore: Symbol.for('ApiGateway_IpAccessListStore'),
+  ApiGateway_RateLimitMetricsStore: Symbol.for('ApiGateway_RateLimitMetricsStore'),
 }

@@ -17,7 +17,9 @@ import {
   stringOption,
   tailLogFiles,
   usage,
+  validateCliIpEntry,
   validateFlagValue,
+  cliIpv4ToInt,
   type LogFileSystemLike,
   type OperatorEnvSpec,
 } from './SrnAdminCli'
@@ -422,8 +424,31 @@ describe('SrnAdminCli helpers', () => {
       expect(helpFor('grant-admin')).toContain('roles grant')
       expect(helpFor('registration')).toContain('PERSISTED')
       expect(helpFor('config')).toContain('read-only')
+      expect(helpFor('ip')).toContain('allow/block')
+      expect(helpFor('limits')).toContain('rate-limit tiers')
       expect(helpFor('unknown-topic')).toEqual(usage())
       expect(helpFor(undefined)).toEqual(usage())
+    })
+  })
+
+  describe('validateCliIpEntry (anti-abuse IP lists)', () => {
+    it('accepts IPv4, IPv4 CIDR and IPv6, canonicalizing them', () => {
+      expect(validateCliIpEntry('1.2.3.4')).toEqual({ ok: true, value: '1.2.3.4' })
+      expect(validateCliIpEntry(' 10.0.0.0/8 ')).toEqual({ ok: true, value: '10.0.0.0/8' })
+      expect(validateCliIpEntry('2001:DB8::1')).toEqual({ ok: true, value: '2001:db8::1' })
+    })
+
+    it('rejects IPv6 CIDR, bad prefixes and injection-shaped input', () => {
+      expect(validateCliIpEntry('2001:db8::/64').ok).toBe(false)
+      expect(validateCliIpEntry('10.0.0.0/33').ok).toBe(false)
+      expect(validateCliIpEntry('1.2.3.4; FLUSHALL').ok).toBe(false)
+      expect(validateCliIpEntry('nope').ok).toBe(false)
+      expect(validateCliIpEntry('').ok).toBe(false)
+    })
+
+    it('cliIpv4ToInt parses and rejects consistently', () => {
+      expect(cliIpv4ToInt('255.255.255.255')).toBe(0xffffffff)
+      expect(cliIpv4ToInt('256.0.0.1')).toBeNull()
     })
   })
 })

@@ -936,6 +936,19 @@ export class LegacyApiService
       emailConfirmationBody?: string | null
       emailConfirmationBaseUrl?: string | null
     }
+    // Standard Red Notes: security knobs — proof-of-work anti-bot + the rate-limit
+    // tiers. Enforced server-side; the admin panel persists them here.
+    security?: {
+      rateLimit?: {
+        enabled?: boolean | null
+        windowSeconds?: number | null
+        loginMax?: number | null
+        registrationMax?: number | null
+        userWindowSeconds?: number | null
+        userMax?: number | null
+        adaptiveEscalation?: boolean | null
+      }
+    }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,
@@ -943,6 +956,48 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to update server settings.',
       params: partial,
+    })
+  }
+
+  /**
+   * Standard Red Notes: anti-abuse LIVE view for the admin Security tab — the
+   * resolved rate-limit tiers, the IP allow/block lists, and throttle telemetry.
+   * Admin-gated at the gateway.
+   */
+  async adminGetAntiAbuse(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.antiAbuse),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load anti-abuse status.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: add/remove an IP or IPv4 CIDR to the gateway allow/block
+   * list. The entry rides in the body so CIDR slashes / IPv6 colons are carried
+   * safely; the gateway validates it before persisting.
+   */
+  async adminMutateAntiAbuseIp(
+    list: 'allow' | 'block',
+    action: 'add' | 'remove',
+    entry: string,
+  ): Promise<HttpResponse> {
+    const url =
+      list === 'block'
+        ? action === 'add'
+          ? Paths.v1.antiAbuseIpBlock
+          : Paths.v1.antiAbuseIpUnblock
+        : action === 'add'
+          ? Paths.v1.antiAbuseIpAllow
+          : Paths.v1.antiAbuseIpUnallow
+
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, url),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to update the IP list.',
+      params: { entry },
     })
   }
 

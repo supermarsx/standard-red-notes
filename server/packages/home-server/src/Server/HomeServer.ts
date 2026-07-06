@@ -13,6 +13,9 @@ import {
   resolveCorsStrictMode,
   buildDefaultRateLimitRules,
   createRateLimitMiddleware,
+  IpAccessListStore,
+  RateLimitConfig,
+  RateLimitMetricsStore,
   RateLimitRedis,
   TYPES as ApiGatewayTypes,
 } from '@standardnotes/api-gateway'
@@ -152,19 +155,61 @@ export class HomeServer implements HomeServerInterface {
         const rateLimitRedis = container.isBound(ApiGatewayTypes.ApiGateway_Redis)
           ? (container.get(ApiGatewayTypes.ApiGateway_Redis) as RateLimitRedis)
           : undefined
-        const rateLimitNumber = (key: string, fallback: number): number =>
-          env.get(key, true) ? +env.get(key, true) : fallback
+        // Standard Red Notes: same config-driven anti-abuse wiring the standalone
+        // gateway installs — the tiers are resolved PER REQUEST from the persisted
+        // ServerSettings overlay (admin wins over RATE_LIMIT_* env wins over the
+        // safe defaults), and the admin-managed IP allow/block list + throttle
+        // telemetry are enforced/recorded when Redis (and thus the stores) is bound.
+        const rateLimitResolver = container.get<{
+          resolveRateLimitConfig(): Promise<{
+            enabled: boolean
+            windowSeconds: number
+            loginMax: number
+            registrationMax: number
+            adaptiveEscalation: boolean
+          }>
+        }>(ApiGatewayTypes.ApiGateway_ServerSettingsResolver)
+        const rateLimitIpAccessList = container.isBound(ApiGatewayTypes.ApiGateway_IpAccessListStore)
+          ? container.get<IpAccessListStore>(ApiGatewayTypes.ApiGateway_IpAccessListStore)
+          : undefined
+        const rateLimitMetrics = container.isBound(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
+          ? container.get<RateLimitMetricsStore>(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
+          : undefined
+        const escalationRedis = rateLimitRedis as unknown as {
+          set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
+        }
         app.use(
           createRateLimitMiddleware({
             redis: rateLimitRedis,
             logger: { warn: (message: string) => winston.loggers.get('home-server').warn(message) },
-            config: {
-              enabled: env.get('RATE_LIMIT_ENABLED', true) !== 'false',
-              rules: buildDefaultRateLimitRules({
-                windowSeconds: rateLimitNumber('RATE_LIMIT_WINDOW_SECONDS', 60),
-                loginMax: rateLimitNumber('RATE_LIMIT_LOGIN_MAX', 10),
-                registrationMax: rateLimitNumber('RATE_LIMIT_REGISTRATION_MAX', 5),
-              }),
+            config: async (): Promise<RateLimitConfig> => {
+              const resolved = await rateLimitResolver.resolveRateLimitConfig()
+
+              return {
+                enabled: resolved.enabled,
+                rules: buildDefaultRateLimitRules({
+                  windowSeconds: resolved.windowSeconds,
+                  loginMax: resolved.loginMax,
+                  registrationMax: resolved.registrationMax,
+                }),
+              }
+            },
+            ipAccessList: rateLimitIpAccessList,
+            metrics: rateLimitMetrics,
+            onThrottle: (clientIp: string): void => {
+              if (escalationRedis.set === undefined) {
+                return
+              }
+              void (async (): Promise<void> => {
+                try {
+                  const resolved = await rateLimitResolver.resolveRateLimitConfig()
+                  if (resolved.adaptiveEscalation && escalationRedis.set) {
+                    await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
+                  }
+                } catch {
+                  // best-effort escalation signal.
+                }
+              })()
             },
           }),
         )

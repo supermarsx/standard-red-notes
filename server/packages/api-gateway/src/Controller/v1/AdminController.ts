@@ -19,6 +19,8 @@ import {
   validateProfilesPatch,
 } from '../../Service/Assistant/profiles'
 import { API_GATEWAY_PROGRAM, ServiceAction, ServiceControlService } from '../../Service/ServiceControl/ServiceControlService'
+import { IpAccessListStore, IpAclList } from '../IpAccessList'
+import { RateLimitMetricsStore } from '../RateLimitMetrics'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -104,6 +106,11 @@ export class AdminController extends BaseHttpController {
     @inject(TYPES.ApiGateway_ServiceControlService)
     @optional()
     private serviceControlService?: ServiceControlService,
+    // Standard Red Notes: anti-abuse admin surface. Both are Redis-backed and only
+    // bound when a Redis cache is configured, so they are @optional — the routes
+    // degrade to 503 (mutations) / empty (view) when absent.
+    @inject(TYPES.ApiGateway_IpAccessListStore) @optional() private ipAccessListStore?: IpAccessListStore,
+    @inject(TYPES.ApiGateway_RateLimitMetricsStore) @optional() private rateLimitMetricsStore?: RateLimitMetricsStore,
   ) {
     super()
   }
@@ -1081,6 +1088,68 @@ export class AdminController extends BaseHttpController {
           changedSettings.push('security.proofOfWork.signInMode')
         }
       }
+
+      // Standard Red Notes: RATE-LIMIT tier knobs. Enforced by the gateway itself
+      // (RateLimitMiddleware reads the resolved config per request). enabled /
+      // adaptiveEscalation are booleans; window/max knobs are bounded integers so
+      // a bad value can never silently disable protection. `null` clears any.
+      if (security.rateLimit !== undefined) {
+        if (!security.rateLimit || typeof security.rateLimit !== 'object' || Array.isArray(security.rateLimit)) {
+          return { error: 'security.rateLimit must be an object.' }
+        }
+        const rl = security.rateLimit as Record<string, unknown>
+        patch.security = patch.security ?? {}
+        patch.security.rateLimit = {}
+        const rlPatch = patch.security.rateLimit as Record<string, unknown>
+
+        for (const key of ['enabled', 'adaptiveEscalation'] as const) {
+          if (rl[key] !== undefined) {
+            if (rl[key] !== null && typeof rl[key] !== 'boolean') {
+              return { error: `security.rateLimit.${key} must be a boolean, or null to clear it.` }
+            }
+            rlPatch[key] = rl[key]
+            changedSettings.push(`security.rateLimit.${key}`)
+          }
+        }
+
+        const rlBoundedInt = (
+          key: 'windowSeconds' | 'loginMax' | 'registrationMax' | 'userWindowSeconds' | 'userMax',
+          min: number,
+          max: number,
+        ): { error: string } | undefined => {
+          if (rl[key] === undefined) {
+            return undefined
+          }
+          if (rl[key] === null) {
+            rlPatch[key] = null
+          } else if (
+            typeof rl[key] === 'number' &&
+            Number.isInteger(rl[key]) &&
+            (rl[key] as number) >= min &&
+            (rl[key] as number) <= max
+          ) {
+            rlPatch[key] = rl[key] as number
+          } else {
+            return { error: `security.rateLimit.${key} must be an integer between ${min} and ${max}, or null to clear it.` }
+          }
+          changedSettings.push(`security.rateLimit.${key}`)
+
+          return undefined
+        }
+
+        for (const [key, min, max] of [
+          ['windowSeconds', 1, 3600],
+          ['loginMax', 0, 100000],
+          ['registrationMax', 0, 100000],
+          ['userWindowSeconds', 1, 3600],
+          ['userMax', 0, 100000],
+        ] as const) {
+          const invalid = rlBoundedInt(key, min, max)
+          if (invalid) {
+            return invalid
+          }
+        }
+      }
     }
 
     // Standard Red Notes: REGISTRATION policy (default role + email-domain policy).
@@ -1199,6 +1268,132 @@ export class AdminController extends BaseHttpController {
     }
 
     return { patch, changedSettings }
+  }
+
+  /**
+   * Standard Red Notes: anti-abuse LIVE view for the admin Security tab. Returns
+   * the effective (resolved) rate-limit tier config, the admin-managed IP
+   * allow/block lists, and best-effort throttle telemetry (per-tier hit counts,
+   * total IP-block hits, a recent-events ring). Admin-gated HARD (403 for
+   * non-admins). Read-only, so no audit entry. Degrades field-by-field when the
+   * Redis-backed stores are absent (in-memory cache deployment) — never 5xx.
+   */
+  @httpGet('/anti-abuse', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getAntiAbuse(_request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    let config = null
+    if (this.serverSettingsResolver) {
+      try {
+        config = await this.serverSettingsResolver.resolveRateLimitConfig()
+      } catch {
+        // a broken overlay must not take the view down.
+      }
+    }
+
+    let allow: string[] = []
+    let block: string[] = []
+    if (this.ipAccessListStore) {
+      try {
+        ;[allow, block] = await Promise.all([
+          this.ipAccessListStore.list('allow'),
+          this.ipAccessListStore.list('block'),
+        ])
+      } catch {
+        // degrade to empty lists on a Redis error.
+      }
+    }
+
+    const metrics = this.rateLimitMetricsStore
+      ? await this.rateLimitMetricsStore.view()
+      : { tierHits: {}, blockHits: 0, recent: [] }
+
+    response.json({
+      available: this.ipAccessListStore !== undefined,
+      config,
+      ipLists: { allow, block },
+      metrics,
+    })
+  }
+
+  @httpPost('/anti-abuse/ip-block', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async blockIp(request: Request, response: Response): Promise<void> {
+    await this.mutateIpList(request, response, 'block', 'add')
+  }
+
+  @httpPost('/anti-abuse/ip-unblock', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async unblockIp(request: Request, response: Response): Promise<void> {
+    await this.mutateIpList(request, response, 'block', 'remove')
+  }
+
+  @httpPost('/anti-abuse/ip-allow', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async allowIp(request: Request, response: Response): Promise<void> {
+    await this.mutateIpList(request, response, 'allow', 'add')
+  }
+
+  @httpPost('/anti-abuse/ip-unallow', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async unallowIp(request: Request, response: Response): Promise<void> {
+    await this.mutateIpList(request, response, 'allow', 'remove')
+  }
+
+  /**
+   * Shared handler for the four IP-list mutations. Admin-gated, validated (the
+   * entry must be a valid IPv4 / IPv4-CIDR / IPv6 — nothing else is ever stored,
+   * so there is no injection surface), and audit-logged on every attempt (list +
+   * action + the canonical entry + outcome). Uses the request BODY for the entry
+   * (not the path) so CIDR slashes and IPv6 colons are carried safely.
+   */
+  private async mutateIpList(
+    request: Request,
+    response: Response,
+    list: IpAclList,
+    action: 'add' | 'remove',
+  ): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+    if (!this.ipAccessListStore) {
+      response.status(503).json({ error: { message: 'IP access lists are not available on this deployment.' } })
+
+      return
+    }
+
+    const body = (request.body ?? {}) as Record<string, unknown>
+    const entry = body.entry
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      response.status(400).json({ error: { message: 'entry must be a non-empty IP or CIDR string.' } })
+
+      return
+    }
+
+    const result =
+      action === 'add' ? await this.ipAccessListStore.add(list, entry) : await this.ipAccessListStore.remove(list, entry)
+    if (!result.ok) {
+      response.status(400).json({ error: { message: result.error } })
+
+      return
+    }
+
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+    this.logger?.info('admin anti-abuse ip-list update', {
+      audit: 'admin.anti-abuse.ip-list',
+      adminUuid,
+      list,
+      action,
+      entry: result.value,
+    })
+
+    const [allow, block] = await Promise.all([
+      this.ipAccessListStore.list('allow'),
+      this.ipAccessListStore.list('block'),
+    ])
+    response.json({ list, action, entry: result.value, ipLists: { allow, block } })
   }
 
   /**

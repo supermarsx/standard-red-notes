@@ -74,6 +74,13 @@ const AdminPaths = {
   // Standard Red Notes: admin-editable server settings (AI providers, update
   // check URL, Nextcloud backups master switch). Secrets are write-only.
   serverSettings: '/v1/admin/server-settings',
+  // Standard Red Notes: anti-abuse live view (resolved rate-limit tiers + IP
+  // allow/block lists + throttle telemetry) and the four IP-list mutations.
+  antiAbuse: '/v1/admin/anti-abuse',
+  antiAbuseIpBlock: '/v1/admin/anti-abuse/ip-block',
+  antiAbuseIpUnblock: '/v1/admin/anti-abuse/ip-unblock',
+  antiAbuseIpAllow: '/v1/admin/anti-abuse/ip-allow',
+  antiAbuseIpUnallow: '/v1/admin/anti-abuse/ip-unallow',
   // Standard Red Notes: grant/revoke the admin role, reset 2FA, fix quota.
   userAdminRole: (userUuid: string) => `/v1/admin/users/${userUuid}/admin-role`,
   userMfaSecret: (userUuid: string) => `/v1/admin/users/${userUuid}/mfa-secret`,

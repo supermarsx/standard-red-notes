@@ -443,4 +443,83 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       })
     })
   })
+
+  describe('rate limit (security.rateLimit)', () => {
+    it('falls back to the safe defaults that reproduce the historical behavior', async () => {
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveRateLimitConfig()).toEqual({
+        enabled: true,
+        windowSeconds: 60,
+        loginMax: 10,
+        registrationMax: 5,
+        userWindowSeconds: 60,
+        userMax: 0,
+        adaptiveEscalation: false,
+      })
+    })
+
+    it('uses the env baseline over defaults, and clamps out-of-range values', async () => {
+      const resolver = makeResolver({
+        rateLimitEnabled: false,
+        rateLimitWindowSeconds: 120,
+        rateLimitLoginMax: 3,
+      })
+
+      const config = await resolver.resolveRateLimitConfig()
+      expect(config.enabled).toBe(false)
+      expect(config.windowSeconds).toBe(120)
+      expect(config.loginMax).toBe(3)
+      expect(config.registrationMax).toBe(5) // unset env -> default
+    })
+
+    it('clamps an out-of-range persisted window into bounds', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({ security: { rateLimit: { windowSeconds: 99999 } } })
+      expect((await resolver.resolveRateLimitConfig()).windowSeconds).toBe(3600)
+    })
+
+    it('lets persisted admin values WIN over env', async () => {
+      const resolver = makeResolver({ rateLimitLoginMax: 3, rateLimitEnabled: false })
+      await resolver.applyPatch({
+        security: { rateLimit: { loginMax: 25, enabled: true, userMax: 30, adaptiveEscalation: true } },
+      })
+
+      const config = await resolver.resolveRateLimitConfig()
+      expect(config.loginMax).toBe(25)
+      expect(config.enabled).toBe(true)
+      expect(config.userMax).toBe(30)
+      expect(config.adaptiveEscalation).toBe(true)
+    })
+
+    it('persists, prunes on null, and clears back to env/default', async () => {
+      const store = new ServerSettingsStore(filePath)
+
+      await store.update({ security: { rateLimit: { loginMax: 20, enabled: false } } })
+      expect(await store.read()).toEqual({ security: { rateLimit: { loginMax: 20, enabled: false } } })
+
+      await store.update({ security: { rateLimit: { enabled: null } } })
+      expect(await store.read()).toEqual({ security: { rateLimit: { loginMax: 20 } } })
+
+      await store.update({ security: { rateLimit: { loginMax: null } } })
+      expect(await store.read()).toEqual({})
+    })
+
+    it('reports the resolved config + sources in the view', async () => {
+      const resolver = makeResolver({ rateLimitLoginMax: 8 })
+      await resolver.applyPatch({ security: { rateLimit: { registrationMax: 2 } } })
+
+      const view = await resolver.view()
+      expect(view.settings.security.rateLimit).toMatchObject({
+        loginMax: 8, // env
+        registrationMax: 2, // persisted
+        windowSeconds: 60, // default
+      })
+      expect(view.sources).toMatchObject({
+        'security.rateLimit.loginMax': 'env',
+        'security.rateLimit.registrationMax': 'persisted',
+        'security.rateLimit.windowSeconds': 'default',
+      })
+    })
+  })
 })

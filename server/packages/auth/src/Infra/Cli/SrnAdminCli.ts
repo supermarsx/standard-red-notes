@@ -129,6 +129,81 @@ export function stringOption(options: Record<string, string | boolean>, name: st
 }
 
 /* ------------------------------------------------------------------------- *
+ * IP allow/block lists (anti-abuse)
+ *
+ * The gateway's RateLimitMiddleware enforces two Redis SETs of IP/CIDR entries.
+ * The CLI manages the SAME keys directly (shared Redis in the single container).
+ * These helpers mirror the gateway's IpAccessList validation EXACTLY (keep them
+ * in sync) and are kept pure/dependency-free so they unit-test without a boot.
+ * ------------------------------------------------------------------------- */
+
+export const IP_ACL_ALLOW_KEY = 'rl:acl:allow'
+export const IP_ACL_BLOCK_KEY = 'rl:acl:block'
+
+export type IpAclList = 'allow' | 'block'
+
+/** Parse a dotted quad to a 32-bit int, or null when out of range (pure). */
+export function cliIpv4ToInt(ip: string): number | null {
+  const match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) {
+    return null
+  }
+  let value = 0
+  for (let i = 1; i <= 4; i++) {
+    const octet = Number(match[i])
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return null
+    }
+    value = value * 256 + octet
+  }
+
+  return value >>> 0
+}
+
+/**
+ * Validate + canonicalize an IP/CIDR entry the SAME way the gateway does: an
+ * exact IPv4, an IPv4 CIDR (/0..32), or a bare IPv6 literal (exact only — IPv6
+ * CIDR is rejected). Guards the character set + length so nothing but an
+ * IP-shaped token can be sent to Redis.
+ */
+export function validateCliIpEntry(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+  if (typeof raw !== 'string') {
+    return { ok: false, error: 'Entry must be a string.' }
+  }
+  const entry = raw.trim().toLowerCase()
+  if (entry.length === 0 || entry.length > 49) {
+    return { ok: false, error: 'Entry must be a non-empty IP or CIDR string.' }
+  }
+  if (!/^[0-9a-f:.\/]+$/.test(entry)) {
+    return { ok: false, error: `"${raw}" is not a valid IP or CIDR.` }
+  }
+
+  const slashAt = entry.indexOf('/')
+  if (slashAt >= 0) {
+    const base = entry.slice(0, slashAt)
+    const bitsRaw = entry.slice(slashAt + 1)
+    if (cliIpv4ToInt(base) === null) {
+      return { ok: false, error: `"${raw}" is not a valid IPv4 CIDR (IPv6 CIDR is not supported).` }
+    }
+    const bits = Number(bitsRaw)
+    if (!/^\d{1,2}$/.test(bitsRaw) || !Number.isInteger(bits) || bits < 0 || bits > 32) {
+      return { ok: false, error: `"${raw}" has an invalid CIDR prefix (expected /0../32).` }
+    }
+
+    return { ok: true, value: `${base}/${bits}` }
+  }
+
+  if (cliIpv4ToInt(entry) !== null) {
+    return { ok: true, value: entry }
+  }
+  if (entry.includes(':') && /^[0-9a-f:]+$/.test(entry) && entry.split(':').length <= 9) {
+    return { ok: true, value: entry }
+  }
+
+  return { ok: false, error: `"${raw}" is not a valid IP or CIDR.` }
+}
+
+/* ------------------------------------------------------------------------- *
  * Table + byte formatting
  * ------------------------------------------------------------------------- */
 
@@ -877,6 +952,14 @@ SERVER
   webhooks delete <webhook-uuid>     Delete any webhook
   config                             Effective operator config + source + restart info
 
+ANTI-ABUSE
+  ip list [allow|block]              List the IP allow/block lists
+  ip block <ip|cidr>                 Block an IP or IPv4 CIDR at the gateway
+  ip unblock <ip|cidr>               Remove an entry from the block list
+  ip allow <ip|cidr>                 Allowlist an IP/CIDR (bypasses rate limits)
+  ip unallow <ip|cidr>               Remove an entry from the allow list
+  limits                             Show effective rate-limit + lockout config
+
 DIAGNOSTICS
   status                             Health snapshot of every sibling service
   logs [--service X] [--level Y] [--tail N]
@@ -1026,6 +1109,30 @@ compose-level file) and restart the stack. The only runtime-settable server
 flag is the persisted registration gate ('registration enable|disable');
 its persisted state needs a DB read, so it is shown by 'registration status'
 rather than here.`,
+  ip: `ip — gateway IP allow/block lists (anti-abuse)
+
+USAGE
+  srn-admin ip list [allow|block] [--json]
+  srn-admin ip block   <ip|ipv4-cidr>
+  srn-admin ip unblock <ip|ipv4-cidr>
+  srn-admin ip allow   <ip|ipv4-cidr>
+  srn-admin ip unallow <ip|ipv4-cidr>
+
+The gateway rejects a BLOCKlisted client IP (403) before any rate-limit tier,
+and lets an ALLOWlisted IP BYPASS the tiers entirely (allow WINS over block, so
+you cannot lock yourself out by allowlisting your own address under a broad
+block). Entries are an exact IPv4, an IPv4 CIDR (a.b.c.d/0..32) or a bare IPv6
+literal (exact match; IPv6 CIDR is not supported). The lists live in Redis and
+are shared with the gateway admin panel's Anti-abuse view. Enforcement fails
+OPEN on a Redis outage (a cache blip never hard-blocks legitimate traffic).`,
+  limits: `limits — effective anti-abuse configuration (read-only)
+
+Shows the effective rate-limit tiers (the persisted admin overlay over the
+RATE_LIMIT_* env baseline over the safe defaults), the per-user tier, the
+adaptive-escalation flag, the sizes of the IP allow/block lists, and the
+failed-login lockout env config. Rate-limit tiers are retunable at runtime from
+the admin panel (Security → Anti-abuse) or by editing the SERVER_SETTINGS_PATH
+overlay; the lockout envs are read at boot (edit the operator .env + restart).`,
   group: `group — RBAC group management
 
 USAGE

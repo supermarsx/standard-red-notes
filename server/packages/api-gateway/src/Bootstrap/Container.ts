@@ -56,6 +56,8 @@ import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStor
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
 import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
+import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
+import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
@@ -280,6 +282,28 @@ export class ContainerConfigLoader {
       proofOfWorkSignInAdaptiveThreshold: env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
         ? +env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
         : undefined,
+      // Standard Red Notes: RATE-LIMIT env baseline. Enforced by the gateway's
+      // RateLimitMiddleware, which reads the resolved config per request. undefined
+      // when unset so the source map reports 'default' (the resolver applies the
+      // hardcoded safe defaults that reproduce the historical hardcoded behavior:
+      // enabled=true, window=60s, login=10, registration=5, per-user off).
+      rateLimitEnabled: env.get('RATE_LIMIT_ENABLED', true)
+        ? env.get('RATE_LIMIT_ENABLED', true) !== 'false'
+        : undefined,
+      rateLimitWindowSeconds: env.get('RATE_LIMIT_WINDOW_SECONDS', true)
+        ? +env.get('RATE_LIMIT_WINDOW_SECONDS', true)
+        : undefined,
+      rateLimitLoginMax: env.get('RATE_LIMIT_LOGIN_MAX', true) ? +env.get('RATE_LIMIT_LOGIN_MAX', true) : undefined,
+      rateLimitRegistrationMax: env.get('RATE_LIMIT_REGISTRATION_MAX', true)
+        ? +env.get('RATE_LIMIT_REGISTRATION_MAX', true)
+        : undefined,
+      rateLimitUserWindowSeconds: env.get('RATE_LIMIT_USER_WINDOW_SECONDS', true)
+        ? +env.get('RATE_LIMIT_USER_WINDOW_SECONDS', true)
+        : undefined,
+      rateLimitUserMax: env.get('RATE_LIMIT_USER_MAX', true) ? +env.get('RATE_LIMIT_USER_MAX', true) : undefined,
+      rateLimitAdaptiveEscalation: env.get('RATE_LIMIT_ADAPTIVE_ESCALATION', true)
+        ? env.get('RATE_LIMIT_ADAPTIVE_ESCALATION', true) === 'true'
+        : undefined,
       // Standard Red Notes: REGISTRATION policy env baseline. The gateway persists
       // + views these; the AUTH server reads the SAME overlay file and enforces
       // them in Register. undefined when unset so the source map reports 'default'
@@ -319,6 +343,20 @@ export class ContainerConfigLoader {
     container
       .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
       .toConstantValue(serverSettingsResolver)
+
+    // Standard Red Notes: anti-abuse infrastructure. The IP allow/block lists and
+    // throttle telemetry are Redis-backed, so bind them only when a Redis cache is
+    // configured (the in-memory cache deployment has no shared store for these and
+    // the whole rate-limit layer no-ops there). Both reuse the SAME ioredis client.
+    if (container.isBound(TYPES.ApiGateway_Redis)) {
+      const antiAbuseRedis = container.get(TYPES.ApiGateway_Redis) as IpAccessListRedis & RateLimitMetricsRedis
+      container
+        .bind<IpAccessListStore>(TYPES.ApiGateway_IpAccessListStore)
+        .toConstantValue(new IpAccessListStore(antiAbuseRedis))
+      container
+        .bind<RateLimitMetricsStore>(TYPES.ApiGateway_RateLimitMetricsStore)
+        .toConstantValue(new RateLimitMetricsStore(antiAbuseRedis))
+    }
 
     // Standard Red Notes: ChatGPT/Codex subscription pairing credential provider.
     // Bound only when an encryption key is present (the token store fails closed

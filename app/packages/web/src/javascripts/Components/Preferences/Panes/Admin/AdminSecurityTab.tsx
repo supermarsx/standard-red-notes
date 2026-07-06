@@ -58,6 +58,30 @@ type AuditEntry = {
   createdAt: string
 }
 
+// Standard Red Notes: anti-abuse live view payload (GET /v1/admin/anti-abuse).
+type AntiAbuseConfig = {
+  enabled: boolean
+  windowSeconds: number
+  loginMax: number
+  registrationMax: number
+  userWindowSeconds: number
+  userMax: number
+  adaptiveEscalation: boolean
+}
+
+type AntiAbuseMetrics = {
+  tierHits: Record<string, number>
+  blockHits: number
+  recent: Array<{ at: number; bucket: string; ip: string; method: string; path: string }>
+}
+
+type AntiAbuseView = {
+  available: boolean
+  config: AntiAbuseConfig | null
+  ipLists: { allow: string[]; block: string[] }
+  metrics: AntiAbuseMetrics
+}
+
 /** Small colored posture chip: green = safe/on, red = attention/off, neutral = unknown. */
 const PostureChip: FunctionComponent<{
   state: boolean | null | undefined
@@ -127,6 +151,16 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
   const [securityEvents, setSecurityEvents] = useState<AuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
   const [auditError, setAuditError] = useState<string | null>(null)
+
+  // Anti-abuse: live view (config + IP lists + throttle telemetry) and its edits.
+  const [antiAbuse, setAntiAbuse] = useState<AntiAbuseView | null>(null)
+  const [antiAbuseLoading, setAntiAbuseLoading] = useState(false)
+  const [antiAbuseError, setAntiAbuseError] = useState<string | null>(null)
+  const [blockEntry, setBlockEntry] = useState('')
+  const [allowEntry, setAllowEntry] = useState('')
+  const [ipBusy, setIpBusy] = useState(false)
+  const [configDraft, setConfigDraft] = useState<AntiAbuseConfig | null>(null)
+  const [configSaving, setConfigSaving] = useState(false)
 
   const loadRegistration = useCallback(async () => {
     setRegistrationLoading(true)
@@ -212,19 +246,103 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
     }
   }, [application, noteIfForbidden])
 
+  const loadAntiAbuse = useCallback(async () => {
+    setAntiAbuseLoading(true)
+    setAntiAbuseError(null)
+    try {
+      const response = await application.legacyApi.adminGetAntiAbuse()
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        setAntiAbuseError('Could not load anti-abuse status. The endpoint may not be available on this server.')
+        return
+      }
+      const data = (response as { data?: AntiAbuseView }).data ?? null
+      setAntiAbuse(data)
+      if (data?.config) {
+        setConfigDraft(data.config)
+      }
+    } catch (error) {
+      console.error(error)
+      setAntiAbuseError('Could not load anti-abuse status.')
+    } finally {
+      setAntiAbuseLoading(false)
+    }
+  }, [application, noteIfForbidden])
+
   useEffect(() => {
     void loadRegistration()
     void loadStatus()
     void loadAdminCount()
     void loadSecurityEvents()
-  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents])
+    void loadAntiAbuse()
+  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse])
 
   const refreshAll = useCallback(() => {
     void loadRegistration()
     void loadStatus()
     void loadAdminCount()
     void loadSecurityEvents()
-  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents])
+    void loadAntiAbuse()
+  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse])
+
+  const mutateIp = useCallback(
+    async (list: 'allow' | 'block', action: 'add' | 'remove', entry: string) => {
+      const trimmed = entry.trim()
+      if (trimmed === '') {
+        return
+      }
+      setIpBusy(true)
+      setAntiAbuseError(null)
+      try {
+        const response = await application.legacyApi.adminMutateAntiAbuseIp(list, action, trimmed)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+          setAntiAbuseError(message ?? 'Could not update the IP list.')
+          return
+        }
+        const data = (response as { data?: { ipLists?: { allow: string[]; block: string[] } } }).data
+        if (data?.ipLists) {
+          setAntiAbuse((prev) => (prev ? { ...prev, ipLists: data.ipLists as { allow: string[]; block: string[] } } : prev))
+        }
+        if (action === 'add' && list === 'block') {
+          setBlockEntry('')
+        }
+        if (action === 'add' && list === 'allow') {
+          setAllowEntry('')
+        }
+      } catch (error) {
+        console.error(error)
+        setAntiAbuseError('Could not update the IP list.')
+      } finally {
+        setIpBusy(false)
+      }
+    },
+    [application, noteIfForbidden],
+  )
+
+  const saveConfig = useCallback(async () => {
+    if (!configDraft) {
+      return
+    }
+    setConfigSaving(true)
+    setAntiAbuseError(null)
+    try {
+      const response = await application.legacyApi.adminSetServerSettings({ security: { rateLimit: configDraft } })
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        setAntiAbuseError(message ?? 'Could not save the rate-limit settings.')
+        return
+      }
+      await loadAntiAbuse()
+    } catch (error) {
+      console.error(error)
+      setAntiAbuseError('Could not save the rate-limit settings.')
+    } finally {
+      setConfigSaving(false)
+    }
+  }, [application, configDraft, noteIfForbidden, loadAntiAbuse])
 
   const signupsOpen = registration ? registrationIsOpen(registration.persistedDisabled, registration.envDisabled) : null
   const blockSource = registration
@@ -452,19 +570,208 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
 
       <HorizontalSeparator classes="my-4" />
 
-      {/* --- Anti-abuse placeholder --------------------------------------- */}
+      {/* --- Anti-abuse & rate limiting ----------------------------------- */}
       <PreferencesSegment>
         <div className="flex items-center justify-between gap-2">
           <Subtitle>Anti-abuse &amp; rate limiting</Subtitle>
-          <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
-            Coming soon
-          </span>
+          {antiAbuseLoading ? (
+            <Spinner className="h-4 w-4" />
+          ) : (
+            <PostureChip
+              state={antiAbuse?.config ? antiAbuse.config.enabled : null}
+              on="Rate limiting on"
+              off="Rate limiting off"
+              unknown="Unavailable"
+            />
+          )}
         </div>
         <Text className="mt-1">
-          Runtime controls for IP bans, login rate limiting and abuse thresholds are not yet configurable from this
-          panel. Today these are governed by the server environment and the auth service&apos;s built-in limits. A later
-          release will surface them here; account bans can already be applied per user from the Users tab.
+          Per-IP rate limiting on the unauthenticated auth surfaces (login, registration, magic-link, recovery), an
+          admin-managed IP allow/block list, and live throttle counters. Tiers are tunable at runtime; a Redis outage
+          fails <em>open</em> (limits and the block list are best-effort, so a cache blip never locks users out).
         </Text>
+
+        {antiAbuseError ? <Text className="mt-3 text-danger">{antiAbuseError}</Text> : null}
+
+        {antiAbuse && !antiAbuse.available ? (
+          <Text className="mt-3">
+            This deployment has no Redis cache configured, so the rate-limit tiers, IP lists and telemetry are inactive.
+          </Text>
+        ) : null}
+
+        {/* Tier configuration */}
+        {configDraft ? (
+          <div className="mt-4">
+            <Subtitle>Rate-limit tiers</Subtitle>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="flex items-center justify-between gap-2">
+                <Text>Enabled</Text>
+                <input
+                  type="checkbox"
+                  checked={configDraft.enabled}
+                  onChange={(event) => setConfigDraft({ ...configDraft, enabled: event.target.checked })}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2">
+                <Text>Adaptive escalation</Text>
+                <input
+                  type="checkbox"
+                  checked={configDraft.adaptiveEscalation}
+                  onChange={(event) => setConfigDraft({ ...configDraft, adaptiveEscalation: event.target.checked })}
+                />
+              </label>
+              {(
+                [
+                  ['Window (seconds)', 'windowSeconds'],
+                  ['Login max / window', 'loginMax'],
+                  ['Registration max / window', 'registrationMax'],
+                  ['Per-user window (seconds)', 'userWindowSeconds'],
+                  ['Per-user max (0 = off)', 'userMax'],
+                ] as Array<[string, keyof AntiAbuseConfig]>
+              ).map(([label, key]) => (
+                <label key={key} className="flex items-center justify-between gap-2">
+                  <Text>{label}</Text>
+                  <input
+                    className="w-24 rounded border border-border bg-default px-2 py-1 text-right text-sm"
+                    type="number"
+                    min={0}
+                    value={String(configDraft[key] as number)}
+                    onChange={(event) =>
+                      setConfigDraft({ ...configDraft, [key]: Math.max(0, Number(event.target.value) || 0) })
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-3">
+              <Button
+                label={configSaving ? 'Saving…' : 'Save rate-limit tiers'}
+                onClick={() => void saveConfig()}
+                disabled={configSaving}
+                primary
+                small
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* IP block/allow lists */}
+        {antiAbuse?.available ? (
+          <div className="mt-5">
+            <Subtitle>IP block list</Subtitle>
+            <Text className="text-xs text-passive-1">
+              A blocklisted client IP is rejected (403) before any rate-limit tier. Accepts an IP, an IPv4 CIDR
+              (a.b.c.d/24) or an IPv6 literal.
+            </Text>
+            <div className="mt-2 flex gap-2">
+              <input
+                className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                type="text"
+                placeholder="e.g. 203.0.113.7 or 203.0.113.0/24"
+                value={blockEntry}
+                onChange={(event) => setBlockEntry(event.target.value)}
+              />
+              <Button label="Block" onClick={() => void mutateIp('block', 'add', blockEntry)} disabled={ipBusy} small />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {antiAbuse.ipLists.block.length === 0 ? (
+                <Text className="text-xs text-passive-1">No blocked IPs.</Text>
+              ) : (
+                antiAbuse.ipLists.block.map((entry) => (
+                  <span
+                    key={entry}
+                    className="inline-flex items-center gap-1 rounded bg-warning px-2 py-0.5 text-xs text-warning-contrast"
+                  >
+                    {entry}
+                    <button
+                      className="font-bold"
+                      title="Unblock"
+                      onClick={() => void mutateIp('block', 'remove', entry)}
+                      disabled={ipBusy}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+
+            <Subtitle className="mt-4">IP allow list</Subtitle>
+            <Text className="text-xs text-passive-1">
+              An allowlisted IP bypasses the rate-limit tiers. Allow wins over block, so you cannot lock yourself out.
+            </Text>
+            <div className="mt-2 flex gap-2">
+              <input
+                className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                type="text"
+                placeholder="e.g. 198.51.100.0/24"
+                value={allowEntry}
+                onChange={(event) => setAllowEntry(event.target.value)}
+              />
+              <Button label="Allow" onClick={() => void mutateIp('allow', 'add', allowEntry)} disabled={ipBusy} small />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {antiAbuse.ipLists.allow.length === 0 ? (
+                <Text className="text-xs text-passive-1">No allowlisted IPs.</Text>
+              ) : (
+                antiAbuse.ipLists.allow.map((entry) => (
+                  <span
+                    key={entry}
+                    className="inline-flex items-center gap-1 rounded bg-success px-2 py-0.5 text-xs text-success-contrast"
+                  >
+                    {entry}
+                    <button
+                      className="font-bold"
+                      title="Remove"
+                      onClick={() => void mutateIp('allow', 'remove', entry)}
+                      disabled={ipBusy}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Throttle telemetry */}
+        {antiAbuse?.available ? (
+          <div className="mt-5">
+            <Subtitle>Throttle activity (last 24h)</Subtitle>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="rounded border border-border px-2 py-0.5 text-xs">
+                IP blocks: <strong>{antiAbuse.metrics.blockHits}</strong>
+              </span>
+              {Object.keys(antiAbuse.metrics.tierHits).length === 0 ? (
+                <span className="rounded border border-border px-2 py-0.5 text-xs">No throttle hits recorded.</span>
+              ) : (
+                Object.entries(antiAbuse.metrics.tierHits).map(([bucket, count]) => (
+                  <span key={bucket} className="rounded border border-border px-2 py-0.5 text-xs">
+                    {bucket}: <strong>{count}</strong>
+                  </span>
+                ))
+              )}
+            </div>
+            {antiAbuse.metrics.recent.length > 0 ? (
+              <div className="mt-3 flex flex-col gap-1">
+                {antiAbuse.metrics.recent.slice(0, SECURITY_EVENTS_PREVIEW).map((event, index) => (
+                  <Text key={`${event.at}-${index}`} className="text-xs text-passive-1">
+                    {formatTimestamp(new Date(event.at).toISOString())} &middot; {event.bucket} &middot; {event.ip}{' '}
+                    &middot; {event.method} {event.path}
+                  </Text>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-3">
+          <Text className="text-xs text-passive-1">
+            The same tiers, IP lists and lockout config are viewable/manageable from the container CLI:{' '}
+            <code>srn-admin limits</code>, <code>srn-admin ip list</code>, <code>srn-admin ip block &lt;ip&gt;</code>.
+          </Text>
+        </div>
       </PreferencesSegment>
 
       <HorizontalSeparator classes="my-4" />

@@ -77,8 +77,37 @@ export interface PersistedProofOfWorkSettings {
   signInAdaptiveThreshold?: number
 }
 
+/**
+ * Standard Red Notes: RATE-LIMIT tier knobs for the gateway's anti-abuse layer.
+ * Unlike proofOfWork/registration these are ENFORCED by the api-gateway itself
+ * (RateLimitMiddleware reads the resolved config per request), so this shape is
+ * NOT a cross-service contract. Every field is optional; absence falls through
+ * to env then the hardcoded safe defaults that reproduce the historical
+ * hardcoded behavior (window 60s, login 10, registration 5, per-user off).
+ */
+export interface PersistedRateLimitSettings {
+  enabled?: boolean
+  /** Fixed-window length in seconds shared by the IP tiers. Integer 1..3600. */
+  windowSeconds?: number
+  /** login / recovery-login tier max per window per IP. Integer 0..100000. */
+  loginMax?: number
+  /** registration / mcp-authenticate / magic-link tier max. Integer 0..100000. */
+  registrationMax?: number
+  /** Per-USER tier window (authenticated expensive endpoints). Integer 1..3600. */
+  userWindowSeconds?: number
+  /** Per-USER tier max per window per user; 0 = disabled. Integer 0..100000. */
+  userMax?: number
+  /**
+   * Item 5: when true, an IP that trips a tier is flagged in Redis so the auth
+   * server's ADAPTIVE proof-of-work path can escalate to a challenge on that
+   * IP's next attempts instead of only hard-blocking. Default false.
+   */
+  adaptiveEscalation?: boolean
+}
+
 export interface PersistedSecuritySettings {
   proofOfWork?: PersistedProofOfWorkSettings
+  rateLimit?: PersistedRateLimitSettings
 }
 
 /**
@@ -142,6 +171,15 @@ export interface ServerSettingsPatch {
       signInMode?: 'always' | 'adaptive' | null
       signInDifficulty?: number | null
       signInAdaptiveThreshold?: number | null
+    }
+    rateLimit?: {
+      enabled?: boolean | null
+      windowSeconds?: number | null
+      loginMax?: number | null
+      registrationMax?: number | null
+      userWindowSeconds?: number | null
+      userMax?: number | null
+      adaptiveEscalation?: boolean | null
     }
   }
   registration?: {
@@ -226,6 +264,24 @@ export class ServerSettingsStore {
         this.applyKey(data.security.proofOfWork, 'signInAdaptiveThreshold', pow.signInAdaptiveThreshold)
         if (Object.keys(data.security.proofOfWork).length === 0) {
           delete data.security.proofOfWork
+        }
+        if (Object.keys(data.security).length === 0) {
+          delete data.security
+        }
+      }
+      if (patch.security?.rateLimit) {
+        data.security = data.security ?? {}
+        data.security.rateLimit = data.security.rateLimit ?? {}
+        const rl = patch.security.rateLimit
+        this.applyKey(data.security.rateLimit, 'enabled', rl.enabled)
+        this.applyKey(data.security.rateLimit, 'windowSeconds', rl.windowSeconds)
+        this.applyKey(data.security.rateLimit, 'loginMax', rl.loginMax)
+        this.applyKey(data.security.rateLimit, 'registrationMax', rl.registrationMax)
+        this.applyKey(data.security.rateLimit, 'userWindowSeconds', rl.userWindowSeconds)
+        this.applyKey(data.security.rateLimit, 'userMax', rl.userMax)
+        this.applyKey(data.security.rateLimit, 'adaptiveEscalation', rl.adaptiveEscalation)
+        if (Object.keys(data.security.rateLimit).length === 0) {
+          delete data.security.rateLimit
         }
         if (Object.keys(data.security).length === 0) {
           delete data.security

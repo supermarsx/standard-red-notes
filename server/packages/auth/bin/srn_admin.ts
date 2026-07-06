@@ -42,6 +42,9 @@ import {
   ADMIN_ROLE_NAME,
   CLI_MANAGEABLE_FLAGS,
   CliLogEntry,
+  IP_ACL_ALLOW_KEY,
+  IP_ACL_BLOCK_KEY,
+  IpAclList,
   OPERATOR_ENVS,
   STORAGE_LIMIT_SETTING,
   STORAGE_USED_SETTING,
@@ -60,6 +63,7 @@ import {
   stringOption,
   tailLogFiles,
   usage,
+  validateCliIpEntry,
   validateFlagValue,
   type GroupLike,
   type OperatorService,
@@ -1211,6 +1215,238 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
 }
 
 /* ---------------------------------------------------------------------------
+ * ANTI-ABUSE (IP allow/block lists + effective limits)
+ * ------------------------------------------------------------------------- */
+
+/** Minimal ioredis slice the IP-list + limits commands need. */
+type RedisSetClient = {
+  sadd(key: string, member: string): Promise<number>
+  srem(key: string, member: string): Promise<number>
+  smembers(key: string): Promise<string[]>
+}
+
+/**
+ * Get the shared Redis client bound by the auth container (Auth_Redis). Returns
+ * undefined when Redis is not configured (in-memory cache mode) — the anti-abuse
+ * layer no-ops there just as it does at the gateway, so we report that honestly.
+ */
+async function getRedisSetClient(container: ContainerLike): Promise<RedisSetClient | undefined> {
+  try {
+    return container.get<RedisSetClient>(TYPES.Auth_Redis)
+  } catch {
+    return undefined
+  }
+}
+
+const ipListKey = (list: IpAclList): string => (list === 'allow' ? IP_ACL_ALLOW_KEY : IP_ACL_BLOCK_KEY)
+
+async function cmdIp(args: ParsedArgs, sub: string | undefined): Promise<number> {
+  if (sub === 'list' || sub === undefined) {
+    const which = args.positionals[0]
+    if (which !== undefined && which !== 'allow' && which !== 'block') {
+      throw new UsageError("ip list [allow|block]")
+    }
+    const container = await loadContainer()
+    const redis = await getRedisSetClient(container)
+    if (!redis) {
+      outLine('IP lists are unavailable: Redis is not configured on this deployment (in-memory cache mode).')
+
+      return 0
+    }
+    const allow = which === 'block' ? [] : (await redis.smembers(IP_ACL_ALLOW_KEY)).sort()
+    const block = which === 'allow' ? [] : (await redis.smembers(IP_ACL_BLOCK_KEY)).sort()
+
+    if (args.options.json === true) {
+      outJson({ allow, block })
+
+      return 0
+    }
+    if (which !== 'block') {
+      outLine(`allow (${allow.length}):${allow.length ? '\n  ' + allow.join('\n  ') : ' (empty)'}`)
+    }
+    if (which !== 'allow') {
+      outLine(`block (${block.length}):${block.length ? '\n  ' + block.join('\n  ') : ' (empty)'}`)
+    }
+
+    return 0
+  }
+
+  const actionMap: Record<string, { list: IpAclList; add: boolean } | undefined> = {
+    block: { list: 'block', add: true },
+    unblock: { list: 'block', add: false },
+    allow: { list: 'allow', add: true },
+    unallow: { list: 'allow', add: false },
+  }
+  const action = actionMap[sub]
+  if (!action) {
+    throw new UsageError(`unknown ip subcommand '${sub}' — list | block | unblock | allow | unallow`)
+  }
+
+  const entryRaw = args.positionals[0]
+  if (!entryRaw) {
+    throw new UsageError(`ip ${sub} <ip|ipv4-cidr>`)
+  }
+  const validated = validateCliIpEntry(entryRaw)
+  if (!validated.ok) {
+    throw new UsageError(validated.error)
+  }
+
+  const container = await loadContainer()
+  const redis = await getRedisSetClient(container)
+  if (!redis) {
+    throw new Error('Redis is not configured on this deployment, so the IP lists cannot be managed from the CLI.')
+  }
+
+  const key = ipListKey(action.list)
+  if (action.add) {
+    await redis.sadd(key, validated.value)
+  } else {
+    await redis.srem(key, validated.value)
+  }
+
+  await writeAudit(container, 'admin.anti-abuse.ip-list', { type: 'ip', uuid: null }, {
+    list: action.list,
+    action: action.add ? 'add' : 'remove',
+    entry: validated.value,
+  })
+
+  outLine(
+    `${action.add ? 'Added' : 'Removed'} ${validated.value} ${action.add ? 'to' : 'from'} the ${action.list} list. Effective within a few seconds (the gateway caches the list briefly).`,
+  )
+
+  return 0
+}
+
+async function cmdLimits(args: ParsedArgs): Promise<number> {
+  // Rate-limit tiers live in the SERVER_SETTINGS overlay (security.rateLimit),
+  // layered over RATE_LIMIT_* env, over the safe defaults. Read the overlay file
+  // + the gateway .env the same honest way the registration policy command does.
+  const authEnv = await readPackageEnv('auth')
+  const gatewayEnv = await readPackageEnv('api-gateway')
+  const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
+
+  let persisted: Record<string, unknown> = {}
+  if (overlayPath) {
+    try {
+      const raw = await fsPromises.readFile(overlayPath, 'utf8')
+      const parsed = JSON.parse(raw) as { security?: { rateLimit?: Record<string, unknown> } }
+      persisted = parsed?.security?.rateLimit ?? {}
+    } catch {
+      persisted = {}
+    }
+  }
+
+  const num = (key: string, fallback: number): { value: number; source: string } => {
+    if (persisted[key] !== undefined && typeof persisted[key] === 'number') {
+      return { value: persisted[key] as number, source: 'persisted' }
+    }
+    const envRaw = process.env[`API_GATEWAY_${key}`] ?? gatewayEnv[key]
+    if (envRaw !== undefined && envRaw !== '' && Number.isFinite(Number(envRaw))) {
+      return { value: Number(envRaw), source: 'env' }
+    }
+
+    return { value: fallback, source: 'default' }
+  }
+  // env var NAMES for the tiers (mapped to the overlay key they override).
+  const window = (() => {
+    if (typeof persisted.windowSeconds === 'number') {
+      return { value: persisted.windowSeconds, source: 'persisted' }
+    }
+    const envRaw = process.env.API_GATEWAY_RATE_LIMIT_WINDOW_SECONDS ?? gatewayEnv.RATE_LIMIT_WINDOW_SECONDS
+    return envRaw ? { value: Number(envRaw), source: 'env' } : { value: 60, source: 'default' }
+  })()
+  const login = (() => {
+    if (typeof persisted.loginMax === 'number') {
+      return { value: persisted.loginMax, source: 'persisted' }
+    }
+    const envRaw = process.env.API_GATEWAY_RATE_LIMIT_LOGIN_MAX ?? gatewayEnv.RATE_LIMIT_LOGIN_MAX
+    return envRaw ? { value: Number(envRaw), source: 'env' } : { value: 10, source: 'default' }
+  })()
+  const registration = (() => {
+    if (typeof persisted.registrationMax === 'number') {
+      return { value: persisted.registrationMax, source: 'persisted' }
+    }
+    const envRaw = process.env.API_GATEWAY_RATE_LIMIT_REGISTRATION_MAX ?? gatewayEnv.RATE_LIMIT_REGISTRATION_MAX
+    return envRaw ? { value: Number(envRaw), source: 'env' } : { value: 5, source: 'default' }
+  })()
+  const enabled =
+    typeof persisted.enabled === 'boolean'
+      ? { value: persisted.enabled, source: 'persisted' }
+      : { value: (process.env.API_GATEWAY_RATE_LIMIT_ENABLED ?? gatewayEnv.RATE_LIMIT_ENABLED) !== 'false', source: 'env/default' }
+  const userMax = num('userMax', 0)
+  const adaptive =
+    typeof persisted.adaptiveEscalation === 'boolean'
+      ? { value: persisted.adaptiveEscalation, source: 'persisted' }
+      : { value: false, source: 'default' }
+
+  // IP list sizes (best-effort — Redis may be unconfigured).
+  let allowCount: number | null = null
+  let blockCount: number | null = null
+  try {
+    const container = await loadContainer()
+    const redis = await getRedisSetClient(container)
+    if (redis) {
+      allowCount = (await redis.smembers(IP_ACL_ALLOW_KEY)).length
+      blockCount = (await redis.smembers(IP_ACL_BLOCK_KEY)).length
+    }
+  } catch {
+    /* keep null (unknown) */
+  }
+
+  // Failed-login lockout config is read at boot from the auth env.
+  const lockout = {
+    failedLoginLockout: process.env.FAILED_LOGIN_LOCKOUT ?? authEnv.FAILED_LOGIN_LOCKOUT ?? '(default)',
+    failedLoginCaptchaLockout:
+      process.env.FAILED_LOGIN_CAPTCHA_LOCKOUT ?? authEnv.FAILED_LOGIN_CAPTCHA_LOCKOUT ?? '(default)',
+  }
+
+  if (args.options.json === true) {
+    outJson({
+      rateLimit: {
+        enabled: enabled.value,
+        windowSeconds: window.value,
+        loginMax: login.value,
+        registrationMax: registration.value,
+        userMax: userMax.value,
+        adaptiveEscalation: adaptive.value,
+      },
+      sources: {
+        enabled: enabled.source,
+        windowSeconds: window.source,
+        loginMax: login.source,
+        registrationMax: registration.source,
+        userMax: userMax.source,
+        adaptiveEscalation: adaptive.source,
+      },
+      ipLists: { allow: allowCount, block: blockCount },
+      lockout,
+      overlayPath: overlayPath ?? null,
+    })
+
+    return 0
+  }
+
+  outLine('rate-limit tiers (effective — persisted overlay over RATE_LIMIT_* env over defaults):')
+  outLine(`  enabled:            ${enabled.value} [${enabled.source}]`)
+  outLine(`  window seconds:     ${window.value} [${window.source}]`)
+  outLine(`  login max / window: ${login.value} [${login.source}]`)
+  outLine(`  registration max:   ${registration.value} [${registration.source}]`)
+  outLine(`  per-user max:       ${userMax.value === 0 ? '0 (disabled)' : userMax.value} [${userMax.source}]`)
+  outLine(`  adaptive escalation:${adaptive.value ? ' on' : ' off'} [${adaptive.source}]`)
+  outLine('')
+  outLine('IP access lists (Redis):')
+  outLine(`  allow entries:      ${allowCount ?? '(Redis unavailable)'}`)
+  outLine(`  block entries:      ${blockCount ?? '(Redis unavailable)'}`)
+  outLine('')
+  outLine('failed-login lockout (auth env; read at boot):')
+  outLine(`  FAILED_LOGIN_LOCKOUT:         ${lockout.failedLoginLockout}`)
+  outLine(`  FAILED_LOGIN_CAPTCHA_LOCKOUT: ${lockout.failedLoginCaptchaLockout}`)
+  outLine(`  overlay file: ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
+
+  return 0
+}
+
+/* ---------------------------------------------------------------------------
  * WEBHOOKS
  * ------------------------------------------------------------------------- */
 
@@ -1825,6 +2061,13 @@ async function main(): Promise<number> {
 
     case 'webhooks':
       return cmdWebhooks({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    /* ANTI-ABUSE ----------------------------------------------------------- */
+    case 'ip':
+      return cmdIp({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'limits':
+      return cmdLimits(args)
 
     case 'config':
       return cmdConfig(args)

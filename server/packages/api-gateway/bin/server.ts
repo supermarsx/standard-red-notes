@@ -64,8 +64,12 @@ import { decideCorsOrigin, resolveCorsStrictMode } from '../src/Controller/CorsO
 import {
   buildDefaultRateLimitRules,
   createRateLimitMiddleware,
+  RateLimitConfig,
   RateLimitRedis,
 } from '../src/Controller/RateLimitMiddleware'
+import { IpAccessListStore } from '../src/Controller/IpAccessList'
+import { RateLimitMetricsStore } from '../src/Controller/RateLimitMetrics'
+import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSettingsResolver'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { registerWorkflowsUiProxy } from '../src/Workflows/registerWorkflowsUiProxy'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
@@ -142,19 +146,56 @@ void container
     const rateLimitRedis = container.isBound(TYPES.ApiGateway_Redis)
       ? (container.get(TYPES.ApiGateway_Redis) as RateLimitRedis)
       : undefined
-    const rateLimitNumber = (key: string, fallback: number): number =>
-      env.get(key, true) ? +env.get(key, true) : fallback
+    // Standard Red Notes: the effective tier config is now resolved PER REQUEST
+    // from the ServerSettings overlay (admin value wins over RATE_LIMIT_* env wins
+    // over the safe defaults that reproduce the historical hardcoded behavior), so
+    // an admin can retune the tiers without a restart. IP allow/block lists +
+    // throttle telemetry are wired in when Redis is bound.
+    const rateLimitResolver = container.get<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
+    const ipAccessList = container.isBound(TYPES.ApiGateway_IpAccessListStore)
+      ? container.get<IpAccessListStore>(TYPES.ApiGateway_IpAccessListStore)
+      : undefined
+    const rateLimitMetrics = container.isBound(TYPES.ApiGateway_RateLimitMetricsStore)
+      ? container.get<RateLimitMetricsStore>(TYPES.ApiGateway_RateLimitMetricsStore)
+      : undefined
+    // Item 5: when adaptive escalation is enabled, flag an IP that trips a tier in
+    // Redis (short TTL) so downstream adaptive anti-bot logic can require a
+    // proof-of-work challenge on that address's next attempts. Best-effort.
+    const escalationRedis = rateLimitRedis as unknown as {
+      set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
+    }
     app.use(
       createRateLimitMiddleware({
         redis: rateLimitRedis,
         logger: { warn: (message: string) => logger.warn(message) },
-        config: {
-          enabled: env.get('RATE_LIMIT_ENABLED', true) !== 'false',
-          rules: buildDefaultRateLimitRules({
-            windowSeconds: rateLimitNumber('RATE_LIMIT_WINDOW_SECONDS', 60),
-            loginMax: rateLimitNumber('RATE_LIMIT_LOGIN_MAX', 10),
-            registrationMax: rateLimitNumber('RATE_LIMIT_REGISTRATION_MAX', 5),
-          }),
+        config: async (): Promise<RateLimitConfig> => {
+          const resolved = await rateLimitResolver.resolveRateLimitConfig()
+
+          return {
+            enabled: resolved.enabled,
+            rules: buildDefaultRateLimitRules({
+              windowSeconds: resolved.windowSeconds,
+              loginMax: resolved.loginMax,
+              registrationMax: resolved.registrationMax,
+            }),
+          }
+        },
+        ipAccessList,
+        metrics: rateLimitMetrics,
+        onThrottle: (clientIp: string): void => {
+          if (escalationRedis.set === undefined) {
+            return
+          }
+          void (async (): Promise<void> => {
+            try {
+              const resolved = await rateLimitResolver.resolveRateLimitConfig()
+              if (resolved.adaptiveEscalation && escalationRedis.set) {
+                await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
+              }
+            } catch {
+              // best-effort escalation signal.
+            }
+          })()
         },
       }),
     )
