@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { isErrorResponse, PrefKey } from '@standardnotes/snjs'
+import { isErrorResponse, PrefKey, VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { AssistantSubscriptionStatus, WebApplication } from '@/Application/WebApplication'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import { Title, Subtitle, Text } from '../../PreferencesComponents/Content'
+import TabList from '@/Components/Tabs/TabList'
+import Tab from '@/Components/Tabs/Tab'
+import TabPanel from '@/Components/Tabs/TabPanel'
+import { useTabState } from '@/Components/Tabs/useTabState'
+import Icon from '@/Components/Icon/Icon'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import Button from '@/Components/Button/Button'
@@ -312,7 +317,20 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
   )
 }
 
+// 2nd-level sub-tabs for the Assistant pane, mirroring the Admin pane's sticky
+// sub-tab bar. Each long stacked section below is wrapped in a TabPanel with the
+// matching id; only the active subtab's sections are mounted at a time.
+const ASSISTANT_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }[] = [
+  { id: 'connection', title: 'Connection', icon: 'link' },
+  { id: 'behavior', title: 'Behavior', icon: 'tune' },
+  { id: 'model', title: 'Model', icon: 'settings' },
+  { id: 'search', title: 'Search', icon: 'search' },
+  { id: 'voice', title: 'Voice', icon: 'file-music' },
+  { id: 'actions', title: 'Actions', icon: 'pencil' },
+]
+
 const Assistant = ({ application }: { application: WebApplication }) => {
+  const tabState = useTabState({ defaultTab: 'connection' })
   const [config, setConfig] = useState<AssistantConfig | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -733,6 +751,21 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
   return (
     <PreferencesPane>
+      {/* Sticky 2nd-level sub-tab bar, built from the raw TabList/Tab primitives so
+          `position: sticky` is not trapped by an overflow-hidden wrapper — same
+          pattern as the Admin pane. */}
+      <div className="sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border border-border bg-default shadow-sm">
+        <TabList state={tabState} className="flex min-w-max">
+          {ASSISTANT_TABS.map(({ id, title, icon }) => (
+            <Tab key={id} id={id} className="inline-flex items-center gap-1.5 whitespace-nowrap first:rounded-tl-md">
+              <Icon type={icon} size="medium" />
+              {title}
+            </Tab>
+          ))}
+        </TabList>
+      </div>
+
+      <TabPanel state={tabState} id="connection">
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Assistant</Title>
@@ -970,7 +1003,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       )}
 
       {application.featuresController.isAdminUser() && <SubscriptionPairing application={application} />}
+      </TabPanel>
 
+      <TabPanel state={tabState} id="behavior">
       <PreferencesGroup>
         <PreferencesSegment>
           <div className="flex items-center justify-between">
@@ -1120,33 +1155,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       </PreferencesGroup>
 
       <AgentRuntimeSettings application={application} />
+      </TabPanel>
 
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Output length</Title>
-          <Text>
-            Cap how many tokens the model generates per turn. Applies to every assistant request (chat, selection
-            actions, research) in both Direct and Server proxy modes. Stored on this device only.
-          </Text>
-
-          <HorizontalSeparator classes="my-4" />
-
-          <Subtitle>Max output tokens</Subtitle>
-          <Text>
-            Cap on tokens generated per turn (request <code>max_tokens</code>). Leave 0 to let the endpoint use its own
-            default. Up to {MAX_TOKENS_MAX}.
-          </Text>
-          <input
-            className="mt-2 w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
-            type="number"
-            min={0}
-            max={MAX_TOKENS_MAX}
-            value={sampling.maxTokens}
-            onChange={(event) => updateSampling({ maxTokens: clampMaxTokens(Number(event.target.value)) })}
-          />
-        </PreferencesSegment>
-      </PreferencesGroup>
-
+      <TabPanel state={tabState} id="search">
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Search</Title>
@@ -1201,7 +1212,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           )}
         </PreferencesSegment>
       </PreferencesGroup>
+      </TabPanel>
 
+      <TabPanel state={tabState} id="voice">
       <NarrationSettings application={application} />
 
       <PreferencesGroup>
@@ -1270,6 +1283,35 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               onChange={(value) => updateDictation({ dictationEnabled: value })}
             />
           </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
+
+      </TabPanel>
+
+      <TabPanel state={tabState} id="model">
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Output length</Title>
+          <Text>
+            Cap how many tokens the model generates per turn. Applies to every assistant request (chat, selection
+            actions, research) in both Direct and Server proxy modes. Stored on this device only.
+          </Text>
+
+          <HorizontalSeparator classes="my-4" />
+
+          <Subtitle>Max output tokens</Subtitle>
+          <Text>
+            Cap on tokens generated per turn (request <code>max_tokens</code>). Leave 0 to let the endpoint use its own
+            default. Up to {MAX_TOKENS_MAX}.
+          </Text>
+          <input
+            className="mt-2 w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+            type="number"
+            min={0}
+            max={MAX_TOKENS_MAX}
+            value={sampling.maxTokens}
+            onChange={(event) => updateSampling({ maxTokens: clampMaxTokens(Number(event.target.value)) })}
+          />
         </PreferencesSegment>
       </PreferencesGroup>
 
@@ -1433,6 +1475,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         </PreferencesSegment>
       </PreferencesGroup>
 
+      </TabPanel>
+
+      <TabPanel state={tabState} id="actions">
       <PreferencesGroup>
         <PreferencesSegment>
           <Subtitle>Text selection AI actions</Subtitle>
@@ -1493,6 +1538,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           </Text>
         </PreferencesSegment>
       </PreferencesGroup>
+      </TabPanel>
     </PreferencesPane>
   )
 }

@@ -8,6 +8,10 @@ import Privacy from './Privacy'
 import Protections from './Protections'
 import ErroredItems from './ErroredItems'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
+import PreferencesSubtabs, {
+  PreferencesSubtab,
+} from '@/Components/Preferences/PreferencesComponents/PreferencesSubtabs'
+import { useTabState } from '@/Components/Tabs/useTabState'
 import BiometricsLock from '@/Components/Preferences/Panes/Security/BiometricsLock'
 import PasskeyLock from '@/Components/Preferences/Panes/Security/PasskeyLock'
 import MultitaskingPrivacy from '@/Components/Preferences/Panes/Security/MultitaskingPrivacy'
@@ -52,32 +56,87 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
       NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.UniversalSecondFactor).getValue(),
     ) === FeatureStatus.Entitled && props.application.sessions.getUser() !== undefined
 
+  const hasUser = props.application.sessions.getUser() !== undefined
+
+  const tabState = useTabState({ defaultTab: 'encryption' })
+
+  const tabs: PreferencesSubtab[] = [
+    {
+      id: 'encryption',
+      title: 'Encryption',
+      icon: 'lock',
+      content: (
+        <>
+          <Encryption />
+          <ServerAccessKey />
+          {props.application.items.invalidNonVaultedItems.length > 0 && <ErroredItems />}
+        </>
+      ),
+    },
+    {
+      id: 'app-lock',
+      title: 'App lock',
+      icon: 'password',
+      content: (
+        <>
+          <Protections application={props.application} />
+          {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
+          <PasscodeLock application={props.application} />
+          {!isNativeMobileWeb && <PasskeyLock application={props.application} />}
+          {isNativeMobileWeb && <BiometricsLock application={props.application} />}
+        </>
+      ),
+    },
+    {
+      id: 'two-factor',
+      title: 'Two-factor',
+      icon: 'user-switch',
+      content: (
+        <>
+          <TwoFactorAuthView auth={auth} application={props.application} canDisable2FA={canDisable2FA} />
+          {isU2FFeatureAvailable && (
+            <U2FView
+              application={props.application}
+              is2FAEnabled={is2FAEnabled}
+              loadAuthenticatorsCallback={onU2FDevicesLoaded}
+            />
+          )}
+          {hasUser && <MagicLinkView application={props.application} />}
+        </>
+      ),
+    },
+    {
+      id: 'tokens',
+      title: 'Tokens & devices',
+      icon: 'link',
+      hidden: !hasUser,
+      content: (
+        <>
+          {hasUser && <TrustedDevices application={props.application} />}
+          {hasUser && <AppPasswords application={props.application} />}
+          {hasUser && <McpTokens application={props.application} />}
+          {hasUser && <CalDavTokens application={props.application} />}
+          {hasUser && <Webhooks application={props.application} />}
+        </>
+      ),
+    },
+    {
+      id: 'privacy',
+      title: 'Privacy & recovery',
+      icon: 'restore',
+      hidden: !hasUser,
+      content: (
+        <>
+          {hasUser && <Privacy application={props.application} />}
+          {hasUser && <AccountRecovery application={props.application} />}
+        </>
+      ),
+    },
+  ]
+
   return (
     <PreferencesPane>
-      <Encryption />
-      <ServerAccessKey />
-      {props.application.items.invalidNonVaultedItems.length > 0 && <ErroredItems />}
-      <Protections application={props.application} />
-      <TwoFactorAuthView auth={auth} application={props.application} canDisable2FA={canDisable2FA} />
-      {isU2FFeatureAvailable && (
-        <U2FView
-          application={props.application}
-          is2FAEnabled={is2FAEnabled}
-          loadAuthenticatorsCallback={onU2FDevicesLoaded}
-        />
-      )}
-      {props.application.sessions.getUser() && <MagicLinkView application={props.application} />}
-      {props.application.sessions.getUser() && <TrustedDevices application={props.application} />}
-      {props.application.sessions.getUser() && <AppPasswords application={props.application} />}
-      {props.application.sessions.getUser() && <McpTokens application={props.application} />}
-      {props.application.sessions.getUser() && <CalDavTokens application={props.application} />}
-      {props.application.sessions.getUser() && <Webhooks application={props.application} />}
-      {props.application.sessions.getUser() && <AccountRecovery application={props.application} />}
-      {isNativeMobileWeb && <MultitaskingPrivacy application={props.application} />}
-      <PasscodeLock application={props.application} />
-      {!isNativeMobileWeb && <PasskeyLock application={props.application} />}
-      {isNativeMobileWeb && <BiometricsLock application={props.application} />}
-      {props.application.sessions.getUser() && <Privacy application={props.application} />}
+      <PreferencesSubtabs state={tabState} tabs={tabs} />
     </PreferencesPane>
   )
 }

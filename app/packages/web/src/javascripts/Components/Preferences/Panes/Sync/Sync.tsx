@@ -390,6 +390,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
             </div>
             <Button
               primary
+              className="shrink-0 whitespace-nowrap"
               label={syncingNow ? 'Syncing…' : 'Sync now'}
               disabled={syncingNow || connection.signedOut}
               onClick={() => void syncNow()}
