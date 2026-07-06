@@ -1119,6 +1119,23 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: OPT-IN container restart (Redis cache / MariaDB) through
+   * the locked-down docker-socket-proxy. OFF BY DEFAULT: the server returns 503
+   * when the capability is not enabled/reachable, and enforces an ALLOWLIST of
+   * container names ({cache, db}). Returns { container, action, status } on
+   * success. The caller learns whether to show the control from the `docker`
+   * block of adminListServices.
+   */
+  async adminRestartContainer(name: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.adminContainerRestart(name)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: `Failed to restart ${name}.`,
+    })
+  }
+
   /** Standard Red Notes: grant or revoke the admin (internal team) role. */
   async adminSetUserAdminRole(userUuid: string, granted: boolean): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({

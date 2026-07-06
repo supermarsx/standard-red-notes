@@ -166,6 +166,19 @@ x-server-env: &server-env
   RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
   RATE_LIMIT_LOGIN_MAX: ${RATE_LIMIT_LOGIN_MAX:-10}
   RATE_LIMIT_REGISTRATION_MAX: ${RATE_LIMIT_REGISTRATION_MAX:-5}
+  # OPT-IN, OFF-BY-DEFAULT admin container restart for the infra containers that
+  # run OUTSIDE the server's supervisord (Redis `cache` + MariaDB `db`). The admin
+  # panel restarts them through the locked-down `docker-socket-proxy` sidecar below
+  # (Docker Engine API over HTTP) — the raw /var/run/docker.sock is NEVER mounted
+  # into this server container, only into the proxy. DISABLED unless BOTH the flag
+  # is set to `true` AND the proxy URL is provided AND the proxy is actually run
+  # (`docker compose --profile ops up -d`). Left empty here so the base stack is
+  # unchanged and the feature stays off. See docs/DEPLOYMENT.md "Opt-in container
+  # restart". SERVICE_CONTROL_DOCKER_PROJECT is the compose project prefix used to
+  # resolve <project>-<service>-1 container names (matches `name:` at the top).
+  SERVICE_CONTROL_DOCKER_ENABLED: ${SERVICE_CONTROL_DOCKER_ENABLED:-}
+  SERVICE_CONTROL_DOCKER_PROXY_URL: ${SERVICE_CONTROL_DOCKER_PROXY_URL:-}
+  SERVICE_CONTROL_DOCKER_PROJECT: ${SERVICE_CONTROL_DOCKER_PROJECT:-standard-red-notes}
 
 services:
   app:
@@ -526,6 +539,76 @@ services:
         # the old hostname) still resolve `localstack` to this container.
         aliases:
           - localstack
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL, OPT-IN docker-socket-proxy for the admin "restart Redis/MariaDB"
+  # controls. Runs ONLY with the `ops` compose profile
+  # (`docker compose --profile ops up -d`), so the base stack is UNCHANGED and
+  # this never starts unless explicitly requested.
+  #
+  # SECURITY — least privilege, defense in depth:
+  #   - The RAW /var/run/docker.sock is mounted ONLY here (read-only), NEVER into
+  #     the server container. The server talks to this proxy over HTTP.
+  #   - Everything is DENIED by default; only ALLOW_RESTARTS=1 is turned on, which
+  #     grants access to just the container restart/stop/kill endpoints. No image
+  #     pull, no container create/exec, no volume/network/secret access, no info.
+  #     Even a bug in the server can do nothing but restart a container.
+  #   - Internal network ONLY — no host port. Reachable only as
+  #     `docker-socket-proxy:2375` on the compose network.
+  #
+  # To ENABLE the feature, run this profile AND set on the server:
+  #   SERVICE_CONTROL_DOCKER_ENABLED=true
+  #   SERVICE_CONTROL_DOCKER_PROXY_URL=http://docker-socket-proxy:2375
+  # See docs/DEPLOYMENT.md "Opt-in container restart".
+  docker-socket-proxy:
+    profiles:
+      - ops
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # HAProxy needs to bind :2375 and drop to its unprivileged user.
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    mem_limit: ${DOCKER_PROXY_MEM_LIMIT:-64m}
+    pids_limit: 128
+    environment:
+      # DENY-ALL baseline, then permit ONLY the restart endpoints.
+      ALLOW_RESTARTS: 1
+      # Everything below is explicitly denied (these are the proxy defaults, set
+      # here for an auditable, self-documenting locked-down surface).
+      CONTAINERS: 0
+      IMAGES: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      SERVICES: 0
+      TASKS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      INFO: 0
+      VERSION: 0
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      DISTRIBUTION: 0
+      EXEC: 0
+      SESSION: 0
+      POST: 0
+    volumes:
+      # READ-ONLY mount of the docker socket — this is the ONLY container that
+      # ever sees it. The proxy still performs API calls over it; :ro only blocks
+      # modifying the socket file itself.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - standard-red-notes
 
 networks:
   standard-red-notes:

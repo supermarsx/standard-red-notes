@@ -19,6 +19,7 @@ import {
   validateProfilesPatch,
 } from '../../Service/Assistant/profiles'
 import { API_GATEWAY_PROGRAM, ServiceAction, ServiceControlService } from '../../Service/ServiceControl/ServiceControlService'
+import { DockerServiceControlService } from '../../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAclList } from '../IpAccessList'
 import { RateLimitMetricsStore } from '../RateLimitMetrics'
 
@@ -33,9 +34,13 @@ export type ServiceStatusEntry = {
   reachable: boolean
   status: 'ok' | 'degraded' | 'down' | 'unknown'
   detail?: string
+  // Standard Red Notes: how long this service's readiness probe took, in ms.
+  // Present whenever a probe actually ran (omitted for the gateway itself, which
+  // is not probed, and for 'not configured' services with no URL to probe).
+  responseTimeMs?: number
 }
 
-type AuthReadiness = { reachable: boolean; status?: string; checks?: Record<string, boolean> }
+type AuthReadiness = { reachable: boolean; status?: string; checks?: Record<string, boolean>; responseTimeMs?: number }
 
 /**
  * Standard Red Notes: minimal fetch shape used by the server-status endpoint to
@@ -111,6 +116,14 @@ export class AdminController extends BaseHttpController {
     // degrade to 503 (mutations) / empty (view) when absent.
     @inject(TYPES.ApiGateway_IpAccessListStore) @optional() private ipAccessListStore?: IpAccessListStore,
     @inject(TYPES.ApiGateway_RateLimitMetricsStore) @optional() private rateLimitMetricsStore?: RateLimitMetricsStore,
+    // Standard Red Notes: OPT-IN container restart via the docker-socket-proxy
+    // sidecar (Redis cache + MariaDB, which run OUTSIDE supervisord). Optional
+    // and OFF BY DEFAULT — when unbound / not enabled the container-restart route
+    // degrades to a clear 503 and the /services `docker` block reports
+    // enabled:false, so the UI simply hides the controls.
+    @inject(TYPES.ApiGateway_DockerServiceControlService)
+    @optional()
+    private dockerServiceControlService?: DockerServiceControlService,
   ) {
     super()
   }
@@ -574,15 +587,115 @@ export class AdminController extends BaseHttpController {
       return
     }
 
+    // Standard Red Notes: the OPT-IN container-restart (docker-socket-proxy)
+    // capability rides along in the same response so the UI learns about it in
+    // one call. `enabled` = operator set the flag + proxy URL; `available` =
+    // enabled AND the proxy is actually reachable. Both false (with an empty
+    // allowlist) when the service is unbound / off — the UI then hides the
+    // Redis/DB controls entirely.
+    const docker = await this.dockerCapability()
+
     if (!this.serviceControlService) {
-      response.json({ available: false, programs: [] })
+      response.json({ available: false, programs: [], docker })
 
       return
     }
 
     const available = await this.serviceControlService.isAvailable()
 
-    response.json({ available, programs: this.serviceControlService.getControllablePrograms() })
+    response.json({ available, programs: this.serviceControlService.getControllablePrograms(), docker })
+  }
+
+  /**
+   * Standard Red Notes: resolve the docker-restart capability block for the
+   * /services response. OFF BY DEFAULT — reports enabled:false/available:false
+   * (empty allowlist) when the service is unbound or the operator has not turned
+   * it on. Never throws.
+   */
+  private async dockerCapability(): Promise<{ enabled: boolean; available: boolean; containers: string[] }> {
+    if (!this.dockerServiceControlService || !this.dockerServiceControlService.isEnabled()) {
+      return { enabled: false, available: false, containers: [] }
+    }
+
+    const available = await this.dockerServiceControlService.isAvailable()
+
+    return { enabled: true, available, containers: this.dockerServiceControlService.getAllowedContainers() }
+  }
+
+  /**
+   * Standard Red Notes: OPT-IN container restart (Redis cache / MariaDB) through
+   * the locked-down docker-socket-proxy. Admin-gated HARD (403 for non-admins),
+   * allowlist-gated ({cache, db} only — anything else 400 with no HTTP call),
+   * and audit-logged on every attempt. OFF BY DEFAULT: when the capability is not
+   * enabled it returns 503 (never actually touching Docker); an unreachable proxy
+   * likewise degrades to 503. NEVER a 500.
+   */
+  @httpPost('/containers/:name/restart', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async restartContainer(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    const name = String(request.params.name ?? '')
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+    const audit = (outcome: string): void => {
+      this.logger?.info('admin container-control', {
+        audit: 'admin.container-control',
+        adminUuid,
+        container: name,
+        action: 'restart',
+        outcome,
+      })
+    }
+
+    if (!this.dockerServiceControlService || !this.dockerServiceControlService.isEnabled()) {
+      audit('disabled')
+      response.status(503).json({
+        error: {
+          message: 'Container control is not enabled on this server. Enable the docker-socket-proxy (ops profile).',
+        },
+      })
+
+      return
+    }
+
+    // Reject non-allowlisted names up front — before any HTTP call to the proxy.
+    if (!this.dockerServiceControlService.isAllowed(name)) {
+      audit('invalid-container')
+      response.status(400).json({ error: { message: `Unknown or non-restartable container: ${name}.` } })
+
+      return
+    }
+
+    const outcome = await this.dockerServiceControlService.restart(name)
+    audit(outcome.kind)
+
+    switch (outcome.kind) {
+      case 'ok':
+        response.json({ container: outcome.container, action: 'restart', status: 'restarting' })
+
+        return
+      case 'disabled':
+        response.status(503).json({ error: { message: 'Container control is not enabled on this server.' } })
+
+        return
+      case 'invalid-container':
+        response
+          .status(400)
+          .json({ error: { message: `Unknown or non-restartable container: ${outcome.container}.` } })
+
+        return
+      case 'unavailable':
+        response.status(503).json({ error: { message: outcome.message } })
+
+        return
+      case 'error':
+        response.status(502).json({ error: { message: outcome.message } })
+
+        return
+    }
   }
 
   /**
@@ -1428,14 +1541,19 @@ export class AdminController extends BaseHttpController {
    */
   private authServiceEntry(auth: AuthReadiness): ServiceStatusEntry {
     if (!auth.reachable) {
-      return { name: 'auth', reachable: false, status: 'down', detail: 'unreachable' }
+      return { name: 'auth', reachable: false, status: 'down', detail: 'unreachable', responseTimeMs: auth.responseTimeMs }
     }
 
     const checks = auth.checks ?? {}
     const allChecksOk = Object.values(checks).every(Boolean)
     const ready = auth.status === undefined || auth.status === 'ready'
 
-    return { name: 'auth', reachable: true, status: ready && allChecksOk ? 'ok' : 'degraded' }
+    return {
+      name: 'auth',
+      reachable: true,
+      status: ready && allChecksOk ? 'ok' : 'degraded',
+      responseTimeMs: auth.responseTimeMs,
+    }
   }
 
   /**
@@ -1451,6 +1569,11 @@ export class AdminController extends BaseHttpController {
       return { name, reachable: false, status: 'unknown', detail: 'not configured' }
     }
 
+    // Standard Red Notes (task #66): time the readiness probe. The probe already
+    // runs; we just measure the wall-clock ms around it and surface it so the UI
+    // can warn on a slow/failing service. Cheap — no extra I/O.
+    const started = Date.now()
+    const elapsed = (): number => Date.now() - started
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 2500)
     try {
@@ -1460,10 +1583,16 @@ export class AdminController extends BaseHttpController {
         signal: controller.signal,
       })
       if (readinessResponse.status === 200) {
-        return { name, reachable: true, status: 'ok' }
+        return { name, reachable: true, status: 'ok', responseTimeMs: elapsed() }
       }
       if (readinessResponse.status === 503) {
-        return { name, reachable: true, status: 'degraded', detail: 'readiness reported unavailable' }
+        return {
+          name,
+          reachable: true,
+          status: 'degraded',
+          detail: 'readiness reported unavailable',
+          responseTimeMs: elapsed(),
+        }
       }
       if (readinessResponse.status === 404) {
         // Standard Red Notes: builds whose service predates the readiness route
@@ -1476,15 +1605,27 @@ export class AdminController extends BaseHttpController {
           signal: controller.signal,
         })
         if (livenessResponse.status === 200) {
-          return { name, reachable: true, status: 'ok', detail: 'liveness only' }
+          return { name, reachable: true, status: 'ok', detail: 'liveness only', responseTimeMs: elapsed() }
         }
 
-        return { name, reachable: true, status: 'down', detail: `unexpected status ${livenessResponse.status}` }
+        return {
+          name,
+          reachable: true,
+          status: 'down',
+          detail: `unexpected status ${livenessResponse.status}`,
+          responseTimeMs: elapsed(),
+        }
       }
 
-      return { name, reachable: true, status: 'down', detail: `unexpected status ${readinessResponse.status}` }
+      return {
+        name,
+        reachable: true,
+        status: 'down',
+        detail: `unexpected status ${readinessResponse.status}`,
+        responseTimeMs: elapsed(),
+      }
     } catch {
-      return { name, reachable: false, status: 'down', detail: 'unreachable' }
+      return { name, reachable: false, status: 'down', detail: 'unreachable', responseTimeMs: elapsed() }
     } finally {
       clearTimeout(timer)
     }
@@ -1498,7 +1639,7 @@ export class AdminController extends BaseHttpController {
    */
   private async probeAuthReadiness(
     fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
-  ): Promise<{ reachable: boolean; status?: string; checks?: Record<string, boolean> }> {
+  ): Promise<AuthReadiness> {
     // Same probe-base resolution as the services array: probe map (defaults to
     // the supervisord sibling port) first, raw AUTH_SERVER_URL as fallback.
     const authProbeUrl = this.serviceProbeUrls?.['auth'] ?? this.authServerUrl
@@ -1506,6 +1647,9 @@ export class AdminController extends BaseHttpController {
       return { reachable: false }
     }
 
+    // Standard Red Notes (task #66): time the auth readiness probe too.
+    const started = Date.now()
+    const elapsed = (): number => Date.now() - started
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 3000)
     try {
@@ -1515,13 +1659,13 @@ export class AdminController extends BaseHttpController {
         signal: controller.signal,
       })
       if (readinessResponse.status !== 200 && readinessResponse.status !== 503) {
-        return { reachable: false }
+        return { reachable: false, responseTimeMs: elapsed() }
       }
       const body = (await readinessResponse.json()) as { status?: string; checks?: Record<string, boolean> }
 
-      return { reachable: true, status: body.status, checks: body.checks }
+      return { reachable: true, status: body.status, checks: body.checks, responseTimeMs: elapsed() }
     } catch {
-      return { reachable: false }
+      return { reachable: false, responseTimeMs: elapsed() }
     } finally {
       clearTimeout(timer)
     }

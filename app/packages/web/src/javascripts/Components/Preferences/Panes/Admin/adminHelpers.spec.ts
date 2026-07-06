@@ -16,9 +16,14 @@ import {
   formatLogTimestamp,
   logLevelColorClass,
   logMatchesText,
+  dockerContainerLabel,
+  dockerRestartDialogCopy,
+  formatServiceLatency,
   serviceActionDialogCopy,
   serviceActionIsSelfInterrupting,
   serviceActionPastTense,
+  serviceControlProgramFor,
+  serviceLatencyClass,
   serviceStatusChipClass,
   serviceStatusLabel,
   settingSource,
@@ -306,5 +311,57 @@ describe('service lifecycle control helpers', () => {
     const copy = serviceActionDialogCopy('api-gateway', 'restart')
     expect(copy.text.toLowerCase()).toContain('drop your admin connection')
     expect(copy.confirmButtonText).toBe('Restart gateway')
+  })
+
+  it('maps the in-process WebSocket gateway to the api-gateway program', () => {
+    expect(serviceControlProgramFor('websocket-gateway')).toBe('api-gateway')
+    expect(serviceControlProgramFor('auth')).toBe('auth')
+    expect(serviceControlProgramFor('api-gateway')).toBe('api-gateway')
+  })
+
+  it('treats a WebSocket gateway restart as self-interrupting (it restarts the api-gateway)', () => {
+    expect(serviceActionIsSelfInterrupting('websocket-gateway', 'restart')).toBe(true)
+    expect(serviceActionIsSelfInterrupting('websocket-gateway', 'stop')).toBe(false)
+  })
+
+  it('explains the WebSocket gateway restart maps to the API gateway process', () => {
+    const copy = serviceActionDialogCopy('websocket-gateway', 'restart')
+    expect(copy.title).toContain('WebSocket gateway')
+    expect(copy.text.toLowerCase()).toContain('api gateway')
+    expect(copy.confirmButtonText).toBe('Restart gateway')
+  })
+})
+
+describe('per-service latency helpers (task #66)', () => {
+  it('formats ms and seconds compactly, blank when absent', () => {
+    expect(formatServiceLatency(42)).toBe('42 ms')
+    expect(formatServiceLatency(0)).toBe('0 ms')
+    expect(formatServiceLatency(1500)).toBe('1.5 s')
+    expect(formatServiceLatency(undefined)).toBe('')
+    expect(formatServiceLatency(null)).toBe('')
+    expect(formatServiceLatency(-1)).toBe('')
+  })
+
+  it('colours latency: red when down, amber when slow, muted otherwise', () => {
+    expect(serviceLatencyClass(20, 'ok')).toBe('text-passive-1')
+    expect(serviceLatencyClass(750, 'ok')).toBe('text-warning')
+    expect(serviceLatencyClass(20, 'down')).toBe('text-danger')
+    // A down probe is always red even if it "responded" quickly.
+    expect(serviceLatencyClass(9999, 'down')).toBe('text-danger')
+  })
+})
+
+describe('opt-in container restart helpers', () => {
+  it('labels the allowlisted containers, falling back to the raw name', () => {
+    expect(dockerContainerLabel('cache')).toBe('Redis cache')
+    expect(dockerContainerLabel('db')).toBe('Database (MariaDB)')
+    expect(dockerContainerLabel('mystery')).toBe('mystery')
+  })
+
+  it('warns that a container restart takes it offline', () => {
+    const copy = dockerRestartDialogCopy('db')
+    expect(copy.title).toContain('Database (MariaDB)')
+    expect(copy.text.toLowerCase()).toContain('offline')
+    expect(copy.confirmButtonText).toBe('Restart')
   })
 })

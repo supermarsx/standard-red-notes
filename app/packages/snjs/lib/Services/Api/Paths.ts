@@ -71,6 +71,10 @@ const AdminPaths = {
   adminServices: '/v1/admin/services',
   adminServiceAction: (name: string, action: 'restart' | 'stop' | 'start') =>
     `/v1/admin/services/${encodeURIComponent(name)}/${action}`,
+  // Standard Red Notes: OPT-IN container restart (Redis cache / MariaDB) via the
+  // locked-down docker-socket-proxy. Off by default; the /services `docker` block
+  // says whether it is enabled + reachable.
+  adminContainerRestart: (name: string) => `/v1/admin/containers/${encodeURIComponent(name)}/restart`,
   // Standard Red Notes: admin-editable server settings (AI providers, update
   // check URL, Nextcloud backups master switch). Secrets are write-only.
   serverSettings: '/v1/admin/server-settings',

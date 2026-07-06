@@ -204,6 +204,42 @@ export type ServerService = {
   reachable: boolean
   status: ServiceStatus
   detail?: string
+  // Standard Red Notes (task #66): the service's readiness-probe response time in
+  // ms. Present when a probe actually ran; omitted for the gateway itself and for
+  // 'not configured' services.
+  responseTimeMs?: number
+}
+
+// ---------------------------------------------------------------------------
+// Server tab — per-service latency (task #66)
+// ---------------------------------------------------------------------------
+
+/** Above this many ms a healthy service's latency is shown in amber. */
+export const SERVICE_LATENCY_WARN_MS = 500
+
+/** Compact latency label ("42 ms", "1.3 s"), or '' when there is nothing to show. */
+export const formatServiceLatency = (ms: number | null | undefined): string => {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) {
+    return ''
+  }
+  if (ms < 1000) {
+    return `${Math.round(ms)} ms`
+  }
+  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`
+}
+
+/**
+ * Text-colour class for a latency label: red on a failed/down probe, amber when
+ * a reachable service is slow (> SERVICE_LATENCY_WARN_MS), else muted.
+ */
+export const serviceLatencyClass = (ms: number | null | undefined, status: string | null | undefined): string => {
+  if (status === 'down') {
+    return 'text-danger'
+  }
+  if (ms != null && Number.isFinite(ms) && ms > SERVICE_LATENCY_WARN_MS) {
+    return 'text-warning'
+  }
+  return 'text-passive-1'
 }
 
 /**
@@ -246,9 +282,29 @@ export type ServiceControlAction = 'restart' | 'stop' | 'start'
 /** The supervisord program whose restart interrupts the admin's own connection. */
 export const SERVICE_CONTROL_SELF_PROGRAM = 'api-gateway'
 
-/** True when this action on this service will drop the admin's own connection. */
+/**
+ * Standard Red Notes: the realtime WebSocket gateway runs IN-PROCESS inside the
+ * api-gateway (attachWebSocketGateway) — it is NOT a separate process/container.
+ * So "restart the WebSocket gateway" maps to restarting the api-gateway program
+ * under the hood. This is the service-array row name for that in-process gateway.
+ */
+export const WS_GATEWAY_SERVICE = 'websocket-gateway'
+
+/**
+ * Map a service-array row name to the supervisord PROGRAM that controls it. Almost
+ * always identity, except the in-process WebSocket gateway, which is controlled by
+ * restarting the api-gateway process it runs inside.
+ */
+export const serviceControlProgramFor = (name: string): string =>
+  name === WS_GATEWAY_SERVICE ? SERVICE_CONTROL_SELF_PROGRAM : name
+
+/**
+ * True when this action on this service will drop the admin's own connection.
+ * Restarting the api-gateway OR the in-process WebSocket gateway (which restarts
+ * the api-gateway) both interrupt this very connection.
+ */
 export const serviceActionIsSelfInterrupting = (name: string, action: ServiceControlAction): boolean =>
-  name === SERVICE_CONTROL_SELF_PROGRAM && action === 'restart'
+  serviceControlProgramFor(name) === SERVICE_CONTROL_SELF_PROGRAM && action === 'restart'
 
 /** Past-tense verb for a success toast ("Restarted auth"). */
 export const serviceActionPastTense = (action: ServiceControlAction): string => {
@@ -271,6 +327,15 @@ export const serviceActionDialogCopy = (
   name: string,
   action: ServiceControlAction,
 ): { title: string; text: string; confirmButtonText: string } => {
+  // The in-process WebSocket gateway: make clear this restarts the api-gateway
+  // process it runs inside (and therefore drops the admin's own connection).
+  if (name === WS_GATEWAY_SERVICE && action === 'restart') {
+    return {
+      title: 'Restart the WebSocket gateway?',
+      text: 'The realtime WebSocket gateway runs inside the API gateway process, so restarting it restarts the API gateway. Your admin connection will drop for a few seconds and realtime sync briefly reconnects. You may need to reload this page afterwards. Continue?',
+      confirmButtonText: 'Restart gateway',
+    }
+  }
   if (serviceActionIsSelfInterrupting(name, action)) {
     return {
       title: 'Restart the API gateway?',
@@ -298,6 +363,41 @@ export const serviceActionDialogCopy = (
         text: `Start the stopped "${name}" service so it can serve requests again?`,
         confirmButtonText: 'Start',
       }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Server tab — OPT-IN container restart (Redis cache + MariaDB via the
+// docker-socket-proxy). Off by default; controls appear only when the /services
+// `docker` block reports the capability enabled AND reachable.
+// ---------------------------------------------------------------------------
+
+/** The docker capability block returned alongside adminListServices. */
+export type DockerControl = {
+  enabled: boolean
+  available: boolean
+  containers: string[]
+}
+
+/** Friendly labels for the allowlisted infrastructure containers. */
+const DOCKER_CONTAINER_LABELS: Record<string, string> = {
+  cache: 'Redis cache',
+  db: 'Database (MariaDB)',
+}
+
+/** Human label for an allowlisted container name, falling back to the raw name. */
+export const dockerContainerLabel = (name: string): string => DOCKER_CONTAINER_LABELS[name] ?? name
+
+/**
+ * DANGER-confirm copy for restarting an infrastructure container. Restarting the
+ * database or cache briefly interrupts every service that depends on it.
+ */
+export const dockerRestartDialogCopy = (name: string): { title: string; text: string; confirmButtonText: string } => {
+  const label = dockerContainerLabel(name)
+  return {
+    title: `Restart ${label}?`,
+    text: `Restarting the "${label}" container briefly takes it offline while it comes back up. Sign-ins, sync and anything that depends on it will fail for a few seconds. This restarts the whole container (not a single process). Continue?`,
+    confirmButtonText: 'Restart',
   }
 }
 

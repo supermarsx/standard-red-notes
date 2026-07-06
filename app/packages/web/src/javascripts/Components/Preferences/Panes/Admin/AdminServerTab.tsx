@@ -15,12 +15,19 @@ import { ToastType, addToast } from '@standardnotes/toast'
 import {
   AdminServerSettings,
   AdminServerSettingsResponse,
+  DockerControl,
   ServerService,
   ServiceControlAction,
+  WS_GATEWAY_SERVICE,
   buildUrlSettingUpdate,
+  dockerContainerLabel,
+  dockerRestartDialogCopy,
+  formatServiceLatency,
   serviceActionDialogCopy,
   serviceActionIsSelfInterrupting,
   serviceActionPastTense,
+  serviceControlProgramFor,
+  serviceLatencyClass,
   serviceStatusChipClass,
   serviceStatusLabel,
   settingSource,
@@ -145,6 +152,11 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [serviceControlSupported, setServiceControlSupported] = useState(true)
   // Key of the in-flight action, `${name}:${action}`, or null. Disables that row.
   const [serviceActionInFlight, setServiceActionInFlight] = useState<string | null>(null)
+  // Standard Red Notes: OPT-IN, off-by-default container restart (Redis/DB via the
+  // docker-socket-proxy). null until the /services call returns; controls appear
+  // only when `available` is true. `container:${name}` is the in-flight key.
+  const [dockerControl, setDockerControl] = useState<DockerControl | null>(null)
+  const [containerActionInFlight, setContainerActionInFlight] = useState<string | null>(null)
 
   // Editable server settings (update-check URL, Nextcloud backups master
   // switch) from /v1/admin/server-settings. A 404 (older server) hides the
@@ -227,10 +239,24 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         }
         return
       }
-      const data = (response as { data?: { available?: boolean; programs?: string[] } }).data
+      const data = (
+        response as {
+          data?: {
+            available?: boolean
+            programs?: string[]
+            docker?: { enabled?: boolean; available?: boolean; containers?: string[] }
+          }
+        }
+      ).data
       setServiceControlSupported(true)
       setServiceControlAvailable(Boolean(data?.available))
       setControllablePrograms(Array.isArray(data?.programs) ? (data?.programs as string[]) : [])
+      // The docker block is optional (older servers omit it) — default to off.
+      setDockerControl({
+        enabled: Boolean(data?.docker?.enabled),
+        available: Boolean(data?.docker?.available),
+        containers: Array.isArray(data?.docker?.containers) ? (data?.docker?.containers as string[]) : [],
+      })
     } catch (error) {
       console.error(error)
     }
@@ -245,10 +271,13 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       }
 
       const selfInterrupt = serviceActionIsSelfInterrupting(name, action)
+      // The in-process WebSocket gateway maps to the api-gateway PROGRAM under the
+      // hood (it runs inside that process); every other row is identity.
+      const program = serviceControlProgramFor(name)
       const key = `${name}:${action}`
       setServiceActionInFlight(key)
       try {
-        const response = await application.legacyApi.adminControlService(name, action, {
+        const response = await application.legacyApi.adminControlService(program, action, {
           confirmSelfInterrupt: selfInterrupt,
         })
         if (isErrorResponse(response)) {
@@ -281,6 +310,43 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         addToast({ type: ToastType.Error, message: `Failed to ${action} ${name}.` })
       } finally {
         setServiceActionInFlight(null)
+      }
+    },
+    [application, noteIfForbidden, loadServerStatus, loadControllableServices],
+  )
+
+  // Standard Red Notes: restart an infrastructure CONTAINER (Redis/DB) through the
+  // opt-in docker-socket-proxy. Danger-confirmed; a 503 (capability disabled or
+  // proxy unreachable) degrades to a clear toast, never a crash.
+  const runContainerRestart = useCallback(
+    async (name: string) => {
+      const { title, text, confirmButtonText } = dockerRestartDialogCopy(name)
+      const confirmed = await confirmDialog({ title, text, confirmButtonText, confirmButtonStyle: 'danger' })
+      if (!confirmed) {
+        return
+      }
+
+      const key = `container:${name}`
+      setContainerActionInFlight(key)
+      try {
+        const response = await application.legacyApi.adminRestartContainer(name)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          const message =
+            (response as { data?: { error?: { message?: string } } }).data?.error?.message ??
+            `Failed to restart ${dockerContainerLabel(name)}.`
+          addToast({ type: ToastType.Error, message })
+          // Re-sync capability so a now-unreachable proxy hides the controls.
+          void loadControllableServices()
+          return
+        }
+        addToast({ type: ToastType.Success, message: `Restarted ${dockerContainerLabel(name)}.` })
+        void loadServerStatus()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: `Failed to restart ${dockerContainerLabel(name)}.` })
+      } finally {
+        setContainerActionInFlight(null)
       }
     },
     [application, noteIfForbidden, loadServerStatus, loadControllableServices],
@@ -525,6 +591,48 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               />
             </div>
 
+            {/* Standard Red Notes: OPT-IN infrastructure container restart (Redis
+                cache + MariaDB) via the locked-down docker-socket-proxy. Shown only
+                when the capability is enabled AND the proxy is reachable; when
+                enabled-but-unreachable it degrades to a muted note (never an error).
+                When off (the default) nothing renders. */}
+            {dockerControl?.available && dockerControl.containers.length > 0 ? (
+              <>
+                <Subtitle className="mb-2 mt-4">Infrastructure containers</Subtitle>
+                <div className="divide-y divide-border rounded border border-border px-3">
+                  {dockerControl.containers.map((container) => {
+                    const rowBusy = containerActionInFlight === `container:${container}`
+                    return (
+                      <div key={container} className="flex items-center justify-between gap-4 py-2">
+                        <div className="flex min-w-0 flex-col">
+                          <Text>{dockerContainerLabel(container)}</Text>
+                          <Text className="text-xs text-passive-1">Restarts the whole container via the docker-socket-proxy</Text>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {rowBusy && <Spinner className="h-4 w-4" />}
+                          <Button
+                            small
+                            colorStyle="danger"
+                            label="Restart"
+                            disabled={rowBusy}
+                            onClick={() => void runContainerRestart(container)}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <Text className="mt-2 text-xs text-passive-1">
+                  Restarting the database or cache briefly interrupts every service that depends on it.
+                </Text>
+              </>
+            ) : dockerControl?.enabled && !dockerControl.available ? (
+              <Text className="mt-3 text-xs text-passive-1">
+                Container restart is enabled but the docker-socket-proxy is not reachable, so restarting Redis/MariaDB is
+                not available right now.
+              </Text>
+            ) : null}
+
             {services.length > 0 && (
               <>
                 <Subtitle className="mb-2 mt-4">All services</Subtitle>
@@ -541,29 +649,39 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     )
 
                     // Controls only for allowlisted programs when supervisorctl is
-                    // actually reachable. websocket-gateway (not a program) and any
-                    // unknown row simply render without controls.
+                    // actually reachable. The in-process WebSocket gateway maps to
+                    // the api-gateway program (serviceControlProgramFor); any other
+                    // unknown row simply renders without controls.
+                    const program = serviceControlProgramFor(service.name)
+                    const isWsGateway = service.name === WS_GATEWAY_SERVICE
                     const canControl =
-                      serviceControlSupported &&
-                      serviceControlAvailable &&
-                      controllablePrograms.includes(service.name)
-                    const isGateway = service.name === 'api-gateway'
+                      serviceControlSupported && serviceControlAvailable && controllablePrograms.includes(program)
+                    const isGateway = program === 'api-gateway'
                     const isDown = service.status === 'down'
                     const rowBusy = serviceActionInFlight !== null && serviceActionInFlight.startsWith(`${service.name}:`)
+                    // Friendly label for the in-process WebSocket gateway.
+                    const displayName = isWsGateway ? 'WebSocket gateway' : service.name
+                    const wsDetail = isWsGateway ? 'Realtime sync — runs inside the API gateway process' : service.detail
+                    const latency = formatServiceLatency(service.responseTimeMs)
 
                     return (
                       <div key={service.name} className="flex items-center justify-between gap-4 py-2">
                         <div className="flex min-w-0 flex-col">
-                          <Text>{service.name}</Text>
-                          {service.detail ? <Text className="text-xs text-passive-1">{service.detail}</Text> : null}
+                          <Text>{displayName}</Text>
+                          {wsDetail ? <Text className="text-xs text-passive-1">{wsDetail}</Text> : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
+                          {latency ? (
+                            <span className={`text-xs tabular-nums ${serviceLatencyClass(service.responseTimeMs, service.status)}`}>
+                              {latency}
+                            </span>
+                          ) : null}
                           {chip}
                           {canControl && (
                             <div className="flex items-center gap-1">
                               {rowBusy && <Spinner className="h-4 w-4" />}
-                              {/* Start only when the program is down/stopped. */}
-                              {isDown && (
+                              {/* Start only when a real (non-ws) program is down/stopped. */}
+                              {isDown && !isWsGateway && (
                                 <Button
                                   small
                                   colorStyle="success"
@@ -579,7 +697,8 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                                 disabled={rowBusy}
                                 onClick={() => void runServiceAction(service.name, 'restart')}
                               />
-                              {/* Stopping the gateway is forbidden server-side; hide it. */}
+                              {/* Stopping the gateway (or the in-process ws gateway) is
+                                  forbidden server-side; hide it. */}
                               {!isGateway && !isDown && (
                                 <Button
                                   small

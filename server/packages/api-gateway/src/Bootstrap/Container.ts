@@ -56,6 +56,7 @@ import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStor
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
 import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
+import { DockerServiceControlService } from '../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
 import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
@@ -532,6 +533,43 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new ServiceControlService({
           configPath: env.get('SUPERVISORCTL_CONFIG_PATH', true) || '/etc/supervisord.conf',
+        }),
+      )
+
+    // Standard Red Notes: OPT-IN, OFF-BY-DEFAULT container restart (Redis cache +
+    // MariaDB) via the locked-down docker-socket-proxy sidecar. It activates ONLY
+    // when the operator BOTH sets SERVICE_CONTROL_DOCKER_ENABLED=true + the proxy
+    // URL AND runs the `ops` compose profile. The raw docker socket is NEVER
+    // mounted into this container — only into the proxy — and the proxy is
+    // configured to permit ONLY container restart. When not enabled/reachable the
+    // service degrades to a clear "disabled"/"unavailable" outcome (never a 500),
+    // and the admin UI hides the controls. SERVICE_CONTROL_DOCKER_PROJECT sets the
+    // compose project prefix used to resolve <project>-<service>-1 container
+    // names (default 'standard-red-notes', matching docker-compose.yml `name:`);
+    // SERVICE_CONTROL_DOCKER_CONTAINERS optionally overrides per service as a CSV
+    // of logical=actual pairs (e.g. "cache=my-redis,db=my-mariadb").
+    const parseContainerNames = (raw: string | undefined): Record<string, string> => {
+      const map: Record<string, string> = {}
+      if (!raw) {
+        return map
+      }
+      for (const pair of raw.split(',')) {
+        const [logical, actual] = pair.split('=').map((part) => part.trim())
+        if (logical && actual) {
+          map[logical] = actual
+        }
+      }
+
+      return map
+    }
+    container
+      .bind<DockerServiceControlService>(TYPES.ApiGateway_DockerServiceControlService)
+      .toConstantValue(
+        new DockerServiceControlService({
+          enabled: env.get('SERVICE_CONTROL_DOCKER_ENABLED', true) === 'true',
+          proxyUrl: env.get('SERVICE_CONTROL_DOCKER_PROXY_URL', true) || '',
+          project: env.get('SERVICE_CONTROL_DOCKER_PROJECT', true) || 'standard-red-notes',
+          containerNames: parseContainerNames(env.get('SERVICE_CONTROL_DOCKER_CONTAINERS', true)),
         }),
       )
 

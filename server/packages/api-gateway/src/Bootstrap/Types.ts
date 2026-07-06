@@ -105,6 +105,11 @@ export const TYPES = {
   // `supervisorctl` (allowlisted program names only) to restart/stop/start the
   // sibling server processes in the single-container image.
   ApiGateway_ServiceControlService: Symbol.for('ApiGateway_ServiceControlService'),
+  // Standard Red Notes: OPT-IN, off-by-default container restart (Redis cache +
+  // MariaDB, which run OUTSIDE the server container's supervisord) via a
+  // locked-down docker-socket-proxy sidecar. The raw docker socket is NEVER
+  // mounted here — only into the proxy.
+  ApiGateway_DockerServiceControlService: Symbol.for('ApiGateway_DockerServiceControlService'),
   // Standard Red Notes: anti-abuse infrastructure — admin-managed IP allow/block
   // lists (Redis sets) enforced before rate-limit tiers, and best-effort throttle
   // telemetry for the admin Anti-abuse view. Bound only when Redis is configured.

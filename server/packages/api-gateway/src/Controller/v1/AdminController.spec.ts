@@ -257,7 +257,7 @@ describe('AdminController server-status', () => {
       const result = await (controller as unknown as ProbeSpyTarget).probeAuthReadiness(fetchFn)
 
       expect(fetchFn).toHaveBeenCalledWith('http://localhost:3103/healthcheck/readiness', expect.anything())
-      expect(result).toEqual({ reachable: true, status: 'ready', checks: { db: true } })
+      expect(result).toEqual({ reachable: true, status: 'ready', checks: { db: true }, responseTimeMs: expect.any(Number) })
     })
 
     it('treats a 404 readiness as "fall back to liveness": /healthcheck 200 => ok (liveness only)', async () => {
@@ -275,7 +275,13 @@ describe('AdminController server-status', () => {
 
       expect(fetchFn).toHaveBeenNthCalledWith(1, 'http://localhost:3105/healthcheck/readiness', expect.anything())
       expect(fetchFn).toHaveBeenNthCalledWith(2, 'http://localhost:3105/healthcheck', expect.anything())
-      expect(entry).toEqual({ name: 'revisions', reachable: true, status: 'ok', detail: 'liveness only' })
+      expect(entry).toEqual({
+        name: 'revisions',
+        reachable: true,
+        status: 'ok',
+        detail: 'liveness only',
+        responseTimeMs: expect.any(Number),
+      })
     })
 
     it('still reports down when both readiness (404) and liveness fail', async () => {
@@ -292,6 +298,37 @@ describe('AdminController server-status', () => {
       )
 
       expect(entry).toMatchObject({ name: 'revisions', reachable: true, status: 'down' })
+    })
+
+    it('includes a per-service response time (ms) on the readiness entry (task #66)', async () => {
+      const controller = makeController()
+      const fetchFn = jest.fn().mockResolvedValue({ status: 200, json: async () => ({}) })
+
+      const entry = await (controller as unknown as ProbeSpyTarget).probeServiceReadiness(
+        'syncing-server',
+        'http://localhost:3101',
+        fetchFn,
+      )
+
+      expect(entry).toMatchObject({ name: 'syncing-server', reachable: true, status: 'ok' })
+      expect(typeof (entry as { responseTimeMs?: number }).responseTimeMs).toBe('number')
+      expect((entry as { responseTimeMs: number }).responseTimeMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('omits response time for a "not configured" service (no probe ran)', async () => {
+      const controller = makeController()
+      const entry = await (controller as unknown as ProbeSpyTarget).probeServiceReadiness('files', undefined)
+      expect(entry).toEqual({ name: 'files', reachable: false, status: 'unknown', detail: 'not configured' })
+      expect((entry as { responseTimeMs?: number }).responseTimeMs).toBeUndefined()
+    })
+
+    it('times the auth readiness probe too', async () => {
+      const controller = makeController({ serviceProbeUrls: singleContainerProbeUrls })
+      const fetchFn = jest.fn().mockResolvedValue({ status: 200, json: async () => ({ status: 'ready', checks: {} }) })
+
+      const result = await (controller as unknown as ProbeSpyTarget).probeAuthReadiness(fetchFn)
+
+      expect(typeof (result as { responseTimeMs?: number }).responseTimeMs).toBe('number')
     })
   })
 
@@ -746,5 +783,160 @@ describe('AdminController anti-abuse', () => {
     const response = responseWith(admin)
     await buildController().unblockIp({ body: { entry: '1.2.3.4' } } as unknown as Request, response)
     expect(statusMock).toHaveBeenCalledWith(503)
+  })
+})
+
+/**
+ * Standard Red Notes: the OPT-IN, OFF-BY-DEFAULT container-restart surface (Redis
+ * cache + MariaDB via the locked-down docker-socket-proxy). Admin-gated + audited
+ * + allowlisted; degrades to 503 when disabled/unreachable — never a 500.
+ */
+describe('AdminController container-restart (docker)', () => {
+  let jsonMock: jest.Mock
+  let statusMock: jest.Mock
+
+  // The docker service is the LAST constructor arg; everything between is left
+  // undefined so the controller degrades all other surfaces gracefully.
+  const buildController = (
+    docker?: unknown,
+    logger?: { info: jest.Mock },
+  ): AdminController =>
+    new AdminController(
+      {} as ServiceProxyInterface,
+      {} as EndpointResolverInterface,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      logger as never,
+      undefined,
+      undefined,
+      undefined,
+      docker as never,
+    )
+
+  const responseWith = (roles: Array<{ name: string }>): Response => {
+    jsonMock = jest.fn()
+    statusMock = jest.fn(() => ({ json: jsonMock }))
+    return {
+      locals: { user: { uuid: 'admin-1' }, roles },
+      status: statusMock,
+      json: jsonMock,
+    } as unknown as Response
+  }
+
+  const admin = [{ name: RoleName.NAMES.AdminUser }]
+  const nonAdmin = [{ name: RoleName.NAMES.CoreUser }]
+
+  const enabledDocker = (overrides: Record<string, unknown> = {}) => ({
+    isEnabled: jest.fn().mockReturnValue(true),
+    isAvailable: jest.fn().mockResolvedValue(true),
+    isAllowed: jest.fn((name: string) => name === 'cache' || name === 'db'),
+    getAllowedContainers: jest.fn().mockReturnValue(['cache', 'db']),
+    restart: jest.fn().mockResolvedValue({ kind: 'ok', container: 'cache', name: 'srn-cache-1' }),
+    ...overrides,
+  })
+
+  it('rejects a non-admin with 403 and never touches docker', async () => {
+    const docker = enabledDocker()
+    await buildController(docker).restartContainer({ params: { name: 'cache' } } as unknown as Request, responseWith(nonAdmin))
+    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(docker.restart).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 (disabled) when the capability is OFF by default (service unbound)', async () => {
+    await buildController(undefined).restartContainer(
+      { params: { name: 'cache' } } as unknown as Request,
+      responseWith(admin),
+    )
+    expect(statusMock).toHaveBeenCalledWith(503)
+  })
+
+  it('returns 503 (disabled) when the service is bound but not enabled', async () => {
+    const docker = enabledDocker({ isEnabled: jest.fn().mockReturnValue(false) })
+    await buildController(docker).restartContainer(
+      { params: { name: 'cache' } } as unknown as Request,
+      responseWith(admin),
+    )
+    expect(statusMock).toHaveBeenCalledWith(503)
+    expect(docker.restart).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-allowlisted container with 400 BEFORE any restart call (injection-safe)', async () => {
+    const docker = enabledDocker()
+    const logger = { info: jest.fn() }
+    for (const evil of ['server', 'cache; rm -rf /', '$(whoami)']) {
+      await buildController(docker, logger).restartContainer(
+        { params: { name: evil } } as unknown as Request,
+        responseWith(admin),
+      )
+      expect(statusMock).toHaveBeenCalledWith(400)
+    }
+    expect(docker.restart).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledWith(
+      'admin container-control',
+      expect.objectContaining({ audit: 'admin.container-control', outcome: 'invalid-container', action: 'restart' }),
+    )
+  })
+
+  it('restarts an allowlisted container and audits the attempt', async () => {
+    const docker = enabledDocker()
+    const logger = { info: jest.fn() }
+    await buildController(docker, logger).restartContainer(
+      { params: { name: 'cache' } } as unknown as Request,
+      responseWith(admin),
+    )
+    expect(docker.restart).toHaveBeenCalledWith('cache')
+    expect(jsonMock).toHaveBeenCalledWith({ container: 'cache', action: 'restart', status: 'restarting' })
+    expect(logger.info).toHaveBeenCalledWith(
+      'admin container-control',
+      expect.objectContaining({ audit: 'admin.container-control', container: 'cache', outcome: 'ok' }),
+    )
+  })
+
+  it('degrades to 503 when the proxy is unreachable (unavailable outcome)', async () => {
+    const docker = enabledDocker({
+      restart: jest.fn().mockResolvedValue({ kind: 'unavailable', message: 'proxy unreachable' }),
+    })
+    await buildController(docker).restartContainer(
+      { params: { name: 'db' } } as unknown as Request,
+      responseWith(admin),
+    )
+    expect(statusMock).toHaveBeenCalledWith(503)
+  })
+
+  it('surfaces a docker error (e.g. no such container) as 502', async () => {
+    const docker = enabledDocker({
+      restart: jest.fn().mockResolvedValue({ kind: 'error', container: 'db', message: 'No such container' }),
+    })
+    await buildController(docker).restartContainer(
+      { params: { name: 'db' } } as unknown as Request,
+      responseWith(admin),
+    )
+    expect(statusMock).toHaveBeenCalledWith(502)
+  })
+
+  it('reports the docker capability block in GET /services (enabled + available + allowlist)', async () => {
+    const docker = enabledDocker()
+    await buildController(docker).listControllableServices({} as Request, responseWith(admin))
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ docker: { enabled: true, available: true, containers: ['cache', 'db'] } }),
+    )
+  })
+
+  it('reports docker disabled in GET /services when the capability is off (default)', async () => {
+    await buildController(undefined).listControllableServices({} as Request, responseWith(admin))
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ docker: { enabled: false, available: false, containers: [] } }),
+    )
   })
 })

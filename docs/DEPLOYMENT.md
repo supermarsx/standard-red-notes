@@ -141,6 +141,66 @@ persists secrets under `/var/lib/standard-red-notes`, and installs
 
 ---
 
+## Opt-in container restart (Redis / MariaDB)
+
+The admin panel (Preferences → Admin → Server) can restart the sibling **server**
+processes out of the box — they run under supervisord inside the server container,
+so the gateway drives them with allow-listed `supervisorctl` calls (no extra
+setup). The **WebSocket gateway** control lives here too; because the realtime
+gateway runs *in-process* inside the API gateway, that button restarts the
+`api-gateway` program under the hood (it will briefly drop your admin connection).
+
+The **Redis `cache`** and **MariaDB `db`** containers, however, run *outside* that
+supervisord. Restarting them requires talking to the Docker daemon, which the
+server container deliberately cannot do (the raw docker socket is never mounted
+into it). This capability is therefore **OFF by default** and gated behind an
+opt-in, least-privilege `docker-socket-proxy` sidecar.
+
+**Security model**
+
+- The raw `/var/run/docker.sock` is mounted **only** into the `docker-socket-proxy`
+  container (read-only), **never** into the server container.
+- The proxy denies everything by default; only `ALLOW_RESTARTS=1` is enabled, so
+  the sole reachable Docker operation is *restart a container*. No image pull, no
+  container create/exec, no volume/network access.
+- The gateway restarts only an **allowlist** of container names (`cache`, `db`);
+  any other name is rejected before any HTTP call.
+- When the flag is off or the proxy is unreachable, the endpoint returns 503 and
+  the UI shows the controls as unavailable — never an error.
+
+**Enable it**
+
+1. Start the proxy with the `ops` compose profile (additive — the base
+   `docker compose up` is unchanged):
+
+   ```sh
+   docker compose --profile ops up -d docker-socket-proxy
+   ```
+
+2. Turn the capability on for the server and point it at the proxy, then recreate
+   the server so it picks up the env:
+
+   ```sh
+   # in your .env (or the shell environment used for compose)
+   SERVICE_CONTROL_DOCKER_ENABLED=true
+   SERVICE_CONTROL_DOCKER_PROXY_URL=http://docker-socket-proxy:2375
+
+   docker compose --profile ops up -d
+   ```
+
+   Container names default to `<project>-<service>-1` (e.g.
+   `standard-red-notes-cache-1`), matching the compose project `name:`. Override
+   the project prefix with `SERVICE_CONTROL_DOCKER_PROJECT`, or map names
+   explicitly with `SERVICE_CONTROL_DOCKER_CONTAINERS=cache=my-redis,db=my-mariadb`.
+
+Once enabled and reachable, an "Infrastructure containers" section appears under
+**Server health** with a danger-confirmed **Restart** for Redis and MariaDB. Every
+restart is admin-gated and audit-logged (`admin.container-control`). To turn the
+feature back off, unset `SERVICE_CONTROL_DOCKER_ENABLED` and stop the proxy
+(`docker compose --profile ops stop docker-socket-proxy`).
+
+---
+
 ## Verifying the CSP self-heal
 
 Modes B and C serve the SPA with a Content-Security-Policy that pins the single
