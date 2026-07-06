@@ -1829,6 +1829,77 @@ async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promi
   )
 }
 
+const DEFAULT_PLUGINS_REPO_URL = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist'
+
+/**
+ * PLUGINS gallery repo base URL (the SERVER_SETTINGS overlay `plugins.repoUrl`,
+ * layered over the gateway PLUGINS_REPO_URL env, over the Standard Notes default).
+ * The gateway proxies `<repoUrl>/packages.json` to the browser SAME-ORIGIN so the
+ * strict CSP is satisfied. Reads + writes the SAME atomic overlay file the admin
+ * panel writes.
+ */
+async function cmdPlugins(args: ParsedArgs, action: string | undefined): Promise<number> {
+  if (action === undefined || action === 'show' || action === 'status') {
+    const { persisted, overlayPath } = await readOverlaySection('plugins')
+    const gatewayEnv = await readPackageEnv('api-gateway')
+    const envOf = (name: string): string | undefined =>
+      process.env[`API_GATEWAY_${name}`] ?? gatewayEnv[name] ?? undefined
+
+    const repoUrl = (() => {
+      if (typeof persisted.repoUrl === 'string' && persisted.repoUrl.trim() !== '') {
+        return { value: persisted.repoUrl.trim().replace(/\/+$/, ''), source: 'persisted' }
+      }
+      const raw = envOf('PLUGINS_REPO_URL')
+      if (raw !== undefined && raw.trim() !== '') {
+        return { value: raw.trim().replace(/\/+$/, ''), source: 'env' }
+      }
+
+      return { value: DEFAULT_PLUGINS_REPO_URL, source: 'default' }
+    })()
+
+    if (args.options.json === true) {
+      outJson({
+        effective: { repoUrl: repoUrl.value, indexUrl: `${repoUrl.value}/packages.json` },
+        sources: { repoUrl: repoUrl.source },
+        overlayPath: overlayPath ?? null,
+      })
+
+      return 0
+    }
+
+    outLine('plugins gallery repo (effective — persisted overlay over gateway env over default):')
+    outLine(`  repo base URL: ${repoUrl.value} [${repoUrl.source}]  (runtime)`)
+    outLine(`  index URL:     ${repoUrl.value}/packages.json`)
+    outLine(`  overlay file:  ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
+
+    return 0
+  }
+
+  const value = args.positionals[0]
+
+  if (action === 'set-repo-url') {
+    if (!value) {
+      throw new UsageError('plugins set-repo-url <http(s)://host/path|clear>')
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('plugins', (p) => delete p.repoUrl)
+      outLine(`plugins.repoUrl cleared (falls back to env/default). Wrote ${file}.`)
+
+      return 0
+    }
+    if (!/^https?:\/\/.+/i.test(value)) {
+      throw new UsageError('the plugins repo URL must be an absolute http(s) URL')
+    }
+    const normalized = value.trim().replace(/\/+$/, '')
+    const file = await updateOverlaySection('plugins', (p) => (p.repoUrl = normalized))
+    outLine(`plugins.repoUrl set to ${normalized}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  throw new UsageError(`unknown plugins action '${action}' — show | set-repo-url <url|clear>`)
+}
+
 /* ---------------------------------------------------------------------------
  * WEBHOOKS
  * ------------------------------------------------------------------------- */
@@ -2458,6 +2529,9 @@ async function main(): Promise<number> {
 
     case 'workflows':
       return cmdWorkflows({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'plugins':
+      return cmdPlugins({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
 
     case 'config':
       return cmdConfig(args)

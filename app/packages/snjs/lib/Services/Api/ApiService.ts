@@ -970,6 +970,11 @@ export class LegacyApiService
       uiBasePath?: string | null
       uiTokenTtlSeconds?: number | null
     }
+    // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
+    // repo server-side so the client fetches the index same-origin (strict CSP).
+    plugins?: {
+      repoUrl?: string | null
+    }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,
@@ -1835,6 +1840,23 @@ export class LegacyApiService
       url,
       external: true,
       fallbackErrorMessage: API_MESSAGE_GENERIC_INVALID_LOGIN,
+    })
+  }
+
+  /**
+   * Standard Red Notes: fetch the plugins (extensions) gallery index via the
+   * SAME-ORIGIN gateway proxy (`/v1/plugins/index`) instead of hitting the
+   * external plugins CDN directly. The direct fetch is blocked by the strict SPA
+   * CSP (`connect-src 'self'`); the gateway performs the outbound fetch against
+   * the operator-configured repo base and returns `packages.json` from this
+   * origin. Authenticated with the session token like the other feature calls.
+   */
+  public downloadPluginsIndex(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.pluginsIndex),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to download the plugins list.',
     })
   }
 

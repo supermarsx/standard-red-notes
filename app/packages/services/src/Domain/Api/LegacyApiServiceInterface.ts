@@ -17,6 +17,12 @@ export interface LegacyApiServiceInterface
 
   downloadFeatureUrl(url: string): Promise<HttpResponse>
 
+  /**
+   * Standard Red Notes: fetch the plugins gallery index (`packages.json`) via the
+   * same-origin gateway proxy so the strict CSP `connect-src 'self'` is satisfied.
+   */
+  downloadPluginsIndex(): Promise<HttpResponse>
+
   getSyncHttpRequest(
     payloads: ServerSyncPushContextualPayload[],
     lastSyncToken: string | undefined,

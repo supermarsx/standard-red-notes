@@ -167,6 +167,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [settingsNotAvailable, setSettingsNotAvailable] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [updateCheckUrl, setUpdateCheckUrl] = useState('')
+  // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
+  // repo server-side so the browse-plugins gallery loads same-origin under the
+  // strict CSP; empty clears the override (falls back to env/default).
+  const [pluginsRepoUrl, setPluginsRepoUrl] = useState('')
   // Standard Red Notes: editable registration policy. The default role + mode are
   // saved immediately on change; the domain list is edited free-form (one per
   // line or comma-separated) and saved with its own button.
@@ -366,6 +370,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setServerSettings(data?.settings ?? null)
     setSettingsSources(data?.sources ?? null)
     setUpdateCheckUrl(data?.settings?.updateCheck?.url ?? '')
+    setPluginsRepoUrl(data?.settings?.plugins?.repoUrl ?? '')
     setDomainListText((data?.settings?.registration?.domainList ?? []).join('\n'))
     setConfirmationSubject(data?.settings?.registration?.emailConfirmationSubject ?? '')
     setConfirmationBody(data?.settings?.registration?.emailConfirmationBody ?? '')
@@ -452,6 +457,18 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       update.value === null ? 'Update check URL cleared.' : 'Update check URL saved.',
     )
   }, [updateCheckUrl, saveServerSettings])
+
+  const savePluginsRepoUrl = useCallback(async () => {
+    const update = buildUrlSettingUpdate(pluginsRepoUrl)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { plugins: { repoUrl: update.value } },
+      update.value === null ? 'Plugins repository URL cleared.' : 'Plugins repository URL saved.',
+    )
+  }, [pluginsRepoUrl, saveServerSettings])
 
   const toggleNextcloudBackups = useCallback(
     async (nextValue: boolean) => {
@@ -972,6 +989,34 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 <Button
                   label={settingsSaving ? 'Saving…' : 'Save'}
                   onClick={() => void saveUpdateCheckUrl()}
+                  disabled={settingsSaving}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <Subtitle>Plugins repository URL</Subtitle>
+                <SourceChip sources={settingsSources} keys={['plugins.repoUrl', 'pluginsRepoUrl']} />
+              </div>
+              <Text className="mt-1 text-xs">
+                Base URL of the plugins (extensions) repository powering Preferences → Plugins → Browse. The server
+                fetches <code>{'<url>/packages.json'}</code> and returns it to the app from this origin (so the strict
+                CSP is satisfied — no external CDN fetch). Leave empty and save to clear the override (falls back to the
+                Standard Notes repository).
+              </Text>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <DecoratedInput
+                  className={{ container: 'w-96 max-w-full' }}
+                  placeholder="https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist"
+                  value={pluginsRepoUrl}
+                  onChange={setPluginsRepoUrl}
+                  onEnter={() => void savePluginsRepoUrl()}
+                  disabled={settingsSaving}
+                />
+                <Button
+                  label={settingsSaving ? 'Saving…' : 'Save'}
+                  onClick={() => void savePluginsRepoUrl()}
                   disabled={settingsSaving}
                 />
               </div>

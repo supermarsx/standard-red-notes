@@ -115,6 +115,13 @@ export interface EnvSettingsBaseline {
   workflowsN8nUrl?: string
   workflowsUiBasePath?: string
   workflowsUiTokenTtlSeconds?: number
+  /**
+   * Standard Red Notes: PLUGINS repo base URL env baseline (PLUGINS_REPO_URL).
+   * Enforced ENTIRELY by the gateway (PluginsController fetches the repo server-
+   * side and returns it to the client SAME-ORIGIN). undefined = env var unset
+   * (falls through to the hardcoded Standard Notes default).
+   */
+  pluginsRepoUrl?: string
 }
 
 export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
@@ -268,6 +275,38 @@ const WORKFLOWS_DEFAULTS: ResolvedWorkflowsConfig = {
 }
 
 /**
+ * Standard Red Notes: the hardcoded PLUGINS repo base URL (applies last, after
+ * persisted then env). This is the current Standard Notes plugins CDN directory;
+ * the index is fetched at `<base>/packages.json`. Keeping this as the default
+ * means a stock deploy behaves EXACTLY like upstream (the browse-plugins gallery
+ * still lists the Standard Notes plugins) until an admin points it elsewhere.
+ * NOTE: it is a directory URL WITHOUT a trailing slash and WITHOUT packages.json.
+ */
+export const DEFAULT_PLUGINS_REPO_URL = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist'
+
+/**
+ * Validate + normalize a plugins repo BASE url. Must be an http(s) absolute URL;
+ * a trailing slash is stripped so `<base>/packages.json` composes cleanly. A
+ * value that does not parse or is not http(s) returns undefined so the caller
+ * falls through to env/default — a bad overlay can never poison the proxy.
+ */
+export const normalizePluginsRepoUrl = (value: string | undefined): string | undefined => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return undefined
+  }
+  try {
+    const parsed = new URL(value.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return undefined
+    }
+  } catch {
+    return undefined
+  }
+
+  return value.trim().replace(/\/+$/, '')
+}
+
+/**
  * The tesseract language alphabet (e.g. 'eng', 'eng+deu', 'chi_sim'). A persisted/
  * env value that does not match is ignored so a bad code can never poison the OCR
  * worker or the browser-OCR download path — the caller falls through to default.
@@ -346,6 +385,8 @@ export interface ServerSettingsView {
     }
     ocr: ResolvedOcrConfig
     workflows: ResolvedWorkflowsConfig
+    /** Standard Red Notes: the effective plugins repo base URL. */
+    plugins: { repoUrl: string }
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -480,6 +521,25 @@ export class ServerSettingsResolver {
     const persisted = await this.safeRead()
 
     return persisted.updateCheck?.url ?? this.envBaseline.updateCheckUrl
+  }
+
+  /**
+   * The effective PLUGINS repo BASE url: persisted admin value wins over the
+   * PLUGINS_REPO_URL env baseline, which falls back to the hardcoded Standard
+   * Notes default. Re-read per call so an admin change takes effect on the next
+   * fetch without a restart. Every candidate is validated/normalized (http(s),
+   * trailing slash stripped) so a bad value can never poison the proxy — it
+   * simply falls through to the next candidate, and ALWAYS resolves to a valid
+   * base (never undefined), so the browse-plugins gallery keeps working.
+   */
+  async resolvePluginsRepoUrl(): Promise<string> {
+    const persisted = await this.safeRead()
+
+    return (
+      normalizePluginsRepoUrl(persisted.plugins?.repoUrl) ??
+      normalizePluginsRepoUrl(this.envBaseline.pluginsRepoUrl) ??
+      DEFAULT_PLUGINS_REPO_URL
+    )
   }
 
   /** Effective Nextcloud-backups master gate (gateway-side VIEW; default OFF). */
@@ -716,6 +776,8 @@ export class ServerSettingsResolver {
     const ocrConfig = await this.resolveOcrConfig()
     const workflows = persisted.workflows ?? {}
     const workflowsConfig = await this.resolveWorkflowsConfig()
+    const plugins = persisted.plugins ?? {}
+    const pluginsRepoUrl = await this.resolvePluginsRepoUrl()
     const sources: Record<string, ServerSettingSource> = {
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
@@ -781,6 +843,7 @@ export class ServerSettingsResolver {
       'workflows.n8nUrl': this.source(workflows.n8nUrl, env.workflowsN8nUrl),
       'workflows.uiBasePath': this.source(workflows.uiBasePath, env.workflowsUiBasePath),
       'workflows.uiTokenTtlSeconds': this.source(workflows.uiTokenTtlSeconds, env.workflowsUiTokenTtlSeconds),
+      'plugins.repoUrl': this.source(plugins.repoUrl, env.pluginsRepoUrl),
     }
 
     return {
@@ -813,6 +876,7 @@ export class ServerSettingsResolver {
         },
         ocr: ocrConfig,
         workflows: workflowsConfig,
+        plugins: { repoUrl: pluginsRepoUrl },
       },
       sources,
     }

@@ -39,6 +39,7 @@ import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubP
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 import { WebFetchLike, WebService } from '../Service/Web/WebService'
 import { resolveOwnPackageVersion, UpdateCheckFetchLike, UpdateCheckService } from '../Service/Updates/UpdateCheckService'
+import { PluginsFetchLike, PluginsProxyService } from '../Service/Plugins/PluginsProxyService'
 import { AdminLogsService } from '../Service/AdminLogs/AdminLogsService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
@@ -369,6 +370,10 @@ export class ContainerConfigLoader {
       workflowsUiTokenTtlSeconds: env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
         ? +env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
         : undefined,
+      // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
+      // repo server-side so the client fetches it SAME-ORIGIN (strict CSP). Unset
+      // => the resolver falls back to the Standard Notes default (behavior unchanged).
+      pluginsRepoUrl: env.get('PLUGINS_REPO_URL', true) || undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container
@@ -504,6 +509,24 @@ export class ContainerConfigLoader {
         currentVersion: env.get('UPDATE_CHECK_CURRENT_VERSION', true) || resolveOwnPackageVersion(),
         cacheTtlMs: env.get('UPDATE_CHECK_CACHE_TTL_MS', true) ? +env.get('UPDATE_CHECK_CACHE_TTL_MS', true) : undefined,
         timeoutMs: env.get('UPDATE_CHECK_TIMEOUT_MS', true) ? +env.get('UPDATE_CHECK_TIMEOUT_MS', true) : undefined,
+      }),
+    )
+
+    // Standard Red Notes: SAME-ORIGIN plugins (extensions) gallery proxy.
+    //
+    // The gateway (never the browser) fetches the operator-configured plugins
+    // repo — base URL resolved per request through the ServerSettingsResolver
+    // (admin `plugins.repoUrl` overlay wins over PLUGINS_REPO_URL env, over the
+    // hardcoded Standard Notes default) — so the client fetches the index (and
+    // package files) from THIS origin and the strict CSP `connect-src 'self'` is
+    // satisfied with no CSP change. The proxy is SSRF-guarded: the client can only
+    // request paths UNDER the configured base (see PluginsProxyService), never an
+    // arbitrary host. Timeout + size cap are configurable via env.
+    container.bind<PluginsProxyService>(TYPES.ApiGateway_PluginsProxyService).toConstantValue(
+      new PluginsProxyService(globalThis.fetch.bind(globalThis) as unknown as PluginsFetchLike, {
+        baseUrlResolver: () => serverSettingsResolver.resolvePluginsRepoUrl(),
+        timeoutMs: env.get('PLUGINS_REPO_TIMEOUT_MS', true) ? +env.get('PLUGINS_REPO_TIMEOUT_MS', true) : undefined,
+        maxBytes: env.get('PLUGINS_REPO_MAX_BYTES', true) ? +env.get('PLUGINS_REPO_MAX_BYTES', true) : undefined,
       }),
     )
 

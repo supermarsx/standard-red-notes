@@ -1499,6 +1499,24 @@ export class AdminController extends BaseHttpController {
       }
     }
 
+    // Standard Red Notes: PLUGINS gallery repo base URL. An http(s) URL (the base
+    // directory — the index is fetched at `<repoUrl>/packages.json`), or null to
+    // clear (fall back to PLUGINS_REPO_URL env, then the Standard Notes default).
+    if (root.plugins !== undefined) {
+      if (!root.plugins || typeof root.plugins !== 'object' || Array.isArray(root.plugins)) {
+        return { error: 'plugins must be an object.' }
+      }
+      const plugins = root.plugins as Record<string, unknown>
+      if (plugins.repoUrl !== undefined) {
+        const value = url(plugins.repoUrl, 'plugins.repoUrl')
+        if (value !== null && typeof value === 'object') {
+          return value
+        }
+        patch.plugins = { repoUrl: value }
+        changedSettings.push('plugins.repoUrl')
+      }
+    }
+
     return { patch, changedSettings }
   }
 

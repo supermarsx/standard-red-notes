@@ -21,7 +21,9 @@ describe('Plugins Service', () => {
   beforeEach(() => {
     apiService = {} as jest.Mocked<LegacyApiServiceInterface>
     apiService.addEventObserver = jest.fn()
+    apiService.downloadPluginsIndex = jest.fn()
     itemManager = {} as jest.Mocked<ItemManagerInterface>
+    itemManager.getDisplayableComponents = jest.fn().mockReturnValue([])
 
     crypto = {} as jest.Mocked<PureCryptoInterface>
     crypto.base64Decode = jest.fn()
@@ -45,6 +47,36 @@ describe('Plugins Service', () => {
     syncService.sync = jest.fn()
 
     pluginsService = new PluginsService(itemManager, mutator, syncService, apiService, alertService, crypto)
+  })
+
+  describe('getInstallablePlugins', () => {
+    it('downloads the index through the same-origin gateway proxy (not a direct CDN fetch)', async () => {
+      apiService.downloadPluginsIndex = jest.fn().mockResolvedValue({
+        data: {
+          'org.example.plugin': {
+            identifier: 'org.example.plugin',
+            name: 'Example',
+            content_type: 'SN|Component',
+            area: 'editor-editor',
+            version: '1.0.0',
+            url: 'https://cdn.example.com/plugin/index.html',
+            showInGallery: true,
+          },
+        },
+      })
+
+      const plugins = await pluginsService.getInstallablePlugins()
+
+      expect(apiService.downloadPluginsIndex).toHaveBeenCalledTimes(1)
+      expect(plugins).toHaveLength(1)
+      expect(plugins[0].identifier).toEqual('org.example.plugin')
+    })
+
+    it('throws when the proxy returns an error body', async () => {
+      apiService.downloadPluginsIndex = jest.fn().mockResolvedValue({ data: { error: { message: 'nope' } } })
+
+      await expect(pluginsService.getInstallablePlugins()).rejects.toThrow('Failed to download the plugins list.')
+    })
   })
 
   describe('downloadRemoteThirdPartyFeature', () => {

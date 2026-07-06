@@ -237,6 +237,12 @@ export const Paths = {
     ...EmailReminderPaths,
     ...ReminderDeliveryPaths,
     ...CaldavTokenPaths,
+    // Standard Red Notes: SAME-ORIGIN plugins (extensions) gallery proxy. The
+    // gateway fetches the operator-configured plugins repo server-side and returns
+    // the index (and package files) from this origin, so the strict CSP
+    // `connect-src 'self'` is satisfied without the client hitting an external CDN.
+    pluginsIndex: '/v1/plugins/index',
+    pluginsDownload: (path: string) => `/v1/plugins/download?path=${encodeURIComponent(path)}`,
     meta: '/v1/meta',
   },
   v2: {

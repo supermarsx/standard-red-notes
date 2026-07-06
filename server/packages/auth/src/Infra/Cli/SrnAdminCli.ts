@@ -963,6 +963,8 @@ SERVER
   workflows set-n8n-url <url>        Internal n8n engine URL (runtime)
   workflows set-ui-base-path </path> Editor proxy mount (next gateway restart)
   workflows set-ui-token-ttl <secs>  Editor-cookie lifetime (runtime; new cookies)
+  plugins [show]                     Effective plugins gallery repo URL + source
+  plugins set-repo-url <url>         Plugins repo base URL (runtime; same-origin proxy)
   config                             Effective operator config + source + restart info
 
 ANTI-ABUSE
@@ -1183,6 +1185,21 @@ true'). No secret lives in this config — the editor proxy authenticates with t
 gateway's own short-lived cookie, and n8n community edition needs no API key for the
 editor. 'show' reads the SAME persisted overlay the admin panel writes over the
 gateway env over defaults. Setting requires SERVER_SETTINGS_PATH configured.`,
+  plugins: `plugins — plugins (extensions) gallery repo (SERVER_SETTINGS overlay)
+
+USAGE
+  srn-admin plugins [show] [--json]
+  srn-admin plugins set-repo-url <http(s)://host/path|clear>
+
+The base URL of the plugins repository powering the app's Preferences → Plugins →
+Browse gallery. The gateway fetches '<repoUrl>/packages.json' server-side and
+returns it to the browser from the SAME origin, so the strict SPA CSP
+('connect-src 'self'') is satisfied without hitting an external CDN directly (this
+is why the gallery previously failed to load). Read per request, so a change takes
+effect at RUNTIME. 'clear' drops the override so it falls back to the gateway
+PLUGINS_REPO_URL env, then the Standard Notes default. 'show' reads the SAME
+persisted overlay the admin panel writes over the gateway env over the default.
+Setting requires SERVER_SETTINGS_PATH configured.`,
   group: `group — RBAC group management
 
 USAGE

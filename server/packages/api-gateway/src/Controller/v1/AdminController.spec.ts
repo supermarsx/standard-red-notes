@@ -687,6 +687,34 @@ describe('AdminController server-status', () => {
       expect(await resolver.resolveWorkflowsConfig()).toMatchObject({ enabled: false, n8nUrl: 'http://n8n:5678' })
       expect(logger.info).not.toHaveBeenCalled()
     })
+
+    it('PUT persists the plugins repo URL (persisted WINS over default) and returns the view', async () => {
+      await settingsController().setServerSettings(
+        { body: { plugins: { repoUrl: 'https://mirror.example.com/plugins' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(await resolver.resolvePluginsRepoUrl()).toBe('https://mirror.example.com/plugins')
+
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.settings.plugins).toEqual({ repoUrl: 'https://mirror.example.com/plugins' })
+      expect(payload.sources['plugins.repoUrl']).toBe('persisted')
+    })
+
+    it('PUT rejects a non-http plugins repo URL as a 400 that persists nothing', async () => {
+      for (const body of [{ plugins: { repoUrl: 'ftp://nope' } }, { plugins: { repoUrl: 'not a url' } }]) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      // Unchanged: still the hardcoded Standard Notes default.
+      expect(await resolver.resolvePluginsRepoUrl()).toBe(
+        'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist',
+      )
+      expect(logger.info).not.toHaveBeenCalled()
+    })
   })
 })
 

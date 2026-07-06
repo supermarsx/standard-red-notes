@@ -181,6 +181,22 @@ export interface PersistedWorkflowsSettings {
   uiTokenTtlSeconds?: number
 }
 
+/**
+ * Standard Red Notes: PLUGINS (extensions gallery) repo knob. The gateway
+ * enforces this ENTIRELY (PluginsController + PluginsProxyService fetch the repo
+ * server-side and hand it to the client SAME-ORIGIN so the strict CSP
+ * `connect-src 'self'` is satisfied with no CSP change). `repoUrl` is the BASE
+ * directory URL of the plugins repo — the index is fetched at
+ * `<repoUrl>/packages.json` and any per-file proxy request is resolved (and
+ * SSRF-guarded) against this base. Read through the resolver per request so an
+ * admin change takes effect WITHOUT a restart. Absent = fall through to env
+ * (PLUGINS_REPO_URL) then the hardcoded Standard Notes default, so a stock
+ * deploy is unchanged until edited.
+ */
+export interface PersistedPluginsSettings {
+  repoUrl?: string
+}
+
 export interface PersistedServerSettings {
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
@@ -189,6 +205,7 @@ export interface PersistedServerSettings {
   registration?: PersistedRegistrationSettings
   ocr?: PersistedOcrSettings
   workflows?: PersistedWorkflowsSettings
+  plugins?: PersistedPluginsSettings
 }
 
 /**
@@ -253,6 +270,9 @@ export interface ServerSettingsPatch {
     n8nUrl?: string | null
     uiBasePath?: string | null
     uiTokenTtlSeconds?: number | null
+  }
+  plugins?: {
+    repoUrl?: string | null
   }
 }
 
@@ -383,6 +403,13 @@ export class ServerSettingsStore {
         this.applyKey(data.workflows, 'uiTokenTtlSeconds', patch.workflows.uiTokenTtlSeconds)
         if (Object.keys(data.workflows).length === 0) {
           delete data.workflows
+        }
+      }
+      if (patch.plugins) {
+        data.plugins = data.plugins ?? {}
+        this.applyKey(data.plugins, 'repoUrl', patch.plugins.repoUrl)
+        if (Object.keys(data.plugins).length === 0) {
+          delete data.plugins
         }
       }
       result = data

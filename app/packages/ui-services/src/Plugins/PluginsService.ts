@@ -19,8 +19,6 @@ import { PluginsServiceInterface } from './PluginsServiceInterface'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { isString } from '@standardnotes/utils'
 
-const PluginsUrl = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist/packages.json'
-
 type DownloadedPackages = {
   [key: string]: PluginListing
 }
@@ -37,12 +35,28 @@ export class PluginsService implements PluginsServiceInterface {
     private crypto: PureCryptoInterface,
   ) {}
 
+  /**
+   * Standard Red Notes: download the plugins gallery index (`packages.json`)
+   * through the SAME-ORIGIN gateway proxy (ApiService.downloadPluginsIndex ->
+   * GET /v1/plugins/index) rather than fetching the external plugins CDN
+   * directly. The direct cross-origin fetch was blocked by the strict SPA CSP
+   * (`connect-src 'self'`), so the gallery never loaded; the gateway now performs
+   * the outbound fetch against the operator-configured repo base and returns the
+   * index from this origin. The repo URL is configurable server-side (admin
+   * `plugins.repoUrl` overlay / PLUGINS_REPO_URL env), defaulting to the Standard
+   * Notes repo so behavior is unchanged when unset.
+   */
   private async performDownloadPlugins(): Promise<PluginsList> {
-    const response = await fetch(PluginsUrl)
-    const changelog = await response.text()
-    const parsedData = JSON.parse(changelog) as DownloadedPackages
+    const response = await this.api.downloadPluginsIndex()
 
-    return Object.values(parsedData)
+    const data = response.data as unknown
+    if (!data || (typeof data === 'object' && 'error' in (data as Record<string, unknown>))) {
+      throw new Error('Failed to download the plugins list.')
+    }
+
+    const parsedData = (isString(data) ? JSON.parse(data) : data) as DownloadedPackages
+
+    return Object.values(parsedData ?? {})
   }
 
   public async getInstallablePlugins(): Promise<PluginsList> {

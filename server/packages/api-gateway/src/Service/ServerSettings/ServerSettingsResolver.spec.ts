@@ -661,4 +661,47 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       })
     })
   })
+
+  describe('plugins repo url', () => {
+    const DEFAULT = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist'
+
+    it('defaults to the Standard Notes repo when nothing is persisted or in env', async () => {
+      expect(await makeResolver().resolvePluginsRepoUrl()).toEqual(DEFAULT)
+    })
+
+    it('uses the env baseline when set (and strips a trailing slash)', async () => {
+      const resolver = makeResolver({ pluginsRepoUrl: 'https://mirror.example.com/plugins/' })
+      expect(await resolver.resolvePluginsRepoUrl()).toEqual('https://mirror.example.com/plugins')
+    })
+
+    it('lets a persisted admin value win over env', async () => {
+      const resolver = makeResolver({ pluginsRepoUrl: 'https://env.example.com/p' })
+      await resolver.applyPatch({ plugins: { repoUrl: 'https://persisted.example.com/p' } })
+      expect(await resolver.resolvePluginsRepoUrl()).toEqual('https://persisted.example.com/p')
+    })
+
+    it('falls through to the default when a persisted/env value is not http(s)', async () => {
+      const resolver = makeResolver({ pluginsRepoUrl: 'ftp://nope.example.com' })
+      expect(await resolver.resolvePluginsRepoUrl()).toEqual(DEFAULT)
+
+      await resolver.applyPatch({ plugins: { repoUrl: 'not a url' } as never })
+      expect(await resolver.resolvePluginsRepoUrl()).toEqual(DEFAULT)
+    })
+
+    it('clears the override on null so it falls back to env/default', async () => {
+      const resolver = makeResolver({ pluginsRepoUrl: 'https://env.example.com/p' })
+      await resolver.applyPatch({ plugins: { repoUrl: 'https://persisted.example.com/p' } })
+      await resolver.applyPatch({ plugins: { repoUrl: null } })
+      expect(await resolver.resolvePluginsRepoUrl()).toEqual('https://env.example.com/p')
+    })
+
+    it('reports the resolved repo url + source in the view', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({ plugins: { repoUrl: 'https://persisted.example.com/p' } })
+
+      const view = await resolver.view()
+      expect(view.settings.plugins).toEqual({ repoUrl: 'https://persisted.example.com/p' })
+      expect(view.sources).toMatchObject({ 'plugins.repoUrl': 'persisted' })
+    })
+  })
 })

@@ -501,6 +501,12 @@ export type AdminServerSettings = {
     uiBasePath?: string
     uiTokenTtlSeconds?: number
   }
+  // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
+  // repo server-side so the browse-plugins gallery loads same-origin under the
+  // strict CSP. The index is fetched at `<repoUrl>/packages.json`.
+  plugins?: {
+    repoUrl?: string
+  }
 }
 
 export type AdminServerSettingsResponse = {
