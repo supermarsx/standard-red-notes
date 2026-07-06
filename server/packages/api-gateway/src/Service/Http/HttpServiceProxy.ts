@@ -1,6 +1,6 @@
 import { AxiosInstance, AxiosError, AxiosResponse, Method } from 'axios'
 import { Request, Response } from 'express'
-import { inject, injectable } from 'inversify'
+import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
 
 import { TYPES } from '../../Bootstrap/Types'
@@ -9,6 +9,7 @@ import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { TimerInterface } from '@standardnotes/time'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
+import { resolveClientIpFromRequest } from '../../Controller/ClientIp'
 
 @injectable()
 export class HttpServiceProxy implements ServiceProxyInterface {
@@ -25,6 +26,9 @@ export class HttpServiceProxy implements ServiceProxyInterface {
     @inject(TYPES.ApiGateway_CrossServiceTokenCache) private crossServiceTokenCache: CrossServiceTokenCacheInterface,
     @inject(TYPES.ApiGateway_Logger) private logger: Logger,
     @inject(TYPES.ApiGateway_Timer) private timer: TimerInterface,
+    // Standard Red Notes: optional trusted client-IP header name (CLIENT_IP_HEADER;
+    // empty = off), threaded into the canonical resolver used to set x-origin-ip.
+    @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() private clientIpHeader: string = '',
   ) {}
 
   async validateSession(dto: {
@@ -370,16 +374,12 @@ export class HttpServiceProxy implements ServiceProxyInterface {
   }
 
   private clientIpFromRequest(request: Request): string {
-    const forwardedFor = request.headers['x-forwarded-for']
-    if (forwardedFor) {
-      const value = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
-      const leftmost = value.split(',')[0]?.trim()
-      if (leftmost) {
-        return leftmost
-      }
-    }
-
-    return request.socket?.remoteAddress ?? request.ip ?? ''
+    // Standard Red Notes: was reading the RAW leftmost X-Forwarded-For here, which a
+    // direct client can spoof — letting them forge the IP recorded on their session.
+    // Now routed through THE canonical resolver so x-origin-ip (which auth persists as
+    // the session/security IP) honors TRUST_PROXY + CLIENT_IP_HEADER and matches the
+    // rate limiter / ACL / workflows audit exactly.
+    return resolveClientIpFromRequest(request, this.clientIpHeader)
   }
 
   private getRequestData(

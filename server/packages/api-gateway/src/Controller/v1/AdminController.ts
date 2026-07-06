@@ -124,6 +124,13 @@ export class AdminController extends BaseHttpController {
     @inject(TYPES.ApiGateway_DockerServiceControlService)
     @optional()
     private dockerServiceControlService?: DockerServiceControlService,
+    // Standard Red Notes: forwarded-client-IP config surfaced READ-ONLY on the admin
+    // Server tab (both are boot settings — changing them needs a redeploy). trustProxy
+    // is the raw Express `trust proxy` spec; clientIpHeader is the optional trusted
+    // client-IP header name (empty = off). Appended LAST so positional construction in
+    // tests is unaffected. See ClientIp.ts / docs/DEPLOYMENT.md.
+    @inject(TYPES.ApiGateway_TRUST_PROXY) @optional() private trustProxy?: string,
+    @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() private clientIpHeader?: string,
   ) {
     super()
   }
@@ -565,6 +572,15 @@ export class AdminController extends BaseHttpController {
       health: {
         gateway: { redis: gatewayRedis },
         auth,
+      },
+      // Standard Red Notes: read-only forwarded-client-IP config (boot settings). The
+      // admin panel shows these so an operator can confirm how the real client IP is
+      // resolved for rate limiting / session security. `trustProxy` empty means the
+      // built-in default (loopback/linklocal/uniquelocal); `clientIpHeader` empty
+      // means no trusted header is read (request.ip only).
+      network: {
+        trustProxy: this.trustProxy && this.trustProxy.trim() !== '' ? this.trustProxy.trim() : null,
+        clientIpHeader: this.clientIpHeader && this.clientIpHeader !== '' ? this.clientIpHeader : null,
       },
       services,
     })

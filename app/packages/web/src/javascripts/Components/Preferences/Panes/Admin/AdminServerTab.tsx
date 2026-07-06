@@ -70,6 +70,12 @@ type ServerStatus = {
     gateway?: { redis?: boolean | null }
     auth?: { reachable?: boolean; status?: string; checks?: Record<string, boolean> }
   }
+  // Standard Red Notes: read-only forwarded-client-IP config (boot settings). null =
+  // built-in default (trust proxy: loopback/linklocal/uniquelocal) / no trusted header.
+  network?: {
+    trustProxy?: string | null
+    clientIpHeader?: string | null
+  }
 }
 
 type EnvFlags = {
@@ -680,6 +686,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const gatewayRedis = serverStatus?.health?.gateway?.redis
   const auth = serverStatus?.health?.auth
   const services = serverStatus?.services ?? []
+  const network = serverStatus?.network
 
   return (
     <>
@@ -940,6 +947,46 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               <Text>Nextcloud backups (NEXTCLOUD_BACKUPS_ENABLED)</Text>
               <StateChip state={envFlags.nextcloudBackupsEnabled} on="On" off="Off" />
             </div>
+          </div>
+        )}
+      </PreferencesSegment>
+
+      <HorizontalSeparator classes="my-4" />
+
+      {/* Standard Red Notes: read-only forwarded-client-IP resolution. These are boot
+          settings (TRUST_PROXY / CLIENT_IP_HEADER) — changing them requires editing the
+          server environment and redeploying. They govern how the real client IP is
+          derived for rate limiting, IP allow/block lists and session security. */}
+      <PreferencesSegment>
+        <Title>Client IP resolution</Title>
+        <Text>
+          How the server derives each request's real client IP (used for rate limiting, IP allow/block lists and the IP
+          recorded on sessions). These are read-only boot settings; only trust forwarded headers when this instance is
+          actually behind a proxy that sets them and strips inbound copies. Changing them requires editing the server
+          environment and redeploying.
+        </Text>
+        {statusLoading ? (
+          <Spinner className="mt-3 h-5 w-5" />
+        ) : (
+          <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+            <StatusRow
+              name="Trusted proxy (TRUST_PROXY)"
+              detail="Which upstream hops Express trusts for X-Forwarded-* headers"
+              chip={
+                <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                  {network?.trustProxy ?? 'Default (loopback/private)'}
+                </span>
+              }
+            />
+            <StatusRow
+              name="Trusted client-IP header (CLIENT_IP_HEADER)"
+              detail="Named header read for the client IP, when set by a trusted proxy"
+              chip={
+                <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                  {network?.clientIpHeader ?? 'Off (request.ip only)'}
+                </span>
+              }
+            />
           </div>
         )}
       </PreferencesSegment>

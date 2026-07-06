@@ -1,10 +1,11 @@
 import { Request, Response } from 'express'
-import { inject } from 'inversify'
+import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import { SettingName } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { TYPES } from '../../Bootstrap/Types'
+import { resolveClientIpFromRequest } from '../ClientIp'
 import { WORKFLOWS_UI_COOKIE_NAME, WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 
 /**
@@ -42,6 +43,9 @@ export class WorkflowsController extends BaseHttpController {
   constructor(
     @inject(TYPES.ApiGateway_WorkflowsService) private workflowsService: WorkflowsService,
     @inject(TYPES.ApiGateway_Logger) private logger: Logger,
+    // Standard Red Notes: optional trusted client-IP header name (CLIENT_IP_HEADER;
+    // empty = off) for the canonical resolver used in the pair/unpair audit lines.
+    @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() private clientIpHeader: string = '',
   ) {
     super()
   }
@@ -181,6 +185,9 @@ export class WorkflowsController extends BaseHttpController {
   }
 
   private clientIp(request: Request): string | null {
-    return (request.headers['x-forwarded-for'] as string | undefined) ?? request.ip ?? null
+    // Standard Red Notes: was reading the RAW X-Forwarded-For (spoofable, ignores
+    // trust-proxy). Now uses THE canonical resolver so the audited IP honors
+    // TRUST_PROXY + CLIENT_IP_HEADER and matches every other IP consumer.
+    return resolveClientIpFromRequest(request, this.clientIpHeader) || null
   }
 }

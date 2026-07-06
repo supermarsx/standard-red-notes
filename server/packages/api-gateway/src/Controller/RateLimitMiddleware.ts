@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 
 import { IpAclDecision } from './IpAccessList'
+import { resolveClientIpFromRequest } from './ClientIp'
 
 /**
  * Redis-backed IP rate limiting for the UNAUTHENTICATED, auth-adjacent gateway
@@ -145,8 +146,13 @@ const IP_BLOCKED = {
   },
 }
 
-const clientIpOf = (request: Request): string =>
-  request.ip || request.socket?.remoteAddress || 'unknown'
+// Standard Red Notes: key on THE canonical resolver so the rate limiter, the IP
+// allow/block list and the auth session IP all agree on ONE address. It honors
+// TRUST_PROXY (via request.ip) + the optional CLIENT_IP_HEADER and normalizes the
+// result (IPv6-mapped IPv4 unwrapped, etc.), so an attacker cannot bypass a limit
+// or block by spoofing X-Forwarded-For when the app isn't configured to trust a proxy.
+const clientIpOf = (request: Request, clientIpHeader?: string): string =>
+  resolveClientIpFromRequest(request, clientIpHeader) || 'unknown'
 
 /** Set the standard rate-limit headers on a limited response. */
 const setRateLimitHeaders = (
@@ -175,9 +181,11 @@ export const createRateLimitMiddleware = (options: {
   metrics?: RateLimitMetricsLike
   /** Item 5 hook: fired (fire-and-forget) when an IP trips a tier. */
   onThrottle?: (clientIp: string, bucket: string) => void
+  /** Optional trusted client-IP header name (CLIENT_IP_HEADER; empty = off). */
+  clientIpHeader?: string
   now?: () => number
 }): ((request: Request, response: Response, next: NextFunction) => void) => {
-  const { redis, config, logger, ipAccessList, metrics, onThrottle } = options
+  const { redis, config, logger, ipAccessList, metrics, onThrottle, clientIpHeader } = options
   const now = options.now ?? ((): number => Date.now())
   const resolveConfig = typeof config === 'function' ? config : async (): Promise<RateLimitConfig> => config
 
@@ -190,7 +198,7 @@ export const createRateLimitMiddleware = (options: {
   return (request: Request, response: Response, next: NextFunction): void => {
     void (async (): Promise<void> => {
       const path = normalizeRateLimitPath(request.path)
-      const ip = clientIpOf(request)
+      const ip = clientIpOf(request, clientIpHeader)
 
       // IP allow/block list — enforced BEFORE the tiers. Fails open (a Redis
       // error degrades to 'none' inside classify) so an outage never hard-blocks.
@@ -292,9 +300,11 @@ export const createUserRateLimitMiddleware = (options: {
   config: UserRateLimitConfigProvider
   logger: RateLimitLogger
   metrics?: RateLimitMetricsLike
+  /** Optional trusted client-IP header name (CLIENT_IP_HEADER; empty = off). */
+  clientIpHeader?: string
   now?: () => number
 }): ((request: Request, response: Response, next: NextFunction) => void) => {
-  const { redis, config, logger, metrics } = options
+  const { redis, config, logger, metrics, clientIpHeader } = options
   const now = options.now ?? ((): number => Date.now())
   const resolveConfig = typeof config === 'function' ? config : async (): Promise<UserRateLimitConfig> => config
 
@@ -355,7 +365,7 @@ export const createUserRateLimitMiddleware = (options: {
         setRateLimitHeaders(response, resolved.max, count, Math.floor(now() / 1000) + retryAfterSeconds)
         void metrics?.recordThrottle({
           bucket: `user:${resolved.bucket}`,
-          ip: clientIpOf(request),
+          ip: clientIpOf(request, clientIpHeader),
           method: request.method,
           path: normalizeRateLimitPath(request.path),
         })

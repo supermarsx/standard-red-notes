@@ -6,6 +6,7 @@ import { Container } from 'inversify'
 import { Logger } from 'winston'
 
 import { TYPES } from '../Bootstrap/Types'
+import { resolveClientIpFromRequest } from '../Controller/ClientIp'
 import { WORKFLOWS_UI_COOKIE_NAME, WorkflowsService } from '../Service/Workflows/WorkflowsService'
 
 /**
@@ -64,6 +65,11 @@ const readCookie = (request: Request, name: string): string | undefined => {
 export function registerWorkflowsUiProxy(app: Application, container: Container): boolean {
   const service = container.get<WorkflowsService>(TYPES.ApiGateway_WorkflowsService)
   const logger = container.get<Logger>(TYPES.ApiGateway_Logger)
+  // Standard Red Notes: honor the same forwarded-client-IP config as every other IP
+  // consumer when telling n8n who the client is (empty = off).
+  const clientIpHeader = container.isBound(TYPES.ApiGateway_CLIENT_IP_HEADER)
+    ? container.get<string>(TYPES.ApiGateway_CLIENT_IP_HEADER)
+    : ''
 
   // The mount path is bound ONCE at boot (Express cannot re-mount at runtime), so
   // a persisted workflows.uiBasePath override only takes effect after a restart —
@@ -120,7 +126,7 @@ export function registerWorkflowsUiProxy(app: Application, container: Container)
       delete headers.host
       headers['x-forwarded-proto'] = request.protocol
       headers['x-forwarded-host'] = request.headers.host ?? ''
-      headers['x-forwarded-for'] = request.ip ?? ''
+      headers['x-forwarded-for'] = resolveClientIpFromRequest(request, clientIpHeader)
 
       // The app-level body parsers (json/text) run BEFORE this router and CONSUME
       // the request stream for the content types they match (the n8n editor's

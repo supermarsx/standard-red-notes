@@ -133,6 +133,18 @@ describe('AdminController server-status', () => {
     )
   })
 
+  it('reports the read-only forwarded-client-IP config (null when unset)', async () => {
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
+
+    // The unit test does not wire TRUST_PROXY / CLIENT_IP_HEADER, so both report null
+    // (built-in default / off).
+    await makeController().getServerStatus({} as Request, response)
+
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ network: { trustProxy: null, clientIpHeader: null } }),
+    )
+  })
+
   it('reports a services array covering EVERY service, degrading per field (never 5xx)', async () => {
     const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 

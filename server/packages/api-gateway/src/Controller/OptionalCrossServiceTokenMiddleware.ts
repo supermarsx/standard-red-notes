@@ -1,6 +1,6 @@
 import { TimerInterface } from '@standardnotes/time'
 import { NextFunction, Response } from 'express'
-import { inject, injectable } from 'inversify'
+import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
 
 import { TYPES } from '../Bootstrap/Types'
@@ -17,8 +17,9 @@ export class OptionalCrossServiceTokenMiddleware extends AuthMiddleware {
     @inject(TYPES.ApiGateway_CrossServiceTokenCache) crossServiceTokenCache: CrossServiceTokenCacheInterface,
     @inject(TYPES.ApiGateway_Timer) timer: TimerInterface,
     @inject(TYPES.ApiGateway_Logger) logger: Logger,
+    @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() clientIpHeader = '',
   ) {
-    super(serviceProxy, jwtSecret, crossServiceTokenCacheTTL, crossServiceTokenCache, timer, logger)
+    super(serviceProxy, jwtSecret, crossServiceTokenCacheTTL, crossServiceTokenCache, timer, logger, clientIpHeader)
   }
 
   protected override handleSessionValidationResponse(

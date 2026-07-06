@@ -13,6 +13,7 @@ import {
   resolveCorsStrictMode,
   buildDefaultRateLimitRules,
   createRateLimitMiddleware,
+  parseClientIpHeaderName,
   IpAccessListStore,
   RateLimitConfig,
   RateLimitMetricsStore,
@@ -143,6 +144,11 @@ export class HomeServer implements HomeServerInterface {
         // remote client cannot spoof the forwarded headers.
         configureTrustProxy(app, env.get('TRUST_PROXY', true))
 
+        // Standard Red Notes: optional trusted client-IP header (CLIENT_IP_HEADER;
+        // empty = off), fed into every IP consumer via the canonical resolveClientIp
+        // so the rate limiter, IP allow/block list and auth session IP all agree.
+        const clientIpHeader = parseClientIpHeaderName(env.get('CLIENT_IP_HEADER', true))
+
         // Standard Red Notes: Redis-backed IP rate limiting on the unauthenticated,
         // auth-adjacent endpoints (login, registration, MCP-token authenticate,
         // magic-link request, recovery) — the same brute-force throttle the
@@ -196,6 +202,7 @@ export class HomeServer implements HomeServerInterface {
             },
             ipAccessList: rateLimitIpAccessList,
             metrics: rateLimitMetrics,
+            clientIpHeader,
             onThrottle: (clientIp: string): void => {
               if (escalationRedis.set === undefined) {
                 return

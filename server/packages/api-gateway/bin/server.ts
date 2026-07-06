@@ -61,6 +61,7 @@ import {
   resolveSharedServerAccessKeyConfig,
 } from '../src/Controller/SharedServerAccessKeyMiddleware'
 import { configureTrustProxy } from '../src/Controller/TrustProxy'
+import { parseClientIpHeaderName } from '../src/Controller/ClientIp'
 import { decideCorsOrigin, resolveCorsStrictMode } from '../src/Controller/CorsOriginResolver'
 import {
   buildDefaultRateLimitRules,
@@ -118,6 +119,11 @@ void container
     // (Docker) networks, so direct access still works and a remote client
     // cannot spoof the forwarded headers.
     configureTrustProxy(app, env.get('TRUST_PROXY', true))
+
+    // Standard Red Notes: optional trusted client-IP header (CLIENT_IP_HEADER; empty
+    // = off). Fed into every IP consumer via the canonical resolveClientIp so the
+    // rate limiter, IP allow/block list and auth session IP all agree. See ClientIp.ts.
+    const clientIpHeader = parseClientIpHeaderName(env.get('CLIENT_IP_HEADER', true))
 
     app.use((request: Request, _response: Response, next: NextFunction) => {
       if (request.hostname.includes('standardnotes.org')) {
@@ -183,6 +189,7 @@ void container
         },
         ipAccessList,
         metrics: rateLimitMetrics,
+        clientIpHeader,
         onThrottle: (clientIp: string): void => {
           if (escalationRedis.set === undefined) {
             return

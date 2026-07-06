@@ -90,6 +90,47 @@ docker compose -f docker-compose.single.yml down -v       # DELETE data volume
 **Behind a reverse proxy / HTTPS.** Front the container with Caddy/nginx/Traefik
 and set `COOKIE_SECURE=true`, `COOKIE_DOMAIN=…`, `PUBLIC_FILES_SERVER_URL=https://…/files`.
 
+#### Forwarded client IP (`TRUST_PROXY` / `CLIENT_IP_HEADER`)
+
+The server resolves each request's **real client IP** in one canonical place and
+uses it for rate limiting, the admin IP allow/block lists, and the IP recorded on
+sessions / forwarded to the auth server (`x-origin-ip`). Getting this right matters
+for security: if the app trusts forwarded headers it should not, a remote attacker
+can spoof any IP (dodging rate limits/blocks and poisoning session audit records).
+
+**Security model — only trust forwarded headers when you are actually behind a
+proxy that sets them and strips inbound copies.**
+
+- **`TRUST_PROXY`** — controls Express's `trust proxy`, i.e. which upstream hops
+  may set `X-Forwarded-For` / `X-Forwarded-Proto`. `req.ip` (and therefore the
+  resolved client IP) only reflects `X-Forwarded-For` for hops you trust here.
+  Accepted forms:
+  - **unset / empty** → the safe default `loopback, linklocal, uniquelocal`. This
+    trusts a proxy on loopback or a private/Docker network but **not** arbitrary
+    public clients — so direct access keeps working and a remote client **cannot**
+    spoof `X-Forwarded-For`.
+  - **`true` / `false`** → trust all hops / trust none. Use `true` only when the
+    proxy is the sole ingress (it appends the real client and clients cannot reach
+    the app directly).
+  - **a number** (e.g. `1`) → trust exactly N proxy hops closest to the app.
+  - **a CSV of IPs/subnets and/or preset names** (e.g.
+    `127.0.0.1, 172.16.0.0/12`, or `loopback`, `linklocal`, `uniquelocal`) → trust
+    exactly those. Recommended when you know your proxy's address.
+
+- **`CLIENT_IP_HEADER`** *(optional, default empty = OFF)* — when set (e.g.
+  `X-Real-IP`, or Cloudflare's `CF-Connecting-IP`), the client IP is taken from
+  that single named header (leftmost value) and it **takes precedence** over
+  `req.ip`. When empty, behavior is exactly today's `req.ip`.
+  ⚠️ **This header is spoofable unless your deployment is genuinely behind a proxy
+  that sets it AND strips any inbound copy the client sent.** Do not enable it on a
+  directly-reachable instance. It composes with (does not replace) `TRUST_PROXY`.
+
+**Default = can't spoof.** With neither variable set beyond the built-in default, a
+direct client's forged `X-Forwarded-For` / `X-Real-IP` is ignored and the resolved
+IP is its real socket address — unchanged from prior behavior. Both settings are
+boot-time only; the admin panel's **Server** tab shows their current values
+read-only (changing them requires editing the environment and redeploying).
+
 ### Architecture
 
 ```

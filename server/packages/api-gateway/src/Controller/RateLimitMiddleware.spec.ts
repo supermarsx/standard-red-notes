@@ -166,6 +166,39 @@ describe('RateLimitMiddleware', () => {
       expect(redis.incr).toHaveBeenCalledWith('rl:auth-sensitive:9.9.9.9')
     })
 
+    it('keys on the TRUST_PROXY-resolved request.ip and IGNORES a spoofed X-Forwarded-For', async () => {
+      // The bypass-prevention property: a direct client cannot dodge the limit by
+      // forging X-Forwarded-For when no proxy is trusted — the key stays request.ip.
+      const next: NextFunction = jest.fn()
+      const redis = buildRedis()
+      const middleware = createRateLimitMiddleware({ redis, config, logger: { warn: jest.fn() } })
+      middleware(
+        buildRequest({ ip: '2.2.2.2', headers: { 'x-forwarded-for': '9.9.9.9' } } as Partial<Request>),
+        buildResponse().response,
+        next,
+      )
+      await flush()
+      expect(redis.incr).toHaveBeenCalledWith('rl:auth-login:2.2.2.2')
+    })
+
+    it('keys on CLIENT_IP_HEADER when configured', async () => {
+      const next: NextFunction = jest.fn()
+      const redis = buildRedis()
+      const middleware = createRateLimitMiddleware({
+        redis,
+        config,
+        logger: { warn: jest.fn() },
+        clientIpHeader: 'x-real-ip',
+      })
+      middleware(
+        buildRequest({ ip: '2.2.2.2', headers: { 'x-real-ip': '203.0.113.5' } } as Partial<Request>),
+        buildResponse().response,
+        next,
+      )
+      await flush()
+      expect(redis.incr).toHaveBeenCalledWith('rl:auth-login:203.0.113.5')
+    })
+
     it('FAILS OPEN (calls next, no 429) when Redis throws', async () => {
       const next: NextFunction = jest.fn()
       const warn = jest.fn()

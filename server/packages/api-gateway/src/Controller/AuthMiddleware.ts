@@ -9,6 +9,7 @@ import { Logger } from 'winston'
 import { CrossServiceTokenCacheInterface } from '../Service/Cache/CrossServiceTokenCacheInterface'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
 import { ResponseLocals } from './ResponseLocals'
+import { resolveClientIpFromRequest } from './ClientIp'
 import { RoleName, SettingName } from '@standardnotes/domain-core'
 
 export abstract class AuthMiddleware extends BaseMiddleware {
@@ -19,6 +20,10 @@ export abstract class AuthMiddleware extends BaseMiddleware {
     private crossServiceTokenCache: CrossServiceTokenCacheInterface,
     private timer: TimerInterface,
     protected logger: Logger,
+    // Standard Red Notes: optional trusted client-IP header name (CLIENT_IP_HEADER;
+    // empty = off). Threaded into the canonical resolver so the session/security IP
+    // sent to auth matches the rate limiter + ACL. Defaults to off.
+    private clientIpHeader: string = '',
   ) {
     super()
   }
@@ -67,12 +72,13 @@ export abstract class AuthMiddleware extends BaseMiddleware {
             method: request.method,
             userAgent: request.headers['user-agent'],
             secChUa: request.headers['sec-ch-ua'] as string,
-            // Standard Red Notes: use request.ip (Express resolves it honoring the
-            // configured TRUST_PROXY) rather than hand-parsing the leftmost
-            // X-Forwarded-For, which a direct client can spoof. This matches how the
-            // RateLimitMiddleware keys its buckets, so session/security IP and rate
-            // limiting agree on the same trusted client address.
-            ip: request.ip ?? request.socket?.remoteAddress ?? '',
+            // Standard Red Notes: THE canonical client-IP resolver (resolveClientIp)
+            // rather than hand-parsing the leftmost X-Forwarded-For, which a direct
+            // client can spoof. It honors the configured TRUST_PROXY (via request.ip)
+            // and the optional CLIENT_IP_HEADER, and normalizes the result — so the
+            // session/security IP recorded by auth matches the RateLimitMiddleware
+            // buckets and the IP allow/block list exactly.
+            ip: resolveClientIpFromRequest(request, this.clientIpHeader),
           },
           cookies: cookiesFromHeaders,
         })

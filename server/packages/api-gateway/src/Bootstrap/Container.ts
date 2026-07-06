@@ -59,6 +59,7 @@ import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettings
 import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
 import { DockerServiceControlService } from '../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
+import { parseClientIpHeaderName } from '../Controller/ClientIp'
 import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
@@ -176,6 +177,15 @@ export class ContainerConfigLoader {
     container.bind(TYPES.ApiGateway_FILES_SERVER_URL).toConstantValue(env.get('FILES_SERVER_URL', true))
     container.bind(TYPES.ApiGateway_WEB_SOCKET_SERVER_URL).toConstantValue(env.get('WEB_SOCKET_SERVER_URL', true))
     container.bind(TYPES.ApiGateway_AUTH_JWT_SECRET).toConstantValue(env.get('AUTH_JWT_SECRET'))
+    // Standard Red Notes: forwarded-client-IP config. TRUST_PROXY is bound raw for
+    // the read-only admin display (Express itself is configured from it in
+    // bin/server.ts / HomeServer.ts). CLIENT_IP_HEADER is parsed to its lower-case
+    // header name (empty = off) and consumed by the canonical resolveClientIp so
+    // the auth session IP, rate limiter, ACL and workflows audit all agree.
+    container.bind<string>(TYPES.ApiGateway_TRUST_PROXY).toConstantValue(env.get('TRUST_PROXY', true) ?? '')
+    container
+      .bind<string>(TYPES.ApiGateway_CLIENT_IP_HEADER)
+      .toConstantValue(parseClientIpHeaderName(env.get('CLIENT_IP_HEADER', true)))
     // Standard Red Notes: collaboration-room capability signing. Reuses the
     // websocket-gateway connection-token secret so the gateway verifies the
     // capability with the SAME secret it already holds. Empty when the realtime

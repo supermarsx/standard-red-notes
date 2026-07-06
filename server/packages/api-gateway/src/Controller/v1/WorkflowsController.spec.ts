@@ -127,6 +127,13 @@ describe('WorkflowsController', () => {
 
       expect(jsonMock).toHaveBeenCalledWith({ paired: true, editorUrl: '/workflows-ui/' })
     })
+
+    it('audits the TRUST_PROXY-resolved request.ip and IGNORES a spoofed X-Forwarded-For', async () => {
+      // Was reading the raw X-Forwarded-For here (spoofable) — now the canonical resolver.
+      const spoofed = { headers: { 'x-forwarded-for': '9.9.9.9' }, ip: '10.0.0.1' } as unknown as Request
+      await makeController(true).pair(spoofed, responseWith(entitled))
+      expect(logger.info).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ ip: '10.0.0.1' }))
+    })
   })
 
   describe('unpair', () => {

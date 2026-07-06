@@ -131,7 +131,7 @@ describe('AuthMiddleware client IP for session validation', () => {
   let timer: { getTimestampInSeconds: jest.Mock; convertStringDateToSeconds: jest.Mock }
   let logger: { debug: jest.Mock; error: jest.Mock }
 
-  const createMiddleware = () =>
+  const createMiddleware = (clientIpHeader = '') =>
     // crossServiceTokenCacheTTL = 0 forces the validateSession path (no cache hit).
     new RequiredCrossServiceTokenMiddleware(
       serviceProxy,
@@ -140,6 +140,7 @@ describe('AuthMiddleware client IP for session validation', () => {
       crossServiceTokenCache,
       timer as never,
       logger as never,
+      clientIpHeader,
     )
 
   beforeEach(() => {
@@ -165,11 +166,11 @@ describe('AuthMiddleware client IP for session validation', () => {
     logger = { debug: jest.fn(), error: jest.fn() }
   })
 
-  const runWithRequest = async (request: Partial<Request>): Promise<string | undefined> => {
+  const runWithRequest = async (request: Partial<Request>, clientIpHeader = ''): Promise<string | undefined> => {
     const response = { locals: {} } as unknown as Response
     const next = jest.fn() as unknown as NextFunction
 
-    await createMiddleware().handler(request as Request, response, next)
+    await createMiddleware(clientIpHeader).handler(request as Request, response, next)
 
     const call = (serviceProxy.validateSession as jest.Mock).mock.calls[0]?.[0]
     return call?.requestMetadata?.ip as string | undefined
@@ -192,5 +193,28 @@ describe('AuthMiddleware client IP for session validation', () => {
     })
 
     expect(ip).toBe('1.1.1.1')
+  })
+
+  it('normalizes an IPv4-mapped IPv6 request.ip to dotted-quad', async () => {
+    const ip = await runWithRequest({
+      headers: { authorization: 'Bearer token' } as never,
+      socket: { remoteAddress: '::ffff:203.0.113.9' } as never,
+      ip: '::ffff:203.0.113.9',
+    })
+
+    expect(ip).toBe('203.0.113.9')
+  })
+
+  it('honors CLIENT_IP_HEADER (when configured) over request.ip', async () => {
+    const ip = await runWithRequest(
+      {
+        headers: { authorization: 'Bearer token', 'x-real-ip': '203.0.113.5' } as never,
+        socket: { remoteAddress: '1.1.1.1' } as never,
+        ip: '2.2.2.2',
+      },
+      'x-real-ip',
+    )
+
+    expect(ip).toBe('203.0.113.5')
   })
 })

@@ -18,6 +18,12 @@ export const TYPES = {
   ApiGateway_EMAIL_SERVER_URL: Symbol.for('ApiGateway_EMAIL_SERVER_URL'),
   ApiGateway_WEB_SOCKET_SERVER_URL: Symbol.for('ApiGateway_WEB_SOCKET_SERVER_URL'),
   ApiGateway_AUTH_JWT_SECRET: Symbol.for('ApiGateway_AUTH_JWT_SECRET'),
+  // Standard Red Notes: forwarded-client-IP configuration. TRUST_PROXY is the raw
+  // Express `trust proxy` spec (kept for the read-only admin display); CLIENT_IP_HEADER
+  // is the optional trusted client-IP header name (empty = off), consumed by the
+  // canonical resolveClientIp so every IP consumer agrees on one address.
+  ApiGateway_TRUST_PROXY: Symbol.for('ApiGateway_TRUST_PROXY'),
+  ApiGateway_CLIENT_IP_HEADER: Symbol.for('ApiGateway_CLIENT_IP_HEADER'),
   // Standard Red Notes: secret + TTL used to mint short-lived collaboration-room
   // capabilities (same HS256 secret the websocket-gateway verifies connection
   // tokens with, so the gateway can verify a capability locally).
