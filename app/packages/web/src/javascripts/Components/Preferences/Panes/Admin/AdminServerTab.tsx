@@ -159,6 +159,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   // saved immediately on change; the domain list is edited free-form (one per
   // line or comma-separated) and saved with its own button.
   const [domainListText, setDomainListText] = useState('')
+  // Standard Red Notes: EMAIL CONFIRMATION (part 2) editable fields. The subject /
+  // body / base URL are edited free-form and saved with a button; enable + gating
+  // save immediately on change.
+  const [confirmationSubject, setConfirmationSubject] = useState('')
+  const [confirmationBody, setConfirmationBody] = useState('')
+  const [confirmationBaseUrl, setConfirmationBaseUrl] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
   const loadRegistrationFlag = useCallback(async () => {
@@ -285,6 +291,9 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setSettingsSources(data?.sources ?? null)
     setUpdateCheckUrl(data?.settings?.updateCheck?.url ?? '')
     setDomainListText((data?.settings?.registration?.domainList ?? []).join('\n'))
+    setConfirmationSubject(data?.settings?.registration?.emailConfirmationSubject ?? '')
+    setConfirmationBody(data?.settings?.registration?.emailConfirmationBody ?? '')
+    setConfirmationBaseUrl(data?.settings?.registration?.emailConfirmationBaseUrl ?? '')
   }, [])
 
   const loadServerSettings = useCallback(async () => {
@@ -393,6 +402,40 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       .filter((entry) => entry.length > 0)
     await saveServerSettings({ registration: { domainList: list } }, 'Email-domain list saved.')
   }, [domainListText, saveServerSettings])
+
+  // Standard Red Notes: EMAIL CONFIRMATION (part 2) save handlers.
+  const saveEmailConfirmationEnabled = useCallback(
+    async (enabled: boolean) => {
+      await saveServerSettings(
+        { registration: { emailConfirmationEnabled: enabled } },
+        enabled ? 'Email confirmation enabled for new signups.' : 'Email confirmation disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveEmailConfirmationGating = useCallback(
+    async (mode: string) => {
+      await saveServerSettings(
+        { registration: { emailConfirmationGating: mode as 'block_signin' | 'warn' } },
+        'Confirmation gating mode saved.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveEmailConfirmationTemplates = useCallback(async () => {
+    await saveServerSettings(
+      {
+        registration: {
+          emailConfirmationSubject: confirmationSubject,
+          emailConfirmationBody: confirmationBody,
+          emailConfirmationBaseUrl: confirmationBaseUrl.trim(),
+        },
+      },
+      'Confirmation email template saved.',
+    )
+  }, [confirmationSubject, confirmationBody, confirmationBaseUrl, saveServerSettings])
 
   const toggleRegistration = useCallback(
     async (nextValue: boolean) => {
@@ -767,6 +810,102 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     disabled={settingsSaving}
                   />
                 </div>
+              </div>
+
+              {/* Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default. */}
+              <div className="border-t border-border pt-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Require email confirmation</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['registration.emailConfirmationEnabled']} />
+                  </div>
+                  <Switch
+                    checked={Boolean(serverSettings?.registration?.emailConfirmationEnabled)}
+                    onChange={(checked) => void saveEmailConfirmationEnabled(checked)}
+                  />
+                </div>
+                <Text className="mt-1 text-xs">
+                  When on, a new signup is emailed a single-use verification link and must confirm before the gate below
+                  applies. Existing accounts are unaffected (they are treated as already confirmed). Requires SMTP to be
+                  configured and the base URL below set so the link is absolute.
+                </Text>
+
+                {serverSettings?.registration?.emailConfirmationEnabled && (
+                  <div className="mt-4 flex flex-col gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-xs font-medium text-passive-1">Gating mode</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationGating']} />
+                      </div>
+                      <div className="mt-1 w-96 max-w-full">
+                        <Dropdown
+                          label="Confirmation gating mode"
+                          items={(serverSettings?.registration?.gatingModes ?? ['block_signin', 'warn']).map((mode) => ({
+                            label: mode === 'block_signin' ? 'Block sign-in until confirmed' : 'Warn only (allow sign-in)',
+                            value: mode,
+                          }))}
+                          value={serverSettings?.registration?.emailConfirmationGating ?? 'block_signin'}
+                          onChange={(mode) => void saveEmailConfirmationGating(mode)}
+                          disabled={settingsSaving}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-xs font-medium text-passive-1">Web app base URL</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBaseUrl']} />
+                      </div>
+                      <input
+                        type="url"
+                        className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                        placeholder="https://notes.example.com"
+                        value={confirmationBaseUrl}
+                        onChange={(event) => setConfirmationBaseUrl(event.target.value)}
+                        disabled={settingsSaving}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-xs font-medium text-passive-1">Email subject</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationSubject']} />
+                      </div>
+                      <input
+                        type="text"
+                        className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                        value={confirmationSubject}
+                        onChange={(event) => setConfirmationSubject(event.target.value)}
+                        disabled={settingsSaving}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-xs font-medium text-passive-1">Email body</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBody']} />
+                      </div>
+                      <textarea
+                        className="mt-1 h-32 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                        value={confirmationBody}
+                        onChange={(event) => setConfirmationBody(event.target.value)}
+                        disabled={settingsSaving}
+                      />
+                      <Text className="mt-1 text-xs text-passive-1">
+                        Use <code>{'{{confirmation_url}}'}</code> where the verification link should appear. If omitted,
+                        the link is appended automatically.
+                      </Text>
+                    </div>
+
+                    <div>
+                      <Button
+                        label={settingsSaving ? 'Saving…' : 'Save confirmation email'}
+                        onClick={() => void saveEmailConfirmationTemplates()}
+                        disabled={settingsSaving}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

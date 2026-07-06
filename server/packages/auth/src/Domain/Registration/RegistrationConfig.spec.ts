@@ -1,11 +1,14 @@
 import { RoleName } from '@standardnotes/domain-core'
 
 import {
+  buildConfirmationUrl,
+  DEFAULT_REGISTRATION_CONFIG,
   domainMatchesList,
   emailAllowedByPolicy,
   emailDomain,
   normalizeDomainList,
   RegistrationConfig,
+  renderConfirmationEmailBody,
   sanitizeDefaultRole,
 } from './RegistrationConfig'
 
@@ -80,6 +83,7 @@ describe('RegistrationConfig helpers', () => {
 
   describe('emailAllowedByPolicy', () => {
     const config = (over: Partial<RegistrationConfig>): RegistrationConfig => ({
+      ...DEFAULT_REGISTRATION_CONFIG,
       defaultRole: RoleName.NAMES.CoreUser,
       domainMode: 'off',
       domainList: [],
@@ -120,6 +124,31 @@ describe('RegistrationConfig helpers', () => {
       expect(emailAllowedByPolicy('no-at-sign', config({ domainMode: 'blocklist', domainList: ['company.com'] }))).toBe(
         true,
       )
+    })
+  })
+
+  describe('buildConfirmationUrl', () => {
+    it('composes an absolute link with the token url-encoded on the root route', () => {
+      expect(buildConfirmationUrl('https://notes.example.com/', 'ab cd')).toBe(
+        'https://notes.example.com/?email_confirmation=ab%20cd',
+      )
+      expect(buildConfirmationUrl('https://notes.example.com', 'tok')).toBe(
+        'https://notes.example.com/?email_confirmation=tok',
+      )
+    })
+
+    it('falls back to a relative link when no base URL is configured', () => {
+      expect(buildConfirmationUrl('', 'tok')).toBe('/?email_confirmation=tok')
+    })
+  })
+
+  describe('renderConfirmationEmailBody', () => {
+    it('substitutes every {{confirmation_url}} placeholder', () => {
+      expect(renderConfirmationEmailBody('Go: {{confirmation_url}} now', 'https://x/y')).toBe('Go: https://x/y now')
+    })
+
+    it('appends the link when the template omits the placeholder', () => {
+      expect(renderConfirmationEmailBody('No placeholder here', 'https://x/y')).toBe('No placeholder here\n\nhttps://x/y')
     })
   })
 })

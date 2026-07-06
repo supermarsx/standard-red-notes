@@ -31,6 +31,29 @@ describe('User', () => {
     expect(user.isPotentiallyAPrivateUsernameAccount()).toBeFalsy()
   })
 
+  // Standard Red Notes: email_confirmed is a tinyint(1). isEmailConfirmed() must
+  // treat the NUMBER 1 and the boolean true as confirmed, and a NULL/undefined
+  // value (legacy row / unset entity) as confirmed so the gate never locks out.
+  it('isEmailConfirmed treats 1 / true as confirmed and 0 / false as unconfirmed', () => {
+    const user = createUser()
+
+    user.emailConfirmed = 1 as unknown as boolean
+    expect(user.isEmailConfirmed()).toBe(true)
+    user.emailConfirmed = true
+    expect(user.isEmailConfirmed()).toBe(true)
+    user.emailConfirmed = 0 as unknown as boolean
+    expect(user.isEmailConfirmed()).toBe(false)
+    user.emailConfirmed = false
+    expect(user.isEmailConfirmed()).toBe(false)
+  })
+
+  it('isEmailConfirmed treats an unset value as confirmed (never lock out)', () => {
+    const user = createUser()
+    expect(user.isEmailConfirmed()).toBe(true)
+    user.emailConfirmed = null as unknown as boolean
+    expect(user.isEmailConfirmed()).toBe(true)
+  })
+
   // Standard Red Notes: the banned column is a tinyint(1) — TypeORM hydrates it
   // from MySQL/MariaDB as the NUMBER 0/1, while SetUserBanStatus assigns a real
   // boolean before saving. isBanned() must treat BOTH representations as banned;

@@ -1140,6 +1140,62 @@ export class AdminController extends BaseHttpController {
         }
         changedSettings.push('registration.domainList')
       }
+
+      // Standard Red Notes: EMAIL CONFIRMATION (part 2). Enforced auth-side; the
+      // gateway only persists these. Enabled is a boolean; gating is
+      // block_signin|warn; subject/body/baseUrl are strings (base URL must be an
+      // absolute http(s) URL when non-empty). `null` clears any of them.
+      if (registration.emailConfirmationEnabled !== undefined) {
+        if (
+          registration.emailConfirmationEnabled !== null &&
+          typeof registration.emailConfirmationEnabled !== 'boolean'
+        ) {
+          return { error: 'registration.emailConfirmationEnabled must be a boolean, or null to clear it.' }
+        }
+        patch.registration.emailConfirmationEnabled = registration.emailConfirmationEnabled as boolean | null
+        changedSettings.push('registration.emailConfirmationEnabled')
+      }
+
+      if (registration.emailConfirmationGating !== undefined) {
+        if (
+          registration.emailConfirmationGating !== null &&
+          registration.emailConfirmationGating !== 'block_signin' &&
+          registration.emailConfirmationGating !== 'warn'
+        ) {
+          return { error: "registration.emailConfirmationGating must be 'block_signin' or 'warn', or null to clear it." }
+        }
+        patch.registration.emailConfirmationGating = registration.emailConfirmationGating as
+          | 'block_signin'
+          | 'warn'
+          | null
+        changedSettings.push('registration.emailConfirmationGating')
+      }
+
+      for (const key of ['emailConfirmationSubject', 'emailConfirmationBody'] as const) {
+        if (registration[key] !== undefined) {
+          const value = registration[key]
+          const maxLength = key === 'emailConfirmationSubject' ? 1000 : 20000
+          if (value !== null && (typeof value !== 'string' || value.length > maxLength)) {
+            return { error: `registration.${key} must be a string of at most ${maxLength} characters, or null to clear it.` }
+          }
+          patch.registration[key] = value as string | null
+          changedSettings.push(`registration.${key}`)
+        }
+      }
+
+      if (registration.emailConfirmationBaseUrl !== undefined) {
+        const value = registration.emailConfirmationBaseUrl
+        if (value === null) {
+          patch.registration.emailConfirmationBaseUrl = null
+        } else if (typeof value === 'string' && (value.trim() === '' || /^https?:\/\/.+/i.test(value.trim()))) {
+          patch.registration.emailConfirmationBaseUrl = value.trim()
+        } else {
+          return {
+            error: 'registration.emailConfirmationBaseUrl must be an absolute http(s) URL, empty, or null to clear it.',
+          }
+        }
+        changedSettings.push('registration.emailConfirmationBaseUrl')
+      }
     }
 
     return { patch, changedSettings }

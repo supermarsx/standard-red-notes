@@ -214,6 +214,28 @@ export class User {
   })
   declare bannedUntil: Date | null
 
+  /**
+   * Standard Red Notes: EMAIL CONFIRMATION. Defaults to TRUE at the database
+   * level so that (a) existing rows backfilled by the migration and (b) every
+   * new signup created while the feature is OFF are treated as confirmed — the
+   * gate only ever affects NEW signups made while an admin has the feature ON,
+   * for which Register explicitly sets this false. `emailConfirmedAt` records
+   * when confirmation happened (null until confirmed).
+   */
+  @Column({
+    name: 'email_confirmed',
+    type: 'tinyint',
+    default: 1,
+  })
+  declare emailConfirmed: boolean
+
+  @Column({
+    name: 'email_confirmed_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare emailConfirmedAt: Date | null
+
   @OneToMany(
     /* istanbul ignore next */
     () => RevokedSession,
@@ -261,6 +283,21 @@ export class User {
 
   supportsSessions(): boolean {
     return parseInt(this.version) >= parseInt(ProtocolVersion.V004)
+  }
+
+  /**
+   * Standard Red Notes: whether the account's email is confirmed. The column is
+   * a tinyint(1): MySQL/MariaDB hydrate it as the NUMBER 0/1 while a freshly
+   * built entity may carry a real boolean. A NULL/undefined value (e.g. a legacy
+   * row read before the backfill, or an entity built without the column set) is
+   * treated as confirmed so the gate can never lock out an account by accident.
+   */
+  isEmailConfirmed(): boolean {
+    if (this.emailConfirmed === null || this.emailConfirmed === undefined) {
+      return true
+    }
+
+    return Number(this.emailConfirmed) === 1
   }
 
   isPotentiallyAPrivateUsernameAccount(): boolean {

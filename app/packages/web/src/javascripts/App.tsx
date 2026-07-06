@@ -57,6 +57,7 @@ import { setDefaultMonospaceFont } from './setDefaultMonospaceFont'
 import { RouteParser, RouteType } from '@standardnotes/ui-services'
 import U2FAuthIframe from './Components/U2FAuthIframe/U2FAuthIframe'
 import SharedView from './Components/SharedView/SharedView'
+import EmailConfirmationView from './Components/EmailConfirmationView/EmailConfirmationView'
 
 let keyCount = 0
 const getKey = () => {
@@ -104,6 +105,14 @@ const startApplication: StartApplication = async function startApplication(
     // ApplicationGroupView, mirroring the U2F standalone-screen branch above.
     if (route.type === RouteType.Shared) {
       root.render(<SharedView shareId={route.sharedParams.shareId} />)
+      return
+    }
+
+    // Standard Red Notes: public, unauthenticated email-confirmation landing. Like
+    // the share viewer it renders with NO WebApplication/session, so we early-return
+    // before the authed ApplicationGroupView.
+    if (route.type === RouteType.EmailConfirmation) {
+      root.render(<EmailConfirmationView token={route.emailConfirmationParams.token} />)
       return
     }
 

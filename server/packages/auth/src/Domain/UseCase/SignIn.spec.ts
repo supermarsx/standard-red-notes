@@ -483,4 +483,101 @@ describe('SignIn', () => {
       })
     })
   })
+
+  describe('email confirmation gate (Standard Red Notes)', () => {
+    let registrationConfigResolver: { resolve: jest.Mock }
+
+    const baseConfig = {
+      defaultRole: 'CORE_USER',
+      domainMode: 'off' as const,
+      domainList: [] as string[],
+      emailConfirmationEnabled: false,
+      emailConfirmationGating: 'block_signin' as const,
+      emailConfirmationSubject: 's',
+      emailConfirmationBody: 'b',
+      emailConfirmationBaseUrl: '',
+    }
+
+    const createUseCaseWithGate = () =>
+      new SignIn(
+        userRepository,
+        authResponseFactoryResolver,
+        domainEventPublisher,
+        domainEventFactory,
+        sessionService,
+        pkceRepository,
+        crypter,
+        logger,
+        maxNonCaptchaAttempts,
+        lockRepository,
+        verifyHumanInteractionUseCase,
+        false,
+        undefined,
+        undefined,
+        registrationConfigResolver as never,
+      )
+
+    const signIn = () =>
+      createUseCaseWithGate().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      })
+
+    beforeEach(() => {
+      registrationConfigResolver = { resolve: jest.fn() }
+      user.isEmailConfirmed = jest.fn().mockReturnValue(false)
+      userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+    })
+
+    it('BLOCKS an unconfirmed user when enabled + gating is block_signin', async () => {
+      registrationConfigResolver.resolve.mockResolvedValue({ ...baseConfig, emailConfirmationEnabled: true })
+
+      const result = (await signIn()) as { success: boolean; errorCode?: number; errorMessage?: string }
+
+      expect(result.success).toBe(false)
+      expect(result.errorCode).toBe(403)
+      expect(result.errorMessage).toMatch(/confirm your email/i)
+    })
+
+    it('ALLOWS an unconfirmed user when the feature is disabled', async () => {
+      registrationConfigResolver.resolve.mockResolvedValue({ ...baseConfig, emailConfirmationEnabled: false })
+
+      const result = await signIn()
+
+      expect(result.success).toBe(true)
+    })
+
+    it('ALLOWS an unconfirmed user in warn mode', async () => {
+      registrationConfigResolver.resolve.mockResolvedValue({
+        ...baseConfig,
+        emailConfirmationEnabled: true,
+        emailConfirmationGating: 'warn',
+      })
+
+      const result = await signIn()
+
+      expect(result.success).toBe(true)
+    })
+
+    it('ALLOWS a CONFIRMED user even when block_signin is enabled', async () => {
+      user.isEmailConfirmed = jest.fn().mockReturnValue(true)
+      registrationConfigResolver.resolve.mockResolvedValue({ ...baseConfig, emailConfirmationEnabled: true })
+
+      const result = await signIn()
+
+      expect(result.success).toBe(true)
+    })
+
+    it('does not block when the resolver throws (fails open)', async () => {
+      registrationConfigResolver.resolve.mockRejectedValue(new Error('overlay unreadable'))
+
+      const result = await signIn()
+
+      expect(result.success).toBe(true)
+    })
+  })
 })

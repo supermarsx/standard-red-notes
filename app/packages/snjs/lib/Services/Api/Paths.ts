@@ -27,6 +27,9 @@ const UserPaths = {
   sessions: '/v1/sessions',
   signIn: '/v1/login',
   signOut: '/v1/logout',
+  // Standard Red Notes: EMAIL CONFIRMATION (part 2). Public, unauthenticated.
+  verifyEmailConfirmation: '/v1/users/email-confirmation/verify',
+  resendEmailConfirmation: '/v1/users/email-confirmation/resend',
 }
 
 const ItemsPaths = {

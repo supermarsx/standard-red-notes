@@ -82,6 +82,9 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:users/:userUuid/attributes/credentials', 'auth.users.updateCredentials'],
     ['[DELETE]:users/:userUuid', 'auth.users.delete'],
     ['[POST]:auth', 'auth.users.register'],
+    // Email confirmation (Standard Red Notes) — public, unauthenticated
+    ['[POST]:auth/email-confirmation/verify', 'auth.emailConfirmation.verify'],
+    ['[POST]:auth/email-confirmation/resend', 'auth.emailConfirmation.resend'],
     ['[GET]:users/:userUuid/settings', 'auth.users.getSettings'],
     ['[PUT]:users/:userUuid/settings', 'auth.users.updateSetting'],
     ['[GET]:users/:userUuid/settings/:settingName', 'auth.users.getSetting'],

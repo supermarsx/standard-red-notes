@@ -8,6 +8,7 @@ const TYPES = {
   Auth_SessionTracePersistenceMapper: Symbol.for('Auth_SessionTracePersistenceMapper'),
   Auth_AuthenticatorChallengePersistenceMapper: Symbol.for('Auth_AuthenticatorChallengePersistenceMapper'),
   Auth_MagicLinkTokenPersistenceMapper: Symbol.for('Auth_MagicLinkTokenPersistenceMapper'),
+  Auth_EmailConfirmationTokenPersistenceMapper: Symbol.for('Auth_EmailConfirmationTokenPersistenceMapper'),
   Auth_AuthenticatorPersistenceMapper: Symbol.for('Auth_AuthenticatorPersistenceMapper'),
   Auth_AuthenticatorHttpMapper: Symbol.for('Auth_AuthenticatorHttpMapper'),
   Auth_AppPasswordPersistenceMapper: Symbol.for('Auth_AppPasswordPersistenceMapper'),
@@ -84,6 +85,7 @@ const TYPES = {
   Auth_PendingMfaApprovalRepository: Symbol.for('Auth_PendingMfaApprovalRepository'),
   Auth_AuthenticatorChallengeRepository: Symbol.for('Auth_AuthenticatorChallengeRepository'),
   Auth_MagicLinkTokenRepository: Symbol.for('Auth_MagicLinkTokenRepository'),
+  Auth_EmailConfirmationTokenRepository: Symbol.for('Auth_EmailConfirmationTokenRepository'),
   Auth_CacheEntryRepository: Symbol.for('Auth_CacheEntryRepository'),
   Auth_SharedVaultUserRepository: Symbol.for('Auth_SharedVaultUserRepository'),
   // ORM
@@ -114,6 +116,7 @@ const TYPES = {
   Auth_ORMPendingMfaApprovalRepository: Symbol.for('Auth_ORMPendingMfaApprovalRepository'),
   Auth_ORMAuthenticatorChallengeRepository: Symbol.for('Auth_ORMAuthenticatorChallengeRepository'),
   Auth_ORMMagicLinkTokenRepository: Symbol.for('Auth_ORMMagicLinkTokenRepository'),
+  Auth_ORMEmailConfirmationTokenRepository: Symbol.for('Auth_ORMEmailConfirmationTokenRepository'),
   Auth_ORMCacheEntryRepository: Symbol.for('Auth_ORMCacheEntryRepository'),
   Auth_ORMSharedVaultUserRepository: Symbol.for('Auth_ORMSharedVaultUserRepository'),
   // Middleware
@@ -173,6 +176,9 @@ const TYPES = {
   Auth_VerifyMFA: Symbol.for('Auth_VerifyMFA'),
   Auth_GenerateMagicLinkCode: Symbol.for('Auth_GenerateMagicLinkCode'),
   Auth_VerifyMagicLinkCode: Symbol.for('Auth_VerifyMagicLinkCode'),
+  Auth_SendEmailConfirmation: Symbol.for('Auth_SendEmailConfirmation'),
+  Auth_VerifyEmailConfirmation: Symbol.for('Auth_VerifyEmailConfirmation'),
+  Auth_ResendEmailConfirmation: Symbol.for('Auth_ResendEmailConfirmation'),
   Auth_SignIn: Symbol.for('Auth_SignIn'),
   Auth_ClearLoginAttempts: Symbol.for('Auth_ClearLoginAttempts'),
   Auth_IncreaseLoginAttempts: Symbol.for('Auth_IncreaseLoginAttempts'),

@@ -405,6 +405,27 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: EMAIL CONFIRMATION (part 2). Public, unauthenticated —
+   * consumes a confirmation token from the verification link.
+   */
+  verifyEmailConfirmation(
+    token: string,
+  ): Promise<HttpResponse<{ success?: boolean; alreadyConfirmed?: boolean }>> {
+    return this.httpService.post<{ success?: boolean; alreadyConfirmed?: boolean }>(
+      Paths.v1.verifyEmailConfirmation,
+      { token },
+    )
+  }
+
+  /**
+   * Standard Red Notes: re-sends the confirmation email. Always resolves 200 with
+   * a uniform body server-side (no account-existence oracle).
+   */
+  resendEmailConfirmation(email: string): Promise<HttpResponse<{ success?: boolean }>> {
+    return this.httpService.post<{ success?: boolean }>(Paths.v1.resendEmailConfirmation, { email })
+  }
+
   async changeCredentials(parameters: {
     userUuid: UuidString
     currentServerPassword: string
@@ -908,6 +929,12 @@ export class LegacyApiService
       defaultRole?: string | null
       domainMode?: 'off' | 'allowlist' | 'blocklist' | null
       domainList?: string[] | null
+      // Standard Red Notes: EMAIL CONFIRMATION (part 2).
+      emailConfirmationEnabled?: boolean | null
+      emailConfirmationGating?: 'block_signin' | 'warn' | null
+      emailConfirmationSubject?: string | null
+      emailConfirmationBody?: string | null
+      emailConfirmationBaseUrl?: string | null
     }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({

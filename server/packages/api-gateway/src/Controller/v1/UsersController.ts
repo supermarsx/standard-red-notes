@@ -94,6 +94,31 @@ export class UsersController extends BaseHttpController {
     )
   }
 
+  // Standard Red Notes: EMAIL CONFIRMATION (part 2). Both are PUBLIC (no session):
+  // verify consumes a confirmation token, resend re-issues the email. The resend
+  // path is rate-limited in the gateway's "auth-sensitive" tier (see
+  // RateLimitMiddleware). Static two-segment paths, so they cannot be shadowed by
+  // the single-segment `/:userUuid` dynamic routes.
+  @httpPost('/email-confirmation/verify')
+  async verifyEmailConfirmation(request: Request, response: Response): Promise<void> {
+    await this.httpService.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'auth/email-confirmation/verify'),
+      request.body,
+    )
+  }
+
+  @httpPost('/email-confirmation/resend')
+  async resendEmailConfirmation(request: Request, response: Response): Promise<void> {
+    await this.httpService.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'auth/email-confirmation/resend'),
+      request.body,
+    )
+  }
+
   @httpGet('/:userUuid/settings', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async listSettings(request: Request, response: Response): Promise<void> {
     await this.httpService.callAuthServer(

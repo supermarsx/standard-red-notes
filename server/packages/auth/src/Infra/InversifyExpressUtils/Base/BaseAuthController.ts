@@ -29,6 +29,8 @@ import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInte
 import { Username } from '@standardnotes/domain-core'
 import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
 import { ProofOfWorkGate, ProofOfWorkChallengePayload } from '../../../Domain/ProofOfWork/ProofOfWorkGate'
+import { VerifyEmailConfirmation } from '../../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
+import { ResendEmailConfirmation } from '../../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 
 const PROOF_OF_WORK_REQUIRED_TAG = 'proof-of-work-required'
 
@@ -55,6 +57,10 @@ export class BaseAuthController extends BaseHttpController {
     protected createPendingMfaApproval: CreatePendingMfaApproval,
     protected userRepository: UserRepositoryInterface,
     protected proofOfWorkGate: ProofOfWorkGate,
+    // Standard Red Notes: EMAIL CONFIRMATION (part 2). Public endpoints to verify
+    // a confirmation token and to resend the confirmation email.
+    protected verifyEmailConfirmationUseCase: VerifyEmailConfirmation,
+    protected resendEmailConfirmationUseCase: ResendEmailConfirmation,
     protected controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -67,7 +73,43 @@ export class BaseAuthController extends BaseHttpController {
       this.controllerContainer.register('auth.signInWithRecoveryCodes', this.recoveryLogin.bind(this))
       this.controllerContainer.register('auth.recoveryKeyParams', this.recoveryParams.bind(this))
       this.controllerContainer.register('auth.signOut', this.signOut.bind(this))
+      this.controllerContainer.register('auth.emailConfirmation.verify', this.verifyEmailConfirmation.bind(this))
+      this.controllerContainer.register('auth.emailConfirmation.resend', this.resendEmailConfirmation.bind(this))
     }
+  }
+
+  /**
+   * Standard Red Notes: PUBLIC. Consumes an email-confirmation token from the
+   * verification link. Returns 200 on success (including a friendly
+   * already-confirmed), 400 with a clear message on invalid/expired/used.
+   */
+  async verifyEmailConfirmation(request: Request): Promise<results.JsonResult> {
+    const token = typeof request.body?.token === 'string' ? request.body.token : ''
+
+    const result = await this.verifyEmailConfirmationUseCase.execute({ token })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, HttpStatusCode.BadRequest)
+    }
+
+    const response = result.getValue()
+    if (!response.success) {
+      return this.json({ error: { message: response.errorMessage } }, HttpStatusCode.BadRequest)
+    }
+
+    return this.json({ success: true, alreadyConfirmed: response.alreadyConfirmed === true })
+  }
+
+  /**
+   * Standard Red Notes: PUBLIC. Re-sends the confirmation email. ALWAYS 200 with
+   * a uniform body so it never becomes an account-existence oracle. Rate-limited
+   * at the gateway (auth-sensitive tier).
+   */
+  async resendEmailConfirmation(request: Request): Promise<results.JsonResult> {
+    const email = typeof request.body?.email === 'string' ? request.body.email : ''
+
+    await this.resendEmailConfirmationUseCase.execute({ email })
+
+    return this.json({ success: true })
   }
 
   private proofOfWorkRequiredResponse(challenge: ProofOfWorkChallengePayload, status: number): results.JsonResult {

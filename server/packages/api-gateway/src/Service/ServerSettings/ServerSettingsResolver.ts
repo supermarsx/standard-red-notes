@@ -70,9 +70,34 @@ export interface EnvSettingsBaseline {
   registrationDefaultRole?: string
   registrationDomainMode?: RegistrationDomainMode
   registrationDomains?: string[]
+  /**
+   * Standard Red Notes: EMAIL CONFIRMATION env baseline. The gateway persists +
+   * views these; the auth server reads the SAME overlay and enforces them.
+   * undefined = env var unset (falls through to default).
+   */
+  registrationEmailConfirmationEnabled?: boolean
+  registrationEmailConfirmationGating?: EmailConfirmationGatingMode
+  registrationEmailConfirmationSubject?: string
+  registrationEmailConfirmationBody?: string
+  registrationEmailConfirmationBaseUrl?: string
 }
 
 export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
+
+export type EmailConfirmationGatingMode = 'block_signin' | 'warn'
+
+export const EMAIL_CONFIRMATION_GATING_MODES: EmailConfirmationGatingMode[] = ['block_signin', 'warn']
+
+/**
+ * Default confirmation-email templates. MUST match the auth server's
+ * DEFAULT_EMAIL_CONFIRMATION_* (RegistrationConfig.ts) so the admin VIEW matches
+ * what auth will actually send when no override is persisted.
+ */
+export const DEFAULT_EMAIL_CONFIRMATION_SUBJECT = 'Confirm your email address'
+export const DEFAULT_EMAIL_CONFIRMATION_BODY =
+  'Welcome! Please confirm your email address by opening the link below:\n\n' +
+  '{{confirmation_url}}\n\n' +
+  'This link expires in 24 hours. If you did not create this account you can ignore this email.'
 
 /** Default-role choices a NEW signup may be given (never the admin role). */
 export const REGISTRATION_ASSIGNABLE_ROLES = ['CORE_USER', 'PRO_USER', 'VAULTS_USER']
@@ -81,6 +106,11 @@ export interface ResolvedRegistrationConfig {
   defaultRole: string
   domainMode: RegistrationDomainMode
   domainList: string[]
+  emailConfirmationEnabled: boolean
+  emailConfirmationGating: EmailConfirmationGatingMode
+  emailConfirmationSubject: string
+  emailConfirmationBody: string
+  emailConfirmationBaseUrl: string
 }
 
 /** Hardcoded registration defaults (apply last, after persisted then env). */
@@ -88,6 +118,11 @@ const REGISTRATION_DEFAULTS: ResolvedRegistrationConfig = {
   defaultRole: 'CORE_USER',
   domainMode: 'off',
   domainList: [],
+  emailConfirmationEnabled: false,
+  emailConfirmationGating: 'block_signin',
+  emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
+  emailConfirmationBaseUrl: '',
 }
 
 /**
@@ -166,7 +201,10 @@ export interface ServerSettingsView {
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
     security: { proofOfWork: ResolvedProofOfWorkConfig }
-    registration: ResolvedRegistrationConfig & { assignableRoles: string[] }
+    registration: ResolvedRegistrationConfig & {
+      assignableRoles: string[]
+      gatingModes: EmailConfirmationGatingMode[]
+    }
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -352,12 +390,44 @@ export class ServerSettingsResolver {
     const rawMode = registration.domainMode ?? env.registrationDomainMode ?? REGISTRATION_DEFAULTS.domainMode
     const rawList = registration.domainList ?? env.registrationDomains ?? REGISTRATION_DEFAULTS.domainList
 
+    const rawEnabled =
+      registration.emailConfirmationEnabled ??
+      env.registrationEmailConfirmationEnabled ??
+      REGISTRATION_DEFAULTS.emailConfirmationEnabled
+    const rawGating =
+      registration.emailConfirmationGating ??
+      env.registrationEmailConfirmationGating ??
+      REGISTRATION_DEFAULTS.emailConfirmationGating
+    const rawSubject =
+      registration.emailConfirmationSubject ??
+      env.registrationEmailConfirmationSubject ??
+      REGISTRATION_DEFAULTS.emailConfirmationSubject
+    const rawBody =
+      registration.emailConfirmationBody ??
+      env.registrationEmailConfirmationBody ??
+      REGISTRATION_DEFAULTS.emailConfirmationBody
+    const rawBaseUrl =
+      registration.emailConfirmationBaseUrl ??
+      env.registrationEmailConfirmationBaseUrl ??
+      REGISTRATION_DEFAULTS.emailConfirmationBaseUrl
+
     return {
       defaultRole: REGISTRATION_ASSIGNABLE_ROLES.includes(rawRole) ? rawRole : REGISTRATION_DEFAULTS.defaultRole,
       domainMode: (['off', 'allowlist', 'blocklist'] as string[]).includes(rawMode)
         ? (rawMode as RegistrationDomainMode)
         : REGISTRATION_DEFAULTS.domainMode,
       domainList: normalizeRegistrationDomains(rawList),
+      emailConfirmationEnabled: typeof rawEnabled === 'boolean' ? rawEnabled : REGISTRATION_DEFAULTS.emailConfirmationEnabled,
+      emailConfirmationGating: EMAIL_CONFIRMATION_GATING_MODES.includes(rawGating as EmailConfirmationGatingMode)
+        ? (rawGating as EmailConfirmationGatingMode)
+        : REGISTRATION_DEFAULTS.emailConfirmationGating,
+      emailConfirmationSubject:
+        typeof rawSubject === 'string' && rawSubject.trim().length > 0
+          ? rawSubject
+          : REGISTRATION_DEFAULTS.emailConfirmationSubject,
+      emailConfirmationBody:
+        typeof rawBody === 'string' && rawBody.trim().length > 0 ? rawBody : REGISTRATION_DEFAULTS.emailConfirmationBody,
+      emailConfirmationBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() : '',
     }
   }
 
@@ -409,6 +479,26 @@ export class ServerSettingsResolver {
       'registration.defaultRole': this.source(registration.defaultRole, env.registrationDefaultRole),
       'registration.domainMode': this.source(registration.domainMode, env.registrationDomainMode),
       'registration.domainList': this.source(registration.domainList, env.registrationDomains),
+      'registration.emailConfirmationEnabled': this.source(
+        registration.emailConfirmationEnabled,
+        env.registrationEmailConfirmationEnabled,
+      ),
+      'registration.emailConfirmationGating': this.source(
+        registration.emailConfirmationGating,
+        env.registrationEmailConfirmationGating,
+      ),
+      'registration.emailConfirmationSubject': this.source(
+        registration.emailConfirmationSubject,
+        env.registrationEmailConfirmationSubject,
+      ),
+      'registration.emailConfirmationBody': this.source(
+        registration.emailConfirmationBody,
+        env.registrationEmailConfirmationBody,
+      ),
+      'registration.emailConfirmationBaseUrl': this.source(
+        registration.emailConfirmationBaseUrl,
+        env.registrationEmailConfirmationBaseUrl,
+      ),
     }
 
     return {
@@ -434,7 +524,11 @@ export class ServerSettingsResolver {
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
         security: { proofOfWork },
-        registration: { ...registrationConfig, assignableRoles: REGISTRATION_ASSIGNABLE_ROLES },
+        registration: {
+          ...registrationConfig,
+          assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,
+          gatingModes: EMAIL_CONFIRMATION_GATING_MODES,
+        },
       },
       sources,
     }

@@ -21,6 +21,7 @@ import {
   emailAllowedByPolicy,
   RegistrationConfig,
 } from '../Registration/RegistrationConfig'
+import { SendEmailConfirmation } from './SendEmailConfirmation/SendEmailConfirmation'
 
 export class Register implements UseCaseInterface {
   constructor(
@@ -51,6 +52,13 @@ export class Register implements UseCaseInterface {
     // so existing call sites / specs keep compiling; when absent, Register falls
     // back to the hardcoded default (CORE_USER, domain policy off).
     private registrationConfigResolver?: RegistrationConfigResolverInterface,
+    // Standard Red Notes: EMAIL CONFIRMATION (part 2). When the resolved policy
+    // has emailConfirmationEnabled, a new signup is created UNCONFIRMED and this
+    // use case issues + emails the single-use verification link. Trailing optional
+    // param so existing call sites / specs keep compiling; when absent, no
+    // confirmation email is ever sent (feature effectively off).
+    private sendEmailConfirmation?: SendEmailConfirmation,
+    private logger?: { error: (message: string) => void },
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
@@ -161,6 +169,18 @@ export class Register implements UseCaseInterface {
     user.encryptedServerKey = await this.crypter.generateEncryptedUserServerKey()
     user.serverEncryptionVersion = User.DEFAULT_ENCRYPTION_VERSION
 
+    // Standard Red Notes: EMAIL CONFIRMATION. Only create an UNCONFIRMED account
+    // when the feature is enabled AND we actually have a way to email the link —
+    // otherwise the account would be created confirmed (DB default), so a
+    // misconfiguration can never lock a new user out. When disabled the column is
+    // left unset and the database default (confirmed) applies.
+    const requireEmailConfirmation =
+      registrationConfig.emailConfirmationEnabled && this.sendEmailConfirmation !== undefined
+    if (requireEmailConfirmation) {
+      user.emailConfirmed = false
+      user.emailConfirmedAt = null
+    }
+
     // Standard Red Notes: assign the admin-configurable default role (validated
     // to a canonical NON-admin role; CORE_USER by default). If the configured
     // role is somehow not seeded in the database, fall back to CORE_USER so a new
@@ -187,6 +207,21 @@ export class Register implements UseCaseInterface {
       return {
         success: false,
         errorMessage: settingsApplicationResult.getError(),
+      }
+    }
+
+    // Standard Red Notes: dispatch the confirmation email (best-effort). A send
+    // failure must NOT fail registration — the account exists and the user can
+    // request a resend; the raw token is never logged.
+    if (requireEmailConfirmation) {
+      try {
+        await this.sendEmailConfirmation!.execute({
+          userUuid: user.uuid,
+          email: user.email,
+          registrationConfig,
+        })
+      } catch (error) {
+        this.logger?.error(`Could not send registration confirmation email: ${(error as Error).message}`)
       }
     }
 

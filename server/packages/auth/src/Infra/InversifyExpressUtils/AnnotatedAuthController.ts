@@ -24,6 +24,8 @@ import { VerifyTrustedDevice } from '../../Domain/UseCase/VerifyTrustedDevice/Ve
 import { CreatePendingMfaApproval } from '../../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
 import { ProofOfWorkGate } from '../../Domain/ProofOfWork/ProofOfWorkGate'
+import { VerifyEmailConfirmation } from '../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
+import { ResendEmailConfirmation } from '../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 
 @controller('/auth')
 export class AnnotatedAuthController extends BaseAuthController {
@@ -49,6 +51,8 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_CreatePendingMfaApproval) override createPendingMfaApproval: CreatePendingMfaApproval,
     @inject(TYPES.Auth_UserRepository) override userRepository: UserRepositoryInterface,
     @inject(TYPES.Auth_ProofOfWorkGate) override proofOfWorkGate: ProofOfWorkGate,
+    @inject(TYPES.Auth_VerifyEmailConfirmation) override verifyEmailConfirmationUseCase: VerifyEmailConfirmation,
+    @inject(TYPES.Auth_ResendEmailConfirmation) override resendEmailConfirmationUseCase: ResendEmailConfirmation,
   ) {
     super(
       verifyMFA,
@@ -72,6 +76,8 @@ export class AnnotatedAuthController extends BaseAuthController {
       createPendingMfaApproval,
       userRepository,
       proofOfWorkGate,
+      verifyEmailConfirmationUseCase,
+      resendEmailConfirmationUseCase,
     )
   }
 
@@ -108,5 +114,15 @@ export class AnnotatedAuthController extends BaseAuthController {
   @httpPost('/')
   override async register(request: Request, response: Response): Promise<results.JsonResult> {
     return super.register(request, response)
+  }
+
+  @httpPost('/email-confirmation/verify')
+  override async verifyEmailConfirmation(request: Request): Promise<results.JsonResult> {
+    return super.verifyEmailConfirmation(request)
+  }
+
+  @httpPost('/email-confirmation/resend')
+  override async resendEmailConfirmation(request: Request): Promise<results.JsonResult> {
+    return super.resendEmailConfirmation(request)
   }
 }

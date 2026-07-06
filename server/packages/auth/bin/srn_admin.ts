@@ -72,6 +72,8 @@ import {
 } from '../src/Infra/Registration/EnvRegistrationConfigResolver'
 import { ASSIGNABLE_DEFAULT_ROLE_NAMES, isAssignableDefaultRole } from '../src/Domain/Role/CanonicalRoles'
 import {
+  EMAIL_CONFIRMATION_GATING_MODES,
+  isEmailConfirmationGatingMode,
   isRegistrationDomainMode,
   normalizeDomainList,
   REGISTRATION_DOMAIN_MODES,
@@ -928,6 +930,11 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
     outLine(`  default role for new users: ${effective.defaultRole}`)
     outLine(`  email-domain mode:          ${effective.domainMode}`)
     outLine(`  email-domain list:          ${effective.domainList.length ? effective.domainList.join(', ') : '(empty)'}`)
+    outLine(`  email confirmation:         ${effective.emailConfirmationEnabled ? 'ENABLED' : 'disabled'}`)
+    outLine(`  confirmation gating mode:   ${effective.emailConfirmationGating}`)
+    outLine(
+      `  confirmation base URL:      ${effective.emailConfirmationBaseUrl || '(unset — link is relative; set with email-confirmation-url)'}`,
+    )
     outLine(`  persisted overlay file:     ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
 
     return 0
@@ -984,8 +991,62 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
     return 0
   }
 
+  if (action === 'email-confirmation') {
+    const value = args.positionals[0]
+    if (value === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.emailConfirmationEnabled)
+      outLine(`email confirmation cleared (falls back to env/default OFF). Wrote ${file}.`)
+
+      return 0
+    }
+    if (value !== 'on' && value !== 'off') {
+      throw new UsageError('registration policy email-confirmation <on|off|clear>')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.emailConfirmationEnabled = value === 'on'))
+    outLine(`email confirmation ${value === 'on' ? 'ENABLED' : 'disabled'}. Effective on the next signup. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'email-confirmation-gating') {
+    const mode = args.positionals[0]
+    if (mode === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.emailConfirmationGating)
+      outLine(`confirmation gating cleared (falls back to env/default block_signin). Wrote ${file}.`)
+
+      return 0
+    }
+    if (!isEmailConfirmationGatingMode(mode)) {
+      throw new UsageError(`registration policy email-confirmation-gating <${EMAIL_CONFIRMATION_GATING_MODES.join('|')}|clear>`)
+    }
+    const file = await updateRegistrationOverlay((r) => (r.emailConfirmationGating = mode))
+    outLine(`confirmation gating mode set to ${mode}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'email-confirmation-url') {
+    const rest = args.positionals.join(' ').trim()
+    if (rest === '') {
+      throw new UsageError('registration policy email-confirmation-url <https://your-web-app|clear>')
+    }
+    if (rest === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.emailConfirmationBaseUrl)
+      outLine(`confirmation base URL cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    if (!/^https?:\/\/.+/i.test(rest)) {
+      throw new UsageError('confirmation base URL must be an absolute http(s) URL, e.g. https://notes.example.com')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.emailConfirmationBaseUrl = rest))
+    outLine(`confirmation base URL set to ${rest}. Wrote ${file}.`)
+
+    return 0
+  }
+
   throw new UsageError(
-    `unknown registration policy action '${action}' — show | default-role <role> | domain-mode <mode> | domains <list>`,
+    `unknown registration policy action '${action}' — show | default-role <role> | domain-mode <mode> | domains <list> | email-confirmation <on|off> | email-confirmation-gating <mode> | email-confirmation-url <url>`,
   )
 }
 
@@ -1116,7 +1177,37 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
     return 0
   }
 
-  throw new UsageError(`unknown registration subcommand '${sub}' — status | enable | disable | policy`)
+  // Standard Red Notes: manually mark a user's email as confirmed (admin override
+  // for the email-confirmation gate) — e.g. when a user cannot receive the email.
+  if (sub === 'confirm-email') {
+    const container = await loadContainer()
+    const user = await resolveUser(container, args.positionals[0])
+    const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+
+    if (user.isEmailConfirmed()) {
+      outLine(`${user.email} is already confirmed. No change.`)
+
+      return 0
+    }
+
+    user.emailConfirmed = true
+    user.emailConfirmedAt = new Date()
+    await userRepository.save(user)
+
+    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: user.uuid }, {
+      name: 'email_confirmed',
+      value: 'true',
+      via: 'cli',
+    })
+
+    outLine(`Marked ${user.email} email-confirmed. They can now sign in.`)
+
+    return 0
+  }
+
+  throw new UsageError(
+    `unknown registration subcommand '${sub}' — status | enable | disable | policy | confirm-email <user>`,
+  )
 }
 
 /* ---------------------------------------------------------------------------

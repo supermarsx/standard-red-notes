@@ -6,4 +6,5 @@ export enum RootQueryParam {
   UserRequest = 'user-request',
   AppViewRoute = 'route',
   Shared = 'shared',
+  EmailConfirmation = 'email_confirmation',
 }

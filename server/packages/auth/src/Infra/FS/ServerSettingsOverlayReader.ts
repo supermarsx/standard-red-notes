@@ -1,7 +1,11 @@
 import { promises as fs } from 'fs'
 
 import { ProofOfWorkOverlay } from '../../Domain/ProofOfWork/ProofOfWorkConfig'
-import { isRegistrationDomainMode, RegistrationConfigOverlay } from '../../Domain/Registration/RegistrationConfig'
+import {
+  isEmailConfirmationGatingMode,
+  isRegistrationDomainMode,
+  RegistrationConfigOverlay,
+} from '../../Domain/Registration/RegistrationConfig'
 
 /**
  * Standard Red Notes: read-only view of the api-gateway's persisted runtime
@@ -92,6 +96,21 @@ export class ServerSettingsOverlayReader {
     }
     if (Array.isArray(registration.domainList)) {
       result.domainList = registration.domainList.filter((entry): entry is string => typeof entry === 'string')
+    }
+    if (typeof registration.emailConfirmationEnabled === 'boolean') {
+      result.emailConfirmationEnabled = registration.emailConfirmationEnabled
+    }
+    if (isEmailConfirmationGatingMode(registration.emailConfirmationGating)) {
+      result.emailConfirmationGating = registration.emailConfirmationGating
+    }
+    if (typeof registration.emailConfirmationSubject === 'string') {
+      result.emailConfirmationSubject = registration.emailConfirmationSubject
+    }
+    if (typeof registration.emailConfirmationBody === 'string') {
+      result.emailConfirmationBody = registration.emailConfirmationBody
+    }
+    if (typeof registration.emailConfirmationBaseUrl === 'string') {
+      result.emailConfirmationBaseUrl = registration.emailConfirmationBaseUrl
     }
 
     return result

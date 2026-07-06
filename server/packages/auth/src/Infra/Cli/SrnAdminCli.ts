@@ -864,6 +864,13 @@ SERVER
   registration policy default-role   Set default role for new users
   registration policy domain-mode    Set email-domain mode (off|allow|block)
   registration policy domains        Set the email-domain allow/block list
+  registration policy email-confirmation <on|off>
+                                     Toggle email confirmation for new signups
+  registration policy email-confirmation-gating <block_signin|warn>
+                                     How unconfirmed users are gated at sign-in
+  registration policy email-confirmation-url <url>
+                                     Web base URL used in the verification link
+  registration confirm-email <user> Manually mark a user's email confirmed
   webhooks list [user]               Global webhooks (+ a user's, if given)
   webhooks create <url> <ev,ev> [--user <user>]
                                      Register a webhook (global unless --user)
@@ -947,6 +954,10 @@ USAGE
   srn-admin registration policy default-role <CORE_USER|PRO_USER|VAULTS_USER|clear>
   srn-admin registration policy domain-mode <off|allowlist|blocklist>
   srn-admin registration policy domains <comma-separated-domains|clear>
+  srn-admin registration policy email-confirmation <on|off|clear>
+  srn-admin registration policy email-confirmation-gating <block_signin|warn|clear>
+  srn-admin registration policy email-confirmation-url <https://your-web-app|clear>
+  srn-admin registration confirm-email <user>
 
 Two independent switches gate signups; registration is blocked when EITHER
 is on:
@@ -963,7 +974,15 @@ email-domain allow/block policy). It reads the SAME persisted overlay the
 admin panel writes (SERVER_SETTINGS_PATH) layered over the REGISTRATION_* env
 baseline. A listed domain also matches its subdomains (example.com matches
 mail.example.com); matching is case-insensitive. New signups are NEVER given
-the admin role. Setting the policy requires SERVER_SETTINGS_PATH configured.`,
+the admin role. Setting the policy requires SERVER_SETTINGS_PATH configured.
+
+EMAIL CONFIRMATION (part 2): OFF by default. When on, new signups are created
+unconfirmed and emailed a single-use verification link (SMTP must be configured,
+and set 'email-confirmation-url' to your web app so the link is absolute). The
+gating mode is 'block_signin' (unconfirmed users cannot sign in until they
+confirm — the strict default) or 'warn' (allowed but flagged). Existing users are
+backfilled confirmed by the migration, so turning this on only affects NEW
+signups. 'confirm-email <user>' manually confirms an account (admin override).`,
   webhooks: `webhooks — outbound webhook management
 
 USAGE

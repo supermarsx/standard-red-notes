@@ -2,8 +2,21 @@ import { promises as fs } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { ServerSettingsResolver } from './ServerSettingsResolver'
+import {
+  DEFAULT_EMAIL_CONFIRMATION_BODY,
+  DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  ServerSettingsResolver,
+} from './ServerSettingsResolver'
 import { ServerSettingsStore } from './ServerSettingsStore'
+
+/** Registration email-confirmation defaults, spread into expectations (DRY). */
+const confirmationDefaults = {
+  emailConfirmationEnabled: false,
+  emailConfirmationGating: 'block_signin' as const,
+  emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
+  emailConfirmationBaseUrl: '',
+}
 
 describe('ServerSettingsStore + ServerSettingsResolver', () => {
   let dir: string
@@ -55,6 +68,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         defaultRole: 'CORE_USER',
         domainMode: 'off',
         domainList: [],
+        ...confirmationDefaults,
       })
     })
 
@@ -69,6 +83,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         defaultRole: 'PRO_USER',
         domainMode: 'allowlist',
         domainList: ['env.com', 'other.com'],
+        ...confirmationDefaults,
       })
     })
 
@@ -82,11 +97,30 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         defaultRole: 'VAULTS_USER',
         domainMode: 'blocklist',
         domainList: ['persisted.com'],
+        ...confirmationDefaults,
       })
 
       // An admin role must never survive resolution as a default.
       await new ServerSettingsStore(filePath).update({ registration: { defaultRole: 'ADMIN_USER' as string } })
       expect((await resolver.resolveRegistrationConfig()).defaultRole).toEqual('CORE_USER')
+    })
+
+    it('resolves email confirmation: persisted enable + gating win over env/default', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: {
+          emailConfirmationEnabled: true,
+          emailConfirmationGating: 'warn',
+          emailConfirmationBaseUrl: 'https://notes.example.com',
+        },
+      })
+      const resolver = makeResolver()
+      const config = await resolver.resolveRegistrationConfig()
+
+      expect(config.emailConfirmationEnabled).toBe(true)
+      expect(config.emailConfirmationGating).toBe('warn')
+      expect(config.emailConfirmationBaseUrl).toBe('https://notes.example.com')
+      // Untouched templates fall through to the defaults.
+      expect(config.emailConfirmationSubject).toBe(DEFAULT_EMAIL_CONFIRMATION_SUBJECT)
     })
 
     it('reports the registration source map and assignable roles in the view', async () => {

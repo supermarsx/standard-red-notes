@@ -704,4 +704,85 @@ describe('Register', () => {
       })
     })
   })
+
+  describe('Standard Red Notes: email confirmation on registration', () => {
+    const makeResolver = (config: Partial<RegistrationConfig>): RegistrationConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        emailConfirmationEnabled: false,
+        emailConfirmationGating: 'block_signin',
+        emailConfirmationSubject: 's',
+        emailConfirmationBody: 'b',
+        emailConfirmationBaseUrl: 'https://notes.example.com',
+        ...config,
+      } as RegistrationConfig),
+    })
+
+    const dto = {
+      email: 'person@example.com',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+    }
+
+    const createWith = (resolver: RegistrationConfigResolverInterface, sender?: { execute: jest.Mock }) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        resolver,
+        sender as never,
+      )
+
+    it('creates the user UNCONFIRMED and sends the confirmation email when enabled', async () => {
+      const sender = { execute: jest.fn().mockResolvedValue(Result.ok(true)) }
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
+
+      expect(result.success).toBe(true)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.emailConfirmed).toBe(false)
+      expect(sender.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ userUuid: expect.any(String), email: 'person@example.com' }),
+      )
+    })
+
+    it('does NOT touch emailConfirmed or send an email when the feature is disabled', async () => {
+      const sender = { execute: jest.fn() }
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: false }), sender).execute(dto)
+
+      expect(result.success).toBe(true)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.emailConfirmed).toBeUndefined()
+      expect(sender.execute).not.toHaveBeenCalled()
+    })
+
+    it('does NOT create an unconfirmed user when enabled but no sender is wired (never lock out)', async () => {
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true })).execute(dto)
+
+      expect(result.success).toBe(true)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.emailConfirmed).toBeUndefined()
+    })
+
+    it('still succeeds if the confirmation email send throws (best-effort)', async () => {
+      const sender = { execute: jest.fn().mockRejectedValue(new Error('smtp down')) }
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
+
+      expect(result.success).toBe(true)
+    })
+  })
 })

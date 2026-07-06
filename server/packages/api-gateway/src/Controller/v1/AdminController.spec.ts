@@ -12,8 +12,20 @@ import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
-import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import {
+  DEFAULT_EMAIL_CONFIRMATION_BODY,
+  DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  ServerSettingsResolver,
+} from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsStore } from '../../Service/ServerSettings/ServerSettingsStore'
+
+const confirmationDefaults = {
+  emailConfirmationEnabled: false,
+  emailConfirmationGating: 'block_signin' as const,
+  emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
+  emailConfirmationBaseUrl: '',
+}
 
 // Only which providers are configured matters for the server-status payload.
 jest.mock('../../Service/Assistant/providers/factory', () => ({
@@ -430,6 +442,7 @@ describe('AdminController server-status', () => {
         defaultRole: 'PRO_USER',
         domainMode: 'allowlist',
         domainList: ['company.com', 'partner.com'],
+        ...confirmationDefaults,
       })
       expect(logger.info).toHaveBeenCalledWith(
         'admin server-settings updated',
@@ -437,6 +450,42 @@ describe('AdminController server-status', () => {
           changedSettings: ['registration.defaultRole', 'registration.domainMode', 'registration.domainList'],
         }),
       )
+    })
+
+    it('PUT persists email confirmation settings and rejects a bad gating mode / base URL', async () => {
+      // Bad gating + bad base URL must 400 and persist nothing.
+      for (const bad of [
+        { registration: { emailConfirmationGating: 'nope' } },
+        { registration: { emailConfirmationBaseUrl: 'notaurl' } },
+      ]) {
+        statusMock.mockClear()
+        await settingsController().setServerSettings(
+          { body: bad } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect((await resolver.resolveRegistrationConfig()).emailConfirmationEnabled).toBe(false)
+
+      // A valid payload persists and auth resolves it.
+      await settingsController().setServerSettings(
+        {
+          body: {
+            registration: {
+              emailConfirmationEnabled: true,
+              emailConfirmationGating: 'warn',
+              emailConfirmationBaseUrl: 'https://notes.example.com',
+              emailConfirmationSubject: 'Verify',
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      const resolved = await resolver.resolveRegistrationConfig()
+      expect(resolved.emailConfirmationEnabled).toBe(true)
+      expect(resolved.emailConfirmationGating).toBe('warn')
+      expect(resolved.emailConfirmationBaseUrl).toBe('https://notes.example.com')
+      expect(resolved.emailConfirmationSubject).toBe('Verify')
     })
 
     it('PUT with an explicit null CLEARS the persisted override (source falls back to env)', async () => {

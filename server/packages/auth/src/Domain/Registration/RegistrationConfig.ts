@@ -13,6 +13,31 @@ export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
 
 export const REGISTRATION_DOMAIN_MODES: RegistrationDomainMode[] = ['off', 'allowlist', 'blocklist']
 
+/**
+ * Standard Red Notes: EMAIL-CONFIRMATION gating mode (only meaningful when
+ * emailConfirmationEnabled is true):
+ *   - 'block_signin': an unconfirmed user cannot sign in until they confirm (the
+ *     strict default when the feature is enabled).
+ *   - 'warn': an unconfirmed user may still sign in; they are only flagged.
+ */
+export type EmailConfirmationGatingMode = 'block_signin' | 'warn'
+
+export const EMAIL_CONFIRMATION_GATING_MODES: EmailConfirmationGatingMode[] = ['block_signin', 'warn']
+
+/**
+ * The default confirmation email subject + body. The body MUST contain the
+ * `{{confirmation_url}}` placeholder — it is substituted with the per-signup
+ * verification link before sending. A configured template that omits the
+ * placeholder has the URL appended (see renderConfirmationEmailBody).
+ */
+export const DEFAULT_EMAIL_CONFIRMATION_SUBJECT = 'Confirm your email address'
+export const DEFAULT_EMAIL_CONFIRMATION_BODY =
+  'Welcome! Please confirm your email address by opening the link below:\n\n' +
+  '{{confirmation_url}}\n\n' +
+  'This link expires in 24 hours. If you did not create this account you can ignore this email.'
+
+export const CONFIRMATION_URL_PLACEHOLDER = '{{confirmation_url}}'
+
 /** The fully-resolved policy — every field populated, ready for enforcement. */
 export interface RegistrationConfig {
   /** A canonical, NON-admin role name (validated). Defaults to CORE_USER. */
@@ -20,6 +45,24 @@ export interface RegistrationConfig {
   domainMode: RegistrationDomainMode
   /** Normalized (lowercased, trimmed, de-duped, non-empty) domain list. */
   domainList: string[]
+  /**
+   * Standard Red Notes: EMAIL CONFIRMATION. OFF by default so existing
+   * deployments are unaffected until an admin turns it on. When enabled a new
+   * signup is created unconfirmed, emailed a single-use verification link, and
+   * gated per emailConfirmationGating on sign-in.
+   */
+  emailConfirmationEnabled: boolean
+  emailConfirmationGating: EmailConfirmationGatingMode
+  /** Subject line of the confirmation email. */
+  emailConfirmationSubject: string
+  /** Body template of the confirmation email (contains {{confirmation_url}}). */
+  emailConfirmationBody: string
+  /**
+   * Absolute base URL of the web app the verification link points at (e.g.
+   * `https://notes.example.com`). Empty when unconfigured — the link then falls
+   * back to a relative path (only useful behind a same-origin reverse proxy).
+   */
+  emailConfirmationBaseUrl: string
 }
 
 /**
@@ -31,16 +74,57 @@ export interface RegistrationConfigOverlay {
   defaultRole?: string
   domainMode?: RegistrationDomainMode
   domainList?: string[]
+  emailConfirmationEnabled?: boolean
+  emailConfirmationGating?: EmailConfirmationGatingMode
+  emailConfirmationSubject?: string
+  emailConfirmationBody?: string
+  emailConfirmationBaseUrl?: string
 }
 
 export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
   defaultRole: RoleName.NAMES.CoreUser,
   domainMode: 'off',
   domainList: [],
+  emailConfirmationEnabled: false,
+  emailConfirmationGating: 'block_signin',
+  emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
+  emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
+  emailConfirmationBaseUrl: '',
 }
 
 export const isRegistrationDomainMode = (value: unknown): value is RegistrationDomainMode =>
   typeof value === 'string' && (REGISTRATION_DOMAIN_MODES as string[]).includes(value)
+
+export const isEmailConfirmationGatingMode = (value: unknown): value is EmailConfirmationGatingMode =>
+  typeof value === 'string' && (EMAIL_CONFIRMATION_GATING_MODES as string[]).includes(value)
+
+/**
+ * Standard Red Notes: composes the verification link a confirmation email points
+ * at. The web app reads the raw token from the `email_confirmation` query param
+ * on the root route (see the web RouteParser). The token is URL-encoded; the
+ * base URL has any trailing slash trimmed. An empty base yields a relative link.
+ */
+export const buildConfirmationUrl = (baseUrl: string, token: string): string => {
+  const base = (baseUrl ?? '').trim().replace(/\/+$/, '')
+  const query = `?email_confirmation=${encodeURIComponent(token)}`
+
+  return base.length === 0 ? `/${query}` : `${base}/${query}`
+}
+
+/**
+ * Substitutes the {{confirmation_url}} placeholder in a (possibly
+ * admin-customized) body template. When the template does not contain the
+ * placeholder the link is appended on its own line so a misconfigured template
+ * never sends an email with no usable link.
+ */
+export const renderConfirmationEmailBody = (template: string, url: string): string => {
+  const body = typeof template === 'string' && template.trim().length > 0 ? template : DEFAULT_EMAIL_CONFIRMATION_BODY
+  if (body.includes(CONFIRMATION_URL_PLACEHOLDER)) {
+    return body.split(CONFIRMATION_URL_PLACEHOLDER).join(url)
+  }
+
+  return `${body}\n\n${url}`
+}
 
 /**
  * Coerces a configured default-role value to a valid one: only a canonical,

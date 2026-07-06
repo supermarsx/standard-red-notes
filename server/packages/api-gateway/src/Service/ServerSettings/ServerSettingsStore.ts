@@ -94,6 +94,16 @@ export interface PersistedRegistrationSettings {
   defaultRole?: string
   domainMode?: 'off' | 'allowlist' | 'blocklist'
   domainList?: string[]
+  /**
+   * Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default. The auth
+   * server reads these same keys and enforces them. Key names/nesting are a
+   * CONTRACT shared with auth (RegistrationConfigOverlay) — keep them in sync.
+   */
+  emailConfirmationEnabled?: boolean
+  emailConfirmationGating?: 'block_signin' | 'warn'
+  emailConfirmationSubject?: string
+  emailConfirmationBody?: string
+  emailConfirmationBaseUrl?: string
 }
 
 export interface PersistedServerSettings {
@@ -138,6 +148,11 @@ export interface ServerSettingsPatch {
     defaultRole?: string | null
     domainMode?: 'off' | 'allowlist' | 'blocklist' | null
     domainList?: string[] | null
+    emailConfirmationEnabled?: boolean | null
+    emailConfirmationGating?: 'block_signin' | 'warn' | null
+    emailConfirmationSubject?: string | null
+    emailConfirmationBody?: string | null
+    emailConfirmationBaseUrl?: string | null
   }
 }
 
@@ -221,6 +236,11 @@ export class ServerSettingsStore {
         this.applyKey(data.registration, 'defaultRole', patch.registration.defaultRole)
         this.applyKey(data.registration, 'domainMode', patch.registration.domainMode)
         this.applyKey(data.registration, 'domainList', patch.registration.domainList)
+        this.applyKey(data.registration, 'emailConfirmationEnabled', patch.registration.emailConfirmationEnabled)
+        this.applyKey(data.registration, 'emailConfirmationGating', patch.registration.emailConfirmationGating)
+        this.applyKey(data.registration, 'emailConfirmationSubject', patch.registration.emailConfirmationSubject)
+        this.applyKey(data.registration, 'emailConfirmationBody', patch.registration.emailConfirmationBody)
+        this.applyKey(data.registration, 'emailConfirmationBaseUrl', patch.registration.emailConfirmationBaseUrl)
         if (Object.keys(data.registration).length === 0) {
           delete data.registration
         }

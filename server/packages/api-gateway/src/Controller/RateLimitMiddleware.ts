@@ -90,7 +90,12 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
       bucket: 'auth-sensitive',
       limit: limits.registrationMax,
       windowSeconds: limits.windowSeconds,
-      match: postTo(['/v1/users', '/v1/mcp-tokens/authenticate', '/v1/mfa/magic-link/request']),
+      match: postTo([
+        '/v1/users',
+        '/v1/mcp-tokens/authenticate',
+        '/v1/mfa/magic-link/request',
+        '/v1/users/email-confirmation/resend',
+      ]),
     },
   ]
 }

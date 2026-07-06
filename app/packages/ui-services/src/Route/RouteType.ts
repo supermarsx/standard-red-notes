@@ -7,5 +7,6 @@ export enum RouteType {
   Demo = 'demo',
   AppViewRoute = 'route',
   Shared = 'shared',
+  EmailConfirmation = 'email-confirmation',
   None = 'none',
 }

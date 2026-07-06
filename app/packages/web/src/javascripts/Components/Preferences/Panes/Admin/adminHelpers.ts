@@ -371,6 +371,14 @@ export type AdminServerSettings = {
     domainList?: string[]
     /** Assignable (canonical non-admin) role choices for the selector. */
     assignableRoles?: string[]
+    // Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default.
+    emailConfirmationEnabled?: boolean
+    emailConfirmationGating?: 'block_signin' | 'warn'
+    emailConfirmationSubject?: string
+    emailConfirmationBody?: string
+    emailConfirmationBaseUrl?: string
+    /** Gating-mode choices for the selector. */
+    gatingModes?: Array<'block_signin' | 'warn'>
   }
 }
 

@@ -4,6 +4,7 @@ import { AppViewRouteParam, ValidAppViewRoutes } from './Params/AppViewRoutePara
 import { DemoParams } from './Params/DemoParams'
 import { OnboardingParams } from './Params/OnboardingParams'
 import { SharedParams } from './Params/SharedParams'
+import { EmailConfirmationParams } from './Params/EmailConfirmationParams'
 import { PurchaseParams } from './Params/PurchaseParams'
 import { SettingsParams } from './Params/SettingsParams'
 import { SubscriptionInviteParams } from './Params/SubscriptionInviteParams'
@@ -60,6 +61,14 @@ export class RouteParser implements RouteParserInterface {
 
     return {
       shareId: this.searchParams.get(RootQueryParam.Shared) as string,
+    }
+  }
+
+  get emailConfirmationParams(): EmailConfirmationParams {
+    this.checkForProperRouteType(RouteType.EmailConfirmation)
+
+    return {
+      token: this.searchParams.get(RootQueryParam.EmailConfirmation) as string,
     }
   }
 
@@ -125,6 +134,7 @@ export class RouteParser implements RouteParserInterface {
       [RootQueryParam.UserRequest, RouteType.UserRequest],
       [RootQueryParam.AppViewRoute, RouteType.AppViewRoute],
       [RootQueryParam.Shared, RouteType.Shared],
+      [RootQueryParam.EmailConfirmation, RouteType.EmailConfirmation],
     ])
 
     for (const rootQueryParam of rootQueryParametersMap.keys()) {

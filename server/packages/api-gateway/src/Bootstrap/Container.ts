@@ -297,6 +297,23 @@ export class ContainerConfigLoader {
       registrationDomains: env.get('REGISTRATION_DOMAINS', true)
         ? env.get('REGISTRATION_DOMAINS', true).split(/[\s,]+/)
         : undefined,
+      // Standard Red Notes: EMAIL CONFIRMATION env baseline (opt-in; only the
+      // exact string 'true' enables it). Enforced auth-side; the gateway views it.
+      registrationEmailConfirmationEnabled:
+        env.get('REGISTRATION_EMAIL_CONFIRMATION', true) === 'true'
+          ? true
+          : env.get('REGISTRATION_EMAIL_CONFIRMATION', true) === 'false'
+            ? false
+            : undefined,
+      registrationEmailConfirmationGating:
+        env.get('REGISTRATION_EMAIL_CONFIRMATION_GATING', true) === 'block_signin'
+          ? 'block_signin'
+          : env.get('REGISTRATION_EMAIL_CONFIRMATION_GATING', true) === 'warn'
+            ? 'warn'
+            : undefined,
+      registrationEmailConfirmationSubject: env.get('REGISTRATION_EMAIL_CONFIRMATION_SUBJECT', true) || undefined,
+      registrationEmailConfirmationBody: env.get('REGISTRATION_EMAIL_CONFIRMATION_BODY', true) || undefined,
+      registrationEmailConfirmationBaseUrl: env.get('REGISTRATION_EMAIL_CONFIRMATION_URL', true) || undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container

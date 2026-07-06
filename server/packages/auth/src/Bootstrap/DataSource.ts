@@ -23,6 +23,7 @@ import { TypeORMTrustedDevice } from '../Infra/TypeORM/TypeORMTrustedDevice'
 import { TypeORMPendingMfaApproval } from '../Infra/TypeORM/TypeORMPendingMfaApproval'
 import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthenticatorChallenge'
 import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
+import { TypeORMEmailConfirmationToken } from '../Infra/TypeORM/TypeORMEmailConfirmationToken'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
 import { TypeORMEmergencyAccessInvitation } from '../Infra/TypeORM/TypeORMEmergencyAccessInvitation'
 import { TypeORMSessionTrace } from '../Infra/TypeORM/TypeORMSessionTrace'
@@ -94,6 +95,7 @@ export class AppDataSource {
         TypeORMPendingMfaApproval,
         TypeORMAuthenticatorChallenge,
         TypeORMMagicLinkToken,
+        TypeORMEmailConfirmationToken,
         TypeORMEmergencyAccessInvitation,
         TypeORMCacheEntry,
         TypeORMSharedVaultUser,

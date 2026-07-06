@@ -196,6 +196,14 @@ import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { MagicLinkTokenPersistenceMapper } from '../Mapping/MagicLinkTokenPersistenceMapper'
 import { MagicLinkTokenRepositoryInterface } from '../Domain/MagicLink/MagicLinkTokenRepositoryInterface'
 import { TypeORMMagicLinkTokenRepository } from '../Infra/TypeORM/TypeORMMagicLinkTokenRepository'
+import { EmailConfirmationToken } from '../Domain/EmailConfirmation/EmailConfirmationToken'
+import { TypeORMEmailConfirmationToken } from '../Infra/TypeORM/TypeORMEmailConfirmationToken'
+import { EmailConfirmationTokenPersistenceMapper } from '../Mapping/EmailConfirmationTokenPersistenceMapper'
+import { EmailConfirmationTokenRepositoryInterface } from '../Domain/EmailConfirmation/EmailConfirmationTokenRepositoryInterface'
+import { TypeORMEmailConfirmationTokenRepository } from '../Infra/TypeORM/TypeORMEmailConfirmationTokenRepository'
+import { SendEmailConfirmation } from '../Domain/UseCase/SendEmailConfirmation/SendEmailConfirmation'
+import { VerifyEmailConfirmation } from '../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
+import { ResendEmailConfirmation } from '../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
 import { SmtpEmailSender } from '../Domain/Email/SmtpEmailSender'
 import { GenerateMagicLinkCode } from '../Domain/UseCase/GenerateMagicLinkCode/GenerateMagicLinkCode'
@@ -744,6 +752,11 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<MagicLinkToken, TypeORMMagicLinkToken>>(TYPES.Auth_MagicLinkTokenPersistenceMapper)
       .toConstantValue(new MagicLinkTokenPersistenceMapper())
     container
+      .bind<MapperInterface<EmailConfirmationToken, TypeORMEmailConfirmationToken>>(
+        TYPES.Auth_EmailConfirmationTokenPersistenceMapper,
+      )
+      .toConstantValue(new EmailConfirmationTokenPersistenceMapper())
+    container
       .bind<MapperInterface<CacheEntry, TypeORMCacheEntry>>(TYPES.Auth_CacheEntryPersistenceMapper)
       .toConstantValue(new CacheEntryPersistenceMapper())
     container
@@ -844,6 +857,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMMagicLinkToken>>(TYPES.Auth_ORMMagicLinkTokenRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMMagicLinkToken))
+    container
+      .bind<Repository<TypeORMEmailConfirmationToken>>(TYPES.Auth_ORMEmailConfirmationTokenRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMEmailConfirmationToken))
     container
       .bind<Repository<TypeORMCacheEntry>>(TYPES.Auth_ORMCacheEntryRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMCacheEntry))
@@ -1010,6 +1026,14 @@ export class ContainerConfigLoader {
         new TypeORMMagicLinkTokenRepository(
           container.get(TYPES.Auth_ORMMagicLinkTokenRepository),
           container.get(TYPES.Auth_MagicLinkTokenPersistenceMapper),
+        ),
+      )
+    container
+      .bind<EmailConfirmationTokenRepositoryInterface>(TYPES.Auth_EmailConfirmationTokenRepository)
+      .toConstantValue(
+        new TypeORMEmailConfirmationTokenRepository(
+          container.get(TYPES.Auth_ORMEmailConfirmationTokenRepository),
+          container.get(TYPES.Auth_EmailConfirmationTokenPersistenceMapper),
         ),
       )
     container
@@ -1354,6 +1378,12 @@ export class ContainerConfigLoader {
       defaultRole: env.get('REGISTRATION_DEFAULT_ROLE', true) || undefined,
       domainMode: env.get('REGISTRATION_DOMAIN_MODE', true) || undefined,
       domains: env.get('REGISTRATION_DOMAINS', true) || undefined,
+      // Standard Red Notes: EMAIL CONFIRMATION env baseline (part 2).
+      emailConfirmationEnabled: env.get('REGISTRATION_EMAIL_CONFIRMATION', true) || undefined,
+      emailConfirmationGating: env.get('REGISTRATION_EMAIL_CONFIRMATION_GATING', true) || undefined,
+      emailConfirmationSubject: env.get('REGISTRATION_EMAIL_CONFIRMATION_SUBJECT', true) || undefined,
+      emailConfirmationBody: env.get('REGISTRATION_EMAIL_CONFIRMATION_BODY', true) || undefined,
+      emailConfirmationBaseUrl: env.get('REGISTRATION_EMAIL_CONFIRMATION_URL', true) || undefined,
     })
     container
       .bind<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver)
@@ -2083,6 +2113,8 @@ export class ContainerConfigLoader {
           container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
           container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
           container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
+          // Standard Red Notes: EMAIL CONFIRMATION sign-in gate (block_signin mode).
+          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
         ),
       )
     container
@@ -2099,6 +2131,35 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new VerifyMagicLinkCode(
           container.get<MagicLinkTokenRepositoryInterface>(TYPES.Auth_MagicLinkTokenRepository),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation)
+      .toConstantValue(
+        new SendEmailConfirmation(
+          container.get<EmailConfirmationTokenRepositoryInterface>(TYPES.Auth_EmailConfirmationTokenRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation)
+      .toConstantValue(
+        new VerifyEmailConfirmation(
+          container.get<EmailConfirmationTokenRepositoryInterface>(TYPES.Auth_EmailConfirmationTokenRepository),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<ResendEmailConfirmation>(TYPES.Auth_ResendEmailConfirmation)
+      .toConstantValue(
+        new ResendEmailConfirmation(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
+          container.get<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation),
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
@@ -2181,6 +2242,10 @@ export class ContainerConfigLoader {
           // Standard Red Notes: resolves the admin-configurable default role +
           // email-domain policy for each registration.
           container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
+          // Standard Red Notes: EMAIL CONFIRMATION — issues + emails the single-use
+          // verification link when the resolved policy enables it.
+          container.get<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
@@ -2983,6 +3048,8 @@ export class ContainerConfigLoader {
           container.get<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval),
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
           container.get<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate),
+          container.get<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation),
+          container.get<ResendEmailConfirmation>(TYPES.Auth_ResendEmailConfirmation),
           container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
         ),
       )

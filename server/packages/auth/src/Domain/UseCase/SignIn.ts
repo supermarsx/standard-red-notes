@@ -22,6 +22,7 @@ import { AuditLogWriterInterface } from '../AuditLog/AuditLogWriterInterface'
 import { AuditAction } from '../AuditLog/AuditAction'
 import { WebhookDispatcherInterface } from '../Webhook/WebhookDispatcherInterface'
 import { WebhookEvent } from '../Webhook/WebhookEvent'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
 
 export class SignIn implements UseCaseInterface {
   constructor(
@@ -44,6 +45,11 @@ export class SignIn implements UseCaseInterface {
     // login success/failure to the audit log and fires the `user.login` webhook.
     private auditLogWriter?: AuditLogWriterInterface,
     private webhookDispatcher?: WebhookDispatcherInterface,
+    // Standard Red Notes: EMAIL CONFIRMATION gate. When the resolved policy has
+    // emailConfirmationEnabled AND gating 'block_signin', an unconfirmed user is
+    // refused sign-in until they confirm. Trailing optional param so existing
+    // call sites / specs keep compiling; when absent the gate is never applied.
+    private registrationConfigResolver?: RegistrationConfigResolverInterface,
   ) {}
 
   async execute(dto: SignInDTO): Promise<SignInResponse> {
@@ -151,6 +157,27 @@ export class SignIn implements UseCaseInterface {
       }
     }
 
+    /**
+     * Standard Red Notes: EMAIL CONFIRMATION gate. Only enforced when the feature
+     * is enabled AND the gating mode is 'block_signin'. Checked after the password
+     * (and ban) checks so the unconfirmed state is never disclosed to someone who
+     * does not know the password. 'warn' mode allows sign-in (the account is only
+     * flagged), and a confirmed / legacy-backfilled user is never blocked.
+     */
+    const emailConfirmationBlock = await this.emailConfirmationBlocksSignIn(user)
+    if (emailConfirmationBlock) {
+      this.logger.debug(`[sign-in][${user.uuid}] Unconfirmed user blocked pending email confirmation.`)
+
+      await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, 'email_unconfirmed')
+
+      return {
+        success: false,
+        errorMessage:
+          'Please confirm your email address before signing in. Check your inbox for the confirmation link.',
+        errorCode: HttpStatusCode.Forbidden,
+      }
+    }
+
     const authResponseFactory = this.authResponseFactoryResolver.resolveAuthResponseFactoryVersion(apiVersion)
 
     await this.sendSignInEmailNotification(user, dto.userAgent)
@@ -215,6 +242,30 @@ export class SignIn implements UseCaseInterface {
         // email is the login identifier the user typed; not a secret.
         metadata: { email, reason },
       })
+    }
+  }
+
+  /**
+   * Standard Red Notes: whether the email-confirmation gate must block this
+   * sign-in. Never throws — a resolver failure degrades to NOT blocking so an
+   * unreadable overlay can never lock users out. Returns false unless the feature
+   * is enabled, the mode is 'block_signin', and the user is unconfirmed.
+   */
+  private async emailConfirmationBlocksSignIn(user: User): Promise<boolean> {
+    if (this.registrationConfigResolver === undefined) {
+      return false
+    }
+
+    try {
+      const config = await this.registrationConfigResolver.resolve()
+
+      return (
+        config.emailConfirmationEnabled &&
+        config.emailConfirmationGating === 'block_signin' &&
+        !user.isEmailConfirmed()
+      )
+    } catch {
+      return false
     }
   }
 
