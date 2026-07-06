@@ -53,6 +53,40 @@ describe('OcrController', () => {
       await makeController(true).config({} as Request, response)
       expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({ allowed: false, available: false }))
     })
+
+    it('surfaces the browser-OCR intent (clientOcrEnabled / clientDefaultLanguage)', async () => {
+      response = responseWith({ [SettingName.NAMES.OcrServerAllowed]: 'true' })
+      await makeController(true).config({} as Request, response)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ clientOcrEnabled: false, clientDefaultLanguage: 'eng' }),
+      )
+    })
+
+    it('a bound resolver overrides the injected env constants (runtime, no restart)', async () => {
+      const resolver = {
+        resolveOcrConfig: jest.fn().mockResolvedValue({
+          serverEnabled: true,
+          defaultLanguage: 'deu',
+          maxPages: 5,
+          maxImageBytes: 1024,
+          clientEnabled: true,
+          clientDefaultLanguage: 'fra',
+        }),
+      }
+      // Controller constructed with serverOcrEnabled=false, but the resolver wins.
+      const controller = new OcrController(false, 'eng', ocrService as unknown as OcrService, resolver as never)
+      response = responseWith({ [SettingName.NAMES.OcrServerAllowed]: 'true' })
+      await controller.config({} as Request, response)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverOcrEnabled: true,
+          available: true,
+          defaultLanguage: 'deu',
+          clientOcrEnabled: true,
+          clientDefaultLanguage: 'fra',
+        }),
+      )
+    })
   })
 
   describe('recognize', () => {
@@ -88,6 +122,10 @@ describe('OcrController', () => {
       expect(ocrService.recognizePages).toHaveBeenCalledWith(
         [expect.objectContaining({ pageNumber: 1, image: expect.any(Buffer) })],
         undefined,
+        // Standard Red Notes: the resolved overlay bounds/default-language. With no
+        // resolver bound (this unit test), the env-baseline default language is
+        // passed and the bounds fall through to the OcrService boot options.
+        { defaultLanguage: 'eng', maxPages: undefined, maxImageBytes: undefined },
       )
       expect(jsonMock).toHaveBeenCalledWith({ pages: [{ pageNumber: 1, text: 'hello' }] })
     })

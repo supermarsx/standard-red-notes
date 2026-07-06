@@ -1380,6 +1380,125 @@ export class AdminController extends BaseHttpController {
       }
     }
 
+    // Standard Red Notes: OCR knobs. serverEnabled/clientEnabled are booleans;
+    // the languages are tesseract codes ([a-zA-Z] groups joined by _ or +);
+    // maxPages/maxImageBytes are bounded integers. Enforced gateway-side (server
+    // OCR) or surfaced via /v1/ocr/config (browser OCR). `null` clears any.
+    if (root.ocr !== undefined) {
+      if (!root.ocr || typeof root.ocr !== 'object' || Array.isArray(root.ocr)) {
+        return { error: 'ocr must be an object.' }
+      }
+      const ocr = root.ocr as Record<string, unknown>
+      patch.ocr = {}
+      const ocrPatch = patch.ocr as Record<string, unknown>
+
+      for (const key of ['serverEnabled', 'clientEnabled'] as const) {
+        if (ocr[key] !== undefined) {
+          if (ocr[key] !== null && typeof ocr[key] !== 'boolean') {
+            return { error: `ocr.${key} must be a boolean, or null to clear it.` }
+          }
+          ocrPatch[key] = ocr[key]
+          changedSettings.push(`ocr.${key}`)
+        }
+      }
+
+      for (const key of ['defaultLanguage', 'clientDefaultLanguage'] as const) {
+        if (ocr[key] !== undefined) {
+          if (ocr[key] === null) {
+            ocrPatch[key] = null
+          } else if (
+            typeof ocr[key] === 'string' &&
+            /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/.test((ocr[key] as string).trim())
+          ) {
+            ocrPatch[key] = (ocr[key] as string).trim()
+          } else {
+            return { error: `ocr.${key} must be a tesseract language code (e.g. "eng" or "eng+deu"), or null to clear it.` }
+          }
+          changedSettings.push(`ocr.${key}`)
+        }
+      }
+
+      for (const [key, min, max] of [
+        ['maxPages', 1, 1000],
+        ['maxImageBytes', 1024, 200 * 1024 * 1024],
+      ] as const) {
+        if (ocr[key] !== undefined) {
+          if (ocr[key] === null) {
+            ocrPatch[key] = null
+          } else if (
+            typeof ocr[key] === 'number' &&
+            Number.isInteger(ocr[key]) &&
+            (ocr[key] as number) >= min &&
+            (ocr[key] as number) <= max
+          ) {
+            ocrPatch[key] = ocr[key] as number
+          } else {
+            return { error: `ocr.${key} must be an integer between ${min} and ${max}, or null to clear it.` }
+          }
+          changedSettings.push(`ocr.${key}`)
+        }
+      }
+    }
+
+    // Standard Red Notes: WORKFLOWS (n8n) knobs. enabled is a boolean; n8nUrl is
+    // an http(s) URL; uiBasePath is an absolute path (restart-bound Express mount);
+    // uiTokenTtlSeconds is a bounded integer. `null` clears any.
+    if (root.workflows !== undefined) {
+      if (!root.workflows || typeof root.workflows !== 'object' || Array.isArray(root.workflows)) {
+        return { error: 'workflows must be an object.' }
+      }
+      const workflows = root.workflows as Record<string, unknown>
+      patch.workflows = {}
+      const wfPatch = patch.workflows as Record<string, unknown>
+
+      if (workflows.enabled !== undefined) {
+        if (workflows.enabled !== null && typeof workflows.enabled !== 'boolean') {
+          return { error: 'workflows.enabled must be a boolean, or null to clear it.' }
+        }
+        wfPatch.enabled = workflows.enabled
+        changedSettings.push('workflows.enabled')
+      }
+
+      if (workflows.n8nUrl !== undefined) {
+        const value = url(workflows.n8nUrl, 'workflows.n8nUrl')
+        if (value !== null && typeof value === 'object') {
+          return value
+        }
+        wfPatch.n8nUrl = value
+        changedSettings.push('workflows.n8nUrl')
+      }
+
+      if (workflows.uiBasePath !== undefined) {
+        if (workflows.uiBasePath === null) {
+          wfPatch.uiBasePath = null
+        } else if (
+          typeof workflows.uiBasePath === 'string' &&
+          /^\/[A-Za-z0-9/_-]*$/.test(workflows.uiBasePath.trim())
+        ) {
+          wfPatch.uiBasePath = workflows.uiBasePath.trim()
+        } else {
+          return { error: 'workflows.uiBasePath must be an absolute path (e.g. "/workflows-ui"), or null to clear it.' }
+        }
+        changedSettings.push('workflows.uiBasePath')
+      }
+
+      if (workflows.uiTokenTtlSeconds !== undefined) {
+        if (workflows.uiTokenTtlSeconds === null) {
+          wfPatch.uiTokenTtlSeconds = null
+        } else if (
+          typeof workflows.uiTokenTtlSeconds === 'number' &&
+          Number.isInteger(workflows.uiTokenTtlSeconds) &&
+          workflows.uiTokenTtlSeconds >= 60 &&
+          workflows.uiTokenTtlSeconds <= 7 * 24 * 60 * 60
+        ) {
+          wfPatch.uiTokenTtlSeconds = workflows.uiTokenTtlSeconds
+        } else {
+          return { error: 'workflows.uiTokenTtlSeconds must be an integer between 60 and 604800, or null to clear it.' }
+        }
+        changedSettings.push('workflows.uiTokenTtlSeconds')
+      }
+    }
+
     return { patch, changedSettings }
   }
 

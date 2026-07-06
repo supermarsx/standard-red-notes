@@ -12,8 +12,10 @@ import {
   joinPageTexts,
   mergeOcrWithEmbedded,
   OcrPageText,
+  OcrServerConfig,
   parseServerOcrConfig,
   readOcrCache,
+  resolveBrowserOcrConfig,
   ServerOcrConfig,
   ServerOcrConfigResponse,
   writeOcrCache,
@@ -247,7 +249,14 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
   // Files are end-to-end encrypted, so OCR cannot run on the server. The server
   // only exposes an enable flag + default language (read here); the actual OCR
   // runs in the browser on the already-decrypted page canvases.
-  const ocrConfig = useMemo(() => getOcrServerConfig(), [])
+  // The baked window.* config (OCR_ENABLED / OCR_DEFAULT_LANGUAGE), read once.
+  const windowOcrConfig = useMemo(() => getOcrServerConfig(), [])
+  // Standard Red Notes: the EFFECTIVE browser-OCR config. Starts at the baked
+  // window.* value and is superseded at runtime by the admin overlay when the
+  // server's /v1/ocr/config exposes it — so an admin can toggle on-device OCR
+  // without rebuilding the web container. Kept in state, updated by the fetch
+  // effect below.
+  const [ocrConfig, setOcrConfig] = useState<OcrServerConfig>(windowOcrConfig)
   const [ocrStatus, setOcrStatus] = useState<OcrStatus>('idle')
   const [ocrProgress, setOcrProgress] = useState<OcrProgress | undefined>()
   const [ocrError, setOcrError] = useState<string | undefined>()
@@ -478,8 +487,13 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
   // the browser-OCR action is enabled (the env flag) is there any point offering
   // an alternative path. Availability is per-user (admin allow flag), so it is
   // resolved at runtime via the authenticated config endpoint. Fails closed.
+  // Standard Red Notes: fetched unconditionally (when signed in) so the admin
+  // overlay can ENABLE browser OCR even when the baked window flag is off — the
+  // effective browser-OCR config AND the per-user server-OCR availability both
+  // come from this one authenticated call. Fails closed to the baked window
+  // config on any error.
   useEffect(() => {
-    if (!ocrConfig.enabled || !application) {
+    if (!application) {
       return
     }
     let cancelled = false
@@ -487,11 +501,13 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       try {
         const response = await application.ocrConfigRequest<ServerOcrConfigResponse>('/v1/ocr/config')
         if (!cancelled) {
+          setOcrConfig(resolveBrowserOcrConfig(windowOcrConfig, response ?? undefined))
           setServerOcr(parseServerOcrConfig(response))
         }
       } catch {
         if (!cancelled) {
-          setServerOcr({ available: false, defaultLanguage: ocrConfig.defaultLanguage })
+          setOcrConfig(windowOcrConfig)
+          setServerOcr({ available: false, defaultLanguage: windowOcrConfig.defaultLanguage })
         }
       }
     }
@@ -499,7 +515,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
     return () => {
       cancelled = true
     }
-  }, [ocrConfig.enabled, ocrConfig.defaultLanguage, application])
+  }, [application, windowOcrConfig])
 
   const runOcr = useCallback(
     async (mode: OcrMode = 'browser') => {

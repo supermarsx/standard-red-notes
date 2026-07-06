@@ -949,6 +949,27 @@ export class LegacyApiService
         adaptiveEscalation?: boolean | null
       }
     }
+    // Standard Red Notes: OCR knobs. serverEnabled/defaultLanguage/maxPages/
+    // maxImageBytes drive the gateway's server-side OCR endpoint (runtime);
+    // clientEnabled/clientDefaultLanguage are the browser-OCR intent surfaced via
+    // GET /v1/ocr/config.
+    ocr?: {
+      serverEnabled?: boolean | null
+      defaultLanguage?: string | null
+      maxPages?: number | null
+      maxImageBytes?: number | null
+      clientEnabled?: boolean | null
+      clientDefaultLanguage?: string | null
+    }
+    // Standard Red Notes: WORKFLOWS (n8n) knobs. enabled/n8nUrl/uiTokenTtlSeconds
+    // are runtime; uiBasePath is the boot-bound editor-proxy mount (restart to
+    // change).
+    workflows?: {
+      enabled?: boolean | null
+      n8nUrl?: string | null
+      uiBasePath?: string | null
+      uiTokenTtlSeconds?: number | null
+    }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,

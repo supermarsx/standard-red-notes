@@ -9,6 +9,7 @@ import {
   pageNeedsOcr,
   parseServerOcrConfig,
   readOcrCache,
+  resolveBrowserOcrConfig,
   writeOcrCache,
 } from './pdfOcr'
 
@@ -215,6 +216,30 @@ describe('pdfOcr', () => {
       expect(parseServerOcrConfig({ available: true, defaultLanguage: '  ' }).defaultLanguage).toBe(
         DEFAULT_OCR_LANGUAGE,
       )
+    })
+  })
+
+  describe('resolveBrowserOcrConfig (admin overlay wins over baked window flags)', () => {
+    const windowConfig = { enabled: false, defaultLanguage: 'eng' }
+
+    it('keeps the baked window config when the server does not expose the overlay', () => {
+      expect(resolveBrowserOcrConfig(windowConfig, undefined)).toEqual(windowConfig)
+      expect(resolveBrowserOcrConfig(windowConfig, {})).toEqual(windowConfig)
+      // A partial response without an explicit boolean does not override.
+      expect(resolveBrowserOcrConfig(windowConfig, { serverOcrEnabled: true })).toEqual(windowConfig)
+    })
+
+    it('lets the overlay ENABLE browser OCR even when the baked window flag is off', () => {
+      expect(resolveBrowserOcrConfig(windowConfig, { clientOcrEnabled: true, clientDefaultLanguage: 'deu' })).toEqual({
+        enabled: true,
+        defaultLanguage: 'deu',
+      })
+    })
+
+    it('lets the overlay DISABLE browser OCR and falls back to the window language when blank', () => {
+      expect(
+        resolveBrowserOcrConfig({ enabled: true, defaultLanguage: 'fra' }, { clientOcrEnabled: false }),
+      ).toEqual({ enabled: false, defaultLanguage: 'fra' })
     })
   })
 })

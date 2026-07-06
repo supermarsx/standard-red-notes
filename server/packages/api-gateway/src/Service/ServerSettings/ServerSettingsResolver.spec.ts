@@ -522,4 +522,143 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       })
     })
   })
+
+  describe('ocr (server + browser)', () => {
+    it('falls back to the safe defaults that reproduce the historical behavior', async () => {
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveOcrConfig()).toEqual({
+        serverEnabled: false,
+        defaultLanguage: 'eng',
+        maxPages: 50,
+        maxImageBytes: 12 * 1024 * 1024,
+        clientEnabled: false,
+        clientDefaultLanguage: 'eng',
+      })
+    })
+
+    it('uses the env baseline over defaults and ignores an invalid language code', async () => {
+      const resolver = makeResolver({
+        ocrServerEnabled: true,
+        ocrDefaultLanguage: 'eng+deu',
+        ocrMaxPages: 10,
+        ocrClientEnabled: true,
+        ocrClientDefaultLanguage: 'not a lang!',
+      })
+
+      const config = await resolver.resolveOcrConfig()
+      expect(config.serverEnabled).toBe(true)
+      expect(config.defaultLanguage).toBe('eng+deu')
+      expect(config.maxPages).toBe(10)
+      expect(config.clientEnabled).toBe(true)
+      // A bad code falls through to the default rather than poisoning the worker.
+      expect(config.clientDefaultLanguage).toBe('eng')
+    })
+
+    it('lets persisted admin values WIN over env and clamps out-of-range bounds', async () => {
+      const resolver = makeResolver({ ocrServerEnabled: false, ocrMaxPages: 10 })
+      await resolver.applyPatch({
+        ocr: { serverEnabled: true, maxPages: 99999, defaultLanguage: 'chi_sim', clientEnabled: true },
+      })
+
+      const config = await resolver.resolveOcrConfig()
+      expect(config.serverEnabled).toBe(true)
+      expect(config.maxPages).toBe(1000) // clamped into bounds
+      expect(config.defaultLanguage).toBe('chi_sim')
+      expect(config.clientEnabled).toBe(true)
+    })
+
+    it('persists, prunes on null, and clears back to env/default', async () => {
+      const store = new ServerSettingsStore(filePath)
+
+      await store.update({ ocr: { serverEnabled: true, defaultLanguage: 'deu' } })
+      expect(await store.read()).toEqual({ ocr: { serverEnabled: true, defaultLanguage: 'deu' } })
+
+      await store.update({ ocr: { serverEnabled: null } })
+      expect(await store.read()).toEqual({ ocr: { defaultLanguage: 'deu' } })
+
+      await store.update({ ocr: { defaultLanguage: null } })
+      expect(await store.read()).toEqual({})
+    })
+
+    it('reports the resolved config + per-setting sources in the view', async () => {
+      const resolver = makeResolver({ ocrServerEnabled: true })
+      await resolver.applyPatch({ ocr: { clientEnabled: true } })
+
+      const view = await resolver.view()
+      expect(view.settings.ocr).toMatchObject({ serverEnabled: true, clientEnabled: true, defaultLanguage: 'eng' })
+      expect(view.sources).toMatchObject({
+        'ocr.serverEnabled': 'env',
+        'ocr.clientEnabled': 'persisted',
+        'ocr.defaultLanguage': 'default',
+      })
+    })
+  })
+
+  describe('workflows (n8n)', () => {
+    it('falls back to the safe defaults', async () => {
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveWorkflowsConfig()).toEqual({
+        enabled: false,
+        n8nUrl: 'http://n8n:5678',
+        uiBasePath: '/workflows-ui',
+        uiTokenTtlSeconds: 12 * 60 * 60,
+      })
+    })
+
+    it('uses the env baseline over defaults and rejects a non-http n8n URL', async () => {
+      const resolver = makeResolver({
+        workflowsEnabled: true,
+        workflowsN8nUrl: 'ftp://bad',
+        workflowsUiBasePath: '/wf',
+        workflowsUiTokenTtlSeconds: 3600,
+      })
+
+      const config = await resolver.resolveWorkflowsConfig()
+      expect(config.enabled).toBe(true)
+      // A non-http(s) URL is ignored — falls through to the default.
+      expect(config.n8nUrl).toBe('http://n8n:5678')
+      expect(config.uiBasePath).toBe('/wf')
+      expect(config.uiTokenTtlSeconds).toBe(3600)
+    })
+
+    it('lets persisted admin values WIN over env and clamps the TTL', async () => {
+      const resolver = makeResolver({ workflowsEnabled: false, workflowsN8nUrl: 'http://env-n8n:5678' })
+      await resolver.applyPatch({
+        workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 999999999 },
+      })
+
+      const config = await resolver.resolveWorkflowsConfig()
+      expect(config.enabled).toBe(true)
+      expect(config.n8nUrl).toBe('https://n8n.example.com')
+      expect(config.uiTokenTtlSeconds).toBe(7 * 24 * 60 * 60) // clamped to 7 days
+    })
+
+    it('persists, prunes on null, and clears back to env/default', async () => {
+      const store = new ServerSettingsStore(filePath)
+
+      await store.update({ workflows: { enabled: true, n8nUrl: 'http://x:1' } })
+      expect(await store.read()).toEqual({ workflows: { enabled: true, n8nUrl: 'http://x:1' } })
+
+      await store.update({ workflows: { enabled: null } })
+      expect(await store.read()).toEqual({ workflows: { n8nUrl: 'http://x:1' } })
+
+      await store.update({ workflows: { n8nUrl: null } })
+      expect(await store.read()).toEqual({})
+    })
+
+    it('reports the resolved config + sources in the view', async () => {
+      const resolver = makeResolver({ workflowsEnabled: true })
+      await resolver.applyPatch({ workflows: { n8nUrl: 'https://persisted:5678' } })
+
+      const view = await resolver.view()
+      expect(view.settings.workflows).toMatchObject({ enabled: true, n8nUrl: 'https://persisted:5678' })
+      expect(view.sources).toMatchObject({
+        'workflows.enabled': 'env',
+        'workflows.n8nUrl': 'persisted',
+        'workflows.uiBasePath': 'default',
+      })
+    })
+  })
 })

@@ -480,6 +480,27 @@ export type AdminServerSettings = {
     /** Gating-mode choices for the selector. */
     gatingModes?: Array<'block_signin' | 'warn'>
   }
+  // Standard Red Notes: OCR config (server-side E2E-downgrade endpoint + the
+  // browser-OCR intent). serverEnabled/defaultLanguage/maxPages/maxImageBytes are
+  // gateway-enforced at runtime; clientEnabled/clientDefaultLanguage are the
+  // baked-window.* intent surfaced via GET /v1/ocr/config.
+  ocr?: {
+    serverEnabled?: boolean
+    defaultLanguage?: string
+    maxPages?: number
+    maxImageBytes?: number
+    clientEnabled?: boolean
+    clientDefaultLanguage?: string
+  }
+  // Standard Red Notes: WORKFLOWS (n8n) config. enabled/n8nUrl/uiTokenTtlSeconds
+  // are runtime; uiBasePath is the boot-bound editor-proxy mount (restart to
+  // change).
+  workflows?: {
+    enabled?: boolean
+    n8nUrl?: string
+    uiBasePath?: string
+    uiTokenTtlSeconds?: number
+  }
 }
 
 export type AdminServerSettingsResponse = {

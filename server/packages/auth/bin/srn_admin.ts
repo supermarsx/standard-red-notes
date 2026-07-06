@@ -1447,6 +1447,389 @@ async function cmdLimits(args: ParsedArgs): Promise<number> {
 }
 
 /* ---------------------------------------------------------------------------
+ * OCR + WORKFLOWS runtime config (the SERVER_SETTINGS overlay `ocr` / `workflows`
+ * sections, layered over the gateway env, over the safe defaults). These read +
+ * write the SAME atomic overlay file the gateway admin panel writes, the same
+ * honest way the registration policy / limits commands do.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Read-modify-write an arbitrary TOP-LEVEL section of the SERVER_SETTINGS overlay
+ * JSON (e.g. 'ocr', 'workflows'). Atomic via tmp + rename. Prunes the section
+ * when it empties. Requires SERVER_SETTINGS_PATH to be configured.
+ */
+async function updateOverlaySection(
+  section: string,
+  mutate: (obj: Record<string, unknown>) => void,
+): Promise<string> {
+  const authEnv = await readPackageEnv('auth')
+  const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
+  if (!overlayPath) {
+    throw new Error(
+      'SERVER_SETTINGS_PATH is not configured, so this setting cannot be persisted from the CLI. Set it in the operator .env (both auth + gateway) or manage it from the admin panel.',
+    )
+  }
+
+  let data: Record<string, unknown> = {}
+  try {
+    const raw = await fsPromises.readFile(overlayPath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object') {
+      data = parsed as Record<string, unknown>
+    }
+  } catch {
+    data = {}
+  }
+
+  const current = (data[section] && typeof data[section] === 'object'
+    ? (data[section] as Record<string, unknown>)
+    : {}) as Record<string, unknown>
+  mutate(current)
+  if (Object.keys(current).length === 0) {
+    delete data[section]
+  } else {
+    data[section] = current
+  }
+
+  await fsPromises.mkdir(path.dirname(overlayPath), { recursive: true })
+  const tmp = `${overlayPath}.${process.pid}.${Date.now()}.tmp`
+  await fsPromises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
+  await fsPromises.rename(tmp, overlayPath)
+
+  return overlayPath
+}
+
+/** Read a top-level overlay section (never throws — missing/corrupt → {}). */
+async function readOverlaySection(section: string): Promise<{ persisted: Record<string, unknown>; overlayPath: string | undefined }> {
+  const authEnv = await readPackageEnv('auth')
+  const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
+  let persisted: Record<string, unknown> = {}
+  if (overlayPath) {
+    try {
+      const raw = await fsPromises.readFile(overlayPath, 'utf8')
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      if (parsed[section] && typeof parsed[section] === 'object') {
+        persisted = parsed[section] as Record<string, unknown>
+      }
+    } catch {
+      persisted = {}
+    }
+  }
+
+  return { persisted, overlayPath }
+}
+
+const LOOSE_TRUE_VALUES = ['true', '1', 'yes', 'on']
+const parseOnOffClear = (value: string | undefined): boolean | null | undefined => {
+  if (value === 'clear') {
+    return null
+  }
+  if (value === 'on' || value === 'true') {
+    return true
+  }
+  if (value === 'off' || value === 'false') {
+    return false
+  }
+
+  return undefined
+}
+const OCR_LANGUAGE_RE = /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/
+
+async function cmdOcr(args: ParsedArgs, action: string | undefined): Promise<number> {
+  if (action === undefined || action === 'show' || action === 'status') {
+    const { persisted, overlayPath } = await readOverlaySection('ocr')
+    const gatewayEnv = await readPackageEnv('api-gateway')
+    const envOf = (name: string): string | undefined =>
+      process.env[`API_GATEWAY_${name}`] ?? gatewayEnv[name] ?? undefined
+
+    const boolField = (key: string, envName: string, def: boolean): { value: boolean; source: string } => {
+      if (typeof persisted[key] === 'boolean') {
+        return { value: persisted[key] as boolean, source: 'persisted' }
+      }
+      const raw = envOf(envName)
+      if (raw !== undefined && raw !== '') {
+        return { value: LOOSE_TRUE_VALUES.includes(raw.toLowerCase()), source: 'env' }
+      }
+
+      return { value: def, source: 'default' }
+    }
+    const strField = (key: string, envName: string, def: string): { value: string; source: string } => {
+      if (typeof persisted[key] === 'string' && OCR_LANGUAGE_RE.test((persisted[key] as string).trim())) {
+        return { value: (persisted[key] as string).trim(), source: 'persisted' }
+      }
+      const raw = envOf(envName)
+      if (raw !== undefined && OCR_LANGUAGE_RE.test(raw.trim())) {
+        return { value: raw.trim(), source: 'env' }
+      }
+
+      return { value: def, source: 'default' }
+    }
+    const numField = (key: string, envName: string, def: number): { value: number; source: string } => {
+      if (typeof persisted[key] === 'number') {
+        return { value: persisted[key] as number, source: 'persisted' }
+      }
+      const raw = envOf(envName)
+      if (raw !== undefined && raw !== '' && Number.isFinite(Number(raw))) {
+        return { value: Number(raw), source: 'env' }
+      }
+
+      return { value: def, source: 'default' }
+    }
+
+    const serverEnabled = boolField('serverEnabled', 'OCR_SERVER_ENABLED', false)
+    const defaultLanguage = strField('defaultLanguage', 'OCR_SERVER_DEFAULT_LANGUAGE', 'eng')
+    const maxPages = numField('maxPages', 'OCR_SERVER_MAX_PAGES', 50)
+    const maxImageBytes = numField('maxImageBytes', 'OCR_SERVER_MAX_IMAGE_BYTES', 12 * 1024 * 1024)
+    const clientEnabled = boolField('clientEnabled', 'OCR_ENABLED', false)
+    const clientDefaultLanguage = strField('clientDefaultLanguage', 'OCR_DEFAULT_LANGUAGE', 'eng')
+
+    if (args.options.json === true) {
+      outJson({
+        effective: {
+          serverEnabled: serverEnabled.value,
+          defaultLanguage: defaultLanguage.value,
+          maxPages: maxPages.value,
+          maxImageBytes: maxImageBytes.value,
+          clientEnabled: clientEnabled.value,
+          clientDefaultLanguage: clientDefaultLanguage.value,
+        },
+        sources: {
+          serverEnabled: serverEnabled.source,
+          defaultLanguage: defaultLanguage.source,
+          maxPages: maxPages.source,
+          maxImageBytes: maxImageBytes.source,
+          clientEnabled: clientEnabled.source,
+          clientDefaultLanguage: clientDefaultLanguage.source,
+        },
+        overlayPath: overlayPath ?? null,
+      })
+
+      return 0
+    }
+
+    outLine('OCR config (effective — persisted overlay over gateway env over defaults):')
+    outLine(`  server-side OCR:          ${serverEnabled.value ? 'on' : 'off'} [${serverEnabled.source}]  (runtime)`)
+    outLine(`  server default language:  ${defaultLanguage.value} [${defaultLanguage.source}]  (runtime)`)
+    outLine(`  server max pages:         ${maxPages.value} [${maxPages.source}]  (runtime)`)
+    outLine(`  server max image bytes:   ${maxImageBytes.value} [${maxImageBytes.source}]  (runtime)`)
+    outLine(`  browser (on-device) OCR:  ${clientEnabled.value ? 'on' : 'off'} [${clientEnabled.source}]  (applies on next page load)`)
+    outLine(`  browser default language: ${clientDefaultLanguage.value} [${clientDefaultLanguage.source}]  (applies on next page load)`)
+    outLine(`  overlay file: ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
+
+    return 0
+  }
+
+  const value = args.positionals[0]
+
+  if (action === 'set-server-enabled' || action === 'set-client-enabled') {
+    const key = action === 'set-server-enabled' ? 'serverEnabled' : 'clientEnabled'
+    const parsed = parseOnOffClear(value)
+    if (parsed === undefined) {
+      throw new UsageError(`ocr ${action} <on|off|clear>`)
+    }
+    const file = await updateOverlaySection('ocr', (o) => (parsed === null ? delete o[key] : (o[key] = parsed)))
+    outLine(`ocr.${key} ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'set-default-language' || action === 'set-client-default-language') {
+    const key = action === 'set-default-language' ? 'defaultLanguage' : 'clientDefaultLanguage'
+    if (!value) {
+      throw new UsageError(`ocr ${action} <tesseract-code|clear>`)
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('ocr', (o) => delete o[key])
+      outLine(`ocr.${key} cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    if (!OCR_LANGUAGE_RE.test(value)) {
+      throw new UsageError(`invalid language '${value}' — must be a tesseract code, e.g. eng or eng+deu`)
+    }
+    const file = await updateOverlaySection('ocr', (o) => (o[key] = value))
+    outLine(`ocr.${key} set to ${value}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'set-max-pages' || action === 'set-max-image-bytes') {
+    const key = action === 'set-max-pages' ? 'maxPages' : 'maxImageBytes'
+    const [min, max] = action === 'set-max-pages' ? [1, 1000] : [1024, 200 * 1024 * 1024]
+    if (!value) {
+      throw new UsageError(`ocr ${action} <${min}..${max}|clear>`)
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('ocr', (o) => delete o[key])
+      outLine(`ocr.${key} cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    const n = Number(value)
+    if (!Number.isInteger(n) || n < min || n > max) {
+      throw new UsageError(`ocr.${key} must be an integer between ${min} and ${max}`)
+    }
+    const file = await updateOverlaySection('ocr', (o) => (o[key] = n))
+    outLine(`ocr.${key} set to ${n}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  throw new UsageError(
+    `unknown ocr action '${action}' — show | set-server-enabled <on|off> | set-default-language <code> | set-max-pages <n> | set-max-image-bytes <n> | set-client-enabled <on|off> | set-client-default-language <code>`,
+  )
+}
+
+async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promise<number> {
+  if (action === undefined || action === 'show' || action === 'status') {
+    const { persisted, overlayPath } = await readOverlaySection('workflows')
+    const gatewayEnv = await readPackageEnv('api-gateway')
+    const envOf = (name: string): string | undefined =>
+      process.env[`API_GATEWAY_${name}`] ?? gatewayEnv[name] ?? undefined
+
+    const enabled = (() => {
+      if (typeof persisted.enabled === 'boolean') {
+        return { value: persisted.enabled, source: 'persisted' }
+      }
+      const raw = envOf('WORKFLOWS_ENABLED')
+      if (raw !== undefined && raw !== '') {
+        return { value: LOOSE_TRUE_VALUES.includes(raw.toLowerCase()), source: 'env' }
+      }
+
+      return { value: false, source: 'default' }
+    })()
+    const strField = (key: string, envName: string, def: string): { value: string; source: string } => {
+      if (typeof persisted[key] === 'string' && (persisted[key] as string).trim() !== '') {
+        return { value: (persisted[key] as string).trim(), source: 'persisted' }
+      }
+      const raw = envOf(envName)
+      if (raw !== undefined && raw !== '') {
+        return { value: raw.trim(), source: 'env' }
+      }
+
+      return { value: def, source: 'default' }
+    }
+    const n8nUrl = strField('n8nUrl', 'WORKFLOWS_N8N_URL', 'http://n8n:5678')
+    const uiBasePath = strField('uiBasePath', 'WORKFLOWS_UI_BASE_PATH', '/workflows-ui')
+    const uiTokenTtl = (() => {
+      if (typeof persisted.uiTokenTtlSeconds === 'number') {
+        return { value: persisted.uiTokenTtlSeconds, source: 'persisted' }
+      }
+      const raw = envOf('WORKFLOWS_UI_TOKEN_TTL_SECONDS')
+      if (raw !== undefined && raw !== '' && Number.isFinite(Number(raw))) {
+        return { value: Number(raw), source: 'env' }
+      }
+
+      return { value: 12 * 60 * 60, source: 'default' }
+    })()
+
+    if (args.options.json === true) {
+      outJson({
+        effective: {
+          enabled: enabled.value,
+          n8nUrl: n8nUrl.value,
+          uiBasePath: uiBasePath.value,
+          uiTokenTtlSeconds: uiTokenTtl.value,
+        },
+        sources: {
+          enabled: enabled.source,
+          n8nUrl: n8nUrl.source,
+          uiBasePath: uiBasePath.source,
+          uiTokenTtlSeconds: uiTokenTtl.source,
+        },
+        overlayPath: overlayPath ?? null,
+      })
+
+      return 0
+    }
+
+    outLine('workflows (n8n) config (effective — persisted overlay over gateway env over defaults):')
+    outLine(`  enabled:            ${enabled.value ? 'on' : 'off'} [${enabled.source}]  (runtime)`)
+    outLine(`  internal n8n URL:   ${n8nUrl.value} [${n8nUrl.source}]  (runtime)`)
+    outLine(`  editor proxy path:  ${uiBasePath.value} [${uiBasePath.source}]  (applies on next gateway restart)`)
+    outLine(`  editor cookie TTL:  ${uiTokenTtl.value}s [${uiTokenTtl.source}]  (runtime; new cookies)`)
+    outLine(`  overlay file: ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
+
+    return 0
+  }
+
+  const value = args.positionals[0]
+
+  if (action === 'set-enabled') {
+    const parsed = parseOnOffClear(value)
+    if (parsed === undefined) {
+      throw new UsageError('workflows set-enabled <on|off|clear>')
+    }
+    const file = await updateOverlaySection('workflows', (w) => (parsed === null ? delete w.enabled : (w.enabled = parsed)))
+    outLine(`workflows.enabled ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'set-n8n-url') {
+    if (!value) {
+      throw new UsageError('workflows set-n8n-url <http(s)://host:port|clear>')
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('workflows', (w) => delete w.n8nUrl)
+      outLine(`workflows.n8nUrl cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    if (!/^https?:\/\/.+/i.test(value)) {
+      throw new UsageError('the n8n URL must be an absolute http(s) URL, e.g. http://n8n:5678')
+    }
+    const file = await updateOverlaySection('workflows', (w) => (w.n8nUrl = value))
+    outLine(`workflows.n8nUrl set to ${value}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'set-ui-base-path') {
+    if (!value) {
+      throw new UsageError('workflows set-ui-base-path </path|clear>')
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('workflows', (w) => delete w.uiBasePath)
+      outLine(`workflows.uiBasePath cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    if (!/^\/[A-Za-z0-9/_-]*$/.test(value)) {
+      throw new UsageError('the editor proxy path must be an absolute path, e.g. /workflows-ui')
+    }
+    const file = await updateOverlaySection('workflows', (w) => (w.uiBasePath = value))
+    outLine(`workflows.uiBasePath set to ${value}. Applies on the next gateway restart. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'set-ui-token-ttl') {
+    if (!value) {
+      throw new UsageError('workflows set-ui-token-ttl <60..604800|clear>')
+    }
+    if (value === 'clear') {
+      const file = await updateOverlaySection('workflows', (w) => delete w.uiTokenTtlSeconds)
+      outLine(`workflows.uiTokenTtlSeconds cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    const n = Number(value)
+    if (!Number.isInteger(n) || n < 60 || n > 7 * 24 * 60 * 60) {
+      throw new UsageError('workflows.uiTokenTtlSeconds must be an integer between 60 and 604800')
+    }
+    const file = await updateOverlaySection('workflows', (w) => (w.uiTokenTtlSeconds = n))
+    outLine(`workflows.uiTokenTtlSeconds set to ${n}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  throw new UsageError(
+    `unknown workflows action '${action}' — show | set-enabled <on|off> | set-n8n-url <url> | set-ui-base-path </path> | set-ui-token-ttl <seconds>`,
+  )
+}
+
+/* ---------------------------------------------------------------------------
  * WEBHOOKS
  * ------------------------------------------------------------------------- */
 
@@ -2068,6 +2451,13 @@ async function main(): Promise<number> {
 
     case 'limits':
       return cmdLimits(args)
+
+    /* RUNTIME FEATURE CONFIG (SERVER_SETTINGS overlay) ---------------------- */
+    case 'ocr':
+      return cmdOcr({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'workflows':
+      return cmdWorkflows({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
 
     case 'config':
       return cmdConfig(args)

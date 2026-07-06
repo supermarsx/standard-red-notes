@@ -339,6 +339,36 @@ export class ContainerConfigLoader {
       registrationEmailConfirmationSubject: env.get('REGISTRATION_EMAIL_CONFIRMATION_SUBJECT', true) || undefined,
       registrationEmailConfirmationBody: env.get('REGISTRATION_EMAIL_CONFIRMATION_BODY', true) || undefined,
       registrationEmailConfirmationBaseUrl: env.get('REGISTRATION_EMAIL_CONFIRMATION_URL', true) || undefined,
+      // Standard Red Notes: OCR env baseline. The SERVER-side knobs (OCR_SERVER_*)
+      // are enforced by the gateway (OcrController/OcrService read the resolver per
+      // request). The BROWSER-OCR knobs mirror OCR_ENABLED / OCR_DEFAULT_LANGUAGE
+      // (in the single-container image the gateway shares the operator env, so it
+      // reads them here as the baseline surfaced via GET /v1/ocr/config). undefined
+      // when unset so the source map reports 'default'.
+      ocrServerEnabled: env.get('OCR_SERVER_ENABLED', true)
+        ? ['true', '1', 'yes', 'on'].includes(env.get('OCR_SERVER_ENABLED', true).toLowerCase())
+        : undefined,
+      ocrDefaultLanguage: env.get('OCR_SERVER_DEFAULT_LANGUAGE', true) || undefined,
+      ocrMaxPages: env.get('OCR_SERVER_MAX_PAGES', true) ? +env.get('OCR_SERVER_MAX_PAGES', true) : undefined,
+      ocrMaxImageBytes: env.get('OCR_SERVER_MAX_IMAGE_BYTES', true)
+        ? +env.get('OCR_SERVER_MAX_IMAGE_BYTES', true)
+        : undefined,
+      ocrClientEnabled: env.get('OCR_ENABLED', true)
+        ? ['true', '1', 'yes', 'on'].includes(env.get('OCR_ENABLED', true).toLowerCase())
+        : undefined,
+      ocrClientDefaultLanguage: env.get('OCR_DEFAULT_LANGUAGE', true) || undefined,
+      // Standard Red Notes: WORKFLOWS (n8n) env baseline. enabled/n8nUrl/uiTokenTtl
+      // are read through the resolver per request (runtime); uiBasePath is the
+      // boot-bound Express mount. undefined when unset so the source map reports
+      // 'default'.
+      workflowsEnabled: env.get('WORKFLOWS_ENABLED', true)
+        ? ['true', '1', 'yes', 'on'].includes(env.get('WORKFLOWS_ENABLED', true).toLowerCase())
+        : undefined,
+      workflowsN8nUrl: env.get('WORKFLOWS_N8N_URL', true) || undefined,
+      workflowsUiBasePath: env.get('WORKFLOWS_UI_BASE_PATH', true) || undefined,
+      workflowsUiTokenTtlSeconds: env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
+        ? +env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
+        : undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container
@@ -695,6 +725,9 @@ export class ContainerConfigLoader {
           uiTokenTtlSeconds: Math.max(60, workflowsUiTokenTtlSeconds),
         },
         new WorkflowsPairingStore(path.join(workflowsDataPath, 'pairings.json')),
+        // Standard Red Notes: the runtime overlay resolver, so enabled/n8nUrl/
+        // uiTokenTtl are re-read per request (persisted admin value wins over env).
+        serverSettingsResolver,
       ),
     )
 

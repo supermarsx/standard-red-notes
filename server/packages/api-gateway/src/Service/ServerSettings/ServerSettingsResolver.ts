@@ -93,6 +93,28 @@ export interface EnvSettingsBaseline {
   registrationEmailConfirmationSubject?: string
   registrationEmailConfirmationBody?: string
   registrationEmailConfirmationBaseUrl?: string
+  /**
+   * Standard Red Notes: OCR env baseline. serverEnabled/defaultLanguage/maxPages/
+   * maxImageBytes drive the SERVER-side /v1/ocr endpoint (gateway-enforced,
+   * runtime). clientEnabled/clientDefaultLanguage mirror the BROWSER-OCR
+   * OCR_ENABLED / OCR_DEFAULT_LANGUAGE (in the single-container image the gateway
+   * shares the operator env, so it reads them as the baseline). undefined = unset.
+   */
+  ocrServerEnabled?: boolean
+  ocrDefaultLanguage?: string
+  ocrMaxPages?: number
+  ocrMaxImageBytes?: number
+  ocrClientEnabled?: boolean
+  ocrClientDefaultLanguage?: string
+  /**
+   * Standard Red Notes: WORKFLOWS (n8n) env baseline. enabled/n8nUrl/uiTokenTtl
+   * are read through the resolver per request (runtime); uiBasePath is the boot-
+   * bound Express mount path (restart to change). undefined = env var unset.
+   */
+  workflowsEnabled?: boolean
+  workflowsN8nUrl?: string
+  workflowsUiBasePath?: string
+  workflowsUiTokenTtlSeconds?: number
 }
 
 export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
@@ -196,6 +218,64 @@ const RATE_LIMIT_DEFAULTS: ResolvedRateLimitConfig = {
   adaptiveEscalation: false,
 }
 
+/**
+ * The fully-resolved OCR config (persisted → env → default). serverEnabled +
+ * defaultLanguage + bounds drive the gateway's server-side OCR endpoint;
+ * clientEnabled + clientDefaultLanguage are the browser-OCR intent surfaced via
+ * GET /v1/ocr/config.
+ */
+export interface ResolvedOcrConfig {
+  serverEnabled: boolean
+  defaultLanguage: string
+  maxPages: number
+  maxImageBytes: number
+  clientEnabled: boolean
+  clientDefaultLanguage: string
+}
+
+/**
+ * Hardcoded OCR defaults (apply last). These EXACTLY reproduce the historical
+ * hardcoded behavior (server OCR + browser OCR both OFF, language 'eng', 50 pages,
+ * 12 MiB per page image) so a stock deploy is unchanged until an admin edits.
+ */
+const OCR_DEFAULTS: ResolvedOcrConfig = {
+  serverEnabled: false,
+  defaultLanguage: 'eng',
+  maxPages: 50,
+  maxImageBytes: 12 * 1024 * 1024,
+  clientEnabled: false,
+  clientDefaultLanguage: 'eng',
+}
+
+/** The fully-resolved WORKFLOWS (n8n) config (persisted → env → default). */
+export interface ResolvedWorkflowsConfig {
+  enabled: boolean
+  n8nUrl: string
+  uiBasePath: string
+  uiTokenTtlSeconds: number
+}
+
+/**
+ * Hardcoded WORKFLOWS defaults (apply last). Reproduce the historical hardcoded
+ * behavior: feature OFF, internal n8n at http://n8n:5678, editor proxy mounted at
+ * /workflows-ui, 12-hour editor cookie.
+ */
+const WORKFLOWS_DEFAULTS: ResolvedWorkflowsConfig = {
+  enabled: false,
+  n8nUrl: 'http://n8n:5678',
+  uiBasePath: '/workflows-ui',
+  uiTokenTtlSeconds: 12 * 60 * 60,
+}
+
+/**
+ * The tesseract language alphabet (e.g. 'eng', 'eng+deu', 'chi_sim'). A persisted/
+ * env value that does not match is ignored so a bad code can never poison the OCR
+ * worker or the browser-OCR download path — the caller falls through to default.
+ */
+const OCR_LANGUAGE_PATTERN = /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/
+const validOcrLanguage = (value: string | undefined): string | undefined =>
+  typeof value === 'string' && OCR_LANGUAGE_PATTERN.test(value.trim()) ? value.trim() : undefined
+
 /** Clamp an integer-ish overlay/env value into [min, max]; undefined passes through. */
 const boundedInt = (value: number | undefined, min: number, max: number): number | undefined => {
   if (value === undefined || typeof value !== 'number' || !Number.isFinite(value)) {
@@ -264,6 +344,8 @@ export interface ServerSettingsView {
       assignableRoles: string[]
       gatingModes: EmailConfirmationGatingMode[]
     }
+    ocr: ResolvedOcrConfig
+    workflows: ResolvedWorkflowsConfig
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -526,6 +608,89 @@ export class ServerSettingsResolver {
   }
 
   /**
+   * The effective OCR config: persisted admin values win over the OCR_* env
+   * baseline, which falls back to the hardcoded safe defaults. Re-read per call so
+   * admin changes take effect without a restart. The language codes are validated
+   * (a bad code falls through to the default) and the bounds are clamped so a bad
+   * value can never disable the per-request page/size guard.
+   */
+  async resolveOcrConfig(): Promise<ResolvedOcrConfig> {
+    const ocr = (await this.safeRead()).ocr ?? {}
+    const env = this.envBaseline
+    const d = OCR_DEFAULTS
+
+    const language = (
+      persisted: string | undefined,
+      envValue: string | undefined,
+      fallback: string,
+    ): string => validOcrLanguage(persisted) ?? validOcrLanguage(envValue) ?? fallback
+
+    return {
+      serverEnabled:
+        typeof ocr.serverEnabled === 'boolean' ? ocr.serverEnabled : env.ocrServerEnabled ?? d.serverEnabled,
+      defaultLanguage: language(ocr.defaultLanguage, env.ocrDefaultLanguage, d.defaultLanguage),
+      maxPages: boundedInt(ocr.maxPages, 1, 1000) ?? boundedInt(env.ocrMaxPages, 1, 1000) ?? d.maxPages,
+      maxImageBytes:
+        boundedInt(ocr.maxImageBytes, 1024, 200 * 1024 * 1024) ??
+        boundedInt(env.ocrMaxImageBytes, 1024, 200 * 1024 * 1024) ??
+        d.maxImageBytes,
+      clientEnabled:
+        typeof ocr.clientEnabled === 'boolean' ? ocr.clientEnabled : env.ocrClientEnabled ?? d.clientEnabled,
+      clientDefaultLanguage: language(ocr.clientDefaultLanguage, env.ocrClientDefaultLanguage, d.clientDefaultLanguage),
+    }
+  }
+
+  /**
+   * The effective WORKFLOWS (n8n) config: persisted admin values win over the
+   * WORKFLOWS_* env baseline, which falls back to the hardcoded safe defaults.
+   * enabled/n8nUrl/uiTokenTtlSeconds are re-read per call (runtime); uiBasePath is
+   * the boot-bound Express mount path, so a persisted value here is the admin
+   * intent and only takes effect after a gateway restart.
+   */
+  async resolveWorkflowsConfig(): Promise<ResolvedWorkflowsConfig> {
+    const wf = (await this.safeRead()).workflows ?? {}
+    const env = this.envBaseline
+    const d = WORKFLOWS_DEFAULTS
+
+    const url = (persisted: string | undefined, envValue: string | undefined, fallback: string): string => {
+      for (const candidate of [persisted, envValue]) {
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+          try {
+            const parsed = new URL(candidate.trim())
+            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+              return candidate.trim()
+            }
+          } catch {
+            // fall through
+          }
+        }
+      }
+
+      return fallback
+    }
+
+    const path = (persisted: string | undefined, envValue: string | undefined, fallback: string): string => {
+      for (const candidate of [persisted, envValue]) {
+        if (typeof candidate === 'string' && candidate.trim().startsWith('/')) {
+          return candidate.trim()
+        }
+      }
+
+      return fallback
+    }
+
+    return {
+      enabled: typeof wf.enabled === 'boolean' ? wf.enabled : env.workflowsEnabled ?? d.enabled,
+      n8nUrl: url(wf.n8nUrl, env.workflowsN8nUrl, d.n8nUrl),
+      uiBasePath: path(wf.uiBasePath, env.workflowsUiBasePath, d.uiBasePath),
+      uiTokenTtlSeconds:
+        boundedInt(wf.uiTokenTtlSeconds, 60, 7 * 24 * 60 * 60) ??
+        boundedInt(env.workflowsUiTokenTtlSeconds, 60, 7 * 24 * 60 * 60) ??
+        d.uiTokenTtlSeconds,
+    }
+  }
+
+  /**
    * The masked admin view: configured booleans for secrets (API keys are NEVER
    * returned), plain values for non-secrets, plus a per-setting source map
    * ('persisted' | 'env' | 'default') so the admin pane can show where each
@@ -547,6 +712,10 @@ export class ServerSettingsResolver {
     const rateLimit = await this.resolveRateLimitConfig()
     const registration = persisted.registration ?? {}
     const registrationConfig = await this.resolveRegistrationConfig()
+    const ocr = persisted.ocr ?? {}
+    const ocrConfig = await this.resolveOcrConfig()
+    const workflows = persisted.workflows ?? {}
+    const workflowsConfig = await this.resolveWorkflowsConfig()
     const sources: Record<string, ServerSettingSource> = {
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
@@ -602,6 +771,16 @@ export class ServerSettingsResolver {
         registration.emailConfirmationBaseUrl,
         env.registrationEmailConfirmationBaseUrl,
       ),
+      'ocr.serverEnabled': this.source(ocr.serverEnabled, env.ocrServerEnabled),
+      'ocr.defaultLanguage': this.source(ocr.defaultLanguage, env.ocrDefaultLanguage),
+      'ocr.maxPages': this.source(ocr.maxPages, env.ocrMaxPages),
+      'ocr.maxImageBytes': this.source(ocr.maxImageBytes, env.ocrMaxImageBytes),
+      'ocr.clientEnabled': this.source(ocr.clientEnabled, env.ocrClientEnabled),
+      'ocr.clientDefaultLanguage': this.source(ocr.clientDefaultLanguage, env.ocrClientDefaultLanguage),
+      'workflows.enabled': this.source(workflows.enabled, env.workflowsEnabled),
+      'workflows.n8nUrl': this.source(workflows.n8nUrl, env.workflowsN8nUrl),
+      'workflows.uiBasePath': this.source(workflows.uiBasePath, env.workflowsUiBasePath),
+      'workflows.uiTokenTtlSeconds': this.source(workflows.uiTokenTtlSeconds, env.workflowsUiTokenTtlSeconds),
     }
 
     return {
@@ -632,6 +811,8 @@ export class ServerSettingsResolver {
           assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,
           gatingModes: EMAIL_CONFIRMATION_GATING_MODES,
         },
+        ocr: ocrConfig,
+        workflows: workflowsConfig,
       },
       sources,
     }

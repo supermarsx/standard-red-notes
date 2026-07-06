@@ -603,6 +603,90 @@ describe('AdminController server-status', () => {
       expect(await resolver.resolveProofOfWorkConfig()).toMatchObject({ registerDifficulty: 12, signInMode: 'adaptive' })
       expect(logger.info).not.toHaveBeenCalled()
     })
+
+    it('PUT persists the OCR config (server + browser) and audit-logs NAMES only', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            ocr: { serverEnabled: true, defaultLanguage: 'eng+deu', maxPages: 20, clientEnabled: true },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      const config = await resolver.resolveOcrConfig()
+      expect(config.serverEnabled).toBe(true)
+      expect(config.defaultLanguage).toBe('eng+deu')
+      expect(config.maxPages).toBe(20)
+      expect(config.clientEnabled).toBe(true)
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          changedSettings: ['ocr.serverEnabled', 'ocr.clientEnabled', 'ocr.defaultLanguage', 'ocr.maxPages'],
+        }),
+      )
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.settings.ocr).toMatchObject({ serverEnabled: true, clientEnabled: true })
+      expect(payload.sources['ocr.serverEnabled']).toBe('persisted')
+    })
+
+    it('PUT rejects a bad OCR language, out-of-range bound and non-boolean as 400s that persist nothing', async () => {
+      const cases = [
+        { ocr: { defaultLanguage: 'not a lang' } },
+        { ocr: { clientDefaultLanguage: '123' } },
+        { ocr: { maxPages: 0 } },
+        { ocr: { maxPages: 99999 } },
+        { ocr: { maxImageBytes: 100 } },
+        { ocr: { serverEnabled: 'yes' } },
+      ]
+      for (const body of cases) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect(await resolver.resolveOcrConfig()).toMatchObject({ serverEnabled: false, defaultLanguage: 'eng' })
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    it('PUT persists the workflows config (persisted WINS over env) and returns the view', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: { workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 3600 } },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      const config = await resolver.resolveWorkflowsConfig()
+      expect(config.enabled).toBe(true)
+      expect(config.n8nUrl).toBe('https://n8n.example.com')
+      expect(config.uiTokenTtlSeconds).toBe(3600)
+
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.settings.workflows).toMatchObject({ enabled: true, n8nUrl: 'https://n8n.example.com' })
+      expect(payload.sources['workflows.enabled']).toBe('persisted')
+    })
+
+    it('PUT rejects a non-http n8n URL, bad base path and out-of-range TTL as 400s that persist nothing', async () => {
+      const cases = [
+        { workflows: { n8nUrl: 'ftp://nope' } },
+        { workflows: { uiBasePath: 'no-leading-slash' } },
+        { workflows: { uiTokenTtlSeconds: 10 } },
+        { workflows: { uiTokenTtlSeconds: 99999999 } },
+        { workflows: { enabled: 'yes' } },
+      ]
+      for (const body of cases) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect(await resolver.resolveWorkflowsConfig()).toMatchObject({ enabled: false, n8nUrl: 'http://n8n:5678' })
+      expect(logger.info).not.toHaveBeenCalled()
+    })
   })
 })
 

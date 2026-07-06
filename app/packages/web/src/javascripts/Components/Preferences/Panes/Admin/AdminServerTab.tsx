@@ -177,6 +177,16 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [confirmationSubject, setConfirmationSubject] = useState('')
   const [confirmationBody, setConfirmationBody] = useState('')
   const [confirmationBaseUrl, setConfirmationBaseUrl] = useState('')
+  // Standard Red Notes: OCR + workflows editable free-form fields. Booleans save
+  // immediately on toggle; the string/number knobs are edited here and saved with
+  // their own button (same pattern as the update-check URL / domain list above).
+  const [ocrDefaultLanguage, setOcrDefaultLanguage] = useState('')
+  const [ocrMaxPages, setOcrMaxPages] = useState('')
+  const [ocrMaxImageBytes, setOcrMaxImageBytes] = useState('')
+  const [ocrClientDefaultLanguage, setOcrClientDefaultLanguage] = useState('')
+  const [workflowsN8nUrl, setWorkflowsN8nUrl] = useState('')
+  const [workflowsUiBasePath, setWorkflowsUiBasePath] = useState('')
+  const [workflowsUiTokenTtl, setWorkflowsUiTokenTtl] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
   const loadRegistrationFlag = useCallback(async () => {
@@ -360,6 +370,15 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setConfirmationSubject(data?.settings?.registration?.emailConfirmationSubject ?? '')
     setConfirmationBody(data?.settings?.registration?.emailConfirmationBody ?? '')
     setConfirmationBaseUrl(data?.settings?.registration?.emailConfirmationBaseUrl ?? '')
+    setOcrDefaultLanguage(data?.settings?.ocr?.defaultLanguage ?? '')
+    setOcrMaxPages(data?.settings?.ocr?.maxPages != null ? String(data.settings.ocr.maxPages) : '')
+    setOcrMaxImageBytes(data?.settings?.ocr?.maxImageBytes != null ? String(data.settings.ocr.maxImageBytes) : '')
+    setOcrClientDefaultLanguage(data?.settings?.ocr?.clientDefaultLanguage ?? '')
+    setWorkflowsN8nUrl(data?.settings?.workflows?.n8nUrl ?? '')
+    setWorkflowsUiBasePath(data?.settings?.workflows?.uiBasePath ?? '')
+    setWorkflowsUiTokenTtl(
+      data?.settings?.workflows?.uiTokenTtlSeconds != null ? String(data.settings.workflows.uiTokenTtlSeconds) : '',
+    )
   }, [])
 
   const loadServerSettings = useCallback(async () => {
@@ -502,6 +521,124 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       'Confirmation email template saved.',
     )
   }, [confirmationSubject, confirmationBody, confirmationBaseUrl, saveServerSettings])
+
+  // Standard Red Notes: OCR + workflows save handlers. A blank text/number field
+  // saves as `null` (clear the override → fall back to env/default); a non-empty
+  // number field must be an integer.
+  const parseIntegerOrClear = useCallback((raw: string): number | null | undefined => {
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      return null
+    }
+    const value = Number(trimmed)
+    return Number.isInteger(value) ? value : undefined
+  }, [])
+
+  const toggleOcrServerEnabled = useCallback(
+    async (nextValue: boolean) => {
+      await saveServerSettings(
+        { ocr: { serverEnabled: nextValue } },
+        nextValue ? 'Server-side OCR enabled.' : 'Server-side OCR disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const toggleOcrClientEnabled = useCallback(
+    async (nextValue: boolean) => {
+      await saveServerSettings(
+        { ocr: { clientEnabled: nextValue } },
+        nextValue ? 'Browser (on-device) OCR enabled.' : 'Browser (on-device) OCR disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveOcrDefaultLanguage = useCallback(async () => {
+    const trimmed = ocrDefaultLanguage.trim()
+    await saveServerSettings(
+      { ocr: { defaultLanguage: trimmed === '' ? null : trimmed } },
+      trimmed === '' ? 'Server OCR default language cleared.' : 'Server OCR default language saved.',
+    )
+  }, [ocrDefaultLanguage, saveServerSettings])
+
+  const saveOcrClientDefaultLanguage = useCallback(async () => {
+    const trimmed = ocrClientDefaultLanguage.trim()
+    await saveServerSettings(
+      { ocr: { clientDefaultLanguage: trimmed === '' ? null : trimmed } },
+      trimmed === '' ? 'Browser OCR default language cleared.' : 'Browser OCR default language saved.',
+    )
+  }, [ocrClientDefaultLanguage, saveServerSettings])
+
+  const saveOcrMaxPages = useCallback(async () => {
+    const value = parseIntegerOrClear(ocrMaxPages)
+    if (value === undefined) {
+      addToast({ type: ToastType.Error, message: 'Max pages must be a whole number.' })
+      return
+    }
+    await saveServerSettings(
+      { ocr: { maxPages: value } },
+      value === null ? 'Server OCR page limit cleared.' : 'Server OCR page limit saved.',
+    )
+  }, [ocrMaxPages, parseIntegerOrClear, saveServerSettings])
+
+  const saveOcrMaxImageBytes = useCallback(async () => {
+    const value = parseIntegerOrClear(ocrMaxImageBytes)
+    if (value === undefined) {
+      addToast({ type: ToastType.Error, message: 'Max image size must be a whole number of bytes.' })
+      return
+    }
+    await saveServerSettings(
+      { ocr: { maxImageBytes: value } },
+      value === null ? 'Server OCR image-size limit cleared.' : 'Server OCR image-size limit saved.',
+    )
+  }, [ocrMaxImageBytes, parseIntegerOrClear, saveServerSettings])
+
+  const toggleWorkflowsEnabled = useCallback(
+    async (nextValue: boolean) => {
+      await saveServerSettings(
+        { workflows: { enabled: nextValue } },
+        nextValue ? 'Workflows (n8n) enabled.' : 'Workflows (n8n) disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveWorkflowsN8nUrl = useCallback(async () => {
+    const trimmed = workflowsN8nUrl.trim()
+    if (trimmed !== '' && !/^https?:\/\/.+/i.test(trimmed)) {
+      addToast({ type: ToastType.Error, message: 'The n8n URL must be an http(s) URL.' })
+      return
+    }
+    await saveServerSettings(
+      { workflows: { n8nUrl: trimmed === '' ? null : trimmed } },
+      trimmed === '' ? 'n8n URL cleared.' : 'n8n URL saved.',
+    )
+  }, [workflowsN8nUrl, saveServerSettings])
+
+  const saveWorkflowsUiBasePath = useCallback(async () => {
+    const trimmed = workflowsUiBasePath.trim()
+    if (trimmed !== '' && !trimmed.startsWith('/')) {
+      addToast({ type: ToastType.Error, message: 'The editor path must be an absolute path (start with /).' })
+      return
+    }
+    await saveServerSettings(
+      { workflows: { uiBasePath: trimmed === '' ? null : trimmed } },
+      trimmed === '' ? 'Workflows editor path cleared.' : 'Workflows editor path saved (applies on next gateway restart).',
+    )
+  }, [workflowsUiBasePath, saveServerSettings])
+
+  const saveWorkflowsUiTokenTtl = useCallback(async () => {
+    const value = parseIntegerOrClear(workflowsUiTokenTtl)
+    if (value === undefined) {
+      addToast({ type: ToastType.Error, message: 'The editor cookie lifetime must be a whole number of seconds.' })
+      return
+    }
+    await saveServerSettings(
+      { workflows: { uiTokenTtlSeconds: value } },
+      value === null ? 'Workflows editor cookie lifetime cleared.' : 'Workflows editor cookie lifetime saved.',
+    )
+  }, [workflowsUiTokenTtl, parseIntegerOrClear, saveServerSettings])
 
   const toggleRegistration = useCallback(
     async (nextValue: boolean) => {
@@ -1030,6 +1167,243 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           </div>
         )}
       </PreferencesSegment>
+
+      {/* Standard Red Notes: OCR configuration. Shown once the editable settings
+          have loaded (same availability signal as the Server settings section). */}
+      {!settingsLoading && !settingsNotAvailable && !settingsError && serverSettings && (
+        <>
+          <HorizontalSeparator classes="my-4" />
+          <PreferencesSegment>
+            <Title>OCR (text extraction)</Title>
+            <Text>
+              Two independent OCR paths. <strong>Server-side OCR</strong> uploads decrypted PDF page images to this
+              server for recognition — that content <strong>leaves end-to-end encryption</strong>, exactly like the AI
+              assistant, so it is off by default and additionally gated per user (Users tab). <strong>Browser OCR</strong>{' '}
+              runs entirely on the device and never leaves it. Server-side changes apply immediately; browser-OCR changes
+              apply on the next page load.
+            </Text>
+            <div className="mt-3 flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-col">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Server-side OCR</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.serverEnabled']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Master switch for the <code>/v1/ocr/recognize</code> endpoint (OCR_SERVER_ENABLED). A user must also
+                    be allowed on the Users tab before it is offered to them.
+                  </Text>
+                </div>
+                {settingsSaving ? (
+                  <Spinner className="h-5 w-5 shrink-0" />
+                ) : (
+                  <Switch
+                    checked={Boolean(serverSettings?.ocr?.serverEnabled)}
+                    onChange={(checked) => void toggleOcrServerEnabled(checked)}
+                  />
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Server OCR default language</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['ocr.defaultLanguage']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  Tesseract language code used when a request does not specify one (e.g. <code>eng</code> or{' '}
+                  <code>eng+deu</code>). Leave empty and save to clear the override.
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-48 max-w-full' }}
+                    placeholder="eng"
+                    value={ocrDefaultLanguage}
+                    onChange={setOcrDefaultLanguage}
+                    onEnter={() => void saveOcrDefaultLanguage()}
+                    disabled={settingsSaving}
+                  />
+                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveOcrDefaultLanguage()} disabled={settingsSaving} />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-6">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Max pages / request</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.maxPages']} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'w-32 max-w-full' }}
+                      placeholder="50"
+                      value={ocrMaxPages}
+                      onChange={setOcrMaxPages}
+                      onEnter={() => void saveOcrMaxPages()}
+                      disabled={settingsSaving}
+                    />
+                    <Button label="Save" onClick={() => void saveOcrMaxPages()} disabled={settingsSaving} />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Max image bytes / page</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.maxImageBytes']} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'w-40 max-w-full' }}
+                      placeholder="12582912"
+                      value={ocrMaxImageBytes}
+                      onChange={setOcrMaxImageBytes}
+                      onEnter={() => void saveOcrMaxImageBytes()}
+                      disabled={settingsSaving}
+                    />
+                    <Button label="Save" onClick={() => void saveOcrMaxImageBytes()} disabled={settingsSaving} />
+                  </div>
+                </div>
+              </div>
+
+              <HorizontalSeparator classes="my-1" />
+
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-col">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Browser (on-device) OCR</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.clientEnabled']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Offers the client-side "Extract text (OCR)" action (OCR_ENABLED). Nothing leaves the device. Applies
+                    on the next page load.
+                  </Text>
+                </div>
+                {settingsSaving ? (
+                  <Spinner className="h-5 w-5 shrink-0" />
+                ) : (
+                  <Switch
+                    checked={Boolean(serverSettings?.ocr?.clientEnabled)}
+                    onChange={(checked) => void toggleOcrClientEnabled(checked)}
+                  />
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Browser OCR default language</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['ocr.clientDefaultLanguage']} />
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-48 max-w-full' }}
+                    placeholder="eng"
+                    value={ocrClientDefaultLanguage}
+                    onChange={setOcrClientDefaultLanguage}
+                    onEnter={() => void saveOcrClientDefaultLanguage()}
+                    disabled={settingsSaving}
+                  />
+                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveOcrClientDefaultLanguage()} disabled={settingsSaving} />
+                </div>
+              </div>
+            </div>
+          </PreferencesSegment>
+
+          <HorizontalSeparator classes="my-4" />
+          <PreferencesSegment>
+            <Title>Workflows (n8n automation)</Title>
+            <Text>
+              The n8n-backed automation engine. The master switch and internal engine URL apply immediately; per-user
+              access is still managed on the Users tab. The editor-proxy path is bound when the gateway starts, so a
+              change to it only takes effect after the gateway restarts.
+            </Text>
+            <div className="mt-3 flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-col">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Workflows enabled</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['workflows.enabled']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Master switch (WORKFLOWS_ENABLED). A user must also be enabled on the Users tab.
+                  </Text>
+                </div>
+                {settingsSaving ? (
+                  <Spinner className="h-5 w-5 shrink-0" />
+                ) : (
+                  <Switch
+                    checked={Boolean(serverSettings?.workflows?.enabled)}
+                    onChange={(checked) => void toggleWorkflowsEnabled(checked)}
+                  />
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Internal n8n URL</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['workflows.n8nUrl']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  The engine's address on the internal network (WORKFLOWS_N8N_URL). The editor is only reachable through
+                  the authenticated gateway proxy. Leave empty and save to clear the override.
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-96 max-w-full' }}
+                    placeholder="http://n8n:5678"
+                    value={workflowsN8nUrl}
+                    onChange={setWorkflowsN8nUrl}
+                    onEnter={() => void saveWorkflowsN8nUrl()}
+                    disabled={settingsSaving}
+                  />
+                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsN8nUrl()} disabled={settingsSaving} />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Editor proxy path</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['workflows.uiBasePath']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  Same-origin path the embedded editor loads (WORKFLOWS_UI_BASE_PATH). <strong>Applies on the next
+                  gateway restart.</strong> Leave empty and save to clear the override.
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-64 max-w-full' }}
+                    placeholder="/workflows-ui"
+                    value={workflowsUiBasePath}
+                    onChange={setWorkflowsUiBasePath}
+                    onEnter={() => void saveWorkflowsUiBasePath()}
+                    disabled={settingsSaving}
+                  />
+                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsUiBasePath()} disabled={settingsSaving} />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Editor cookie lifetime (seconds)</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['workflows.uiTokenTtlSeconds']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  How long an editor-access cookie stays valid (WORKFLOWS_UI_TOKEN_TTL_SECONDS). Applies to newly issued
+                  cookies.
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-40 max-w-full' }}
+                    placeholder="43200"
+                    value={workflowsUiTokenTtl}
+                    onChange={setWorkflowsUiTokenTtl}
+                    onEnter={() => void saveWorkflowsUiTokenTtl()}
+                    disabled={settingsSaving}
+                  />
+                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsUiTokenTtl()} disabled={settingsSaving} />
+                </div>
+              </div>
+            </div>
+          </PreferencesSegment>
+        </>
+      )}
     </>
   )
 }

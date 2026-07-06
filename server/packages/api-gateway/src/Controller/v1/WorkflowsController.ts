@@ -54,12 +54,12 @@ export class WorkflowsController extends BaseHttpController {
    */
   @httpGet('/status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async status(_request: Request, response: Response): Promise<void> {
-    const enabled = this.workflowsService.isEnabled() && this.userEnabled(response)
+    const enabled = (await this.workflowsService.resolvedEnabled()) && this.userEnabled(response)
     const userUuid = (response.locals.user as { uuid: string }).uuid
     const paired = await this.workflowsService.isPaired(userUuid)
 
     if (enabled && paired) {
-      this.setUiAccessCookie(response, userUuid)
+      await this.setUiAccessCookie(response, userUuid)
     }
 
     response.json({
@@ -78,13 +78,13 @@ export class WorkflowsController extends BaseHttpController {
    */
   @httpPost('/pair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async pair(request: Request, response: Response): Promise<void> {
-    if (!this.respondWhenNotEnabled(response)) {
+    if (!(await this.respondWhenNotEnabled(response))) {
       return
     }
 
     const userUuid = (response.locals.user as { uuid: string }).uuid
     await this.workflowsService.pair(userUuid)
-    this.setUiAccessCookie(response, userUuid)
+    await this.setUiAccessCookie(response, userUuid)
 
     // Audit trail (see class docblock for why this is a log line in Phase 1).
     this.logger.info('[workflows] user paired with the workflows engine', {
@@ -105,7 +105,7 @@ export class WorkflowsController extends BaseHttpController {
    */
   @httpPost('/unpair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async unpair(request: Request, response: Response): Promise<void> {
-    if (!this.respondWhenNotEnabled(response)) {
+    if (!(await this.respondWhenNotEnabled(response))) {
       return
     }
 
@@ -126,8 +126,8 @@ export class WorkflowsController extends BaseHttpController {
   }
 
   /** Emits the 403 contract responses. Returns true when the caller may proceed. */
-  private respondWhenNotEnabled(response: Response): boolean {
-    if (!this.workflowsService.isEnabled()) {
+  private async respondWhenNotEnabled(response: Response): Promise<boolean> {
+    if (!(await this.workflowsService.resolvedEnabled())) {
       response.status(403).json({
         error: {
           tag: 'workflows-disabled',
@@ -164,14 +164,15 @@ export class WorkflowsController extends BaseHttpController {
     return raw !== undefined && raw !== null && `${raw}`.toLowerCase() === 'true'
   }
 
-  private setUiAccessCookie(response: Response, userUuid: string): void {
-    response.cookie(WORKFLOWS_UI_COOKIE_NAME, this.workflowsService.mintUiAccessToken(userUuid), {
+  private async setUiAccessCookie(response: Response, userUuid: string): Promise<void> {
+    const ttlSeconds = await this.workflowsService.resolvedUiTokenTtlSeconds()
+    response.cookie(WORKFLOWS_UI_COOKIE_NAME, this.workflowsService.mintUiAccessToken(userUuid, ttlSeconds), {
       httpOnly: true,
       sameSite: 'lax',
       secure: this.workflowsService.cookieSecure,
       // Path-scoped to the proxy so the token never rides on ordinary API calls.
       path: this.workflowsService.uiBasePath,
-      maxAge: this.workflowsService.uiTokenTtlSeconds * 1000,
+      maxAge: ttlSeconds * 1000,
     })
   }
 

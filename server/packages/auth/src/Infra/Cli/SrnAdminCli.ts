@@ -950,6 +950,19 @@ SERVER
   webhooks create <url> <ev,ev> [--user <user>]
                                      Register a webhook (global unless --user)
   webhooks delete <webhook-uuid>     Delete any webhook
+  ocr [show]                         Effective OCR config (server + browser) + source
+  ocr set-server-enabled <on|off>    Toggle the server-side OCR endpoint (runtime)
+  ocr set-default-language <code>    Server OCR default tesseract language (runtime)
+  ocr set-max-pages <n>              Server OCR page ceiling per request (runtime)
+  ocr set-max-image-bytes <n>        Server OCR per-page byte ceiling (runtime)
+  ocr set-client-enabled <on|off>    Toggle browser (on-device) OCR (next page load)
+  ocr set-client-default-language <code>
+                                     Browser OCR default language (next page load)
+  workflows [show]                   Effective workflows (n8n) config + source
+  workflows set-enabled <on|off>     Toggle the workflows master switch (runtime)
+  workflows set-n8n-url <url>        Internal n8n engine URL (runtime)
+  workflows set-ui-base-path </path> Editor proxy mount (next gateway restart)
+  workflows set-ui-token-ttl <secs>  Editor-cookie lifetime (runtime; new cookies)
   config                             Effective operator config + source + restart info
 
 ANTI-ABUSE
@@ -1133,6 +1146,43 @@ adaptive-escalation flag, the sizes of the IP allow/block lists, and the
 failed-login lockout env config. Rate-limit tiers are retunable at runtime from
 the admin panel (Security → Anti-abuse) or by editing the SERVER_SETTINGS_PATH
 overlay; the lockout envs are read at boot (edit the operator .env + restart).`,
+  ocr: `ocr — OCR runtime configuration (SERVER_SETTINGS overlay)
+
+USAGE
+  srn-admin ocr [show] [--json]
+  srn-admin ocr set-server-enabled <on|off|clear>
+  srn-admin ocr set-default-language <tesseract-code|clear>
+  srn-admin ocr set-max-pages <1..1000|clear>
+  srn-admin ocr set-max-image-bytes <1024..209715200|clear>
+  srn-admin ocr set-client-enabled <on|off|clear>
+  srn-admin ocr set-client-default-language <tesseract-code|clear>
+
+Two independent OCR paths. SERVER-side OCR (the /v1/ocr/recognize endpoint) uploads
+DECRYPTED PDF page images to the server — that content LEAVES end-to-end encryption,
+like the AI proxy — so it is off by default and additionally gated per user
+('flags set <user> OCR_SERVER_ALLOWED true'). Its knobs (enabled/default-language/
+max-pages/max-image-bytes) are gateway-enforced and take effect at RUNTIME. BROWSER
+OCR runs entirely on the device; its enable/default-language apply on the next page
+load (the values are surfaced through /v1/ocr/config). 'show' reads the SAME
+persisted overlay the admin panel writes (SERVER_SETTINGS_PATH) over the gateway
+env baseline over the safe defaults. Setting requires SERVER_SETTINGS_PATH set.`,
+  workflows: `workflows — workflows (n8n) runtime configuration (SERVER_SETTINGS overlay)
+
+USAGE
+  srn-admin workflows [show] [--json]
+  srn-admin workflows set-enabled <on|off|clear>
+  srn-admin workflows set-n8n-url <http(s)://host:port|clear>
+  srn-admin workflows set-ui-base-path </path|clear>
+  srn-admin workflows set-ui-token-ttl <60..604800|clear>
+
+The n8n-backed automation engine. The master switch and internal engine URL are
+read per request, so they take effect at RUNTIME; the editor-proxy base path is
+bound when the gateway starts, so a change to it only applies after the gateway
+restarts. Per-user access is a separate opt-in ('flags set <user> WORKFLOWS_ENABLED
+true'). No secret lives in this config — the editor proxy authenticates with the
+gateway's own short-lived cookie, and n8n community edition needs no API key for the
+editor. 'show' reads the SAME persisted overlay the admin panel writes over the
+gateway env over defaults. Setting requires SERVER_SETTINGS_PATH configured.`,
   group: `group — RBAC group management
 
 USAGE

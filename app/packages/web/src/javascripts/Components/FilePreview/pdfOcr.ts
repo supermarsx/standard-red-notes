@@ -316,6 +316,34 @@ export type ServerOcrConfigResponse = {
   available?: boolean
   /** Server's default tesseract language (e.g. "eng"). */
   defaultLanguage?: string
+  /**
+   * Standard Red Notes: BROWSER-OCR intent resolved from the admin overlay (over
+   * the baked OCR_ENABLED / OCR_DEFAULT_LANGUAGE). Present on servers that expose
+   * the runtime overlay; absent on older servers (the client then keeps the baked
+   * window.* values). Lets an admin toggle on-device OCR without a web rebuild.
+   */
+  clientOcrEnabled?: boolean
+  clientDefaultLanguage?: string
+}
+
+/**
+ * Resolve the EFFECTIVE browser-OCR config: the server overlay wins when it is
+ * present (`clientOcrEnabled` is an explicit boolean), otherwise the baked
+ * window.* config stands. Keeps everything on-device — this only decides whether
+ * the client offers the action and which language it defaults to.
+ */
+export function resolveBrowserOcrConfig(
+  windowConfig: OcrServerConfig,
+  response: Partial<ServerOcrConfigResponse> | undefined,
+): OcrServerConfig {
+  if (response === undefined || typeof response.clientOcrEnabled !== 'boolean') {
+    return windowConfig
+  }
+  const lang =
+    typeof response.clientDefaultLanguage === 'string' && response.clientDefaultLanguage.trim().length > 0
+      ? response.clientDefaultLanguage.trim()
+      : windowConfig.defaultLanguage
+  return { enabled: response.clientOcrEnabled, defaultLanguage: lang }
 }
 
 export type ServerOcrConfig = {

@@ -135,12 +135,60 @@ export interface PersistedRegistrationSettings {
   emailConfirmationBaseUrl?: string
 }
 
+/**
+ * Standard Red Notes: OCR knobs. Two distinct paths, both persisted here:
+ *   - SERVER-side OCR (the E2E-downgrade /v1/ocr/recognize endpoint): serverEnabled
+ *     (master switch), defaultLanguage, and the per-request bounds maxPages /
+ *     maxImageBytes. Enforced ENTIRELY by the api-gateway (OcrController +
+ *     OcrService read the resolver per request), so these are fully runtime.
+ *   - BROWSER OCR (the client-side, on-device tesseract path): clientEnabled /
+ *     clientDefaultLanguage. These historically bake into the SPA at web-container
+ *     start (OCR_ENABLED / OCR_DEFAULT_LANGUAGE → window.ocrEnabled /
+ *     window.ocrDefaultLanguage). Persisted here as the admin INTENT and surfaced
+ *     at runtime through GET /v1/ocr/config so a fresh page picks them up without
+ *     a web-container rebuild; the baked window.* path still works as a fallback.
+ * Every field is optional; absence falls through to env then the safe defaults
+ * (all OFF / eng / current bounds), so a stock deploy is unchanged until edited.
+ */
+export interface PersistedOcrSettings {
+  serverEnabled?: boolean
+  defaultLanguage?: string
+  /** Integer 1..1000. */
+  maxPages?: number
+  /** Integer 1024..(200 MiB). */
+  maxImageBytes?: number
+  clientEnabled?: boolean
+  clientDefaultLanguage?: string
+}
+
+/**
+ * Standard Red Notes: WORKFLOWS (n8n) knobs. Enforced ENTIRELY by the api-gateway
+ * (WorkflowsController + the /workflows-ui proxy). `enabled` and `n8nUrl` are read
+ * through the resolver per request so they are fully runtime; `uiTokenTtlSeconds`
+ * applies to newly-minted editor cookies. `uiBasePath` is the Express mount path
+ * of the editor proxy — it is bound ONCE at boot, so a persisted value here is the
+ * admin INTENT and only takes effect after the gateway restarts (documented). No
+ * secret lives here: the editor proxy authenticates with the gateway's own
+ * short-lived UI cookie, and n8n community edition needs no API key for the editor.
+ * Every field is optional; absence falls through to env then the safe defaults.
+ */
+export interface PersistedWorkflowsSettings {
+  enabled?: boolean
+  n8nUrl?: string
+  /** Restart-bound (Express mount path). */
+  uiBasePath?: string
+  /** Integer 60..(7 days). */
+  uiTokenTtlSeconds?: number
+}
+
 export interface PersistedServerSettings {
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
   nextcloudBackups?: { enabled?: boolean }
   security?: PersistedSecuritySettings
   registration?: PersistedRegistrationSettings
+  ocr?: PersistedOcrSettings
+  workflows?: PersistedWorkflowsSettings
 }
 
 /**
@@ -191,6 +239,20 @@ export interface ServerSettingsPatch {
     emailConfirmationSubject?: string | null
     emailConfirmationBody?: string | null
     emailConfirmationBaseUrl?: string | null
+  }
+  ocr?: {
+    serverEnabled?: boolean | null
+    defaultLanguage?: string | null
+    maxPages?: number | null
+    maxImageBytes?: number | null
+    clientEnabled?: boolean | null
+    clientDefaultLanguage?: string | null
+  }
+  workflows?: {
+    enabled?: boolean | null
+    n8nUrl?: string | null
+    uiBasePath?: string | null
+    uiTokenTtlSeconds?: number | null
   }
 }
 
@@ -299,6 +361,28 @@ export class ServerSettingsStore {
         this.applyKey(data.registration, 'emailConfirmationBaseUrl', patch.registration.emailConfirmationBaseUrl)
         if (Object.keys(data.registration).length === 0) {
           delete data.registration
+        }
+      }
+      if (patch.ocr) {
+        data.ocr = data.ocr ?? {}
+        this.applyKey(data.ocr, 'serverEnabled', patch.ocr.serverEnabled)
+        this.applyKey(data.ocr, 'defaultLanguage', patch.ocr.defaultLanguage)
+        this.applyKey(data.ocr, 'maxPages', patch.ocr.maxPages)
+        this.applyKey(data.ocr, 'maxImageBytes', patch.ocr.maxImageBytes)
+        this.applyKey(data.ocr, 'clientEnabled', patch.ocr.clientEnabled)
+        this.applyKey(data.ocr, 'clientDefaultLanguage', patch.ocr.clientDefaultLanguage)
+        if (Object.keys(data.ocr).length === 0) {
+          delete data.ocr
+        }
+      }
+      if (patch.workflows) {
+        data.workflows = data.workflows ?? {}
+        this.applyKey(data.workflows, 'enabled', patch.workflows.enabled)
+        this.applyKey(data.workflows, 'n8nUrl', patch.workflows.n8nUrl)
+        this.applyKey(data.workflows, 'uiBasePath', patch.workflows.uiBasePath)
+        this.applyKey(data.workflows, 'uiTokenTtlSeconds', patch.workflows.uiTokenTtlSeconds)
+        if (Object.keys(data.workflows).length === 0) {
+          delete data.workflows
         }
       }
       result = data

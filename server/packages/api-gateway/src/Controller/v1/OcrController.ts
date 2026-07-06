@@ -1,10 +1,11 @@
 import { Request, Response } from 'express'
-import { inject } from 'inversify'
+import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import { SettingName } from '@standardnotes/domain-core'
 
 import { TYPES } from '../../Bootstrap/Types'
 import { OcrPageImage, OcrService } from '../../Service/Ocr/OcrService'
+import { ResolvedOcrConfig, ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 
 interface RecognizeRequestBody {
   /** tesseract language code (e.g. "eng", "eng+deu"). Optional -> server default. */
@@ -42,8 +43,42 @@ export class OcrController extends BaseHttpController {
     @inject(TYPES.ApiGateway_OCR_SERVER_ENABLED) private serverOcrEnabled: boolean,
     @inject(TYPES.ApiGateway_OCR_DEFAULT_LANGUAGE) private defaultLanguage: string,
     @inject(TYPES.ApiGateway_OcrService) private ocrService: OcrService,
+    // Standard Red Notes: runtime overlay resolver (persisted admin value wins over
+    // env). When present, the master switch + default language + per-request bounds
+    // are re-read per request so admin changes take effect WITHOUT a restart. When
+    // absent (unit tests) the boot-time injected env constants are used.
+    @inject(TYPES.ApiGateway_ServerSettingsResolver)
+    @optional()
+    private serverSettingsResolver?: ServerSettingsResolver,
   ) {
     super()
+  }
+
+  /**
+   * The effective OCR config: persisted admin overlay wins over env, per request.
+   * Falls back to the boot-time injected env constants if the resolver is absent
+   * or the overlay read fails, so a broken overlay never breaks OCR harder than
+   * its env config already would.
+   */
+  private async resolveConfig(): Promise<ResolvedOcrConfig> {
+    if (this.serverSettingsResolver) {
+      try {
+        return await this.serverSettingsResolver.resolveOcrConfig()
+      } catch {
+        // fall through to the env baseline below.
+      }
+    }
+
+    return {
+      serverEnabled: this.serverOcrEnabled,
+      defaultLanguage: this.defaultLanguage,
+      // Bounds are enforced inside OcrService from its own boot options when we do
+      // not pass overrides, so these two only matter for the resolver path.
+      maxPages: 0,
+      maxImageBytes: 0,
+      clientEnabled: false,
+      clientDefaultLanguage: this.defaultLanguage,
+    }
   }
 
   /**
@@ -55,13 +90,20 @@ export class OcrController extends BaseHttpController {
   @httpGet('/config', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async config(_request: Request, response: Response): Promise<void> {
     const allowed = this.userAllowed(response)
+    const config = await this.resolveConfig()
 
     response.json({
-      serverOcrEnabled: this.serverOcrEnabled,
+      serverOcrEnabled: config.serverEnabled,
       allowed,
       // The client should only offer server OCR when BOTH are satisfied.
-      available: this.serverOcrEnabled && allowed,
-      defaultLanguage: this.defaultLanguage,
+      available: config.serverEnabled && allowed,
+      defaultLanguage: config.defaultLanguage,
+      // Standard Red Notes: the BROWSER-OCR intent (admin overlay over OCR_ENABLED
+      // / OCR_DEFAULT_LANGUAGE). Surfaced here so a fresh page can pick up an admin
+      // change WITHOUT a web-container rebuild; the baked window.* globals remain
+      // the fallback when this endpoint is unavailable.
+      clientOcrEnabled: config.clientEnabled,
+      clientDefaultLanguage: config.clientDefaultLanguage,
     })
   }
 
@@ -72,7 +114,8 @@ export class OcrController extends BaseHttpController {
    */
   @httpPost('/recognize', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async recognize(request: Request, response: Response): Promise<void> {
-    if (!this.serverOcrEnabled) {
+    const config = await this.resolveConfig()
+    if (!config.serverEnabled) {
       response.status(403).json({
         error: { tag: 'ocr-server-disabled', message: 'Server-side OCR is disabled on this server.' },
       })
@@ -115,7 +158,14 @@ export class OcrController extends BaseHttpController {
     }
 
     try {
-      const results = await this.ocrService.recognizePages(pages, body.language)
+      // Pass the resolved overlay bounds/default-language so an admin can retune
+      // them at runtime. maxPages/maxImageBytes of 0 (the env-baseline fallback
+      // when no resolver is bound) mean "use the OcrService boot options".
+      const results = await this.ocrService.recognizePages(pages, body.language, {
+        defaultLanguage: config.defaultLanguage,
+        maxPages: config.maxPages > 0 ? config.maxPages : undefined,
+        maxImageBytes: config.maxImageBytes > 0 ? config.maxImageBytes : undefined,
+      })
       response.json({ pages: results })
     } catch (error) {
       // Bounds violations (too many pages / oversized image) and recognition

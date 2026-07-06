@@ -65,17 +65,24 @@ export function registerWorkflowsUiProxy(app: Application, container: Container)
   const service = container.get<WorkflowsService>(TYPES.ApiGateway_WorkflowsService)
   const logger = container.get<Logger>(TYPES.ApiGateway_Logger)
 
+  // The mount path is bound ONCE at boot (Express cannot re-mount at runtime), so
+  // a persisted workflows.uiBasePath override only takes effect after a restart —
+  // documented in ServerSettingsStore. enabled + n8nUrl ARE resolved per request.
   const basePath = service.uiBasePath
-  const target = new URL(service.n8nUrl)
-  const transport = target.protocol === 'https:' ? https : http
 
   app.use(basePath, async (request: Request, response: Response) => {
     try {
-      // Gate 1: master switch. 404 keeps the feature invisible when off.
-      if (!service.isEnabled()) {
+      // Gate 1: master switch (persisted admin overlay wins over env, per request).
+      // 404 keeps the feature invisible when off.
+      if (!(await service.resolvedEnabled())) {
         response.status(404).send('Not found.')
         return
       }
+
+      // The internal n8n URL is resolved per request too, so an admin can retarget
+      // the engine without a restart. Parsed here (not at mount) to pick it up.
+      const target = new URL(await service.resolvedN8nUrl())
+      const transport = target.protocol === 'https:' ? https : http
 
       // Gate 2: purpose-scoped UI-access token (see WorkflowsService docblock).
       const userUuid = service.verifyUiAccessToken(readCookie(request, WORKFLOWS_UI_COOKIE_NAME))

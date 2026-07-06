@@ -80,23 +80,32 @@ export class OcrService {
    * sequentially (the underlying worker is single-threaded) and the input order
    * is preserved in the result.
    */
-  async recognizePages(pages: OcrPageImage[], language?: string): Promise<OcrPageResult[]> {
+  async recognizePages(
+    pages: OcrPageImage[],
+    language?: string,
+    // Standard Red Notes: optional per-request bounds/default-language overrides so
+    // the admin overlay (runtime-resolved by the caller) can retune these without a
+    // restart. Absent fields fall back to the service's boot options.
+    overrides?: { defaultLanguage?: string; maxPages?: number; maxImageBytes?: number },
+  ): Promise<OcrPageResult[]> {
     if (pages.length === 0) {
       return []
     }
-    if (pages.length > this.options.maxPages) {
-      throw new Error(`Too many pages: ${pages.length} (max ${this.options.maxPages}).`)
+    const maxPages = overrides?.maxPages ?? this.options.maxPages
+    const maxImageBytes = overrides?.maxImageBytes ?? this.options.maxImageBytes
+    if (pages.length > maxPages) {
+      throw new Error(`Too many pages: ${pages.length} (max ${maxPages}).`)
     }
 
-    const lang = this.resolveLanguage(language)
+    const lang = this.resolveLanguage(language, overrides?.defaultLanguage)
 
     for (const page of pages) {
       if (page.image.length === 0) {
         throw new Error(`Empty image for page ${page.pageNumber}.`)
       }
-      if (page.image.length > this.options.maxImageBytes) {
+      if (page.image.length > maxImageBytes) {
         throw new Error(
-          `Image for page ${page.pageNumber} is too large: ${page.image.length} bytes (max ${this.options.maxImageBytes}).`,
+          `Image for page ${page.pageNumber} is too large: ${page.image.length} bytes (max ${maxImageBytes}).`,
         )
       }
     }
@@ -115,9 +124,15 @@ export class OcrService {
    * etc., to avoid passing arbitrary strings into the worker / file resolution.
    * Falls back to the configured default when absent or invalid.
    */
-  resolveLanguage(language?: string): string {
+  resolveLanguage(language?: string, defaultLanguageOverride?: string): string {
     if (typeof language === 'string') {
       const trimmed = language.trim()
+      if (trimmed.length > 0 && /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/.test(trimmed)) {
+        return trimmed
+      }
+    }
+    if (typeof defaultLanguageOverride === 'string') {
+      const trimmed = defaultLanguageOverride.trim()
       if (trimmed.length > 0 && /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/.test(trimmed)) {
         return trimmed
       }

@@ -3,6 +3,20 @@ import { sign, verify } from 'jsonwebtoken'
 import { WorkflowsPairing, WorkflowsPairingStore } from './WorkflowsPairingStore'
 
 /**
+ * Minimal read seam over the gateway's ServerSettingsResolver so this service
+ * does not depend on the resolver's whole type surface (and stays unit-testable
+ * with a tiny stub). Optional at construction — absent = env/boot config only.
+ */
+export interface WorkflowsConfigResolver {
+  resolveWorkflowsConfig(): Promise<{
+    enabled: boolean
+    n8nUrl: string
+    uiBasePath: string
+    uiTokenTtlSeconds: number
+  }>
+}
+
+/**
  * Standard Red Notes: WORKFLOWS (n8n-backed automation) gateway service.
  *
  * Owns everything the /v1/workflows controller and the /workflows-ui editor
@@ -52,14 +66,49 @@ export class WorkflowsService {
   constructor(
     private readonly config: WorkflowsServiceConfig,
     private readonly pairingStore: WorkflowsPairingStore,
+    // Standard Red Notes: optional runtime overlay resolver (persisted admin value
+    // wins over env). When present, enabled/n8nUrl/uiTokenTtl are re-read per
+    // request so admin changes take effect WITHOUT a restart. When absent the
+    // boot-time env config is used (previous behavior, kept for tests).
+    private readonly resolver?: WorkflowsConfigResolver,
   ) {}
 
+  /** Boot-time env value (fallback / sync callers). Prefer resolvedEnabled(). */
   isEnabled(): boolean {
     return this.config.enabled
   }
 
+  /**
+   * The effective master switch: persisted admin overlay wins over the env
+   * baseline. Re-read per request. Falls back to the boot env value if the
+   * overlay read fails, so a broken overlay never takes the feature down harder
+   * than its env config already would.
+   */
+  async resolvedEnabled(): Promise<boolean> {
+    if (!this.resolver) {
+      return this.config.enabled
+    }
+    try {
+      return (await this.resolver.resolveWorkflowsConfig()).enabled
+    } catch {
+      return this.config.enabled
+    }
+  }
+
   get n8nUrl(): string {
     return this.config.n8nUrl
+  }
+
+  /** The effective internal n8n URL (persisted admin overlay wins over env). */
+  async resolvedN8nUrl(): Promise<string> {
+    if (!this.resolver) {
+      return this.config.n8nUrl
+    }
+    try {
+      return (await this.resolver.resolveWorkflowsConfig()).n8nUrl
+    } catch {
+      return this.config.n8nUrl
+    }
   }
 
   get uiBasePath(): string {
@@ -72,6 +121,18 @@ export class WorkflowsService {
 
   get uiTokenTtlSeconds(): number {
     return this.config.uiTokenTtlSeconds
+  }
+
+  /** The effective editor-cookie lifetime (persisted admin overlay wins over env). */
+  async resolvedUiTokenTtlSeconds(): Promise<number> {
+    if (!this.resolver) {
+      return this.config.uiTokenTtlSeconds
+    }
+    try {
+      return (await this.resolver.resolveWorkflowsConfig()).uiTokenTtlSeconds
+    } catch {
+      return this.config.uiTokenTtlSeconds
+    }
   }
 
   /** The same-origin editor path handed to the client (`editorUrl`). */
@@ -95,11 +156,11 @@ export class WorkflowsService {
    * Mint the short-lived UI-access token for the editor proxy cookie. Only ever
    * called AFTER the caller passed the session + entitlement (+ pairing) checks.
    */
-  mintUiAccessToken(userUuid: string): string {
+  mintUiAccessToken(userUuid: string, ttlSeconds: number = this.config.uiTokenTtlSeconds): string {
     return sign({ purpose: UI_TOKEN_PURPOSE }, this.config.jwtSecret, {
       algorithm: 'HS256',
       subject: userUuid,
-      expiresIn: this.config.uiTokenTtlSeconds,
+      expiresIn: ttlSeconds,
     })
   }
 
