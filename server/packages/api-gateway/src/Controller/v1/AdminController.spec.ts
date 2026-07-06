@@ -99,7 +99,7 @@ describe('AdminController server-status', () => {
   })
 
   it('returns master switches and health states for an admin requestor', async () => {
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController().getServerStatus({} as Request, response)
 
@@ -122,7 +122,7 @@ describe('AdminController server-status', () => {
   })
 
   it('reports a services array covering EVERY service, degrading per field (never 5xx)', async () => {
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController().getServerStatus({} as Request, response)
 
@@ -143,7 +143,7 @@ describe('AdminController server-status', () => {
   })
 
   it('reports gateway redis as null (not configured) when no redis is bound', async () => {
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController({ withRedis: false }).getServerStatus({} as Request, response)
 
@@ -154,7 +154,7 @@ describe('AdminController server-status', () => {
 
   it('reports gateway redis as unhealthy when the ping fails', async () => {
     redis.ping = jest.fn().mockRejectedValue(new Error('down'))
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController().getServerStatus({} as Request, response)
 
@@ -177,7 +177,7 @@ describe('AdminController server-status', () => {
   })
 
   it('degrades to an empty result when the logs service is not wired', async () => {
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController().getLogs({ query: {} } as unknown as Request, response)
 
@@ -186,7 +186,7 @@ describe('AdminController server-status', () => {
 
   it('clamps the logs limit to the 500 max and forwards the service/level filters', async () => {
     const tail = jest.fn().mockResolvedValue({ entries: [{ message: 'x' }], truncated: true })
-    const response = responseWith([{ name: RoleName.NAMES.InternalTeamUser }])
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
 
     await makeController({ adminLogsService: { tail } as unknown as AdminLogsService }).getLogs(
       { query: { limit: '9999', service: 'auth', level: 'error' } } as unknown as Request,
@@ -224,7 +224,7 @@ describe('AdminController server-status', () => {
         .spyOn(controller as unknown as ProbeSpyTarget, 'probeAuthReadiness')
         .mockResolvedValue({ reachable: true })
 
-      await controller.getServerStatus({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+      await controller.getServerStatus({} as Request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
 
       const probed = Object.fromEntries(probeSpy.mock.calls.map((call) => [call[0], call[1]]))
       expect(probed).toEqual({
@@ -316,14 +316,14 @@ describe('AdminController server-status', () => {
     })
 
     it('degrades to 503 when the resolver is not wired', async () => {
-      await makeController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+      await makeController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
       expect(statusMock).toHaveBeenCalledWith(503)
     })
 
     it('GET returns the masked view (configured booleans, NEVER key material) with sources', async () => {
       await resolver.applyPatch({ ai: { anthropicApiKey: 'persisted-secret' } })
 
-      await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.InternalTeamUser }]))
+      await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
 
       const payload = jsonMock.mock.calls[0][0]
       expect(JSON.stringify(payload)).not.toContain('persisted-secret')
@@ -350,7 +350,7 @@ describe('AdminController server-status', () => {
       for (const body of cases) {
         await settingsController().setServerSettings(
           { body } as unknown as Request,
-          responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
         )
         expect(statusMock).toHaveBeenCalledWith(400)
       }
@@ -367,7 +367,7 @@ describe('AdminController server-status', () => {
             nextcloudBackups: { enabled: true },
           },
         } as unknown as Request,
-        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
       )
 
       // Precedence: the persisted values now win over env on the next resolve.
@@ -399,7 +399,7 @@ describe('AdminController server-status', () => {
 
       await settingsController().setServerSettings(
         { body: { updateCheck: { url: null } } } as unknown as Request,
-        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
       )
 
       expect(await resolver.resolveUpdateCheckUrl()).toEqual('https://env.update.example.com')
@@ -423,7 +423,7 @@ describe('AdminController server-status', () => {
             },
           },
         } as unknown as Request,
-        responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
       )
 
       const config = await resolver.resolveProofOfWorkConfig()
@@ -464,7 +464,7 @@ describe('AdminController server-status', () => {
       for (const body of cases) {
         await settingsController().setServerSettings(
           { body } as unknown as Request,
-          responseWith([{ name: RoleName.NAMES.InternalTeamUser }]),
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
         )
         expect(statusMock).toHaveBeenCalledWith(400)
       }

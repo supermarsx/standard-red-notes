@@ -63,7 +63,7 @@ describe('FeatureService', () => {
       RoleName.NAMES.CoreUser,
       RoleName.NAMES.PlusUser,
       RoleName.NAMES.ProUser,
-      RoleName.NAMES.InternalTeamUser,
+      RoleName.NAMES.AdminUser,
     ])
     expect(response.features).toEqual(
       expect.arrayContaining([

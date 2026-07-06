@@ -6,6 +6,6 @@ export interface RegisterWebhookDTO {
   events: string[]
   // When true, registers a global/admin webhook (null user_uuid) that fires for
   // events across all users. Requires the caller to be an admin (enforced in the
-  // controller via the INTERNAL_TEAM_USER role check).
+  // controller via the ADMIN_USER role check).
   global?: boolean
 }

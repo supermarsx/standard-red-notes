@@ -8,6 +8,26 @@ describe('RoleName', () => {
     expect(valueOrError.getValue().value).toEqual('PRO_USER')
   })
 
+  it('should expose ADMIN_USER as the canonical admin role value', () => {
+    expect(RoleName.NAMES.AdminUser).toEqual('ADMIN_USER')
+
+    const valueOrError = RoleName.create(RoleName.NAMES.AdminUser)
+
+    expect(valueOrError.isFailed()).toBeFalsy()
+    expect(valueOrError.getValue().value).toEqual('ADMIN_USER')
+  })
+
+  it('should accept the deprecated INTERNAL_TEAM_USER alias and normalize it to ADMIN_USER', () => {
+    const valueOrError = RoleName.create('INTERNAL_TEAM_USER')
+
+    expect(valueOrError.isFailed()).toBeFalsy()
+    // Legacy input resolves to the canonical admin role value...
+    expect(valueOrError.getValue().value).toEqual('ADMIN_USER')
+    // ...and retains full admin power over every other role.
+    const proUserRole = RoleName.create(RoleName.NAMES.ProUser).getValue()
+    expect(valueOrError.getValue().hasMoreOrEqualPowerTo(proUserRole)).toBeTruthy()
+  })
+
   it('should not create an invalid value object', () => {
     for (const value of ['', undefined, null, 0, 'SOME_USER']) {
       const valueOrError = RoleName.create(value as string)
@@ -20,7 +40,7 @@ describe('RoleName', () => {
     const proUserRole = RoleName.create(RoleName.NAMES.ProUser).getValue()
     const plusUserRole = RoleName.create(RoleName.NAMES.PlusUser).getValue()
     const coreUser = RoleName.create(RoleName.NAMES.CoreUser).getValue()
-    const internalTeamUser = RoleName.create(RoleName.NAMES.InternalTeamUser).getValue()
+    const internalTeamUser = RoleName.create(RoleName.NAMES.AdminUser).getValue()
 
     expect(internalTeamUser.hasMoreOrEqualPowerTo(proUserRole)).toBeTruthy()
     expect(internalTeamUser.hasMoreOrEqualPowerTo(proUserRole)).toBeTruthy()
@@ -48,7 +68,7 @@ describe('RoleName', () => {
     const coreUser = RoleName.create(RoleName.NAMES.CoreUser).getValue()
     const plusUserRole = RoleName.create(RoleName.NAMES.PlusUser).getValue()
     const proUserRole = RoleName.create(RoleName.NAMES.ProUser).getValue()
-    const internalTeamUser = RoleName.create(RoleName.NAMES.InternalTeamUser).getValue()
+    const internalTeamUser = RoleName.create(RoleName.NAMES.AdminUser).getValue()
 
     // Reflexivity: a VaultsUser must have power >= a VaultsUser.
     expect(vaultsUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeTruthy()
@@ -64,7 +84,7 @@ describe('RoleName', () => {
     // CoreUser remains a sibling: it does not gain power over VaultsUser.
     expect(coreUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeFalsy()
     // Higher roles still outrank VaultsUser via their CoreUser-inclusive arms
-    // (Pro/Plus include CoreUser but not VaultsUser); InternalTeamUser outranks all.
+    // (Pro/Plus include CoreUser but not VaultsUser); AdminUser outranks all.
     expect(internalTeamUser.hasMoreOrEqualPowerTo(vaultsUser)).toBeTruthy()
   })
 })

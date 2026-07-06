@@ -125,14 +125,14 @@ export class AssistantController extends BaseHttpController {
   }
 
   /**
-   * Standard Red Notes: same admin gate the auth server enforces (InternalTeamUser
+   * Standard Red Notes: same admin gate the auth server enforces (AdminUser
    * role from the verified cross-service token), applied to the gateway-local
    * subscription pairing routes since they manage a server-held credential.
    */
   private requestorIsAdmin(response: Response): boolean {
     const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
 
-    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
+    return roles.some((role) => role.name === RoleName.NAMES.AdminUser)
   }
 
   /**

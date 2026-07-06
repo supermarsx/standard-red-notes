@@ -7,8 +7,20 @@ export class RoleName extends ValueObject<RoleNameProps> {
     CoreUser: 'CORE_USER',
     PlusUser: 'PLUS_USER',
     ProUser: 'PRO_USER',
-    InternalTeamUser: 'INTERNAL_TEAM_USER',
+    AdminUser: 'ADMIN_USER',
     VaultsUser: 'VAULTS_USER',
+  }
+
+  /**
+   * DEPRECATED backward-compat alias. The admin role was historically named
+   * 'INTERNAL_TEAM_USER' and was renamed to 'ADMIN_USER'. A short-lived
+   * cross-service token issued by another service just before this deploy may
+   * still carry the legacy string; `create` normalizes it to the canonical
+   * ADMIN_USER value so such an in-flight token still authorizes admin.
+   * Safe to remove once all issuers/tokens have rolled over.
+   */
+  private static readonly LEGACY_ALIASES: Record<string, string> = {
+    INTERNAL_TEAM_USER: 'ADMIN_USER',
   }
 
   get value(): string {
@@ -17,7 +29,7 @@ export class RoleName extends ValueObject<RoleNameProps> {
 
   hasMoreOrEqualPowerTo(roleName: RoleName): boolean {
     switch (this.value) {
-      case RoleName.NAMES.InternalTeamUser:
+      case RoleName.NAMES.AdminUser:
         return true
       case RoleName.NAMES.ProUser:
         return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser].includes(roleName.value)
@@ -41,11 +53,14 @@ export class RoleName extends ValueObject<RoleNameProps> {
   }
 
   static create(name: string): Result<RoleName> {
-    const isValidName = Object.values(this.NAMES).includes(name)
+    // DEPRECATED: normalize any accepted legacy alias (e.g. the old
+    // 'INTERNAL_TEAM_USER' admin role) to its canonical value before validating.
+    const canonicalName = this.LEGACY_ALIASES[name] ?? name
+    const isValidName = Object.values(this.NAMES).includes(canonicalName)
     if (!isValidName) {
       return Result.fail<RoleName>(`Invalid role name: ${name}`)
     } else {
-      return Result.ok<RoleName>(new RoleName({ value: name }))
+      return Result.ok<RoleName>(new RoleName({ value: canonicalName }))
     }
   }
 }

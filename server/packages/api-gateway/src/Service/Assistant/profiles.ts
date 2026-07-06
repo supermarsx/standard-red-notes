@@ -583,7 +583,7 @@ export interface AssistantProfileAssignments {
 }
 
 /** The four canonical roles an admin may assign a profile to. */
-export const ASSIGNABLE_ROLE_NAMES = ['INTERNAL_TEAM_USER', 'PRO_USER', 'CORE_USER', 'VAULTS_USER'] as const
+export const ASSIGNABLE_ROLE_NAMES = ['ADMIN_USER', 'PRO_USER', 'CORE_USER', 'VAULTS_USER'] as const
 export type AssignableRoleName = (typeof ASSIGNABLE_ROLE_NAMES)[number]
 
 /**

@@ -19,7 +19,7 @@ import {
  * ADMIN-STORY GATE — the repeatable end-to-end check for the whole admin chain:
  *
  *   1. Operator grant paths: `srn-admin grant-admin` (direct role) and RBAC
- *      group-conferred admin (`group create ... INTERNAL_TEAM_USER` + add-user)
+ *      group-conferred admin (`group create ... ADMIN_USER` + add-user)
  *      must both unlock the /v1/admin surface for a fresh session — the
  *      group-conferred variant is the historic regression (group roles must
  *      union into the cross-service token at mint time).
@@ -84,7 +84,7 @@ test.describe('@chromium', () => {
       expect(preGrant.status, 'pre-grant session must be denied with 403').toBe(403)
 
       srnAdmin('grant-admin', adminUser.email)
-      expect(srnAdmin('list-roles', adminUser.email)).toContain('INTERNAL_TEAM_USER')
+      expect(srnAdmin('list-roles', adminUser.email)).toContain('ADMIN_USER')
 
       const adminSession = await signInUser(adminUser)
       const postGrant = await apiCall('GET', ADMIN_PROBE, { token: adminSession.access_token })
@@ -108,11 +108,11 @@ test.describe('@chromium', () => {
       }
 
       // ---- 3. Group-conferred admin (the historic regression). ----
-      srnAdmin('group', 'create', groupName, 'INTERNAL_TEAM_USER')
+      srnAdmin('group', 'create', groupName, 'ADMIN_USER')
       srnAdmin('group', 'add-user', groupName, groupUser.email)
       const groupSession = await signInUser(groupUser)
       const viaGroup = await apiCall('GET', ADMIN_PROBE, { token: groupSession.access_token })
-      expect(viaGroup.status, 'group-conferred INTERNAL_TEAM_USER must unlock admin endpoints').toBe(200)
+      expect(viaGroup.status, 'group-conferred ADMIN_USER must unlock admin endpoints').toBe(200)
 
       srnAdmin('group', 'remove-user', groupName, groupUser.email)
       const afterRemoval = await apiCall('GET', ADMIN_PROBE, { token: (await signInUser(groupUser)).access_token })

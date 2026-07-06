@@ -29,7 +29,7 @@ export type AdminRole = {
  * so role names render with friendly labels everywhere they are listed.
  */
 export const CANONICAL_ROLE_LABELS: Record<string, string> = {
-  INTERNAL_TEAM_USER: 'Admin user',
+  ADMIN_USER: 'Admin user',
   PRO_USER: 'Full user',
   CORE_USER: 'Core user',
   VAULTS_USER: 'Vaults user',
@@ -47,7 +47,7 @@ export const canonicalRoleLabel = (name: string): string => CANONICAL_ROLE_LABEL
  * is ever consulted.
  */
 export const CANONICAL_ROLE_DESCRIPTIONS: Record<string, string> = {
-  INTERNAL_TEAM_USER: 'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
+  ADMIN_USER: 'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
   PRO_USER: 'Every end-user feature unlocked — notes, files, vaults, and the premium editors, at the highest tier.',
   CORE_USER: 'A standard account — core note-taking and sync with baseline limits.',
   VAULTS_USER: 'Collaboration-focused — shared vaults and team features on top of core note-taking.',

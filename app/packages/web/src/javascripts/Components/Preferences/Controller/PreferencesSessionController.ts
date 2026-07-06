@@ -41,7 +41,7 @@ export class PreferencesSessionController {
     }
 
     // Standard Red Notes: the Admin pane is only added to the menu for users who
-    // carry the INTERNAL_TEAM_USER role. Non-admins never see the entry, and the
+    // carry the ADMIN_USER role. Non-admins never see the entry, and the
     // server independently re-checks the role on every admin endpoint.
     if (application.featuresController.isAdminUser()) {
       // wide: the Admin pane hosts big tables (users list, audit log, logs) and

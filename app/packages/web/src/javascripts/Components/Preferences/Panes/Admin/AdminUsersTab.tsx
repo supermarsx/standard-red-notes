@@ -76,8 +76,8 @@ const BYTES_IN_ONE_MEGABYTE = 1_048_576
 const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
 
 // The admin (internal team) role name — must match the server's
-// RoleName.NAMES.InternalTeamUser value.
-const INTERNAL_TEAM_USER = 'INTERNAL_TEAM_USER'
+// RoleName.NAMES.AdminUser value.
+const ADMIN_USER = 'ADMIN_USER'
 
 // Bulk actions run the per-user admin calls a handful at a time (a bounded
 // worker pool) rather than all-at-once, to avoid hammering the server.
@@ -862,7 +862,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
   }, [application, user, patchUserRow])
 
-  const userIsAdmin = permissions?.directRoleNames.includes(INTERNAL_TEAM_USER) ?? false
+  const userIsAdmin = permissions?.directRoleNames.includes(ADMIN_USER) ?? false
 
   const toggleAdminRole = useCallback(async () => {
     if (!user || !permissions) {
@@ -903,8 +903,8 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             ? {
                 ...row,
                 roles: granting
-                  ? Array.from(new Set([...row.roles, INTERNAL_TEAM_USER]))
-                  : row.roles.filter((name) => name !== INTERNAL_TEAM_USER),
+                  ? Array.from(new Set([...row.roles, ADMIN_USER]))
+                  : row.roles.filter((name) => name !== ADMIN_USER),
               }
             : row,
         ),

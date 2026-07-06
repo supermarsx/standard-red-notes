@@ -50,7 +50,7 @@ export type ReadinessFetchLike = (
  * the auth server's `/admin` controller. They are protected by the required
  * cross-service token middleware so the auth server receives the decoded roles
  * on `response.locals.roles`, where the controller enforces the
- * INTERNAL_TEAM_USER role. The proxied endpoints themselves only expose the
+ * ADMIN_USER role. The proxied endpoints themselves only expose the
  * per-user feature-flag setters/getters (never the broader unprotected admin
  * routes).
  */
@@ -117,7 +117,7 @@ export class AdminController extends BaseHttpController {
   private requestorIsAdmin(response: Response): boolean {
     const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
 
-    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
+    return roles.some((role) => role.name === RoleName.NAMES.AdminUser)
   }
 
   @httpGet('/lookup-user/:email', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
@@ -245,7 +245,7 @@ export class AdminController extends BaseHttpController {
 
   // Standard Red Notes: RBAC role management (read all roles with permissions +
   // edit a role's permission assignments). Proxied to the auth admin controller,
-  // which re-gates on the INTERNAL_TEAM_USER role.
+  // which re-gates on the ADMIN_USER role.
   @httpGet('/roles/detailed', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async listRolesWithPermissions(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(
@@ -273,7 +273,7 @@ export class AdminController extends BaseHttpController {
   // Standard Red Notes: EXTENSIVE RBAC management — the permission CATALOG
   // browser, effective-permissions SIMULATOR, custom-role create/delete and the
   // role-holders INSPECTOR. All proxied to the auth admin controller, which
-  // re-gates on the INTERNAL_TEAM_USER role.
+  // re-gates on the ADMIN_USER role.
   @httpGet('/permissions', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getPermissionCatalog(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(

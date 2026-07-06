@@ -7,7 +7,7 @@ import { RoleName } from '@standardnotes/domain-core'
  * listed / assigned in admin. They MAP onto the existing RoleName enum + seeded
  * role rows — no enum change and no destructive migration:
  *
- *   - Admin user   -> INTERNAL_TEAM_USER (the admin / internal-team role)
+ *   - Admin user   -> ADMIN_USER          (the admin / internal-team role)
  *   - Full user    -> PRO_USER           (the full-feature / pro tier)
  *   - Core user    -> CORE_USER          (the basic / standard tier)
  *   - Vaults user  -> VAULTS_USER        (the vault / collaboration role)
@@ -26,7 +26,7 @@ export interface CanonicalRoleDefinition {
    * A concise, friendly one-liner describing what this role actually grants.
    * Grounded in the real entitlements: the RoleName power hierarchy
    * (hasMoreOrEqualPowerTo) and the seeded role_permissions —
-   *   - InternalTeamUser outranks every role (admin / full server control)
+   *   - AdminUser outranks every role (admin / full server control)
    *   - ProUser >= Core/Plus/Pro (every paid end-user feature + editors)
    *   - VaultsUser is a Core sibling with the shared-vault / collaboration grant
    *   - CoreUser is the baseline account (sync + core note-taking)
@@ -38,7 +38,7 @@ export interface CanonicalRoleDefinition {
 
 export const CANONICAL_ADMIN_ROLES: CanonicalRoleDefinition[] = [
   {
-    name: RoleName.NAMES.InternalTeamUser,
+    name: RoleName.NAMES.AdminUser,
     label: 'Admin user',
     description:
       'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',

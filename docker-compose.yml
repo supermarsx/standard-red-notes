@@ -40,7 +40,7 @@ x-server-env: &server-env
   # proxy". Pair with COOKIE_SECURE=true when TLS is terminated at the proxy.
   TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
   LOG_LEVEL: ${LOG_LEVEL:-info}
-  # Comma-separated emails granted the InternalTeamUser (admin) role, which
+  # Comma-separated emails granted the AdminUser (admin) role, which
   # unlocks the in-app Admin panel and the /admin user-management endpoints.
   ADMIN_EMAILS: ${ADMIN_EMAILS:-}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}

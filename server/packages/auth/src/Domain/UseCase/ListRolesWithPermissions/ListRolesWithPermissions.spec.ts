@@ -24,7 +24,7 @@ describe('ListRolesWithPermissions', () => {
     roleRepository.findAll = jest.fn().mockResolvedValue([
       role(RoleName.NAMES.CoreUser),
       role(RoleName.NAMES.ProUser),
-      role(RoleName.NAMES.InternalTeamUser),
+      role(RoleName.NAMES.AdminUser),
       role(RoleName.NAMES.VaultsUser),
       // Hidden from the admin surface:
       role(RoleName.NAMES.PlusUser),
@@ -42,7 +42,7 @@ describe('ListRolesWithPermissions', () => {
     const { roles, builtInRoleNames } = result.getValue()
 
     expect(roles.map((r) => r.name)).toEqual([
-      RoleName.NAMES.InternalTeamUser,
+      RoleName.NAMES.AdminUser,
       RoleName.NAMES.ProUser,
       RoleName.NAMES.CoreUser,
       RoleName.NAMES.VaultsUser,
@@ -54,7 +54,7 @@ describe('ListRolesWithPermissions', () => {
     expect(roles.some((r) => r.name === 'TRANSITION_USER')).toBe(false)
 
     expect(builtInRoleNames).toEqual([
-      RoleName.NAMES.InternalTeamUser,
+      RoleName.NAMES.AdminUser,
       RoleName.NAMES.ProUser,
       RoleName.NAMES.CoreUser,
       RoleName.NAMES.VaultsUser,
@@ -75,7 +75,7 @@ describe('ListRolesWithPermissions', () => {
     }
 
     const byName = new Map(roles.map((r) => [r.name, r.description]))
-    expect(byName.get(RoleName.NAMES.InternalTeamUser)).toMatch(/administrative/i)
+    expect(byName.get(RoleName.NAMES.AdminUser)).toMatch(/administrative/i)
     expect(byName.get(RoleName.NAMES.CoreUser)).toMatch(/standard account/i)
   })
 

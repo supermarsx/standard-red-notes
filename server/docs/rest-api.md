@@ -219,7 +219,7 @@ Full request/response shapes and the event catalogue: see
 ### Audit log — `/v1/admin/audit-log` (admin only)
 | Method & path              | Auth                | Purpose |
 |----------------------------|---------------------|---------|
-| `GET /v1/admin/audit-log`  | Bearer (**admin** role `InternalTeamUser`) | Query the security audit log. |
+| `GET /v1/admin/audit-log`  | Bearer (**admin** role `AdminUser`) | Query the security audit log. |
 
 Query params: `actorUuid`, `action`, `createdAfter` (epoch ms), `createdBefore`
 (epoch ms), `limit`, `offset`. Response entries:

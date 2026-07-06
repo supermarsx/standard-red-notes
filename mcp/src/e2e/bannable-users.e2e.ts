@@ -2,13 +2,13 @@ import { check, cleanup, finish, freshAccount, SERVER, serverUp } from './helper
 
 // Standard Red Notes — Bannable users (admin-gated).
 //
-// An admin (INTERNAL_TEAM_USER role) can ban a user; enforcement then happens in
+// An admin (ADMIN_USER role) can ban a user; enforcement then happens in
 // SignIn (new sign-ins are rejected with 403) and AuthenticateUser (an existing
 // banned session is rejected on its next authenticated call). The ADMIN side of
 // this is reachable only with the internal-team role, which a fresh e2e account
 // does not have and cannot self-grant over the API. So this spec asserts the
 // reachable half — the admin gate itself — and SKIPS the actual ban-enforcement
-// assertions (they need an INTERNAL_TEAM_USER account, i.e. a DB role seed) with
+// assertions (they need an ADMIN_USER account, i.e. a DB role seed) with
 // a clear reason rather than faking a pass.
 //
 // What IS asserted here (over the real gateway HTTP API):
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
 
   console.log(
     'SKIP: ban ENFORCEMENT (banned sign-in rejected with 403; banned session rejected ' +
-      'on next request). Requires an INTERNAL_TEAM_USER admin account to issue the ban, ' +
+      'on next request). Requires an ADMIN_USER admin account to issue the ban, ' +
       'which cannot be provisioned through the public API in this harness.',
   )
 

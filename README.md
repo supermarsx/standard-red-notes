@@ -340,7 +340,7 @@ storage quota. Run it inside the running stack:
 ```sh
 docker compose exec server srn-admin help
 docker compose exec server srn-admin whois user@example.com   # uuid, email, roles
-docker compose exec server srn-admin grant-admin user@example.com   # → INTERNAL_TEAM_USER
+docker compose exec server srn-admin grant-admin user@example.com   # → ADMIN_USER
 docker compose exec server srn-admin revoke-admin user@example.com
 docker compose exec server srn-admin list-roles user@example.com    # direct + effective
 docker compose exec server srn-admin reset-mfa user@example.com     # clear 2FA + recovery codes
@@ -352,7 +352,7 @@ the `group` subcommands:
 
 ```sh
 docker compose exec server srn-admin group list
-docker compose exec server srn-admin group create "Editors" CORE_USER,INTERNAL_TEAM_USER
+docker compose exec server srn-admin group create "Editors" CORE_USER,ADMIN_USER
 docker compose exec server srn-admin group set-roles <groupUuid> CORE_USER
 docker compose exec server srn-admin group members <groupUuid>
 docker compose exec server srn-admin group add-user <groupUuid> user@example.com
@@ -360,7 +360,7 @@ docker compose exec server srn-admin group remove-user <groupUuid> user@example.
 docker compose exec server srn-admin group delete <groupUuid>
 ```
 
-Granting `INTERNAL_TEAM_USER` is the same role the server reads from the
+Granting `ADMIN_USER` is the same role the server reads from the
 `ADMIN_EMAILS` env var at boot — `srn-admin grant-admin` is the ad-hoc
 equivalent for an already-registered user.
 

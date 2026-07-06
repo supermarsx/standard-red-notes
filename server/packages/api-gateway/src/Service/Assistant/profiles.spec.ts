@@ -418,10 +418,10 @@ describe('assistant-profile assignments', () => {
 
   describe('validateAssignmentsPatch', () => {
     it('accepts users + canonical roles and lowercases user keys', () => {
-      const result = validateAssignmentsPatch({ users: { 'UUID-1': 'p1' }, roles: { INTERNAL_TEAM_USER: 'p2' } })
+      const result = validateAssignmentsPatch({ users: { 'UUID-1': 'p1' }, roles: { ADMIN_USER: 'p2' } })
       expect('error' in result ? result.error : result.assignments).toEqual({
         users: { 'uuid-1': 'p1' },
-        roles: { INTERNAL_TEAM_USER: 'p2' },
+        roles: { ADMIN_USER: 'p2' },
       })
     })
 

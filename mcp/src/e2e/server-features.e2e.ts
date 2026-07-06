@@ -20,8 +20,8 @@ import type { HeadlessApp } from '../snjs/bootstrap.js'
 //   - FeatureService.getFeaturesForUser -> GetFeatures() every entry stamped role_name PRO_USER, no_expire:true
 //     (server/packages/auth/src/Domain/Feature/FeatureService.ts:23-34)
 // A fresh user's session carries the CORE_USER role PLUS a synthetic PRO_USER
-// role (uuid "singletier-PRO_USER") — but NOT INTERNAL_TEAM_USER — so admin
-// endpoints (INTERNAL_TEAM_USER-gated, BaseAdminController.ts:79-81) stay denied.
+// role (uuid "singletier-PRO_USER") — but NOT ADMIN_USER — so admin
+// endpoints (ADMIN_USER-gated, BaseAdminController.ts:79-81) stay denied.
 //
 // NOTE: the api-gateway wraps every auth-server JSON response as
 //   { meta: { auth, server }, data: <payload> }

@@ -3,6 +3,14 @@ import { PermissionName } from '../Permission/PermissionName'
 import { NativeFeatureIdentifier } from '../Feature/NativeFeatureIdentifier'
 import { RoleName } from '@standardnotes/domain-core'
 
+// Standard Red Notes: the admin role name. Must match the server's
+// RoleName.NAMES.AdminUser value ('ADMIN_USER'). We do NOT reference the
+// published @standardnotes/domain-core enum member (RoleName.NAMES.AdminUser)
+// because the published package predates the fork's INTERNAL_TEAM_USER→ADMIN_USER
+// rename and does not know the admin member. availableInRoles is a string[], so
+// a plain string is sufficient and fully durable against the real published enum.
+const ADMIN_ROLE_NAME = 'ADMIN_USER'
+
 export function serverFeatures(): ServerFeatureDescription[] {
   return [
     {
@@ -69,7 +77,7 @@ export function serverFeatures(): ServerFeatureDescription[] {
       name: 'Shared Vaults',
       identifier: NativeFeatureIdentifier.TYPES.SharedVaults,
       permission_name: PermissionName.SharedVaults,
-      availableInRoles: [RoleName.NAMES.InternalTeamUser],
+      availableInRoles: [ADMIN_ROLE_NAME],
     },
   ]
 }

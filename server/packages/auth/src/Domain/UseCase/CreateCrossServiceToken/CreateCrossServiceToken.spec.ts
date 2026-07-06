@@ -397,7 +397,7 @@ describe('CreateCrossServiceToken', () => {
     it('should union roles conferred by the user groups into the token roles', async () => {
       const groupRepository = {
         findByUserUuid: jest.fn().mockResolvedValue([
-          { props: { roleNames: ['INTERNAL_TEAM_USER'] } },
+          { props: { roleNames: ['ADMIN_USER'] } },
           // A duplicate of a direct role must not be added twice.
           { props: { roleNames: ['role1'] } },
         ]),
@@ -430,7 +430,7 @@ describe('CreateCrossServiceToken', () => {
       expect(encoded.roles).toEqual([
         { name: 'role1', uuid: '1-3-4' },
         { name: 'PRO_USER', uuid: 'singletier-PRO_USER' },
-        { name: 'INTERNAL_TEAM_USER', uuid: 'group-INTERNAL_TEAM_USER' },
+        { name: 'ADMIN_USER', uuid: 'group-ADMIN_USER' },
       ])
     })
 

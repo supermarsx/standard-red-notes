@@ -93,7 +93,7 @@ describe('adminRolesUi', () => {
 
   describe('canonicalRoleLabel', () => {
     it('maps the four canonical role names to their friendly labels', () => {
-      expect(canonicalRoleLabel('INTERNAL_TEAM_USER')).toBe('Admin user')
+      expect(canonicalRoleLabel('ADMIN_USER')).toBe('Admin user')
       expect(canonicalRoleLabel('PRO_USER')).toBe('Full user')
       expect(canonicalRoleLabel('CORE_USER')).toBe('Core user')
       expect(canonicalRoleLabel('VAULTS_USER')).toBe('Vaults user')
@@ -106,13 +106,13 @@ describe('adminRolesUi', () => {
 
   describe('canonicalRoleDescription', () => {
     it('returns a non-empty description for each of the four canonical roles', () => {
-      for (const name of ['INTERNAL_TEAM_USER', 'PRO_USER', 'CORE_USER', 'VAULTS_USER']) {
+      for (const name of ['ADMIN_USER', 'PRO_USER', 'CORE_USER', 'VAULTS_USER']) {
         expect(canonicalRoleDescription(name).length).toBeGreaterThan(0)
       }
     })
 
     it('describes each role accurately to what it grants', () => {
-      expect(canonicalRoleDescription('INTERNAL_TEAM_USER')).toMatch(/administrative/i)
+      expect(canonicalRoleDescription('ADMIN_USER')).toMatch(/administrative/i)
       expect(canonicalRoleDescription('PRO_USER')).toMatch(/every end-user feature/i)
       expect(canonicalRoleDescription('CORE_USER')).toMatch(/standard account/i)
       expect(canonicalRoleDescription('VAULTS_USER')).toMatch(/collaboration/i)

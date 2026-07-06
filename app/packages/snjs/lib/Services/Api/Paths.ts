@@ -47,7 +47,7 @@ const SettingsPaths = {
 }
 
 // Standard Red Notes: in-app admin panel endpoints (proxied to the auth server
-// /admin controller and gated on the INTERNAL_TEAM_USER role server-side).
+// /admin controller and gated on the ADMIN_USER role server-side).
 const AdminPaths = {
   lookupUser: (email: string) => `/v1/admin/lookup-user/${encodeURIComponent(email)}`,
   // Standard Red Notes: paginated admin users list (most-recent-first) with
@@ -132,7 +132,7 @@ const McpTokenPaths = {
 // Standard Red Notes: outbound webhooks. These hit the gateway /v1/webhooks
 // routes (cross-service-token protected), which proxy to the auth server's
 // WebhooksController. A signed-in user lists/creates/deletes their own webhooks;
-// the HMAC secret is returned exactly once on create. Admins (InternalTeamUser)
+// the HMAC secret is returned exactly once on create. Admins (AdminUser)
 // may additionally register global webhooks that fire for all users.
 const WebhookPaths = {
   webhooks: '/v1/webhooks',

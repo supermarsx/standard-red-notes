@@ -9,9 +9,9 @@ import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
 import { filterSecurityAuditEntries, registrationBlockSource, registrationIsOpen } from './adminSecurityHelpers'
 
-// Must match the server's RoleName.NAMES.InternalTeamUser value (the admin role
+// Must match the server's RoleName.NAMES.AdminUser value (the admin role
 // granted to ADMIN_EMAILS at sign-in).
-const INTERNAL_TEAM_USER = 'INTERNAL_TEAM_USER'
+const ADMIN_USER = 'ADMIN_USER'
 
 // How many recent security-relevant audit rows to preview here. The full,
 // paginated log lives on the Audit tab.
@@ -178,7 +178,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
 
   const loadAdminCount = useCallback(async () => {
     try {
-      const response = await application.legacyApi.adminListUsers({ role: INTERNAL_TEAM_USER, limit: 1, offset: 0 })
+      const response = await application.legacyApi.adminListUsers({ role: ADMIN_USER, limit: 1, offset: 0 })
       if (isErrorResponse(response)) {
         noteIfForbidden(response)
         return
@@ -292,7 +292,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           />
         </div>
         <Text className="mt-1">
-          Admin access is the <strong>{INTERNAL_TEAM_USER}</strong> role. On sign-in, any account whose email is listed
+          Admin access is the <strong>{ADMIN_USER}</strong> role. On sign-in, any account whose email is listed
           in the server&apos;s <strong>ADMIN_EMAILS</strong> environment variable is granted this role; it can also be
           assigned directly or via a group on the Groups &amp; roles tab. Every admin action is re-verified against this
           role on the server, so removing an email from ADMIN_EMAILS (or the role) revokes access on the next session

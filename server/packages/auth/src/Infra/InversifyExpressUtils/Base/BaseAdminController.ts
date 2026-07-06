@@ -52,7 +52,7 @@ import { CANONICAL_ADMIN_ROLES, CANONICAL_ADMIN_ROLE_NAMES } from '../../../Doma
 import { FixStorageQuotaForUser } from '../../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
 
 /**
- * Standard Red Notes: settings an admin (INTERNAL_TEAM_USER) is allowed to set
+ * Standard Red Notes: settings an admin (ADMIN_USER) is allowed to set
  * on behalf of another user via the admin panel. Keep this allow-list tight so
  * the admin endpoints can never be used to mutate arbitrary/sensitive settings.
  */
@@ -224,7 +224,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   /**
-   * Standard Red Notes: enforce the INTERNAL_TEAM_USER role for admin-only
+   * Standard Red Notes: enforce the ADMIN_USER role for admin-only
    * endpoints. The api-gateway AuthMiddleware decodes the cross-service token and
    * places the roles (by name) on `response.locals.roles`, which is forwarded to
    * this controller both over HTTP and in the home-server DirectCall path.
@@ -232,7 +232,7 @@ export class BaseAdminController extends BaseHttpController {
   protected requestorIsAdmin(response?: Response): boolean {
     const roles = ((response?.locals as { roles?: Role[] } | undefined)?.roles ?? []) as Role[]
 
-    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
+    return roles.some((role) => role.name === RoleName.NAMES.AdminUser)
   }
 
   async getUser(request: Request): Promise<results.JsonResult> {
@@ -355,7 +355,7 @@ export class BaseAdminController extends BaseHttpController {
   /**
    * Standard Red Notes: admin-gated user lookup by email used by the in-app
    * admin panel. Unlike the internal `getUser`, this enforces the
-   * INTERNAL_TEAM_USER role before resolving the user's uuid.
+   * ADMIN_USER role before resolving the user's uuid.
    */
   async lookupUser(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
@@ -773,7 +773,7 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   /**
-   * Standard Red Notes: grant or revoke the admin role (INTERNAL_TEAM_USER) on a
+   * Standard Red Notes: grant or revoke the admin role (ADMIN_USER) on a
    * user, the HTTP surface of the srn-admin CLI's grant-admin / revoke-admin.
    * Body: { granted: boolean }. Self-revocation is refused so an admin cannot
    * accidentally lock the panel for themselves (and potentially the instance —
@@ -817,7 +817,7 @@ export class BaseAdminController extends BaseHttpController {
       )
     }
 
-    const roleNameOrError = RoleName.create(RoleName.NAMES.InternalTeamUser)
+    const roleNameOrError = RoleName.create(RoleName.NAMES.AdminUser)
     /* istanbul ignore if -- the canonical role name always parses */
     if (roleNameOrError.isFailed()) {
       return this.json({ error: { message: roleNameOrError.getError() } }, 500)
@@ -836,17 +836,17 @@ export class BaseAdminController extends BaseHttpController {
       targetType: 'user',
       targetUuid: userUuid,
       ip: this.clientIp(request),
-      metadata: { role: RoleName.NAMES.InternalTeamUser, granted },
+      metadata: { role: RoleName.NAMES.AdminUser, granted },
     })
 
     await this.dispatchAdminActionWebhook({
       actorUuid: this.actorUuid(response),
       action: AuditAction.RoleChanged,
       targetUuid: userUuid,
-      metadata: { role: RoleName.NAMES.InternalTeamUser, granted },
+      metadata: { role: RoleName.NAMES.AdminUser, granted },
     })
 
-    return this.json({ success: true, userUuid, role: RoleName.NAMES.InternalTeamUser, granted })
+    return this.json({ success: true, userUuid, role: RoleName.NAMES.AdminUser, granted })
   }
 
   /**

@@ -812,7 +812,7 @@ export function parseDateFilter(input: string): number | undefined {
  * Help text
  * ------------------------------------------------------------------------- */
 
-export const ADMIN_ROLE_NAME = 'INTERNAL_TEAM_USER'
+export const ADMIN_ROLE_NAME = 'ADMIN_USER'
 
 export function usage(): string {
   return `srn-admin — in-container server administration for Standard Red Notes

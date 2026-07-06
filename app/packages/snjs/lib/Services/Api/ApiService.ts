@@ -730,7 +730,7 @@ export class LegacyApiService
   /**
    * Standard Red Notes: admin panel API. These hit the gateway /v1/admin routes,
    * which are protected by the cross-service token middleware; the auth server
-   * additionally re-checks the INTERNAL_TEAM_USER role on every call. A
+   * additionally re-checks the ADMIN_USER role on every call. A
    * non-admin caller will receive a 401 from the server.
    */
   async adminLookupUser(email: string): Promise<HttpResponse> {
@@ -1066,7 +1066,7 @@ export class LegacyApiService
   /**
    * Standard Red Notes: RBAC groups & granular permissions admin API. All routes
    * hit the gateway /v1/admin/* endpoints, which the auth server re-gates on the
-   * INTERNAL_TEAM_USER role.
+   * ADMIN_USER role.
    */
   async adminGetAvailableRoles(): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({

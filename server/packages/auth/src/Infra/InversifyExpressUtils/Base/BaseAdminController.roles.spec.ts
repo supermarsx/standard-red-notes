@@ -139,7 +139,7 @@ describe('BaseAdminController role endpoints', () => {
     } as unknown as Request
 
     adminResponse = {
-      locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }], user: { uuid: 'admin-1' } },
+      locals: { roles: [{ name: RoleName.NAMES.AdminUser }], user: { uuid: 'admin-1' } },
     } as unknown as Response
 
     nonAdminResponse = {

@@ -11,7 +11,7 @@ import { MaskedAiProfile } from './aiProfiles'
 
 /** The four canonical roles a profile may be assigned to (server-validated). */
 const ASSIGNABLE_ROLES: { name: string; label: string }[] = [
-  { name: 'INTERNAL_TEAM_USER', label: 'Admin (internal team)' },
+  { name: 'ADMIN_USER', label: 'Admin (internal team)' },
   { name: 'PRO_USER', label: 'Full user (Pro)' },
   { name: 'CORE_USER', label: 'Core user' },
   { name: 'VAULTS_USER', label: 'Vaults user' },

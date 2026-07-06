@@ -14,6 +14,16 @@ import { AbstractViewController } from './Abstract/AbstractViewController'
 import { CrossControllerEvent } from './CrossControllerEvent'
 import { featureTrunkVaultsEnabled } from '@/FeatureTrunk'
 
+// Standard Red Notes: the admin role name. Must match the server's
+// RoleName.NAMES.AdminUser value ('ADMIN_USER'). We do NOT go through the
+// published @standardnotes/domain-core enum (RoleName.NAMES.AdminUser /
+// RoleName.create('ADMIN_USER')) because the published package predates the
+// fork's INTERNAL_TEAM_USER→ADMIN_USER rename: it lacks the admin enum member
+// and its create() would reject 'ADMIN_USER'. hasRole() only reads .value, so a
+// minimal RoleName-shaped object is durable against the real published package.
+const ADMIN_ROLE_NAME = 'ADMIN_USER'
+const adminRoleName = { value: ADMIN_ROLE_NAME } as unknown as RoleName
+
 export class FeaturesController extends AbstractViewController implements InternalEventHandlerInterface {
   // Standard Red Notes: single-tier free fork. Every feature is entitled.
   hasFolders = true
@@ -62,12 +72,12 @@ export class FeaturesController extends AbstractViewController implements Intern
     // Standard Red Notes: no Super demo modal; the editor is always available.
   }
 
-  // Standard Red Notes: true when the current user has the INTERNAL_TEAM_USER
+  // Standard Red Notes: true when the current user has the ADMIN_USER
   // role. Used to gate the in-app Admin preferences pane on the client. The
   // server re-enforces this role on every admin endpoint, so this is purely a
   // UX gate.
   isAdminUser(): boolean {
-    return this.features.hasRole(RoleName.create(RoleName.NAMES.InternalTeamUser).getValue())
+    return this.features.hasRole(adminRoleName)
   }
 
   isVaultsEnabled(): boolean {
@@ -75,7 +85,7 @@ export class FeaturesController extends AbstractViewController implements Intern
     return (
       featureTrunkVaultsEnabled() ||
       enabled ||
-      this.features.hasRole(RoleName.create(RoleName.NAMES.InternalTeamUser).getValue())
+      this.features.hasRole(adminRoleName)
     )
   }
 

@@ -78,7 +78,7 @@ describe('BaseAdminController ban endpoints', () => {
     } as unknown as Request
 
     adminResponse = {
-      locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] },
+      locals: { roles: [{ name: RoleName.NAMES.AdminUser }] },
     } as unknown as Response
 
     nonAdminResponse = {
@@ -175,7 +175,7 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     setSettingValue = {} as jest.Mocked<SetSettingValue>
     setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
 
-    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.AdminUser }] } } as unknown as Response
     nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
   })
 
@@ -268,7 +268,7 @@ describe('BaseAdminController Nextcloud backup-allowed flag (admin-manageable)',
     setSettingValue = {} as jest.Mocked<SetSettingValue>
     setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
 
-    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.AdminUser }] } } as unknown as Response
     nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
   })
 
@@ -386,7 +386,7 @@ describe('BaseAdminController workflows-enabled flag (admin-manageable)', () => 
     setSettingValue = {} as jest.Mocked<SetSettingValue>
     setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
 
-    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.AdminUser }] } } as unknown as Response
     nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
   })
 
@@ -506,7 +506,7 @@ describe('BaseAdminController admin-role / reset-MFA / fix-quota endpoints', () 
     } as unknown as Request
 
     adminResponse = {
-      locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }], user: { uuid: actorUuid } },
+      locals: { roles: [{ name: RoleName.NAMES.AdminUser }], user: { uuid: actorUuid } },
     } as unknown as Response
 
     nonAdminResponse = {
@@ -567,13 +567,13 @@ describe('BaseAdminController admin-role / reset-MFA / fix-quota endpoints', () 
     expect(roleService.addRoleToUser).toHaveBeenCalled()
     const [calledUuid, calledRole] = (roleService.addRoleToUser as jest.Mock).mock.calls[0]
     expect(calledUuid.value).toEqual(targetUuid)
-    expect(calledRole.value).toEqual(RoleName.NAMES.InternalTeamUser)
+    expect(calledRole.value).toEqual(RoleName.NAMES.AdminUser)
     expect(auditLogWriter.write).toHaveBeenCalledWith(
       expect.objectContaining({
         actorUuid,
         action: AuditAction.RoleChanged,
         targetUuid,
-        metadata: { role: RoleName.NAMES.InternalTeamUser, granted: true },
+        metadata: { role: RoleName.NAMES.AdminUser, granted: true },
       }),
     )
     expect(result.json).toMatchObject({ success: true, userUuid: targetUuid, granted: true })
@@ -724,7 +724,7 @@ describe('BaseAdminController registration flag env read-out', () => {
     request = { params: {}, body: {}, headers: {} } as unknown as Request
     adminResponse = {
       locals: {
-        roles: [{ name: RoleName.NAMES.InternalTeamUser }],
+        roles: [{ name: RoleName.NAMES.AdminUser }],
         user: { uuid: '00000000-0000-4000-8000-000000000001' },
       },
     } as unknown as Response
@@ -802,7 +802,7 @@ describe('BaseAdminController user list', () => {
       total: 1,
     })
 
-    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.InternalTeamUser }] } } as unknown as Response
+    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.AdminUser }] } } as unknown as Response
     nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
   })
 
@@ -830,7 +830,7 @@ describe('BaseAdminController user list', () => {
         email: '  Foo  ',
         createdAfter: '1000',
         createdBefore: '2000',
-        role: 'INTERNAL_TEAM_USER',
+        role: 'ADMIN_USER',
         banned: 'true',
         subscription: 'active',
       }),
@@ -844,7 +844,7 @@ describe('BaseAdminController user list', () => {
       email: 'Foo',
       createdAfter: 1000,
       createdBefore: 2000,
-      role: 'INTERNAL_TEAM_USER',
+      role: 'ADMIN_USER',
       banned: true,
       subscription: 'active',
     })

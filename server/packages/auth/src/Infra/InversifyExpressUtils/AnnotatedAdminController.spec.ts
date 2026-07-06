@@ -13,7 +13,7 @@ import { AnnotatedAdminController } from './AnnotatedAdminController'
  * path are ONLY populated by the required cross-service-token middleware
  * decoding the X-Auth-Token the api-gateway forwards. A route that forgets the
  * middleware therefore 403s for EVERY caller, including genuine
- * INTERNAL_TEAM_USER admins (the live-stack bug this spec pins down). The gate
+ * ADMIN_USER admins (the live-stack bug this spec pins down). The gate
  * logic itself is covered by BaseAdminController.spec.ts; this spec asserts the
  * WIRING: every admin-panel route must carry the middleware, and the six
  * legacy internal routes (unreachable through the public gateway) must stay

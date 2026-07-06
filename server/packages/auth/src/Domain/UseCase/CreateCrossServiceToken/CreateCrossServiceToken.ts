@@ -270,7 +270,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
   /**
    * Standard Red Notes: resolve the role names conferred by the RBAC groups the
    * user belongs to. These are unioned into the token's roles at MINT time so
-   * a role granted via a group (e.g. INTERNAL_TEAM_USER through an "admins"
+   * a role granted via a group (e.g. ADMIN_USER through an "admins"
    * group) is honored by role-gated endpoints exactly like a directly-assigned
    * role — without it, effective roles and token roles diverge forever and a
    * genuine admin is denied (403) no matter how often the session refreshes.
@@ -309,15 +309,15 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       projected.push({ uuid: `singletier-${RoleName.NAMES.ProUser}`, name: RoleName.NAMES.ProUser })
     }
     // Designate admins via the ADMIN_EMAILS env (comma-separated). These users
-    // carry the InternalTeamUser role, which unlocks the in-app Admin panel and
+    // carry the AdminUser role, which unlocks the in-app Admin panel and
     // the /admin endpoints that manage other users' feature flags.
     const adminEmails = (process.env.ADMIN_EMAILS ?? '')
       .split(',')
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean)
     if (email && adminEmails.includes(email.toLowerCase())) {
-      if (!projected.some((role) => role.name === RoleName.NAMES.InternalTeamUser)) {
-        projected.push({ uuid: `admin-${RoleName.NAMES.InternalTeamUser}`, name: RoleName.NAMES.InternalTeamUser })
+      if (!projected.some((role) => role.name === RoleName.NAMES.AdminUser)) {
+        projected.push({ uuid: `admin-${RoleName.NAMES.AdminUser}`, name: RoleName.NAMES.AdminUser })
       }
     }
     // Standard Red Notes: union in RBAC group-conferred role names so the token

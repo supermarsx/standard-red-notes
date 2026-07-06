@@ -20,12 +20,12 @@ export class BaseWebhooksController extends BaseHttpController {
     }
   }
 
-  // INTERNAL_TEAM_USER is required for global webhooks and to list/delete
+  // ADMIN_USER is required for global webhooks and to list/delete
   // across users. Mirrors BaseAdminController.requestorIsAdmin.
   protected requestorIsAdmin(response: Response): boolean {
     const roles = ((response.locals as { roles?: Role[] } | undefined)?.roles ?? []) as Role[]
 
-    return roles.some((role) => role.name === RoleName.NAMES.InternalTeamUser)
+    return roles.some((role) => role.name === RoleName.NAMES.AdminUser)
   }
 
   private clientIp(request: Request): string | undefined {

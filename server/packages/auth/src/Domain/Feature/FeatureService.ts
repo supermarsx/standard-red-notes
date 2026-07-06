@@ -34,6 +34,6 @@ export class FeatureService implements FeatureServiceInterface {
   }
 
   private getIncludedRoles(): string[] {
-    return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser, RoleName.NAMES.InternalTeamUser]
+    return [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser, RoleName.NAMES.AdminUser]
   }
 }

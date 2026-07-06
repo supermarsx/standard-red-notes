@@ -36,7 +36,7 @@ Content-Type: application/json
 |-------------|----------|-------|
 | `targetUrl` | yes      | Public HTTPS URL. Must resolve to a **public** address (see SSRF, §6). |
 | `events`    | yes      | Non-empty array from the [event catalogue](#4-event-catalogue). Unknown names are rejected. |
-| `global`    | no       | `true` = fire for **all users' events**. **Admin only** (role `InternalTeamUser`); a non-admin sending `global:true` gets `401`. Omit or `false` for a normal user-scoped webhook. |
+| `global`    | no       | `true` = fire for **all users' events**. **Admin only** (role `AdminUser`); a non-admin sending `global:true` gets `401`. Omit or `false` for a normal user-scoped webhook. |
 
 ### Response — the secret is shown ONCE
 

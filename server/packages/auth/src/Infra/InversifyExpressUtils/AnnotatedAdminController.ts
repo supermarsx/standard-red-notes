@@ -166,7 +166,7 @@ export class AnnotatedAdminController extends BaseAdminController {
   // forwards onto response.locals (user + roles), which is what the
   // BaseAdminController's requestorIsAdmin() gate and the audit-log actor
   // attribution read. Without it locals.roles stays empty and every admin
-  // endpoint 403s even for genuine INTERNAL_TEAM_USER admins. The six legacy
+  // endpoint 403s even for genuine ADMIN_USER admins. The six legacy
   // internal routes above are deliberately left as-is: they predate the panel,
   // are not reachable through the public gateway, and stay internal-only.
   @httpGet('/lookup-user/:email', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
