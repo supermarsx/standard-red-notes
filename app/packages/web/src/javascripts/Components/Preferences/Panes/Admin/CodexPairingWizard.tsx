@@ -68,6 +68,9 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
   const pollRef = useRef<number | null>(null)
   const timeoutRef = useRef<number | null>(null)
   const mountedRef = useRef(true)
+  // Last paired state we told the parent about. Starts unknown (null) so the
+  // very first (passive) status read never notifies.
+  const lastNotifiedPairedRef = useRef<boolean | null>(null)
 
   const refreshStatus = useCallback(async (): Promise<AssistantSubscriptionStatus> => {
     const result = await application.assistantSubscriptionStatus()
@@ -77,7 +80,14 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
         setStep('done')
       }
     }
-    onStatusChange?.()
+    // Only tell the parent to refresh when the paired state actually TRANSITIONS.
+    // Notifying on every passive read (mount, poll tick) made the parent reload
+    // its whole view, which unmounted+remounted this wizard, which read status
+    // again and notified again — an endless spinner/flicker loop.
+    if (lastNotifiedPairedRef.current !== null && lastNotifiedPairedRef.current !== result.paired) {
+      onStatusChange?.()
+    }
+    lastNotifiedPairedRef.current = result.paired
     return result
   }, [application, onStatusChange])
 

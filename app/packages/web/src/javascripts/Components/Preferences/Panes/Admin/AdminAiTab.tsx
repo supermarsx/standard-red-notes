@@ -314,7 +314,11 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     )
   }, [weeklyTokenLimit, save])
 
-  if (loading) {
+  // Only show the full-page spinner on the INITIAL load, when there is nothing to
+  // render yet. Later reloads (Refresh, or a pairing transition from a child) keep
+  // the already-rendered content mounted and update it in place, so the pane never
+  // unmounts+remounts its children and flashes back to a bare spinner.
+  if (loading && settings === null && !notAvailable && !loadError) {
     return (
       <PreferencesSegment>
         <Title>AI configuration</Title>
