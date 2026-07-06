@@ -61,6 +61,33 @@ export interface EnvSettingsBaseline {
   proofOfWorkSignInMode?: 'always' | 'adaptive'
   proofOfWorkSignInDifficulty?: number
   proofOfWorkSignInAdaptiveThreshold?: number
+  /**
+   * Standard Red Notes: REGISTRATION policy env baseline (REGISTRATION_DEFAULT_ROLE
+   * / REGISTRATION_DOMAIN_MODE / REGISTRATION_DOMAINS). The gateway PERSISTS +
+   * VIEWS these; the auth server ENFORCES them by reading the same overlay file.
+   * undefined = env var unset (falls through to default).
+   */
+  registrationDefaultRole?: string
+  registrationDomainMode?: RegistrationDomainMode
+  registrationDomains?: string[]
+}
+
+export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
+
+/** Default-role choices a NEW signup may be given (never the admin role). */
+export const REGISTRATION_ASSIGNABLE_ROLES = ['CORE_USER', 'PRO_USER', 'VAULTS_USER']
+
+export interface ResolvedRegistrationConfig {
+  defaultRole: string
+  domainMode: RegistrationDomainMode
+  domainList: string[]
+}
+
+/** Hardcoded registration defaults (apply last, after persisted then env). */
+const REGISTRATION_DEFAULTS: ResolvedRegistrationConfig = {
+  defaultRole: 'CORE_USER',
+  domainMode: 'off',
+  domainList: [],
 }
 
 /**
@@ -91,6 +118,29 @@ const PROOF_OF_WORK_DEFAULTS: ResolvedProofOfWorkConfig = {
   signInAdaptiveThreshold: 3,
 }
 
+/**
+ * Normalizes a registration domain list the same way the auth server does
+ * (lowercase, trim, strip a leading '@'/'.', drop empties, de-dupe) so the admin
+ * VIEW matches exactly what auth will enforce.
+ */
+export const normalizeRegistrationDomains = (list: string[]): string[] => {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of list) {
+    if (typeof raw !== 'string') {
+      continue
+    }
+    const normalized = raw.trim().toLowerCase().replace(/^[@.]+/, '')
+    if (normalized.length === 0 || seen.has(normalized)) {
+      continue
+    }
+    seen.add(normalized)
+    result.push(normalized)
+  }
+
+  return result
+}
+
 /** The masked admin view returned by GET/PUT /v1/admin/server-settings. */
 export interface ServerSettingsView {
   settings: {
@@ -116,6 +166,7 @@ export interface ServerSettingsView {
     updateCheck: { url: string | null }
     nextcloudBackups: { enabled: boolean }
     security: { proofOfWork: ResolvedProofOfWorkConfig }
+    registration: ResolvedRegistrationConfig & { assignableRoles: string[] }
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -286,6 +337,31 @@ export class ServerSettingsResolver {
   }
 
   /**
+   * The effective REGISTRATION policy: persisted admin values win over the
+   * REGISTRATION_* env baseline, which falls back to hardcoded defaults. The
+   * default role is coerced to an assignable (canonical non-admin) role; the mode
+   * to a known mode; the list normalized (lowercased/trimmed/de-duped). Re-read
+   * per call. NOTE: the gateway does not enforce this — the auth server reads the
+   * same overlay and gates registration; this method feeds the admin view.
+   */
+  async resolveRegistrationConfig(): Promise<ResolvedRegistrationConfig> {
+    const registration = (await this.safeRead()).registration ?? {}
+    const env = this.envBaseline
+
+    const rawRole = registration.defaultRole ?? env.registrationDefaultRole ?? REGISTRATION_DEFAULTS.defaultRole
+    const rawMode = registration.domainMode ?? env.registrationDomainMode ?? REGISTRATION_DEFAULTS.domainMode
+    const rawList = registration.domainList ?? env.registrationDomains ?? REGISTRATION_DEFAULTS.domainList
+
+    return {
+      defaultRole: REGISTRATION_ASSIGNABLE_ROLES.includes(rawRole) ? rawRole : REGISTRATION_DEFAULTS.defaultRole,
+      domainMode: (['off', 'allowlist', 'blocklist'] as string[]).includes(rawMode)
+        ? (rawMode as RegistrationDomainMode)
+        : REGISTRATION_DEFAULTS.domainMode,
+      domainList: normalizeRegistrationDomains(rawList),
+    }
+  }
+
+  /**
    * The masked admin view: configured booleans for secrets (API keys are NEVER
    * returned), plain values for non-secrets, plus a per-setting source map
    * ('persisted' | 'env' | 'default') so the admin pane can show where each
@@ -303,6 +379,8 @@ export class ServerSettingsResolver {
     const ai = persisted.ai ?? {}
     const pow = persisted.security?.proofOfWork ?? {}
     const proofOfWork = await this.resolveProofOfWorkConfig()
+    const registration = persisted.registration ?? {}
+    const registrationConfig = await this.resolveRegistrationConfig()
     const sources: Record<string, ServerSettingSource> = {
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
@@ -328,6 +406,9 @@ export class ServerSettingsResolver {
         pow.signInAdaptiveThreshold,
         env.proofOfWorkSignInAdaptiveThreshold,
       ),
+      'registration.defaultRole': this.source(registration.defaultRole, env.registrationDefaultRole),
+      'registration.domainMode': this.source(registration.domainMode, env.registrationDomainMode),
+      'registration.domainList': this.source(registration.domainList, env.registrationDomains),
     }
 
     return {
@@ -353,6 +434,7 @@ export class ServerSettingsResolver {
         updateCheck: { url: (await this.resolveUpdateCheckUrl()) ?? null },
         nextcloudBackups: { enabled: await this.resolveNextcloudBackupsEnabled() },
         security: { proofOfWork },
+        registration: { ...registrationConfig, assignableRoles: REGISTRATION_ASSIGNABLE_ROLES },
       },
       sources,
     }

@@ -448,6 +448,11 @@ import { VerifyProofOfWork } from '../Domain/UseCase/VerifyProofOfWork/VerifyPro
 import { RedisProofOfWorkChallengeRepository } from '../Infra/Redis/RedisProofOfWorkChallengeRepository'
 import { TypeORMProofOfWorkChallengeRepository } from '../Infra/TypeORM/TypeORMProofOfWorkChallengeRepository'
 import { clampDifficulty, EnvProofOfWorkConfigResolver } from '../Infra/ProofOfWork/EnvProofOfWorkConfigResolver'
+import { RegistrationConfigResolverInterface } from '../Domain/Registration/RegistrationConfigResolverInterface'
+import {
+  EnvRegistrationConfigResolver,
+  registrationBaselineFromEnv,
+} from '../Infra/Registration/EnvRegistrationConfigResolver'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -1339,6 +1344,22 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new EnvProofOfWorkConfigResolver(proofOfWorkBaseline, () => proofOfWorkOverlayReader.proofOfWork()),
       )
+
+    // Standard Red Notes: registration policy (default role + email-domain policy)
+    // resolved per registration from the persisted admin overlay layered over the
+    // REGISTRATION_* env baseline (persisted -> env -> default). Reads the SAME
+    // ServerSettings overlay file the gateway admin surface writes.
+    const registrationOverlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
+    const registrationBaseline = registrationBaselineFromEnv({
+      defaultRole: env.get('REGISTRATION_DEFAULT_ROLE', true) || undefined,
+      domainMode: env.get('REGISTRATION_DOMAIN_MODE', true) || undefined,
+      domains: env.get('REGISTRATION_DOMAINS', true) || undefined,
+    })
+    container
+      .bind<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver)
+      .toConstantValue(
+        new EnvRegistrationConfigResolver(registrationBaseline, () => registrationOverlayReader.registration()),
+      )
     container
       .bind<RequestProofOfWorkChallenge>(TYPES.Auth_RequestProofOfWorkChallenge)
       .toConstantValue(
@@ -2157,6 +2178,9 @@ export class ContainerConfigLoader {
           // Standard Red Notes: lets Register consult the admin-panel-persisted
           // REGISTRATION_DISABLED flag at runtime (in addition to the env override).
           container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+          // Standard Red Notes: resolves the admin-configurable default role +
+          // email-domain policy for each registration.
+          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)

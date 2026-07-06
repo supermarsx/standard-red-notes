@@ -9,6 +9,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
+import Dropdown from '@/Components/Dropdown/Dropdown'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import {
@@ -31,6 +32,22 @@ type Props = {
   application: WebApplication
   noteIfForbidden: (response: { status?: number }) => void
 }
+
+// Standard Red Notes: friendly labels for the assignable default-registration
+// roles (must match the server's canonical role labels). Any unknown role name
+// falls back to the raw value so a server revision cannot blank the selector.
+const REGISTRATION_ROLE_LABELS: Record<string, string> = {
+  CORE_USER: 'Core user',
+  PRO_USER: 'Full user',
+  VAULTS_USER: 'Vaults user',
+}
+const registrationRoleLabel = (role: string): string => REGISTRATION_ROLE_LABELS[role] ?? role
+
+const REGISTRATION_DOMAIN_MODE_ITEMS = [
+  { label: 'Off — allow any email domain', value: 'off' },
+  { label: 'Allowlist — only listed domains may register', value: 'allowlist' },
+  { label: 'Blocklist — listed domains may not register', value: 'blocklist' },
+]
 
 type ServerStatus = {
   services?: ServerService[]
@@ -138,6 +155,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [settingsNotAvailable, setSettingsNotAvailable] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [updateCheckUrl, setUpdateCheckUrl] = useState('')
+  // Standard Red Notes: editable registration policy. The default role + mode are
+  // saved immediately on change; the domain list is edited free-form (one per
+  // line or comma-separated) and saved with its own button.
+  const [domainListText, setDomainListText] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
   const loadRegistrationFlag = useCallback(async () => {
@@ -263,6 +284,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setServerSettings(data?.settings ?? null)
     setSettingsSources(data?.sources ?? null)
     setUpdateCheckUrl(data?.settings?.updateCheck?.url ?? '')
+    setDomainListText((data?.settings?.registration?.domainList ?? []).join('\n'))
   }, [])
 
   const loadServerSettings = useCallback(async () => {
@@ -346,6 +368,31 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     },
     [saveServerSettings],
   )
+
+  const saveRegistrationDefaultRole = useCallback(
+    async (role: string) => {
+      await saveServerSettings({ registration: { defaultRole: role } }, 'Default role for new users saved.')
+    },
+    [saveServerSettings],
+  )
+
+  const saveRegistrationDomainMode = useCallback(
+    async (mode: string) => {
+      await saveServerSettings(
+        { registration: { domainMode: mode as 'off' | 'allowlist' | 'blocklist' } },
+        'Email-domain policy mode saved.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveRegistrationDomainList = useCallback(async () => {
+    const list = domainListText
+      .split(/[\s,]+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    await saveServerSettings({ registration: { domainList: list } }, 'Email-domain list saved.')
+  }, [domainListText, saveServerSettings])
 
   const toggleRegistration = useCallback(
     async (nextValue: boolean) => {
@@ -650,6 +697,77 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   onChange={(checked) => void toggleNextcloudBackups(checked)}
                 />
               )}
+            </div>
+
+            <HorizontalSeparator classes="my-1" />
+
+            {/* --- Registration policy (default role + email-domain policy) --- */}
+            <div className="flex flex-col gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Default role for new users</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['registration.defaultRole']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  The role assigned to every account created through self-service sign-up. New signups are never given
+                  the admin role.
+                </Text>
+                <div className="mt-2 w-96 max-w-full">
+                  <Dropdown
+                    label="Default role for new users"
+                    items={(serverSettings?.registration?.assignableRoles ?? ['CORE_USER', 'PRO_USER', 'VAULTS_USER']).map(
+                      (role) => ({ label: registrationRoleLabel(role), value: role }),
+                    )}
+                    value={serverSettings?.registration?.defaultRole ?? 'CORE_USER'}
+                    onChange={(role) => void saveRegistrationDefaultRole(role)}
+                    disabled={settingsSaving}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Email-domain policy</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['registration.domainMode']} />
+                </div>
+                <Text className="mt-1 text-xs">
+                  Restrict which email domains may sign up. In <strong>allowlist</strong> mode only the listed domains may
+                  register; in <strong>blocklist</strong> mode the listed domains are refused. A listed domain also
+                  matches its subdomains (e.g. <code>example.com</code> matches <code>mail.example.com</code>). Matching
+                  is case-insensitive.
+                </Text>
+                <div className="mt-2 w-96 max-w-full">
+                  <Dropdown
+                    label="Email-domain policy mode"
+                    items={REGISTRATION_DOMAIN_MODE_ITEMS}
+                    value={serverSettings?.registration?.domainMode ?? 'off'}
+                    onChange={(mode) => void saveRegistrationDomainMode(mode)}
+                    disabled={settingsSaving}
+                  />
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Text className="text-xs font-medium text-passive-1">Domains</Text>
+                  <SourceChip sources={settingsSources} keys={['registration.domainList']} />
+                </div>
+                <textarea
+                  className="mt-1 h-24 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                  placeholder={'example.com\npartner.org'}
+                  value={domainListText}
+                  onChange={(event) => setDomainListText(event.target.value)}
+                  disabled={settingsSaving}
+                />
+                <Text className="mt-1 text-xs text-passive-1">
+                  One domain per line (or comma-separated). The list applies to both allowlist and blocklist modes and is
+                  ignored while the mode is Off.
+                </Text>
+                <div className="mt-2">
+                  <Button
+                    label={settingsSaving ? 'Saving…' : 'Save domains'}
+                    onClick={() => void saveRegistrationDomainList()}
+                    disabled={settingsSaving}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         )}

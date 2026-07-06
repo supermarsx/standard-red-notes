@@ -40,6 +40,13 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.GoogleDriveBackupFrequency,
     SettingName.NAMES.OneDriveBackupFrequency,
     SettingName.NAMES.LogSessionUserAgent,
+    // Standard Red Notes: the instance-wide "registration disabled" flag is a plain
+    // 'true'/'false' value carrying no secret. It MUST be stored UNENCRYPTED because
+    // Register consults it instance-wide with a raw value comparison
+    // (SettingRepository.countAllByNameAndValue({ value: 'true' })) and cannot decrypt
+    // per-user ciphertext there. Storing it encrypted made that comparison never
+    // match, so a persisted "signups off" was silently ignored at registration time.
+    SettingName.NAMES.RegistrationDisabled,
   ]
 
   private readonly UNSENSITIVE_SETTINGS = [
@@ -87,6 +94,13 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // a normal value rather than gated as "sensitive" (which returns no value).
     SettingName.NAMES.ConflictResolutionStrategy,
     SettingName.NAMES.SearchIndexEnabled,
+    // Standard Red Notes: the instance-wide "registration disabled" flag must be
+    // retrievable as a plain value by the admin panel (GET /v1/admin/registration
+    // reads it with allowSensitiveRetrieval:false) and consulted unencrypted by
+    // Register. It carries no secret, so it is not marked sensitive — otherwise
+    // GetSetting refuses the non-sensitive admin read and the panel always shows
+    // "signups open".
+    SettingName.NAMES.RegistrationDisabled,
   ]
 
   private readonly CLIENT_IMMUTABLE_SETTINGS = [

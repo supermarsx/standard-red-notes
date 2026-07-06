@@ -280,6 +280,23 @@ export class ContainerConfigLoader {
       proofOfWorkSignInAdaptiveThreshold: env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
         ? +env.get('PROOF_OF_WORK_SIGNIN_ADAPTIVE_THRESHOLD', true)
         : undefined,
+      // Standard Red Notes: REGISTRATION policy env baseline. The gateway persists
+      // + views these; the AUTH server reads the SAME overlay file and enforces
+      // them in Register. undefined when unset so the source map reports 'default'
+      // (the resolver applies CORE_USER / off / [] fallbacks). REGISTRATION_DOMAINS
+      // is a comma/whitespace-separated list.
+      registrationDefaultRole: env.get('REGISTRATION_DEFAULT_ROLE', true) || undefined,
+      registrationDomainMode:
+        env.get('REGISTRATION_DOMAIN_MODE', true) === 'allowlist'
+          ? 'allowlist'
+          : env.get('REGISTRATION_DOMAIN_MODE', true) === 'blocklist'
+            ? 'blocklist'
+            : env.get('REGISTRATION_DOMAIN_MODE', true) === 'off'
+              ? 'off'
+              : undefined,
+      registrationDomains: env.get('REGISTRATION_DOMAINS', true)
+        ? env.get('REGISTRATION_DOMAINS', true).split(/[\s,]+/)
+        : undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container

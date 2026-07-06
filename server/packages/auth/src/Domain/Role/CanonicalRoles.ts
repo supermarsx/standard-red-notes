@@ -69,6 +69,20 @@ const descriptionByName = new Map<string, string>(CANONICAL_ADMIN_ROLES.map((rol
 
 export const isCanonicalAdminRole = (name: string): boolean => orderByName.has(name)
 
+/**
+ * Standard Red Notes: role names a NEW self-service signup may be given by
+ * default — every canonical role EXCEPT the admin role. New accounts must never
+ * default to ADMIN_USER, so it is excluded here; the remaining canonical roles
+ * (Full/Core/Vaults) are all safe end-user tiers. Used to validate the
+ * admin-configurable "default role for new users" (REGISTRATION_DEFAULT_ROLE /
+ * the persisted overlay) before Register assigns it.
+ */
+export const ASSIGNABLE_DEFAULT_ROLE_NAMES: string[] = CANONICAL_ADMIN_ROLE_NAMES.filter(
+  (name) => name !== RoleName.NAMES.AdminUser,
+)
+
+export const isAssignableDefaultRole = (name: string): boolean => ASSIGNABLE_DEFAULT_ROLE_NAMES.includes(name)
+
 export const canonicalAdminRoleLabel = (name: string): string | null => labelByName.get(name) ?? null
 
 export const canonicalAdminRoleDescription = (name: string): string | null => descriptionByName.get(name) ?? null

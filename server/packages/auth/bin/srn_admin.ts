@@ -65,6 +65,19 @@ import {
   type OperatorService,
   type ParsedArgs,
 } from '../src/Infra/Cli/SrnAdminCli'
+import { ServerSettingsOverlayReader } from '../src/Infra/FS/ServerSettingsOverlayReader'
+import {
+  EnvRegistrationConfigResolver,
+  registrationBaselineFromEnv,
+} from '../src/Infra/Registration/EnvRegistrationConfigResolver'
+import { ASSIGNABLE_DEFAULT_ROLE_NAMES, isAssignableDefaultRole } from '../src/Domain/Role/CanonicalRoles'
+import {
+  isRegistrationDomainMode,
+  normalizeDomainList,
+  REGISTRATION_DOMAIN_MODES,
+  type RegistrationConfig,
+  type RegistrationConfigOverlay,
+} from '../src/Domain/Registration/RegistrationConfig'
 
 /* ---------------------------------------------------------------------------
  * Small shared shapes so use cases can be driven through the container without
@@ -832,7 +845,155 @@ async function registrationPersistedCount(container: ContainerLike): Promise<num
   return settingRepository.countAllByNameAndValue({ name, value: 'true' })
 }
 
+/**
+ * Standard Red Notes: resolves the effective REGISTRATION POLICY (default role +
+ * email-domain policy) exactly the way the auth server does — the persisted
+ * admin overlay (the gateway-written SERVER_SETTINGS_PATH JSON) layered over the
+ * REGISTRATION_* env baseline. Returns the effective config plus the overlay
+ * path and the raw persisted section so the CLI can show provenance.
+ */
+async function resolveRegistrationPolicy(): Promise<{
+  effective: RegistrationConfig
+  overlayPath: string | undefined
+  persisted: RegistrationConfigOverlay | undefined
+}> {
+  const authEnv = await readPackageEnv('auth')
+  const baseline = registrationBaselineFromEnv({
+    defaultRole: process.env.REGISTRATION_DEFAULT_ROLE ?? authEnv.REGISTRATION_DEFAULT_ROLE,
+    domainMode: process.env.REGISTRATION_DOMAIN_MODE ?? authEnv.REGISTRATION_DOMAIN_MODE,
+    domains: process.env.REGISTRATION_DOMAINS ?? authEnv.REGISTRATION_DOMAINS,
+  })
+  const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
+  const reader = new ServerSettingsOverlayReader(overlayPath)
+  const persisted = await reader.registration()
+  const resolver = new EnvRegistrationConfigResolver(baseline, () => Promise.resolve(persisted))
+
+  return { effective: await resolver.resolve(), overlayPath, persisted }
+}
+
+/**
+ * Read-modify-write the persisted `registration` section of the SERVER_SETTINGS
+ * overlay JSON (the same file the gateway admin surface writes). Atomic via a
+ * tmp file + rename. Requires SERVER_SETTINGS_PATH to be configured.
+ */
+async function updateRegistrationOverlay(
+  mutate: (registration: Record<string, unknown>) => void,
+): Promise<string> {
+  const authEnv = await readPackageEnv('auth')
+  const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
+  if (!overlayPath) {
+    throw new Error(
+      'SERVER_SETTINGS_PATH is not configured, so the registration policy cannot be persisted from the CLI. Set it in the operator .env (both auth + gateway) or manage the policy from the admin panel.',
+    )
+  }
+
+  let data: Record<string, unknown> = {}
+  try {
+    const raw = await fsPromises.readFile(overlayPath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object') {
+      data = parsed as Record<string, unknown>
+    }
+  } catch {
+    data = {}
+  }
+
+  const registration = (data.registration && typeof data.registration === 'object'
+    ? (data.registration as Record<string, unknown>)
+    : {}) as Record<string, unknown>
+  mutate(registration)
+  if (Object.keys(registration).length === 0) {
+    delete data.registration
+  } else {
+    data.registration = registration
+  }
+
+  await fsPromises.mkdir(path.dirname(overlayPath), { recursive: true })
+  const tmp = `${overlayPath}.${process.pid}.${Date.now()}.tmp`
+  await fsPromises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
+  await fsPromises.rename(tmp, overlayPath)
+
+  return overlayPath
+}
+
+async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefined): Promise<number> {
+  if (action === undefined || action === 'show' || action === 'status') {
+    const { effective, overlayPath, persisted } = await resolveRegistrationPolicy()
+    if (args.options.json === true) {
+      outJson({ effective, persisted: persisted ?? null, overlayPath: overlayPath ?? null })
+
+      return 0
+    }
+    outLine('registration policy (effective — persisted overlay over env, then default):')
+    outLine(`  default role for new users: ${effective.defaultRole}`)
+    outLine(`  email-domain mode:          ${effective.domainMode}`)
+    outLine(`  email-domain list:          ${effective.domainList.length ? effective.domainList.join(', ') : '(empty)'}`)
+    outLine(`  persisted overlay file:     ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
+
+    return 0
+  }
+
+  if (action === 'default-role') {
+    const role = args.positionals[0]
+    if (!role) {
+      throw new UsageError(`registration policy default-role <${ASSIGNABLE_DEFAULT_ROLE_NAMES.join('|')}|clear>`)
+    }
+    if (role === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.defaultRole)
+      outLine(`registration default role cleared (falls back to env/CORE_USER). Wrote ${file}.`)
+
+      return 0
+    }
+    if (!isAssignableDefaultRole(role)) {
+      throw new UsageError(
+        `invalid default role '${role}' — must be one of ${ASSIGNABLE_DEFAULT_ROLE_NAMES.join(', ')} (never the admin role)`,
+      )
+    }
+    const file = await updateRegistrationOverlay((r) => (r.defaultRole = role))
+    outLine(`registration default role set to ${role}. Effective on the next signup. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'domain-mode') {
+    const mode = args.positionals[0]
+    if (!mode || !isRegistrationDomainMode(mode)) {
+      throw new UsageError(`registration policy domain-mode <${REGISTRATION_DOMAIN_MODES.join('|')}>`)
+    }
+    const file = await updateRegistrationOverlay((r) => (r.domainMode = mode))
+    outLine(`registration email-domain mode set to ${mode}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (action === 'domains') {
+    const rest = args.positionals.join(' ')
+    if (rest.trim() === '') {
+      throw new UsageError("registration policy domains <comma-separated-domains|clear>")
+    }
+    if (rest.trim() === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.domainList)
+      outLine(`registration email-domain list cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    const list = normalizeDomainList(rest.split(/[\s,]+/))
+    const file = await updateRegistrationOverlay((r) => (r.domainList = list))
+    outLine(`registration email-domain list set to: ${list.length ? list.join(', ') : '(empty)'}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  throw new UsageError(
+    `unknown registration policy action '${action}' — show | default-role <role> | domain-mode <mode> | domains <list>`,
+  )
+}
+
 async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promise<number> {
+  if (sub === 'policy') {
+    return cmdRegistrationPolicy({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+  }
+
   if (sub === 'status' || sub === undefined) {
     // The env master switch is read at BOOT by the auth service; the CLI reads
     // the same entrypoint-generated .env the service loaded.
@@ -955,7 +1116,7 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
     return 0
   }
 
-  throw new UsageError(`unknown registration subcommand '${sub}' — status | enable | disable`)
+  throw new UsageError(`unknown registration subcommand '${sub}' — status | enable | disable | policy`)
 }
 
 /* ---------------------------------------------------------------------------

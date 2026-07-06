@@ -36,6 +36,20 @@ describe('SettingsAssociationService', () => {
     ).toEqual(EncryptionVersion.Unencrypted)
   })
 
+  it('should store the instance-wide registration-disabled flag UNENCRYPTED so Register can compare it by raw value', () => {
+    expect(
+      createService().getEncryptionVersionForSetting(
+        SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
+      ),
+    ).toEqual(EncryptionVersion.Unencrypted)
+  })
+
+  it('should mark the registration-disabled flag UNSENSITIVE so the admin panel can read it back', () => {
+    expect(
+      createService().getSensitivityForSetting(SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue()),
+    ).toBeFalsy()
+  })
+
   it('should return default sensitivity for a setting which sensitivity is not strictly defined', () => {
     expect(
       createService().getSensitivityForSetting(SettingName.create(SettingName.NAMES.DropboxBackupToken).getValue()),

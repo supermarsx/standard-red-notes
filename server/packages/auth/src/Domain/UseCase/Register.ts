@@ -15,6 +15,12 @@ import { ApiVersion } from '../Api/ApiVersion'
 import { ApplyDefaultSettings } from './ApplyDefaultSettings/ApplyDefaultSettings'
 import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremiumFeatures'
 import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import {
+  DEFAULT_REGISTRATION_CONFIG,
+  emailAllowedByPolicy,
+  RegistrationConfig,
+} from '../Registration/RegistrationConfig'
 
 export class Register implements UseCaseInterface {
   constructor(
@@ -39,6 +45,12 @@ export class Register implements UseCaseInterface {
     // call sites / specs keep compiling; when absent, only the boot-time
     // DISABLE_USER_REGISTRATION env governs registration (legacy behavior).
     private settingRepository?: SettingRepositoryInterface,
+    // Standard Red Notes: resolves the admin-configurable registration policy
+    // (default role for new users + email-domain allow/block policy), layering
+    // the persisted admin overlay over the env baseline. Trailing optional param
+    // so existing call sites / specs keep compiling; when absent, Register falls
+    // back to the hardcoded default (CORE_USER, domain policy off).
+    private registrationConfigResolver?: RegistrationConfigResolverInterface,
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
@@ -92,6 +104,18 @@ export class Register implements UseCaseInterface {
     }
     const username = usernameOrError.getValue()
 
+    // Standard Red Notes: resolve the admin-configurable registration policy once
+    // (default role + email-domain policy), layering the persisted admin overlay
+    // over the env baseline. Enforce the email-domain policy before creating any
+    // user so a refused domain never persists a row.
+    const registrationConfig = await this.resolveRegistrationConfig()
+    if (!emailAllowedByPolicy(username.value, registrationConfig)) {
+      return {
+        success: false,
+        errorMessage: 'Registration is not allowed for this email domain.',
+      }
+    }
+
     // Standard Red Notes: when the workspaces-per-email feature is ON, the
     // account is keyed by the composite (email, workspaceIdentifier). An
     // absent/empty workspace name resolves to the 'default' workspace so the
@@ -137,8 +161,15 @@ export class Register implements UseCaseInterface {
     user.encryptedServerKey = await this.crypter.generateEncryptedUserServerKey()
     user.serverEncryptionVersion = User.DEFAULT_ENCRYPTION_VERSION
 
+    // Standard Red Notes: assign the admin-configurable default role (validated
+    // to a canonical NON-admin role; CORE_USER by default). If the configured
+    // role is somehow not seeded in the database, fall back to CORE_USER so a new
+    // account is never left role-less by a misconfiguration.
     const roles = []
-    const defaultRole = await this.roleRepository.findOneByName(RoleName.NAMES.CoreUser)
+    let defaultRole = await this.roleRepository.findOneByName(registrationConfig.defaultRole)
+    if (!defaultRole && registrationConfig.defaultRole !== RoleName.NAMES.CoreUser) {
+      defaultRole = await this.roleRepository.findOneByName(RoleName.NAMES.CoreUser)
+    }
     if (defaultRole) {
       roles.push(defaultRole)
     }
@@ -219,6 +250,26 @@ export class Register implements UseCaseInterface {
     })
 
     return count > 0
+  }
+
+  /**
+   * Standard Red Notes: resolves the effective registration policy. Delegates to
+   * the injected resolver (persisted admin overlay -> env -> default); when no
+   * resolver is wired (legacy call sites / specs) it returns the hardcoded
+   * default (CORE_USER default role, domain policy off). Never throws — a
+   * resolver failure degrades to the default so registration is not taken down
+   * by an unreadable overlay.
+   */
+  private async resolveRegistrationConfig(): Promise<RegistrationConfig> {
+    if (this.registrationConfigResolver === undefined) {
+      return DEFAULT_REGISTRATION_CONFIG
+    }
+
+    try {
+      return await this.registrationConfigResolver.resolve()
+    } catch {
+      return DEFAULT_REGISTRATION_CONFIG
+    }
   }
 
   /**

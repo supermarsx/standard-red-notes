@@ -9,7 +9,7 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
-import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import { REGISTRATION_ASSIGNABLE_ROLES, ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
 import {
   PersistedAiProfile,
@@ -1080,6 +1080,65 @@ export class AdminController extends BaseHttpController {
           powPatch.signInMode = pow.signInMode
           changedSettings.push('security.proofOfWork.signInMode')
         }
+      }
+    }
+
+    // Standard Red Notes: REGISTRATION policy (default role + email-domain policy).
+    // The gateway only PERSISTS these; the AUTH server reads the same overlay file
+    // and ENFORCES them in Register. defaultRole must be an assignable (canonical
+    // non-admin) role; domainMode is off|allowlist|blocklist; domainList is an
+    // array of non-empty domain strings. `null` clears any of them.
+    if (root.registration !== undefined) {
+      if (!root.registration || typeof root.registration !== 'object' || Array.isArray(root.registration)) {
+        return { error: 'registration must be an object.' }
+      }
+      const registration = root.registration as Record<string, unknown>
+      patch.registration = {}
+
+      if (registration.defaultRole !== undefined) {
+        if (registration.defaultRole === null) {
+          patch.registration.defaultRole = null
+        } else if (
+          typeof registration.defaultRole === 'string' &&
+          REGISTRATION_ASSIGNABLE_ROLES.includes(registration.defaultRole)
+        ) {
+          patch.registration.defaultRole = registration.defaultRole
+        } else {
+          return {
+            error: `registration.defaultRole must be one of ${REGISTRATION_ASSIGNABLE_ROLES.join(', ')}, or null to clear it.`,
+          }
+        }
+        changedSettings.push('registration.defaultRole')
+      }
+
+      if (registration.domainMode !== undefined) {
+        if (
+          registration.domainMode !== null &&
+          registration.domainMode !== 'off' &&
+          registration.domainMode !== 'allowlist' &&
+          registration.domainMode !== 'blocklist'
+        ) {
+          return { error: "registration.domainMode must be 'off', 'allowlist' or 'blocklist', or null to clear it." }
+        }
+        patch.registration.domainMode = registration.domainMode as 'off' | 'allowlist' | 'blocklist' | null
+        changedSettings.push('registration.domainMode')
+      }
+
+      if (registration.domainList !== undefined) {
+        if (registration.domainList === null) {
+          patch.registration.domainList = null
+        } else if (
+          Array.isArray(registration.domainList) &&
+          registration.domainList.every((entry) => typeof entry === 'string')
+        ) {
+          const cleaned = (registration.domainList as string[])
+            .map((entry) => entry.trim().toLowerCase().replace(/^[@.]+/, ''))
+            .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index)
+          patch.registration.domainList = cleaned
+        } else {
+          return { error: 'registration.domainList must be an array of domain strings, or null to clear it.' }
+        }
+        changedSettings.push('registration.domainList')
       }
     }
 

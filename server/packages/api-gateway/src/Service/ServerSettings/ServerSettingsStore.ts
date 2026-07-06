@@ -81,11 +81,27 @@ export interface PersistedSecuritySettings {
   proofOfWork?: PersistedProofOfWorkSettings
 }
 
+/**
+ * Standard Red Notes: REGISTRATION policy (default role + email-domain policy).
+ * The api-gateway PERSISTS + VIEWS these (admin pane); the AUTH server reads the
+ * SAME overlay file (SERVER_SETTINGS_PATH) and ENFORCES them in its Register use
+ * case. This shape is therefore a CONTRACT shared with auth — keep the key
+ * names/nesting exactly as the auth side (RegistrationConfigOverlay) expects.
+ * Every field is optional; absence means "fall back to auth's env/default".
+ */
+export interface PersistedRegistrationSettings {
+  /** A canonical, NON-admin role name (CORE_USER / PRO_USER / VAULTS_USER). */
+  defaultRole?: string
+  domainMode?: 'off' | 'allowlist' | 'blocklist'
+  domainList?: string[]
+}
+
 export interface PersistedServerSettings {
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
   nextcloudBackups?: { enabled?: boolean }
   security?: PersistedSecuritySettings
+  registration?: PersistedRegistrationSettings
 }
 
 /**
@@ -117,6 +133,11 @@ export interface ServerSettingsPatch {
       signInDifficulty?: number | null
       signInAdaptiveThreshold?: number | null
     }
+  }
+  registration?: {
+    defaultRole?: string | null
+    domainMode?: 'off' | 'allowlist' | 'blocklist' | null
+    domainList?: string[] | null
   }
 }
 
@@ -193,6 +214,15 @@ export class ServerSettingsStore {
         }
         if (Object.keys(data.security).length === 0) {
           delete data.security
+        }
+      }
+      if (patch.registration) {
+        data.registration = data.registration ?? {}
+        this.applyKey(data.registration, 'defaultRole', patch.registration.defaultRole)
+        this.applyKey(data.registration, 'domainMode', patch.registration.domainMode)
+        this.applyKey(data.registration, 'domainList', patch.registration.domainList)
+        if (Object.keys(data.registration).length === 0) {
+          delete data.registration
         }
       }
       result = data

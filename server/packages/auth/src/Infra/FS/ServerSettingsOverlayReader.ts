@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs'
 
 import { ProofOfWorkOverlay } from '../../Domain/ProofOfWork/ProofOfWorkConfig'
+import { isRegistrationDomainMode, RegistrationConfigOverlay } from '../../Domain/Registration/RegistrationConfig'
 
 /**
  * Standard Red Notes: read-only view of the api-gateway's persisted runtime
@@ -64,6 +65,33 @@ export class ServerSettingsOverlayReader {
     }
     if (typeof pow.signInAdaptiveThreshold === 'number') {
       result.signInAdaptiveThreshold = pow.signInAdaptiveThreshold
+    }
+
+    return result
+  }
+
+  /**
+   * Reads the admin-set REGISTRATION policy overrides from `registration.*`
+   * (default role + email-domain policy). Returns only the fields an admin has
+   * actually persisted (each undefined when unset, so the caller falls through
+   * to env then default). Never throws.
+   */
+  async registration(): Promise<RegistrationConfigOverlay | undefined> {
+    const overlay = await this.read()
+    const registration = overlay?.registration as Record<string, unknown> | undefined
+    if (!registration || typeof registration !== 'object') {
+      return undefined
+    }
+
+    const result: RegistrationConfigOverlay = {}
+    if (typeof registration.defaultRole === 'string') {
+      result.defaultRole = registration.defaultRole
+    }
+    if (isRegistrationDomainMode(registration.domainMode)) {
+      result.domainMode = registration.domainMode
+    }
+    if (Array.isArray(registration.domainList)) {
+      result.domainList = registration.domainList.filter((entry): entry is string => typeof entry === 'string')
     }
 
     return result

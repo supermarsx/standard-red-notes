@@ -363,6 +363,15 @@ export type AdminServerSettings = {
   nextcloudBackups?: {
     enabled?: boolean
   }
+  // Standard Red Notes: REGISTRATION policy (default role for new users + email
+  // domain allow/block policy). Persisted gateway-side; enforced auth-side.
+  registration?: {
+    defaultRole?: string
+    domainMode?: 'off' | 'allowlist' | 'blocklist'
+    domainList?: string[]
+    /** Assignable (canonical non-admin) role choices for the selector. */
+    assignableRoles?: string[]
+  }
 }
 
 export type AdminServerSettingsResponse = {

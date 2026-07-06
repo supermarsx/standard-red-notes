@@ -860,6 +860,10 @@ FLAGS
 SERVER
   registration status                Registration gate: env vs persisted flag
   registration enable|disable        Toggle the PERSISTED runtime flag
+  registration policy [show]         Show the effective signup policy
+  registration policy default-role   Set default role for new users
+  registration policy domain-mode    Set email-domain mode (off|allow|block)
+  registration policy domains        Set the email-domain allow/block list
   webhooks list [user]               Global webhooks (+ a user's, if given)
   webhooks create <url> <ev,ev> [--user <user>]
                                      Register a webhook (global unless --user)
@@ -935,10 +939,14 @@ USAGE
 The limit is a SUBSCRIPTION setting (integer bytes; -1/'unlimited' disables
 the space check). New upload valet tokens honor the new limit immediately;
 tokens issued earlier keep the old embedded limit until they expire.`,
-  registration: `registration — instance-wide signup gate
+  registration: `registration — instance-wide signup gate + policy
 
 USAGE
   srn-admin registration status|enable|disable
+  srn-admin registration policy [show] [--json]
+  srn-admin registration policy default-role <CORE_USER|PRO_USER|VAULTS_USER|clear>
+  srn-admin registration policy domain-mode <off|allowlist|blocklist>
+  srn-admin registration policy domains <comma-separated-domains|clear>
 
 Two independent switches gate signups; registration is blocked when EITHER
 is on:
@@ -948,7 +956,14 @@ is on:
     enable/disable toggles, effective immediately without a restart.
 'status' reports both honestly. 'disable' writes the flag onto an admin
 user's record (pass --as <user> to choose which); 'enable' clears EVERY
-'true' row so no stale record keeps signups blocked.`,
+'true' row so no stale record keeps signups blocked.
+
+'policy' shows/sets the effective signup policy (default role for new users +
+email-domain allow/block policy). It reads the SAME persisted overlay the
+admin panel writes (SERVER_SETTINGS_PATH) layered over the REGISTRATION_* env
+baseline. A listed domain also matches its subdomains (example.com matches
+mail.example.com); matching is case-insensitive. New signups are NEVER given
+the admin role. Setting the policy requires SERVER_SETTINGS_PATH configured.`,
   webhooks: `webhooks — outbound webhook management
 
 USAGE

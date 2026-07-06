@@ -904,6 +904,11 @@ export class LegacyApiService
     nextcloudBackups?: {
       enabled?: boolean | null
     }
+    registration?: {
+      defaultRole?: string | null
+      domainMode?: 'off' | 'allowlist' | 'blocklist' | null
+      domainList?: string[] | null
+    }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,

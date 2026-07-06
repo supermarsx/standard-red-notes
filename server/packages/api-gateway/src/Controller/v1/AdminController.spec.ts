@@ -394,6 +394,51 @@ describe('AdminController server-status', () => {
       expect(payload.settings.nextcloudBackups).toEqual({ enabled: true })
     })
 
+    it('PUT validates the registration policy: bad role, bad mode and bad list are 400s that persist nothing', async () => {
+      const cases = [
+        { registration: { defaultRole: 'ADMIN_USER' } },
+        { registration: { defaultRole: 'NOT_A_ROLE' } },
+        { registration: { domainMode: 'sometimes' } },
+        { registration: { domainList: 'example.com' } },
+        { registration: { domainList: [1, 2] } },
+      ]
+      for (const body of cases) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect((await resolver.resolveRegistrationConfig()).defaultRole).toEqual('CORE_USER')
+    })
+
+    it('PUT persists the registration policy (normalizing the domain list) and auth resolves it', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            registration: {
+              defaultRole: 'PRO_USER',
+              domainMode: 'allowlist',
+              domainList: ['Company.com', 'company.com', '@partner.com'],
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(await resolver.resolveRegistrationConfig()).toEqual({
+        defaultRole: 'PRO_USER',
+        domainMode: 'allowlist',
+        domainList: ['company.com', 'partner.com'],
+      })
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          changedSettings: ['registration.defaultRole', 'registration.domainMode', 'registration.domainList'],
+        }),
+      )
+    })
+
     it('PUT with an explicit null CLEARS the persisted override (source falls back to env)', async () => {
       await resolver.applyPatch({ updateCheck: { url: 'https://persisted.update.example.com' } })
 

@@ -47,6 +47,60 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     })
   })
 
+  describe('registration policy', () => {
+    it('defaults to CORE_USER / off / [] when nothing is persisted or in env', async () => {
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveRegistrationConfig()).toEqual({
+        defaultRole: 'CORE_USER',
+        domainMode: 'off',
+        domainList: [],
+      })
+    })
+
+    it('falls back to the env baseline, normalizing the domain list', async () => {
+      const resolver = makeResolver({
+        registrationDefaultRole: 'PRO_USER',
+        registrationDomainMode: 'allowlist',
+        registrationDomains: ['Env.com', 'env.com', '@other.com'],
+      })
+
+      expect(await resolver.resolveRegistrationConfig()).toEqual({
+        defaultRole: 'PRO_USER',
+        domainMode: 'allowlist',
+        domainList: ['env.com', 'other.com'],
+      })
+    })
+
+    it('lets persisted admin values WIN over env and coerces an invalid role to CORE_USER', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { defaultRole: 'VAULTS_USER', domainMode: 'blocklist', domainList: ['persisted.com'] },
+      })
+      const resolver = makeResolver({ registrationDefaultRole: 'PRO_USER', registrationDomainMode: 'allowlist' })
+
+      expect(await resolver.resolveRegistrationConfig()).toEqual({
+        defaultRole: 'VAULTS_USER',
+        domainMode: 'blocklist',
+        domainList: ['persisted.com'],
+      })
+
+      // An admin role must never survive resolution as a default.
+      await new ServerSettingsStore(filePath).update({ registration: { defaultRole: 'ADMIN_USER' as string } })
+      expect((await resolver.resolveRegistrationConfig()).defaultRole).toEqual('CORE_USER')
+    })
+
+    it('reports the registration source map and assignable roles in the view', async () => {
+      await new ServerSettingsStore(filePath).update({ registration: { domainMode: 'allowlist' } })
+      const resolver = makeResolver({ registrationDefaultRole: 'PRO_USER' })
+      const view = await resolver.view()
+
+      expect(view.settings.registration.assignableRoles).toEqual(['CORE_USER', 'PRO_USER', 'VAULTS_USER'])
+      expect(view.sources['registration.domainMode']).toEqual('persisted')
+      expect(view.sources['registration.defaultRole']).toEqual('env')
+      expect(view.sources['registration.domainList']).toEqual('default')
+    })
+  })
+
   describe('resolver precedence: persisted → env → default', () => {
     it('falls back to env values when nothing is persisted', async () => {
       const resolver = makeResolver({

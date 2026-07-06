@@ -224,6 +224,7 @@ const TYPES = {
   Auth_RequestProofOfWorkChallenge: Symbol.for('Auth_RequestProofOfWorkChallenge'),
   Auth_VerifyProofOfWork: Symbol.for('Auth_VerifyProofOfWork'),
   Auth_ProofOfWorkConfigResolver: Symbol.for('Auth_ProofOfWorkConfigResolver'),
+  Auth_RegistrationConfigResolver: Symbol.for('Auth_RegistrationConfigResolver'),
   Auth_ProofOfWorkGate: Symbol.for('Auth_ProofOfWorkGate'),
   Auth_CreateMcpToken: Symbol.for('Auth_CreateMcpToken'),
   Auth_ListMcpTokens: Symbol.for('Auth_ListMcpTokens'),

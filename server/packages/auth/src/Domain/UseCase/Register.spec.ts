@@ -14,6 +14,8 @@ import { Result, RoleName } from '@standardnotes/domain-core'
 import { ApplyDefaultSettings } from './ApplyDefaultSettings/ApplyDefaultSettings'
 import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremiumFeatures'
 import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { RegistrationConfig } from '../Registration/RegistrationConfig'
 
 describe('Register', () => {
   let userRepository: UserRepositoryInterface
@@ -428,6 +430,137 @@ describe('Register', () => {
       // Env short-circuits before the setting store is consulted.
       expect(settingRepository.countAllByNameAndValue).not.toHaveBeenCalled()
       expect(userRepository.save).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Standard Red Notes: configurable default role + email-domain policy', () => {
+    const makeResolver = (config: Partial<RegistrationConfig>): RegistrationConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        ...config,
+      } as RegistrationConfig),
+    })
+
+    const createUseCaseWithResolver = (resolver: RegistrationConfigResolverInterface) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        resolver,
+      )
+
+    const dtoFor = (email: string) => ({
+      email,
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      pwCost: 11,
+      pwSalt: 'qweqwe',
+      pwNonce: undefined,
+    })
+
+    it('assigns the admin-configured default role to a new user', async () => {
+      const proRole = { name: RoleName.NAMES.ProUser } as unknown as Role
+      roleRepository.findOneByName = jest.fn().mockResolvedValue(proRole)
+
+      const result = await createUseCaseWithResolver(
+        makeResolver({ defaultRole: RoleName.NAMES.ProUser }),
+      ).execute(dtoFor('person@example.com'))
+
+      expect(result.success).toBe(true)
+      expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.ProUser)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      await expect(savedUser.roles).resolves.toEqual([proRole])
+    })
+
+    it('defaults to CORE_USER when no resolver is wired (legacy behavior)', async () => {
+      roleRepository.findOneByName = jest.fn().mockResolvedValue(null)
+
+      await createUseCase().execute(dtoFor('person@example.com'))
+
+      expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.CoreUser)
+    })
+
+    it('falls back to CORE_USER when the configured role is not seeded in the database', async () => {
+      const coreRole = { name: RoleName.NAMES.CoreUser } as unknown as Role
+      roleRepository.findOneByName = jest.fn().mockImplementation((name: string) =>
+        Promise.resolve(name === RoleName.NAMES.CoreUser ? coreRole : null),
+      )
+
+      const result = await createUseCaseWithResolver(
+        makeResolver({ defaultRole: RoleName.NAMES.VaultsUser }),
+      ).execute(dtoFor('person@example.com'))
+
+      expect(result.success).toBe(true)
+      expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.VaultsUser)
+      expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.CoreUser)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      await expect(savedUser.roles).resolves.toEqual([coreRole])
+    })
+
+    it('allowlist: refuses an email whose domain is NOT in the list', async () => {
+      const result = await createUseCaseWithResolver(
+        makeResolver({ domainMode: 'allowlist', domainList: ['company.com'] }),
+      ).execute(dtoFor('person@example.com'))
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'Registration is not allowed for this email domain.',
+      })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('allowlist: allows an email whose domain (or subdomain) is in the list', async () => {
+      const result = await createUseCaseWithResolver(
+        makeResolver({ domainMode: 'allowlist', domainList: ['company.com'] }),
+      ).execute(dtoFor('person@eu.company.com'))
+
+      expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalled()
+    })
+
+    it('blocklist: refuses an email whose domain is in the list', async () => {
+      const result = await createUseCaseWithResolver(
+        makeResolver({ domainMode: 'blocklist', domainList: ['spam.com'] }),
+      ).execute(dtoFor('person@spam.com'))
+
+      expect(result).toEqual({
+        success: false,
+        errorMessage: 'Registration is not allowed for this email domain.',
+      })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('blocklist: allows an email whose domain is NOT in the list', async () => {
+      const result = await createUseCaseWithResolver(
+        makeResolver({ domainMode: 'blocklist', domainList: ['spam.com'] }),
+      ).execute(dtoFor('person@example.com'))
+
+      expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalled()
+    })
+
+    it('off: allows any email domain', async () => {
+      const result = await createUseCaseWithResolver(
+        makeResolver({ domainMode: 'off', domainList: ['company.com'] }),
+      ).execute(dtoFor('person@anywhere.example'))
+
+      expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalled()
     })
   })
 
