@@ -323,10 +323,10 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
 const ASSISTANT_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }[] = [
   { id: 'connection', title: 'Connection', icon: 'link' },
   { id: 'behavior', title: 'Behavior', icon: 'tune' },
-  { id: 'model', title: 'Model', icon: 'settings' },
+  { id: 'model', title: 'Model', icon: 'box' },
   { id: 'search', title: 'Search', icon: 'search' },
   { id: 'voice', title: 'Voice', icon: 'file-music' },
-  { id: 'actions', title: 'Actions', icon: 'pencil' },
+  { id: 'actions', title: 'Actions', icon: 'tasks' },
 ]
 
 const Assistant = ({ application }: { application: WebApplication }) => {

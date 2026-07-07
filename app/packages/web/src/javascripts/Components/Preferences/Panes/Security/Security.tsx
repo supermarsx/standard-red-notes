@@ -90,7 +90,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
     {
       id: 'two-factor',
       title: 'Two-factor',
-      icon: 'user-switch',
+      icon: 'authenticator',
       content: (
         <>
           <TwoFactorAuthView auth={auth} application={props.application} canDisable2FA={canDisable2FA} />
@@ -108,7 +108,7 @@ const Security: FunctionComponent<SecurityProps> = (props) => {
     {
       id: 'tokens',
       title: 'Tokens & devices',
-      icon: 'link',
+      icon: 'safe',
       hidden: !hasUser,
       content: (
         <>

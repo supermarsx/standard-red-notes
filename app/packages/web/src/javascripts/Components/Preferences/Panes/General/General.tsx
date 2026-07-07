@@ -53,7 +53,7 @@ const General: FunctionComponent = () => {
     {
       id: 'privacy',
       title: 'Privacy & data',
-      icon: 'lock',
+      icon: 'eye-off',
       content: (
         <>
           <FileUploadPrivacy />
@@ -64,7 +64,7 @@ const General: FunctionComponent = () => {
     {
       id: 'tools',
       title: 'Tools & labs',
-      icon: 'tune',
+      icon: 'code',
       content: (
         <>
           <Tools application={application} />
