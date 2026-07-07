@@ -23,6 +23,14 @@ export interface LegacyApiServiceInterface
    */
   downloadPluginsIndex(): Promise<HttpResponse>
 
+  /**
+   * Standard Red Notes: fetch the client-readable plugins config
+   * ({ repoUrl, sameOriginRendering }) used to decide whether to rewrite a
+   * trusted-repo component's external `hosted_url` to the same-origin component
+   * route so its iframe renders under the strict CSP `frame-src 'self'`.
+   */
+  downloadPluginsConfig(): Promise<HttpResponse>
+
   getSyncHttpRequest(
     payloads: ServerSyncPushContextualPayload[],
     lastSyncToken: string | undefined,

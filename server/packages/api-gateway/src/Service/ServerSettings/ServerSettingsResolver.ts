@@ -122,6 +122,14 @@ export interface EnvSettingsBaseline {
    * (falls through to the hardcoded Standard Notes default).
    */
   pluginsRepoUrl?: string
+  /**
+   * Standard Red Notes: PLUGINS same-origin component RENDERING opt-in
+   * (PLUGINS_SAME_ORIGIN_RENDERING). Default OFF. When on, the gateway serves a
+   * trusted-repo plugin component SAME-ORIGIN so its iframe renders under the
+   * strict CSP `frame-src 'self'`. undefined = env var unset (falls through to
+   * the hardcoded default, OFF).
+   */
+  pluginsSameOriginRendering?: boolean
 }
 
 export type RegistrationDomainMode = 'off' | 'allowlist' | 'blocklist'
@@ -285,6 +293,15 @@ const WORKFLOWS_DEFAULTS: ResolvedWorkflowsConfig = {
 export const DEFAULT_PLUGINS_REPO_URL = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist'
 
 /**
+ * Standard Red Notes: same-origin component RENDERING is OFF by default. Serving
+ * third-party plugin code from the SN origin (so its iframe satisfies the strict
+ * CSP `frame-src 'self'`) is a real trust decision, so an admin must opt in. When
+ * OFF the behavior is exactly as before: the installed component keeps its
+ * external `hosted_url` and its iframe is blocked by the CSP.
+ */
+export const DEFAULT_PLUGINS_SAME_ORIGIN_RENDERING = false
+
+/**
  * Validate + normalize a plugins repo BASE url. Must be an http(s) absolute URL;
  * a trailing slash is stripped so `<base>/packages.json` composes cleanly. A
  * value that does not parse or is not http(s) returns undefined so the caller
@@ -385,8 +402,11 @@ export interface ServerSettingsView {
     }
     ocr: ResolvedOcrConfig
     workflows: ResolvedWorkflowsConfig
-    /** Standard Red Notes: the effective plugins repo base URL. */
-    plugins: { repoUrl: string }
+    /**
+     * Standard Red Notes: the effective plugins repo base URL + the same-origin
+     * component-rendering opt-in.
+     */
+    plugins: { repoUrl: string; sameOriginRendering: boolean }
   }
   sources: Record<string, ServerSettingSource>
 }
@@ -540,6 +560,22 @@ export class ServerSettingsResolver {
       normalizePluginsRepoUrl(this.envBaseline.pluginsRepoUrl) ??
       DEFAULT_PLUGINS_REPO_URL
     )
+  }
+
+  /**
+   * The effective PLUGINS same-origin RENDERING opt-in: persisted admin value wins
+   * over the PLUGINS_SAME_ORIGIN_RENDERING env baseline, which falls back to the
+   * hardcoded default (OFF). Re-read per call so an admin toggle takes effect on
+   * the next request without a restart. Default OFF keeps a stock deploy behaving
+   * exactly as before (external hosted_url, blocked by CSP).
+   */
+  async resolvePluginsSameOriginRendering(): Promise<boolean> {
+    const persisted = await this.safeRead()
+    const value = persisted.plugins?.sameOriginRendering
+
+    return typeof value === 'boolean'
+      ? value
+      : this.envBaseline.pluginsSameOriginRendering ?? DEFAULT_PLUGINS_SAME_ORIGIN_RENDERING
   }
 
   /** Effective Nextcloud-backups master gate (gateway-side VIEW; default OFF). */
@@ -778,6 +814,7 @@ export class ServerSettingsResolver {
     const workflowsConfig = await this.resolveWorkflowsConfig()
     const plugins = persisted.plugins ?? {}
     const pluginsRepoUrl = await this.resolvePluginsRepoUrl()
+    const pluginsSameOriginRendering = await this.resolvePluginsSameOriginRendering()
     const sources: Record<string, ServerSettingSource> = {
       'ai.anthropicApiKey': this.source(ai.anthropicApiKey, env.assistant.anthropicApiKey),
       'ai.openaiApiKey': this.source(ai.openaiApiKey, env.assistant.openaiApiKey),
@@ -844,6 +881,7 @@ export class ServerSettingsResolver {
       'workflows.uiBasePath': this.source(workflows.uiBasePath, env.workflowsUiBasePath),
       'workflows.uiTokenTtlSeconds': this.source(workflows.uiTokenTtlSeconds, env.workflowsUiTokenTtlSeconds),
       'plugins.repoUrl': this.source(plugins.repoUrl, env.pluginsRepoUrl),
+      'plugins.sameOriginRendering': this.source(plugins.sameOriginRendering, env.pluginsSameOriginRendering),
     }
 
     return {
@@ -876,7 +914,7 @@ export class ServerSettingsResolver {
         },
         ocr: ocrConfig,
         workflows: workflowsConfig,
-        plugins: { repoUrl: pluginsRepoUrl },
+        plugins: { repoUrl: pluginsRepoUrl, sameOriginRendering: pluginsSameOriginRendering },
       },
       sources,
     }

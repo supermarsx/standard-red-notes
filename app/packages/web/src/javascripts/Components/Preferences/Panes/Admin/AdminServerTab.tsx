@@ -476,6 +476,18 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     )
   }, [pluginsRepoUrl, saveServerSettings])
 
+  const togglePluginsSameOriginRendering = useCallback(
+    async (nextValue: boolean) => {
+      await saveServerSettings(
+        { plugins: { sameOriginRendering: nextValue } },
+        nextValue
+          ? 'Same-origin plugin rendering enabled.'
+          : 'Same-origin plugin rendering disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
   const toggleNextcloudBackups = useCallback(
     async (nextValue: boolean) => {
       await saveServerSettings(
@@ -1067,6 +1079,36 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   disabled={settingsSaving}
                 />
               </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 flex-col">
+                <div className="flex items-center gap-2">
+                  <Subtitle>Same-origin plugin rendering</Subtitle>
+                  <SourceChip
+                    sources={settingsSources}
+                    keys={['plugins.sameOriginRendering', 'pluginsSameOriginRendering']}
+                  />
+                </div>
+                <Text className="mt-1 text-xs">
+                  Render externally-hosted plugin components from the repository above by serving their files through
+                  this server under <code>/v1/plugins/component/…</code>, so the plugin&apos;s iframe loads same-origin
+                  and the strict Content-Security-Policy (<code>frame-src &apos;self&apos;</code>) allows it — no CSP
+                  change. Only files under the configured repository URL are ever served (SSRF-guarded).{' '}
+                  <strong>Security note:</strong> this serves third-party plugin code from this server&apos;s origin. The
+                  plugin still runs in a sandboxed iframe with no access to your notes&apos; origin (it communicates only
+                  through the plugin message API), but enabling this is a trust decision — leave it off unless you trust
+                  the configured repository. When off, external plugins remain blocked by the CSP as before.
+                </Text>
+              </div>
+              {settingsSaving ? (
+                <Spinner className="h-5 w-5 shrink-0" />
+              ) : (
+                <Switch
+                  checked={Boolean(serverSettings?.plugins?.sameOriginRendering)}
+                  onChange={(checked) => void togglePluginsSameOriginRendering(checked)}
+                />
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-4">

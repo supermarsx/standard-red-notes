@@ -974,6 +974,7 @@ export class LegacyApiService
     // repo server-side so the client fetches the index same-origin (strict CSP).
     plugins?: {
       repoUrl?: string | null
+      sameOriginRendering?: boolean | null
     }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
@@ -1886,6 +1887,22 @@ export class LegacyApiService
       url: joinPaths(this.host, Paths.v1.pluginsIndex),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to download the plugins list.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: fetch the client-readable plugins config
+   * ({ repoUrl, sameOriginRendering }) via the gateway. The web client uses it to
+   * decide whether to rewrite an installed trusted-repo component's external
+   * `hosted_url` to the same-origin component route so its iframe renders under
+   * the strict CSP `frame-src 'self'`. Authenticated with the session token.
+   */
+  public downloadPluginsConfig(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.pluginsConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load the plugins configuration.',
     })
   }
 

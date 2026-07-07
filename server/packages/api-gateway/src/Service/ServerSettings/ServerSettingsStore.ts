@@ -192,9 +192,20 @@ export interface PersistedWorkflowsSettings {
  * admin change takes effect WITHOUT a restart. Absent = fall through to env
  * (PLUGINS_REPO_URL) then the hardcoded Standard Notes default, so a stock
  * deploy is unchanged until edited.
+ *
+ * `sameOriginRendering` is an OPT-IN admin trust decision (default OFF): when on,
+ * the gateway ALSO serves a trusted-repo plugin component's files SAME-ORIGIN
+ * (GET /v1/plugins/component/<relPath>) so its iframe can load under the strict
+ * CSP `frame-src 'self'` and actually RENDER. Serving third-party code from the
+ * SN origin is why this is opt-in; the component stays SANDBOXED (opaque origin,
+ * no parent DOM/storage access) so same-origin serving grants it no extra trust.
+ * Absent = fall through to env (PLUGINS_SAME_ORIGIN_RENDERING) then the hardcoded
+ * default (OFF), so a stock deploy behaves exactly as before (external hosted_url,
+ * blocked by CSP).
  */
 export interface PersistedPluginsSettings {
   repoUrl?: string
+  sameOriginRendering?: boolean
 }
 
 export interface PersistedServerSettings {
@@ -273,6 +284,7 @@ export interface ServerSettingsPatch {
   }
   plugins?: {
     repoUrl?: string | null
+    sameOriginRendering?: boolean | null
   }
 }
 
@@ -408,6 +420,7 @@ export class ServerSettingsStore {
       if (patch.plugins) {
         data.plugins = data.plugins ?? {}
         this.applyKey(data.plugins, 'repoUrl', patch.plugins.repoUrl)
+        this.applyKey(data.plugins, 'sameOriginRendering', patch.plugins.sameOriginRendering)
         if (Object.keys(data.plugins).length === 0) {
           delete data.plugins
         }

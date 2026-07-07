@@ -1528,8 +1528,18 @@ export class AdminController extends BaseHttpController {
         if (value !== null && typeof value === 'object') {
           return value
         }
-        patch.plugins = { repoUrl: value }
+        patch.plugins = { ...(patch.plugins ?? {}), repoUrl: value }
         changedSettings.push('plugins.repoUrl')
+      }
+      // Same-origin component RENDERING opt-in. A boolean (serve trusted-repo
+      // components same-origin so their iframes render under `frame-src 'self'`),
+      // or null to clear (fall back to PLUGINS_SAME_ORIGIN_RENDERING env / OFF).
+      if (plugins.sameOriginRendering !== undefined) {
+        if (plugins.sameOriginRendering !== null && typeof plugins.sameOriginRendering !== 'boolean') {
+          return { error: 'plugins.sameOriginRendering must be a boolean, or null to clear it.' }
+        }
+        patch.plugins = { ...(patch.plugins ?? {}), sameOriginRendering: plugins.sameOriginRendering }
+        changedSettings.push('plugins.sameOriginRendering')
       }
     }
 

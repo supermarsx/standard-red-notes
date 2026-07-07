@@ -14,6 +14,7 @@ import UrlMissing from '@/Components/ComponentView/UrlMissing'
 import IsDeprecated from '@/Components/ComponentView/IsDeprecated'
 import IssueOnLoading from '@/Components/ComponentView/IssueOnLoading'
 import { useApplication } from '../ApplicationProvider'
+import { rewriteComponentUrlForSameOrigin, usePluginsSameOriginConfig } from './pluginsSameOrigin'
 
 interface Props {
   componentViewer: ComponentViewerInterface
@@ -53,6 +54,22 @@ const IframeFeatureView: FunctionComponent<Props> = ({
   const [didAttemptReload, setDidAttemptReload] = useState(false)
 
   const uiFeature = componentViewer.getComponentOrFeatureItem()
+
+  /**
+   * Standard Red Notes: when the admin has opted into same-origin plugin rendering
+   * AND this component's external `hosted_url` lives under the configured trusted
+   * repo base, rewrite the iframe src to the same-origin component-serve route so
+   * it loads under the strict CSP `frame-src 'self'`. Any other URL (native
+   * components, or a host outside the trusted base) is left unchanged, and until
+   * the config loads the original URL is used — so behavior is exactly today's
+   * when the opt-in is off. The iframe stays sandboxed WITHOUT allow-same-origin,
+   * so same-origin serving grants no access to the parent SN origin.
+   */
+  const pluginsSameOriginConfig = usePluginsSameOriginConfig(application)
+  const iframeSrc = useMemo(
+    () => rewriteComponentUrlForSameOrigin(componentViewer.url || '', pluginsSameOriginConfig),
+    [componentViewer.url, pluginsSameOriginConfig],
+  )
 
   const reloadValidityStatus = useCallback(() => {
     setFeatureStatus(componentViewer.getFeatureStatus())
@@ -247,7 +264,7 @@ const IframeFeatureView: FunctionComponent<Props> = ({
           onLoad={onIframeLoad}
           data-component-viewer-id={componentViewer.identifier}
           frameBorder={0}
-          src={componentViewer.url || ''}
+          src={iframeSrc}
           sandbox={sandboxAttributes.join(' ')}
           {...(usedInModal && { 'data-used-in-modal': true })}
         >

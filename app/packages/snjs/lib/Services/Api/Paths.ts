@@ -246,6 +246,21 @@ export const Paths = {
     // `connect-src 'self'` is satisfied without the client hitting an external CDN.
     pluginsIndex: '/v1/plugins/index',
     pluginsDownload: (path: string) => `/v1/plugins/download?path=${encodeURIComponent(path)}`,
+    // Standard Red Notes: the client-readable plugins config ({ repoUrl,
+    // sameOriginRendering }) used to decide same-origin component-URL rewriting.
+    pluginsConfig: '/v1/plugins/config',
+    // Standard Red Notes: same-origin component-serve route. `relativePath` is a
+    // file path RELATIVE to the trusted repo base (including the component's
+    // directory hierarchy); each segment is encoded but the slashes are preserved
+    // so the browser resolves the component's relative asset refs back through
+    // this same route. Used as the RENDERING iframe src so `frame-src 'self'` is
+    // satisfied without a CSP change.
+    pluginsComponent: (relativePath: string) =>
+      `/v1/plugins/component/${relativePath
+        .split('/')
+        .filter((segment) => segment.length > 0)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/')}`,
     meta: '/v1/meta',
   },
   v2: {

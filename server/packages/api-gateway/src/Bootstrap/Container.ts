@@ -385,6 +385,12 @@ export class ContainerConfigLoader {
       // repo server-side so the client fetches it SAME-ORIGIN (strict CSP). Unset
       // => the resolver falls back to the Standard Notes default (behavior unchanged).
       pluginsRepoUrl: env.get('PLUGINS_REPO_URL', true) || undefined,
+      // Standard Red Notes: same-origin component RENDERING opt-in. Default OFF —
+      // the resolver falls back to OFF so a stock deploy keeps external hosted_url
+      // (blocked by CSP) exactly as before. Admin overlay wins over this env.
+      pluginsSameOriginRendering: env.get('PLUGINS_SAME_ORIGIN_RENDERING', true)
+        ? env.get('PLUGINS_SAME_ORIGIN_RENDERING', true) === 'true'
+        : undefined,
     })
     container.bind<ServerSettingsStore>(TYPES.ApiGateway_ServerSettingsStore).toConstantValue(serverSettingsStore)
     container

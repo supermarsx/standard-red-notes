@@ -506,6 +506,9 @@ export type AdminServerSettings = {
   // strict CSP. The index is fetched at `<repoUrl>/packages.json`.
   plugins?: {
     repoUrl?: string
+    // Standard Red Notes: opt-in to serving trusted-repo plugin components
+    // SAME-ORIGIN so their iframes render under the strict CSP `frame-src 'self'`.
+    sameOriginRendering?: boolean
   }
 }
 

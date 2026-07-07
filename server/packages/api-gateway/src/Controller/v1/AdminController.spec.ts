@@ -709,8 +709,34 @@ describe('AdminController server-status', () => {
       expect(await resolver.resolvePluginsRepoUrl()).toBe('https://mirror.example.com/plugins')
 
       const payload = jsonMock.mock.calls[0][0]
-      expect(payload.settings.plugins).toEqual({ repoUrl: 'https://mirror.example.com/plugins' })
+      expect(payload.settings.plugins).toEqual({
+        repoUrl: 'https://mirror.example.com/plugins',
+        sameOriginRendering: false,
+      })
       expect(payload.sources['plugins.repoUrl']).toBe('persisted')
+    })
+
+    it('PUT persists the same-origin rendering opt-in and returns it in the view', async () => {
+      await settingsController().setServerSettings(
+        { body: { plugins: { sameOriginRendering: true } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(await resolver.resolvePluginsSameOriginRendering()).toBe(true)
+
+      const payload = jsonMock.mock.calls[0][0]
+      expect(payload.settings.plugins.sameOriginRendering).toBe(true)
+      expect(payload.sources['plugins.sameOriginRendering']).toBe('persisted')
+    })
+
+    it('PUT rejects a non-boolean same-origin rendering value as a 400 that persists nothing', async () => {
+      await settingsController().setServerSettings(
+        { body: { plugins: { sameOriginRendering: 'yes' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(400)
+      expect(await resolver.resolvePluginsSameOriginRendering()).toBe(false)
+      expect(logger.info).not.toHaveBeenCalled()
     })
 
     it('PUT rejects a non-http plugins repo URL as a 400 that persists nothing', async () => {

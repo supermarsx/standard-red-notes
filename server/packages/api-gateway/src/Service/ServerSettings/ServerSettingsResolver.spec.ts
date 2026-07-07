@@ -700,8 +700,43 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       await resolver.applyPatch({ plugins: { repoUrl: 'https://persisted.example.com/p' } })
 
       const view = await resolver.view()
-      expect(view.settings.plugins).toEqual({ repoUrl: 'https://persisted.example.com/p' })
+      expect(view.settings.plugins).toEqual({ repoUrl: 'https://persisted.example.com/p', sameOriginRendering: false })
       expect(view.sources).toMatchObject({ 'plugins.repoUrl': 'persisted' })
+    })
+  })
+
+  describe('plugins same-origin rendering opt-in', () => {
+    it('defaults to OFF when nothing is persisted or in env', async () => {
+      expect(await makeResolver().resolvePluginsSameOriginRendering()).toBe(false)
+    })
+
+    it('uses the env baseline when set', async () => {
+      expect(await makeResolver({ pluginsSameOriginRendering: true }).resolvePluginsSameOriginRendering()).toBe(true)
+    })
+
+    it('lets a persisted admin value win over env (both directions)', async () => {
+      const resolver = makeResolver({ pluginsSameOriginRendering: false })
+      await resolver.applyPatch({ plugins: { sameOriginRendering: true } })
+      expect(await resolver.resolvePluginsSameOriginRendering()).toBe(true)
+
+      await resolver.applyPatch({ plugins: { sameOriginRendering: false } })
+      expect(await resolver.resolvePluginsSameOriginRendering()).toBe(false)
+    })
+
+    it('clears the override on null so it falls back to env/default', async () => {
+      const resolver = makeResolver({ pluginsSameOriginRendering: true })
+      await resolver.applyPatch({ plugins: { sameOriginRendering: false } })
+      await resolver.applyPatch({ plugins: { sameOriginRendering: null } })
+      expect(await resolver.resolvePluginsSameOriginRendering()).toBe(true)
+    })
+
+    it('reports the resolved value + source in the view', async () => {
+      const resolver = makeResolver()
+      await resolver.applyPatch({ plugins: { sameOriginRendering: true } })
+
+      const view = await resolver.view()
+      expect(view.settings.plugins.sameOriginRendering).toBe(true)
+      expect(view.sources).toMatchObject({ 'plugins.sameOriginRendering': 'persisted' })
     })
   })
 })
