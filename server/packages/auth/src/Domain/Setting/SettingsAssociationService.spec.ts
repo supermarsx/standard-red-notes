@@ -171,6 +171,49 @@ describe('SettingsAssociationService', () => {
     })
   })
 
+  describe('instance-wide registration-disabled flag (Standard Red Notes, admin-only)', () => {
+    it('should be a valid, recognized setting name', () => {
+      const result = SettingName.create(SettingName.NAMES.RegistrationDisabled)
+      expect(result.isFailed()).toBeFalsy()
+      expect(result.getValue().value).toEqual('REGISTRATION_DISABLED')
+    })
+
+    it('should be IMMUTABLE by the client so a non-admin cannot disable registration instance-wide', () => {
+      // Regression guard for the broken-access-control fix: if this ever becomes
+      // client-mutable again, an authenticated non-admin could PUT
+      // REGISTRATION_DISABLED='true' on their own record and take down signups.
+      expect(
+        createService().isSettingMutableByClient(
+          SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
+        ),
+      ).toBeFalsy()
+    })
+
+    it('should be stored unencrypted so Register can compare its raw value instance-wide', () => {
+      expect(
+        createService().getEncryptionVersionForSetting(
+          SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
+        ),
+      ).toEqual(EncryptionVersion.Unencrypted)
+    })
+
+    it('should be unsensitive (plain readable value) so the admin panel can display it', () => {
+      expect(
+        createService().getSensitivityForSetting(
+          SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
+        ),
+      ).toBeFalsy()
+    })
+
+    it('should not be part of any default settings for new accounts', () => {
+      const newUserSettings = createService().getDefaultSettingsAndValuesForNewUser()
+      const newVaultSettings = createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount()
+
+      expect(newUserSettings.has(SettingName.NAMES.RegistrationDisabled)).toBeFalsy()
+      expect(newVaultSettings.has(SettingName.NAMES.RegistrationDisabled)).toBeFalsy()
+    })
+  })
+
   describe('client default settings (Standard Red Notes): conflict-resolution & search-index', () => {
     const clientDefaultSettings = [
       SettingName.NAMES.ConflictResolutionStrategy,

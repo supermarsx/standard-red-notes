@@ -113,6 +113,21 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // Standard Red Notes: last-run bookkeeping for scheduled Nextcloud backups is
     // written only by the server-side trigger job; clients may not mutate it.
     SettingName.NAMES.NextcloudBackupLastRun,
+    // Standard Red Notes: the instance-wide "registration disabled" flag is an
+    // ADMIN-ONLY control. It must NOT be writable through the ordinary user
+    // settings endpoint (BaseSettingsController's user-settings PUT, which lets a
+    // user write their OWN settings with checkUserPermissions:true) — otherwise a
+    // normal authenticated user could persist REGISTRATION_DISABLED='true' on their
+    // own record and disable signups instance-wide (a persistent DoS). Marking it
+    // client-immutable makes isSettingMutableByClient() return false so
+    // SetSettingValue.userHasPermissionToUpdateSetting() refuses that client write.
+    // The admin panel write path (BaseAdminController.setRegistrationFlag) is
+    // unaffected: it calls SetSettingValue with checkUserPermissions:false, which
+    // bypasses the client-permission check entirely, so the admin can still toggle
+    // it. Register additionally only counts admin-owned REGISTRATION_DISABLED rows
+    // (see Register.registrationDisabledBySetting), so any stale non-admin row
+    // written before this fix is ignored.
+    SettingName.NAMES.RegistrationDisabled,
   ]
 
   private readonly permissionsAssociatedWithSettings = new Map<string, PermissionName>([

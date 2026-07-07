@@ -264,10 +264,21 @@ export class Register implements UseCaseInterface {
    * Standard Red Notes: consult the admin-panel-persisted REGISTRATION_DISABLED
    * flag at runtime. The flag is stored as a setting on the admin's OWN user
    * record (see BaseAdminController.setRegistrationFlag), so we can't key the
-   * lookup on the registering user. Instead we count, across all users, settings
-   * named REGISTRATION_DISABLED whose value is 'true': a single such row means an
-   * admin has turned registration off instance-wide. Fails OPEN (returns false)
-   * when no setting store is wired, so the env behavior is preserved.
+   * lookup on the registering user. Instead we count settings named
+   * REGISTRATION_DISABLED whose value is 'true' AND that are owned by a user
+   * holding the ADMIN_USER role: a single such row means an admin has turned
+   * registration off instance-wide.
+   *
+   * The count is deliberately scoped to admin-owned rows (rather than every user)
+   * so that a REGISTRATION_DISABLED='true' row written by a NON-admin cannot
+   * disable signups. The user-settings write path is already blocked from writing
+   * this setting (it is CLIENT_IMMUTABLE — see SettingsAssociationService), and
+   * scoping the count here means any stale malicious row persisted before that fix
+   * is ignored too. This also keeps the count consistent with the admin panel,
+   * which reads/writes the flag on the (admin) requestor's own record.
+   *
+   * Fails OPEN (returns false) when no setting store is wired, so the env behavior
+   * is preserved.
    */
   private async registrationDisabledBySetting(): Promise<boolean> {
     if (this.settingRepository === undefined) {
@@ -279,9 +290,10 @@ export class Register implements UseCaseInterface {
       return false
     }
 
-    const count = await this.settingRepository.countAllByNameAndValue({
+    const count = await this.settingRepository.countAllByNameAndValueOwnedByRole({
       name: nameOrError.getValue(),
       value: 'true',
+      roleName: RoleName.NAMES.AdminUser,
     })
 
     return count > 0

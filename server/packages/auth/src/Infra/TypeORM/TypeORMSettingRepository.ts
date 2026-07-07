@@ -22,6 +22,28 @@ export class TypeORMSettingRepository implements SettingRepositoryInterface {
       .getCount()
   }
 
+  // Standard Red Notes: count settings with the given name+value that are owned by
+  // a user holding the given role. Joins settings -> user_roles -> roles so only
+  // rows belonging to (e.g.) an ADMIN_USER are counted. Column names are used raw
+  // in the join/where fragments because user_roles and roles are not TypeORM
+  // relations of TypeORMSetting.
+  async countAllByNameAndValueOwnedByRole(dto: {
+    name: SettingName
+    value: string
+    roleName: string
+  }): Promise<number> {
+    return this.ormRepository
+      .createQueryBuilder('setting')
+      .innerJoin('user_roles', 'user_role', 'user_role.user_uuid = setting.user_uuid')
+      .innerJoin('roles', 'role', 'role.uuid = user_role.role_uuid')
+      .where('setting.name = :name AND setting.value = :value AND role.name = :roleName', {
+        name: dto.name.value,
+        value: dto.value,
+        roleName: dto.roleName,
+      })
+      .getCount()
+  }
+
   async findAllByNameAndValue(dto: {
     name: SettingName
     value: string

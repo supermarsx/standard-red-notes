@@ -372,9 +372,9 @@ describe('Register', () => {
       pwNonce: undefined,
     }
 
-    it('blocks registration when the persisted flag is set even though the env override is OFF', async () => {
+    it('blocks registration when an admin-owned persisted flag is set even though the env override is OFF', async () => {
       const settingRepository = {
-        countAllByNameAndValue: jest.fn().mockResolvedValue(1),
+        countAllByNameAndValueOwnedByRole: jest.fn().mockResolvedValue(1),
       } as unknown as SettingRepositoryInterface
 
       const result = await createUseCaseWithSettingRepository(settingRepository).execute(dto)
@@ -383,16 +383,21 @@ describe('Register', () => {
         success: false,
         errorMessage: 'User registration is currently not allowed.',
       })
-      expect(settingRepository.countAllByNameAndValue).toHaveBeenCalledWith({
+      // The count is scoped to rows OWNED BY AN ADMIN so a non-admin can never
+      // disable registration by persisting the flag on their own record.
+      expect(settingRepository.countAllByNameAndValueOwnedByRole).toHaveBeenCalledWith({
         name: expect.objectContaining({ props: { value: 'REGISTRATION_DISABLED' } }),
         value: 'true',
+        roleName: RoleName.NAMES.AdminUser,
       })
       expect(userRepository.save).not.toHaveBeenCalled()
     })
 
-    it('allows registration when the persisted flag is NOT set', async () => {
+    it('allows registration when no admin-owned persisted flag is set (e.g. only a stale non-admin row exists)', async () => {
+      // The repository counts only admin-owned rows, so a leftover non-admin
+      // REGISTRATION_DISABLED='true' row resolves to a count of 0 here.
       const settingRepository = {
-        countAllByNameAndValue: jest.fn().mockResolvedValue(0),
+        countAllByNameAndValueOwnedByRole: jest.fn().mockResolvedValue(0),
       } as unknown as SettingRepositoryInterface
 
       const result = await createUseCaseWithSettingRepository(settingRepository).execute(dto)
@@ -403,7 +408,7 @@ describe('Register', () => {
 
     it('keeps the env override as a hard block regardless of the persisted flag', async () => {
       const settingRepository = {
-        countAllByNameAndValue: jest.fn().mockResolvedValue(0),
+        countAllByNameAndValueOwnedByRole: jest.fn().mockResolvedValue(0),
       } as unknown as SettingRepositoryInterface
 
       const result = await new Register(
@@ -428,7 +433,7 @@ describe('Register', () => {
         errorMessage: 'User registration is currently not allowed.',
       })
       // Env short-circuits before the setting store is consulted.
-      expect(settingRepository.countAllByNameAndValue).not.toHaveBeenCalled()
+      expect(settingRepository.countAllByNameAndValueOwnedByRole).not.toHaveBeenCalled()
       expect(userRepository.save).not.toHaveBeenCalled()
     })
   })

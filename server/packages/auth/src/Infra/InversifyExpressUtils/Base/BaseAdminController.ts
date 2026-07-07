@@ -1175,14 +1175,15 @@ export class BaseAdminController extends BaseHttpController {
   /**
    * Standard Red Notes: read the instance-wide "registration disabled" flag.
    *
-   * NOTE: this flag is persisted as a setting on the admin's own user record so
-   * the admin panel can display/toggle it and the value survives restarts.
-   * Actual enforcement at signup time is still governed by the
-   * DISABLE_USER_REGISTRATION env var (read at boot in Register.ts).
-   *
-   * TODO(standard-red-notes): have the Register use case consult this persisted
-   * flag at runtime (e.g. via a GetSetting lookup against a well-known admin
-   * record) so toggling here takes effect without a redeploy.
+   * The flag is persisted as a setting on the admin's own user record so the admin
+   * panel can display/toggle it and the value survives restarts. Enforcement at
+   * signup time is governed by EITHER the boot-time DISABLE_USER_REGISTRATION env
+   * var OR this persisted flag: Register consults it at runtime (see
+   * Register.registrationDisabledBySetting), counting REGISTRATION_DISABLED='true'
+   * rows OWNED BY AN ADMIN. Because the flag is written on the (admin) requestor's
+   * own record here — and the setting is CLIENT_IMMUTABLE so only this admin path
+   * may write it — this per-admin read is consistent with the admin-scoped count
+   * Register uses, and toggling takes effect without a redeploy.
    */
   async getRegistrationFlag(_request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
@@ -1221,7 +1222,14 @@ export class BaseAdminController extends BaseHttpController {
 
   /**
    * Standard Red Notes: set the instance-wide "registration disabled" flag.
-   * See getRegistrationFlag for the persistence/enforcement caveats and TODO.
+   * See getRegistrationFlag for the persistence/enforcement details.
+   *
+   * The write goes through SetSettingValue with checkUserPermissions:false, which
+   * bypasses the client-permission gate — this is what still allows an admin to
+   * write REGISTRATION_DISABLED even though the setting is CLIENT_IMMUTABLE (the
+   * ordinary user-settings PUT path, which passes checkUserPermissions:true, is
+   * therefore the only path that is refused). Access here is gated by the
+   * ADMIN_USER role check above.
    */
   async setRegistrationFlag(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
