@@ -46,6 +46,19 @@ export type PluginsFetchLike = (
   ok: boolean
   headers: { get(name: string): string | null }
   arrayBuffer: () => Promise<ArrayBuffer>
+  /**
+   * The WHATWG streaming body (undici `Response.body`). Present on the real
+   * `globalThis.fetch`; optional so lightweight test doubles can omit it and fall
+   * back to `arrayBuffer`. Used to enforce the size cap WITHOUT buffering an
+   * unbounded body first (see readCappedBody).
+   */
+  body?: {
+    getReader(): {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>
+      cancel(): Promise<void>
+      releaseLock?(): void
+    }
+  } | null
 }>
 
 export interface PluginsProxyConfig {
@@ -76,6 +89,15 @@ export type PluginsProxyError =
 
 const DEFAULT_TIMEOUT_MS = 8 * 1000
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024
+/**
+ * Redirects are NOT auto-followed (SSRF hardening); each 3xx hop is re-validated
+ * against the configured base before we fetch it. This bounds a redirect chain
+ * that stays within the base so a hostile/broken remote cannot loop us forever.
+ */
+const MAX_REDIRECTS = 5
+
+/** Sentinel returned by readCappedBody when the streamed body exceeds the cap. */
+const TOO_LARGE = Symbol('too-large')
 
 /**
  * Resolve a client-supplied RELATIVE path against the configured base and prove
@@ -92,16 +114,12 @@ const DEFAULT_MAX_BYTES = 16 * 1024 * 1024
  *   - The resolved URL must share the base's origin AND its pathname must be
  *     prefixed by the base directory pathname (so `..` cannot climb out).
  */
-export function resolveWithinBase(base: string, requestedPath: string): string | null {
-  if (typeof requestedPath !== 'string') {
-    return null
-  }
-  // Reject anything that looks like an absolute URL / scheme-relative host.
-  const trimmed = requestedPath.trim()
-  if (trimmed.length === 0 || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) || trimmed.startsWith('//')) {
-    return null
-  }
-
+/**
+ * Normalize a configured base to its DIRECTORY URL (trailing slash) so relative
+ * resolution and the prefix check both treat it as a folder, not a file. Returns
+ * null when the base is not a valid http(s) URL.
+ */
+function baseDirectory(base: string): URL | null {
   let baseUrl: URL
   try {
     baseUrl = new URL(base)
@@ -112,9 +130,57 @@ export function resolveWithinBase(base: string, requestedPath: string): string |
     return null
   }
 
-  // The base as a DIRECTORY (trailing slash) so relative resolution and the
-  // prefix check both treat it as a folder, not a file.
-  const baseDir = new URL(baseUrl.href.replace(/\/+$/, '') + '/')
+  return new URL(baseUrl.href.replace(/\/+$/, '') + '/')
+}
+
+/**
+ * Prove an ABSOLUTE url stays inside the configured base directory: same protocol
+ * + host AND its pathname is prefixed by the base directory pathname. Exported +
+ * reused both by {@link resolveWithinBase} (client path containment) and by the
+ * redirect guard (a `Location` must not escape the base/host). PURE.
+ */
+export function isWithinBase(base: string, candidate: string): boolean {
+  const baseDir = baseDirectory(base)
+  if (!baseDir) {
+    return false
+  }
+
+  let resolved: URL
+  try {
+    resolved = new URL(candidate)
+  } catch {
+    return false
+  }
+
+  if (resolved.protocol !== baseDir.protocol || resolved.host !== baseDir.host) {
+    return false
+  }
+
+  return resolved.pathname.startsWith(baseDir.pathname)
+}
+
+export function resolveWithinBase(base: string, requestedPath: string): string | null {
+  if (typeof requestedPath !== 'string') {
+    return null
+  }
+  // Reject anything that looks like an absolute URL / scheme-relative host.
+  const trimmed = requestedPath.trim()
+  if (trimmed.length === 0 || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) || trimmed.startsWith('//')) {
+    return null
+  }
+  // Reject percent-encoded dot/slash: the WHATWG URL parser does NOT decode `%2f`
+  // / `%2e`, so `..%2f` would slip past the normalization + prefix check below and
+  // could climb out of the base once the upstream server decodes it. Legitimate
+  // component paths are plain (segments are encodeURIComponent'd client-side, which
+  // never emits `%2e`/`%2f`), so this rejects only traversal attempts.
+  if (/%2e/i.test(trimmed) || /%2f/i.test(trimmed)) {
+    return null
+  }
+
+  const baseDir = baseDirectory(base)
+  if (!baseDir) {
+    return null
+  }
 
   let resolved: URL
   try {
@@ -123,12 +189,9 @@ export function resolveWithinBase(base: string, requestedPath: string): string |
     return null
   }
 
-  if (resolved.protocol !== baseDir.protocol || resolved.host !== baseDir.host) {
-    return null
-  }
-  // Path-prefix containment: `..` in the input normalizes before this check, so
-  // a climb above the base directory fails here.
-  if (!resolved.pathname.startsWith(baseDir.pathname)) {
+  // `..` in the input normalizes before this check, so a climb above the base
+  // directory fails the host/prefix containment in isWithinBase.
+  if (!isWithinBase(base, resolved.href)) {
     return null
   }
 
@@ -156,7 +219,7 @@ export class PluginsProxyService {
     const base = await this.config.baseUrlResolver()
     const url = `${base.replace(/\/+$/, '')}/packages.json`
 
-    return this.fetchUrl(url)
+    return this.fetchUrl(base, url)
   }
 
   /**
@@ -171,37 +234,76 @@ export class PluginsProxyService {
       return { error: 'outside-base' }
     }
 
-    return this.fetchUrl(url)
+    return this.fetchUrl(base, url)
   }
 
-  private async fetchUrl(url: string): Promise<PluginsProxyResult | PluginsProxyError> {
+  private async fetchUrl(base: string, url: string): Promise<PluginsProxyResult | PluginsProxyError> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
 
     try {
-      const response = await this.fetchFn(url, {
-        method: 'GET',
-        headers: {
-          Accept: '*/*',
-          'User-Agent': 'standard-red-notes-plugins-proxy',
-        },
-        signal: controller.signal,
-        redirect: 'follow',
-      })
+      let currentUrl = url
+      for (let hop = 0; ; hop++) {
+        const response = await this.fetchFn(currentUrl, {
+          method: 'GET',
+          headers: {
+            Accept: '*/*',
+            'User-Agent': 'standard-red-notes-plugins-proxy',
+          },
+          signal: controller.signal,
+          // SSRF hardening: do NOT auto-follow. A redirect could send us to an
+          // arbitrary host (or an internal address). We validate every hop against
+          // the configured base below before fetching it.
+          redirect: 'manual',
+        })
 
-      if (!response.ok) {
-        return { error: 'upstream', status: response.status }
-      }
+        // A 3xx must stay within the operator-configured base/host or it is
+        // rejected (never fetched). Resolve a relative Location against the current
+        // URL, then re-run the containment guard.
+        if (response.status >= 300 && response.status < 400) {
+          if (hop >= MAX_REDIRECTS) {
+            return { error: 'unreachable' }
+          }
+          const location = response.headers.get('location')
+          if (!location) {
+            return { error: 'upstream', status: response.status }
+          }
+          let next: string
+          try {
+            next = new URL(location, currentUrl).href
+          } catch {
+            return { error: 'outside-base' }
+          }
+          if (!isWithinBase(base, next)) {
+            return { error: 'outside-base' }
+          }
+          currentUrl = next
+          continue
+        }
 
-      const buffer = Buffer.from(await response.arrayBuffer())
-      if (buffer.length > this.maxBytes) {
-        return { error: 'too-large' }
-      }
+        if (!response.ok) {
+          return { error: 'upstream', status: response.status }
+        }
 
-      return {
-        status: 200,
-        contentType: response.headers.get('content-type') || 'application/octet-stream',
-        body: buffer,
+        // DoS guard, step 1: reject on a declared Content-Length over the cap
+        // WITHOUT reading a single body byte.
+        const declaredLength = Number(response.headers.get('content-length'))
+        if (Number.isFinite(declaredLength) && declaredLength > this.maxBytes) {
+          return { error: 'too-large' }
+        }
+
+        // DoS guard, step 2: stream the body with a running byte counter that
+        // aborts the moment the cap is exceeded — never buffer an unbounded body.
+        const body = await this.readCappedBody(response, controller)
+        if (body === TOO_LARGE) {
+          return { error: 'too-large' }
+        }
+
+        return {
+          status: 200,
+          contentType: response.headers.get('content-type') || 'application/octet-stream',
+          body,
+        }
       }
     } catch {
       return { error: 'unreachable' }
@@ -209,4 +311,59 @@ export class PluginsProxyService {
       clearTimeout(timer)
     }
   }
+
+  /**
+   * Read the response body enforcing {@link maxBytes} WITHOUT first buffering an
+   * unbounded body. Streams via the WHATWG reader, counting bytes as they arrive
+   * and aborting (abort the request + cancel the stream) the instant the cap is
+   * exceeded. Falls back to `arrayBuffer` (post-check) only when the fetch double
+   * exposes no stream body.
+   */
+  private async readCappedBody(
+    response: { arrayBuffer: () => Promise<ArrayBuffer>; body?: PluginsResponseBody | null },
+    controller: AbortController,
+  ): Promise<Buffer | typeof TOO_LARGE> {
+    const stream = response.body
+    if (!stream || typeof stream.getReader !== 'function') {
+      const buffer = Buffer.from(await response.arrayBuffer())
+
+      return buffer.length > this.maxBytes ? TOO_LARGE : buffer
+    }
+
+    const reader = stream.getReader()
+    const chunks: Buffer[] = []
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        if (value && value.length > 0) {
+          total += value.length
+          if (total > this.maxBytes) {
+            controller.abort()
+            try {
+              await reader.cancel()
+            } catch {
+              // best-effort teardown; the abort already stops the transfer.
+            }
+
+            return TOO_LARGE
+          }
+          chunks.push(Buffer.from(value))
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock?.()
+      } catch {
+        // ignore — the stream is already fully consumed or cancelled.
+      }
+    }
+
+    return Buffer.concat(chunks, total)
+  }
 }
+
+type PluginsResponseBody = NonNullable<Awaited<ReturnType<PluginsFetchLike>>['body']>

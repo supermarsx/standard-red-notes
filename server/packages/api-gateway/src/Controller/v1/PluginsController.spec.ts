@@ -14,8 +14,10 @@ const makeResponse = (): {
   json: jest.Mock
   send: jest.Mock
   headers: Record<string, string>
+  removedHeaders: string[]
 } => {
   const headers: Record<string, string> = {}
+  const removedHeaders: string[] = []
   const json = jest.fn()
   const send = jest.fn()
   const status = jest.fn(() => ({ json, send }))
@@ -26,9 +28,13 @@ const makeResponse = (): {
     setHeader: (name: string, value: string) => {
       headers[name] = value
     },
+    removeHeader: (name: string) => {
+      removedHeaders.push(name)
+      delete headers[name]
+    },
   } as unknown as Response
 
-  return { response, status, json, send, headers }
+  return { response, status, json, send, headers, removedHeaders }
 }
 
 describe('contentTypeForPath', () => {
@@ -109,6 +115,34 @@ describe('PluginsController', () => {
       expect(headers['X-Content-Type-Options']).toBe('nosniff')
       expect(headers['Access-Control-Allow-Origin']).toBe('*')
       expect(send).toHaveBeenCalledWith(Buffer.from('<html></html>'))
+    })
+
+    it('forces an OPAQUE origin + blocks framing: sandbox CSP (no allow-same-origin) overriding helmet, X-Frame-Options', async () => {
+      const fetchFile = jest.fn(async () => ({
+        status: 200,
+        contentType: 'text/plain',
+        body: Buffer.from('<html><script src="./main.js"></script></html>'),
+      }))
+      const { controller } = makeController({ sameOriginRendering: true, fetchFile })
+      const { response, headers, removedHeaders } = makeResponse()
+
+      await controller.component(
+        { params: { 0: 'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
+        response,
+      )
+
+      const csp = headers['Content-Security-Policy']
+      // OVERRIDES helmet's global CSP for this route (removeHeader → setHeader).
+      expect(removedHeaders).toContain('Content-Security-Policy')
+      // sandbox WITHOUT allow-same-origin => opaque origin under ANY load path.
+      expect(csp).toContain('sandbox')
+      expect(csp).toContain('allow-scripts')
+      expect(csp).not.toContain('allow-same-origin')
+      // No script-src directive => the doc's own same-origin bundles still load.
+      expect(csp).not.toContain('script-src')
+      // Blocks cross-site framing two ways.
+      expect(csp).toContain("frame-ancestors 'self'")
+      expect(headers['X-Frame-Options']).toBe('SAMEORIGIN')
     })
 
     it('propagates the SSRF guard: an out-of-base path is rejected as 400 (never mislabeled)', async () => {

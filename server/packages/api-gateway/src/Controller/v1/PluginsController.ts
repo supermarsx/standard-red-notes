@@ -50,7 +50,44 @@ import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSetti
  * extension-derived Content-Types (raw.githubusercontent serves everything as
  * text/plain, which would stop the browser executing JS / rendering HTML) and a
  * permissive CORS header so the opaque-origin document can load its own fonts.
+ *
+ * ---------------------------------------------------------------------------
+ * OPAQUE-ORIGIN ENFORCEMENT (READ THIS — the whole feature's safety rests here)
+ * ---------------------------------------------------------------------------
+ * The isolation argument above ("runs in an OPAQUE origin") is ONLY true when the
+ * document is loaded via the INTENDED sandboxed `IframeFeatureView` iframe (which
+ * sets `sandbox` WITHOUT `allow-same-origin`). Loaded ANY OTHER way — a direct
+ * top-level navigation to `/v1/plugins/component/<path>/index.html`, or an attacker
+ * page cross-site-framing it with no sandbox attribute — the served HTML+JS would
+ * otherwise run in the REAL Standard Notes origin and could read localStorage /
+ * IndexedDB (session token + E2EE keys) => account takeover + note decryption.
+ *
+ * We therefore stamp a PER-RESPONSE Content-Security-Policy carrying the `sandbox`
+ * directive WITHOUT `allow-same-origin` on EVERY served component document. That
+ * forces the document into an OPAQUE origin regardless of how it was loaded — its
+ * scripts still run (allow-scripts) but can never touch SN-origin storage/cookies.
+ * The sandbox set MATCHES the parent iframe's attribute (IframeFeatureView) so the
+ * effective (intersection) sandbox is unchanged for the intended load, and it adds
+ * NO `script-src`, so the component's own same-origin subresource bundles still
+ * load and execute (no opaque-origin / `script-src 'self'` tension). We ALSO block
+ * cross-site framing (`frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN`) so
+ * only the same-origin SPA can frame it. This CSP is set explicitly on the response
+ * (removeHeader → setHeader) so it OVERRIDES helmet's global gateway CSP for this
+ * route — mirroring registerWorkflowsUiProxy's removeHeader pattern.
  */
+
+/**
+ * Per-response CSP for a served component document. The `sandbox` directive forces
+ * an OPAQUE origin (no `allow-same-origin`) even under a direct top-level nav or an
+ * attacker cross-site frame, so the third-party doc can NEVER reach SN-origin
+ * storage/cookies; the allowed tokens mirror the intended IframeFeatureView iframe
+ * `sandbox` attribute so the intended sandboxed rendering is unchanged. It carries
+ * NO `script-src`, so the doc's own same-origin subresource bundles still load.
+ * `frame-ancestors 'self'` blocks cross-site framing (belt-and-suspenders with the
+ * X-Frame-Options header set alongside it).
+ */
+const COMPONENT_CSP =
+  "sandbox allow-scripts allow-top-navigation-by-user-activation allow-popups allow-modals allow-forms allow-downloads; frame-ancestors 'self'"
 
 /** Map a file extension to a browser Content-Type for a served component file. */
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
@@ -200,6 +237,18 @@ export class PluginsController extends BaseHttpController {
 
       return
     }
+
+    // CRITICAL: force this third-party document into an OPAQUE origin no matter how
+    // it is loaded (intended sandboxed iframe, direct top-level nav, or an attacker
+    // cross-site frame). helmet already stamped the gateway's global CSP on this
+    // response, so remove it and set our own per-response `sandbox` CSP (no
+    // allow-same-origin) — this OVERRIDES helmet for this route. X-Frame-Options +
+    // the CSP `frame-ancestors 'self'` additionally block cross-site framing. See
+    // the class docblock (OPAQUE-ORIGIN ENFORCEMENT) for why this preserves the
+    // intended rendering while closing the account-takeover path.
+    response.removeHeader('Content-Security-Policy')
+    response.setHeader('Content-Security-Policy', COMPONENT_CSP)
+    response.setHeader('X-Frame-Options', 'SAMEORIGIN')
 
     // Correct, extension-derived Content-Type (never the upstream text/plain) so
     // the browser executes JS / renders HTML. nosniff pins that type; the
