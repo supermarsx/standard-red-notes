@@ -5,7 +5,6 @@ import {
   Challenge,
   ChallengeReason,
   SessionStrings,
-  removeFromArray,
   WebAppEvent,
   PrefKey,
   PrefDefaults,
@@ -70,6 +69,7 @@ import RemindersButton from '@/Reminders/RemindersButton'
 import FloatingNarrationPlayer from '../Narration/FloatingNarrationPlayer'
 import AppLockPasskeyScreen from './AppLockPasskeyScreen'
 import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
+import { addChallengeToList, removeChallengeFromList } from './challengeList'
 
 type Props = {
   application: WebApplication
@@ -253,9 +253,12 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
             application.accountMenuController.pendingReauthChallenge = challenge
             return
           }
-          const challengesCopy = challenges.slice()
-          challengesCopy.push(challenge)
-          setChallenges(challengesCopy)
+          // Append via a FUNCTIONAL updater (see challengeList.ts) so we derive
+          // from the latest state instead of the empty snapshot this once-
+          // registered handler closed over — otherwise a second challenge arriving
+          // while a first is still open would replace, not stack on, that first
+          // (possibly gating unlock/2FA) challenge and could wedge the app.
+          setChallenges((prev) => addChallengeToList(prev, challenge))
         },
       })
       .then(() => {
@@ -265,14 +268,13 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application])
 
-  const removeChallenge = useCallback(
-    (challenge: Challenge) => {
-      const challengesCopy = challenges.slice()
-      removeFromArray(challengesCopy, challenge)
-      setChallenges(challengesCopy)
-    },
-    [challenges],
-  )
+  const removeChallenge = useCallback((challenge: Challenge) => {
+    // Remove via a FUNCTIONAL updater (identity match) so this callback does not
+    // depend on `challenges`. A `[challenges]`-based version would be recreated
+    // on every add/remove and could dismiss based on a stale snapshot; deriving
+    // from `prev` removes only the dismissed challenge and keeps the others.
+    setChallenges((prev) => removeChallengeFromList(prev, challenge))
+  }, [])
 
   const onAppStart = useCallback(() => {
     setNeedsUnlock(application.hasPasscode())
