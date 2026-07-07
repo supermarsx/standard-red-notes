@@ -1,4 +1,6 @@
 import { applyEditorFont, applyEditorLigatures } from '@/Utils/editorFont'
+import { applyTypographyProfile, resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
+import type { TypographyProfile } from '@standardnotes/models'
 
 /**
  * Applies the editor font CSS variable.
@@ -14,4 +16,18 @@ import { applyEditorFont, applyEditorLigatures } from '@/Utils/editorFont'
 export const reloadFont = (monospaceFont?: boolean, customFontFamily?: string, ligaturesEnabled?: boolean) => {
   applyEditorFont(customFontFamily, monospaceFont)
   applyEditorLigatures(ligaturesEnabled)
+}
+
+/**
+ * Standard Red Notes: (re)applies the active typography profile. Mirrors
+ * `reloadFont` — driven from the synced `PrefKey.TypographyProfiles` /
+ * `PrefKey.ActiveTypographyProfileId` prefs. Resolves the active profile and
+ * injects/updates the single scoped `<style>` on document.head, so the editor,
+ * read-only viewer and previews all pick it up. Safe to call repeatedly.
+ */
+export const reloadTypographyProfile = (
+  profiles: TypographyProfile[] | undefined,
+  activeProfileId: string | undefined,
+) => {
+  applyTypographyProfile(resolveActiveTypographyProfile(profiles, activeProfileId))
 }

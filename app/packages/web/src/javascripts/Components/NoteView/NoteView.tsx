@@ -54,7 +54,7 @@ import LinkedItemBubblesContainer from '../LinkedItems/LinkedItemBubblesContaine
 import LinkedItemsButton from '../LinkedItems/LinkedItemsButton'
 import MobileItemsListButton from '../NoteGroupView/MobileItemsListButton'
 import EditingDisabledBanner from './EditingDisabledBanner'
-import { reloadFont } from './FontFunctions'
+import { reloadFont, reloadTypographyProfile } from './FontFunctions'
 import NoteViewFileDropTarget from './NoteViewFileDropTarget'
 import { NoteViewProps } from './NoteViewProps'
 import {
@@ -809,6 +809,18 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       PrefDefaults[PrefKey.EditorFontFamily],
     )
 
+    // Standard Red Notes: resolve + apply the active typography profile. Read
+    // here (alongside the font) so it re-applies on every PreferencesChanged —
+    // i.e. whenever the active profile or a profile's contents change.
+    const typographyProfiles = this.application.getPreference(
+      PrefKey.TypographyProfiles,
+      PrefDefaults[PrefKey.TypographyProfiles],
+    )
+    const activeTypographyProfileId = this.application.getPreference(
+      PrefKey.ActiveTypographyProfileId,
+      PrefDefaults[PrefKey.ActiveTypographyProfileId],
+    )
+
     const updateSavingIndicator = this.application.getPreference(
       PrefKey.UpdateSavingStatusIndicator,
       PrefDefaults[PrefKey.UpdateSavingStatusIndicator],
@@ -832,6 +844,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     })
 
     reloadFont(monospaceFont, customEditorFont, ligaturesEnabled)
+    reloadTypographyProfile(typographyProfiles, activeTypographyProfileId)
   }
 
   async reloadStackComponents() {

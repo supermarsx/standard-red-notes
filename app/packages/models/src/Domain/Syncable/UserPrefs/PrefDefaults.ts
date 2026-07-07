@@ -6,6 +6,7 @@ import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
 import { PrefKey, PrefValue } from './PrefKey'
 import { NewNoteTitleFormat } from './NewNoteTitleFormat'
+import { DEFAULT_TYPOGRAPHY_PROFILE, DEFAULT_TYPOGRAPHY_PROFILE_ID } from './TypographyProfile'
 
 export const PrefDefaults = {
   [PrefKey.TagsPanelWidth]: 220,
@@ -112,6 +113,11 @@ export const PrefDefaults = {
   // default; users opt in via Preferences → General → Updates. Hiding it also
   // suppresses the unread-changelog dot and the open-to-What's-New behavior.
   [PrefKey.ShowWhatsNewSection]: false,
+  // Standard Red Notes: ship with only the built-in Default profile active. Its
+  // per-block styles reproduce editor.scss, so the default active state is a
+  // zero-visual-change no-op for existing notes.
+  [PrefKey.TypographyProfiles]: [DEFAULT_TYPOGRAPHY_PROFILE],
+  [PrefKey.ActiveTypographyProfileId]: DEFAULT_TYPOGRAPHY_PROFILE_ID,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

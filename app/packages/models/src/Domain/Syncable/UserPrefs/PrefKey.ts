@@ -7,6 +7,7 @@ import { EditorLineWidth } from './EditorLineWidth'
 import { EditorFontSize } from './EditorFontSize'
 import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { AllComponentPreferences } from './ComponentPreferences'
+import { TypographyProfile } from './TypographyProfile'
 
 export enum PrefKey {
   TagsPanelWidth = 'tagsPanelWidth',
@@ -125,6 +126,15 @@ export enum PrefKey {
   // (including its unread-changelog badge and auto-open behavior) until the user
   // enables it via Preferences → General → Updates.
   ShowWhatsNewSection = 'showWhatsNewSection',
+  // Standard Red Notes: per-account typography profiles for the Super editor.
+  // TypographyProfiles is the full set of named profiles (always includes the
+  // built-in Default). ActiveTypographyProfileId selects which one is compiled to
+  // the injected <style> and applied to the editor / read-only / preview views.
+  // Both are synced (per-account, not per-note); the active profile's contents
+  // are the *defaults* for block spacing/indent — a per-block manual override
+  // (#77 inline style) always wins by the cascade.
+  TypographyProfiles = 'typographyProfiles',
+  ActiveTypographyProfileId = 'activeTypographyProfileId',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -258,4 +268,14 @@ export type PrefValue = {
    * CSS font-family stack / installed local font name.
    */
   [PrefKey.EditorFontFamily]: string
+  /**
+   * The full set of per-account typography profiles. Always contains at least
+   * the built-in Default profile.
+   */
+  [PrefKey.TypographyProfiles]: TypographyProfile[]
+  /**
+   * The id of the currently active typography profile (a member of
+   * `TypographyProfiles`). Falls back to the Default profile when unset/missing.
+   */
+  [PrefKey.ActiveTypographyProfileId]: string
 }
