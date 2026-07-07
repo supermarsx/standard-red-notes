@@ -3242,6 +3242,38 @@ export class ContainerConfigLoader {
             container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser),
             container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
             container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
+            // Standard Red Notes: the RBAC group + role-management deps stay
+            // undefined on the home-server single-process path (pre-existing
+            // behaviour; those endpoints degrade to "not available" here). They
+            // are passed explicitly as `undefined` only so the trailing
+            // lockRepository — the LAST positional constructor arg — can be wired
+            // by position without pulling the group/RBAC surface in.
+            undefined, // doCreateGroup
+            undefined, // doListGroups
+            undefined, // doDeleteGroup
+            undefined, // doAddUserToGroup
+            undefined, // doRemoveUserFromGroup
+            undefined, // doSetGroupRoles
+            undefined, // doListGroupMembers
+            undefined, // doGetUserEffectivePermissions
+            undefined, // groupHttpMapper
+            undefined, // doListRolesWithPermissions
+            undefined, // doSetRolePermissions
+            undefined, // doCreateCustomRole
+            undefined, // doDeleteCustomRole
+            undefined, // doGetPermissionCatalog
+            undefined, // doGetRoleHolders
+            undefined, // doResolveRoleSetPermissions
+            // Standard Red Notes: failed-login lock repository, backing the
+            // anti-abuse "Locked accounts" list + unlock on the single-container
+            // deploy. Auth_LockRepository is always bound (RedisLockRepository
+            // under a Redis cache, TypeORMLockRepository under the in-memory/
+            // TypeORM cache topology). Wiring it here makes UNLOCK (resetLockCounter)
+            // work on the single container; the LIST endpoint additionally requires
+            // the Redis SCAN-based listLockedAccounts, so under the TypeORM cache
+            // topology it correctly reports `available:false` (see
+            // BaseAdminController.getLockedAccounts / LockRepositoryInterface).
+            container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
           ),
         )
       container
