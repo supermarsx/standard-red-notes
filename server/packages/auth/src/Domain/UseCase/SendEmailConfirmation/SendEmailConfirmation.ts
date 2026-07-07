@@ -55,7 +55,23 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
         new UniqueEntityId(uuidv4()),
       ).getValue()
 
+      // Invalidate any prior outstanding tokens for this user (delete them) so
+      // only the token we are about to issue is valid, and this also prunes the
+      // user's consumed/expired rows. Must run BEFORE save so the new token
+      // survives.
+      await this.tokenRepository.deleteAllForUser(dto.userUuid)
+
       await this.tokenRepository.save(token)
+
+      // Opportunistic, best-effort GC of other users' consumed/expired rows to
+      // bound table growth. Never let a cleanup failure fail the issuance.
+      try {
+        await this.tokenRepository.deleteExpiredOrConsumed(now)
+      } catch (cleanupError) {
+        this.logger.warn(
+          `[email-confirmation] Token cleanup failed (non-fatal): ${(cleanupError as Error).message}`,
+        )
+      }
 
       if (!this.emailSender.isConfigured()) {
         // Token is stored; without SMTP there is simply no way to deliver the link.

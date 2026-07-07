@@ -37,9 +37,82 @@ export interface IpAccessListRedis {
 }
 
 /**
+ * Canonicalize a bare IPv6 hextet literal to a single stable form: lower-cased,
+ * `::` expanded to the exact run of zero groups, each group stripped of leading
+ * zeros, then the longest run of zero groups re-compressed to `::` (leftmost on
+ * a tie). This means every notation of the same address maps to one string, so a
+ * stored entry always matches the live address regardless of which side used the
+ * expanded (`2001:0db8:0000:...:0001`) or compressed (`2001:db8::1`) form.
+ *
+ * Anything that does not parse as a clean 8-group IPv6 is returned lower-cased
+ * unchanged — a deterministic fall-back, so equal inputs still compare equal.
+ */
+export const canonicalizeIpv6 = (raw: string): string => {
+  const lower = raw.toLowerCase()
+
+  // At most one "::" is legal.
+  if ((lower.match(/::/g) || []).length > 1) {
+    return lower
+  }
+
+  let groups: string[]
+  if (lower.includes('::')) {
+    const [headPart, tailPart] = lower.split('::')
+    const head = headPart.length ? headPart.split(':') : []
+    const tail = tailPart.length ? tailPart.split(':') : []
+    const missing = 8 - (head.length + tail.length)
+    if (missing < 0) {
+      return lower
+    }
+    groups = [...head, ...new Array(missing).fill('0'), ...tail]
+  } else {
+    groups = lower.split(':')
+    if (groups.length !== 8) {
+      return lower
+    }
+  }
+
+  // Normalize each hextet (strip leading zeros); bail on anything non-hextet.
+  const normalized: string[] = []
+  for (const group of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(group)) {
+      return lower
+    }
+    normalized.push(parseInt(group, 16).toString(16))
+  }
+
+  // Longest run of zero groups (>= 2) becomes "::"; leftmost wins on a tie.
+  let bestStart = -1
+  let bestLen = 0
+  let curStart = -1
+  let curLen = 0
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === '0') {
+      curStart = curLen === 0 ? i : curStart
+      curLen += 1
+      if (curLen > bestLen) {
+        bestLen = curLen
+        bestStart = curStart
+      }
+    } else {
+      curLen = 0
+    }
+  }
+
+  if (bestLen < 2) {
+    return normalized.join(':')
+  }
+  const before = normalized.slice(0, bestStart).join(':')
+  const after = normalized.slice(bestStart + bestLen).join(':')
+
+  return `${before}::${after}`
+}
+
+/**
  * Strip an IPv6 zone id and unwrap an IPv4-mapped IPv6 address so the same
  * client is matched whether Express reports it as `1.2.3.4` or `::ffff:1.2.3.4`.
- * Lower-cases IPv6 for stable exact comparison. Returns '' for junk.
+ * Canonicalizes IPv6 to a single form (see canonicalizeIpv6) so an expanded and
+ * a compressed spelling of one address always compare equal. Returns '' for junk.
  */
 export const normalizeIp = (raw: string): string => {
   if (typeof raw !== 'string') {
@@ -60,7 +133,7 @@ export const normalizeIp = (raw: string): string => {
     return mapped[1]
   }
 
-  return ip.includes(':') ? ip.toLowerCase() : ip
+  return ip.includes(':') ? canonicalizeIpv6(ip) : ip
 }
 
 const IPV4_OCTETS = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
@@ -133,8 +206,10 @@ export const validateIpAclEntry = (raw: unknown): { ok: true; value: string } | 
 
 /**
  * Does a (normalized) client IP fall under a stored entry? IPv4 exact + IPv4
- * CIDR are matched numerically; IPv6 is matched by exact (normalized) string.
- * Pure + total: any parse failure is a non-match, never a throw.
+ * CIDR are matched numerically; IPv6 is matched by canonical-form string equality
+ * (both sides run through normalizeIp), so an expanded stored entry still matches
+ * the compressed live address. Pure + total: any parse failure is a non-match,
+ * never a throw.
  */
 export const ipMatchesEntry = (clientIp: string, entry: string): boolean => {
   const ip = normalizeIp(clientIp)
@@ -218,9 +293,15 @@ export class IpAccessListStore {
 
   /** Classify a client IP; never throws (a Redis error degrades to 'none'). */
   async classify(clientIp: string): Promise<IpAclDecision> {
-    const { allow, block } = await this.load()
+    try {
+      const { allow, block } = await this.load()
 
-    return classifyIp(clientIp, allow, block)
+      return classifyIp(clientIp, allow, block)
+    } catch {
+      // Fail-open: a Redis/load error must never hard-block traffic. Matches the
+      // middleware's existing fail-open and the module-level design note above.
+      return 'none'
+    }
   }
 
   /** Add a VALIDATED entry to a list. Returns the canonical stored value. */

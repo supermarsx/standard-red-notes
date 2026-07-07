@@ -48,11 +48,24 @@ export class ResendEmailConfirmation implements UseCaseInterface<boolean> {
         return uniformSuccess
       }
 
-      await this.sendEmailConfirmation.execute({
-        userUuid: user.uuid,
-        email: user.email,
-        registrationConfig: config,
-      })
+      // Fire-and-forget: do NOT await the SMTP send, so response latency is
+      // constant regardless of account state (awaiting only when the account
+      // exists + is unconfirmed would leak account existence via timing). Errors
+      // are still logged — they just never block the uniform 200 response.
+      void this.sendEmailConfirmation
+        .execute({
+          userUuid: user.uuid,
+          email: user.email,
+          registrationConfig: config,
+        })
+        .then((result) => {
+          if (result.isFailed()) {
+            this.logger.error(`[email-confirmation] Resend send failed: ${result.getError()}`)
+          }
+        })
+        .catch((error) => {
+          this.logger.error(`[email-confirmation] Resend send failed: ${(error as Error).message}`)
+        })
     } catch (error) {
       // Never surface internal failures to the caller (no enumeration, no 500).
       this.logger.error(`[email-confirmation] Resend failed: ${(error as Error).message}`)

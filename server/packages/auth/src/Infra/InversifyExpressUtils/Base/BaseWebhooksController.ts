@@ -29,7 +29,14 @@ export class BaseWebhooksController extends BaseHttpController {
   }
 
   private clientIp(request: Request): string | undefined {
-    return (request.headers['x-forwarded-for'] as string | undefined) ?? request.ip
+    // Prefer the gateway-resolved `x-origin-ip` over the raw, client-spoofable
+    // `x-forwarded-for`; fall back only when x-origin-ip is absent. Audit-metadata
+    // integrity only (mirrors BaseAdminController.clientIp).
+    return (
+      (request.headers['x-origin-ip'] as string | undefined) ??
+      (request.headers['x-forwarded-for'] as string | undefined) ??
+      request.ip
+    )
   }
 
   async list(_request: Request, response: Response): Promise<results.JsonResult> {

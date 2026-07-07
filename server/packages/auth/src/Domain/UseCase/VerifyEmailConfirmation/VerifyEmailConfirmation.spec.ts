@@ -47,7 +47,12 @@ describe('VerifyEmailConfirmation', () => {
   const createUseCase = () => new VerifyEmailConfirmation(tokenRepository, userRepository, timer, logger)
 
   beforeEach(() => {
-    tokenRepository = { save: jest.fn(), findByHashedToken: jest.fn() }
+    tokenRepository = {
+      save: jest.fn(),
+      findByHashedToken: jest.fn(),
+      deleteAllForUser: jest.fn(),
+      deleteExpiredOrConsumed: jest.fn().mockResolvedValue(0),
+    }
     userRepository = {
       findOneByUuid: jest.fn(),
       save: jest.fn(async (u) => u),

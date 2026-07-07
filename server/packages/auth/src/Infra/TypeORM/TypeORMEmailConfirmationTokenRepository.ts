@@ -30,4 +30,25 @@ export class TypeORMEmailConfirmationTokenRepository implements EmailConfirmatio
 
     return this.mapper.toDomain(persistence)
   }
+
+  async deleteAllForUser(userUuid: string): Promise<void> {
+    await this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .from(TypeORMEmailConfirmationToken)
+      .where('user_uuid = :userUuid', { userUuid })
+      .execute()
+  }
+
+  async deleteExpiredOrConsumed(now: Date): Promise<number> {
+    const result = await this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .from(TypeORMEmailConfirmationToken)
+      .where('consumed = :consumed', { consumed: true })
+      .orWhere('expires_at <= :now', { now })
+      .execute()
+
+    return result.affected ?? 0
+  }
 }

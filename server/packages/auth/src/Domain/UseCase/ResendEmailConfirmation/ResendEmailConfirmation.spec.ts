@@ -81,6 +81,43 @@ describe('ResendEmailConfirmation', () => {
     expect(sendEmailConfirmation.execute).not.toHaveBeenCalled()
   })
 
+  it('does not await the send — a slow/never-settling SMTP call cannot delay the uniform 200 (constant latency)', async () => {
+    resolver.resolve.mockResolvedValue(config({ emailConfirmationEnabled: true }))
+    userRepository.findOneByUsernameOrEmail.mockResolvedValue(makeUser(false))
+    // A send that never resolves must not block the response.
+    sendEmailConfirmation.execute.mockReturnValue(new Promise<Result<boolean>>(() => {}))
+
+    const result = await createUseCase().execute({ email: 'a@b.co' })
+
+    expect(result.getValue()).toBe(true)
+    expect(sendEmailConfirmation.execute).toHaveBeenCalled()
+  })
+
+  it('logs a fire-and-forget send rejection without blocking or throwing', async () => {
+    resolver.resolve.mockResolvedValue(config({ emailConfirmationEnabled: true }))
+    userRepository.findOneByUsernameOrEmail.mockResolvedValue(makeUser(false))
+    sendEmailConfirmation.execute.mockRejectedValue(new Error('smtp down'))
+
+    const result = await createUseCase().execute({ email: 'a@b.co' })
+    expect(result.getValue()).toBe(true)
+
+    // Drain the microtask queue so the fire-and-forget .catch runs.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('logs when the fire-and-forget send resolves to a failed Result', async () => {
+    resolver.resolve.mockResolvedValue(config({ emailConfirmationEnabled: true }))
+    userRepository.findOneByUsernameOrEmail.mockResolvedValue(makeUser(false))
+    sendEmailConfirmation.execute.mockResolvedValue(Result.fail('send failed'))
+
+    const result = await createUseCase().execute({ email: 'a@b.co' })
+    expect(result.getValue()).toBe(true)
+
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(logger.error).toHaveBeenCalled()
+  })
+
   it('never throws even if resolution fails', async () => {
     resolver.resolve.mockRejectedValue(new Error('overlay unreadable'))
 

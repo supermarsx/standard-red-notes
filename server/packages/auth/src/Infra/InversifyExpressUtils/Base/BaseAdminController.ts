@@ -1130,7 +1130,16 @@ export class BaseAdminController extends BaseHttpController {
   }
 
   private clientIp(request: Request): string | null {
-    return (request.headers['x-forwarded-for'] as string | undefined) ?? request.ip ?? null
+    // Prefer the gateway-resolved `x-origin-ip` (set by HttpServiceProxy from the
+    // trusted proxy chain) over the raw, client-spoofable `x-forwarded-for`. Fall
+    // back to x-forwarded-for / request.ip only when x-origin-ip is absent (e.g.
+    // a non-gateway/local request). Audit metadata only — not a security gate.
+    return (
+      (request.headers['x-origin-ip'] as string | undefined) ??
+      (request.headers['x-forwarded-for'] as string | undefined) ??
+      request.ip ??
+      null
+    )
   }
 
   /**

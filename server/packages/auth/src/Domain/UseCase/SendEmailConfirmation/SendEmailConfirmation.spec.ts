@@ -24,7 +24,12 @@ describe('SendEmailConfirmation', () => {
   const createUseCase = () => new SendEmailConfirmation(tokenRepository, emailSender, logger)
 
   beforeEach(() => {
-    tokenRepository = { save: jest.fn(), findByHashedToken: jest.fn() }
+    tokenRepository = {
+      save: jest.fn(),
+      findByHashedToken: jest.fn(),
+      deleteAllForUser: jest.fn(),
+      deleteExpiredOrConsumed: jest.fn().mockResolvedValue(0),
+    }
     emailSender = { isConfigured: jest.fn().mockReturnValue(true), sendEmail: jest.fn().mockResolvedValue(true) }
     logger = { debug: jest.fn(), warn: jest.fn(), error: jest.fn() } as unknown as jest.Mocked<Logger>
   })
@@ -76,6 +81,34 @@ describe('SendEmailConfirmation', () => {
     expect(to).toBe('a@b.co')
     expect(subject).toBe('Verify!')
     expect(body).toMatch(/^Link: https:\/\/notes\.example\.com\/\?email_confirmation=/)
+  })
+
+  it('invalidates prior tokens BEFORE saving the new one, then prunes expired/consumed rows', async () => {
+    const order: string[] = []
+    tokenRepository.deleteAllForUser.mockImplementation(async () => {
+      order.push('deleteAllForUser')
+    })
+    tokenRepository.save.mockImplementation(async () => {
+      order.push('save')
+    })
+
+    await createUseCase().execute({ userUuid: 'u-1', email: 'a@b.co', registrationConfig: config() })
+
+    expect(tokenRepository.deleteAllForUser).toHaveBeenCalledWith('u-1')
+    // Ordering matters: deleting after save would remove the token we just issued.
+    expect(order).toEqual(['deleteAllForUser', 'save'])
+    expect(tokenRepository.deleteExpiredOrConsumed).toHaveBeenCalledTimes(1)
+  })
+
+  it('still issues the token when the opportunistic cleanup fails (non-fatal)', async () => {
+    tokenRepository.deleteExpiredOrConsumed.mockRejectedValue(new Error('gc boom'))
+
+    const result = await createUseCase().execute({ userUuid: 'u-1', email: 'a@b.co', registrationConfig: config() })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe(true)
+    expect(tokenRepository.save).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalled()
   })
 
   it('fails gracefully when persistence throws', async () => {

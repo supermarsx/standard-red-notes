@@ -1,4 +1,5 @@
 import {
+  canonicalizeIpv6,
   classifyIp,
   IpAccessListRedis,
   IpAccessListStore,
@@ -19,6 +20,30 @@ describe('IpAccessList', () => {
     })
   })
 
+  describe('canonicalizeIpv6', () => {
+    it('collapses an expanded address to the compressed canonical form', () => {
+      expect(canonicalizeIpv6('2001:0db8:0000:0000:0000:0000:0000:0001')).toBe('2001:db8::1')
+      expect(canonicalizeIpv6('2001:DB8:0:0:0:0:0:1')).toBe('2001:db8::1')
+      expect(canonicalizeIpv6('2001:db8::1')).toBe('2001:db8::1')
+    })
+    it('strips leading zeros from each hextet', () => {
+      expect(canonicalizeIpv6('2001:0db8:0000:0000:0000:0000:0000:0010')).toBe('2001:db8::10')
+      expect(canonicalizeIpv6('fe80:0000:0000:0000:0000:0000:0000:0001')).toBe('fe80::1')
+    })
+    it('compresses the longest zero run, leftmost on a tie (RFC 5952)', () => {
+      // longest run wins (len-3 over len-2)
+      expect(canonicalizeIpv6('2001:0:0:1:0:0:0:1')).toBe('2001:0:0:1::1')
+      // equal-length runs -> leftmost compressed, only one "::"
+      expect(canonicalizeIpv6('2001:0:0:1:0:0:1:2')).toBe('2001::1:0:0:1:2')
+      expect(canonicalizeIpv6('0:0:0:0:0:0:0:0')).toBe('::')
+      expect(canonicalizeIpv6('0:0:0:0:0:0:0:1')).toBe('::1')
+    })
+    it('returns junk lower-cased unchanged (deterministic fallback)', () => {
+      expect(canonicalizeIpv6('2001:db8:::1')).toBe('2001:db8:::1')
+      expect(canonicalizeIpv6('GHIJ::1')).toBe('ghij::1')
+    })
+  })
+
   describe('ipv4ToInt', () => {
     it('parses valid dotted quads and rejects junk', () => {
       expect(ipv4ToInt('0.0.0.0')).toBe(0)
@@ -34,6 +59,12 @@ describe('IpAccessList', () => {
       expect(validateIpAclEntry('1.2.3.4')).toEqual({ ok: true, value: '1.2.3.4' })
       expect(validateIpAclEntry('10.0.0.0/8')).toEqual({ ok: true, value: '10.0.0.0/8' })
       expect(validateIpAclEntry(' 2001:DB8::1 ')).toEqual({ ok: true, value: '2001:db8::1' })
+    })
+    it('canonicalizes an expanded IPv6 entry to its compressed form on write', () => {
+      expect(validateIpAclEntry('2001:0db8:0000:0000:0000:0000:0000:0001')).toEqual({
+        ok: true,
+        value: '2001:db8::1',
+      })
     })
     it('rejects IPv6 CIDR, out-of-range prefixes and injection-shaped input', () => {
       expect(validateIpAclEntry('2001:db8::/64').ok).toBe(false)
@@ -60,6 +91,14 @@ describe('IpAccessList', () => {
     it('matches IPv6 exactly', () => {
       expect(ipMatchesEntry('2001:db8::1', '2001:db8::1')).toBe(true)
       expect(ipMatchesEntry('2001:db8::2', '2001:db8::1')).toBe(false)
+    })
+    it('matches an expanded stored IPv6 entry against the compressed live address (and vice versa)', () => {
+      expect(ipMatchesEntry('2001:db8::1', '2001:0db8:0000:0000:0000:0000:0000:0001')).toBe(true)
+      expect(ipMatchesEntry('2001:0db8:0000:0000:0000:0000:0000:0001', '2001:db8::1')).toBe(true)
+      // leading-zero / uppercase variant of the same address still matches
+      expect(ipMatchesEntry('2001:DB8:0:0:0:0:0:1', '2001:db8::1')).toBe(true)
+      // a different address must NOT match
+      expect(ipMatchesEntry('2001:db8::2', '2001:0db8:0000:0000:0000:0000:0000:0001')).toBe(false)
     })
   })
 
@@ -117,6 +156,17 @@ describe('IpAccessList', () => {
       // a mutation drops the cache so the next classify re-reads
       await store.add('allow', '203.0.113.9')
       expect(await store.classify('203.0.113.9')).toBe('allowed')
+    })
+
+    it('classify never throws — a Redis load error degrades to none (fail-open)', async () => {
+      const redis: IpAccessListRedis = {
+        sadd: jest.fn(),
+        srem: jest.fn(),
+        smembers: jest.fn().mockRejectedValue(new Error('redis down')),
+      }
+      const store = new IpAccessListStore(redis)
+
+      await expect(store.classify('1.2.3.4')).resolves.toBe('none')
     })
   })
 })
