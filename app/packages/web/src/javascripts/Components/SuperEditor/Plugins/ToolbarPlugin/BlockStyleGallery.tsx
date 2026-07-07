@@ -110,14 +110,29 @@ const BlockStyleSquare = ({
 const BlockStyleGallery = ({
   profile,
   onApplyBlock,
+  onEditStyles,
 }: {
   profile: TypographyProfile | null | undefined
   onApplyBlock: (descriptor: GalleryBlockDescriptor) => void
+  /** Optional: open the Phase 3 popup style editor for the active profile. */
+  onEditStyles?: () => void
 }) => {
   return (
     <div className="flex flex-col gap-2 p-2" onMouseDown={(event) => event.preventDefault()}>
-      <div className="px-1 text-xs text-passive-1">
-        {profile ? profile.name : 'Default'} · click a style to apply it to the current block
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="text-xs text-passive-1">
+          {profile ? profile.name : 'Default'} · click a style to apply it to the current block
+        </span>
+        {onEditStyles ? (
+          <button
+            type="button"
+            onClick={onEditStyles}
+            className="flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-info hover:bg-contrast focus:outline-none focus-visible:bg-contrast"
+          >
+            <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
+            Edit styles…
+          </button>
+        ) : null}
       </div>
       <div className="grid grid-cols-3 gap-1.5">
         {GALLERY_BLOCKS.map((descriptor) => (

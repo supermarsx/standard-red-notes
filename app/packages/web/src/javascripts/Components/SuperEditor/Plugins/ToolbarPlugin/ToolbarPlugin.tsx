@@ -209,6 +209,7 @@ import {
 } from './listStyle'
 import { useTranslation } from 'react-i18next'
 import BlockStyleGallery from './BlockStyleGallery'
+import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import { GalleryBlockDescriptor, applyTypographyBlockToSelection } from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
 
@@ -553,6 +554,8 @@ const ToolbarPlugin = () => {
   // Standard Red Notes: typography-profile preview-square gallery popover.
   const [isTypographyGalleryMenuOpen, setIsTypographyGalleryMenuOpen] = useState(false)
   const typographyGalleryAnchorRef = useRef<HTMLButtonElement>(null)
+  // Standard Red Notes: Phase 3 popup style editor (edits the active profile).
+  const [isTypographyEditorOpen, setIsTypographyEditorOpen] = useState(false)
 
   const [isAlignmentMenuOpen, setIsAlignmentMenuOpen] = useState(false)
   const alignmentAnchorRef = useRef<HTMLButtonElement>(null)
@@ -3370,8 +3373,16 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <BlockStyleGallery profile={activeTypographyProfile} onApplyBlock={applyTypographyBlock} />
+        <BlockStyleGallery
+          profile={activeTypographyProfile}
+          onApplyBlock={applyTypographyBlock}
+          onEditStyles={() => {
+            setIsTypographyGalleryMenuOpen(false)
+            setIsTypographyEditorOpen(true)
+          }}
+        />
       </Popover>
+      <TypographyStyleEditorModal isOpen={isTypographyEditorOpen} close={() => setIsTypographyEditorOpen(false)} />
       <Popover
         title={t('alignment')}
         anchorElement={alignmentAnchorRef}
