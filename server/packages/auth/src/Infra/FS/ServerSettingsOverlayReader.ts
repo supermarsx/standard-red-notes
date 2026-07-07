@@ -75,6 +75,20 @@ export class ServerSettingsOverlayReader {
   }
 
   /**
+   * Reads the admin-set `security.rateLimit.adaptiveEscalation` flag — the SAME
+   * overlay key the api-gateway both persists AND reads to decide whether to
+   * write the per-IP `rl:escalate:<ip>` signal. Returns `undefined` when unset
+   * so the caller can fall through to its env baseline / default. Never throws.
+   */
+  async rateLimitAdaptiveEscalation(): Promise<boolean | undefined> {
+    const overlay = await this.read()
+    const security = overlay?.security as { rateLimit?: Record<string, unknown> } | undefined
+    const enabled = security?.rateLimit?.adaptiveEscalation
+
+    return typeof enabled === 'boolean' ? enabled : undefined
+  }
+
+  /**
    * Reads the admin-set REGISTRATION policy overrides from `registration.*`
    * (default role + email-domain policy). Returns only the fields an admin has
    * actually persisted (each undefined when unset, so the caller falls through

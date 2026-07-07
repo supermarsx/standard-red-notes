@@ -125,6 +125,9 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:admin/users/:userUuid/admin-role', 'admin.setUserAdminRole'],
     ['[DELETE]:admin/users/:userUuid/mfa-secret', 'admin.resetUserMFA'],
     ['[POST]:admin/users/:userUuid/fix-quota', 'admin.fixUserQuota'],
+    // Anti-abuse: locked-account list + unlock (proxied to the auth admin controller)
+    ['[GET]:admin/anti-abuse/locked-accounts', 'admin.getLockedAccounts'],
+    ['[POST]:admin/anti-abuse/unlock', 'admin.unlockAccount'],
     // Syncing Server
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],

@@ -1,5 +1,6 @@
 import { FunctionComponent, ReactNode, useCallback, useEffect, useState } from 'react'
 import { isErrorResponse } from '@standardnotes/snjs'
+import { confirmDialog } from '@standardnotes/ui-services'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -82,6 +83,19 @@ type AntiAbuseView = {
   metrics: AntiAbuseMetrics
 }
 
+type LockedAccount = {
+  identifier: string
+  counter: number
+  captchaCounter: number
+  ttlSeconds: number
+  locked: boolean
+}
+
+type LockedAccountsView = {
+  available: boolean
+  accounts: LockedAccount[]
+}
+
 /** Small colored posture chip: green = safe/on, red = attention/off, neutral = unknown. */
 const PostureChip: FunctionComponent<{
   state: boolean | null | undefined
@@ -161,6 +175,11 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
   const [ipBusy, setIpBusy] = useState(false)
   const [configDraft, setConfigDraft] = useState<AntiAbuseConfig | null>(null)
   const [configSaving, setConfigSaving] = useState(false)
+
+  const [lockedAccounts, setLockedAccounts] = useState<LockedAccountsView | null>(null)
+  const [lockedLoading, setLockedLoading] = useState(false)
+  const [lockedError, setLockedError] = useState<string | null>(null)
+  const [unlockBusy, setUnlockBusy] = useState<string | null>(null)
 
   const loadRegistration = useCallback(async () => {
     setRegistrationLoading(true)
@@ -269,13 +288,34 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
     }
   }, [application, noteIfForbidden])
 
+  const loadLockedAccounts = useCallback(async () => {
+    setLockedLoading(true)
+    setLockedError(null)
+    try {
+      const response = await application.legacyApi.adminGetLockedAccounts()
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        setLockedError('Could not load locked accounts. The endpoint may not be available on this server.')
+        return
+      }
+      const data = (response as { data?: LockedAccountsView }).data ?? null
+      setLockedAccounts(data)
+    } catch (error) {
+      console.error(error)
+      setLockedError('Could not load locked accounts.')
+    } finally {
+      setLockedLoading(false)
+    }
+  }, [application, noteIfForbidden])
+
   useEffect(() => {
     void loadRegistration()
     void loadStatus()
     void loadAdminCount()
     void loadSecurityEvents()
     void loadAntiAbuse()
-  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse])
+    void loadLockedAccounts()
+  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse, loadLockedAccounts])
 
   const refreshAll = useCallback(() => {
     void loadRegistration()
@@ -283,7 +323,40 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
     void loadAdminCount()
     void loadSecurityEvents()
     void loadAntiAbuse()
-  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse])
+    void loadLockedAccounts()
+  }, [loadRegistration, loadStatus, loadAdminCount, loadSecurityEvents, loadAntiAbuse, loadLockedAccounts])
+
+  const unlockAccount = useCallback(
+    async (identifier: string) => {
+      const confirmed = await confirmDialog({
+        title: 'Unlock account',
+        text: `Clear the failed-login lockout for "${identifier}"? They will be able to attempt sign-in immediately.`,
+        confirmButtonText: 'Unlock account',
+        confirmButtonStyle: 'danger',
+      })
+      if (!confirmed) {
+        return
+      }
+      setUnlockBusy(identifier)
+      setLockedError(null)
+      try {
+        const response = await application.legacyApi.adminUnlockAccount(identifier)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+          setLockedError(message ?? 'Could not unlock the account.')
+          return
+        }
+        await loadLockedAccounts()
+      } catch (error) {
+        console.error(error)
+        setLockedError('Could not unlock the account.')
+      } finally {
+        setUnlockBusy(null)
+      }
+    },
+    [application, noteIfForbidden, loadLockedAccounts],
+  )
 
   const mutateIp = useCallback(
     async (list: 'allow' | 'block', action: 'add' | 'remove', entry: string) => {
@@ -765,6 +838,60 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             ) : null}
           </div>
         ) : null}
+
+        {/* Locked accounts (failed-login lockout) */}
+        <div className="mt-5">
+          <div className="flex items-center justify-between gap-2">
+            <Subtitle>Locked accounts</Subtitle>
+            <Button label="Refresh" onClick={() => void loadLockedAccounts()} disabled={lockedLoading} small />
+          </div>
+          <Text className="text-xs text-passive-1">
+            Accounts currently rate-limited by the failed-login lockout. Unlocking clears the attempt counters so the
+            user can sign in again. The identifier is whatever the failed attempts were keyed on (a user id or email).
+          </Text>
+          {lockedError ? <Text className="mt-2 text-danger">{lockedError}</Text> : null}
+          {lockedLoading && !lockedAccounts ? (
+            <div className="mt-2">
+              <Spinner className="h-4 w-4" />
+            </div>
+          ) : lockedAccounts && !lockedAccounts.available ? (
+            <Text className="mt-2 text-xs text-passive-1">
+              Locked-account listing is not available on this deployment (requires a Redis-backed cache).
+            </Text>
+          ) : lockedAccounts && lockedAccounts.accounts.length === 0 ? (
+            <Text className="mt-2 text-xs text-passive-1">No accounts are currently locked.</Text>
+          ) : lockedAccounts ? (
+            <div className="mt-2 flex flex-col gap-1">
+              {lockedAccounts.accounts.map((account) => (
+                <div
+                  key={account.identifier}
+                  className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold">{account.identifier}</span>
+                      {account.locked ? (
+                        <span className="rounded bg-danger px-1.5 py-0.5 text-xs text-danger-contrast">locked</span>
+                      ) : (
+                        <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">tracking</span>
+                      )}
+                    </div>
+                    <Text className="text-xs text-passive-1">
+                      attempts: {account.counter} &middot; captcha: {account.captchaCounter}
+                      {account.ttlSeconds >= 0 ? <> &middot; expires in {account.ttlSeconds}s</> : null}
+                    </Text>
+                  </div>
+                  <Button
+                    label="Unlock"
+                    onClick={() => void unlockAccount(account.identifier)}
+                    disabled={unlockBusy === account.identifier}
+                    small
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
         <div className="mt-3">
           <Text className="text-xs text-passive-1">

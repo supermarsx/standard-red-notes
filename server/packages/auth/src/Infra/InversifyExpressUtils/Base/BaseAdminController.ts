@@ -34,6 +34,7 @@ import { GetSetting } from './../../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { AdminUserSort, UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
+import { LockRepositoryInterface } from '../../../Domain/User/LockRepositoryInterface'
 import { BanType } from '../../../Domain/User/User'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
 import { QueryAuditLog } from '../../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
@@ -180,6 +181,11 @@ export class BaseAdminController extends BaseHttpController {
     protected doGetPermissionCatalog?: GetPermissionCatalog,
     protected doGetRoleHolders?: GetRoleHolders,
     protected doResolveRoleSetPermissions?: ResolveRoleSetPermissions,
+    // Standard Red Notes: failed-login lock repository, backing the anti-abuse
+    // "Locked accounts" list + unlock. Optional so existing constructions (home
+    // server, tests) keep compiling; the endpoints degrade gracefully when absent
+    // or when the bound repository (TypeORM cache) cannot list locks.
+    protected lockRepository?: LockRepositoryInterface,
   ) {
     super()
 
@@ -220,6 +226,8 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.setUserAdminRole', this.setUserAdminRole.bind(this))
       this.controllerContainer.register('admin.resetUserMFA', this.resetUserMFA.bind(this))
       this.controllerContainer.register('admin.fixUserQuota', this.fixUserQuota.bind(this))
+      this.controllerContainer.register('admin.getLockedAccounts', this.getLockedAccounts.bind(this))
+      this.controllerContainer.register('admin.unlockAccount', this.unlockAccount.bind(this))
     }
   }
 
@@ -1051,6 +1059,70 @@ export class BaseAdminController extends BaseHttpController {
       limit,
       offset,
     })
+  }
+
+  /**
+   * Standard Red Notes: anti-abuse "Locked accounts" list. Admin-gated (403 for
+   * non-admins). Read-only, so no audit entry. Returns the currently-tracked
+   * failed-login locks (identifier + counters + TTL + locked flag) via the lock
+   * repository's SCAN-based listing. Degrades to `available:false` with an empty
+   * list when the repository is absent or cannot list (TypeORM cache topology).
+   */
+  async getLockedAccounts(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+
+    if (!this.lockRepository || !this.lockRepository.listLockedAccounts) {
+      return this.json({ available: false, accounts: [] })
+    }
+
+    try {
+      const accounts = await this.lockRepository.listLockedAccounts()
+
+      return this.json({ available: true, accounts })
+    } catch {
+      // A cache read error must not 5xx the panel — report the feature as
+      // available but the list as momentarily empty.
+      return this.json({ available: true, accounts: [] })
+    }
+  }
+
+  /**
+   * Standard Red Notes: anti-abuse "unlock account". Admin-gated (403 for
+   * non-admins), audited (AccountUnlocked). Clears BOTH failed-login lock tiers
+   * for the given identifier (a user uuid or email, from the request body so
+   * emails with dots/@ are carried safely) so the account can sign in again.
+   */
+  async unlockAccount(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+
+    if (!this.lockRepository) {
+      return this.json({ error: { message: 'Account lockout management is not available on this deployment.' } }, 503)
+    }
+
+    const identifier = (request.body as { identifier?: unknown }).identifier
+    if (typeof identifier !== 'string' || identifier.trim() === '') {
+      return this.json({ error: { message: 'identifier must be a non-empty string.' } }, 400)
+    }
+    const trimmed = identifier.trim()
+
+    await this.lockRepository.resetLockCounter(trimmed)
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.AccountUnlocked,
+      targetType: 'user',
+      // The identifier can be a uuid or an email; record it as metadata rather
+      // than assuming a uuid target.
+      targetUuid: null,
+      ip: this.clientIp(request),
+      metadata: { identifier: trimmed },
+    })
+
+    return this.json({ success: true, identifier: trimmed })
   }
 
   private actorUuid(response?: Response): string | null {

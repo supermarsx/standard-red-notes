@@ -21,6 +21,7 @@ import { MapperInterface, ServiceContainerInterface } from '@standardnotes/domai
 import { EndpointResolverInterface } from '../Service/Resolver/EndpointResolverInterface'
 import { EndpointResolver } from '../Service/Resolver/EndpointResolver'
 import { RequiredCrossServiceTokenMiddleware } from '../Controller/RequiredCrossServiceTokenMiddleware'
+import { UserRateLimitMiddleware } from '../Controller/UserRateLimitMiddleware'
 import { OptionalCrossServiceTokenMiddleware } from '../Controller/OptionalCrossServiceTokenMiddleware'
 import { Transform } from 'stream'
 import { AuthClient, IAuthClient, ISyncingClient, SyncRequest, SyncResponse, SyncingClient } from '@standardnotes/grpc'
@@ -768,6 +769,13 @@ export class ContainerConfigLoader {
     container
       .bind<RequiredCrossServiceTokenMiddleware>(TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
       .to(RequiredCrossServiceTokenMiddleware)
+    // Standard Red Notes: the PER-USER rate tier for expensive authenticated
+    // endpoints (mounted after RequiredCrossServiceTokenMiddleware on the
+    // assistant streaming proxy). Off by default (userMax 0 => pass-through);
+    // no-op when Redis is absent. See UserRateLimitMiddleware.
+    container
+      .bind<UserRateLimitMiddleware>(TYPES.ApiGateway_UserRateLimitMiddleware)
+      .to(UserRateLimitMiddleware)
     container
       .bind<OptionalCrossServiceTokenMiddleware>(TYPES.ApiGateway_OptionalCrossServiceTokenMiddleware)
       .to(OptionalCrossServiceTokenMiddleware)

@@ -85,6 +85,9 @@ const AdminPaths = {
   antiAbuseIpUnblock: '/v1/admin/anti-abuse/ip-unblock',
   antiAbuseIpAllow: '/v1/admin/anti-abuse/ip-allow',
   antiAbuseIpUnallow: '/v1/admin/anti-abuse/ip-unallow',
+  // Standard Red Notes: anti-abuse locked-account list + unlock (proxied to auth).
+  antiAbuseLockedAccounts: '/v1/admin/anti-abuse/locked-accounts',
+  antiAbuseUnlock: '/v1/admin/anti-abuse/unlock',
   // Standard Red Notes: grant/revoke the admin role, reset 2FA, fix quota.
   userAdminRole: (userUuid: string) => `/v1/admin/users/${userUuid}/admin-role`,
   userMfaSecret: (userUuid: string) => `/v1/admin/users/${userUuid}/mfa-secret`,

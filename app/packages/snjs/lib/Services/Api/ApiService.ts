@@ -1028,6 +1028,35 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: list the accounts currently locked out by failed-login
+   * lockout (identifier + attempt counters + TTL). Proxied to the auth admin
+   * controller, which SCANs its lock keys. Admin-gated at the gateway.
+   */
+  async adminGetLockedAccounts(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.antiAbuseLockedAccounts),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load locked accounts.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: clear a locked-out account's failed-login counters so it
+   * can sign in again. The identifier (a user uuid or email) rides in the body so
+   * an email's dots/@ are carried safely. Admin-gated + audited at the auth server.
+   */
+  async adminUnlockAccount(identifier: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.antiAbuseUnlock),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to unlock the account.',
+      params: { identifier },
+    })
+  }
+
+  /**
    * Standard Red Notes: paginated admin users list (most-recent-first) with
    * optional filters. All filters are optional; the server clamps `limit` to its
    * own maximum (1500). Returns { users, total, limit, offset }.

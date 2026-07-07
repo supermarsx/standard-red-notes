@@ -6,6 +6,7 @@ import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
 import { RequestProofOfWorkChallenge } from '../UseCase/RequestProofOfWorkChallenge/RequestProofOfWorkChallenge'
 import { VerifyProofOfWork } from '../UseCase/VerifyProofOfWork/VerifyProofOfWork'
 
+import { IpEscalationCheckerInterface } from './IpEscalationCheckerInterface'
 import { ProofOfWorkConfig } from './ProofOfWorkConfig'
 import { ProofOfWorkConfigResolverInterface } from './ProofOfWorkConfigResolverInterface'
 import { ProofOfWorkGate } from './ProofOfWorkGate'
@@ -174,6 +175,62 @@ describe('ProofOfWorkGate', () => {
 
       expect(result.satisfied).toBe(true)
       expect(logger.warn).toHaveBeenCalled()
+    })
+  })
+
+  describe('sign-in with the gateway per-IP escalate flag', () => {
+    let escalationChecker: jest.Mocked<IpEscalationCheckerInterface>
+
+    const createGateWithEscalation = () =>
+      new ProofOfWorkGate(
+        requestChallenge,
+        verifyProofOfWork,
+        configResolver,
+        lockRepository,
+        userRepository,
+        logger,
+        escalationChecker,
+      )
+
+    beforeEach(() => {
+      // Account is well below the adaptive threshold, so any escalation must come
+      // purely from the IP flag.
+      lockRepository.getLockCounter = jest.fn().mockResolvedValue(0)
+      escalationChecker = { isEscalated: jest.fn().mockResolvedValue(false) } as jest.Mocked<IpEscalationCheckerInterface>
+    })
+
+    it('REQUIRES a challenge when the IP escalate flag is set, even below the account threshold', async () => {
+      escalationChecker.isEscalated = jest.fn().mockResolvedValue(true)
+
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '1.2.3.4')
+
+      expect(result.satisfied).toBe(false)
+      expect(escalationChecker.isEscalated).toHaveBeenCalledWith('1.2.3.4')
+    })
+
+    it('does NOT require a challenge when the IP flag is unset and the account is below threshold', async () => {
+      escalationChecker.isEscalated = jest.fn().mockResolvedValue(false)
+
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '1.2.3.4')
+
+      expect(result.satisfied).toBe(true)
+      expect(requestChallenge.execute).not.toHaveBeenCalled()
+    })
+
+    it('does not consult the IP flag when no client IP is provided', async () => {
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false)
+
+      expect(result.satisfied).toBe(true)
+      expect(escalationChecker.isEscalated).not.toHaveBeenCalled()
+    })
+
+    it('still requires a challenge from the account threshold even if the IP flag is unset', async () => {
+      lockRepository.getLockCounter = jest.fn().mockResolvedValue(2) // 2 + 2 = 4 >= 3
+      escalationChecker.isEscalated = jest.fn().mockResolvedValue(false)
+
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '1.2.3.4')
+
+      expect(result.satisfied).toBe(false)
     })
   })
 })

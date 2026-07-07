@@ -16,6 +16,9 @@ export const AuditAction = {
   QuotaRecalculated: 'quota.recalculated',
   WebhookCreated: 'webhook.created',
   WebhookDeleted: 'webhook.deleted',
+  // Standard Red Notes: admin anti-abuse "unlock account" — clears a user's
+  // failed-login lock counter(s) so they can sign in again.
+  AccountUnlocked: 'account.unlocked',
 } as const
 
 export type AuditActionName = (typeof AuditAction)[keyof typeof AuditAction]

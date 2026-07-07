@@ -546,7 +546,16 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
 </body></html>`
   }
 
-  @httpPost('/stream', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  // Standard Red Notes: the assistant streaming proxy is the canonical expensive
+  // per-user POST, so it carries the PER-USER rate tier (item 4) AFTER the auth
+  // middleware (which sets response.locals.user the tier keys on). Off by default
+  // (userMax 0 => pass-through), so this is behavior-preserving until an admin
+  // opts in via the Anti-abuse panel.
+  @httpPost(
+    '/stream',
+    TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
+    TYPES.ApiGateway_UserRateLimitMiddleware,
+  )
   async streamCompletion(request: Request, response: Response): Promise<void> {
     const body = (request.body ?? {}) as StreamRequestBody
 

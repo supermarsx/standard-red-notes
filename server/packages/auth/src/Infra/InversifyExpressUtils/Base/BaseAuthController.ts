@@ -221,6 +221,10 @@ export class BaseAuthController extends BaseHttpController {
       request.body.email as string,
       request.body,
       proofOfWorkBypass,
+      // Standard Red Notes: the client IP the gateway forwards (x-origin-ip). Lets
+      // the gate consult the shared per-IP escalate flag so an abusive IP is
+      // challenged even before its account crosses the adaptive threshold.
+      (request.headers['x-origin-ip'] as string) ?? undefined,
     )
     if (!signInProofOfWork.satisfied) {
       return this.proofOfWorkRequiredResponse(signInProofOfWork.challenge, 401)

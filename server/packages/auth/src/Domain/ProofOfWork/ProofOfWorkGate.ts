@@ -6,6 +6,7 @@ import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
 import { RequestProofOfWorkChallenge } from '../UseCase/RequestProofOfWorkChallenge/RequestProofOfWorkChallenge'
 import { VerifyProofOfWork } from '../UseCase/VerifyProofOfWork/VerifyProofOfWork'
 
+import { IpEscalationCheckerInterface } from './IpEscalationCheckerInterface'
 import { ProofOfWorkConfigResolverInterface } from './ProofOfWorkConfigResolverInterface'
 import { ProofOfWorkScope, ProofOfWorkScopeConfig } from './ProofOfWorkConfig'
 
@@ -40,6 +41,11 @@ export class ProofOfWorkGate {
     private lockRepository: LockRepositoryInterface,
     private userRepository: UserRepositoryInterface,
     private logger: Logger,
+    // Standard Red Notes: optional reader for the gateway's per-IP escalate flag
+    // (shared Redis). When present AND the resolved client IP is escalated, the
+    // adaptive sign-in gate requires PoW even below the account threshold. Absent
+    // (no shared Redis / older wiring) => escalation simply never triggers.
+    private escalationChecker?: IpEscalationCheckerInterface,
   ) {}
 
   async enforceRegister(requestBody: Record<string, unknown>): Promise<ProofOfWorkGateResult> {
@@ -61,6 +67,10 @@ export class ProofOfWorkGate {
     email: string,
     requestBody: Record<string, unknown>,
     bypass: boolean,
+    // Standard Red Notes: the resolved client IP reaching auth (from the gateway's
+    // x-origin-ip header). Used to consult the shared per-IP escalate flag. When
+    // omitted, only the account-based adaptive rule applies (unchanged behavior).
+    clientIp?: string,
   ): Promise<ProofOfWorkGateResult> {
     try {
       // A pre-authorized credential (valid app password / trusted device) skips
@@ -75,8 +85,15 @@ export class ProofOfWorkGate {
         return { satisfied: true }
       }
 
+      // In 'always' mode PoW is required unconditionally. In 'adaptive' mode it is
+      // required when EITHER the account has crossed the failed-attempt threshold
+      // OR the gateway has flagged this IP for escalation (shared Redis). The
+      // ip-escalate check fails open to false, so it can only ADD enforcement.
       const required =
-        config.mode === 'always' ? true : await this.adaptiveRequirementReached(email, config.adaptiveThreshold)
+        config.mode === 'always'
+          ? true
+          : (await this.adaptiveRequirementReached(email, config.adaptiveThreshold)) ||
+            (await this.ipEscalated(clientIp))
       if (!required) {
         return { satisfied: true }
       }
@@ -127,6 +144,20 @@ export class ProofOfWorkGate {
       satisfied: false,
       challenge: challengeResult.getValue(),
     }
+  }
+
+  /**
+   * Whether the gateway has flagged this client IP for escalation (an active
+   * `rl:escalate:<ip>` key in the shared Redis). Gated by the same
+   * adaptiveEscalation config the gateway uses to set the flag; fails open to
+   * false so a Redis error never forces PoW. No checker / no IP => false.
+   */
+  private async ipEscalated(clientIp?: string): Promise<boolean> {
+    if (this.escalationChecker === undefined || clientIp === undefined || clientIp === '') {
+      return false
+    }
+
+    return this.escalationChecker.isEscalated(clientIp)
   }
 
   private async adaptiveRequirementReached(email: string, threshold: number): Promise<boolean> {

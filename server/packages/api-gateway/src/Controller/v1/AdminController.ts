@@ -1586,6 +1586,37 @@ export class AdminController extends BaseHttpController {
     })
   }
 
+  /**
+   * Standard Red Notes: anti-abuse LOCKED ACCOUNTS list — proxied to the auth
+   * admin controller (the failed-login lock counters live in auth's Redis). The
+   * auth side SCANs the lock keys and re-gates on the ADMIN_USER role.
+   */
+  @httpGet('/anti-abuse/locked-accounts', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getLockedAccounts(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/anti-abuse/locked-accounts'),
+      request.body,
+    )
+  }
+
+  /**
+   * Standard Red Notes: anti-abuse UNLOCK — clears a user's failed-login lock
+   * counter(s). Proxied to the auth admin controller, which re-gates on the
+   * ADMIN_USER role and audits the action. The identifier rides in the body so an
+   * email (dots/@) is carried safely.
+   */
+  @httpPost('/anti-abuse/unlock', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async unlockAccount(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'admin/anti-abuse/unlock'),
+      request.body,
+    )
+  }
+
   @httpPost('/anti-abuse/ip-block', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async blockIp(request: Request, response: Response): Promise<void> {
     await this.mutateIpList(request, response, 'block', 'add')

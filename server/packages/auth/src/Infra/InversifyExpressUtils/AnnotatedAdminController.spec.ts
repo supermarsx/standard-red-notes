@@ -46,6 +46,8 @@ describe('AnnotatedAdminController route wiring', () => {
     'setUserAdminRole',
     'resetUserMFA',
     'fixUserQuota',
+    'getLockedAccountsEndpoint',
+    'unlockAccountEndpoint',
   ]
 
   const legacyInternalHandlers = [

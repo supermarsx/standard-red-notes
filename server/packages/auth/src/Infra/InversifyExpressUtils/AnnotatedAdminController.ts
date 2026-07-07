@@ -16,6 +16,7 @@ import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInt
 import { WebhookDispatcherInterface } from '../../Domain/Webhook/WebhookDispatcherInterface'
 import { MapperInterface } from '@standardnotes/domain-core'
 import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterface'
+import { LockRepositoryInterface } from '../../Domain/User/LockRepositoryInterface'
 import { Group } from '../../Domain/Group/Group'
 import { GroupHttpProjection } from '../Http/Projection/GroupHttpProjection'
 import { CreateGroup } from '../../Domain/UseCase/CreateGroup/CreateGroup'
@@ -89,6 +90,9 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_GetPermissionCatalog) override doGetPermissionCatalog: GetPermissionCatalog,
     @inject(TYPES.Auth_GetRoleHolders) override doGetRoleHolders: GetRoleHolders,
     @inject(TYPES.Auth_ResolveRoleSetPermissions) override doResolveRoleSetPermissions: ResolveRoleSetPermissions,
+    // Standard Red Notes: failed-login lock repository for the anti-abuse
+    // "Locked accounts" list + unlock endpoints.
+    @inject(TYPES.Auth_LockRepository) override lockRepository: LockRepositoryInterface,
   ) {
     super(
       doDeleteSetting,
@@ -126,6 +130,7 @@ export class AnnotatedAdminController extends BaseAdminController {
       doGetPermissionCatalog,
       doGetRoleHolders,
       doResolveRoleSetPermissions,
+      lockRepository,
     )
   }
 
@@ -319,5 +324,18 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPost('/users/:userUuid/fix-quota', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async fixUserQuota(request: Request, response: Response): Promise<results.JsonResult> {
     return super.fixUserQuota(request, response)
+  }
+
+  // Standard Red Notes: anti-abuse "Locked accounts" list + unlock. The gateway
+  // proxies /v1/admin/anti-abuse/locked-accounts and /v1/admin/anti-abuse/unlock
+  // here; both re-gate on the ADMIN_USER role in the base controller.
+  @httpGet('/anti-abuse/locked-accounts', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async getLockedAccountsEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getLockedAccounts(request, response)
+  }
+
+  @httpPost('/anti-abuse/unlock', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async unlockAccountEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.unlockAccount(request, response)
   }
 }

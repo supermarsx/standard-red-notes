@@ -476,6 +476,7 @@ import { HttpCaptchaServer } from '../Infra/Http/HumanVerification/HttpCaptchaSe
 import { CookieFactoryInterface } from '../Domain/Auth/Cookies/CookieFactoryInterface'
 import { CookieFactory } from '../Domain/Auth/Cookies/CookieFactory'
 import { RedisLockRepository } from '../Infra/Redis/RedisLockRepository'
+import { RedisIpEscalationChecker } from '../Infra/Redis/RedisIpEscalationChecker'
 import { RedisMfaSecretRepository } from '../Infra/Redis/RedisMfaSecretRepository'
 import { TypeORMMfaSecretRepository } from '../Infra/TypeORM/TypeORMMfaSecretRepository'
 import { MfaSecretRepositoryInterface } from '../Domain/Mfa/MfaSecretRepositoryInterface'
@@ -1404,6 +1405,24 @@ export class ContainerConfigLoader {
           container.get<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository),
         ),
       )
+    // Standard Red Notes: reader for the gateway's per-IP escalate flag on the
+    // SHARED Redis cache. Bound only when Auth_Redis is present (the gateway and
+    // auth share the same cache container); absent under the TypeORM cache
+    // topology, where the gate simply never escalates on IP. The flag is
+    // config-gated by the SAME adaptiveEscalation switch the gateway uses to write
+    // it: persisted admin overlay wins over the RATE_LIMIT_ADAPTIVE_ESCALATION env
+    // baseline, else off. Reads are per-call so an admin toggle applies live.
+    const rateLimitEscalationOverlayReader = new ServerSettingsOverlayReader(
+      env.get('SERVER_SETTINGS_PATH', true) || undefined,
+    )
+    const adaptiveEscalationEnvBaseline = env.get('RATE_LIMIT_ADAPTIVE_ESCALATION', true) === 'true'
+    const ipEscalationChecker = container.isBound(TYPES.Auth_Redis)
+      ? new RedisIpEscalationChecker(container.get<Redis>(TYPES.Auth_Redis), async (): Promise<boolean> => {
+          const overlay = await rateLimitEscalationOverlayReader.rateLimitAdaptiveEscalation()
+
+          return overlay ?? adaptiveEscalationEnvBaseline
+        })
+      : undefined
     container
       .bind<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate)
       .toConstantValue(
@@ -1414,6 +1433,7 @@ export class ContainerConfigLoader {
           container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          ipEscalationChecker,
         ),
       )
 
