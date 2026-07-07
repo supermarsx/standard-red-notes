@@ -208,6 +208,9 @@ import {
   ListStylePreset,
 } from './listStyle'
 import { useTranslation } from 'react-i18next'
+import BlockStyleGallery from './BlockStyleGallery'
+import { GalleryBlockDescriptor, applyTypographyBlockToSelection } from './typographyGallery'
+import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -547,6 +550,10 @@ const ToolbarPlugin = () => {
   const [isTextStyleMenuOpen, setIsTextStyleMenuOpen] = useState(false)
   const textStyleAnchorRef = useRef<HTMLButtonElement>(null)
 
+  // Standard Red Notes: typography-profile preview-square gallery popover.
+  const [isTypographyGalleryMenuOpen, setIsTypographyGalleryMenuOpen] = useState(false)
+  const typographyGalleryAnchorRef = useRef<HTMLButtonElement>(null)
+
   const [isAlignmentMenuOpen, setIsAlignmentMenuOpen] = useState(false)
   const alignmentAnchorRef = useRef<HTMLButtonElement>(null)
 
@@ -659,6 +666,26 @@ const ToolbarPlugin = () => {
   // Format painter (Word-style) armed state + formatting marks (¶) toggle.
   const painter = useFormatPainter()
   const [marksOn, toggleMarks] = useFormattingMarks()
+
+  // Standard Red Notes: the resolved ACTIVE typography profile (Phase 1), read
+  // reactively from synced prefs. Drives the truthful preview squares and the
+  // per-block style the gallery stamps on apply.
+  const typographyProfiles = usePreference(PrefKey.TypographyProfiles)
+  const activeTypographyProfileId = usePreference(PrefKey.ActiveTypographyProfileId)
+  const activeTypographyProfile = useMemo(
+    () => resolveActiveTypographyProfile(typographyProfiles, activeTypographyProfileId),
+    [typographyProfiles, activeTypographyProfileId],
+  )
+
+  // Clicking a gallery square: set the block TYPE + stamp the active profile's
+  // per-block style (reusing the block ops + blockFormatting), then close.
+  const applyTypographyBlock = useCallback(
+    (descriptor: GalleryBlockDescriptor) => {
+      applyTypographyBlockToSelection(activeEditor, descriptor, activeTypographyProfile)
+      setIsTypographyGalleryMenuOpen(false)
+    },
+    [activeEditor, activeTypographyProfile],
+  )
 
   // Apply a block-formatting helper across the current range selection.
   const runBlockFormat = useCallback(
@@ -1856,6 +1883,17 @@ const ToolbarPlugin = () => {
         className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
       >
         <Icon type={blockTypeToIconName[blockType]} size="custom" className="super-toolbar-icon" />
+        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.TypographyGallery]: (
+      <ToolbarButton
+        name="Block style gallery"
+        onSelect={() => setIsTypographyGalleryMenuOpen(!isTypographyGalleryMenuOpen)}
+        ref={typographyGalleryAnchorRef}
+        className={isTypographyGalleryMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="dashboard" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -3314,6 +3352,25 @@ const ToolbarPlugin = () => {
             onClick={() => CodeBlock.onSelect(editor)}
           />
         </Menu>
+      </Popover>
+      {/* Standard Red Notes: typography-profile preview-square gallery. Each
+          square is a truthful static preview of a block type as styled by the
+          active profile; clicking it sets the block type + stamps that style. */}
+      <Popover
+        title="Block style gallery"
+        anchorElement={typographyGalleryAnchorRef}
+        open={isTypographyGalleryMenuOpen}
+        togglePopover={() => setIsTypographyGalleryMenuOpen(!isTypographyGalleryMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-72 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <BlockStyleGallery profile={activeTypographyProfile} onApplyBlock={applyTypographyBlock} />
       </Popover>
       <Popover
         title={t('alignment')}

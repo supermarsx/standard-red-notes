@@ -44,7 +44,9 @@ describe('applyToolbarConfig', () => {
   it('drops a group entirely when all of its buttons are hidden', () => {
     const result = applyToolbarConfig({
       groupOrder: [],
-      hiddenButtonIds: [ToolbarButtonId.BlockStyle], // BlockStyle group has a single button
+      // Hide every button in the BlockStyle group (formatting options + the
+      // typography-profile gallery) so the group has nothing left to render.
+      hiddenButtonIds: [ToolbarButtonId.BlockStyle, ToolbarButtonId.TypographyGallery],
     })
     expect(groupIds(result)).not.toContain(ToolbarGroupId.BlockStyle)
   })

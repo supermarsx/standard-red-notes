@@ -161,6 +161,30 @@ export const $setFirstLineIndent = (selection: RangeSelection, value: string): n
   $patchBlockStyle(selection, 'text-indent', value)
 
 /**
+ * Apply many CSS declarations at once onto every leaf block the selection spans,
+ * merging each `[property, value]` pair with whatever is already on the block
+ * (later pairs win, empty values clear). Used by the typography-profile gallery
+ * to stamp a whole block style (from `blockStyleToStyleEntries`) as a per-block
+ * override — it writes onto the block's inline `style`, which persists via the
+ * Styled* nodes (#77). Reuses the same collect + merge primitives as the single
+ * `$set*` helpers. Returns the number of blocks touched.
+ */
+export const $applyBlockStyleEntries = (
+  selection: RangeSelection,
+  entries: ReadonlyArray<readonly [string, string]>,
+): number => {
+  const blocks = $collectFormatBlocks(selection)
+  for (const block of blocks) {
+    let style = block.getStyle()
+    for (const [property, value] of entries) {
+      style = mergeBlockStyle(style, property, value)
+    }
+    block.setStyle(style)
+  }
+  return blocks.length
+}
+
+/**
  * Set block left / right margins on each spanned block. Either field may be
  * omitted to leave that side untouched; an empty string clears that side.
  */

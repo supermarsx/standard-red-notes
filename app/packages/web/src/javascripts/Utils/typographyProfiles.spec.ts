@@ -8,6 +8,8 @@ import {
   applyTypographyProfile,
   blockStyleToCss,
   blockStyleToDeclarations,
+  blockStyleToInlineStyle,
+  blockStyleToStyleEntries,
   isSafeCssValue,
   resolveActiveTypographyProfile,
 } from './typographyProfiles'
@@ -82,6 +84,74 @@ describe('typographyProfiles', () => {
     it("resolves a google: fontFamily through the vetted grammar", () => {
       const decls = blockStyleToDeclarations({ fontFamily: 'google:Inter' })
       expect(decls).toContain("font-family: 'Inter'")
+    })
+  })
+
+  describe('blockStyleToStyleEntries', () => {
+    it('returns kebab-case [property, value] pairs for set, safe values only', () => {
+      const entries = blockStyleToStyleEntries({
+        lineHeight: '1.75',
+        marginTop: '8px',
+        color: 'red',
+        backgroundColor: 'url(https://evil.example/x.png)', // unsafe -> dropped
+        fontSize: undefined, // unset -> dropped
+      })
+      expect(entries).toContainEqual(['line-height', '1.75'])
+      expect(entries).toContainEqual(['margin-top', '8px'])
+      expect(entries).toContainEqual(['color', 'red'])
+      expect(entries.some(([p]) => p === 'background-color')).toBe(false)
+      expect(entries.some(([p]) => p === 'font-size')).toBe(false)
+    })
+
+    it('is the single source of truth behind blockStyleToDeclarations', () => {
+      const style = { lineHeight: '2', marginTop: '12px', color: 'blue' }
+      expect(blockStyleToStyleEntries(style).map(([p, v]) => `${p}: ${v}`)).toEqual(blockStyleToDeclarations(style))
+    })
+  })
+
+  describe('blockStyleToInlineStyle (preview square)', () => {
+    it('produces a camelCase React style object mirroring the CSS declarations', () => {
+      const inline = blockStyleToInlineStyle({
+        lineHeight: '1.5',
+        marginTop: '8px',
+        fontSize: '1.625rem',
+        fontWeight: '700',
+        color: 'var(--sn-stylekit-editor-foreground-color)',
+      })
+      expect(inline).toEqual({
+        lineHeight: '1.5',
+        marginTop: '8px',
+        fontSize: '1.625rem',
+        fontWeight: '700',
+        color: 'var(--sn-stylekit-editor-foreground-color)',
+      })
+    })
+
+    it('camel-cases edge-specific border + list properties', () => {
+      const inline = blockStyleToInlineStyle({
+        borderSide: 'left',
+        borderColor: 'blue',
+        borderWidth: '4px',
+        listMarkerStyle: 'square',
+        paddingBlock: '1rem',
+      })
+      expect(inline.borderLeftColor).toBe('blue')
+      expect(inline.borderLeftWidth).toBe('4px')
+      expect(inline.listStyleType).toBe('square')
+      expect(inline.paddingBlock).toBe('1rem')
+    })
+
+    it('reflects the DEFAULT profile h1 as a truthful inline style', () => {
+      const inline = blockStyleToInlineStyle(DEFAULT_TYPOGRAPHY_PROFILE.blocks.h1!)
+      expect(inline.fontSize).toBe('1.625rem')
+      expect(inline.fontWeight).toBe('700')
+      expect(inline.color).toBe('var(--sn-stylekit-editor-foreground-color)')
+    })
+
+    it('drops CSP-unsafe values (no url()/@import can reach the square)', () => {
+      const inline = blockStyleToInlineStyle({ backgroundColor: 'url(https://evil.example/x.png)', color: 'red' })
+      expect(inline.backgroundColor).toBeUndefined()
+      expect(inline.color).toBe('red')
     })
   })
 

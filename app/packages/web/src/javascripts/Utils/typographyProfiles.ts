@@ -70,60 +70,89 @@ const resolveFontFamily = (value: string | undefined): string | null => {
   return resolved && isSafeCssValue(resolved) ? resolved : null
 }
 
-/** Push a `prop: value` declaration if the value is safe. */
-const pushDecl = (decls: string[], prop: string, value: string | undefined): void => {
-  if (isSafeCssValue(value)) {
-    decls.push(`${prop}: ${value.trim()}`)
-  }
-}
-
 /**
- * Compile a single block's `BlockStyle` into a list of CSS declarations
- * (property: value), skipping unset and unsafe values.
+ * Compile a single block's `BlockStyle` into ordered `[cssProperty, value]`
+ * pairs (kebab-case property names), skipping unset and unsafe values. This is
+ * the single source of truth shared by the scoped-CSS compiler
+ * (`blockStyleToDeclarations`/`blockStyleToCss`), the inline-style builder for
+ * the toolbar preview squares (`blockStyleToInlineStyle`), and the per-block
+ * apply path (the gallery writes these pairs onto the selected block's inline
+ * style via blockFormatting's `$applyBlockStyleEntries`).
  */
-export const blockStyleToDeclarations = (style: BlockStyle): string[] => {
-  const decls: string[] = []
+export const blockStyleToStyleEntries = (style: BlockStyle): Array<[string, string]> => {
+  const entries: Array<[string, string]> = []
+  const push = (prop: string, value: string | undefined): void => {
+    if (isSafeCssValue(value)) {
+      entries.push([prop, value.trim()])
+    }
+  }
 
   // Spacing / indentation (mirror blockFormatting.ts).
-  pushDecl(decls, 'line-height', style.lineHeight)
-  pushDecl(decls, 'margin-top', style.marginTop)
-  pushDecl(decls, 'margin-bottom', style.marginBottom)
-  pushDecl(decls, 'margin-left', style.marginLeft)
-  pushDecl(decls, 'margin-right', style.marginRight)
-  pushDecl(decls, 'padding-left', style.paddingLeft)
-  pushDecl(decls, 'padding-right', style.paddingRight)
-  pushDecl(decls, 'text-indent', style.textIndent)
+  push('line-height', style.lineHeight)
+  push('margin-top', style.marginTop)
+  push('margin-bottom', style.marginBottom)
+  push('margin-left', style.marginLeft)
+  push('margin-right', style.marginRight)
+  push('padding-left', style.paddingLeft)
+  push('padding-right', style.paddingRight)
+  push('text-indent', style.textIndent)
 
   // Typography.
   const fontFamily = resolveFontFamily(style.fontFamily)
   if (fontFamily) {
-    decls.push(`font-family: ${fontFamily}`)
+    entries.push(['font-family', fontFamily])
   }
-  pushDecl(decls, 'font-size', style.fontSize)
-  pushDecl(decls, 'font-weight', style.fontWeight)
-  pushDecl(decls, 'font-style', style.fontStyle)
-  pushDecl(decls, 'letter-spacing', style.letterSpacing)
-  pushDecl(decls, 'text-transform', style.textTransform)
+  push('font-size', style.fontSize)
+  push('font-weight', style.fontWeight)
+  push('font-style', style.fontStyle)
+  push('letter-spacing', style.letterSpacing)
+  push('text-transform', style.textTransform)
 
   // Colour.
-  pushDecl(decls, 'color', style.color)
-  pushDecl(decls, 'background-color', style.backgroundColor)
+  push('color', style.color)
+  push('background-color', style.backgroundColor)
 
   // Alignment.
-  pushDecl(decls, 'text-align', style.textAlign)
+  push('text-align', style.textAlign)
 
   // Box props. borderSide selects which edge the colour/width/style apply to.
   const side = style.borderSide && style.borderSide !== 'all' ? `-${style.borderSide}` : ''
-  pushDecl(decls, `border${side}-color`, style.borderColor)
-  pushDecl(decls, `border${side}-width`, style.borderWidth)
-  pushDecl(decls, `border${side}-style`, style.borderStyle)
-  pushDecl(decls, 'border-radius', style.borderRadius)
-  pushDecl(decls, 'padding-block', style.paddingBlock)
+  push(`border${side}-color`, style.borderColor)
+  push(`border${side}-width`, style.borderWidth)
+  push(`border${side}-style`, style.borderStyle)
+  push('border-radius', style.borderRadius)
+  push('padding-block', style.paddingBlock)
 
   // Lists.
-  pushDecl(decls, 'list-style-type', style.listMarkerStyle)
+  push('list-style-type', style.listMarkerStyle)
 
-  return decls
+  return entries
+}
+
+/**
+ * Compile a single block's `BlockStyle` into a list of CSS declarations
+ * (`property: value`), skipping unset and unsafe values.
+ */
+export const blockStyleToDeclarations = (style: BlockStyle): string[] =>
+  blockStyleToStyleEntries(style).map(([prop, value]) => `${prop}: ${value}`)
+
+/** kebab-case CSS property -> camelCase React style key (e.g. `line-height` -> `lineHeight`). */
+const cssPropToCamelCase = (prop: string): string => prop.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase())
+
+/**
+ * Build a React-compatible inline style object (camelCase keys) from a
+ * `BlockStyle`, reusing the exact same vetted `[prop, value]` pairs the scoped
+ * CSS compiler emits. Used by the toolbar's preview squares so each square is a
+ * *truthful* render of the block as the active profile styles it — inline styles
+ * outrank the base theme class exactly as the per-block override does in the
+ * real editor. Returned as a plain string map; callers cast to `CSSProperties`.
+ */
+export const blockStyleToInlineStyle = (style: BlockStyle): Record<string, string> => {
+  const inline: Record<string, string> = {}
+  for (const [prop, value] of blockStyleToStyleEntries(style)) {
+    inline[cssPropToCamelCase(prop)] = value
+  }
+  return inline
 }
 
 /**

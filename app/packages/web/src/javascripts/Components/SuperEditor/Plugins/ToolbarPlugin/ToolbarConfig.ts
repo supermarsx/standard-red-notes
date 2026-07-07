@@ -45,6 +45,8 @@ export enum ToolbarButtonId {
   Deselect = 'deselect',
   // Block style
   BlockStyle = 'blockStyle',
+  /** Typography-profile preview-square gallery (Standard Red Notes). */
+  TypographyGallery = 'typographyGallery',
   // Text style
   Bold = 'bold',
   Italic = 'italic',
@@ -185,7 +187,10 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     id: ToolbarGroupId.BlockStyle,
     label: 'Block style',
     caption: 'Block',
-    buttons: [{ id: ToolbarButtonId.BlockStyle, label: 'Formatting options', group: ToolbarGroupId.BlockStyle }],
+    buttons: [
+      { id: ToolbarButtonId.BlockStyle, label: 'Formatting options', group: ToolbarGroupId.BlockStyle },
+      { id: ToolbarButtonId.TypographyGallery, label: 'Block style gallery', group: ToolbarGroupId.BlockStyle },
+    ],
   },
   {
     id: ToolbarGroupId.ColorFont,

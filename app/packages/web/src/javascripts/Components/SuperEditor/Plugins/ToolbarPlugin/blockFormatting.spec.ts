@@ -20,6 +20,7 @@ import {
 } from 'lexical'
 
 import {
+  $applyBlockStyleEntries,
   $collectFormatBlocks,
   $setBlockMargins,
   $setFirstLineIndent,
@@ -228,6 +229,47 @@ describe('block-style apply helpers', () => {
     const map = parseStyleString(blockStyles(editor)[0])
     expect(map.has('line-height')).toBe(false)
     expect(map.get('margin-top')).toBe('8px')
+  })
+})
+
+describe('$applyBlockStyleEntries', () => {
+  it('stamps many CSS declarations onto each spanned block, merging with existing', () => {
+    const editor = makeEditor()
+    seedThreeParagraphsSelectFirstTwo(editor)
+    // Pre-existing per-block property that must survive the merge.
+    runOnSelection(editor, (selection) => $setLineHeight(selection, '1.25'))
+    let count = -1
+    runOnSelection(editor, (selection) => {
+      count = $applyBlockStyleEntries(selection, [
+        ['font-size', '1.625rem'],
+        ['font-weight', '700'],
+        ['color', 'var(--sn-stylekit-editor-foreground-color)'],
+      ])
+    })
+    expect(count).toBe(2)
+    const map = parseStyleString(blockStyles(editor)[0])
+    expect(map.get('line-height')).toBe('1.25') // preserved
+    expect(map.get('font-size')).toBe('1.625rem')
+    expect(map.get('font-weight')).toBe('700')
+    expect(map.get('color')).toBe('var(--sn-stylekit-editor-foreground-color)')
+    // Untouched third block stays clean.
+    expect(blockStyles(editor)[2]).toBe('')
+  })
+
+  it('later pairs win and empty values clear a property', () => {
+    const editor = makeEditor()
+    seedThreeParagraphsSelectFirstTwo(editor)
+    runOnSelection(editor, (selection) => {
+      $applyBlockStyleEntries(selection, [
+        ['font-size', '10px'],
+        ['font-size', '20px'],
+        ['margin-top', '8px'],
+        ['margin-top', ''],
+      ])
+    })
+    const map = parseStyleString(blockStyles(editor)[0])
+    expect(map.get('font-size')).toBe('20px')
+    expect(map.has('margin-top')).toBe(false)
   })
 })
 
