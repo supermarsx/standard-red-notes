@@ -34,9 +34,13 @@ const extractPlaintextFromLexicalJSON = (raw: string): string => {
   const isBlockNode = (type: unknown) => {
     return (
       type === 'paragraph' ||
+      // Standard Red Notes styled block overrides (see StyledBlockNodes.ts).
+      type === 'paragraph-styled' ||
       type === 'heading' ||
+      type === 'heading-styled' ||
       type === 'listitem' ||
       type === 'quote' ||
+      type === 'quote-styled' ||
       type === 'code' ||
       type === 'horizontalrule'
     )

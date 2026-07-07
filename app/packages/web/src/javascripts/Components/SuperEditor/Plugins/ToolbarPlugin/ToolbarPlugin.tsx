@@ -26,6 +26,7 @@ import {
   $createParagraphNode,
   $isTextNode,
   $getNodeByKey,
+  $isParagraphNode,
   TextNode,
   BaseSelection,
   RangeSelection,
@@ -965,7 +966,17 @@ const ToolbarPlugin = () => {
         const type = parentList ? parentList.getListType() : element.getListType()
         setBlockType(type)
       } else {
-        const type = $isHeadingNode(element) ? element.getTag() : element.getType()
+        // $isHeadingNode / $isQuoteNode / $isParagraphNode are instanceof checks,
+        // so they also match the Standard Red Notes styled overrides (whose own
+        // getType() is e.g. 'paragraph-styled'); normalize those back to the base
+        // block name so the block-type dropdown reflects them correctly.
+        const type = $isHeadingNode(element)
+          ? element.getTag()
+          : $isQuoteNode(element)
+            ? 'quote'
+            : $isParagraphNode(element)
+              ? 'paragraph'
+              : element.getType()
         if (type in blockTypeToBlockName) {
           setBlockType(type as keyof typeof blockTypeToBlockName)
         }

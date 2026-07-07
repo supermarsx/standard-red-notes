@@ -277,7 +277,19 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
         ToolbarButtonId.Divider,
         ToolbarButtonId.FormattingMarks,
       ],
-      [ToolbarButtonId.Quote, ToolbarButtonId.CodeBlock, ToolbarButtonId.Divider],
+      [
+        ToolbarButtonId.Quote,
+        ToolbarButtonId.CodeBlock,
+        ToolbarButtonId.Divider,
+        // Increase / decrease indent, then a divider and the paragraph-layout
+        // dropdown (line spacing + space before/after + shading) and list-style
+        // picker, per the Standard Red Notes paragraph-formatting row.
+        ToolbarButtonId.Indent,
+        ToolbarButtonId.Outdent,
+        ToolbarButtonId.Divider,
+        ToolbarButtonId.ParagraphLayout,
+        ToolbarButtonId.ListStyle,
+      ],
       [
         ToolbarButtonId.AlignLeft,
         ToolbarButtonId.AlignCenter,

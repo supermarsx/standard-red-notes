@@ -17,6 +17,7 @@ import { BubbleNode } from '../../Plugins/ItemBubblePlugin/Nodes/BubbleNode'
 import { RemoteImageNode } from '../../Plugins/RemoteImagePlugin/RemoteImageNode'
 import { InlineFileNode } from '../../Plugins/InlineFilePlugin/InlineFileNode'
 import { CreateEditorArgs } from 'lexical'
+import { STYLED_BLOCK_NODE_OVERRIDES } from './StyledBlockNodes'
 import { FileExportNode } from './FileExportNode'
 import { MermaidNode } from './MermaidNode'
 import { ExcalidrawNode } from './ExcalidrawNode'
@@ -96,6 +97,16 @@ const CommonNodes = [
   PageBreakNode,
 ]
 
-export const BlockEditorNodes = CommonNodes
+// Standard Red Notes: register the styled paragraph/heading/quote overrides so
+// block-level styles (line spacing, paragraph spacing, indent) render and
+// serialize. Kept last so the base nodes they replace are already listed.
+export const BlockEditorNodes: NonNullable<CreateEditorArgs['nodes']> = [
+  ...CommonNodes,
+  ...STYLED_BLOCK_NODE_OVERRIDES,
+]
 
-export const SuperExportNodes: CreateEditorArgs['nodes'] = [...CommonNodes, FileExportNode]
+export const SuperExportNodes: NonNullable<CreateEditorArgs['nodes']> = [
+  ...CommonNodes,
+  FileExportNode,
+  ...STYLED_BLOCK_NODE_OVERRIDES,
+]

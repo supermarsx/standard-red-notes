@@ -28,7 +28,7 @@ import { $patchStyleText } from '@lexical/selection'
 /* ------------------------------------------------------------------ presets */
 
 /** Unit-less line-height multipliers offered in the toolbar menu. */
-export const LINE_HEIGHT_PRESETS = ['1', '1.15', '1.5', '2'] as const
+export const LINE_HEIGHT_PRESETS = ['1', '1.15', '1.25', '1.5', '1.75', '2'] as const
 
 /** Paragraph spacing presets (CSS lengths) for space-before / space-after. */
 export const SPACING_PRESETS = ['0', '4px', '8px', '12px', '16px', '24px'] as const

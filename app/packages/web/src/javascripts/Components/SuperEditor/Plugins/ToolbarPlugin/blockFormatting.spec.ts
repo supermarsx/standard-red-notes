@@ -40,7 +40,7 @@ import {
 
 describe('presets', () => {
   it('exposes the documented preset shapes', () => {
-    expect(LINE_HEIGHT_PRESETS).toEqual(['1', '1.15', '1.5', '2'])
+    expect(LINE_HEIGHT_PRESETS).toEqual(['1', '1.15', '1.25', '1.5', '1.75', '2'])
     expect(SPACING_PRESETS[0]).toBe('0')
     expect(INDENT_STEP).toBe('40px')
     expect(TEXT_SHADING_PRESETS[0]).toBeNull()
