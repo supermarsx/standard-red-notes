@@ -11,9 +11,12 @@ import { Subtitle, Title, Text } from '@/Components/Preferences/PreferencesCompo
 import PreferencesPane from '../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../PreferencesComponents/PreferencesSegment'
+import PreferencesSubtabs, { PreferencesSubtab } from '../PreferencesComponents/PreferencesSubtabs'
 import EditorAppearance from './Appearance/EditorAppearance'
 import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
 import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
+import StyleProfiles from './Appearance/StyleProfiles/StyleProfiles'
+import { useTabState } from '@/Components/Tabs/useTabState'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
@@ -112,8 +115,10 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
     setAutoDarkTheme(value)
   }
 
-  return (
-    <PreferencesPane>
+  const tabState = useTabState({ defaultTab: 'appearance' })
+
+  const appearanceTab = (
+    <>
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Themes</Title>
@@ -188,6 +193,27 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
         </PreferencesSegment>
       </PreferencesGroup>
       <EditorAppearance application={application} />
+    </>
+  )
+
+  const tabs: PreferencesSubtab[] = [
+    {
+      id: 'appearance',
+      title: 'Appearance',
+      icon: 'themes',
+      content: appearanceTab,
+    },
+    {
+      id: 'style-profiles',
+      title: 'Style profiles',
+      icon: 'tune',
+      content: <StyleProfiles />,
+    },
+  ]
+
+  return (
+    <PreferencesPane>
+      <PreferencesSubtabs state={tabState} tabs={tabs} />
     </PreferencesPane>
   )
 }

@@ -34,7 +34,7 @@ import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import { blockStyleToInlineStyle, resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
-import { sanitizeBlockStyle, setActiveProfileBlocks } from '@/Utils/typographyProfileEditor'
+import { sanitizeBlockStyle, setProfileBlocks } from '@/Utils/typographyProfileEditor'
 import { BlockStylePreview } from './BlockStyleGallery'
 import { GALLERY_BLOCKS } from './typographyGallery'
 import { INDENT_STEP, LINE_HEIGHT_PRESETS, SPACING_PRESETS } from './blockFormatting'
@@ -236,17 +236,21 @@ const isListBlock = (key: BlockTypeKey): boolean =>
 
 /* ------------------------------------------------------------------- content */
 
-const ModalContent = ({ close }: { close: () => void }) => {
+const ModalContent = ({ close, profileId }: { close: () => void; profileId?: string }) => {
   const application = useApplication()
   const profiles = usePreference(PrefKey.TypographyProfiles)
   const activeId = usePreference(PrefKey.ActiveTypographyProfileId)
 
-  const activeProfile: TypographyProfile | null = useMemo(
-    () => resolveActiveTypographyProfile(profiles, activeId),
-    [profiles, activeId],
+  // The profile being edited: an explicit `profileId` (P4 — edit ANY profile from
+  // Settings) when given, otherwise the ACTIVE profile (P3 — in-editor button).
+  const targetProfile: TypographyProfile | null = useMemo(
+    () =>
+      (profileId ? profiles?.find((p) => p.id === profileId) : undefined) ??
+      resolveActiveTypographyProfile(profiles, activeId),
+    [profiles, activeId, profileId],
   )
 
-  const [draftBlocks, setDraftBlocks] = useState<DraftBlocks>(() => cloneBlocks(activeProfile?.blocks))
+  const [draftBlocks, setDraftBlocks] = useState<DraftBlocks>(() => cloneBlocks(targetProfile?.blocks))
   const [selectedKey, setSelectedKey] = useState<BlockTypeKey>('paragraph')
 
   const selectedDescriptor = GALLERY_BLOCKS.find((descriptor) => descriptor.key === selectedKey) ?? GALLERY_BLOCKS[0]
@@ -272,14 +276,18 @@ const ModalContent = ({ close }: { close: () => void }) => {
   const get = (prop: keyof BlockStyle): string => (draft[prop] as string | undefined) ?? ''
 
   const onSave = (): void => {
-    const updated = setActiveProfileBlocks(profiles, activeId, draftBlocks)
+    if (!targetProfile) {
+      close()
+      return
+    }
+    const updated = setProfileBlocks(profiles, targetProfile.id, draftBlocks)
     void application.setPreference(PrefKey.TypographyProfiles, updated)
     close()
   }
 
   return (
     <Modal
-      title={`Edit styles — ${activeProfile ? activeProfile.name : 'Default'}`}
+      title={`Edit styles — ${targetProfile ? targetProfile.name : 'Default'}`}
       close={close}
       className="p-0"
       actions={[
@@ -531,11 +539,22 @@ const ModalContent = ({ close }: { close: () => void }) => {
 
 /**
  * The popup style editor. Mounted (and its draft seeded) only while open, so
- * Cancel/close discards; reopening starts fresh from the active profile.
+ * Cancel/close discards; reopening starts fresh from the target profile.
+ *
+ * `profileId` selects which profile to edit: omit it (P3 in-editor button) to
+ * edit the ACTIVE profile, or pass an id (P4 Settings) to edit that profile.
  */
-const TypographyStyleEditorModal = ({ isOpen, close }: { isOpen: boolean; close: () => void }) => (
+const TypographyStyleEditorModal = ({
+  isOpen,
+  close,
+  profileId,
+}: {
+  isOpen: boolean
+  close: () => void
+  profileId?: string
+}) => (
   <ModalOverlay isOpen={isOpen} close={close} className="md:!w-auto md:max-w-[52rem]">
-    <ModalContent close={close} />
+    <ModalContent close={close} profileId={profileId} />
   </ModalOverlay>
 )
 
