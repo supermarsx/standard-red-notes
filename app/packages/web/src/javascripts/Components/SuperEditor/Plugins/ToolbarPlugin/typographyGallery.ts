@@ -60,7 +60,7 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     iconName: 'paragraph',
     themeClass: 'Lexical__paragraph',
     kind: 'block',
-    sample: 'Normal text',
+    sample: 'Normal body text',
     setType: (editor) => ParagraphBlock.onSelect(editor),
   },
   {
@@ -96,7 +96,7 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     iconName: 'quote',
     themeClass: 'Lexical__quote',
     kind: 'block',
-    sample: 'Quote',
+    sample: 'A quoted line',
     setType: (editor) => QuoteBlock.onSelect(editor),
   },
   {
@@ -114,7 +114,7 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     iconName: 'list-bulleted',
     themeClass: 'Lexical__ul',
     kind: 'ul',
-    sample: 'Bulleted',
+    sample: 'Bulleted item',
     setType: (editor) => BulletedListBlock.onSelect(editor),
   },
   {
@@ -123,7 +123,7 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     iconName: 'list-numbered',
     themeClass: 'Lexical__ol1',
     kind: 'ol',
-    sample: 'Numbered',
+    sample: 'Numbered item',
     setType: (editor) => NumberedListBlock.onSelect(editor),
   },
   {
@@ -132,7 +132,7 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     iconName: 'list-check',
     themeClass: 'Lexical__checkList',
     kind: 'checklist',
-    sample: 'Checklist',
+    sample: 'Checklist item',
     setType: (editor) => ChecklistBlock.onSelect(editor),
   },
 ]
@@ -142,6 +142,65 @@ export const getProfileBlockStyle = (
   profile: TypographyProfile | null | undefined,
   key: BlockTypeKey,
 ): BlockStyle | undefined => profile?.blocks?.[key]
+
+/* ----------------------------------------------------- responsive inline fit */
+
+/**
+ * Fixed geometry of an inline preview square, in CSS px. The width is a constant
+ * (not measured) so the fit math below is pure and deterministic — the toolbar
+ * bar renders each square at exactly this width, measures the available track,
+ * and asks `computeGalleryFit` how many squares fit inline.
+ */
+export const GALLERY_SQUARE_WIDTH = 88
+/** Horizontal gap between adjacent inline squares / the overflow toggle, in px. */
+export const GALLERY_SQUARE_GAP = 6
+/** Reserved track (toggle width + its leading gap) for the overflow "▾" button. */
+export const GALLERY_OVERFLOW_TOGGLE_WIDTH = 34 + GALLERY_SQUARE_GAP
+
+export type GalleryFit = {
+  /** How many squares render inline in the bar. */
+  inlineCount: number
+  /** How many squares spill into the overflow "▾" dropdown. */
+  overflowCount: number
+}
+
+/**
+ * Given the available inline track `containerWidth` (px) and the number of
+ * squares `total`, compute how many fit inline vs. overflow into the dropdown.
+ *
+ * A run of N squares occupies `N*squareWidth + (N-1)*gap`, so the most that fit
+ * in a width W is `floor((W + gap) / (squareWidth + gap))`. When not all fit, we
+ * reserve `overflowWidth` for the "▾" toggle and recompute, so the toggle itself
+ * never causes horizontal overflow. Degrades to `{ inlineCount: 0, overflowCount:
+ * total }` at very narrow widths (everything reachable via the dropdown). Pure.
+ */
+export function computeGalleryFit({
+  containerWidth,
+  total,
+  squareWidth = GALLERY_SQUARE_WIDTH,
+  gap = GALLERY_SQUARE_GAP,
+  overflowWidth = GALLERY_OVERFLOW_TOGGLE_WIDTH,
+}: {
+  containerWidth: number
+  total: number
+  squareWidth?: number
+  gap?: number
+  overflowWidth?: number
+}): GalleryFit {
+  if (total <= 0) {
+    return { inlineCount: 0, overflowCount: 0 }
+  }
+  const fitIn = (width: number): number =>
+    width < squareWidth ? 0 : Math.max(0, Math.floor((width + gap) / (squareWidth + gap)))
+
+  // Everything fits with room to spare → no overflow toggle needed.
+  if (fitIn(containerWidth) >= total) {
+    return { inlineCount: total, overflowCount: 0 }
+  }
+  // Otherwise reserve the toggle's width so it can't push the row over.
+  const inlineCount = Math.min(fitIn(containerWidth - overflowWidth), total - 1)
+  return { inlineCount: Math.max(0, inlineCount), overflowCount: total - Math.max(0, inlineCount) }
+}
 
 /**
  * Apply a gallery square to the current selection: first convert the block TYPE
