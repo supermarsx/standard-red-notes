@@ -188,7 +188,12 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     label: 'Block style',
     caption: 'Block',
     buttons: [
-      { id: ToolbarButtonId.BlockStyle, label: 'Formatting options', group: ToolbarGroupId.BlockStyle },
+      // Standard Red Notes: the responsive inline block-style gallery bar is the
+      // single authoritative "set block type (+ apply active profile's style)"
+      // control in the main toolbar. The former plain block-type dropdown
+      // ("Formatting options") was a duplicate way to set the block type and was
+      // removed from this group; it survives only on the floating selection
+      // mini-toolbar. ToolbarButtonId.BlockStyle is retained for that surface.
       { id: ToolbarButtonId.TypographyGallery, label: 'Block style gallery', group: ToolbarGroupId.BlockStyle },
     ],
   },

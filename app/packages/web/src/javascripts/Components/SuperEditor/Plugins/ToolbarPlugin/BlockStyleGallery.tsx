@@ -1,23 +1,39 @@
 /**
  * Standard Red Notes: Typography Profiles — Phase 2 gallery UI.
  *
- * A grid of "nice little squares", each a static, non-editable, TRUTHFUL preview
- * of a block type as rendered by the ACTIVE typography profile: the block's real
- * Lexical theme class (base appearance) with the profile's style for that block
- * layered on as an inline override — exactly how a per-block override wins in the
- * real editor. Clicking a square applies it to the current selection (block type
- * + per-block style); see `typographyGallery.ts`.
+ * "Nice little squares", each a static, non-editable, TRUTHFUL preview of a block
+ * type as rendered by the ACTIVE typography profile: the block's real Lexical
+ * theme class (base appearance) with the profile's style for that block layered
+ * on as an inline override — exactly how a per-block override wins in the real
+ * editor. Clicking a square applies it to the current selection (block type +
+ * per-block style); see `typographyGallery.ts`.
+ *
+ * `BlockStyleGalleryBar` renders the squares INLINE in the toolbar bar: it fills
+ * the available width (measured with a ResizeObserver), showing as many squares
+ * as fit and collapsing the rest into an overflow "▾" dropdown so the bar never
+ * causes horizontal overflow. Each square is two text-lines tall. A dedicated
+ * "Edit styles" button (opens the P3 modal) sits on the same line. The
+ * non-block-type actions (Smart checklist, Restore completed tasks) are rendered
+ * as standalone first-line buttons by the caller, not inside this bar.
  */
-import { CSSProperties } from 'react'
+import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import type { TypographyProfile } from '@standardnotes/models'
 import { classNames } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
+import Popover from '@/Components/Popover/Popover'
 import { blockStyleToInlineStyle } from '@/Utils/typographyProfiles'
-import { GALLERY_BLOCKS, GalleryBlockDescriptor, getProfileBlockStyle } from './typographyGallery'
+import {
+  GALLERY_BLOCKS,
+  GALLERY_OVERFLOW_TOGGLE_WIDTH,
+  GALLERY_SQUARE_WIDTH,
+  GalleryBlockDescriptor,
+  computeGalleryFit,
+  getProfileBlockStyle,
+} from './typographyGallery'
 
 /**
  * The sample block element for a square, carrying the real theme class plus the
- * profile's inline style. Reusable in isolation (e.g. future settings preview).
+ * profile's inline style. Reusable in isolation (e.g. the P3 modal preview).
  */
 export const BlockStylePreview = ({
   descriptor,
@@ -56,7 +72,8 @@ export const BlockStylePreview = ({
 }
 
 /**
- * A single clickable preview square: the mini-preview above its icon + label.
+ * A single clickable preview square: a TWO-LINE-tall mini-preview above its
+ * icon + label. Fixed width so the bar's fit math (typographyGallery) is exact.
  */
 const BlockStyleSquare = ({
   descriptor,
@@ -75,17 +92,19 @@ const BlockStyleSquare = ({
       type="button"
       title={descriptor.label}
       aria-label={descriptor.label}
+      style={{ width: GALLERY_SQUARE_WIDTH }}
       className={classNames(
-        'flex select-none flex-col items-stretch gap-1 rounded border border-border bg-default p-1.5',
+        'flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border border-border bg-default p-1.5',
         'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
       )}
       onClick={() => onApply(descriptor)}
       onMouseDown={(event) => event.preventDefault()}
     >
-      {/* Truthful mini-preview on the real editor surface colours. Clipped to a
-          fixed box so a large heading still fits while its relative size shows. */}
+      {/* Truthful mini-preview on the real editor surface colours. Two text-lines
+          tall and clipped, so a large heading fits while its relative size shows.
+          `leading-snug` + wrapping lets normal text flow onto a second line. */}
       <div
-        className="flex h-11 items-center overflow-hidden rounded-sm px-1.5"
+        className="flex h-[2.9rem] items-center justify-start overflow-hidden rounded-sm px-1.5 leading-snug"
         style={{
           backgroundColor: 'var(--sn-stylekit-editor-background-color)',
           color: 'var(--sn-stylekit-editor-foreground-color)',
@@ -103,44 +122,135 @@ const BlockStyleSquare = ({
   )
 }
 
+/** Overflow "▾" toggle + its dropdown of the squares that didn't fit inline. */
+const OverflowSquares = ({
+  descriptors,
+  profile,
+  onApply,
+}: {
+  descriptors: GalleryBlockDescriptor[]
+  profile: TypographyProfile | null | undefined
+  onApply: (descriptor: GalleryBlockDescriptor) => void
+}) => {
+  const [open, setOpen] = useState(false)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        title={`${descriptors.length} more block styles`}
+        aria-label={`${descriptors.length} more block styles`}
+        onClick={() => setOpen((o) => !o)}
+        onMouseDown={(event) => event.preventDefault()}
+        className={classNames(
+          'flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border border-border bg-default px-1.5',
+          'text-xs text-passive-0 transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
+          open ? 'border-info bg-contrast' : '',
+        )}
+      >
+        <span className="tabular-nums">{descriptors.length}</span>
+        <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5" />
+      </button>
+      <Popover
+        title="More block styles"
+        anchorElement={anchorRef}
+        open={open}
+        togglePopover={() => setOpen((o) => !o)}
+        side="bottom"
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+      >
+        <div className="grid grid-cols-3 gap-1.5 p-2" onMouseDown={(event) => event.preventDefault()}>
+          {descriptors.map((descriptor) => (
+            <BlockStyleSquare
+              key={descriptor.key}
+              descriptor={descriptor}
+              profile={profile}
+              onApply={(d) => {
+                onApply(d)
+                setOpen(false)
+              }}
+            />
+          ))}
+        </div>
+      </Popover>
+    </>
+  )
+}
+
 /**
- * The gallery grid. Reads the resolved active profile and renders one square per
- * gallery block; clicking a square invokes `onApplyBlock`.
+ * The responsive inline gallery bar. Renders as many truthful preview squares as
+ * fit the available width (measured via ResizeObserver), collapses the rest into
+ * an overflow "▾" dropdown, and always keeps an "Edit styles" button (opens the
+ * P3 modal) reachable even at very narrow widths. Never causes horizontal
+ * overflow. Non-block-type actions (Smart checklist, Restore completed tasks)
+ * are rendered as standalone first-line buttons by the caller, NOT here.
  */
-const BlockStyleGallery = ({
+export const BlockStyleGalleryBar = ({
   profile,
   onApplyBlock,
   onEditStyles,
 }: {
   profile: TypographyProfile | null | undefined
   onApplyBlock: (descriptor: GalleryBlockDescriptor) => void
-  /** Optional: open the Phase 3 popup style editor for the active profile. */
-  onEditStyles?: () => void
+  onEditStyles: () => void
 }) => {
+  // The flex-grow track the squares live in; its width drives the fit math. It
+  // fills the space left by the Edit-styles button, so that is naturally
+  // excluded from the measurement.
+  const trackRef = useRef<HTMLDivElement>(null)
+  const [trackWidth, setTrackWidth] = useState(0)
+
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el || typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const observer = new ResizeObserver((entries) => {
+      setTrackWidth(entries[0]?.contentRect.width ?? el.clientWidth)
+    })
+    observer.observe(el)
+    setTrackWidth(el.getBoundingClientRect().width)
+    return () => observer.disconnect()
+  }, [])
+
+  const total = GALLERY_BLOCKS.length
+  const { inlineCount } = useMemo(
+    () => computeGalleryFit({ containerWidth: trackWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
+    [trackWidth, total],
+  )
+  const inlineBlocks = GALLERY_BLOCKS.slice(0, inlineCount)
+  const overflowBlocks = GALLERY_BLOCKS.slice(inlineCount)
+
   return (
-    <div className="flex flex-col gap-2 p-2" onMouseDown={(event) => event.preventDefault()}>
-      <div className="flex items-center justify-between gap-2 px-1">
-        <span className="text-xs text-passive-1">
-          {profile ? profile.name : 'Default'} · click a style to apply it to the current block
-        </span>
-        {onEditStyles ? (
-          <button
-            type="button"
-            onClick={onEditStyles}
-            className="flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-info hover:bg-contrast focus:outline-none focus-visible:bg-contrast"
-          >
-            <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
-            Edit styles…
-          </button>
-        ) : null}
-      </div>
-      <div className="grid grid-cols-3 gap-1.5">
-        {GALLERY_BLOCKS.map((descriptor) => (
+    <div className="flex w-full min-w-0 items-stretch gap-1.5" onMouseDown={(event) => event.preventDefault()}>
+      <div ref={trackRef} className="flex min-w-0 flex-grow items-stretch gap-1.5 overflow-hidden">
+        {inlineBlocks.map((descriptor) => (
           <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
         ))}
+        {overflowBlocks.length > 0 && (
+          <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} />
+        )}
       </div>
+
+      <button
+        type="button"
+        onClick={onEditStyles}
+        onMouseDown={(event) => event.preventDefault()}
+        title={`Edit styles — ${profile ? profile.name : 'Default'}`}
+        className={classNames(
+          'flex flex-shrink-0 items-center gap-1 self-stretch rounded border border-border bg-default px-2 text-xs font-medium text-info',
+          'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
+        )}
+      >
+        <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
+        <span className="hidden whitespace-nowrap sm:inline">Edit styles</span>
+      </button>
     </div>
   )
 }
 
-export default BlockStyleGallery
+export default BlockStyleGalleryBar
