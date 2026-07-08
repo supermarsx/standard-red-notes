@@ -208,7 +208,7 @@ import {
   ListStylePreset,
 } from './listStyle'
 import { useTranslation } from 'react-i18next'
-import BlockStyleGalleryBar from './BlockStyleGallery'
+import BlockStyleGallery from './BlockStyleGallery'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import { GalleryBlockDescriptor, applyTypographyBlockToSelection } from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
@@ -551,6 +551,9 @@ const ToolbarPlugin = () => {
   const [isTextStyleMenuOpen, setIsTextStyleMenuOpen] = useState(false)
   const textStyleAnchorRef = useRef<HTMLButtonElement>(null)
 
+  // Standard Red Notes: typography-profile preview-square gallery popover.
+  const [isTypographyGalleryMenuOpen, setIsTypographyGalleryMenuOpen] = useState(false)
+  const typographyGalleryAnchorRef = useRef<HTMLButtonElement>(null)
   // Standard Red Notes: Phase 3 popup style editor (edits the active profile).
   const [isTypographyEditorOpen, setIsTypographyEditorOpen] = useState(false)
 
@@ -678,10 +681,11 @@ const ToolbarPlugin = () => {
   )
 
   // Clicking a gallery square: set the block TYPE + stamp the active profile's
-  // per-block style (reusing the block ops + blockFormatting).
+  // per-block style (reusing the block ops + blockFormatting), then close.
   const applyTypographyBlock = useCallback(
     (descriptor: GalleryBlockDescriptor) => {
       applyTypographyBlockToSelection(activeEditor, descriptor, activeTypographyProfile)
+      setIsTypographyGalleryMenuOpen(false)
     },
     [activeEditor, activeTypographyProfile],
   )
@@ -1882,6 +1886,17 @@ const ToolbarPlugin = () => {
         className={isTextStyleMenuOpen ? 'md:bg-default' : ''}
       >
         <Icon type={blockTypeToIconName[blockType]} size="custom" className="super-toolbar-icon" />
+        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
+    [ToolbarButtonId.TypographyGallery]: (
+      <ToolbarButton
+        name="Block style gallery"
+        onSelect={() => setIsTypographyGalleryMenuOpen(!isTypographyGalleryMenuOpen)}
+        ref={typographyGalleryAnchorRef}
+        className={isTypographyGalleryMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="dashboard" size="custom" className="super-toolbar-icon" />
         <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -3098,52 +3113,6 @@ const ToolbarPlugin = () => {
           >
             {canShowAllItems
               ? activeGroups.map((group) => {
-                  // Standard Red Notes: the Block-style group renders the
-                  // responsive INLINE gallery bar (preview squares that fill the
-                  // available width + an overflow "▾" dropdown for the rest), a
-                  // first-line "Edit styles" button, and an "⋮" menu that hosts
-                  // the checklist-behaviour actions (which used to live in the
-                  // now-removed plain block-type dropdown). The bar grows to fill
-                  // leftover width on its line, so it degrades gracefully.
-                  if (group.id === ToolbarGroupId.BlockStyle) {
-                    return (
-                      <div
-                        key={group.id}
-                        role="group"
-                        aria-label={group.label}
-                        className="super-toolbar-group flex min-w-[12rem] flex-grow flex-col rounded-lg bg-contrast px-1 py-0.5"
-                      >
-                        <div className="flex flex-col items-stretch justify-center gap-0.5 md:min-h-[7.375rem]">
-                          <BlockStyleGalleryBar
-                            profile={activeTypographyProfile}
-                            onApplyBlock={applyTypographyBlock}
-                            onEditStyles={() => setIsTypographyEditorOpen(true)}
-                            extraMenu={
-                              <Menu a11yLabel={t('blockStyle')} className="!px-0">
-                                <ToolbarMenuItem
-                                  name={t('smartChecklist')}
-                                  iconName="list-check"
-                                  active={autoMoveCompleted}
-                                  onClick={toggleAutoMoveCompleted}
-                                />
-                                <ToolbarMenuItem
-                                  name={t('restoreCompletedTasks')}
-                                  iconName="arrow-left"
-                                  onClick={restoreCompletedTasks}
-                                />
-                              </Menu>
-                            }
-                          />
-                        </div>
-                        <span
-                          aria-hidden
-                          className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
-                        >
-                          {group.caption ?? group.label}
-                        </span>
-                      </div>
-                    )
-                  }
                   // Word/Office-style segmented groups: each group is a rounded
                   // cluster (tight inner spacing) with a small caption title
                   // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
@@ -3387,9 +3356,32 @@ const ToolbarPlugin = () => {
           />
         </Menu>
       </Popover>
-      {/* Standard Red Notes: the typography-profile preview-square gallery now
-          renders INLINE in the toolbar's BlockStyle group (see the activeGroups
-          renderer); only the Phase 3 style editor modal is hosted here. */}
+      {/* Standard Red Notes: typography-profile preview-square gallery. Each
+          square is a truthful static preview of a block type as styled by the
+          active profile; clicking it sets the block type + stamps that style. */}
+      <Popover
+        title="Block style gallery"
+        anchorElement={typographyGalleryAnchorRef}
+        open={isTypographyGalleryMenuOpen}
+        togglePopover={() => setIsTypographyGalleryMenuOpen(!isTypographyGalleryMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-72 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <BlockStyleGallery
+          profile={activeTypographyProfile}
+          onApplyBlock={applyTypographyBlock}
+          onEditStyles={() => {
+            setIsTypographyGalleryMenuOpen(false)
+            setIsTypographyEditorOpen(true)
+          }}
+        />
+      </Popover>
       <TypographyStyleEditorModal isOpen={isTypographyEditorOpen} close={() => setIsTypographyEditorOpen(false)} />
       <Popover
         title={t('alignment')}
