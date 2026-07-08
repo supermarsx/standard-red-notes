@@ -259,6 +259,30 @@ const COLOR_PRESETS = [
 ]
 
 /**
+ * Named text-color presets rendered as a labeled dropdown list (swatch chip +
+ * human-readable name) in both the anchored and floating toolbar surfaces. Keep
+ * the order in sync with COLOR_PRESETS; the "Auto" (reset-to-theme) row is added
+ * separately as the first item in each list.
+ */
+const TEXT_COLOR_OPTIONS: { value: string; label: string }[] = [
+  { value: '#000000', label: 'Black' },
+  { value: '#5b5b5b', label: 'Gray' },
+  { value: '#e11d48', label: 'Red' },
+  { value: '#ea580c', label: 'Orange' },
+  { value: '#ca8a04', label: 'Yellow' },
+  { value: '#16a34a', label: 'Green' },
+  { value: '#0891b2', label: 'Cyan' },
+  { value: '#2563eb', label: 'Blue' },
+  { value: '#7c3aed', label: 'Purple' },
+  { value: '#db2777', label: 'Pink' },
+]
+
+/** Diagonal "no color" slash used by the Auto text-color chip. */
+const AUTO_COLOR_CHIP_STYLE = {
+  backgroundImage: 'linear-gradient(to top right, transparent calc(50% - 1px), #dc2626, transparent calc(50% + 1px))',
+}
+
+/**
  * Standard Red Notes: CSS length applied to `--super-toolbar-icon-size` for each
  * SuperToolbarIconSize enum value. `Small` (the default) is a modest step down
  * from the previous 1rem/16px desktop default; `Medium` restores it and `Large`
@@ -3521,22 +3545,46 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="mb-2 text-sm font-semibold text-text">{t('textColor')}</div>
-        <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
-          {COLOR_PRESETS.map((color) => (
+        <div className="max-h-64 min-w-[10rem] overflow-y-auto" onMouseDown={(e) => e.preventDefault()}>
+          <button
+            type="button"
+            className="flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm text-text hover:bg-contrast"
+            onClick={() => {
+              applyStyleText({ color: null })
+              setIsTextColorMenuOpen(false)
+            }}
+          >
+            <span
+              aria-hidden
+              className="h-5 w-5 shrink-0 rounded border border-border bg-default"
+              style={AUTO_COLOR_CHIP_STYLE}
+            />
+            {t('autoTextColor')}
+          </button>
+          {TEXT_COLOR_OPTIONS.map(({ value, label }) => (
             <button
-              key={color}
+              key={value}
               type="button"
-              aria-label={t('textColorSwatch', { color })}
-              className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
-              style={{ backgroundColor: color }}
+              aria-label={t('textColorSwatch', { color: label })}
+              className="flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm text-text hover:bg-contrast"
               onClick={() => {
-                applyStyleText({ color })
+                applyStyleText({ color: value })
                 setIsTextColorMenuOpen(false)
               }}
-            />
+            >
+              <span
+                aria-hidden
+                className="h-5 w-5 shrink-0 rounded border border-border"
+                style={{ backgroundColor: value }}
+              />
+              {label}
+            </button>
           ))}
         </div>
-        <div className="mt-3 flex items-center gap-2" onMouseDown={(e) => e.preventDefault()}>
+        <div
+          className="mt-2 flex items-center gap-2 border-t border-border pt-2"
+          onMouseDown={(e) => e.preventDefault()}
+        >
           <label className="flex items-center gap-2 text-sm">
             {t('custom')}
             <input
@@ -3545,16 +3593,6 @@ const ToolbarPlugin = () => {
               onChange={(event) => applyStyleText({ color: event.target.value })}
             />
           </label>
-          <button
-            type="button"
-            className="ml-auto rounded px-2 py-1 text-sm hover:bg-contrast"
-            onClick={() => {
-              applyStyleText({ color: null })
-              setIsTextColorMenuOpen(false)
-            }}
-          >
-            {t('clear')}
-          </button>
         </div>
       </Popover>
       <Popover
@@ -4672,24 +4710,35 @@ const ToolbarPlugin = () => {
               secondary anchor (absent in floating mode) is needed. */}
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
             <div className="mb-1 text-xs font-semibold text-text">{t('textColor')}</div>
-            <div className="flex flex-wrap gap-1.5">
-              {COLOR_PRESETS.map((color) => (
-                <button
-                  key={`fg-${color}`}
-                  type="button"
-                  aria-label={t('textColorSwatch', { color })}
-                  className="h-6 w-6 rounded border border-border"
-                  style={{ backgroundColor: color }}
-                  onClick={() => applyStyleText({ color })}
-                />
-              ))}
+            <div className="max-h-56 overflow-y-auto">
               <button
                 type="button"
-                className="rounded px-1.5 text-xs hover:bg-contrast"
+                className="flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs text-text hover:bg-contrast"
                 onClick={() => applyStyleText({ color: null })}
               >
-                {t('clear')}
+                <span
+                  aria-hidden
+                  className="h-4 w-4 shrink-0 rounded border border-border bg-default"
+                  style={AUTO_COLOR_CHIP_STYLE}
+                />
+                {t('autoTextColor')}
               </button>
+              {TEXT_COLOR_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={`fg-${value}`}
+                  type="button"
+                  aria-label={t('textColorSwatch', { color: label })}
+                  className="flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs text-text hover:bg-contrast"
+                  onClick={() => applyStyleText({ color: value })}
+                >
+                  <span
+                    aria-hidden
+                    className="h-4 w-4 shrink-0 rounded border border-border"
+                    style={{ backgroundColor: value }}
+                  />
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>

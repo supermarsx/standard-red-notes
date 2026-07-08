@@ -138,6 +138,7 @@ const editor = {
   // Color popovers
   custom: 'Custom',
   clear: 'Clear',
+  autoTextColor: 'Auto',
   textColorSwatch: 'Text color {{color}}',
   highlightColorSwatch: 'Highlight color {{color}}',
   textShadingSwatch: 'Text shading {{color}}',
