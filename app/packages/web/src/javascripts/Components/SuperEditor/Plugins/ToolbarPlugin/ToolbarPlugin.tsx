@@ -2536,8 +2536,15 @@ const ToolbarPlugin = () => {
 
   // Resolve the config into the ordered, filtered groups to render, then emit
   // each group's buttons with a separator between non-empty groups.
-  const resolvedGroups = applyToolbarConfig(toolbarConfig).filter((group) =>
-    group.buttons.some((button) => buttonRenderers[button.id] != null),
+  const resolvedGroups = applyToolbarConfig(toolbarConfig).filter(
+    (group) =>
+      // The Block-style group has no per-button renderer: its sole config button
+      // (TypographyGallery) is drawn by the dedicated special-case in the group
+      // renderer (the inline gallery bar + standalone actions), not via
+      // buttonRenderers. So keep it unconditionally — otherwise this "drop groups
+      // with nothing renderable" filter would delete the entire block section.
+      group.id === ToolbarGroupId.BlockStyle ||
+      group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
 
   // Office-ribbon "super group" tabs: partition the resolved groups into top-level
