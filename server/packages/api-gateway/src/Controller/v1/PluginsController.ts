@@ -203,13 +203,16 @@ export class PluginsController extends BaseHttpController {
    * its RENDERING iframe satisfies the strict CSP `frame-src 'self'`. UNAUTHENTICATED
    * on purpose (an iframe navigation carries no token) but GATED behind the admin
    * `plugins.sameOriginRendering` opt-in (404 when off) and SSRF-guarded to the
-   * configured base. The wildcard (`req.params[0]`) is the file path RELATIVE to
-   * the repo base — including the component directory hierarchy — so a component's
-   * own relative asset refs (`./main.js`, `static/js/x.js`) resolve back through
-   * this same route and stay under the base. See the class doc for the isolation
-   * rationale.
+   * configured base. The wildcard (`req.params.splat`) is the file path RELATIVE
+   * to the repo base — including the component directory hierarchy — so a
+   * component's own relative asset refs (`./main.js`, `static/js/x.js`) resolve
+   * back through this same route and stay under the base. See the class doc for
+   * the isolation rationale.
    */
-  @httpGet('/component/*')
+  // path-to-regexp v8 (Express 5 router) rejects a bare `*` — use a NAMED
+  // wildcard (matches the CalDav router's `/{*splat}`). Registering a bare `*`
+  // throws at startup ("Missing parameter name") and crash-loops the gateway.
+  @httpGet('/component/{*splat}')
   async component(request: Request, response: Response): Promise<void> {
     // OFF by default: expose nothing beyond today's behavior unless an admin opts in.
     if (!(await this.serverSettingsResolver.resolvePluginsSameOriginRendering())) {
@@ -220,7 +223,11 @@ export class PluginsController extends BaseHttpController {
       return
     }
 
-    const relativePath = typeof request.params[0] === 'string' ? request.params[0] : ''
+    // The `{*splat}` capture arrives as an array of decoded path segments (or a
+    // string, or undefined when empty). Rejoin with '/' to reconstruct the
+    // base-relative file path; the SSRF guard in fetchFile handles containment.
+    const splat = request.params.splat as unknown as string | string[] | undefined
+    const relativePath = Array.isArray(splat) ? splat.join('/') : typeof splat === 'string' ? splat : ''
     if (relativePath.length === 0) {
       response
         .status(400)

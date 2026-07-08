@@ -89,7 +89,7 @@ describe('PluginsController', () => {
       const { controller } = makeController({ sameOriginRendering: false, fetchFile })
       const { response, status } = makeResponse()
 
-      await controller.component({ params: { 0: 'org.foo/dist/index.html' } } as unknown as Request, response)
+      await controller.component({ params: { splat:'org.foo/dist/index.html' } } as unknown as Request, response)
 
       expect(status).toHaveBeenCalledWith(404)
       expect(fetchFile).not.toHaveBeenCalled()
@@ -105,7 +105,7 @@ describe('PluginsController', () => {
       const { response, status, send, headers } = makeResponse()
 
       await controller.component(
-        { params: { 0: 'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
+        { params: { splat:'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
         response,
       )
 
@@ -127,7 +127,7 @@ describe('PluginsController', () => {
       const { response, headers, removedHeaders } = makeResponse()
 
       await controller.component(
-        { params: { 0: 'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
+        { params: { splat:'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
         response,
       )
 
@@ -151,7 +151,7 @@ describe('PluginsController', () => {
       const { response, status } = makeResponse()
 
       await controller.component(
-        { params: { 0: 'https://evil.example.com/x' } } as unknown as Request,
+        { params: { splat:'https://evil.example.com/x' } } as unknown as Request,
         response,
       )
 
