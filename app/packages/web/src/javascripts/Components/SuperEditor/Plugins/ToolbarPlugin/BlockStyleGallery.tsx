@@ -8,13 +8,13 @@
  * editor. Clicking a square applies it to the current selection (block type +
  * per-block style); see `typographyGallery.ts`.
  *
- * `BlockStyleGalleryBar` renders the squares INLINE in the toolbar bar: it fills
- * the available width (measured with a ResizeObserver), showing as many squares
- * as fit and collapsing the rest into an overflow "▾" dropdown so the bar never
- * causes horizontal overflow. Each square is two text-lines tall. A dedicated
- * "Edit styles" button (opens the P3 modal) sits on the same line. The
- * non-block-type actions (Smart checklist, Restore completed tasks) are rendered
- * as standalone first-line buttons by the caller, not inside this bar.
+ * `BlockStyleGalleryBar` renders the squares row that occupies the 2nd and 3rd
+ * lines of the block group. It is a pure, full-width squares track: it fills the
+ * group width (measured with a ResizeObserver), showing as many squares as fit
+ * and collapsing the rest into an overflow "▾" dropdown so it never causes
+ * horizontal overflow. Each square is two text-lines tall. The block group's
+ * first-line action buttons (Smart checklist, Restore completed tasks, Edit
+ * styles) are rendered by the caller ABOVE this bar, not inside it.
  */
 import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import type { TypographyProfile } from '@standardnotes/models'
@@ -182,25 +182,21 @@ const OverflowSquares = ({
 }
 
 /**
- * The responsive inline gallery bar. Renders as many truthful preview squares as
- * fit the available width (measured via ResizeObserver), collapses the rest into
- * an overflow "▾" dropdown, and always keeps an "Edit styles" button (opens the
- * P3 modal) reachable even at very narrow widths. Never causes horizontal
- * overflow. Non-block-type actions (Smart checklist, Restore completed tasks)
- * are rendered as standalone first-line buttons by the caller, NOT here.
+ * The responsive full-width squares track. Renders as many truthful preview
+ * squares as fit the group width (measured via ResizeObserver) and collapses the
+ * rest into an overflow "▾" dropdown, never causing horizontal overflow. This is
+ * the squares row only; the block group's first-line action buttons (Smart
+ * checklist, Restore completed tasks, Edit styles) are rendered by the caller
+ * above it, NOT here.
  */
 export const BlockStyleGalleryBar = ({
   profile,
   onApplyBlock,
-  onEditStyles,
 }: {
   profile: TypographyProfile | null | undefined
   onApplyBlock: (descriptor: GalleryBlockDescriptor) => void
-  onEditStyles: () => void
 }) => {
-  // The flex-grow track the squares live in; its width drives the fit math. It
-  // fills the space left by the Edit-styles button, so that is naturally
-  // excluded from the measurement.
+  // The full-width track the squares live in; its width drives the fit math.
   const trackRef = useRef<HTMLDivElement>(null)
   const [trackWidth, setTrackWidth] = useState(0)
 
@@ -226,29 +222,17 @@ export const BlockStyleGalleryBar = ({
   const overflowBlocks = GALLERY_BLOCKS.slice(inlineCount)
 
   return (
-    <div className="flex w-full min-w-0 items-stretch gap-1.5" onMouseDown={(event) => event.preventDefault()}>
-      <div ref={trackRef} className="flex min-w-0 flex-grow items-stretch gap-1.5 overflow-hidden">
-        {inlineBlocks.map((descriptor) => (
-          <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
-        ))}
-        {overflowBlocks.length > 0 && (
-          <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} />
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={onEditStyles}
-        onMouseDown={(event) => event.preventDefault()}
-        title={`Edit styles — ${profile ? profile.name : 'Default'}`}
-        className={classNames(
-          'flex flex-shrink-0 items-center gap-1 self-stretch rounded border border-border bg-default px-2 text-xs font-medium text-info',
-          'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
-        )}
-      >
-        <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
-        <span className="hidden whitespace-nowrap sm:inline">Edit styles</span>
-      </button>
+    <div
+      ref={trackRef}
+      className="flex w-full min-w-0 items-stretch gap-1.5 overflow-hidden"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      {inlineBlocks.map((descriptor) => (
+        <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
+      ))}
+      {overflowBlocks.length > 0 && (
+        <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} />
+      )}
     </div>
   )
 }

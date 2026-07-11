@@ -3129,15 +3129,15 @@ const ToolbarPlugin = () => {
           >
             {canShowAllItems
               ? activeGroups.map((group) => {
-                  // Standard Red Notes: the Block-style group renders the
-                  // responsive INLINE gallery bar (preview squares that fill the
-                  // available width + an overflow "▾" dropdown for the rest), a
-                  // first-line "Edit styles" button, and — as STANDALONE,
-                  // always-visible first-line buttons — the two non-block-type
-                  // actions that used to live in the now-removed plain block-type
-                  // dropdown (Smart checklist toggle, Restore completed tasks).
-                  // Nothing is hidden in a "⋮" menu. The bar grows to fill the
-                  // leftover width on its line, so it degrades gracefully.
+                  // Standard Red Notes: the Block-style group is a vertical stack.
+                  // LINE 1 is a row of three always-visible action buttons — Smart
+                  // checklist (a TOGGLE bound to autoMoveCompleted), Restore
+                  // completed tasks (a plain action), and Edit styles (opens the P3
+                  // typography editor modal). LINES 2–3 are the responsive squares
+                  // gallery bar (preview squares that fill the group width + an
+                  // overflow "▾" dropdown for the rest). Nothing is hidden in a "⋮"
+                  // menu, and the squares track grows to fill the group width so it
+                  // degrades gracefully.
                   if (group.id === ToolbarGroupId.BlockStyle) {
                     return (
                       <div
@@ -3146,17 +3146,9 @@ const ToolbarPlugin = () => {
                         aria-label={group.label}
                         className="super-toolbar-group flex min-w-[12rem] flex-grow flex-col rounded-lg bg-contrast px-1 py-0.5"
                       >
-                        <div className="flex flex-col items-stretch justify-center gap-0.5 md:min-h-[7.375rem]">
-                          <div className="flex w-full min-w-0 items-stretch gap-1.5">
-                            <BlockStyleGalleryBar
-                              profile={activeTypographyProfile}
-                              onApplyBlock={applyTypographyBlock}
-                              onEditStyles={() => setIsTypographyEditorOpen(true)}
-                            />
-                            {/* Standalone, always-visible non-block-type actions.
-                                Smart checklist is a TOGGLE whose pressed state is
-                                bound to autoMoveCompleted; Restore is a plain
-                                action. Neither is hidden in a "⋮" menu. */}
+                        <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[7.375rem]">
+                          {/* Line 1: the three action buttons. */}
+                          <div className="flex items-center gap-1.5">
                             <ToolbarButton
                               name={t('smartChecklist')}
                               iconName="list-check"
@@ -3169,6 +3161,30 @@ const ToolbarPlugin = () => {
                               iconName="arrow-left"
                               onSelect={restoreCompletedTasks}
                               className="flex-shrink-0 self-center"
+                            />
+                            {/* Edit styles — reuses the gallery's old pill markup
+                                (pencil icon + label + "Edit styles — <profile>"
+                                tooltip); self-stretch keeps it the same height as
+                                the two ToolbarButtons. */}
+                            <button
+                              type="button"
+                              onClick={() => setIsTypographyEditorOpen(true)}
+                              onMouseDown={(event) => event.preventDefault()}
+                              title={`Edit styles — ${activeTypographyProfile ? activeTypographyProfile.name : 'Default'}`}
+                              className={classNames(
+                                'flex flex-shrink-0 items-center gap-1 self-stretch rounded border border-border bg-default px-2 text-xs font-medium text-info',
+                                'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
+                              )}
+                            >
+                              <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
+                              <span className="hidden whitespace-nowrap sm:inline">Edit styles</span>
+                            </button>
+                          </div>
+                          {/* Lines 2–3: the full-width squares gallery. */}
+                          <div className="flex w-full min-w-0">
+                            <BlockStyleGalleryBar
+                              profile={activeTypographyProfile}
+                              onApplyBlock={applyTypographyBlock}
                             />
                           </div>
                         </div>
