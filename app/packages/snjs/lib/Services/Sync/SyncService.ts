@@ -1015,7 +1015,13 @@ export class SyncService
 
     const itemsWithoutBackoffPenalty = nonLiteDirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
 
-    return SyncService.excludeLocalOnlyItems(itemsWithoutBackoffPenalty)
+    /**
+     * NOTE: local-only items are intentionally NOT excluded here. They must remain in the set that
+     * prepareForSync persists to the local database (otherwise a dirty local-only item is silently
+     * dropped from disk and lost on reload). Local-only exclusion is applied ONLY to the UPLOAD set,
+     * at the return of prepareForSync — see SyncService.excludeLocalOnlyItems.
+     */
+    return itemsWithoutBackoffPenalty
   }
 
   /**
@@ -1394,7 +1400,19 @@ export class SyncService
       options.onPresyncSave()
     }
 
-    return { items, beginDate, frozenDirtyIndex, neverSyncedDeleted }
+    /**
+     * UPLOAD SEAM for local-only exclusion. `items` above (and the `decryptedPayloads` derived from it,
+     * already persisted) INCLUDES local-only items so they survive reloads. But local-only items must
+     * never leave the device, so filter them out of the set we RETURN — this returned set is consumed
+     * solely by the upload path (prepareForSyncExecution → setLastSyncBeganForItems → createSyncOperation).
+     * Filtering here (rather than inside itemsNeedingSync or getOnline/OfflineSyncParameters) keeps
+     * local-only items out of both the upload and the lastSyncBegan stamping while preserving their
+     * local persistence. Deleted items pass through (a local-only deletion still needs to reach the
+     * server / complete its local removal) — see excludeLocalOnlyItems.
+     */
+    const uploadItems = SyncService.excludeLocalOnlyItems(items)
+
+    return { items: uploadItems, beginDate, frozenDirtyIndex, neverSyncedDeleted }
   }
 
   /**

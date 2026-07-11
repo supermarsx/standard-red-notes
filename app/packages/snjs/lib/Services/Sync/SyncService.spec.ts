@@ -477,6 +477,196 @@ describe('SyncService local-only exclusion (excludeLocalOnlyItems)', () => {
   })
 })
 
+describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () => {
+  /**
+   * These tests guard the actual bug that shipped green: a dirty local-only item was excluded
+   * INSIDE itemsNeedingSync, so the SAME filtered set fed both the local persist path and the
+   * upload path in prepareForSync — the item never reached persistPayloads and was lost on reload.
+   * The pure-filter tests above never exercised persistence, which is why the bug was invisible.
+   *
+   * The invariant now is: prepareForSync PERSISTS local-only items (so they survive reloads) but
+   * EXCLUDES them from the returned upload set (so they never leave the device). Both the online
+   * and offline sync paths consume that single returned upload set with no re-derivation, so the
+   * online/offline tests below drive performSync and assert what prepareForSyncExecution receives.
+   */
+
+  let logger: jest.Mocked<LoggerInterface>
+  let getDirtyItems: jest.Mock
+  let persistPayloads: jest.Mock
+  let online: jest.Mock
+
+  const LOCAL_ONLY_UUID = 'local-only-uuid'
+  const NORMAL_UUID = 'normal-uuid'
+  const DELETED_UUID = 'deleted-uuid'
+
+  /**
+   * Minimal dirty item shaped for the persist/upload derivation: itemsNeedingSync inspects
+   * `payload` (lite check), `localOnly` and the backoff service; prepareForSync reads
+   * `neverSynced`, `payload.deleted` (never-synced-deleted filter) and `payloadRepresentation()`
+   * (the payload that reaches persistPayloads). A plain object content is non-lite and decrypted.
+   */
+  const makeDirtyItem = (uuid: string, localOnly: boolean, deleted = false) => {
+    const payload = {
+      uuid,
+      deleted,
+      dirtyIndex: 1,
+      content: deleted ? undefined : { title: uuid },
+    }
+    return {
+      uuid,
+      localOnly,
+      neverSynced: false,
+      payload,
+      payloadRepresentation: () => payload,
+    } as unknown as DecryptedItemInterface
+  }
+
+  const createService = (dirtyItems: DecryptedItemInterface[]): SyncService => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+
+    const noop = () => undefined
+
+    getDirtyItems = jest.fn().mockReturnValue(dirtyItems)
+    online = jest.fn().mockReturnValue(true)
+
+    const itemManager = {
+      getDirtyItems,
+      findItem: jest.fn(),
+      getCollection: jest.fn(),
+    }
+    const sessionManager = {
+      online,
+      isCurrentSessionReadOnly: jest.fn().mockReturnValue(false),
+    }
+    const syncFrequencyGuard = {
+      isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false),
+    }
+    const syncBackoffService = {
+      isItemInBackoff: jest.fn().mockReturnValue(false),
+    }
+
+    const service = new SyncService(
+      itemManager as never,
+      sessionManager as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      syncFrequencyGuard as never,
+      syncBackoffService as never,
+      { addEventHandler: noop } as never,
+    )
+
+    persistPayloads = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { persistPayloads: unknown }).persistPayloads = persistPayloads
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+
+    return service
+  }
+
+  const callPrepareForSync = (
+    service: SyncService,
+  ): Promise<{ items: DecryptedItemInterface[]; neverSyncedDeleted: DecryptedItemInterface[] }> =>
+    (
+      service as unknown as {
+        prepareForSync: (o: Record<string, unknown>) => Promise<{
+          items: DecryptedItemInterface[]
+          neverSyncedDeleted: DecryptedItemInterface[]
+        }>
+      }
+    ).prepareForSync({})
+
+  const persistedUuids = (): string[] =>
+    (persistPayloads.mock.calls[0][0] as { uuid: string }[]).map((p) => p.uuid)
+
+  it('prepareForSync persists a dirty local-only item locally', async () => {
+    const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
+
+    await callPrepareForSync(service)
+
+    expect(persistPayloads).toHaveBeenCalledTimes(1)
+    // The local-only item MUST reach the local persist set (this is the reload-survival guarantee).
+    expect(persistedUuids()).toContain(LOCAL_ONLY_UUID)
+    expect(persistedUuids()).toContain(NORMAL_UUID)
+  })
+
+  it('prepareForSync excludes a local-only item from the returned upload set', async () => {
+    const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
+
+    const { items } = await callPrepareForSync(service)
+
+    const uploadUuids = items.map((i) => i.uuid)
+    expect(uploadUuids).not.toContain(LOCAL_ONLY_UUID)
+    expect(uploadUuids).toContain(NORMAL_UUID)
+  })
+
+  it('a deleted item still flows to the upload/delete set (deletions must propagate)', async () => {
+    const service = createService([makeDirtyItem(DELETED_UUID, false, true), makeDirtyItem(NORMAL_UUID, false)])
+
+    const { items } = await callPrepareForSync(service)
+
+    expect(items.map((i) => i.uuid)).toContain(DELETED_UUID)
+  })
+
+  /**
+   * Drives performSync just far enough to capture the upload set handed to the execution seam,
+   * then throws a sentinel from the (overridden) prepareForSyncExecution so we never make a real
+   * request. prepareForSyncExecution is called OUTSIDE performSync's try/catch, so the sentinel
+   * propagates out and we assert on the captured values.
+   */
+  const captureUploadSetViaPerformSync = async (
+    service: SyncService,
+  ): Promise<DecryptedItemInterface[]> => {
+    let capturedUploadItems: DecryptedItemInterface[] = []
+    const sentinel = new Error('stop-after-capture')
+    ;(service as unknown as { prepareForSyncExecution: unknown }).prepareForSyncExecution = (
+      items: DecryptedItemInterface[],
+    ) => {
+      capturedUploadItems = items
+      throw sentinel
+    }
+
+    await expect(
+      (service as unknown as { performSync: (o: Record<string, unknown>) => Promise<unknown> }).performSync({}),
+    ).rejects.toBe(sentinel)
+
+    return capturedUploadItems
+  }
+
+  it('ONLINE path: persists the local-only item but never hands it to the upload execution seam', async () => {
+    const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
+    online.mockReturnValue(true)
+
+    const uploadItems = await captureUploadSetViaPerformSync(service)
+
+    expect(persistedUuids()).toContain(LOCAL_ONLY_UUID)
+    expect(uploadItems.map((i) => i.uuid)).not.toContain(LOCAL_ONLY_UUID)
+    expect(uploadItems.map((i) => i.uuid)).toContain(NORMAL_UUID)
+  })
+
+  it('OFFLINE path: persists the local-only item but never hands it to the upload execution seam', async () => {
+    const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
+    online.mockReturnValue(false)
+
+    const uploadItems = await captureUploadSetViaPerformSync(service)
+
+    expect(persistedUuids()).toContain(LOCAL_ONLY_UUID)
+    expect(uploadItems.map((i) => i.uuid)).not.toContain(LOCAL_ONLY_UUID)
+    expect(uploadItems.map((i) => i.uuid)).toContain(NORMAL_UUID)
+  })
+})
+
 describe('SyncService cold-load STREAMING (large-vault OOM fix)', () => {
   let uuidCounter = 0
   const nextUuid = () => `sync-stream-${uuidCounter++}`
