@@ -95,6 +95,11 @@ export enum ToolbarButtonId {
   ListStyle = 'listStyle',
   FormattingMarks = 'formattingMarks',
   // Insert
+  // @deprecated The general Insert dropdown and its quick-insert siblings were
+  // replaced by always-visible catalog sections (see the Insert group config +
+  // the Insert special-case in ToolbarPlugin). These enum values are retained
+  // only so any persisted user config referencing them stays parseable; they are
+  // no longer part of the default Insert group and have no renderer.
   InsertMenu = 'insertMenu',
   InsertTable = 'insertTable',
   InsertImageFile = 'insertImageFile',
@@ -312,14 +317,20 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     id: ToolbarGroupId.Insert,
     label: 'Insert',
     caption: 'Insert',
+    // Standard Red Notes: the general Insert dropdown (InsertMenu) and its
+    // quick-insert siblings (InsertTable / InsertImageFile / InsertDrawing /
+    // InsertEquation / InsertFootnote) were replaced by always-visible captioned
+    // catalog sections (Basic / Lists / Media / Data & tables / Diagrams &
+    // charts / Finance / Others) rendered by the dedicated Insert special-case in
+    // the group renderer (driven by blockCatalog.ts, like the BlockStyle
+    // gallery). Those section items are catalog-driven and intentionally not
+    // per-item customizable. The three remaining buttons are the non-catalog
+    // Insert actions surfaced (renderer-backed) in the trailing "Others" section;
+    // keeping at least one renderer-backed button here also satisfies the
+    // "drop groups with nothing renderable" filter (see ToolbarPlugin
+    // resolvedGroups) alongside the unconditional Insert keep there.
     buttons: [
-      { id: ToolbarButtonId.InsertMenu, label: 'Insert menu', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.Link, label: 'Link', group: ToolbarGroupId.Insert },
-      { id: ToolbarButtonId.InsertTable, label: 'Insert table', group: ToolbarGroupId.Insert },
-      { id: ToolbarButtonId.InsertImageFile, label: 'Insert image or file', group: ToolbarGroupId.Insert },
-      { id: ToolbarButtonId.InsertDrawing, label: 'Insert drawing', group: ToolbarGroupId.Insert },
-      { id: ToolbarButtonId.InsertEquation, label: 'Insert equation', group: ToolbarGroupId.Insert },
-      { id: ToolbarButtonId.InsertFootnote, label: 'Insert footnote', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.NoteFromSelection, label: 'Create note from selection', group: ToolbarGroupId.Insert },
       { id: ToolbarButtonId.Dictation, label: 'Dictate (speech-to-text)', group: ToolbarGroupId.Insert },
     ],

@@ -270,6 +270,9 @@ const editor = {
   blockCategoryFinance: 'Finance',
   blockCategoryEmbeds: 'Embeds',
   blockCategoryAdvanced: 'Advanced',
+  // Trailing catch-all caption for the Insert tab's inline sections (folds the
+  // Embeds + Advanced catalog categories plus the non-catalog Insert actions).
+  blockSectionOthers: 'Others',
 }
 
 export default editor

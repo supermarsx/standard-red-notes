@@ -9,6 +9,8 @@
  *   - malformed / partial / unknown-id config falls back safely to default
  *   - DEFAULT_TOOLBAR_GROUPS is never mutated
  */
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import {
   applyToolbarConfig,
   DEFAULT_TOOLBAR_GROUPS,
@@ -85,6 +87,54 @@ describe('applyToolbarConfig', () => {
     const before = JSON.stringify(DEFAULT_TOOLBAR_GROUPS)
     applyToolbarConfig({ groupOrder: [ToolbarGroupId.AI], hiddenButtonIds: [ToolbarButtonId.Bold] })
     expect(JSON.stringify(DEFAULT_TOOLBAR_GROUPS)).toBe(before)
+  })
+
+  it('trims the Insert group to exactly the three non-catalog actions (t41)', () => {
+    // The general Insert dropdown + quick-insert buttons were replaced by inline
+    // catalog sections (rendered by the Insert special-case). Only Link,
+    // NoteFromSelection and Dictation remain as renderer-backed config buttons.
+    const insert = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.Insert)
+    expect(insert).toBeDefined()
+    expect(insert!.buttons.map((b) => b.id)).toEqual([
+      ToolbarButtonId.Link,
+      ToolbarButtonId.NoteFromSelection,
+      ToolbarButtonId.Dictation,
+    ])
+    // The removed ids must NOT be part of the default Insert group anymore…
+    const removed = [
+      ToolbarButtonId.InsertMenu,
+      ToolbarButtonId.InsertTable,
+      ToolbarButtonId.InsertImageFile,
+      ToolbarButtonId.InsertDrawing,
+      ToolbarButtonId.InsertEquation,
+      ToolbarButtonId.InsertFootnote,
+    ]
+    const allButtonIdsInDefaults = allButtonIds(DEFAULT_TOOLBAR_GROUPS)
+    for (const id of removed) {
+      expect(allButtonIdsInDefaults).not.toContain(id)
+    }
+    // …but the enum values are retained for persisted-config back-compat.
+    for (const id of removed) {
+      expect(typeof id).toBe('string')
+    }
+  })
+})
+
+describe('Insert-sections vanish guard (static source assertion)', () => {
+  // The Insert group is rendered by a dedicated special-case (inline catalog
+  // sections), so — exactly like the BlockStyle group — its config buttons alone
+  // must never decide whether the group survives the "drop groups with nothing
+  // renderable" filter. This asserts the unconditional keep literally exists in
+  // the source, since it has silently disappeared twice before and no runtime
+  // test can mount the full ToolbarPlugin.
+  const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
+
+  it('keeps the BlockStyle group unconditionally in resolvedGroups', () => {
+    expect(source).toContain('group.id === ToolbarGroupId.BlockStyle ||')
+  })
+
+  it('keeps the Insert group unconditionally in resolvedGroups', () => {
+    expect(source).toContain('group.id === ToolbarGroupId.Insert ||')
   })
 })
 

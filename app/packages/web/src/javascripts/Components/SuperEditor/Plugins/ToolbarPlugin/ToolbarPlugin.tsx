@@ -134,11 +134,10 @@ import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fo
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { Fragment } from 'react'
 import {
-  BLOCK_CATALOG,
   BlockCatalogContext,
-  filterBlockCatalog,
+  buildInsertSections,
   getFullBlockCatalog,
-  groupBlockCatalogByCategory,
+  InsertSectionId,
 } from '../Blocks/blockCatalog'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import {
@@ -209,6 +208,7 @@ import {
 } from './listStyle'
 import { useTranslation } from 'react-i18next'
 import BlockStyleGalleryBar from './BlockStyleGallery'
+import InsertSectionsBar from './InsertSectionsBar'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import { GalleryBlockDescriptor, applyTypographyBlockToSelection } from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
@@ -300,13 +300,6 @@ const SUPER_TOOLBAR_ICON_SIZES: Record<SuperToolbarIconSize, string> = {
  * button-heavy group renders as a compact 2–3 row block. `rows === 1` (or fewer
  * buttons than rows) collapses to a single row, preserving the prior behavior.
  */
-/** Block-catalog icon name keyed by catalog `key`, for the toolbar's direct
- * "quick insert" buttons (Table, image/file, drawing, equation, footnote) so
- * their icons stay in sync with the Insert menu / slash picker. */
-const BLOCK_ICON_BY_KEY: Record<string, string> = Object.fromEntries(
-  BLOCK_CATALOG.map((entry) => [entry.key, entry.iconName]),
-)
-
 function splitIntoRows<T>(items: T[], rows: number): T[][] {
   const rowCount = Math.max(1, Math.min(rows, items.length || 1))
   if (rowCount <= 1) {
@@ -389,6 +382,21 @@ export const translateBlockName = (name: string, t: (key: string) => string): st
 const translateBlockCategory = (category: string, t: (key: string) => string): string => {
   const key = BLOCK_CATEGORY_I18N_KEYS[category]
   return key ? t(key) : category
+}
+
+/**
+ * Insert-tab section id -> the catalog category string that `translateBlockCategory`
+ * already knows, so the six non-"others" section captions reuse the existing
+ * `blockCategory*` i18n keys (no new keys). `others` is handled separately via
+ * the one new `blockSectionOthers` key.
+ */
+const INSERT_SECTION_CAPTION_CATEGORY: Record<Exclude<InsertSectionId, 'others'>, string> = {
+  basic: 'Basic',
+  lists: 'Lists',
+  media: 'Media',
+  dataTables: 'Data & tables',
+  diagramsCharts: 'Diagrams & charts',
+  finance: 'Finance',
 }
 
 const toCamelCase = (text: string): string => {
@@ -583,12 +591,6 @@ const ToolbarPlugin = () => {
 
   const [isAlignmentMenuOpen, setIsAlignmentMenuOpen] = useState(false)
   const alignmentAnchorRef = useRef<HTMLButtonElement>(null)
-
-  const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false)
-  const insertAnchorRef = useRef<HTMLButtonElement>(null)
-  // Mini search box at the top of the Insert menu so the (now full) block list
-  // can be filtered by name/keyword instead of scrolled.
-  const [insertMenuQuery, setInsertMenuQuery] = useState('')
 
   const [isTextColorMenuOpen, setIsTextColorMenuOpen] = useState(false)
   const textColorAnchorRef = useRef<HTMLButtonElement>(null)
@@ -2400,56 +2402,12 @@ const ToolbarPlugin = () => {
         <span className="text-base font-semibold leading-none">¶</span>
       </ToolbarButton>
     ),
-    [ToolbarButtonId.InsertMenu]: canShowAllItems ? (
-      <ToolbarButton
-        name={t('insert')}
-        onSelect={() => {
-          setIsInsertMenuOpen(!isInsertMenuOpen)
-        }}
-        ref={insertAnchorRef}
-        className={isInsertMenuOpen ? 'md:bg-default' : ''}
-      >
-        <Icon type="add" size="custom" className="super-toolbar-icon" />
-        <Icon type="chevron-down" size="custom" className="ml-2 h-4 w-4 md:h-3.5 md:w-3.5" />
-      </ToolbarButton>
-    ) : null,
-    // Quick-insert buttons: one-tap access to the most-used blocks, each reusing
-    // the shared block catalog so behavior matches the Insert menu / slash picker.
-    [ToolbarButtonId.InsertTable]: canShowAllItems ? (
-      <ToolbarButton
-        name={translateBlockName('Table', t)}
-        iconName={BLOCK_ICON_BY_KEY['Table']}
-        onSelect={() => insertCatalogBlock('Table')}
-      />
-    ) : null,
-    [ToolbarButtonId.InsertImageFile]: canShowAllItems ? (
-      <ToolbarButton
-        name={translateBlockName('Upload file', t)}
-        iconName={BLOCK_ICON_BY_KEY['UploadFile']}
-        onSelect={() => insertCatalogBlock('UploadFile')}
-      />
-    ) : null,
-    [ToolbarButtonId.InsertDrawing]: canShowAllItems ? (
-      <ToolbarButton
-        name={translateBlockName('Drawing', t)}
-        iconName={BLOCK_ICON_BY_KEY['Drawing']}
-        onSelect={() => insertCatalogBlock('Drawing')}
-      />
-    ) : null,
-    [ToolbarButtonId.InsertEquation]: canShowAllItems ? (
-      <ToolbarButton
-        name={translateBlockName('Equation', t)}
-        iconName={BLOCK_ICON_BY_KEY['Equation']}
-        onSelect={() => insertCatalogBlock('Equation')}
-      />
-    ) : null,
-    [ToolbarButtonId.InsertFootnote]: canShowAllItems ? (
-      <ToolbarButton
-        name={translateBlockName('Footnote', t)}
-        iconName={BLOCK_ICON_BY_KEY['Footnote']}
-        onSelect={() => insertCatalogBlock('Footnote')}
-      />
-    ) : null,
+    // Standard Red Notes: the former general Insert dropdown (InsertMenu) and its
+    // quick-insert siblings (InsertTable / InsertImageFile / InsertDrawing /
+    // InsertEquation / InsertFootnote) were replaced by always-visible captioned
+    // catalog sections, rendered by the Insert special-case in the group renderer
+    // (see `activeGroups.map`, `group.id === ToolbarGroupId.Insert`). The slash
+    // ("/") BlockPicker still provides search-driven insert everywhere.
     // Live speech-to-text toggle. DictationButton encapsulates the existing STT
     // start/stop logic and self-hides unless the user opted in AND the browser
     // supports SpeechRecognition, so it renders null when unavailable.
@@ -2551,6 +2509,13 @@ const ToolbarPlugin = () => {
       // buttonRenderers. So keep it unconditionally — otherwise this "drop groups
       // with nothing renderable" filter would delete the entire block section.
       group.id === ToolbarGroupId.BlockStyle ||
+      // The Insert group's catalog sections (Basic / Lists / … / Others) are also
+      // drawn by a dedicated special-case, not via buttonRenderers. Its three
+      // config buttons (Link / NoteFromSelection / Dictation) ARE renderer-backed,
+      // so the `.some(...)` below would normally keep it — but keep it
+      // unconditionally too, so the sections can never vanish even if all three
+      // are later hidden/removed (this section has silently disappeared before).
+      group.id === ToolbarGroupId.Insert ||
       group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
 
@@ -2578,22 +2543,6 @@ const ToolbarPlugin = () => {
       openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
     }),
     [showModal, editor, activeEditor, t],
-  )
-
-  // Direct "quick insert" used by the Insert group's per-block buttons: look the
-  // block up in the same catalog the Insert menu uses and run its onSelect, so
-  // the buttons and the menu can never drift.
-  const insertCatalogBlock = useCallback(
-    (key: string) => {
-      const entry = getFullBlockCatalog(editor).find((candidate) => candidate.key === key)
-      entry?.onSelect(editor, blockCatalogContext)
-    },
-    [editor, blockCatalogContext],
-  )
-
-  const insertMenuCategories = useMemo(
-    () => groupBlockCatalogByCategory(filterBlockCatalog(getFullBlockCatalog(editor), insertMenuQuery)),
-    [editor, insertMenuQuery],
   )
 
   // Feature #273 — build the dynamic contextual group for the active widget. It
@@ -3198,6 +3147,47 @@ const ToolbarPlugin = () => {
                       </div>
                     )
                   }
+                  // Standard Red Notes: the Insert group renders as always-visible
+                  // captioned catalog sections (Basic / Lists / Media / Data &
+                  // tables / Diagrams & charts / Finance / Others) instead of a
+                  // single general dropdown. Sections are derived from the shared
+                  // blockCatalog (single source of truth, same list the slash
+                  // picker uses); each catalog entry becomes a ToolbarButton that
+                  // runs its `onSelect`. The three non-catalog Insert actions still
+                  // in this group's (hide-aware) config — Link, Create-note-from-
+                  // selection, Dictate — are appended, renderer-backed, to "Others".
+                  if (group.id === ToolbarGroupId.Insert) {
+                    const sections = buildInsertSections(getFullBlockCatalog(editor))
+                    const actionIds = new Set<ToolbarButtonId>([
+                      ToolbarButtonId.Link,
+                      ToolbarButtonId.NoteFromSelection,
+                      ToolbarButtonId.Dictation,
+                    ])
+                    // Preserve config order / respect hidden buttons by filtering
+                    // over the resolved group's own buttons, not a static list.
+                    const actionButtons: ReactNode[] = group.buttons
+                      .filter((button) => actionIds.has(button.id))
+                      .map((button) => <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>)
+                    const rendered = sections.map((section) => {
+                      const caption =
+                        section.id === 'others'
+                          ? t('blockSectionOthers')
+                          : translateBlockCategory(INSERT_SECTION_CAPTION_CATEGORY[section.id], t)
+                      const buttons: ReactNode[] = section.entries.map((entry) => (
+                        <ToolbarButton
+                          key={entry.key}
+                          name={translateBlockName(entry.name, t)}
+                          iconName={entry.iconName}
+                          onSelect={() => entry.onSelect(editor, blockCatalogContext)}
+                        />
+                      ))
+                      if (section.id === 'others') {
+                        buttons.push(...actionButtons)
+                      }
+                      return { key: section.id, caption, rows: splitIntoRows(buttons, 3) }
+                    })
+                    return <InsertSectionsBar key={group.id} sections={rendered} />
+                  }
                   // Word/Office-style segmented groups: each group is a rounded
                   // cluster (tight inner spacing) with a small caption title
                   // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
@@ -3486,89 +3476,10 @@ const ToolbarPlugin = () => {
           />
         </Menu>
       </Popover>
-      <Popover
-        title={t('insert')}
-        anchorElement={insertAnchorRef}
-        open={isInsertMenuOpen}
-        togglePopover={() => {
-          const next = !isInsertMenuOpen
-          setIsInsertMenuOpen(next)
-          if (!next) {
-            setInsertMenuQuery('')
-          }
-        }}
-        side={isMobile ? 'top' : 'bottom'}
-        align="start"
-        className="py-1"
-        disableMobileFullscreenTakeover
-        disableFlip
-        containerClassName="md:!min-w-60 md:!w-auto"
-        portal={false}
-        documentElement={popoverDocumentElement}
-      >
-        <div className="px-2 pb-1.5 pt-1">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-default px-2 py-1.5">
-            <Icon type="search" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
-            <input
-              type="text"
-              autoFocus
-              value={insertMenuQuery}
-              onChange={(event) => setInsertMenuQuery(event.target.value)}
-              onMouseDown={(event) => event.stopPropagation()}
-              placeholder={t('searchBlocksPlaceholder')}
-              aria-label={t('searchBlocksToInsert')}
-              className="w-full bg-transparent text-sm text-text placeholder:text-passive-1 focus:outline-none"
-            />
-            {insertMenuQuery && (
-              <button
-                type="button"
-                aria-label={t('clearSearch')}
-                className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setInsertMenuQuery('')}
-              >
-                <Icon type="close" size="custom" className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-        <Menu
-          a11yLabel={t('insert')}
-          className="!px-0"
-          onClick={() => {
-            setIsInsertMenuOpen(false)
-            setInsertMenuQuery('')
-          }}
-        >
-          {insertMenuCategories.length === 0 ? (
-            <div className="px-3 py-3 text-center text-sm text-passive-1">
-              {t('noBlocksMatch', { query: insertMenuQuery })}
-            </div>
-          ) : (
-            insertMenuCategories.map((group, groupIndex) => (
-              <Fragment key={group.category}>
-                {groupIndex > 0 && <MenuItemSeparator />}
-                <div
-                  aria-hidden
-                  className="select-none px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-passive-1"
-                >
-                  {translateBlockCategory(group.category, t)}
-                </div>
-                {group.entries.map((entry) => (
-                  <ToolbarMenuItem
-                    key={entry.key}
-                    name={translateBlockName(entry.name, t)}
-                    iconName={entry.iconName}
-                    onClick={() => entry.onSelect(editor, blockCatalogContext)}
-                  />
-                ))}
-              </Fragment>
-            ))
-          )}
-          <MenuItemSeparator />
-          <ToolbarMenuItem name={t('customizeToolbar')} iconName="settings" onClick={openCustomizeDialog} />
-        </Menu>
-      </Popover>
+      {/* Standard Red Notes: the general Insert dropdown popover was removed — its
+          catalog now renders inline as the Insert tab's always-visible captioned
+          sections (see the Insert special-case in the group renderer). The slash
+          ("/") BlockPicker still provides the search-driven insert flow. */}
       <Popover
         title={t('textColor')}
         anchorElement={textColorAnchorRef}

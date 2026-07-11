@@ -216,3 +216,54 @@ export const groupBlockCatalogByCategory = (
     category,
     entries: entries.filter((entry) => entry.category === category),
   })).filter((group) => group.entries.length > 0)
+
+/**
+ * Stable identity of the always-visible Insert-tab sections. The first six map
+ * 1:1 onto a catalog category; `others` is the trailing catch-all that folds the
+ * low-frequency `Embeds` + `Advanced` categories (and, in the toolbar, the three
+ * non-catalog Insert actions Link / Create-note-from-selection / Dictate).
+ */
+export type InsertSectionId =
+  | 'basic'
+  | 'lists'
+  | 'media'
+  | 'dataTables'
+  | 'diagramsCharts'
+  | 'finance'
+  | 'others'
+
+export type InsertSection = { id: InsertSectionId; entries: BlockCatalogEntry[] }
+
+/** Category -> section. `Embeds` + `Advanced` collapse into the trailing "Others" bucket. */
+const SECTION_BY_CATEGORY: Record<BlockCategory, InsertSectionId> = {
+  Basic: 'basic',
+  Lists: 'lists',
+  Media: 'media',
+  'Data & tables': 'dataTables',
+  'Diagrams & charts': 'diagramsCharts',
+  Finance: 'finance',
+  Embeds: 'others',
+  Advanced: 'others',
+}
+
+/** Fixed display order of the Insert-tab sections. */
+export const INSERT_SECTION_ORDER: InsertSectionId[] = [
+  'basic',
+  'lists',
+  'media',
+  'dataTables',
+  'diagramsCharts',
+  'finance',
+  'others',
+]
+
+/**
+ * Group a (full) catalog into the fixed, ordered Insert sections, dropping any
+ * section that ends up empty. Pure and i18n-free (returns stable section ids;
+ * the toolbar translates captions), so the mapping is trivially unit-testable.
+ */
+export const buildInsertSections = (entries: BlockCatalogEntry[]): InsertSection[] =>
+  INSERT_SECTION_ORDER.map((id) => ({
+    id,
+    entries: entries.filter((entry) => SECTION_BY_CATEGORY[entry.category] === id),
+  })).filter((section) => section.entries.length > 0)
