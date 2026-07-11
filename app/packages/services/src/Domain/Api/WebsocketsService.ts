@@ -106,12 +106,11 @@ export class WebSocketsService extends AbstractService<
 
   public loadWebSocketUrl(): void {
     const storedValue = this.storageService.getValue<string | undefined>(StorageKey.WebSocketUrl)
-    // Guard the bare `window` deref for headless (node/mcp) embeddings where it is
-    // undefined; without this the fallback throws ReferenceError and crashes launch.
-    const windowFallbackUrl =
-      typeof window !== 'undefined'
-        ? (window as { _websocket_url?: string })._websocket_url
-        : undefined
+    // Read the injected fallback off `globalThis` rather than a bare `window`: `window`
+    // is undeclared in non-DOM runtimes (react-native, headless node/mcp) where it errors
+    // at type-check and throws ReferenceError at runtime. `globalThis` is always defined
+    // (in a browser/WebView `globalThis === window`), so no typeof guard is needed.
+    const windowFallbackUrl = (globalThis as { _websocket_url?: string })._websocket_url
     this.webSocketUrl = storedValue || this.webSocketUrl || windowFallbackUrl
   }
 
@@ -144,8 +143,12 @@ export class WebSocketsService extends AbstractService<
       }
 
       this.webSocket = new WebSocket(`${this.webSocketUrl}?authToken=${webSocketConectionToken}`)
-      this.webSocket.onmessage = this.onWebSocketMessage.bind(this)
-      this.webSocket.onclose = this.onWebSocketClose.bind(this)
+      // Adapt at the assignment seam: react-native's WebSocket event types declare `.data`
+      // and `.code` as optional, which isn't assignable to our strict handler params. Coerce
+      // here so the internal handlers keep their exact `{ data: string }` / `{ code: number }`
+      // contracts and the file compiles under both DOM (web/services) and RN (mobile) libs.
+      this.webSocket.onmessage = (event) => this.onWebSocketMessage({ data: String(event.data ?? '') })
+      this.webSocket.onclose = (event) => this.onWebSocketClose({ code: event.code ?? 0 })
       this.webSocket.onopen = this.onWebSocketOpen.bind(this)
 
       return Result.ok()
