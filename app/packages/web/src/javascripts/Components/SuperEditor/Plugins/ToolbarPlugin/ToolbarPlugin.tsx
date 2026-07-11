@@ -543,6 +543,9 @@ const ToolbarPlugin = () => {
   const [isEditable, setIsEditable] = useState(() => editor.isEditable())
 
   const [blockType, setBlockType] = useState<keyof typeof blockTypeToBlockName>('paragraph')
+  // The anchor block's stamped inline style string, so the block-style gallery can
+  // disambiguate paragraph variants (Title/Accented/etc.) and mark the active one.
+  const [activeBlockStyle, setActiveBlockStyle] = useState('')
   const [elementFormat, setElementFormat] = useState<ElementFormatType>('left')
 
   const [isBold, setIsBold] = useState(false)
@@ -1032,6 +1035,10 @@ const ToolbarPlugin = () => {
         }
       }
     }
+
+    // Capture the anchor block's stamped inline style (for the gallery's active-
+    // style indication; '' when the top block isn't an element).
+    setActiveBlockStyle($isElementNode(element) ? element.getStyle() : '')
 
     setElementFormat(($isElementNode(node) ? node.getFormatType() : parent?.getFormatType()) || 'left')
 
@@ -3177,6 +3184,8 @@ const ToolbarPlugin = () => {
                             <BlockStyleGalleryBar
                               profile={activeTypographyProfile}
                               onApplyBlock={applyTypographyBlock}
+                              activeBlockType={blockType}
+                              activeBlockStyle={activeBlockStyle}
                             />
                           </div>
                         </div>

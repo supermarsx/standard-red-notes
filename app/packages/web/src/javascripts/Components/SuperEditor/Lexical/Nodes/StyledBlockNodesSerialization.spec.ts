@@ -226,6 +226,53 @@ describe('Styled block node overrides', () => {
       expect(result.isQuote).toBe(true)
       expect(parseStyleString(result.quoteStyle).get('margin-top')).toBe('8px')
     })
+
+    it('round-trips a styled h4 heading keeping its tag and style (proves h4/h5 persist)', () => {
+      const editor = makeEditor()
+      inEditor(editor, () => {
+        const root = $getRoot()
+        root.clear()
+        const heading = $createStyledHeadingNode('h4').append($createTextNode('Sub-sub heading'))
+        heading.setStyle('font-size: 1.0625rem; font-weight: 700')
+        root.append(heading)
+      })
+
+      const saved = saveToJSON(editor)
+      expect(saved).toContain('heading-styled')
+
+      const restored = editor.parseEditorState(saved)
+      const result = restored.read(() => {
+        const heading = $getRoot().getFirstChild() as StyledHeadingNode
+        return { tag: heading.getTag(), style: heading.getStyle() }
+      })
+      expect(result.tag).toBe('h4')
+      const map = parseStyleString(result.style)
+      expect(map.get('font-size')).toBe('1.0625rem')
+      expect(map.get('font-weight')).toBe('700')
+    })
+  })
+
+  describe('paragraph-variant style persistence (Title / Accented / Strong / …)', () => {
+    it('round-trips a variant-styled paragraph via paragraph-styled with the style intact', () => {
+      const editor = makeEditor()
+      // The stamped signature of an "Accented" paragraph variant (colour + weight).
+      inEditor(editor, () => {
+        const root = $getRoot()
+        root.clear()
+        const paragraph = $createParagraphNode().append($createTextNode('Accented text'))
+        paragraph.setStyle('color: var(--sn-stylekit-info-color); font-weight: 500')
+        root.append(paragraph)
+      })
+
+      const saved = saveToJSON(editor)
+      expect(saved).toContain('paragraph-styled')
+
+      const restored = editor.parseEditorState(saved)
+      const style = restored.read(() => ($getRoot().getFirstChild() as StyledParagraphNode).getStyle())
+      const map = parseStyleString(style)
+      expect(map.get('color')).toBe('var(--sn-stylekit-info-color)')
+      expect(map.get('font-weight')).toBe('500')
+    })
   })
 
   it('exposes unique, stable getType() names', () => {

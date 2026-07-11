@@ -66,3 +66,45 @@ export function GetH3BlockOption(editor: LexicalEditor) {
     onSelect: () => H3Block.onSelect(editor),
   })
 }
+
+export const H4Block = {
+  name: 'Heading 4',
+  iconName: 'h4',
+  keywords: ['heading', 'header', 'h4'],
+  onSelect: (editor: LexicalEditor) =>
+    editor.update(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection)) {
+        $setBlocksType(selection, () => $createHeadingNode('h4'))
+      }
+    }),
+}
+
+export function GetH4BlockOption(editor: LexicalEditor) {
+  return new BlockPickerOption(H4Block.name, {
+    iconName: H4Block.iconName as LexicalIconName,
+    keywords: H4Block.keywords,
+    onSelect: () => H4Block.onSelect(editor),
+  })
+}
+
+export const H5Block = {
+  name: 'Heading 5',
+  iconName: 'h5',
+  keywords: ['heading', 'header', 'h5'],
+  onSelect: (editor: LexicalEditor) =>
+    editor.update(() => {
+      const selection = $getSelection()
+      if ($isRangeSelection(selection)) {
+        $setBlocksType(selection, () => $createHeadingNode('h5'))
+      }
+    }),
+}
+
+export function GetH5BlockOption(editor: LexicalEditor) {
+  return new BlockPickerOption(H5Block.name, {
+    iconName: H5Block.iconName as LexicalIconName,
+    keywords: H5Block.keywords,
+    onSelect: () => H5Block.onSelect(editor),
+  })
+}

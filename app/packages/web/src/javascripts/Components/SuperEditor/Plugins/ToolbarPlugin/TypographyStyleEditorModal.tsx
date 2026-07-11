@@ -256,8 +256,13 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
   const selectedDescriptor = GALLERY_BLOCKS.find((descriptor) => descriptor.key === selectedKey) ?? GALLERY_BLOCKS[0]
   const draft = draftBlocks[selectedKey] ?? {}
 
-  const inlineFor = (key: BlockTypeKey): CSSProperties =>
-    blockStyleToInlineStyle(sanitizeBlockStyle(draftBlocks[key])) as CSSProperties
+  const inlineFor = (key: BlockTypeKey): CSSProperties => {
+    // Layer the built-in `baseStyle` (paragraph-variant identity) under the draft
+    // so a variant previews correctly before the user overrides anything — the
+    // same merge used at apply time and in the toolbar gallery squares.
+    const base = GALLERY_BLOCKS.find((descriptor) => descriptor.key === key)?.baseStyle ?? {}
+    return blockStyleToInlineStyle(sanitizeBlockStyle({ ...base, ...draftBlocks[key] })) as CSSProperties
+  }
 
   const setField = (prop: keyof BlockStyle, value: string): void => {
     setDraftBlocks((prev) => {

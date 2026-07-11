@@ -36,12 +36,20 @@ export const TYPOGRAPHY_STYLE_ELEMENT_ID = 'srn-typography-profile'
  */
 export const TYPOGRAPHY_SCOPE_SELECTOR = '.ContentEditable__root'
 
-/** Maps each block type to the selector(s) (relative to the scope) it targets. */
-const BLOCK_SELECTORS: Record<BlockTypeKey, string[]> = {
+/**
+ * Maps each block type to the selector(s) (relative to the scope) it targets.
+ * Partial: the paragraph-variant keys (title/normalSpaced/accented/strong/
+ * emphasis) intentionally have NO global selector — they share `.Lexical__paragraph`
+ * and are styled only per-block via the gallery descriptor's `baseStyle`, so a
+ * global rule would wrongly restyle every paragraph.
+ */
+const BLOCK_SELECTORS: Partial<Record<BlockTypeKey, string[]>> = {
   paragraph: ['.Lexical__paragraph'],
   h1: ['.Lexical__h1'],
   h2: ['.Lexical__h2'],
   h3: ['.Lexical__h3'],
+  h4: ['.Lexical__h4'],
+  h5: ['.Lexical__h5'],
   quote: ['.Lexical__quote'],
   code: ['.Lexical__code'],
   callout: ['[data-callout-block="true"]'],
@@ -169,8 +177,13 @@ export const blockStyleToCss = (profile: TypographyProfile): string => {
     if (!style) {
       continue
     }
+    // BLOCK_SELECTORS is Partial: paragraph-variant keys have no global selector.
+    const selectors = BLOCK_SELECTORS[blockKey]
+    if (!selectors) {
+      continue
+    }
 
-    const scopedSelector = BLOCK_SELECTORS[blockKey]
+    const scopedSelector = selectors
       .map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel}`)
       .join(', ')
 
@@ -181,7 +194,7 @@ export const blockStyleToCss = (profile: TypographyProfile): string => {
 
     // ::marker colour needs its own rule (targets the list-item markers).
     if (isSafeCssValue(style.markerColor)) {
-      const markerSelector = BLOCK_SELECTORS[blockKey]
+      const markerSelector = selectors
         .map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel} ::marker`)
         .join(', ')
       rules.push(`${markerSelector} {\n  color: ${style.markerColor.trim()};\n}`)

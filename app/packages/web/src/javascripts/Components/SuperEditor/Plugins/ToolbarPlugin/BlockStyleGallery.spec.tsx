@@ -6,9 +6,11 @@
  * "Edit styles" pill button moved OUT to the caller's first-line button row, so
  * it must no longer appear inside this component. jsdom has no ResizeObserver
  * and reports a 0px `getBoundingClientRect`, so we install a no-op observer plus
- * a 1000px-wide `getBoundingClientRect` (the width the effect reads on mount) to
+ * a 2000px-wide `getBoundingClientRect` (the width the effect reads on mount) to
  * make every preview square fit inline (no overflow "▾" / Popover), then assert
- * the squares render and the Edit-styles control is absent here.
+ * the squares render and the Edit-styles control is absent here. (2000px, not
+ * 1000px, so all 16 squares — grown from the 7 new block styles in task t40 —
+ * still fit inline at GALLERY_SQUARE_WIDTH=88+gap.)
  */
 import { createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
@@ -61,7 +63,7 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
   originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
   Element.prototype.getBoundingClientRect = function () {
-    return { width: 1000, height: 40, top: 0, left: 0, right: 1000, bottom: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    return { width: 2000, height: 40, top: 0, left: 0, right: 2000, bottom: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   }
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -74,14 +76,18 @@ afterEach(() => {
   Element.prototype.getBoundingClientRect = originalGetBoundingClientRect
 })
 
-const render = () => {
+const render = (extraProps: { activeBlockType?: string; activeBlockStyle?: string } = {}) => {
   act(() => {
     root.render(
       createElement(ApplicationProvider, {
         application: fakeApp,
         children: createElement(AndroidBackHandlerProvider, {
           application: fakeApp,
-          children: createElement(BlockStyleGalleryBar, { profile: null, onApplyBlock: () => undefined }),
+          children: createElement(BlockStyleGalleryBar, {
+            profile: null,
+            onApplyBlock: () => undefined,
+            ...extraProps,
+          }),
         }),
       }),
     )
@@ -123,5 +129,20 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
       (d.getAttribute('style') ?? '').includes('scale('),
     )
     expect(scaled.length).toBe(GALLERY_BLOCKS.length) // one scaling wrapper per inline square
+  })
+
+  it('marks the square matching the active block type as pressed (and only that one)', () => {
+    render({ activeBlockType: 'h1' })
+    const squareButtons = Array.from(container.querySelectorAll('button')).filter((b) =>
+      GALLERY_BLOCKS.some((d) => b.getAttribute('title') === d.label),
+    )
+    const heading1 = squareButtons.find((b) => b.getAttribute('title') === 'Heading 1')
+    expect(heading1?.getAttribute('aria-pressed')).toBe('true')
+    // Every other square is not pressed.
+    for (const button of squareButtons) {
+      if (button.getAttribute('title') !== 'Heading 1') {
+        expect(button.getAttribute('aria-pressed')).toBe('false')
+      }
+    }
   })
 })

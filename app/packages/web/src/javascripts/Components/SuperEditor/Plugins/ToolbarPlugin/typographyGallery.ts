@@ -15,9 +15,9 @@
 import { $getSelection, $isRangeSelection, LexicalEditor } from 'lexical'
 import type { BlockStyle, BlockTypeKey, TypographyProfile } from '@standardnotes/models'
 import { blockStyleToStyleEntries } from '@/Utils/typographyProfiles'
-import { $applyBlockStyleEntries } from './blockFormatting'
+import { $applyBlockStyleEntries, parseStyleString } from './blockFormatting'
 import { ParagraphBlock } from '../Blocks/Paragraph'
-import { H1Block, H2Block, H3Block } from '../Blocks/Headings'
+import { H1Block, H2Block, H3Block, H4Block, H5Block } from '../Blocks/Headings'
 import { QuoteBlock } from '../Blocks/Quote'
 import { CodeBlock } from '../Blocks/Code'
 import { BulletedListBlock, NumberedListBlock, ChecklistBlock } from '../Blocks/List'
@@ -44,6 +44,17 @@ export type GalleryBlockDescriptor = {
   sample: string
   /** Convert the current selection to this block type, reusing the block op. */
   setType: (editor: LexicalEditor) => void
+  /**
+   * A built-in defining style baked into code, for paragraph *variants* (Title,
+   * Normal-spaced, Accented, Strong, Emphasis) that share `.Lexical__paragraph`
+   * and therefore have no distinguishing theme class / scoped-CSS rule. At apply
+   * time and in every preview the effective style is `{ ...baseStyle,
+   * ...profileOverride }` (a profile edit wins per property), so the variant's
+   * identity always survives even in a fresh profile. Real block types (headings,
+   * quote, code, lists) leave this undefined — their appearance comes from the
+   * theme class + profile.
+   */
+  baseStyle?: BlockStyle
 }
 
 /**
@@ -55,13 +66,23 @@ export type GalleryBlockDescriptor = {
  */
 export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
   {
-    key: 'paragraph',
-    label: 'Normal',
-    iconName: 'paragraph',
+    key: 'title',
+    label: 'Title',
+    iconName: 'text',
+    // Renders as a styled paragraph (no heading semantics / not in the TOC); its
+    // large-title look comes entirely from `baseStyle` layered over the paragraph.
     themeClass: 'Lexical__paragraph',
     kind: 'block',
-    sample: 'Normal body text',
+    sample: 'Title',
     setType: (editor) => ParagraphBlock.onSelect(editor),
+    baseStyle: {
+      fontSize: '2rem',
+      fontWeight: '800',
+      lineHeight: '1.2',
+      color: 'var(--sn-stylekit-editor-foreground-color)',
+      marginTop: '0',
+      marginBottom: '0.5rem',
+    },
   },
   {
     key: 'h1',
@@ -89,6 +110,83 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     kind: 'block',
     sample: 'Heading 3',
     setType: (editor) => H3Block.onSelect(editor),
+  },
+  {
+    key: 'h4',
+    label: 'Heading 4',
+    iconName: 'h4',
+    themeClass: 'Lexical__h4',
+    kind: 'block',
+    sample: 'Heading 4',
+    setType: (editor) => H4Block.onSelect(editor),
+  },
+  {
+    key: 'h5',
+    label: 'Heading 5',
+    iconName: 'h5',
+    themeClass: 'Lexical__h5',
+    kind: 'block',
+    sample: 'Heading 5',
+    setType: (editor) => H5Block.onSelect(editor),
+  },
+  {
+    key: 'paragraph',
+    label: 'Normal',
+    iconName: 'paragraph',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Normal body text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+  },
+  {
+    key: 'normalSpaced',
+    label: 'Normal (spaced)',
+    iconName: 'plain-text',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Spaced body text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+    baseStyle: {
+      marginTop: '0',
+      marginBottom: '0.75rem',
+    },
+  },
+  {
+    key: 'accented',
+    label: 'Accented',
+    iconName: 'star',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Accented text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+    baseStyle: {
+      color: 'var(--sn-stylekit-info-color)',
+      fontWeight: '500',
+    },
+  },
+  {
+    key: 'strong',
+    label: 'Strong',
+    iconName: 'bold',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Strong text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+    baseStyle: {
+      fontWeight: '700',
+    },
+  },
+  {
+    key: 'emphasis',
+    label: 'Emphasis',
+    iconName: 'italic',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Emphasis text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+    baseStyle: {
+      fontStyle: 'italic',
+    },
   },
   {
     key: 'quote',
@@ -142,6 +240,76 @@ export const getProfileBlockStyle = (
   profile: TypographyProfile | null | undefined,
   key: BlockTypeKey,
 ): BlockStyle | undefined => profile?.blocks?.[key]
+
+/* -------------------------------------------------- active-style resolution */
+
+/**
+ * Direct map from the toolbar's `blockType` state (keys of `blockTypeToBlockName`
+ * in ToolbarPlugin) to the gallery key that renders that real block type. `h6`
+ * and any other unlisted type map to no square (null). `paragraph` is handled
+ * separately (variant disambiguation) and is intentionally absent here.
+ */
+const BLOCK_TYPE_TO_GALLERY_KEY: Record<string, BlockTypeKey> = {
+  h1: 'h1',
+  h2: 'h2',
+  h3: 'h3',
+  h4: 'h4',
+  h5: 'h5',
+  quote: 'quote',
+  code: 'code',
+  bullet: 'bulletList',
+  number: 'numberedList',
+  check: 'checkList',
+}
+
+/**
+ * The paragraph-variant keys checked most-specific-first when the active block is
+ * a plain `paragraph`: the first whose effective (merged) style is a subset of
+ * the block's stamped inline style wins; if none match it is plain Normal.
+ */
+const PARAGRAPH_VARIANT_PRIORITY: BlockTypeKey[] = ['title', 'accented', 'normalSpaced', 'strong', 'emphasis']
+
+/**
+ * Resolve which gallery square (if any) matches the current selection/cursor's
+ * block, so the gallery can render it in an active state. Pure.
+ *
+ * - Real block types map directly from `blockType` (h1–h5, quote, code, lists;
+ *   `h6` → null).
+ * - A plain `paragraph` may be one of the inline-style-only variants; a variant
+ *   is active when its effective style — the SAME `{ ...baseStyle,
+ *   ...profileOverride }` merge stamped at apply time — is a subset of the
+ *   block's current inline style string. Checked most-specific-first; if none
+ *   match, the block is plain Normal (`'paragraph'`).
+ *
+ * Best-effort: `$applyBlockStyleEntries` merges (never clears) prior properties,
+ * so switching styles can leave a stale signature on a block — detection returns
+ * the most-specific still-matching variant. See the plan's flagged limitation.
+ */
+export const resolveActiveGalleryKey = (args: {
+  blockType: string
+  style: string
+  profile: TypographyProfile | null | undefined
+}): BlockTypeKey | null => {
+  const { blockType, style, profile } = args
+
+  if (blockType !== 'paragraph') {
+    return BLOCK_TYPE_TO_GALLERY_KEY[blockType] ?? null
+  }
+
+  const parsed = parseStyleString(style)
+  for (const key of PARAGRAPH_VARIANT_PRIORITY) {
+    const descriptor = GALLERY_BLOCKS.find((d) => d.key === key)
+    if (!descriptor?.baseStyle) {
+      continue
+    }
+    const merged = { ...descriptor.baseStyle, ...(getProfileBlockStyle(profile, key) ?? {}) }
+    const entries = blockStyleToStyleEntries(merged)
+    if (entries.length > 0 && entries.every(([prop, value]) => parsed.get(prop) === value)) {
+      return key
+    }
+  }
+  return 'paragraph'
+}
 
 /* ----------------------------------------------------- responsive inline fit */
 
@@ -219,11 +387,12 @@ export const applyTypographyBlockToSelection = (
 ): void => {
   descriptor.setType(editor)
 
-  const style = getProfileBlockStyle(profile, descriptor.key)
-  if (!style) {
-    return
-  }
-  const entries = blockStyleToStyleEntries(style)
+  // Effective style = built-in `baseStyle` (paragraph-variant identity) with the
+  // active profile's override layered on top per property. Real block types have
+  // no baseStyle, so this reduces to the profile style alone.
+  const profileStyle = getProfileBlockStyle(profile, descriptor.key)
+  const merged = { ...(descriptor.baseStyle ?? {}), ...(profileStyle ?? {}) }
+  const entries = blockStyleToStyleEntries(merged)
   if (entries.length === 0) {
     return
   }

@@ -29,6 +29,7 @@ import {
   GalleryBlockDescriptor,
   computeGalleryFit,
   getProfileBlockStyle,
+  resolveActiveGalleryKey,
 } from './typographyGallery'
 
 /**
@@ -79,13 +80,21 @@ const BlockStyleSquare = ({
   descriptor,
   profile,
   onApply,
+  isActive = false,
 }: {
   descriptor: GalleryBlockDescriptor
   profile: TypographyProfile | null | undefined
   onApply: (descriptor: GalleryBlockDescriptor) => void
+  /** True when this square matches the current selection/cursor's block style. */
+  isActive?: boolean
 }) => {
-  const blockStyle = getProfileBlockStyle(profile, descriptor.key)
-  const inlineStyle = (blockStyle ? blockStyleToInlineStyle(blockStyle) : {}) as CSSProperties
+  // Effective preview style = built-in `baseStyle` (paragraph-variant identity)
+  // with the active profile's override on top — the SAME merge used at apply time,
+  // so the square is a truthful render of what clicking it produces.
+  const profileStyle = getProfileBlockStyle(profile, descriptor.key)
+  const merged = { ...(descriptor.baseStyle ?? {}), ...(profileStyle ?? {}) }
+  const inlineStyle = blockStyleToInlineStyle(merged) as CSSProperties
+  const mergedKey = JSON.stringify(merged)
 
   const previewBoxRef = useRef<HTMLDivElement>(null)
   const previewContentRef = useRef<HTMLDivElement>(null)
@@ -115,21 +124,32 @@ const BlockStyleSquare = ({
     const observer = new ResizeObserver(fit)
     observer.observe(box)
     return () => observer.disconnect()
-  }, [descriptor.key, blockStyle])
+  }, [descriptor.key, mergedKey])
 
   return (
     <button
       type="button"
       title={descriptor.label}
       aria-label={descriptor.label}
+      aria-pressed={isActive}
       style={{ width: GALLERY_SQUARE_WIDTH }}
       className={classNames(
-        'flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border border-border bg-default p-1.5',
+        'relative flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border bg-default p-1.5',
         'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
+        isActive ? 'border-info ring-2 ring-info' : 'border-border',
       )}
       onClick={() => onApply(descriptor)}
       onMouseDown={(event) => event.preventDefault()}
     >
+      {/* Active affordance: a small check badge in the top-right corner. */}
+      {isActive && (
+        <span
+          aria-hidden
+          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-info text-info-contrast shadow-sm"
+        >
+          <Icon type="check" size="custom" className="h-3 w-3" />
+        </span>
+      )}
       {/* Truthful mini-preview on the real editor surface colours. The sample is
           laid out on ONE natural-width line and scaled down (never up) via a
           measured `transform: scale()` so the whole styled sample stays visible
@@ -165,13 +185,19 @@ const OverflowSquares = ({
   descriptors,
   profile,
   onApply,
+  activeKey,
 }: {
   descriptors: GalleryBlockDescriptor[]
   profile: TypographyProfile | null | undefined
   onApply: (descriptor: GalleryBlockDescriptor) => void
+  /** The resolved active gallery key, so the toggle can signal a hidden active style. */
+  activeKey?: string | null
 }) => {
   const [open, setOpen] = useState(false)
   const anchorRef = useRef<HTMLButtonElement>(null)
+  // When the active style is one of the collapsed squares, signal it on the "▾"
+  // toggle so the user still sees that a style is in use even while hidden.
+  const hasActive = activeKey != null && descriptors.some((d) => d.key === activeKey)
   return (
     <>
       <button
@@ -182,11 +208,15 @@ const OverflowSquares = ({
         onClick={() => setOpen((o) => !o)}
         onMouseDown={(event) => event.preventDefault()}
         className={classNames(
-          'flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border border-border bg-default px-1.5',
+          'relative flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border bg-default px-1.5',
           'text-xs text-passive-0 transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
-          open ? 'border-info bg-contrast' : '',
+          hasActive || open ? 'border-info' : 'border-border',
+          open ? 'bg-contrast' : '',
         )}
       >
+        {hasActive && (
+          <span aria-hidden className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-info shadow-sm" />
+        )}
         <span className="tabular-nums">{descriptors.length}</span>
         <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5" />
       </button>
@@ -207,6 +237,7 @@ const OverflowSquares = ({
               key={descriptor.key}
               descriptor={descriptor}
               profile={profile}
+              isActive={descriptor.key === activeKey}
               onApply={(d) => {
                 onApply(d)
                 setOpen(false)
@@ -230,9 +261,15 @@ const OverflowSquares = ({
 export const BlockStyleGalleryBar = ({
   profile,
   onApplyBlock,
+  activeBlockType,
+  activeBlockStyle,
 }: {
   profile: TypographyProfile | null | undefined
   onApplyBlock: (descriptor: GalleryBlockDescriptor) => void
+  /** The current selection/cursor's block TYPE (from the toolbar's blockType state). */
+  activeBlockType?: string
+  /** The current block's stamped inline style string (disambiguates paragraph variants). */
+  activeBlockStyle?: string
 }) => {
   // The full-width track the squares live in; its width drives the fit math.
   const trackRef = useRef<HTMLDivElement>(null)
@@ -259,6 +296,12 @@ export const BlockStyleGalleryBar = ({
   const inlineBlocks = GALLERY_BLOCKS.slice(0, inlineCount)
   const overflowBlocks = GALLERY_BLOCKS.slice(inlineCount)
 
+  // Which square (if any) matches the current selection/cursor's block style.
+  const activeKey = useMemo(
+    () => resolveActiveGalleryKey({ blockType: activeBlockType ?? '', style: activeBlockStyle ?? '', profile }),
+    [activeBlockType, activeBlockStyle, profile],
+  )
+
   return (
     <div
       ref={trackRef}
@@ -266,10 +309,16 @@ export const BlockStyleGalleryBar = ({
       onMouseDown={(event) => event.preventDefault()}
     >
       {inlineBlocks.map((descriptor) => (
-        <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
+        <BlockStyleSquare
+          key={descriptor.key}
+          descriptor={descriptor}
+          profile={profile}
+          isActive={descriptor.key === activeKey}
+          onApply={onApplyBlock}
+        />
       ))}
       {overflowBlocks.length > 0 && (
-        <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} />
+        <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} activeKey={activeKey} />
       )}
     </div>
   )

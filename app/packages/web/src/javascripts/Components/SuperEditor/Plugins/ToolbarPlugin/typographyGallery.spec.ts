@@ -3,7 +3,14 @@
  * gallery bar: given the available track width and a square width, how many
  * squares render inline vs. spill into the overflow "▾" dropdown.
  */
-import { computeGalleryFit, GALLERY_SQUARE_GAP, GALLERY_SQUARE_WIDTH } from './typographyGallery'
+import {
+  computeGalleryFit,
+  GALLERY_BLOCKS,
+  GALLERY_SQUARE_GAP,
+  GALLERY_SQUARE_WIDTH,
+  resolveActiveGalleryKey,
+} from './typographyGallery'
+import { blockStyleToStyleEntries } from '@/Utils/typographyProfiles'
 
 const S = GALLERY_SQUARE_WIDTH
 const G = GALLERY_SQUARE_GAP
@@ -66,5 +73,44 @@ describe('computeGalleryFit', () => {
     const fit = computeGalleryFit({ containerWidth: 200, total: 10, squareWidth: 40, gap: 0, overflowWidth: 0 })
     // 200 / 40 = 5 fit; total 10 → 5 inline, 5 overflow.
     expect(fit).toEqual({ inlineCount: 5, overflowCount: 5 })
+  })
+})
+
+describe('resolveActiveGalleryKey', () => {
+  // Build the exact stamped inline style a variant produces (baseStyle only,
+  // fresh profile) — the same pairs applied at click time.
+  const styleStringFor = (key: string): string => {
+    const base = GALLERY_BLOCKS.find((d) => d.key === key)?.baseStyle ?? {}
+    return blockStyleToStyleEntries(base)
+      .map(([prop, value]) => `${prop}: ${value}`)
+      .join('; ')
+  }
+
+  it('maps a real heading block type directly to its gallery key (h4 → h4)', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'h4', style: '', profile: null })).toBe('h4')
+  })
+
+  it('maps a bullet list block type to bulletList', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'bullet', style: '', profile: null })).toBe('bulletList')
+  })
+
+  it('returns null for a block type with no gallery square (h6)', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'h6', style: '', profile: null })).toBeNull()
+  })
+
+  it('treats a plain paragraph with no stamped style as Normal (paragraph)', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: '', profile: null })).toBe('paragraph')
+  })
+
+  it('detects the Emphasis variant from a paragraph carrying font-style: italic', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: 'font-style: italic', profile: null })).toBe(
+      'emphasis',
+    )
+  })
+
+  it('detects the Title variant from a paragraph carrying its merged style', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: styleStringFor('title'), profile: null })).toBe(
+      'title',
+    )
   })
 })

@@ -22,12 +22,23 @@ export type BlockTypeKey =
   | 'h1'
   | 'h2'
   | 'h3'
+  | 'h4'
+  | 'h5'
   | 'quote'
   | 'code'
   | 'callout'
   | 'bulletList'
   | 'numberedList'
   | 'checkList'
+  // Paragraph variants distinguished only by an inline `baseStyle` baked into the
+  // gallery descriptor (see typographyGallery.ts). They intentionally emit NO
+  // global scoped CSS (that would restyle every paragraph), so they are absent
+  // from BLOCK_SELECTORS and from the Default profile's `blocks`.
+  | 'title'
+  | 'normalSpaced'
+  | 'accented'
+  | 'strong'
+  | 'emphasis'
 
 /** Which edge(s) a block's border declarations apply to. */
 export type BlockBorderSide = 'all' | 'left' | 'right' | 'top' | 'bottom'
@@ -178,6 +189,20 @@ export const DEFAULT_TYPOGRAPHY_PROFILE: TypographyProfile = {
     // .Lexical__h3 { font-size: 1.1875rem; font-weight: 700; margin: 0 } (no colour)
     h3: {
       fontSize: '1.1875rem',
+      fontWeight: '700',
+      marginTop: '0',
+      marginBottom: '0',
+    },
+    // .Lexical__h4 { font-size: 1.0625rem; font-weight: 700; margin: 0 } (no colour)
+    h4: {
+      fontSize: '1.0625rem',
+      fontWeight: '700',
+      marginTop: '0',
+      marginBottom: '0',
+    },
+    // .Lexical__h5 { font-size: 0.9375rem; font-weight: 700; margin: 0 } (no colour)
+    h5: {
+      fontSize: '0.9375rem',
       fontWeight: '700',
       marginTop: '0',
       marginBottom: '0',
