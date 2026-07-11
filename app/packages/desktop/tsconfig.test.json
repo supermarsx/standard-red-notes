@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["app/**/*", "test/**/*"],
+  "exclude": ["node_modules", "app/dist"],
+  "files": ["app/index.ts", "app/javascripts/Renderer/Renderer.ts"]
+}

@@ -2,17 +2,21 @@
 import { ChildProcess, spawn } from 'child_process'
 import electronPath, { MenuItem } from 'electron'
 import path from 'path'
-import { Language } from '../app/javascripts/Main/spellcheckerManager'
-import { StoreKeys } from '../app/javascripts/Main/store'
-import { UpdateState } from '../app/javascripts/Main/updateManager'
-import { deleteDir, ensureDirectoryExists, readJSONFile } from '../app/javascripts/Main/Utils/fileUtils'
+import { fileURLToPath } from 'url'
+import { Language } from '../app/javascripts/Main/SpellcheckerManager'
+import { StoreKeys } from '../app/javascripts/Main/Store/StoreKeys'
+import { UpdateState } from '../app/javascripts/Main/UpdateManager'
+import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
 import { CommandLineArgs } from '../app/javascripts/Shared/CommandLineArgs'
 import { AppMessageType, AppTestMessage, MessageType, TestIPCMessage, TestIPCMessageResult } from './TestIpcMessage'
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url))
+const filesManager = new FilesManager()
 
 function spawnAppprocess(userDataPath: string) {
   const p = spawn(
     electronPath as any,
-    [path.join(__dirname, '..'), CommandLineArgs.Testing, CommandLineArgs.UserDataPath, userDataPath],
+    [path.join(currentDir, '..'), CommandLineArgs.Testing, CommandLineArgs.UserDataPath, userDataPath],
     {
       stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
     },
@@ -105,7 +109,7 @@ class Driver {
   readonly storage = {
     dataOnDisk: async (): Promise<{ [key in StoreKeys]: any }> => {
       const location = await this.send(MessageType.StoreSettingsLocation)
-      return readJSONFile(location)
+      return filesManager.readJSONFile(location) as Promise<{ [key in StoreKeys]: any }>
     },
     dataLocation: (): Promise<string> => this.send(MessageType.StoreSettingsLocation),
     setZoomFactor: (factor: number) => this.send(MessageType.StoreSet, 'zoomFactor', factor),
@@ -158,23 +162,21 @@ class Driver {
     await new Promise((resolve) => setTimeout(resolve, 150))
 
     /**
-     * Windows can throw EPERM or EBUSY errors when we try to delete the
-     * user data directory too quickly.
+     * Windows can hit EPERM or EBUSY when we try to delete the user data
+     * directory too quickly. FilesManager.deleteDir swallows the error and
+     * returns a failed Result instead of throwing, so retry on isFailed().
      */
     const maxTries = 5
+    let lastError = ''
     for (let i = 0; i < maxTries; i++) {
-      try {
-        await deleteDir(this.userDataPath)
+      const result = await filesManager.deleteDir(this.userDataPath)
+      if (!result.isFailed()) {
         return
-      } catch (error: any) {
-        if (error.code === 'EPERM' || error.code === 'EBUSY') {
-          await new Promise((resolve) => setTimeout(resolve, 300))
-        } else {
-          throw error
-        }
       }
+      lastError = result.getError()
+      await new Promise((resolve) => setTimeout(resolve, 300))
     }
-    throw new Error(`Couldn't delete user data directory after ${maxTries} tries`)
+    throw new Error(`Couldn't delete user data directory after ${maxTries} tries: ${lastError}`)
   }
 
   restart = async () => {
@@ -191,12 +193,12 @@ export type { Driver }
 
 export async function createDriver() {
   const userDataPath = path.join(
-    __dirname,
+    currentDir,
     'data',
     'tmp',
     `userData-${Date.now()}-${Math.round(Math.random() * 10000)}`,
   )
-  await ensureDirectoryExists(userDataPath)
+  await filesManager.ensureDirectoryExists(userDataPath)
   const driver = new Driver(userDataPath)
   await driver.appReady
   return driver

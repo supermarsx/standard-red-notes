@@ -1,21 +1,25 @@
 import path from 'path'
-import { deleteDir, ensureDirectoryExists } from '../app/javascripts/Main/Utils/FileUtils'
+import { fileURLToPath } from 'url'
+import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url))
+const filesManager = new FilesManager()
 
 export function createTmpDir(name: string): {
   path: string
   make(): Promise<string>
   clean(): Promise<void>
 } {
-  const tmpDirPath = path.join(__dirname, 'data', 'tmp', path.basename(name))
+  const tmpDirPath = path.join(currentDir, 'data', 'tmp', path.basename(name))
 
   return {
     path: tmpDirPath,
     async make() {
-      await ensureDirectoryExists(tmpDirPath)
+      await filesManager.ensureDirectoryExists(tmpDirPath)
       return tmpDirPath
     },
     async clean() {
-      await deleteDir(tmpDirPath)
+      await filesManager.deleteDir(tmpDirPath)
     },
   }
 }
