@@ -3162,23 +3162,15 @@ const ToolbarPlugin = () => {
                               onSelect={restoreCompletedTasks}
                               className="flex-shrink-0 self-center"
                             />
-                            {/* Edit styles — reuses the gallery's old pill markup
-                                (pencil icon + label + "Edit styles — <profile>"
-                                tooltip); self-stretch keeps it the same height as
-                                the two ToolbarButtons. */}
-                            <button
-                              type="button"
-                              onClick={() => setIsTypographyEditorOpen(true)}
-                              onMouseDown={(event) => event.preventDefault()}
-                              title={`Edit styles — ${activeTypographyProfile ? activeTypographyProfile.name : 'Default'}`}
-                              className={classNames(
-                                'flex flex-shrink-0 items-center gap-1 self-stretch rounded border border-border bg-default px-2 text-xs font-medium text-info',
-                                'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
-                              )}
-                            >
-                              <Icon type="pencil-filled" size="custom" className="h-3.5 w-3.5" />
-                              <span className="hidden whitespace-nowrap sm:inline">Edit styles</span>
-                            </button>
+                            {/* Edit styles — a plain icon-only ToolbarButton like
+                                its two siblings; opens the P3 typography editor
+                                modal (where the active profile is shown/edited). */}
+                            <ToolbarButton
+                              name={t('editStyles')}
+                              iconName="pencil-filled"
+                              onSelect={() => setIsTypographyEditorOpen(true)}
+                              className="flex-shrink-0 self-center"
+                            />
                           </div>
                           {/* Lines 2–3: the full-width squares gallery. */}
                           <div className="flex w-full min-w-0">

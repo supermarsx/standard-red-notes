@@ -123,6 +123,7 @@ const editor = {
   normal: 'Normal',
   smartChecklist: 'Smart checklist',
   restoreCompletedTasks: 'Restore completed tasks',
+  editStyles: 'Edit styles',
   leftAlign: 'Left align',
   centerAlign: 'Center align',
   rightAlign: 'Right align',

@@ -116,4 +116,12 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
     expect(rootEl).not.toBeNull()
     expect(rootEl.className).toContain('w-full')
   })
+
+  it('wraps each preview in a fit-scaling layer (transform: scale) so oversized samples stay visible', () => {
+    render()
+    const scaled = Array.from(container.querySelectorAll('div')).filter((d) =>
+      (d.getAttribute('style') ?? '').includes('scale('),
+    )
+    expect(scaled.length).toBe(GALLERY_BLOCKS.length) // one scaling wrapper per inline square
+  })
 })

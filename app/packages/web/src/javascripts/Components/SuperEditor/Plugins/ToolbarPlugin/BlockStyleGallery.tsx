@@ -16,7 +16,7 @@
  * first-line action buttons (Smart checklist, Restore completed tasks, Edit
  * styles) are rendered by the caller ABOVE this bar, not inside it.
  */
-import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { TypographyProfile } from '@standardnotes/models'
 import { classNames } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
@@ -87,6 +87,36 @@ const BlockStyleSquare = ({
   const blockStyle = getProfileBlockStyle(profile, descriptor.key)
   const inlineStyle = (blockStyle ? blockStyleToInlineStyle(blockStyle) : {}) as CSSProperties
 
+  const previewBoxRef = useRef<HTMLDivElement>(null)
+  const previewContentRef = useRef<HTMLDivElement>(null)
+  const [previewScale, setPreviewScale] = useState(1)
+
+  useLayoutEffect(() => {
+    const box = previewBoxRef.current
+    const content = previewContentRef.current
+    if (!box || !content) {
+      return
+    }
+    const fit = () => {
+      // scrollWidth/Height are the UN-transformed natural size (transform is
+      // paint-only), so measuring is stable and never oscillates.
+      const naturalWidth = content.scrollWidth
+      const naturalHeight = content.scrollHeight
+      if (!naturalWidth || !naturalHeight) {
+        setPreviewScale(1)
+        return
+      }
+      setPreviewScale(Math.min(1, box.clientWidth / naturalWidth, box.clientHeight / naturalHeight))
+    }
+    fit()
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const observer = new ResizeObserver(fit)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [descriptor.key, blockStyle])
+
   return (
     <button
       type="button"
@@ -100,17 +130,25 @@ const BlockStyleSquare = ({
       onClick={() => onApply(descriptor)}
       onMouseDown={(event) => event.preventDefault()}
     >
-      {/* Truthful mini-preview on the real editor surface colours. Two text-lines
-          tall and clipped, so a large heading fits while its relative size shows.
-          `leading-snug` + wrapping lets normal text flow onto a second line. */}
+      {/* Truthful mini-preview on the real editor surface colours. The sample is
+          laid out on ONE natural-width line and scaled down (never up) via a
+          measured `transform: scale()` so the whole styled sample stays visible
+          inside the box — headings/large fonts shrink to fit instead of clipping. */}
       <div
-        className="flex h-[2.9rem] items-center justify-start overflow-hidden rounded-sm px-1.5 leading-snug"
+        ref={previewBoxRef}
+        className="flex h-[2.9rem] items-center justify-start overflow-hidden rounded-sm px-1.5"
         style={{
           backgroundColor: 'var(--sn-stylekit-editor-background-color)',
           color: 'var(--sn-stylekit-editor-foreground-color)',
         }}
       >
-        <BlockStylePreview descriptor={descriptor} style={inlineStyle} />
+        <div
+          ref={previewContentRef}
+          className="flex origin-left items-center whitespace-nowrap leading-snug"
+          style={{ transform: `scale(${previewScale})` }}
+        >
+          <BlockStylePreview descriptor={descriptor} style={inlineStyle} />
+        </div>
       </div>
       <span className="flex items-center gap-1 overflow-hidden">
         <Icon type={descriptor.iconName} size="custom" className="h-3.5 w-3.5 flex-shrink-0 text-passive-1" />
