@@ -18,10 +18,13 @@ import { HashingKey } from '../Hash/HashingKey'
  * can compute authenticity of the content on demand.
  */
 export class GenerateSymmetricPayloadSignatureResultUseCase {
-  private parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
-  private hashUseCase = new HashStringUseCase(this.crypto)
+  private parseBase64Usecase: ParseConsistentBase64JsonPayloadUseCase
+  private hashUseCase: HashStringUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+    this.hashUseCase = new HashStringUseCase(this.crypto)
+  }
 
   execute(
     payload: EncryptedInputParameters,

@@ -7,9 +7,11 @@ import { AsymmetricDecryptResult } from '../../../Types/AsymmetricDecryptResult'
 import { Result, SyncUseCaseInterface } from '@standardnotes/domain-core'
 
 export class AsymmetricDecryptOwnMessage004 implements SyncUseCaseInterface<AsymmetricDecryptResult> {
-  private parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  private parseBase64Usecase: ParseConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(dto: {
     message: AsymmetricallyEncryptedString

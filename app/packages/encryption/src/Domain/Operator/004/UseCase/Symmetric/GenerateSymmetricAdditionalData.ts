@@ -4,9 +4,11 @@ import { HashStringUseCase } from '../Hash/HashString'
 import { HashingKey } from '../Hash/HashingKey'
 
 export class GenerateSymmetricAdditionalDataUseCase {
-  private hashUseCase = new HashStringUseCase(this.crypto)
+  private hashUseCase: HashStringUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.hashUseCase = new HashStringUseCase(this.crypto)
+  }
 
   execute(
     payloadPlaintext: string,

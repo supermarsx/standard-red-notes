@@ -6,9 +6,11 @@ import { CreateConsistentBase64JsonPayloadUseCase } from '../Utils/CreateConsist
 import { AsymmetricItemAdditionalData } from '../../../../Types/EncryptionAdditionalData'
 
 export class AsymmetricEncrypt004 {
-  private base64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
+  private base64DataUsecase: CreateConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.base64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(dto: {
     stringToEncrypt: Utf8String

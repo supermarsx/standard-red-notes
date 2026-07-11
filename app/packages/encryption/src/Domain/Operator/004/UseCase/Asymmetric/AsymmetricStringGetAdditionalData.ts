@@ -6,9 +6,11 @@ import { AsymmetricItemAdditionalData } from '../../../../Types/EncryptionAdditi
 import { Result, SyncUseCaseInterface } from '@standardnotes/domain-core'
 
 export class AsymmetricStringGetAdditionalData004 implements SyncUseCaseInterface<AsymmetricItemAdditionalData> {
-  private parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  private parseBase64Usecase: ParseConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(dto: { encryptedString: AsymmetricallyEncryptedString }): Result<AsymmetricItemAdditionalData> {
     const [_, __, ___, additionalDataString] = <V004AsymmetricStringComponents>dto.encryptedString.split(':')

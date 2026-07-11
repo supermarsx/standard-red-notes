@@ -6,9 +6,11 @@ import { AsymmetricItemAdditionalData } from '../../../../Types/EncryptionAdditi
 import { AsymmetricSignatureVerificationDetachedResult } from '../../../Types/AsymmetricSignatureVerificationDetachedResult'
 
 export class AsymmetricSignatureVerificationDetached004 {
-  private parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  private parseBase64Usecase: ParseConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(dto: { encryptedString: AsymmetricallyEncryptedString }): AsymmetricSignatureVerificationDetachedResult {
     const [_, __, ciphertext, additionalDataString] = <V004AsymmetricStringComponents>dto.encryptedString.split(':')

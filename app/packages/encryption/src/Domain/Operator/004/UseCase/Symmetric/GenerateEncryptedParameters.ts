@@ -22,13 +22,18 @@ import { HashingKey } from '../Hash/HashingKey'
 import { DeriveHashingKeyUseCase } from '../Hash/DeriveHashingKey'
 
 export class GenerateEncryptedParametersUseCase {
-  private generateProtocolStringUseCase = new GenerateEncryptedProtocolStringUseCase(this.crypto)
+  private generateProtocolStringUseCase: GenerateEncryptedProtocolStringUseCase
   private generateAuthenticatedDataUseCase = new GenerateAuthenticatedDataUseCase()
-  private generateAdditionalDataUseCase = new GenerateSymmetricAdditionalDataUseCase(this.crypto)
-  private encodeBase64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
-  private deriveHashingKeyUseCase = new DeriveHashingKeyUseCase(this.crypto)
+  private generateAdditionalDataUseCase: GenerateSymmetricAdditionalDataUseCase
+  private encodeBase64DataUsecase: CreateConsistentBase64JsonPayloadUseCase
+  private deriveHashingKeyUseCase: DeriveHashingKeyUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.generateProtocolStringUseCase = new GenerateEncryptedProtocolStringUseCase(this.crypto)
+    this.generateAdditionalDataUseCase = new GenerateSymmetricAdditionalDataUseCase(this.crypto)
+    this.encodeBase64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
+    this.deriveHashingKeyUseCase = new DeriveHashingKeyUseCase(this.crypto)
+  }
 
   execute(
     payload: DecryptedPayloadInterface,

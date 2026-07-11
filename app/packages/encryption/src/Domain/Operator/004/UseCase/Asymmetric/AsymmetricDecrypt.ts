@@ -6,9 +6,11 @@ import { AsymmetricItemAdditionalData } from '../../../../Types/EncryptionAdditi
 import { AsymmetricDecryptResult } from '../../../Types/AsymmetricDecryptResult'
 
 export class AsymmetricDecrypt004 {
-  private parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  private parseBase64Usecase: ParseConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseBase64Usecase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(dto: {
     stringToDecrypt: AsymmetricallyEncryptedString

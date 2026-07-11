@@ -23,12 +23,17 @@ import { DeriveHashingKeyUseCase } from '../Hash/DeriveHashingKey'
 import { V004Components } from '../../V004AlgorithmTypes'
 
 export class GenerateDecryptedParametersUseCase {
-  private base64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
-  private stringToAuthenticatedDataUseCase = new StringToAuthenticatedDataUseCase(this.crypto)
-  private signingVerificationUseCase = new GenerateSymmetricPayloadSignatureResultUseCase(this.crypto)
-  private deriveHashingKeyUseCase = new DeriveHashingKeyUseCase(this.crypto)
+  private base64DataUsecase: CreateConsistentBase64JsonPayloadUseCase
+  private stringToAuthenticatedDataUseCase: StringToAuthenticatedDataUseCase
+  private signingVerificationUseCase: GenerateSymmetricPayloadSignatureResultUseCase
+  private deriveHashingKeyUseCase: DeriveHashingKeyUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.base64DataUsecase = new CreateConsistentBase64JsonPayloadUseCase(this.crypto)
+    this.stringToAuthenticatedDataUseCase = new StringToAuthenticatedDataUseCase(this.crypto)
+    this.signingVerificationUseCase = new GenerateSymmetricPayloadSignatureResultUseCase(this.crypto)
+    this.deriveHashingKeyUseCase = new DeriveHashingKeyUseCase(this.crypto)
+  }
 
   execute<C extends ItemContent = ItemContent>(
     encrypted: EncryptedInputParameters,

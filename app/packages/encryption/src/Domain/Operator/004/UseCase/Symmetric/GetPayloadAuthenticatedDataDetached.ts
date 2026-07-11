@@ -7,9 +7,11 @@ import { deconstructEncryptedPayloadString } from '../../V004AlgorithmHelpers'
 import { ParseConsistentBase64JsonPayloadUseCase } from '../Utils/ParseConsistentBase64JsonPayload'
 
 export class GetPayloadAuthenticatedDataDetachedUseCase {
-  private parseStringUseCase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  private parseStringUseCase: ParseConsistentBase64JsonPayloadUseCase
 
-  constructor(private readonly crypto: PureCryptoInterface) {}
+  constructor(private readonly crypto: PureCryptoInterface) {
+    this.parseStringUseCase = new ParseConsistentBase64JsonPayloadUseCase(this.crypto)
+  }
 
   execute(
     encrypted: EncryptedOutputParameters,

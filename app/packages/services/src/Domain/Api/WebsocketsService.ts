@@ -81,13 +81,13 @@ export class WebSocketsService extends AbstractService<
   private RECONNECT_STABLE_MS = 10_000
 
   private reconnectAttempts = 0
-  private reconnectTimeout?: NodeJS.Timeout
-  private stableConnectionTimeout?: NodeJS.Timeout
+  private reconnectTimeout?: ReturnType<typeof setTimeout>
+  private stableConnectionTimeout?: ReturnType<typeof setTimeout>
   /** Guards against concurrent dials (sign-in + close + online all racing). */
   private connecting = false
 
   private webSocket?: WebSocket
-  private webSocketHeartbeatInterval?: NodeJS.Timeout
+  private webSocketHeartbeatInterval?: ReturnType<typeof setInterval>
   private collaborationFrameHandlers = new Set<(frame: CollaborationFrame) => void>()
 
   constructor(
@@ -106,14 +106,13 @@ export class WebSocketsService extends AbstractService<
 
   public loadWebSocketUrl(): void {
     const storedValue = this.storageService.getValue<string | undefined>(StorageKey.WebSocketUrl)
-    this.webSocketUrl =
-      storedValue ||
-      this.webSocketUrl ||
-      (
-        window as {
-          _websocket_url?: string
-        }
-      )._websocket_url
+    // Guard the bare `window` deref for headless (node/mcp) embeddings where it is
+    // undefined; without this the fallback throws ReferenceError and crashes launch.
+    const windowFallbackUrl =
+      typeof window !== 'undefined'
+        ? (window as { _websocket_url?: string })._websocket_url
+        : undefined
+    this.webSocketUrl = storedValue || this.webSocketUrl || windowFallbackUrl
   }
 
   async startWebSocketConnection(): Promise<Result<void>> {
@@ -211,6 +210,12 @@ export class WebSocketsService extends AbstractService<
   }
 
   isWebSocketConnectionOpen(): boolean {
+    // The right operand `WebSocket.OPEN` is evaluated even when `this.webSocket` is
+    // undefined; in a headless runtime lacking a global `WebSocket` that throws. Guard
+    // the global so this returns false (not throws) on the auto-sync tick.
+    if (typeof WebSocket === 'undefined') {
+      return false
+    }
     return this.webSocket?.readyState === WebSocket.OPEN
   }
 
@@ -273,7 +278,7 @@ export class WebSocketsService extends AbstractService<
     }
   }
 
-  private onWebSocketMessage(messageEvent: MessageEvent) {
+  private onWebSocketMessage(messageEvent: { data: string }) {
     const eventData = JSON.parse(messageEvent.data)
     if (typeof eventData.t === 'string' && COLLABORATION_FRAME_TYPES.has(eventData.t)) {
       this.collaborationFrameHandlers.forEach((handler) => handler(eventData as CollaborationFrame))
@@ -326,7 +331,7 @@ export class WebSocketsService extends AbstractService<
     }
   }
 
-  private onWebSocketClose(event: CloseEvent) {
+  private onWebSocketClose(event: { code: number }) {
     if (this.webSocketHeartbeatInterval) {
       clearInterval(this.webSocketHeartbeatInterval)
     }
