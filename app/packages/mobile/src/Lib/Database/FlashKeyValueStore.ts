@@ -1,10 +1,10 @@
-import { MMKV } from 'react-native-mmkv'
+import { createMMKV, type MMKV } from 'react-native-mmkv'
 
 export class FlashKeyValueStore {
   private storage: MMKV
 
   constructor(identifier: string) {
-    this.storage = new MMKV({ id: identifier })
+    this.storage = createMMKV({ id: identifier })
   }
 
   set(key: string, value: unknown): void {
@@ -12,7 +12,7 @@ export class FlashKeyValueStore {
   }
 
   delete(key: string): void {
-    this.storage.delete(key)
+    this.storage.remove(key)
   }
 
   deleteAll(): void {

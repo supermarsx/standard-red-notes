@@ -47,7 +47,7 @@ export class Database implements DatabaseInterface {
   }
 
   async multiDelete(keys: string[]): Promise<void> {
-    return AsyncStorage.multiRemove(keys)
+    return AsyncStorage.removeMany(keys)
   }
 
   async deleteItem(itemUuid: string): Promise<void> {
@@ -155,12 +155,13 @@ export class Database implements DatabaseInterface {
       }
     } else {
       try {
-        for (const item of await AsyncStorage.multiGet(keys)) {
-          if (item[1]) {
+        const record = await AsyncStorage.getMany(keys)
+        for (const value of Object.values(record)) {
+          if (value) {
             try {
-              results.push(JSON.parse(item[1]))
+              results.push(JSON.parse(value))
             } catch (e) {
-              results.push(item[1] as T)
+              results.push(value as T)
             }
           }
         }

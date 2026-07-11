@@ -23,7 +23,6 @@ import {
   Appearance,
   AppState,
   AppStateStatus,
-  ColorSchemeName,
   Linking,
   NativeModules,
   PermissionsAndroid,
@@ -588,8 +587,9 @@ export class MobileDevice implements MobileDeviceInterface {
     return AppState.currentState
   }
 
-  async getColorScheme(): Promise<ColorSchemeName> {
-    return Appearance.getColorScheme()
+  async getColorScheme(): Promise<'light' | 'dark' | null | undefined> {
+    const scheme = Appearance.getColorScheme()
+    return scheme === 'dark' ? 'dark' : scheme === 'light' ? 'light' : undefined
   }
 
   hideMobileInterfaceFromScreenshots(): void {
