@@ -190,6 +190,36 @@ describe('ApplicationEventObserver', () => {
       expect(routeService.removeQueryParameterFromURL).toHaveBeenCalledWith(RootQueryParam.AcceptSubscriptionInvite)
     })
 
+    it('should open the create-account pane on an invite launch when the user is not logged in', async () => {
+      sessionManager.getUser = jest.fn().mockReturnValue(undefined)
+      routeService.getRoute = jest.fn().mockReturnValue({
+        type: RouteType.Invite,
+        inviteParams: {
+          token: 'raw-invite-token',
+        },
+      } as unknown as jest.Mocked<RouteParserInterface>)
+
+      await createObserver().handle(ApplicationEvent.Launched)
+
+      expect(accountMenuController.setShow).toHaveBeenCalledWith(true)
+      expect(accountMenuController.setCurrentPane).toHaveBeenCalledWith(AccountMenuPane.Register)
+    })
+
+    it('should NOT open the create-account pane on an invite launch when the user is already logged in', async () => {
+      sessionManager.getUser = jest.fn().mockReturnValue({} as jest.Mocked<User>)
+      routeService.getRoute = jest.fn().mockReturnValue({
+        type: RouteType.Invite,
+        inviteParams: {
+          token: 'raw-invite-token',
+        },
+      } as unknown as jest.Mocked<RouteParserInterface>)
+
+      await createObserver().handle(ApplicationEvent.Launched)
+
+      expect(accountMenuController.setShow).not.toHaveBeenCalled()
+      expect(accountMenuController.setCurrentPane).not.toHaveBeenCalled()
+    })
+
     it('should open up sign in if user is not logged in and tries to send request', async () => {
       sessionManager.getUser = jest.fn().mockReturnValue(undefined)
       routeService.getRoute = jest.fn().mockReturnValue({

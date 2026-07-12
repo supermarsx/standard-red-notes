@@ -5,6 +5,7 @@ import { DemoParams } from './Params/DemoParams'
 import { OnboardingParams } from './Params/OnboardingParams'
 import { SharedParams } from './Params/SharedParams'
 import { EmailConfirmationParams } from './Params/EmailConfirmationParams'
+import { InviteParams } from './Params/InviteParams'
 import { PurchaseParams } from './Params/PurchaseParams'
 import { SettingsParams } from './Params/SettingsParams'
 import { SubscriptionInviteParams } from './Params/SubscriptionInviteParams'
@@ -72,6 +73,14 @@ export class RouteParser implements RouteParserInterface {
     }
   }
 
+  get inviteParams(): InviteParams {
+    this.checkForProperRouteType(RouteType.Invite)
+
+    return {
+      token: this.searchParams.get(RootQueryParam.Invite) as string,
+    }
+  }
+
   get settingsParams(): SettingsParams {
     this.checkForProperRouteType(RouteType.Settings)
 
@@ -135,6 +144,7 @@ export class RouteParser implements RouteParserInterface {
       [RootQueryParam.AppViewRoute, RouteType.AppViewRoute],
       [RootQueryParam.Shared, RouteType.Shared],
       [RootQueryParam.EmailConfirmation, RouteType.EmailConfirmation],
+      [RootQueryParam.Invite, RouteType.Invite],
     ])
 
     for (const rootQueryParam of rootQueryParametersMap.keys()) {

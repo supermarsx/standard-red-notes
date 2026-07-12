@@ -18,6 +18,7 @@ import IconButton from '@/Components/Button/IconButton'
 import { useApplication } from '../ApplicationProvider'
 import { useCaptcha } from '@/Hooks/useCaptcha'
 import { isErrorResponse } from '@standardnotes/snjs'
+import { RouteType } from '@standardnotes/ui-services'
 import MergeLocalDataCheckbox from './MergeLocalDataCheckbox'
 import ConfirmNoMergeDialog from './ConfirmNoMergeDialog'
 import { useTranslation } from 'react-i18next'
@@ -46,15 +47,35 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
   const [hvmToken, setHVMToken] = useState('')
   const [captchaURL, setCaptchaURL] = useState('')
   const [showNoMergeConfirmation, setShowNoMergeConfirmation] = useState(false)
+  // Standard Red Notes: APPROVAL / waitlist queue. Set when register resolves
+  // with a pending-approval response so we show an "awaiting approval" screen
+  // instead of proceeding to a signed-in state.
+  const [awaitingApproval, setAwaitingApproval] = useState(false)
+
+  // Standard Red Notes: INVITE-URL signup control. Read the invite token captured
+  // from `?invite=<token>` at launch (RouteType.Invite). Computed once — the
+  // route does not change while this pane is open — and threaded into register.
+  const [inviteToken] = useState<string | undefined>(() => {
+    const route = application.routeService.getRoute()
+    return route.type === RouteType.Invite ? route.inviteParams.token : undefined
+  })
 
   const register = useCallback(() => {
     setIsRegistering(true)
     application
       // Standard Red Notes: pass the optional workspace name through to register.
       // An empty string is treated as the default workspace; the server ignores
-      // it entirely unless WORKSPACES_PER_EMAIL_ENABLED is on.
-      .register(email, password, hvmToken, isEphemeral, shouldMergeLocal, workspaceIdentifier || undefined)
-      .then(() => {
+      // it entirely unless WORKSPACES_PER_EMAIL_ENABLED is on. The invite token is
+      // sent only when the launch carried `?invite=` (undefined otherwise).
+      .register(email, password, hvmToken, isEphemeral, shouldMergeLocal, workspaceIdentifier || undefined, inviteToken)
+      .then((response) => {
+        // Standard Red Notes: APPROVAL / waitlist queue. A pending-approval
+        // response established NO session — do not proceed to a signed-in state;
+        // show the awaiting-approval screen instead.
+        if (response?.pendingApproval) {
+          setAwaitingApproval(true)
+          return
+        }
         application.accountMenuController.closeAccountMenu()
         application.accountMenuController.setCurrentPane(AccountMenuPane.GeneralMenu)
       })
@@ -65,7 +86,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
       .finally(() => {
         setIsRegistering(false)
       })
-  }, [application, email, hvmToken, isEphemeral, password, shouldMergeLocal, workspaceIdentifier])
+  }, [application, email, hvmToken, isEphemeral, password, shouldMergeLocal, workspaceIdentifier, inviteToken])
 
   const captchaIframe = useCaptcha(captchaURL, (token) => {
     setHVMToken(token)
@@ -174,8 +195,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
   const confirmPasswordForm = (
     <>
       <div className="mb-3 px-3 text-sm">
-        {t('passwordResetWarningPart1')}{' '}
-        <span className="text-danger">{t('passwordResetWarningHighlight')}</span>
+        {t('passwordResetWarningPart1')} <span className="text-danger">{t('passwordResetWarningHighlight')}</span>
         {t('passwordResetWarningPart2')}
       </div>
       <form onSubmit={handleConfirmFormSubmit} className="mb-1 px-3">
@@ -219,6 +239,29 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
     </>
   )
 
+  // Standard Red Notes: APPROVAL / waitlist queue. Terminal screen shown when the
+  // account was created PENDING (no session). Distinct from the normal flow — no
+  // back button, no form — the user simply acknowledges and waits for approval.
+  if (awaitingApproval) {
+    return (
+      <>
+        <div className="mb-3 mt-1 flex items-center px-3">
+          <div className="text-base font-bold">{t('awaitingApprovalTitle')}</div>
+        </div>
+        <div className="mb-3 px-3 text-sm">{t('awaitingApprovalMessage')}</div>
+        <div className="px-3">
+          <Button
+            primary
+            fullWidth
+            className="mb-3"
+            label={t('close')}
+            onClick={() => application.accountMenuController.closeAccountMenu()}
+          />
+        </div>
+      </>
+    )
+  }
+
   return (
     <>
       <div className="mb-3 mt-1 flex items-center px-3">
@@ -230,9 +273,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
           focusable={true}
           disabled={isRegistering}
         />
-        <div className="text-base font-bold">
-          {captchaURL ? t('humanVerification') : t('confirmPasswordTitle')}
-        </div>
+        <div className="text-base font-bold">{captchaURL ? t('humanVerification') : t('confirmPasswordTitle')}</div>
       </div>
       {captchaURL ? <div className="p-[10px]">{captchaIframe}</div> : confirmPasswordForm}
       {showNoMergeConfirmation && (

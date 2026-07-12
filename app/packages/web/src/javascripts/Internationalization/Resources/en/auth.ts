@@ -31,6 +31,12 @@ const auth = {
   goBack: 'Go back',
   humanVerification: 'Human verification',
   confirmPasswordTitle: 'Confirm password',
+  // Standard Red Notes: APPROVAL / waitlist queue. Shown after a pending-approval
+  // registration response (the account was created but is not yet active).
+  awaitingApprovalTitle: 'Awaiting approval',
+  awaitingApprovalMessage:
+    'Your account has been created and is awaiting administrator approval. You will be able to sign in once an administrator approves it.',
+  close: 'Close',
 
   // CreateAccount
   createAccount: 'Create account',
@@ -57,8 +63,7 @@ const auth = {
     'If unchecked, your local notes and topics will be permanently deleted and replaced with data from your account.',
 
   // ServerPicker
-  homeServerNotRunning:
-    'Home server is not running. Please open the prefences and home server tab to start it.',
+  homeServerNotRunning: 'Home server is not running. Please open the prefences and home server tab to start it.',
   serverDefault: 'Default',
   serverCustom: 'Custom',
   serverHomeServer: 'Home Server',
@@ -84,8 +89,7 @@ const auth = {
 
   // NoAccountWarningContent
   dataNotBackedUp: 'Data not backed up',
-  signInOrRegisterToSync:
-    'Sign in or register to sync your notes to your other devices with end-to-end encryption.',
+  signInOrRegisterToSync: 'Sign in or register to sync your notes to your other devices with end-to-end encryption.',
   openAccountMenu: 'Open Account menu',
   ignoreWarning: 'Ignore warning',
 

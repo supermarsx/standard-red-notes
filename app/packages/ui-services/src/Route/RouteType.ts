@@ -8,5 +8,7 @@ export enum RouteType {
   AppViewRoute = 'route',
   Shared = 'shared',
   EmailConfirmation = 'email-confirmation',
+  // Standard Red Notes: INVITE-URL signup control — a launch carrying `?invite=`.
+  Invite = 'invite',
   None = 'none',
 }

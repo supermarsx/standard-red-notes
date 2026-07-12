@@ -84,6 +84,19 @@ export class ApplicationEventObserver implements EventObserverInterface {
 
               break
             }
+            case RouteType.Invite: {
+              // Standard Red Notes: INVITE-URL signup control. A launch carrying
+              // `?invite=<token>` means the visitor followed an invite link, so
+              // surface the create-account pane (unless they are already signed
+              // in). ConfirmPassword reads the token off the route and threads it
+              // into register.
+              const user = this.sessionManager.getUser()
+              if (user === undefined) {
+                this.promptUserRegister()
+              }
+
+              break
+            }
           }
         }
         break
@@ -121,6 +134,15 @@ export class ApplicationEventObserver implements EventObserverInterface {
   private promptUserSignIn(): void {
     this.accountMenuController.setShow(true)
     this.accountMenuController.setCurrentPane(AccountMenuPane.SignIn)
+  }
+
+  // Standard Red Notes: INVITE-URL signup control. Opens the account menu on the
+  // create-account (Register) pane so an invite-link visitor lands directly on
+  // registration. `setShow(true)` resets the pane to GeneralMenu, so set the
+  // Register pane AFTER (mirrors promptUserSignIn).
+  private promptUserRegister(): void {
+    this.accountMenuController.setShow(true)
+    this.accountMenuController.setCurrentPane(AccountMenuPane.Register)
   }
 
   private async acceptSubscriptionInvitation(route: RouteParserInterface): Promise<void> {

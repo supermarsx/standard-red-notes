@@ -66,4 +66,20 @@ describe('route parser', () => {
     expect(parser.type).toEqual(RouteType.UserRequest)
     expect(parser.userRequestParams.requestType).toEqual(UserRequestType.ExitDiscount)
   })
+
+  it('routes to invite and parses the token', () => {
+    const url = 'https://app.standardnotes.com/?invite=abc123deftoken'
+    const parser = new RouteParser(url)
+
+    expect(parser.type).toEqual(RouteType.Invite)
+    expect(parser.inviteParams.token).toEqual('abc123deftoken')
+  })
+
+  it('is not an invite route when ?invite= is absent', () => {
+    const url = 'https://app.standardnotes.com/?settings=account'
+    const parser = new RouteParser(url)
+
+    expect(parser.type).toEqual(RouteType.Settings)
+    expect(() => parser.inviteParams).toThrow('Accessing invalid params')
+  })
 })
