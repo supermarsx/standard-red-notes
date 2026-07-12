@@ -1,4 +1,5 @@
 import {
+  buildFileTagSuggestionPrompt,
   buildTagSuggestionPrompt,
   DEFAULT_TAG_INPUT_BUDGET,
   MAX_SUGGESTED_TAGS,
@@ -75,6 +76,66 @@ describe('buildTagSuggestionPrompt', () => {
     // The user message has a fixed preamble; assert the body portion is short.
     const body = user.slice(user.indexOf('Note:\n---\n') + 'Note:\n---\n'.length)
     expect(body.length).toBeLessThanOrEqual(50)
+  })
+})
+
+describe('buildFileTagSuggestionPrompt', () => {
+  const base = { name: 'invoice.txt', mimeType: 'text/plain', sizeLabel: '2 KB', extractedText: '', existingTags: [] }
+
+  it('asks for at most MAX_SUGGESTED_TAGS as a JSON array', () => {
+    const { system } = buildFileTagSuggestionPrompt(base)
+    expect(system).toContain(`at most ${MAX_SUGGESTED_TAGS}`)
+    expect(system.toLowerCase()).toContain('json array')
+  })
+
+  it('always includes filename, mime type, and size in the user message', () => {
+    const { user } = buildFileTagSuggestionPrompt({ ...base, name: 'Q3 report.pdf', mimeType: 'application/pdf', sizeLabel: '1.2 MB' })
+    expect(user).toContain('Filename: Q3 report.pdf')
+    expect(user).toContain('Type: application/pdf')
+    expect(user).toContain('Size: 1.2 MB')
+  })
+
+  it('appends extracted text when present', () => {
+    const { user } = buildFileTagSuggestionPrompt({ ...base, extractedText: 'quarterly revenue figures' })
+    expect(user).toContain('Readable text extracted from the file')
+    expect(user).toContain('quarterly revenue figures')
+  })
+
+  it('states explicitly when no text could be extracted', () => {
+    const { user } = buildFileTagSuggestionPrompt({ ...base, extractedText: '' })
+    expect(user).toContain('No readable text could be extracted')
+    expect(user).not.toContain('Readable text extracted from the file')
+  })
+
+  it('lists existing tags so the model prefers reusing them', () => {
+    const { user } = buildFileTagSuggestionPrompt({ ...base, existingTags: ['work', '  finance  ', '', 'invoices'] })
+    expect(user).toContain('- work')
+    expect(user).toContain('- finance')
+    expect(user).toContain('- invoices')
+    expect(user).toContain('prefer reusing')
+  })
+
+  it('notes when the user has no existing tags', () => {
+    const { user } = buildFileTagSuggestionPrompt(base)
+    expect(user).toContain('no existing tags')
+  })
+
+  it('clamps the extracted text to the budget', () => {
+    const big = 'lorem '.repeat(5000)
+    const { user } = buildFileTagSuggestionPrompt({ ...base, extractedText: big }, 50)
+    const body = user.slice(user.indexOf('---\n') + '---\n'.length)
+    expect(body.length).toBeLessThanOrEqual(50)
+  })
+
+  it('falls back to placeholders for a blank name/type', () => {
+    const { user } = buildFileTagSuggestionPrompt({ ...base, name: '  ', mimeType: '' })
+    expect(user).toContain('Filename: (unnamed)')
+    expect(user).toContain('Type: (unknown)')
+  })
+
+  it('feeds a JSON-array reply through the shared parser', () => {
+    // The file variant reuses parseSuggestedTags verbatim.
+    expect(parseSuggestedTags('["invoices","2024","finance"]')).toEqual(['invoices', '2024', 'finance'])
   })
 })
 

@@ -15,6 +15,7 @@ import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import Icon from '../Icon/Icon'
 import { VaultUserServiceEvent } from '@standardnotes/snjs'
 import { useTranslation } from 'react-i18next'
+import SuggestTagsForFileModal from './SuggestTagsForFileModal'
 
 const SyncTimeoutNoDebounceMs = 100
 const SyncTimeoutDebounceMs = 350
@@ -49,6 +50,10 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
   const toggleFileInfoPanel = () => {
     setIsFileInfoPanelOpen((show) => !show)
   }
+
+  // Owned here (a persistently-mounted host) rather than inside a menu/popover, so
+  // the modal is not unmounted when a transient menu closes.
+  const [suggestTagsOpen, setSuggestTagsOpen] = useState(false)
 
   const onTitleChange: ChangeEventHandler<HTMLInputElement> = useCallback(
     async (event) => {
@@ -123,6 +128,9 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
             </div>
             <div className="flex items-center gap-3">
               {!isReadonly && <LinkedItemsButton linkingController={application.linkingController} />}
+              {!isReadonly && (
+                <RoundIconButton label="Suggest topics" onClick={() => setSuggestTagsOpen(true)} icon="dashboard" />
+              )}
               <RoundIconButton
                 label={t('fileInformationPanel')}
                 onClick={toggleFileInfoPanel}
@@ -154,6 +162,12 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
       <div className="flex min-h-0 flex-grow flex-col">
         <FilePreview file={file} application={application} key={file.uuid} />
       </div>
+      <SuggestTagsForFileModal
+        application={application}
+        file={file}
+        isOpen={suggestTagsOpen}
+        close={() => setSuggestTagsOpen(false)}
+      />
     </div>
   )
 }

@@ -212,3 +212,93 @@ export function notePlaintextForTags(
 ): string {
   return extractPlaintextFromNoteText(noteText ?? '', noteType)
 }
+
+// ---------------------------------------------------------------------------
+// File variant
+// ---------------------------------------------------------------------------
+//
+// Files are first-class synced items and can be tagged exactly like notes. Unlike
+// a note, a file's decrypted bytes are usually NOT readable text — so the honest
+// signal the model gets is the plaintext metadata (filename + mime type + size)
+// ALWAYS, plus on-device-extracted text ONLY for text-like files (see
+// fileTextExtraction.ts). The exposure warning in the modal states exactly this.
+
+/** System prompt for the file variant. Same contract as notes, retargeted to files. */
+const FILE_SYSTEM_PROMPT =
+  'You are a tagging assistant for a note-taking app. Given a file (its name, type, and any readable text), ' +
+  'propose a small set of short, relevant topic tags that would help the user find and group this file later. ' +
+  "Prefer reusing the user's existing tags when one fits, instead of inventing a near-duplicate. " +
+  `Reply with ONLY a JSON array of at most ${MAX_SUGGESTED_TAGS} tag strings, e.g. ["invoices","2024"]. ` +
+  'Each tag should be 1-3 words, lowercase unless a proper noun, with no leading "#". ' +
+  'No preamble, no explanation, no markdown code fences.'
+
+export interface FileTagPromptInput {
+  /** File name (plaintext metadata on the item). */
+  name: string
+  /** File mime type (plaintext metadata). */
+  mimeType: string
+  /** Human-readable size label, e.g. "1.2 MB" (plaintext metadata). */
+  sizeLabel: string
+  /**
+   * Text extracted on-device from the file, or '' when none is available (encrypted
+   * binaries, or PDFs with OCR off). Empty text is stated explicitly in the prompt.
+   */
+  extractedText: string
+  /** Existing tag titles to prefer reusing (deduped, order preserved by caller). */
+  existingTags: string[]
+}
+
+/**
+ * Build the {system, user} messages for a one-shot file tag-suggestion completion.
+ * Pure function of its inputs. Filename + mime type + size are ALWAYS included;
+ * extracted text is appended when present, and its absence is stated so the model
+ * knows to lean on the filename/type alone.
+ */
+export function buildFileTagSuggestionPrompt(
+  input: FileTagPromptInput,
+  budget = DEFAULT_TAG_INPUT_BUDGET,
+): { system: string; user: string } {
+  const name = (input.name ?? '').trim()
+  const mimeType = (input.mimeType ?? '').trim()
+  const sizeLabel = (input.sizeLabel ?? '').trim()
+  const extracted = prepareTagInputText(input.extractedText ?? '', budget)
+
+  const existing = (input.existingTags ?? []).map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
+
+  const existingBlock =
+    existing.length > 0
+      ? `The user already has these tags — strongly prefer reusing an exact match from this list when it fits:\n${existing
+          .map((t) => `- ${t}`)
+          .join('\n')}\n\n`
+      : 'The user has no existing tags yet.\n\n'
+
+  const metadataBlock =
+    `Filename: ${name || '(unnamed)'}\n` +
+    `Type: ${mimeType || '(unknown)'}\n` +
+    (sizeLabel ? `Size: ${sizeLabel}\n` : '')
+
+  const textBlock = extracted
+    ? `\nReadable text extracted from the file:\n---\n${extracted}`
+    : '\nNo readable text could be extracted; suggest from the filename and type.'
+
+  const user =
+    `Suggest up to ${MAX_SUGGESTED_TAGS} tags for the following file.\n\n` + existingBlock + metadataBlock + textBlock
+
+  return { system: FILE_SYSTEM_PROMPT, user }
+}
+
+/**
+ * Generate up to 4 suggested tags for a file. Mirrors {@link suggestTagsForNote}:
+ * a single completion through the existing provider layer, then the shared
+ * parse/sanitize. The file's metadata (and any extracted text) ARE sent to the
+ * configured AI provider — callers must surface that to the user first.
+ */
+export async function suggestTagsForFile(
+  application: WebApplication,
+  input: FileTagPromptInput,
+  options: SuggestTagsOptions = {},
+): Promise<string[]> {
+  const { system, user } = buildFileTagSuggestionPrompt(input, options.budget)
+  const reply = await runOneShotCompletion(application, system, user, { signal: options.signal })
+  return parseSuggestedTags(reply)
+}
