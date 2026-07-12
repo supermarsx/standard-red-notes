@@ -409,13 +409,10 @@ export class LegacyApiService
    * Standard Red Notes: EMAIL CONFIRMATION (part 2). Public, unauthenticated —
    * consumes a confirmation token from the verification link.
    */
-  verifyEmailConfirmation(
-    token: string,
-  ): Promise<HttpResponse<{ success?: boolean; alreadyConfirmed?: boolean }>> {
-    return this.httpService.post<{ success?: boolean; alreadyConfirmed?: boolean }>(
-      Paths.v1.verifyEmailConfirmation,
-      { token },
-    )
+  verifyEmailConfirmation(token: string): Promise<HttpResponse<{ success?: boolean; alreadyConfirmed?: boolean }>> {
+    return this.httpService.post<{ success?: boolean; alreadyConfirmed?: boolean }>(Paths.v1.verifyEmailConfirmation, {
+      token,
+    })
   }
 
   /**
@@ -772,11 +769,7 @@ export class LegacyApiService
     })
   }
 
-  async adminSetUserFeatureFlag(
-    userUuid: UuidString,
-    name: string,
-    value: string | null,
-  ): Promise<HttpResponse> {
+  async adminSetUserFeatureFlag(userUuid: UuidString, name: string, value: string | null): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Put,
       url: joinPaths(this.host, Paths.v1.userFeatureFlags(userUuid)),
@@ -964,6 +957,20 @@ export class LegacyApiService
       emailConfirmationSubject?: string | null
       emailConfirmationBody?: string | null
       emailConfirmationBaseUrl?: string | null
+      // Standard Red Notes: SIGNUP CAPS (t50). Admin-owned overlay keys enforced
+      // auth-side. A "max" of 0/null = unlimited (clears the cap); windows are in
+      // hours. per-device is a best-effort, per-browser soft cap (bypassable).
+      signupsPerIpMax?: number | null
+      signupsPerIpWindowHours?: number | null
+      signupsPerWeekMax?: number | null
+      signupsPerDeviceMax?: number | null
+      signupsPerDeviceWindowHours?: number | null
+    }
+    // Standard Red Notes: runtime LOG VERBOSITY (t50). One winston level applied
+    // to the api-gateway + auth loggers within the poll interval; null clears the
+    // override (falls back to env LOG_LEVEL, then 'info').
+    logging?: {
+      level?: string | null
     }
     // Standard Red Notes: security knobs — proof-of-work anti-bot + the rate-limit
     // tiers. Enforced server-side; the admin panel persists them here.
@@ -2004,7 +2011,6 @@ export class LegacyApiService
       return new ClientDisplayableError(API_MESSAGE_FAILED_OFFLINE_ACTIVATION)
     }
   }
-
 
   public async createUserFileValetToken(
     remoteIdentifier: string,

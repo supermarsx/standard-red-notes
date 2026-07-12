@@ -1,0 +1,159 @@
+/**
+ * @jest-environment jsdom
+ *
+ * AdminSecurityTab render guard (MEMORY: verify UI render paths). This tab was
+ * refactored from one long scroll into a 4-subtab bar (overview / antiabuse /
+ * lockout / auth), with segments redistributed and the anti-abuse segment split
+ * so locked accounts get their own subtab. We drive the REAL component in jsdom,
+ * click every subtab, and assert each subtab label + a piece of its panel content
+ * mounts — tsc/jest green is not proof a restructured panel actually renders.
+ */
+import { act, createElement } from 'react'
+import { createRoot, Root } from 'react-dom/client'
+
+jest.mock('@standardnotes/toast', () => ({
+  addToast: jest.fn(),
+  ToastType: { Error: 'error', Success: 'success', Regular: 'regular' },
+}))
+
+jest.mock('@standardnotes/snjs', () => ({
+  isErrorResponse: (response: unknown) => Boolean((response as { error?: unknown })?.error),
+  classNames: (...values: unknown[]) => values.filter(Boolean).join(' '),
+}))
+
+jest.mock('@standardnotes/ui-services', () => ({
+  confirmDialog: jest.fn().mockResolvedValue(true),
+}))
+
+import AdminSecurityTab from './AdminSecurityTab'
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const makeApplication = () => ({
+  legacyApi: {
+    adminGetRegistrationFlag: jest
+      .fn()
+      .mockResolvedValue({ data: { registrationDisabled: false, env: { registrationDisabled: null } } }),
+    adminGetServerStatus: jest.fn().mockResolvedValue({ data: { masterSwitches: {}, health: {} } }),
+    adminListUsers: jest.fn().mockResolvedValue({ data: { total: 1 } }),
+    adminGetAuditLog: jest.fn().mockResolvedValue({ data: { entries: [] } }),
+    adminGetAntiAbuse: jest.fn().mockResolvedValue({
+      data: {
+        available: true,
+        config: {
+          enabled: true,
+          windowSeconds: 60,
+          loginMax: 5,
+          registrationMax: 3,
+          userWindowSeconds: 60,
+          userMax: 0,
+          adaptiveEscalation: false,
+        },
+        ipLists: { allow: [], block: [] },
+        metrics: { tierHits: {}, blockHits: 0, recent: [] },
+      },
+    }),
+    adminGetLockedAccounts: jest.fn().mockResolvedValue({ data: { available: true, accounts: [] } }),
+  },
+})
+
+let container: HTMLElement
+let root: Root
+
+beforeEach(() => {
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+})
+
+afterEach(() => {
+  act(() => {
+    root.unmount()
+  })
+  container.remove()
+})
+
+const goToTab = jest.fn()
+
+const renderTab = async (application: ReturnType<typeof makeApplication>) => {
+  await act(async () => {
+    root.render(
+      createElement(AdminSecurityTab, {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        application: application as any,
+        noteIfForbidden: jest.fn(),
+        goToTab,
+      }),
+    )
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+const tabWithText = (text: string): HTMLButtonElement | undefined =>
+  Array.from(container.querySelectorAll('button[role="tab"]')).find((b) => (b.textContent ?? '').includes(text)) as
+    | HTMLButtonElement
+    | undefined
+
+const clickSubtab = async (label: string) => {
+  const tab = tabWithText(label)
+  if (!tab) {
+    throw new Error(`subtab not found: ${label}`)
+  }
+  await act(async () => {
+    tab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
+
+describe('AdminSecurityTab — 4 subtabs mount with content (vanish guard)', () => {
+  it('renders every subtab label', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+
+    for (const label of ['Overview', 'Anti-abuse & rate limits', 'Account lockout', 'Authentication']) {
+      expect(tabWithText(label)).toBeDefined()
+    }
+  })
+
+  it('mounts each subtab panel content when its tab is active', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+
+    // Overview is the default tab.
+    expect(container.textContent).toContain('Security overview')
+    expect(container.textContent).toContain('Sign-up security')
+    expect(container.textContent).toContain('Administrator access model')
+    expect(container.textContent).toContain('Recent security events')
+
+    await clickSubtab('Anti-abuse & rate limits')
+    expect(container.textContent).toContain('Anti-abuse & rate limiting')
+    expect(container.textContent).toContain('Rate-limit tiers')
+
+    await clickSubtab('Account lockout')
+    expect(container.textContent).toContain('Locked accounts')
+
+    await clickSubtab('Authentication')
+    expect(container.textContent).toContain('Two-factor authentication')
+    expect(container.textContent).toContain('Sessions & tokens')
+    expect(container.textContent).toContain('Configured via the server environment')
+  })
+
+  it('routes the Recent-events button to the Logs tab (audit folded into Logs)', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+
+    const openLog = Array.from(container.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').includes('Open full audit log'),
+    )
+    expect(openLog).toBeDefined()
+    await act(async () => {
+      openLog?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(goToTab).toHaveBeenCalledWith('logs')
+  })
+})

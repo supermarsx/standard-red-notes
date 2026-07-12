@@ -11,14 +11,22 @@ import Switch from '@/Components/Switch/Switch'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import Spinner from '@/Components/Spinner/Spinner'
+import Icon from '@/Components/Icon/Icon'
+import TabList from '@/Components/Tabs/TabList'
+import Tab from '@/Components/Tabs/Tab'
+import TabPanel from '@/Components/Tabs/TabPanel'
+import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
 import {
   AdminServerSettings,
   AdminServerSettingsResponse,
   DockerControl,
+  LOG_LEVEL_OPTIONS,
   ServerService,
   ServiceControlAction,
   WS_GATEWAY_SERVICE,
+  buildSignupCapUpdate,
+  buildSignupWindowUpdate,
   buildUrlSettingUpdate,
   dockerContainerLabel,
   dockerRestartDialogCopy,
@@ -84,20 +92,24 @@ type EnvFlags = {
 }
 
 /** Small colored state chip: green = healthy/on, red = down/off, neutral = unknown. */
-const StateChip: FunctionComponent<{ state: boolean | null | undefined; on?: string; off?: string; unknown?: string }> =
-  ({ state, on = 'OK', off = 'Down', unknown = 'Unknown' }) => {
-    const className =
-      state === true
-        ? 'bg-success text-success-contrast'
-        : state === false
-          ? 'bg-danger text-danger-contrast'
-          : 'bg-passive-4 text-foreground'
-    return (
-      <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${className}`}>
-        {state === true ? on : state === false ? off : unknown}
-      </span>
-    )
-  }
+const StateChip: FunctionComponent<{
+  state: boolean | null | undefined
+  on?: string
+  off?: string
+  unknown?: string
+}> = ({ state, on = 'OK', off = 'Down', unknown = 'Unknown' }) => {
+  const className =
+    state === true
+      ? 'bg-success text-success-contrast'
+      : state === false
+      ? 'bg-danger text-danger-contrast'
+      : 'bg-passive-4 text-foreground'
+  return (
+    <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${className}`}>
+      {state === true ? on : state === false ? off : unknown}
+    </span>
+  )
+}
 
 /**
  * One status row in a vertical list: name (with optional small subtext) on the
@@ -128,7 +140,9 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
   return (
     <span
       title="A saved override wins over the server environment; 'Default' means neither is set."
-      className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${settingSourceChipClass(source)}`}
+      className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${settingSourceChipClass(
+        source,
+      )}`}
     >
       {settingSourceLabel(source)}
     </span>
@@ -136,6 +150,10 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
 }
 
 const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
+  // Second-level tabs inside the Server pane (§2 IA): split the long single
+  // scroll into General / Registration / Health / Integrations / Logging.
+  const subTab = useTabState({ defaultTab: 'general' })
+
   // Instance-wide switches. Loaded lazily: this component only mounts when the
   // Server tab is opened.
   const [registrationDisabled, setRegistrationDisabled] = useState(false)
@@ -197,6 +215,14 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [workflowsN8nUrl, setWorkflowsN8nUrl] = useState('')
   const [workflowsUiBasePath, setWorkflowsUiBasePath] = useState('')
   const [workflowsUiTokenTtl, setWorkflowsUiTokenTtl] = useState('')
+  // Standard Red Notes: SIGNUP CAPS (t50). Save-on-button text rows; blank/0 max =
+  // unlimited (clears the cap), windows in hours. per-device is a soft, per-browser
+  // cap (see the copy on that row). Populated from the server view below.
+  const [signupsPerIpMax, setSignupsPerIpMax] = useState('')
+  const [signupsPerIpWindowHours, setSignupsPerIpWindowHours] = useState('')
+  const [signupsPerWeekMax, setSignupsPerWeekMax] = useState('')
+  const [signupsPerDeviceMax, setSignupsPerDeviceMax] = useState('')
+  const [signupsPerDeviceWindowHours, setSignupsPerDeviceWindowHours] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
   const loadRegistrationFlag = useCallback(async () => {
@@ -390,6 +416,16 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setWorkflowsUiTokenTtl(
       data?.settings?.workflows?.uiTokenTtlSeconds != null ? String(data.settings.workflows.uiTokenTtlSeconds) : '',
     )
+    // Signup caps: show a positive max as its number, unlimited (0/absent) as blank;
+    // windows always carry a resolved value, shown as-is.
+    const reg = data?.settings?.registration
+    const capToInput = (value: number | null | undefined): string => (value != null && value > 0 ? String(value) : '')
+    const windowToInput = (value: number | null | undefined): string => (value != null ? String(value) : '')
+    setSignupsPerIpMax(capToInput(reg?.signupsPerIpMax))
+    setSignupsPerIpWindowHours(windowToInput(reg?.signupsPerIpWindowHours))
+    setSignupsPerWeekMax(capToInput(reg?.signupsPerWeekMax))
+    setSignupsPerDeviceMax(capToInput(reg?.signupsPerDeviceMax))
+    setSignupsPerDeviceWindowHours(windowToInput(reg?.signupsPerDeviceWindowHours))
   }, [])
 
   const loadServerSettings = useCallback(async () => {
@@ -480,9 +516,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     async (nextValue: boolean) => {
       await saveServerSettings(
         { plugins: { sameOriginRendering: nextValue } },
-        nextValue
-          ? 'Same-origin plugin rendering enabled.'
-          : 'Same-origin plugin rendering disabled.',
+        nextValue ? 'Same-origin plugin rendering enabled.' : 'Same-origin plugin rendering disabled.',
       )
     },
     [saveServerSettings],
@@ -556,6 +590,78 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       'Confirmation email template saved.',
     )
   }, [confirmationSubject, confirmationBody, confirmationBaseUrl, saveServerSettings])
+
+  // Standard Red Notes: SIGNUP CAPS (t50) save handlers. Each is its own
+  // save-on-button row PUTting a partial registration patch (blank/0 max =
+  // unlimited → null clears the cap; windows blank → null resets to env/default).
+  const saveSignupsPerIpMax = useCallback(async () => {
+    const update = buildSignupCapUpdate(signupsPerIpMax)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsPerIpMax: update.value } },
+      update.value === null ? 'Per-IP signup cap cleared (unlimited).' : 'Per-IP signup cap saved.',
+    )
+  }, [signupsPerIpMax, saveServerSettings])
+
+  const saveSignupsPerIpWindow = useCallback(async () => {
+    const update = buildSignupWindowUpdate(signupsPerIpWindowHours)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsPerIpWindowHours: update.value } },
+      update.value === null ? 'Per-IP window reset to default.' : 'Per-IP window saved.',
+    )
+  }, [signupsPerIpWindowHours, saveServerSettings])
+
+  const saveSignupsPerWeekMax = useCallback(async () => {
+    const update = buildSignupCapUpdate(signupsPerWeekMax)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsPerWeekMax: update.value } },
+      update.value === null ? 'Weekly signup cap cleared (unlimited).' : 'Weekly signup cap saved.',
+    )
+  }, [signupsPerWeekMax, saveServerSettings])
+
+  const saveSignupsPerDeviceMax = useCallback(async () => {
+    const update = buildSignupCapUpdate(signupsPerDeviceMax)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsPerDeviceMax: update.value } },
+      update.value === null ? 'Per-device signup cap cleared (unlimited).' : 'Per-device signup cap saved.',
+    )
+  }, [signupsPerDeviceMax, saveServerSettings])
+
+  const saveSignupsPerDeviceWindow = useCallback(async () => {
+    const update = buildSignupWindowUpdate(signupsPerDeviceWindowHours)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsPerDeviceWindowHours: update.value } },
+      update.value === null ? 'Per-device window reset to default.' : 'Per-device window saved.',
+    )
+  }, [signupsPerDeviceWindowHours, saveServerSettings])
+
+  // Standard Red Notes: runtime LOG VERBOSITY (t50). Saves immediately on change;
+  // the server applies it to the gateway + auth loggers within the poll interval.
+  const saveLoggingLevel = useCallback(
+    async (level: string) => {
+      await saveServerSettings({ logging: { level } }, `Server log level set to "${level}".`)
+    },
+    [saveServerSettings],
+  )
 
   // Standard Red Notes: OCR + workflows save handlers. A blank text/number field
   // saves as `null` (clear the override → fall back to env/default); a non-empty
@@ -659,7 +765,9 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     }
     await saveServerSettings(
       { workflows: { uiBasePath: trimmed === '' ? null : trimmed } },
-      trimmed === '' ? 'Workflows editor path cleared.' : 'Workflows editor path saved (applies on next gateway restart).',
+      trimmed === ''
+        ? 'Workflows editor path cleared.'
+        : 'Workflows editor path saved (applies on next gateway restart).',
     )
   }, [workflowsUiBasePath, saveServerSettings])
 
@@ -703,841 +811,1132 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   return (
     <>
       <PreferencesSegment>
-        <Title>Registration</Title>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col">
-            <Subtitle>Disable new signups</Subtitle>
-            <Text>
-              When enabled, new users cannot register on this instance. Note: enforcement at signup currently also
-              depends on the server's DISABLE_USER_REGISTRATION configuration
-              {envFlags.registrationDisabled !== null && (
-                <>
-                  {' '}
-                  (currently <strong>{envFlags.registrationDisabled ? 'set — signups blocked' : 'not set'}</strong> in
-                  the environment)
-                </>
-              )}
-              .
-            </Text>
-          </div>
-          {registrationLoading ? (
-            <Spinner className="h-5 w-5" />
-          ) : (
-            <Switch checked={registrationDisabled} onChange={(checked) => void toggleRegistration(checked)} />
-          )}
+        <Title>Server</Title>
+        <Text>
+          Instance configuration, health and integrations, grouped into subtabs. Editable settings are persisted and
+          override the matching environment variable until cleared.
+        </Text>
+        <div className="mt-3 border-b border-border">
+          <TabList state={subTab} className="flex flex-wrap">
+            <Tab id="general" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="tune" size="medium" />
+              General
+            </Tab>
+            <Tab id="registration" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="user-switch" size="medium" />
+              Registration &amp; signups
+            </Tab>
+            <Tab id="health" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="server" size="medium" />
+              Health &amp; services
+            </Tab>
+            <Tab id="integrations" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="dashboard" size="medium" />
+              Integrations
+            </Tab>
+            <Tab id="logging" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="list-bulleted" size="medium" />
+              Logging
+            </Tab>
+          </TabList>
         </div>
       </PreferencesSegment>
 
-      <HorizontalSeparator classes="my-4" />
+      {/* ================= HEALTH & SERVICES ================= */}
+      <TabPanel state={subTab} id="health">
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Title>Server health</Title>
+            <Button label="Refresh" onClick={() => void loadServerStatus()} disabled={statusLoading} />
+          </div>
+          <Text>
+            Live reachability of the server's core dependencies, probed on request. The API gateway itself is reachable
+            (this page loaded through it).
+          </Text>
+          {statusLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : statusError ? (
+            <Text className="mt-3 text-danger">{statusError}</Text>
+          ) : serverStatus ? (
+            <div className="mt-3 flex flex-col">
+              {/* Dependency states: one per line, chip aligned right. */}
+              <div className="divide-y divide-border rounded border border-border px-3">
+                <StatusRow
+                  name="Auth server"
+                  detail="Accounts, sessions, settings"
+                  chip={<StateChip state={auth ? Boolean(auth.reachable) : null} on="Reachable" off="Unreachable" />}
+                />
+                {auth?.reachable && auth.checks && 'db' in auth.checks && (
+                  <StatusRow name="Database" indent chip={<StateChip state={auth.checks.db} />} />
+                )}
+                {auth?.reachable && auth.checks && 'redis' in auth.checks && (
+                  <StatusRow name="Cache (Redis)" indent chip={<StateChip state={auth.checks.redis} />} />
+                )}
+                <StatusRow
+                  name="Gateway cache (Redis)"
+                  chip={<StateChip state={gatewayRedis ?? null} unknown="Not configured" />}
+                />
+              </div>
 
-      <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Title>Server health</Title>
-          <Button label="Refresh" onClick={() => void loadServerStatus()} disabled={statusLoading} />
-        </div>
-        <Text>
-          Live reachability of the server's core dependencies, probed on request. The API gateway itself is reachable
-          (this page loaded through it).
-        </Text>
-        {statusLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : statusError ? (
-          <Text className="mt-3 text-danger">{statusError}</Text>
-        ) : serverStatus ? (
-          <div className="mt-3 flex flex-col">
-            {/* Dependency states: one per line, chip aligned right. */}
-            <div className="divide-y divide-border rounded border border-border px-3">
-              <StatusRow
-                name="Auth server"
-                detail="Accounts, sessions, settings"
-                chip={<StateChip state={auth ? Boolean(auth.reachable) : null} on="Reachable" off="Unreachable" />}
-              />
-              {auth?.reachable && auth.checks && 'db' in auth.checks && (
-                <StatusRow name="Database" indent chip={<StateChip state={auth.checks.db} />} />
-              )}
-              {auth?.reachable && auth.checks && 'redis' in auth.checks && (
-                <StatusRow name="Cache (Redis)" indent chip={<StateChip state={auth.checks.redis} />} />
-              )}
-              <StatusRow
-                name="Gateway cache (Redis)"
-                chip={<StateChip state={gatewayRedis ?? null} unknown="Not configured" />}
-              />
-            </div>
-
-            {/* Standard Red Notes: OPT-IN infrastructure container restart (Redis
+              {/* Standard Red Notes: OPT-IN infrastructure container restart (Redis
                 cache + MariaDB) via the locked-down docker-socket-proxy. Shown only
                 when the capability is enabled AND the proxy is reachable; when
                 enabled-but-unreachable it degrades to a muted note (never an error).
                 When off (the default) nothing renders. */}
-            {dockerControl?.available && dockerControl.containers.length > 0 ? (
-              <>
-                <Subtitle className="mb-2 mt-4">Infrastructure containers</Subtitle>
-                <div className="divide-y divide-border rounded border border-border px-3">
-                  {dockerControl.containers.map((container) => {
-                    const rowBusy = containerActionInFlight === `container:${container}`
-                    return (
-                      <div key={container} className="flex items-center justify-between gap-4 py-2">
-                        <div className="flex min-w-0 flex-col">
-                          <Text>{dockerContainerLabel(container)}</Text>
-                          <Text className="text-xs text-passive-1">Restarts the whole container via the docker-socket-proxy</Text>
+              {dockerControl?.available && dockerControl.containers.length > 0 ? (
+                <>
+                  <Subtitle className="mb-2 mt-4">Infrastructure containers</Subtitle>
+                  <div className="divide-y divide-border rounded border border-border px-3">
+                    {dockerControl.containers.map((container) => {
+                      const rowBusy = containerActionInFlight === `container:${container}`
+                      return (
+                        <div key={container} className="flex items-center justify-between gap-4 py-2">
+                          <div className="flex min-w-0 flex-col">
+                            <Text>{dockerContainerLabel(container)}</Text>
+                            <Text className="text-xs text-passive-1">
+                              Restarts the whole container via the docker-socket-proxy
+                            </Text>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {rowBusy && <Spinner className="h-4 w-4" />}
+                            <Button
+                              small
+                              colorStyle="danger"
+                              label="Restart"
+                              disabled={rowBusy}
+                              onClick={() => void runContainerRestart(container)}
+                            />
+                          </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {rowBusy && <Spinner className="h-4 w-4" />}
-                          <Button
-                            small
-                            colorStyle="danger"
-                            label="Restart"
-                            disabled={rowBusy}
-                            onClick={() => void runContainerRestart(container)}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                <Text className="mt-2 text-xs text-passive-1">
-                  Restarting the database or cache briefly interrupts every service that depends on it.
+                      )
+                    })}
+                  </div>
+                  <Text className="mt-2 text-xs text-passive-1">
+                    Restarting the database or cache briefly interrupts every service that depends on it.
+                  </Text>
+                </>
+              ) : dockerControl?.enabled && !dockerControl.available ? (
+                <Text className="mt-3 text-xs text-passive-1">
+                  Container restart is enabled but the docker-socket-proxy is not reachable, so restarting Redis/MariaDB
+                  is not available right now.
                 </Text>
-              </>
-            ) : dockerControl?.enabled && !dockerControl.available ? (
-              <Text className="mt-3 text-xs text-passive-1">
-                Container restart is enabled but the docker-socket-proxy is not reachable, so restarting Redis/MariaDB is
-                not available right now.
-              </Text>
-            ) : null}
+              ) : null}
 
-            {services.length > 0 && (
-              <>
-                <Subtitle className="mb-2 mt-4">All services</Subtitle>
-                <div className="divide-y divide-border rounded border border-border px-3">
-                  {services.map((service) => {
-                    const chip = (
-                      <span
-                        className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
-                          service.status,
-                        )}`}
-                      >
-                        {serviceStatusLabel(service.status)}
-                      </span>
-                    )
+              {services.length > 0 && (
+                <>
+                  <Subtitle className="mb-2 mt-4">All services</Subtitle>
+                  <div className="divide-y divide-border rounded border border-border px-3">
+                    {services.map((service) => {
+                      const chip = (
+                        <span
+                          className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
+                            service.status,
+                          )}`}
+                        >
+                          {serviceStatusLabel(service.status)}
+                        </span>
+                      )
 
-                    // Controls only for allowlisted programs when supervisorctl is
-                    // actually reachable. The in-process WebSocket gateway maps to
-                    // the api-gateway program (serviceControlProgramFor); any other
-                    // unknown row simply renders without controls.
-                    const program = serviceControlProgramFor(service.name)
-                    const isWsGateway = service.name === WS_GATEWAY_SERVICE
-                    const canControl =
-                      serviceControlSupported && serviceControlAvailable && controllablePrograms.includes(program)
-                    const isGateway = program === 'api-gateway'
-                    const isDown = service.status === 'down'
-                    const rowBusy = serviceActionInFlight !== null && serviceActionInFlight.startsWith(`${service.name}:`)
-                    // Friendly label for the in-process WebSocket gateway.
-                    const displayName = isWsGateway ? 'WebSocket gateway' : service.name
-                    const wsDetail = isWsGateway ? 'Realtime sync — runs inside the API gateway process' : service.detail
-                    const latency = formatServiceLatency(service.responseTimeMs)
+                      // Controls only for allowlisted programs when supervisorctl is
+                      // actually reachable. The in-process WebSocket gateway maps to
+                      // the api-gateway program (serviceControlProgramFor); any other
+                      // unknown row simply renders without controls.
+                      const program = serviceControlProgramFor(service.name)
+                      const isWsGateway = service.name === WS_GATEWAY_SERVICE
+                      const canControl =
+                        serviceControlSupported && serviceControlAvailable && controllablePrograms.includes(program)
+                      const isGateway = program === 'api-gateway'
+                      const isDown = service.status === 'down'
+                      const rowBusy =
+                        serviceActionInFlight !== null && serviceActionInFlight.startsWith(`${service.name}:`)
+                      // Friendly label for the in-process WebSocket gateway.
+                      const displayName = isWsGateway ? 'WebSocket gateway' : service.name
+                      const wsDetail = isWsGateway
+                        ? 'Realtime sync — runs inside the API gateway process'
+                        : service.detail
+                      const latency = formatServiceLatency(service.responseTimeMs)
 
-                    return (
-                      <div key={service.name} className="flex items-center justify-between gap-4 py-2">
-                        <div className="flex min-w-0 flex-col">
-                          <Text>{displayName}</Text>
-                          {wsDetail ? <Text className="text-xs text-passive-1">{wsDetail}</Text> : null}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {latency ? (
-                            <span className={`text-xs tabular-nums ${serviceLatencyClass(service.responseTimeMs, service.status)}`}>
-                              {latency}
-                            </span>
-                          ) : null}
-                          {chip}
-                          {canControl && (
-                            <div className="flex items-center gap-1">
-                              {rowBusy && <Spinner className="h-4 w-4" />}
-                              {/* Start only when a real (non-ws) program is down/stopped. */}
-                              {isDown && !isWsGateway && (
+                      return (
+                        <div key={service.name} className="flex items-center justify-between gap-4 py-2">
+                          <div className="flex min-w-0 flex-col">
+                            <Text>{displayName}</Text>
+                            {wsDetail ? <Text className="text-xs text-passive-1">{wsDetail}</Text> : null}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {latency ? (
+                              <span
+                                className={`text-xs tabular-nums ${serviceLatencyClass(
+                                  service.responseTimeMs,
+                                  service.status,
+                                )}`}
+                              >
+                                {latency}
+                              </span>
+                            ) : null}
+                            {chip}
+                            {canControl && (
+                              <div className="flex items-center gap-1">
+                                {rowBusy && <Spinner className="h-4 w-4" />}
+                                {/* Start only when a real (non-ws) program is down/stopped. */}
+                                {isDown && !isWsGateway && (
+                                  <Button
+                                    small
+                                    colorStyle="success"
+                                    label="Start"
+                                    disabled={rowBusy}
+                                    onClick={() => void runServiceAction(service.name, 'start')}
+                                  />
+                                )}
                                 <Button
                                   small
-                                  colorStyle="success"
-                                  label="Start"
+                                  colorStyle="warning"
+                                  label="Restart"
                                   disabled={rowBusy}
-                                  onClick={() => void runServiceAction(service.name, 'start')}
+                                  onClick={() => void runServiceAction(service.name, 'restart')}
                                 />
-                              )}
-                              <Button
-                                small
-                                colorStyle="warning"
-                                label="Restart"
-                                disabled={rowBusy}
-                                onClick={() => void runServiceAction(service.name, 'restart')}
-                              />
-                              {/* Stopping the gateway (or the in-process ws gateway) is
+                                {/* Stopping the gateway (or the in-process ws gateway) is
                                   forbidden server-side; hide it. */}
-                              {!isGateway && !isDown && (
-                                <Button
-                                  small
-                                  colorStyle="danger"
-                                  label="Stop"
-                                  disabled={rowBusy}
-                                  onClick={() => void runServiceAction(service.name, 'stop')}
-                                />
-                              )}
-                            </div>
-                          )}
+                                {!isGateway && !isDown && (
+                                  <Button
+                                    small
+                                    colorStyle="danger"
+                                    label="Stop"
+                                    disabled={rowBusy}
+                                    onClick={() => void runServiceAction(service.name, 'stop')}
+                                  />
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                {!serviceControlSupported ? (
-                  <Text className="mt-2 text-xs text-passive-1">
-                    Service lifecycle controls are not available on this server (the /v1/admin/services endpoint is
-                    missing). Update the server image to restart/stop/start services from here.
-                  </Text>
-                ) : !serviceControlAvailable ? (
-                  <Text className="mt-2 text-xs text-passive-1">
-                    Service lifecycle controls require a newer server image: supervisorctl cannot reach supervisord on
-                    this deployment, so restart/stop/start are disabled.
-                  </Text>
-                ) : (
-                  <Text className="mt-2 text-xs text-passive-1">
-                    Restarting a service briefly interrupts what it powers. Restarting the API gateway will drop your
-                    admin connection for a few seconds.
-                  </Text>
-                )}
-              </>
-            )}
-          </div>
-        ) : null}
-      </PreferencesSegment>
+                      )
+                    })}
+                  </div>
+                  {!serviceControlSupported ? (
+                    <Text className="mt-2 text-xs text-passive-1">
+                      Service lifecycle controls are not available on this server (the /v1/admin/services endpoint is
+                      missing). Update the server image to restart/stop/start services from here.
+                    </Text>
+                  ) : !serviceControlAvailable ? (
+                    <Text className="mt-2 text-xs text-passive-1">
+                      Service lifecycle controls require a newer server image: supervisorctl cannot reach supervisord on
+                      this deployment, so restart/stop/start are disabled.
+                    </Text>
+                  ) : (
+                    <Text className="mt-2 text-xs text-passive-1">
+                      Restarting a service briefly interrupts what it powers. Restarting the API gateway will drop your
+                      admin connection for a few seconds.
+                    </Text>
+                  )}
+                </>
+              )}
+            </div>
+          ) : null}
+        </PreferencesSegment>
+      </TabPanel>
 
-      <HorizontalSeparator classes="my-4" />
+      {/* ================= GENERAL ================= */}
+      <TabPanel state={subTab} id="general">
+        <PreferencesSegment>
+          <Title>Feature master switches</Title>
+          <Text>
+            Read-only view of the operator-level switches configured in the server's environment. Per-user access is
+            managed on the Users tab; a feature is live for a user only when BOTH the master switch and the user's flag
+            allow it. Changing these requires editing the server environment and redeploying.
+          </Text>
+          {statusLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : (
+            <div className="mt-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <Text>Server-side OCR (OCR_SERVER_ENABLED)</Text>
+                <StateChip state={masterSwitches ? Boolean(masterSwitches.ocrServerEnabled) : null} on="On" off="Off" />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Text>Workflows / n8n (WORKFLOWS_ENABLED)</Text>
+                <StateChip state={masterSwitches ? Boolean(masterSwitches.workflowsEnabled) : null} on="On" off="Off" />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Text>
+                  AI assistant providers
+                  {masterSwitches?.assistantConfigured && masterSwitches.assistantProviders?.length
+                    ? ` (${masterSwitches.assistantProviders.join(', ')})`
+                    : ''}
+                </Text>
+                <StateChip
+                  state={masterSwitches ? Boolean(masterSwitches.assistantConfigured) : null}
+                  on="Configured"
+                  off="Not configured"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Text>
+                  Update check (UPDATE_CHECK_URL)
+                  {masterSwitches?.currentVersion ? ` — current version ${masterSwitches.currentVersion}` : ''}
+                </Text>
+                <StateChip
+                  state={masterSwitches ? Boolean(masterSwitches.updateCheckConfigured) : null}
+                  on="Configured"
+                  off="Not configured"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Text>Nextcloud backups (NEXTCLOUD_BACKUPS_ENABLED)</Text>
+                <StateChip state={envFlags.nextcloudBackupsEnabled} on="On" off="Off" />
+              </div>
+            </div>
+          )}
+        </PreferencesSegment>
 
-      <PreferencesSegment>
-        <Title>Feature master switches</Title>
-        <Text>
-          Read-only view of the operator-level switches configured in the server's environment. Per-user access is
-          managed on the Users tab; a feature is live for a user only when BOTH the master switch and the user's flag
-          allow it. Changing these requires editing the server environment and redeploying.
-        </Text>
-        {statusLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : (
-          <div className="mt-3 flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <Text>Server-side OCR (OCR_SERVER_ENABLED)</Text>
-              <StateChip state={masterSwitches ? Boolean(masterSwitches.ocrServerEnabled) : null} on="On" off="Off" />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Text>Workflows / n8n (WORKFLOWS_ENABLED)</Text>
-              <StateChip state={masterSwitches ? Boolean(masterSwitches.workflowsEnabled) : null} on="On" off="Off" />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Text>
-                AI assistant providers
-                {masterSwitches?.assistantConfigured && masterSwitches.assistantProviders?.length
-                  ? ` (${masterSwitches.assistantProviders.join(', ')})`
-                  : ''}
-              </Text>
-              <StateChip
-                state={masterSwitches ? Boolean(masterSwitches.assistantConfigured) : null}
-                on="Configured"
-                off="Not configured"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Text>
-                Update check (UPDATE_CHECK_URL)
-                {masterSwitches?.currentVersion ? ` — current version ${masterSwitches.currentVersion}` : ''}
-              </Text>
-              <StateChip
-                state={masterSwitches ? Boolean(masterSwitches.updateCheckConfigured) : null}
-                on="Configured"
-                off="Not configured"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Text>Nextcloud backups (NEXTCLOUD_BACKUPS_ENABLED)</Text>
-              <StateChip state={envFlags.nextcloudBackupsEnabled} on="On" off="Off" />
-            </div>
-          </div>
-        )}
-      </PreferencesSegment>
+        <HorizontalSeparator classes="my-4" />
 
-      <HorizontalSeparator classes="my-4" />
-
-      {/* Standard Red Notes: read-only forwarded-client-IP resolution. These are boot
+        {/* Standard Red Notes: read-only forwarded-client-IP resolution. These are boot
           settings (TRUST_PROXY / CLIENT_IP_HEADER) — changing them requires editing the
           server environment and redeploying. They govern how the real client IP is
           derived for rate limiting, IP allow/block lists and session security. */}
-      <PreferencesSegment>
-        <Title>Client IP resolution</Title>
-        <Text>
-          How the server derives each request's real client IP (used for rate limiting, IP allow/block lists and the IP
-          recorded on sessions). These are read-only boot settings; only trust forwarded headers when this instance is
-          actually behind a proxy that sets them and strips inbound copies. Changing them requires editing the server
-          environment and redeploying.
-        </Text>
-        {statusLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : (
-          <div className="mt-3 divide-y divide-border rounded border border-border px-3">
-            <StatusRow
-              name="Trusted proxy (TRUST_PROXY)"
-              detail="Which upstream hops Express trusts for X-Forwarded-* headers"
-              chip={
-                <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
-                  {network?.trustProxy ?? 'Default (loopback/private)'}
-                </span>
-              }
-            />
-            <StatusRow
-              name="Trusted client-IP header (CLIENT_IP_HEADER)"
-              detail="Named header read for the client IP, when set by a trusted proxy"
-              chip={
-                <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
-                  {network?.clientIpHeader ?? 'Off (request.ip only)'}
-                </span>
-              }
-            />
-          </div>
-        )}
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      <PreferencesSegment>
-        <Title>Server settings</Title>
-        <Text>
-          Editable, persisted server settings. A saved value <strong>overrides the environment variable</strong> until
-          it is cleared; the chip next to each setting shows where its active value comes from.
-        </Text>
-        {settingsLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : settingsNotAvailable ? (
-          <Text className="mt-3">
-            Editable server settings are not available on this server (the /v1/admin/server-settings endpoint is
-            missing). Update the server to manage the update-check URL and Nextcloud backups from here.
+        <PreferencesSegment>
+          <Title>Client IP resolution</Title>
+          <Text>
+            How the server derives each request's real client IP (used for rate limiting, IP allow/block lists and the
+            IP recorded on sessions). These are read-only boot settings; only trust forwarded headers when this instance
+            is actually behind a proxy that sets them and strips inbound copies. Changing them requires editing the
+            server environment and redeploying.
           </Text>
-        ) : settingsError ? (
-          <>
-            <Text className="mt-3 text-danger">{settingsError}</Text>
-            <div className="mt-2">
-              <Button label="Retry" onClick={() => void loadServerSettings()} />
+          {statusLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : (
+            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+              <StatusRow
+                name="Trusted proxy (TRUST_PROXY)"
+                detail="Which upstream hops Express trusts for X-Forwarded-* headers"
+                chip={
+                  <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                    {network?.trustProxy ?? 'Default (loopback/private)'}
+                  </span>
+                }
+              />
+              <StatusRow
+                name="Trusted client-IP header (CLIENT_IP_HEADER)"
+                detail="Named header read for the client IP, when set by a trusted proxy"
+                chip={
+                  <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                    {network?.clientIpHeader ?? 'Off (request.ip only)'}
+                  </span>
+                }
+              />
             </div>
-          </>
-        ) : (
-          <div className="mt-3 flex flex-col gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Subtitle>Update check URL</Subtitle>
-                <SourceChip sources={settingsSources} keys={['updateCheck.url', 'updateCheckUrl']} />
-              </div>
-              <Text className="mt-1 text-xs">
-                Where the server looks for new releases; used by Preferences → General → Updates. Leave empty and save
-                to clear the override.
-              </Text>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <DecoratedInput
-                  className={{ container: 'w-96 max-w-full' }}
-                  placeholder="https://example.com/releases.json"
-                  value={updateCheckUrl}
-                  onChange={setUpdateCheckUrl}
-                  onEnter={() => void saveUpdateCheckUrl()}
-                  disabled={settingsSaving}
-                />
-                <Button
-                  label={settingsSaving ? 'Saving…' : 'Save'}
-                  onClick={() => void saveUpdateCheckUrl()}
-                  disabled={settingsSaving}
-                />
-              </div>
-            </div>
+          )}
+        </PreferencesSegment>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <Subtitle>Plugins repository URL</Subtitle>
-                <SourceChip sources={settingsSources} keys={['plugins.repoUrl', 'pluginsRepoUrl']} />
-              </div>
-              <Text className="mt-1 text-xs">
-                Base URL of the plugins (extensions) repository powering Preferences → Plugins → Browse. The server
-                fetches <code>{'<url>/packages.json'}</code> and returns it to the app from this origin (so the strict
-                CSP is satisfied — no external CDN fetch). Leave empty and save to clear the override (falls back to the
-                Standard Notes repository).
-              </Text>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <DecoratedInput
-                  className={{ container: 'w-96 max-w-full' }}
-                  placeholder="https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist"
-                  value={pluginsRepoUrl}
-                  onChange={setPluginsRepoUrl}
-                  onEnter={() => void savePluginsRepoUrl()}
-                  disabled={settingsSaving}
-                />
-                <Button
-                  label={settingsSaving ? 'Saving…' : 'Save'}
-                  onClick={() => void savePluginsRepoUrl()}
-                  disabled={settingsSaving}
-                />
-              </div>
-            </div>
+        <HorizontalSeparator classes="my-4" />
 
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex min-w-0 flex-col">
-                <div className="flex items-center gap-2">
-                  <Subtitle>Same-origin plugin rendering</Subtitle>
-                  <SourceChip
-                    sources={settingsSources}
-                    keys={['plugins.sameOriginRendering', 'pluginsSameOriginRendering']}
-                  />
-                </div>
-                <Text className="mt-1 text-xs">
-                  Render externally-hosted plugin components from the repository above by serving their files through
-                  this server under <code>/v1/plugins/component/…</code>, so the plugin&apos;s iframe loads same-origin
-                  and the strict Content-Security-Policy (<code>frame-src &apos;self&apos;</code>) allows it — no CSP
-                  change. Only files under the configured repository URL are ever served (SSRF-guarded).{' '}
-                  <strong>Security note:</strong> this serves third-party plugin code from this server&apos;s origin. The
-                  plugin still runs in a sandboxed iframe with no access to your notes&apos; origin (it communicates only
-                  through the plugin message API), but enabling this is a trust decision — leave it off unless you trust
-                  the configured repository. When off, external plugins remain blocked by the CSP as before.
-                </Text>
+        <PreferencesSegment>
+          <Title>Server settings</Title>
+          <Text>
+            Editable, persisted server settings. A saved value <strong>overrides the environment variable</strong> until
+            it is cleared; the chip next to each setting shows where its active value comes from.
+          </Text>
+          {settingsLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : settingsNotAvailable ? (
+            <Text className="mt-3">
+              Editable server settings are not available on this server (the /v1/admin/server-settings endpoint is
+              missing). Update the server to manage the update-check URL and Nextcloud backups from here.
+            </Text>
+          ) : settingsError ? (
+            <>
+              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <div className="mt-2">
+                <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
-              {settingsSaving ? (
-                <Spinner className="h-5 w-5 shrink-0" />
-              ) : (
-                <Switch
-                  checked={Boolean(serverSettings?.plugins?.sameOriginRendering)}
-                  onChange={(checked) => void togglePluginsSameOriginRendering(checked)}
-                />
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex min-w-0 flex-col">
-                <div className="flex items-center gap-2">
-                  <Subtitle>Nextcloud backups</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['nextcloudBackups.enabled', 'nextcloudBackupsEnabled']} />
-                </div>
-                <Text className="mt-1 text-xs">
-                  Master switch for scheduled Nextcloud backups on this instance. Per-user opt-ins still apply: a
-                  user's backups run only when this switch AND their own opt-in are enabled (see the Users tab).
-                </Text>
-              </div>
-              {settingsSaving ? (
-                <Spinner className="h-5 w-5 shrink-0" />
-              ) : (
-                <Switch
-                  checked={Boolean(serverSettings?.nextcloudBackups?.enabled)}
-                  onChange={(checked) => void toggleNextcloudBackups(checked)}
-                />
-              )}
-            </div>
-
-            <HorizontalSeparator classes="my-1" />
-
-            {/* --- Registration policy (default role + email-domain policy) --- */}
-            <div className="flex flex-col gap-4">
+            </>
+          ) : (
+            <div className="mt-3 flex flex-col gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <Subtitle>Default role for new users</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['registration.defaultRole']} />
+                  <Subtitle>Update check URL</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['updateCheck.url', 'updateCheckUrl']} />
                 </div>
                 <Text className="mt-1 text-xs">
-                  The role assigned to every account created through self-service sign-up. New signups are never given
-                  the admin role.
+                  Where the server looks for new releases; used by Preferences → General → Updates. Leave empty and save
+                  to clear the override.
                 </Text>
-                <div className="mt-2 w-96 max-w-full">
-                  <Dropdown
-                    label="Default role for new users"
-                    items={(serverSettings?.registration?.assignableRoles ?? ['CORE_USER', 'PRO_USER', 'VAULTS_USER']).map(
-                      (role) => ({ label: registrationRoleLabel(role), value: role }),
-                    )}
-                    value={serverSettings?.registration?.defaultRole ?? 'CORE_USER'}
-                    onChange={(role) => void saveRegistrationDefaultRole(role)}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-96 max-w-full' }}
+                    placeholder="https://example.com/releases.json"
+                    value={updateCheckUrl}
+                    onChange={setUpdateCheckUrl}
+                    onEnter={() => void saveUpdateCheckUrl()}
                     disabled={settingsSaving}
                   />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2">
-                  <Subtitle>Email-domain policy</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['registration.domainMode']} />
-                </div>
-                <Text className="mt-1 text-xs">
-                  Restrict which email domains may sign up. In <strong>allowlist</strong> mode only the listed domains may
-                  register; in <strong>blocklist</strong> mode the listed domains are refused. A listed domain also
-                  matches its subdomains (e.g. <code>example.com</code> matches <code>mail.example.com</code>). Matching
-                  is case-insensitive.
-                </Text>
-                <div className="mt-2 w-96 max-w-full">
-                  <Dropdown
-                    label="Email-domain policy mode"
-                    items={REGISTRATION_DOMAIN_MODE_ITEMS}
-                    value={serverSettings?.registration?.domainMode ?? 'off'}
-                    onChange={(mode) => void saveRegistrationDomainMode(mode)}
-                    disabled={settingsSaving}
-                  />
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <Text className="text-xs font-medium text-passive-1">Domains</Text>
-                  <SourceChip sources={settingsSources} keys={['registration.domainList']} />
-                </div>
-                <textarea
-                  className="mt-1 h-24 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
-                  placeholder={'example.com\npartner.org'}
-                  value={domainListText}
-                  onChange={(event) => setDomainListText(event.target.value)}
-                  disabled={settingsSaving}
-                />
-                <Text className="mt-1 text-xs text-passive-1">
-                  One domain per line (or comma-separated). The list applies to both allowlist and blocklist modes and is
-                  ignored while the mode is Off.
-                </Text>
-                <div className="mt-2">
                   <Button
-                    label={settingsSaving ? 'Saving…' : 'Save domains'}
-                    onClick={() => void saveRegistrationDomainList()}
+                    label={settingsSaving ? 'Saving…' : 'Save'}
+                    onClick={() => void saveUpdateCheckUrl()}
                     disabled={settingsSaving}
                   />
                 </div>
               </div>
 
-              {/* Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default. */}
-              <div className="border-t border-border pt-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Require email confirmation</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['registration.emailConfirmationEnabled']} />
-                  </div>
-                  <Switch
-                    checked={Boolean(serverSettings?.registration?.emailConfirmationEnabled)}
-                    onChange={(checked) => void saveEmailConfirmationEnabled(checked)}
-                  />
+              <div>
+                <div className="flex items-center gap-2">
+                  <Subtitle>Plugins repository URL</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['plugins.repoUrl', 'pluginsRepoUrl']} />
                 </div>
                 <Text className="mt-1 text-xs">
-                  When on, a new signup is emailed a single-use verification link and must confirm before the gate below
-                  applies. Existing accounts are unaffected (they are treated as already confirmed). Requires SMTP to be
-                  configured and the base URL below set so the link is absolute.
+                  Base URL of the plugins (extensions) repository powering Preferences → Plugins → Browse. The server
+                  fetches <code>{'<url>/packages.json'}</code> and returns it to the app from this origin (so the strict
+                  CSP is satisfied — no external CDN fetch). Leave empty and save to clear the override (falls back to
+                  the Standard Notes repository).
                 </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-96 max-w-full' }}
+                    placeholder="https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist"
+                    value={pluginsRepoUrl}
+                    onChange={setPluginsRepoUrl}
+                    onEnter={() => void savePluginsRepoUrl()}
+                    disabled={settingsSaving}
+                  />
+                  <Button
+                    label={settingsSaving ? 'Saving…' : 'Save'}
+                    onClick={() => void savePluginsRepoUrl()}
+                    disabled={settingsSaving}
+                  />
+                </div>
+              </div>
 
-                {serverSettings?.registration?.emailConfirmationEnabled && (
-                  <div className="mt-4 flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-col">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Same-origin plugin rendering</Subtitle>
+                    <SourceChip
+                      sources={settingsSources}
+                      keys={['plugins.sameOriginRendering', 'pluginsSameOriginRendering']}
+                    />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Render externally-hosted plugin components from the repository above by serving their files through
+                    this server under <code>/v1/plugins/component/…</code>, so the plugin&apos;s iframe loads
+                    same-origin and the strict Content-Security-Policy (<code>frame-src &apos;self&apos;</code>) allows
+                    it — no CSP change. Only files under the configured repository URL are ever served (SSRF-guarded).{' '}
+                    <strong>Security note:</strong> this serves third-party plugin code from this server&apos;s origin.
+                    The plugin still runs in a sandboxed iframe with no access to your notes&apos; origin (it
+                    communicates only through the plugin message API), but enabling this is a trust decision — leave it
+                    off unless you trust the configured repository. When off, external plugins remain blocked by the CSP
+                    as before.
+                  </Text>
+                </div>
+                {settingsSaving ? (
+                  <Spinner className="h-5 w-5 shrink-0" />
+                ) : (
+                  <Switch
+                    checked={Boolean(serverSettings?.plugins?.sameOriginRendering)}
+                    onChange={(checked) => void togglePluginsSameOriginRendering(checked)}
+                  />
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-col">
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Nextcloud backups</Subtitle>
+                    <SourceChip
+                      sources={settingsSources}
+                      keys={['nextcloudBackups.enabled', 'nextcloudBackupsEnabled']}
+                    />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Master switch for scheduled Nextcloud backups on this instance. Per-user opt-ins still apply: a
+                    user's backups run only when this switch AND their own opt-in are enabled (see the Users tab).
+                  </Text>
+                </div>
+                {settingsSaving ? (
+                  <Spinner className="h-5 w-5 shrink-0" />
+                ) : (
+                  <Switch
+                    checked={Boolean(serverSettings?.nextcloudBackups?.enabled)}
+                    onChange={(checked) => void toggleNextcloudBackups(checked)}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+        </PreferencesSegment>
+      </TabPanel>
+
+      {/* ================= REGISTRATION & SIGNUPS ================= */}
+      <TabPanel state={subTab} id="registration">
+        <PreferencesSegment>
+          <Title>Registration</Title>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col">
+              <Subtitle>Disable new signups</Subtitle>
+              <Text>
+                When enabled, new users cannot register on this instance. Note: enforcement at signup currently also
+                depends on the server's DISABLE_USER_REGISTRATION configuration
+                {envFlags.registrationDisabled !== null && (
+                  <>
+                    {' '}
+                    (currently <strong>{envFlags.registrationDisabled ? 'set — signups blocked' : 'not set'}</strong> in
+                    the environment)
+                  </>
+                )}
+                .
+              </Text>
+            </div>
+            {registrationLoading ? (
+              <Spinner className="h-5 w-5" />
+            ) : (
+              <Switch checked={registrationDisabled} onChange={(checked) => void toggleRegistration(checked)} />
+            )}
+          </div>
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        <PreferencesSegment>
+          <Title>Registration policy &amp; signup caps</Title>
+          <Text>
+            Who may create an account, and how many new accounts are allowed. Saved values override the matching
+            environment variables until cleared; the chip by each control shows where its active value comes from.
+          </Text>
+          {settingsLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : settingsNotAvailable ? (
+            <Text className="mt-3">
+              Editable server settings are not available on this server (the /v1/admin/server-settings endpoint is
+              missing). Update the server to manage the registration policy and signup caps from here.
+            </Text>
+          ) : settingsError ? (
+            <>
+              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <div className="mt-2">
+                <Button label="Retry" onClick={() => void loadServerSettings()} />
+              </div>
+            </>
+          ) : (
+            <div className="mt-3 flex flex-col gap-4">
+              {/* --- Registration policy (default role + email-domain policy) --- */}
+              <div className="flex flex-col gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Default role for new users</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['registration.defaultRole']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    The role assigned to every account created through self-service sign-up. New signups are never given
+                    the admin role.
+                  </Text>
+                  <div className="mt-2 w-96 max-w-full">
+                    <Dropdown
+                      label="Default role for new users"
+                      items={(
+                        serverSettings?.registration?.assignableRoles ?? ['CORE_USER', 'PRO_USER', 'VAULTS_USER']
+                      ).map((role) => ({ label: registrationRoleLabel(role), value: role }))}
+                      value={serverSettings?.registration?.defaultRole ?? 'CORE_USER'}
+                      onChange={(role) => void saveRegistrationDefaultRole(role)}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Email-domain policy</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['registration.domainMode']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Restrict which email domains may sign up. In <strong>allowlist</strong> mode only the listed domains
+                    may register; in <strong>blocklist</strong> mode the listed domains are refused. A listed domain
+                    also matches its subdomains (e.g. <code>example.com</code> matches <code>mail.example.com</code>).
+                    Matching is case-insensitive.
+                  </Text>
+                  <div className="mt-2 w-96 max-w-full">
+                    <Dropdown
+                      label="Email-domain policy mode"
+                      items={REGISTRATION_DOMAIN_MODE_ITEMS}
+                      value={serverSettings?.registration?.domainMode ?? 'off'}
+                      onChange={(mode) => void saveRegistrationDomainMode(mode)}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Text className="text-xs font-medium text-passive-1">Domains</Text>
+                    <SourceChip sources={settingsSources} keys={['registration.domainList']} />
+                  </div>
+                  <textarea
+                    className="mt-1 h-24 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                    placeholder={'example.com\npartner.org'}
+                    value={domainListText}
+                    onChange={(event) => setDomainListText(event.target.value)}
+                    disabled={settingsSaving}
+                  />
+                  <Text className="mt-1 text-xs text-passive-1">
+                    One domain per line (or comma-separated). The list applies to both allowlist and blocklist modes and
+                    is ignored while the mode is Off.
+                  </Text>
+                  <div className="mt-2">
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save domains'}
+                      onClick={() => void saveRegistrationDomainList()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                {/* Standard Red Notes: SIGNUP CAPS (t50). Admin-owned overlay keys
+                  enforced auth-side; a max of 0/blank = unlimited. */}
+                <div className="border-t border-border pt-4">
+                  <Subtitle>Signup rate caps</Subtitle>
+                  <Text className="mt-1 text-xs">
+                    Limit how many new accounts can be created. Enforced server-side on top of the anti-abuse rate
+                    limits (Security tab). A cap of 0 or blank means unlimited. Enforcement fails open — a cache outage
+                    never blocks legitimate signups.
+                  </Text>
+
+                  <div className="mt-3 flex flex-col gap-4">
+                    {/* Per-IP cap + window */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Gating mode</Text>
-                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationGating']} />
+                        <Text className="text-xs font-medium text-passive-1">Per-IP signups</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.signupsPerIpMax']} />
                       </div>
-                      <div className="mt-1 w-96 max-w-full">
-                        <Dropdown
-                          label="Confirmation gating mode"
-                          items={(serverSettings?.registration?.gatingModes ?? ['block_signin', 'warn']).map((mode) => ({
-                            label: mode === 'block_signin' ? 'Block sign-in until confirmed' : 'Warn only (allow sign-in)',
-                            value: mode,
-                          }))}
-                          value={serverSettings?.registration?.emailConfirmationGating ?? 'block_signin'}
-                          onChange={(mode) => void saveEmailConfirmationGating(mode)}
+                      <Text className="mt-1 text-xs text-passive-1">
+                        Maximum new accounts allowed from one client IP within the rolling window.
+                      </Text>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <DecoratedInput
+                          className={{ container: 'w-32 max-w-full' }}
+                          placeholder="0 (unlimited)"
+                          value={signupsPerIpMax}
+                          onChange={setSignupsPerIpMax}
+                          onEnter={() => void saveSignupsPerIpMax()}
+                          disabled={settingsSaving}
+                        />
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save'}
+                          onClick={() => void saveSignupsPerIpMax()}
+                          disabled={settingsSaving}
+                        />
+                        <Text className="text-xs text-passive-1">within</Text>
+                        <DecoratedInput
+                          className={{ container: 'w-24 max-w-full' }}
+                          placeholder="24"
+                          value={signupsPerIpWindowHours}
+                          onChange={setSignupsPerIpWindowHours}
+                          onEnter={() => void saveSignupsPerIpWindow()}
+                          disabled={settingsSaving}
+                        />
+                        <Text className="text-xs text-passive-1">hours</Text>
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save window'}
+                          onClick={() => void saveSignupsPerIpWindow()}
+                          disabled={settingsSaving}
+                        />
+                        <SourceChip sources={settingsSources} keys={['registration.signupsPerIpWindowHours']} />
+                      </div>
+                    </div>
+
+                    {/* Per-week global cap */}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Text className="text-xs font-medium text-passive-1">Per-week (whole instance)</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.signupsPerWeekMax']} />
+                      </div>
+                      <Text className="mt-1 text-xs text-passive-1">
+                        Global cap on new accounts created across the whole instance in any rolling 7-day period.
+                      </Text>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <DecoratedInput
+                          className={{ container: 'w-40 max-w-full' }}
+                          placeholder="0 (unlimited)"
+                          value={signupsPerWeekMax}
+                          onChange={setSignupsPerWeekMax}
+                          onEnter={() => void saveSignupsPerWeekMax()}
+                          disabled={settingsSaving}
+                        />
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save'}
+                          onClick={() => void saveSignupsPerWeekMax()}
                           disabled={settingsSaving}
                         />
                       </div>
                     </div>
 
+                    {/* Per-device SOFT cap + window */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Web app base URL</Text>
-                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBaseUrl']} />
+                        <Text className="text-xs font-medium text-passive-1">Per-device (soft)</Text>
+                        <SourceChip sources={settingsSources} keys={['registration.signupsPerDeviceMax']} />
                       </div>
-                      <input
-                        type="url"
-                        className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
-                        placeholder="https://notes.example.com"
-                        value={confirmationBaseUrl}
-                        onChange={(event) => setConfirmationBaseUrl(event.target.value)}
-                        disabled={settingsSaving}
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Email subject</Text>
-                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationSubject']} />
-                      </div>
-                      <input
-                        type="text"
-                        className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
-                        value={confirmationSubject}
-                        onChange={(event) => setConfirmationSubject(event.target.value)}
-                        disabled={settingsSaving}
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Email body</Text>
-                        <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBody']} />
-                      </div>
-                      <textarea
-                        className="mt-1 h-32 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
-                        value={confirmationBody}
-                        onChange={(event) => setConfirmationBody(event.target.value)}
-                        disabled={settingsSaving}
-                      />
                       <Text className="mt-1 text-xs text-passive-1">
-                        Use <code>{'{{confirmation_url}}'}</code> where the verification link should appear. If omitted,
-                        the link is appended automatically.
+                        Maximum new accounts per browser within the window.{' '}
+                        <strong>Best-effort, per-browser and bypassable:</strong> it relies on a device id the client
+                        sends, which the client fully controls (incognito, another browser or a script defeats it), so
+                        it is a speed-bump, <strong>not</strong> a security boundary. Native apps send no device id, so
+                        this cap does not apply there.
                       </Text>
-                    </div>
-
-                    <div>
-                      <Button
-                        label={settingsSaving ? 'Saving…' : 'Save confirmation email'}
-                        onClick={() => void saveEmailConfirmationTemplates()}
-                        disabled={settingsSaving}
-                      />
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <DecoratedInput
+                          className={{ container: 'w-32 max-w-full' }}
+                          placeholder="0 (unlimited)"
+                          value={signupsPerDeviceMax}
+                          onChange={setSignupsPerDeviceMax}
+                          onEnter={() => void saveSignupsPerDeviceMax()}
+                          disabled={settingsSaving}
+                        />
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save'}
+                          onClick={() => void saveSignupsPerDeviceMax()}
+                          disabled={settingsSaving}
+                        />
+                        <Text className="text-xs text-passive-1">within</Text>
+                        <DecoratedInput
+                          className={{ container: 'w-24 max-w-full' }}
+                          placeholder="24"
+                          value={signupsPerDeviceWindowHours}
+                          onChange={setSignupsPerDeviceWindowHours}
+                          onEnter={() => void saveSignupsPerDeviceWindow()}
+                          disabled={settingsSaving}
+                        />
+                        <Text className="text-xs text-passive-1">hours</Text>
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save window'}
+                          onClick={() => void saveSignupsPerDeviceWindow()}
+                          disabled={settingsSaving}
+                        />
+                        <SourceChip sources={settingsSources} keys={['registration.signupsPerDeviceWindowHours']} />
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </PreferencesSegment>
+                </div>
 
-      {/* Standard Red Notes: OCR configuration. Shown once the editable settings
-          have loaded (same availability signal as the Server settings section). */}
-      {!settingsLoading && !settingsNotAvailable && !settingsError && serverSettings && (
-        <>
-          <HorizontalSeparator classes="my-4" />
-          <PreferencesSegment>
-            <Title>OCR (text extraction)</Title>
-            <Text>
-              Two independent OCR paths. <strong>Server-side OCR</strong> uploads decrypted PDF page images to this
-              server for recognition — that content <strong>leaves end-to-end encryption</strong>, exactly like the AI
-              assistant, so it is off by default and additionally gated per user (Users tab). <strong>Browser OCR</strong>{' '}
-              runs entirely on the device and never leaves it. Server-side changes apply immediately; browser-OCR changes
-              apply on the next page load.
-            </Text>
-            <div className="mt-3 flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 flex-col">
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Server-side OCR</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['ocr.serverEnabled']} />
+                {/* Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default. */}
+                <div className="border-t border-border pt-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Require email confirmation</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['registration.emailConfirmationEnabled']} />
+                    </div>
+                    <Switch
+                      checked={Boolean(serverSettings?.registration?.emailConfirmationEnabled)}
+                      onChange={(checked) => void saveEmailConfirmationEnabled(checked)}
+                    />
                   </div>
                   <Text className="mt-1 text-xs">
-                    Master switch for the <code>/v1/ocr/recognize</code> endpoint (OCR_SERVER_ENABLED). A user must also
-                    be allowed on the Users tab before it is offered to them.
+                    When on, a new signup is emailed a single-use verification link and must confirm before the gate
+                    below applies. Existing accounts are unaffected (they are treated as already confirmed). Requires
+                    SMTP to be configured and the base URL below set so the link is absolute.
                   </Text>
-                </div>
-                {settingsSaving ? (
-                  <Spinner className="h-5 w-5 shrink-0" />
-                ) : (
-                  <Switch
-                    checked={Boolean(serverSettings?.ocr?.serverEnabled)}
-                    onChange={(checked) => void toggleOcrServerEnabled(checked)}
-                  />
-                )}
-              </div>
 
-              <div>
-                <div className="flex items-center gap-2">
-                  <Subtitle>Server OCR default language</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['ocr.defaultLanguage']} />
-                </div>
-                <Text className="mt-1 text-xs">
-                  Tesseract language code used when a request does not specify one (e.g. <code>eng</code> or{' '}
-                  <code>eng+deu</code>). Leave empty and save to clear the override.
-                </Text>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'w-48 max-w-full' }}
-                    placeholder="eng"
-                    value={ocrDefaultLanguage}
-                    onChange={setOcrDefaultLanguage}
-                    onEnter={() => void saveOcrDefaultLanguage()}
-                    disabled={settingsSaving}
-                  />
-                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveOcrDefaultLanguage()} disabled={settingsSaving} />
+                  {serverSettings?.registration?.emailConfirmationEnabled && (
+                    <div className="mt-4 flex flex-col gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Text className="text-xs font-medium text-passive-1">Gating mode</Text>
+                          <SourceChip sources={settingsSources} keys={['registration.emailConfirmationGating']} />
+                        </div>
+                        <div className="mt-1 w-96 max-w-full">
+                          <Dropdown
+                            label="Confirmation gating mode"
+                            items={(serverSettings?.registration?.gatingModes ?? ['block_signin', 'warn']).map(
+                              (mode) => ({
+                                label:
+                                  mode === 'block_signin'
+                                    ? 'Block sign-in until confirmed'
+                                    : 'Warn only (allow sign-in)',
+                                value: mode,
+                              }),
+                            )}
+                            value={serverSettings?.registration?.emailConfirmationGating ?? 'block_signin'}
+                            onChange={(mode) => void saveEmailConfirmationGating(mode)}
+                            disabled={settingsSaving}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Text className="text-xs font-medium text-passive-1">Web app base URL</Text>
+                          <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBaseUrl']} />
+                        </div>
+                        <input
+                          type="url"
+                          className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          placeholder="https://notes.example.com"
+                          value={confirmationBaseUrl}
+                          onChange={(event) => setConfirmationBaseUrl(event.target.value)}
+                          disabled={settingsSaving}
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Text className="text-xs font-medium text-passive-1">Email subject</Text>
+                          <SourceChip sources={settingsSources} keys={['registration.emailConfirmationSubject']} />
+                        </div>
+                        <input
+                          type="text"
+                          className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          value={confirmationSubject}
+                          onChange={(event) => setConfirmationSubject(event.target.value)}
+                          disabled={settingsSaving}
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Text className="text-xs font-medium text-passive-1">Email body</Text>
+                          <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBody']} />
+                        </div>
+                        <textarea
+                          className="mt-1 h-32 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          value={confirmationBody}
+                          onChange={(event) => setConfirmationBody(event.target.value)}
+                          disabled={settingsSaving}
+                        />
+                        <Text className="mt-1 text-xs text-passive-1">
+                          Use <code>{'{{confirmation_url}}'}</code> where the verification link should appear. If
+                          omitted, the link is appended automatically.
+                        </Text>
+                      </div>
+
+                      <div>
+                        <Button
+                          label={settingsSaving ? 'Saving…' : 'Save confirmation email'}
+                          onClick={() => void saveEmailConfirmationTemplates()}
+                          disabled={settingsSaving}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
+            </div>
+          )}
+        </PreferencesSegment>
+      </TabPanel>
 
-              <div className="flex flex-wrap gap-6">
+      {/* ================= INTEGRATIONS ================= */}
+      <TabPanel state={subTab} id="integrations">
+        {settingsLoading || settingsNotAvailable || settingsError || !serverSettings ? (
+          <PreferencesSegment>
+            <Title>Integrations</Title>
+            <Text className="mt-3 text-passive-1">
+              {settingsLoading
+                ? 'Loading integration settings…'
+                : 'Integration settings (OCR, Workflows) are unavailable until this server reports editable settings.'}
+            </Text>
+          </PreferencesSegment>
+        ) : (
+          <>
+            <PreferencesSegment>
+              <Title>OCR (text extraction)</Title>
+              <Text>
+                Two independent OCR paths. <strong>Server-side OCR</strong> uploads decrypted PDF page images to this
+                server for recognition — that content <strong>leaves end-to-end encryption</strong>, exactly like the AI
+                assistant, so it is off by default and additionally gated per user (Users tab).{' '}
+                <strong>Browser OCR</strong> runs entirely on the device and never leaves it. Server-side changes apply
+                immediately; browser-OCR changes apply on the next page load.
+              </Text>
+              <div className="mt-3 flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex min-w-0 flex-col">
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Server-side OCR</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['ocr.serverEnabled']} />
+                    </div>
+                    <Text className="mt-1 text-xs">
+                      Master switch for the <code>/v1/ocr/recognize</code> endpoint (OCR_SERVER_ENABLED). A user must
+                      also be allowed on the Users tab before it is offered to them.
+                    </Text>
+                  </div>
+                  {settingsSaving ? (
+                    <Spinner className="h-5 w-5 shrink-0" />
+                  ) : (
+                    <Switch
+                      checked={Boolean(serverSettings?.ocr?.serverEnabled)}
+                      onChange={(checked) => void toggleOcrServerEnabled(checked)}
+                    />
+                  )}
+                </div>
+
                 <div>
                   <div className="flex items-center gap-2">
-                    <Subtitle>Max pages / request</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['ocr.maxPages']} />
+                    <Subtitle>Server OCR default language</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.defaultLanguage']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Tesseract language code used when a request does not specify one (e.g. <code>eng</code> or{' '}
+                    <code>eng+deu</code>). Leave empty and save to clear the override.
+                  </Text>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'w-48 max-w-full' }}
+                      placeholder="eng"
+                      value={ocrDefaultLanguage}
+                      onChange={setOcrDefaultLanguage}
+                      onEnter={() => void saveOcrDefaultLanguage()}
+                      disabled={settingsSaving}
+                    />
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save'}
+                      onClick={() => void saveOcrDefaultLanguage()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-6">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Max pages / request</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['ocr.maxPages']} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <DecoratedInput
+                        className={{ container: 'w-32 max-w-full' }}
+                        placeholder="50"
+                        value={ocrMaxPages}
+                        onChange={setOcrMaxPages}
+                        onEnter={() => void saveOcrMaxPages()}
+                        disabled={settingsSaving}
+                      />
+                      <Button label="Save" onClick={() => void saveOcrMaxPages()} disabled={settingsSaving} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Max image bytes / page</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['ocr.maxImageBytes']} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <DecoratedInput
+                        className={{ container: 'w-40 max-w-full' }}
+                        placeholder="12582912"
+                        value={ocrMaxImageBytes}
+                        onChange={setOcrMaxImageBytes}
+                        onEnter={() => void saveOcrMaxImageBytes()}
+                        disabled={settingsSaving}
+                      />
+                      <Button label="Save" onClick={() => void saveOcrMaxImageBytes()} disabled={settingsSaving} />
+                    </div>
+                  </div>
+                </div>
+
+                <HorizontalSeparator classes="my-1" />
+
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex min-w-0 flex-col">
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Browser (on-device) OCR</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['ocr.clientEnabled']} />
+                    </div>
+                    <Text className="mt-1 text-xs">
+                      Offers the client-side "Extract text (OCR)" action (OCR_ENABLED). Nothing leaves the device.
+                      Applies on the next page load.
+                    </Text>
+                  </div>
+                  {settingsSaving ? (
+                    <Spinner className="h-5 w-5 shrink-0" />
+                  ) : (
+                    <Switch
+                      checked={Boolean(serverSettings?.ocr?.clientEnabled)}
+                      onChange={(checked) => void toggleOcrClientEnabled(checked)}
+                    />
+                  )}
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Browser OCR default language</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['ocr.clientDefaultLanguage']} />
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <DecoratedInput
-                      className={{ container: 'w-32 max-w-full' }}
-                      placeholder="50"
-                      value={ocrMaxPages}
-                      onChange={setOcrMaxPages}
-                      onEnter={() => void saveOcrMaxPages()}
+                      className={{ container: 'w-48 max-w-full' }}
+                      placeholder="eng"
+                      value={ocrClientDefaultLanguage}
+                      onChange={setOcrClientDefaultLanguage}
+                      onEnter={() => void saveOcrClientDefaultLanguage()}
                       disabled={settingsSaving}
                     />
-                    <Button label="Save" onClick={() => void saveOcrMaxPages()} disabled={settingsSaving} />
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save'}
+                      onClick={() => void saveOcrClientDefaultLanguage()}
+                      disabled={settingsSaving}
+                    />
                   </div>
                 </div>
+              </div>
+            </PreferencesSegment>
+
+            <HorizontalSeparator classes="my-4" />
+            <PreferencesSegment>
+              <Title>Workflows (n8n automation)</Title>
+              <Text>
+                The n8n-backed automation engine. The master switch and internal engine URL apply immediately; per-user
+                access is still managed on the Users tab. The editor-proxy path is bound when the gateway starts, so a
+                change to it only takes effect after the gateway restarts.
+              </Text>
+              <div className="mt-3 flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex min-w-0 flex-col">
+                    <div className="flex items-center gap-2">
+                      <Subtitle>Workflows enabled</Subtitle>
+                      <SourceChip sources={settingsSources} keys={['workflows.enabled']} />
+                    </div>
+                    <Text className="mt-1 text-xs">
+                      Master switch (WORKFLOWS_ENABLED). A user must also be enabled on the Users tab.
+                    </Text>
+                  </div>
+                  {settingsSaving ? (
+                    <Spinner className="h-5 w-5 shrink-0" />
+                  ) : (
+                    <Switch
+                      checked={Boolean(serverSettings?.workflows?.enabled)}
+                      onChange={(checked) => void toggleWorkflowsEnabled(checked)}
+                    />
+                  )}
+                </div>
+
                 <div>
                   <div className="flex items-center gap-2">
-                    <Subtitle>Max image bytes / page</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['ocr.maxImageBytes']} />
+                    <Subtitle>Internal n8n URL</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['workflows.n8nUrl']} />
                   </div>
+                  <Text className="mt-1 text-xs">
+                    The engine's address on the internal network (WORKFLOWS_N8N_URL). The editor is only reachable
+                    through the authenticated gateway proxy. Leave empty and save to clear the override.
+                  </Text>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'w-96 max-w-full' }}
+                      placeholder="http://n8n:5678"
+                      value={workflowsN8nUrl}
+                      onChange={setWorkflowsN8nUrl}
+                      onEnter={() => void saveWorkflowsN8nUrl()}
+                      disabled={settingsSaving}
+                    />
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save'}
+                      onClick={() => void saveWorkflowsN8nUrl()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Editor proxy path</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['workflows.uiBasePath']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    Same-origin path the embedded editor loads (WORKFLOWS_UI_BASE_PATH).{' '}
+                    <strong>Applies on the next gateway restart.</strong> Leave empty and save to clear the override.
+                  </Text>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'w-64 max-w-full' }}
+                      placeholder="/workflows-ui"
+                      value={workflowsUiBasePath}
+                      onChange={setWorkflowsUiBasePath}
+                      onEnter={() => void saveWorkflowsUiBasePath()}
+                      disabled={settingsSaving}
+                    />
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save'}
+                      onClick={() => void saveWorkflowsUiBasePath()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Subtitle>Editor cookie lifetime (seconds)</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['workflows.uiTokenTtlSeconds']} />
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    How long an editor-access cookie stays valid (WORKFLOWS_UI_TOKEN_TTL_SECONDS). Applies to newly
+                    issued cookies.
+                  </Text>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <DecoratedInput
                       className={{ container: 'w-40 max-w-full' }}
-                      placeholder="12582912"
-                      value={ocrMaxImageBytes}
-                      onChange={setOcrMaxImageBytes}
-                      onEnter={() => void saveOcrMaxImageBytes()}
+                      placeholder="43200"
+                      value={workflowsUiTokenTtl}
+                      onChange={setWorkflowsUiTokenTtl}
+                      onEnter={() => void saveWorkflowsUiTokenTtl()}
                       disabled={settingsSaving}
                     />
-                    <Button label="Save" onClick={() => void saveOcrMaxImageBytes()} disabled={settingsSaving} />
+                    <Button
+                      label={settingsSaving ? 'Saving…' : 'Save'}
+                      onClick={() => void saveWorkflowsUiTokenTtl()}
+                      disabled={settingsSaving}
+                    />
                   </div>
                 </div>
               </div>
+            </PreferencesSegment>
+          </>
+        )}
+      </TabPanel>
 
-              <HorizontalSeparator classes="my-1" />
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 flex-col">
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Browser (on-device) OCR</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['ocr.clientEnabled']} />
-                  </div>
-                  <Text className="mt-1 text-xs">
-                    Offers the client-side "Extract text (OCR)" action (OCR_ENABLED). Nothing leaves the device. Applies
-                    on the next page load.
-                  </Text>
-                </div>
-                {settingsSaving ? (
-                  <Spinner className="h-5 w-5 shrink-0" />
-                ) : (
-                  <Switch
-                    checked={Boolean(serverSettings?.ocr?.clientEnabled)}
-                    onChange={(checked) => void toggleOcrClientEnabled(checked)}
-                  />
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2">
-                  <Subtitle>Browser OCR default language</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['ocr.clientDefaultLanguage']} />
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'w-48 max-w-full' }}
-                    placeholder="eng"
-                    value={ocrClientDefaultLanguage}
-                    onChange={setOcrClientDefaultLanguage}
-                    onEnter={() => void saveOcrClientDefaultLanguage()}
-                    disabled={settingsSaving}
-                  />
-                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveOcrClientDefaultLanguage()} disabled={settingsSaving} />
-                </div>
-              </div>
-            </div>
-          </PreferencesSegment>
-
-          <HorizontalSeparator classes="my-4" />
-          <PreferencesSegment>
-            <Title>Workflows (n8n automation)</Title>
-            <Text>
-              The n8n-backed automation engine. The master switch and internal engine URL apply immediately; per-user
-              access is still managed on the Users tab. The editor-proxy path is bound when the gateway starts, so a
-              change to it only takes effect after the gateway restarts.
+      {/* ================= LOGGING ================= */}
+      <TabPanel state={subTab} id="logging">
+        <PreferencesSegment>
+          <Title>Logging</Title>
+          <Text>
+            Runtime log verbosity for the server. Changing this alters <strong>what the server writes</strong> to its
+            logs and takes effect within about 30 seconds — no restart or redeploy. This is distinct from the level
+            filter on the Logs tab, which only changes which already-written lines are displayed.
+          </Text>
+          {settingsLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : settingsNotAvailable ? (
+            <Text className="mt-3">
+              Editable server settings are not available on this server (the /v1/admin/server-settings endpoint is
+              missing), so the log level cannot be changed from here.
             </Text>
-            <div className="mt-3 flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 flex-col">
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Workflows enabled</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['workflows.enabled']} />
-                  </div>
-                  <Text className="mt-1 text-xs">
-                    Master switch (WORKFLOWS_ENABLED). A user must also be enabled on the Users tab.
-                  </Text>
-                </div>
-                {settingsSaving ? (
-                  <Spinner className="h-5 w-5 shrink-0" />
-                ) : (
-                  <Switch
-                    checked={Boolean(serverSettings?.workflows?.enabled)}
-                    onChange={(checked) => void toggleWorkflowsEnabled(checked)}
-                  />
-                )}
+          ) : settingsError ? (
+            <>
+              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <div className="mt-2">
+                <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
-
+            </>
+          ) : (
+            <div className="mt-3 flex flex-col gap-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <Subtitle>Internal n8n URL</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['workflows.n8nUrl']} />
+                  <Subtitle>Log level</Subtitle>
+                  <SourceChip sources={settingsSources} keys={['logging.level']} />
                 </div>
                 <Text className="mt-1 text-xs">
-                  The engine's address on the internal network (WORKFLOWS_N8N_URL). The editor is only reachable through
-                  the authenticated gateway proxy. Leave empty and save to clear the override.
+                  From least to most verbose: error, warn, info, http, verbose, debug, silly. The default is info.
                 </Text>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'w-96 max-w-full' }}
-                    placeholder="http://n8n:5678"
-                    value={workflowsN8nUrl}
-                    onChange={setWorkflowsN8nUrl}
-                    onEnter={() => void saveWorkflowsN8nUrl()}
+                <div className="mt-2 w-96 max-w-full">
+                  <Dropdown
+                    label="Server log level"
+                    items={LOG_LEVEL_OPTIONS.map((level) => ({ label: level, value: level }))}
+                    value={serverSettings?.logging?.level ?? 'info'}
+                    onChange={(level) => void saveLoggingLevel(level)}
                     disabled={settingsSaving}
                   />
-                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsN8nUrl()} disabled={settingsSaving} />
                 </div>
               </div>
-
-              <div>
-                <div className="flex items-center gap-2">
-                  <Subtitle>Editor proxy path</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['workflows.uiBasePath']} />
-                </div>
-                <Text className="mt-1 text-xs">
-                  Same-origin path the embedded editor loads (WORKFLOWS_UI_BASE_PATH). <strong>Applies on the next
-                  gateway restart.</strong> Leave empty and save to clear the override.
-                </Text>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'w-64 max-w-full' }}
-                    placeholder="/workflows-ui"
-                    value={workflowsUiBasePath}
-                    onChange={setWorkflowsUiBasePath}
-                    onEnter={() => void saveWorkflowsUiBasePath()}
-                    disabled={settingsSaving}
-                  />
-                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsUiBasePath()} disabled={settingsSaving} />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2">
-                  <Subtitle>Editor cookie lifetime (seconds)</Subtitle>
-                  <SourceChip sources={settingsSources} keys={['workflows.uiTokenTtlSeconds']} />
-                </div>
-                <Text className="mt-1 text-xs">
-                  How long an editor-access cookie stays valid (WORKFLOWS_UI_TOKEN_TTL_SECONDS). Applies to newly issued
-                  cookies.
-                </Text>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'w-40 max-w-full' }}
-                    placeholder="43200"
-                    value={workflowsUiTokenTtl}
-                    onChange={setWorkflowsUiTokenTtl}
-                    onEnter={() => void saveWorkflowsUiTokenTtl()}
-                    disabled={settingsSaving}
-                  />
-                  <Button label={settingsSaving ? 'Saving…' : 'Save'} onClick={() => void saveWorkflowsUiTokenTtl()} disabled={settingsSaving} />
-                </div>
-              </div>
+              <Text className="text-xs text-passive-1">
+                Scope: this control changes the <strong>api-gateway</strong> and <strong>auth</strong> service loggers
+                (the highest-value surfaces). Other services keep honoring their <code>LOG_LEVEL</code> environment
+                variable until a later release adds them. In deployments where services do not share the settings
+                volume, this only affects services that can read the overlay.
+              </Text>
             </div>
-          </PreferencesSegment>
-        </>
-      )}
+          )}
+        </PreferencesSegment>
+      </TabPanel>
     </>
   )
 }

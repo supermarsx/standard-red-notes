@@ -8,6 +8,11 @@ import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/P
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Spinner from '@/Components/Spinner/Spinner'
+import Icon from '@/Components/Icon/Icon'
+import TabList from '@/Components/Tabs/TabList'
+import Tab from '@/Components/Tabs/Tab'
+import TabPanel from '@/Components/Tabs/TabPanel'
+import { useTabState } from '@/Components/Tabs/useTabState'
 import { filterSecurityAuditEntries, registrationBlockSource, registrationIsOpen } from './adminSecurityHelpers'
 
 // Must match the server's RoleName.NAMES.AdminUser value (the admin role
@@ -111,8 +116,8 @@ const PostureChip: FunctionComponent<{
   const className = good
     ? 'bg-success text-success-contrast'
     : bad
-      ? 'bg-warning text-warning-contrast'
-      : 'bg-passive-4 text-foreground'
+    ? 'bg-warning text-warning-contrast'
+    : 'bg-passive-4 text-foreground'
   return (
     <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${className}`}>
       {state === true ? on : state === false ? off : unknown}
@@ -150,6 +155,10 @@ const formatTimestamp = (createdAt: string): string => {
  * Loaded lazily — this component only mounts when the Security tab is opened.
  */
 const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidden, goToTab }) => {
+  // Second-level tabs inside the Security pane (§2 IA): Overview / Anti-abuse &
+  // rate limits / Account lockout / Authentication.
+  const subTab = useTabState({ defaultTab: 'overview' })
+
   const [registration, setRegistration] = useState<RegistrationInfo | null>(null)
   const [registrationLoading, setRegistrationLoading] = useState(false)
 
@@ -376,7 +385,8 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
         }
         const data = (response as { data?: { ipLists?: { allow: string[]; block: string[] } } }).data
         if (data?.ipLists) {
-          setAntiAbuse((prev) => (prev ? { ...prev, ipLists: data.ipLists as { allow: string[]; block: string[] } } : prev))
+          const nextLists = data.ipLists as { allow: string[]; block: string[] }
+          setAntiAbuse((prev) => (prev ? { ...prev, ipLists: nextLists } : prev))
         }
         if (action === 'add' && list === 'block') {
           setBlockEntry('')
@@ -428,491 +438,547 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
   return (
     <>
       <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Title>Security overview</Title>
-          <Button label="Refresh" onClick={refreshAll} disabled={statusLoading || auditLoading} small />
-        </div>
+        <Title>Security</Title>
         <Text>
-          An at-a-glance view of this instance&apos;s security posture, pulled together from settings that already live
-          across the other Admin tabs. This is a read-only summary &mdash; each item links to where its control actually
-          lives.
+          This instance&apos;s security posture and the runtime anti-abuse controls, grouped into subtabs. The Overview
+          is a read-only summary; each item links to where its control actually lives.
         </Text>
+        <div className="mt-3 border-b border-border">
+          <TabList state={subTab} className="flex flex-wrap">
+            <Tab id="overview" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="security" size="medium" />
+              Overview
+            </Tab>
+            <Tab id="antiabuse" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="list-check" size="medium" />
+              Anti-abuse &amp; rate limits
+            </Tab>
+            <Tab id="lockout" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="history" size="medium" />
+              Account lockout
+            </Tab>
+            <Tab id="auth" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="accessibility" size="medium" />
+              Authentication
+            </Tab>
+          </TabList>
+        </div>
       </PreferencesSegment>
 
-      <HorizontalSeparator classes="my-4" />
+      {/* ================= OVERVIEW ================= */}
+      <TabPanel state={subTab} id="overview">
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Title>Security overview</Title>
+            <Button label="Refresh" onClick={refreshAll} disabled={statusLoading || auditLoading} small />
+          </div>
+          <Text>
+            An at-a-glance view of this instance&apos;s security posture, pulled together from settings that already
+            live across the other Admin tabs. This is a read-only summary &mdash; each item links to where its control
+            actually lives.
+          </Text>
+        </PreferencesSegment>
 
-      {/* --- Registration ------------------------------------------------- */}
-      <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Subtitle>Sign-up security</Subtitle>
-          {registrationLoading ? (
-            <Spinner className="h-4 w-4" />
-          ) : (
-            <PostureChip state={signupsOpen === null ? null : !signupsOpen} on="Signups closed" off="Signups open" />
-          )}
-        </div>
-        <Text className="mt-1">
-          {signupsOpen === null
-            ? 'Whether new accounts can be created on this instance.'
-            : signupsOpen
+        <HorizontalSeparator classes="my-4" />
+
+        {/* --- Registration ------------------------------------------------- */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Subtitle>Sign-up security</Subtitle>
+            {registrationLoading ? (
+              <Spinner className="h-4 w-4" />
+            ) : (
+              <PostureChip state={signupsOpen === null ? null : !signupsOpen} on="Signups closed" off="Signups open" />
+            )}
+          </div>
+          <Text className="mt-1">
+            {signupsOpen === null
+              ? 'Whether new accounts can be created on this instance.'
+              : signupsOpen
               ? 'New accounts can currently be created on this instance.'
               : blockSource === 'both'
-                ? 'New signups are blocked by both the in-app switch and the server environment (DISABLE_USER_REGISTRATION).'
-                : blockSource === 'persisted'
-                  ? 'New signups are blocked by the in-app registration switch.'
-                  : 'New signups are blocked by the server environment (DISABLE_USER_REGISTRATION).'}
-          {registration && registration.envDisabled === null && (
-            <> This server did not report its environment flag, so only the in-app switch is reflected above.</>
-          )}
-        </Text>
-        <div className="mt-2">
-          <Button label="Manage registration on the Server tab" onClick={() => goToTab('server')} small />
-        </div>
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Admin access model ------------------------------------------- */}
-      <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Subtitle>Administrator access model</Subtitle>
-          <PostureChip
-            state={adminCount === null ? null : true}
-            on={`${adminCount} admin${adminCount === 1 ? '' : 's'}`}
-            unknown="Count unavailable"
-          />
-        </div>
-        <Text className="mt-1">
-          Admin access is the <strong>{ADMIN_USER}</strong> role. On sign-in, any account whose email is listed
-          in the server&apos;s <strong>ADMIN_EMAILS</strong> environment variable is granted this role; it can also be
-          assigned directly or via a group on the Groups &amp; roles tab. Every admin action is re-verified against this
-          role on the server, so removing an email from ADMIN_EMAILS (or the role) revokes access on the next session
-          refresh.
-        </Text>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button label="Review admins in Users" onClick={() => goToTab('users')} small />
-          <Button label="Roles & groups" onClick={() => goToTab('groups')} small />
-        </div>
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Two-factor authentication ------------------------------------ */}
-      <PreferencesSegment>
-        <Subtitle>Two-factor authentication (2FA)</Subtitle>
-        <Text className="mt-1">
-          2FA is opt-in per user and enforced by the auth server at sign-in. There is no instance-wide 2FA toggle to
-          surface here. An admin can reset a locked-out user&apos;s 2FA from the Users tab &mdash; this clears their
-          authenticator secret, so verify such requests out-of-band first. Each reset is written to the audit log.
-        </Text>
-        <div className="mt-2">
-          <Button label="Reset a user's 2FA in Users" onClick={() => goToTab('users')} small />
-        </div>
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Data privacy / master switches ------------------------------- */}
-      <PreferencesSegment>
-        <Subtitle>Data privacy master switches</Subtitle>
-        <Text className="mt-1">
-          Operator-level switches (set in the server environment) that affect whether note content leaves the
-          end-to-end-encrypted boundary for a server-side feature. Read-only here; each is configured on the tab noted.
-        </Text>
-        {statusLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : statusError ? (
-          <Text className="mt-3 text-danger">{statusError}</Text>
-        ) : (
-          <div className="mt-3 divide-y divide-border rounded border border-border px-3">
-            <PostureRow
-              name="Server-side OCR"
-              detail="When on, images are decrypted on the server to extract text — they leave the E2E boundary. Off is the privacy-safe state. (Server tab)"
-              chip={
-                <PostureChip
-                  state={masterSwitches ? Boolean(masterSwitches.ocrServerEnabled) : null}
-                  onIsGood={false}
-                />
-              }
-            />
-            <PostureRow
-              name="Workflows / n8n"
-              detail="When on, note data can be sent to the configured workflow engine. Off keeps data in-app. (Server tab)"
-              chip={
-                <PostureChip
-                  state={masterSwitches ? Boolean(masterSwitches.workflowsEnabled) : null}
-                  onIsGood={false}
-                />
-              }
-            />
-            <PostureRow
-              name="AI assistant providers"
-              detail={
-                masterSwitches?.assistantConfigured && masterSwitches.assistantProviders?.length
-                  ? `Configured (${masterSwitches.assistantProviders.join(
-                      ', ',
-                    )}). Prompts/content sent to AI go to the provider. Manage on the AI tab.`
-                  : 'When configured, prompts and selected content are sent to the AI provider. Manage on the AI tab.'
-              }
-              chip={
-                <PostureChip
-                  state={masterSwitches ? Boolean(masterSwitches.assistantConfigured) : null}
-                  on="Configured"
-                  off="Not configured"
-                  onIsGood={false}
-                />
-              }
-            />
-          </div>
-        )}
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button label="Server master switches" onClick={() => goToTab('server')} small />
-          <Button label="AI settings" onClick={() => goToTab('ai')} small />
-        </div>
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Session infrastructure --------------------------------------- */}
-      <PreferencesSegment>
-        <Subtitle>Sessions &amp; tokens</Subtitle>
-        <Text className="mt-1">
-          Sessions are backed by refreshable access/refresh tokens issued by the auth server. Token lifetimes are fixed
-          in the server configuration and are not exposed to this panel. The session/token cache state (Redis) is shown
-          below when the server reports it.
-        </Text>
-        {statusLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : (
-          <div className="mt-3 divide-y divide-border rounded border border-border px-3">
-            <PostureRow
-              name="Auth session cache (Redis)"
-              detail="Backs sessions and revocation."
-              chip={<PostureChip state={authRedis} on="Reachable" off="Unreachable" unknown="Not reported" />}
-            />
-            <PostureRow
-              name="Gateway cache (Redis)"
-              detail="Cross-service token/session cache at the API gateway."
-              chip={<PostureChip state={gatewayRedis} on="Reachable" off="Unreachable" unknown="Not configured" />}
-            />
-          </div>
-        )}
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Recent security events --------------------------------------- */}
-      <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Subtitle>Recent security events</Subtitle>
-          <Button label="Open full audit log" onClick={() => goToTab('audit')} small />
-        </div>
-        <Text className="mt-1">
-          The latest security-relevant entries from the audit log (sign-ins, role, ban, 2FA and registration changes).
-          Newest first; the full, paginated record lives on the Audit log tab.
-        </Text>
-        {auditLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : auditError ? (
-          <Text className="mt-3 text-danger">{auditError}</Text>
-        ) : securityEvents.length === 0 ? (
-          <Text className="mt-3">No recent security-relevant events in the latest audit entries.</Text>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2">
-            {securityEvents.map((entry) => (
-              <div key={entry.uuid} className="rounded border border-border p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <Subtitle>{entry.action}</Subtitle>
-                  <Text className="text-xs">{formatTimestamp(entry.createdAt)}</Text>
-                </div>
-                <Text className="text-xs">
-                  Actor: {entry.actorUuid ?? 'anonymous'}
-                  {entry.targetUuid ? (
-                    <>
-                      {' '}
-                      &rarr; {entry.targetType ?? 'target'} {entry.targetUuid}
-                    </>
-                  ) : null}
-                  {entry.ip ? <> &middot; from {entry.ip}</> : null}
-                </Text>
-              </div>
-            ))}
-          </div>
-        )}
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Anti-abuse & rate limiting ----------------------------------- */}
-      <PreferencesSegment>
-        <div className="flex items-center justify-between gap-2">
-          <Subtitle>Anti-abuse &amp; rate limiting</Subtitle>
-          {antiAbuseLoading ? (
-            <Spinner className="h-4 w-4" />
-          ) : (
-            <PostureChip
-              state={antiAbuse?.config ? antiAbuse.config.enabled : null}
-              on="Rate limiting on"
-              off="Rate limiting off"
-              unknown="Unavailable"
-            />
-          )}
-        </div>
-        <Text className="mt-1">
-          Per-IP rate limiting on the unauthenticated auth surfaces (login, registration, magic-link, recovery), an
-          admin-managed IP allow/block list, and live throttle counters. Tiers are tunable at runtime; a Redis outage
-          fails <em>open</em> (limits and the block list are best-effort, so a cache blip never locks users out).
-        </Text>
-
-        {antiAbuseError ? <Text className="mt-3 text-danger">{antiAbuseError}</Text> : null}
-
-        {antiAbuse && !antiAbuse.available ? (
-          <Text className="mt-3">
-            This deployment has no Redis cache configured, so the rate-limit tiers, IP lists and telemetry are inactive.
+              ? 'New signups are blocked by both the in-app switch and the server environment (DISABLE_USER_REGISTRATION).'
+              : blockSource === 'persisted'
+              ? 'New signups are blocked by the in-app registration switch.'
+              : 'New signups are blocked by the server environment (DISABLE_USER_REGISTRATION).'}
+            {registration && registration.envDisabled === null && (
+              <> This server did not report its environment flag, so only the in-app switch is reflected above.</>
+            )}
           </Text>
-        ) : null}
+          <div className="mt-2">
+            <Button label="Manage registration on the Server tab" onClick={() => goToTab('server')} small />
+          </div>
+        </PreferencesSegment>
 
-        {/* Tier configuration */}
-        {configDraft ? (
-          <div className="mt-4">
-            <Subtitle>Rate-limit tiers</Subtitle>
-            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between gap-2">
-                <Text>Enabled</Text>
-                <input
-                  type="checkbox"
-                  checked={configDraft.enabled}
-                  onChange={(event) => setConfigDraft({ ...configDraft, enabled: event.target.checked })}
-                />
-              </label>
-              <label className="flex items-center justify-between gap-2">
-                <Text>Adaptive escalation</Text>
-                <input
-                  type="checkbox"
-                  checked={configDraft.adaptiveEscalation}
-                  onChange={(event) => setConfigDraft({ ...configDraft, adaptiveEscalation: event.target.checked })}
-                />
-              </label>
-              {(
-                [
-                  ['Window (seconds)', 'windowSeconds'],
-                  ['Login max / window', 'loginMax'],
-                  ['Registration max / window', 'registrationMax'],
-                  ['Per-user window (seconds)', 'userWindowSeconds'],
-                  ['Per-user max (0 = off)', 'userMax'],
-                ] as Array<[string, keyof AntiAbuseConfig]>
-              ).map(([label, key]) => (
-                <label key={key} className="flex items-center justify-between gap-2">
-                  <Text>{label}</Text>
-                  <input
-                    className="w-24 rounded border border-border bg-default px-2 py-1 text-right text-sm"
-                    type="number"
-                    min={0}
-                    value={String(configDraft[key] as number)}
-                    onChange={(event) =>
-                      setConfigDraft({ ...configDraft, [key]: Math.max(0, Number(event.target.value) || 0) })
-                    }
-                  />
-                </label>
+        <HorizontalSeparator classes="my-4" />
+
+        {/* --- Admin access model ------------------------------------------- */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Subtitle>Administrator access model</Subtitle>
+            <PostureChip
+              state={adminCount === null ? null : true}
+              on={`${adminCount} admin${adminCount === 1 ? '' : 's'}`}
+              unknown="Count unavailable"
+            />
+          </div>
+          <Text className="mt-1">
+            Admin access is the <strong>{ADMIN_USER}</strong> role. On sign-in, any account whose email is listed in the
+            server&apos;s <strong>ADMIN_EMAILS</strong> environment variable is granted this role; it can also be
+            assigned directly or via a group on the Groups &amp; roles tab. Every admin action is re-verified against
+            this role on the server, so removing an email from ADMIN_EMAILS (or the role) revokes access on the next
+            session refresh.
+          </Text>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button label="Review admins in Users" onClick={() => goToTab('users')} small />
+            <Button label="Roles & groups" onClick={() => goToTab('groups')} small />
+          </div>
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        {/* --- Recent security events --------------------------------------- */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Subtitle>Recent security events</Subtitle>
+            <Button label="Open full audit log" onClick={() => goToTab('logs')} small />
+          </div>
+          <Text className="mt-1">
+            The latest security-relevant entries from the audit log (sign-ins, role, ban, 2FA and registration changes).
+            Newest first; the full, paginated record lives on the Logs tab.
+          </Text>
+          {auditLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : auditError ? (
+            <Text className="mt-3 text-danger">{auditError}</Text>
+          ) : securityEvents.length === 0 ? (
+            <Text className="mt-3">No recent security-relevant events in the latest audit entries.</Text>
+          ) : (
+            <div className="mt-3 flex flex-col gap-2">
+              {securityEvents.map((entry) => (
+                <div key={entry.uuid} className="rounded border border-border p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Subtitle>{entry.action}</Subtitle>
+                    <Text className="text-xs">{formatTimestamp(entry.createdAt)}</Text>
+                  </div>
+                  <Text className="text-xs">
+                    Actor: {entry.actorUuid ?? 'anonymous'}
+                    {entry.targetUuid ? (
+                      <>
+                        {' '}
+                        &rarr; {entry.targetType ?? 'target'} {entry.targetUuid}
+                      </>
+                    ) : null}
+                    {entry.ip ? <> &middot; from {entry.ip}</> : null}
+                  </Text>
+                </div>
               ))}
             </div>
-            <div className="mt-3">
-              <Button
-                label={configSaving ? 'Saving…' : 'Save rate-limit tiers'}
-                onClick={() => void saveConfig()}
-                disabled={configSaving}
-                primary
-                small
-              />
-            </div>
+          )}
+        </PreferencesSegment>
+      </TabPanel>
+
+      {/* ================= AUTHENTICATION ================= */}
+      <TabPanel state={subTab} id="auth">
+        {/* --- Two-factor authentication ------------------------------------ */}
+        <PreferencesSegment>
+          <Subtitle>Two-factor authentication (2FA)</Subtitle>
+          <Text className="mt-1">
+            2FA is opt-in per user and enforced by the auth server at sign-in. There is no instance-wide 2FA toggle to
+            surface here. An admin can reset a locked-out user&apos;s 2FA from the Users tab &mdash; this clears their
+            authenticator secret, so verify such requests out-of-band first. Each reset is written to the audit log.
+          </Text>
+          <div className="mt-2">
+            <Button label="Reset a user's 2FA in Users" onClick={() => goToTab('users')} small />
           </div>
-        ) : null}
+        </PreferencesSegment>
 
-        {/* IP block/allow lists */}
-        {antiAbuse?.available ? (
-          <div className="mt-5">
-            <Subtitle>IP block list</Subtitle>
-            <Text className="text-xs text-passive-1">
-              A blocklisted client IP is rejected (403) before any rate-limit tier. Accepts an IP, an IPv4 CIDR
-              (a.b.c.d/24) or an IPv6 literal.
-            </Text>
-            <div className="mt-2 flex gap-2">
-              <input
-                className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
-                type="text"
-                placeholder="e.g. 203.0.113.7 or 203.0.113.0/24"
-                value={blockEntry}
-                onChange={(event) => setBlockEntry(event.target.value)}
-              />
-              <Button label="Block" onClick={() => void mutateIp('block', 'add', blockEntry)} disabled={ipBusy} small />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {antiAbuse.ipLists.block.length === 0 ? (
-                <Text className="text-xs text-passive-1">No blocked IPs.</Text>
-              ) : (
-                antiAbuse.ipLists.block.map((entry) => (
-                  <span
-                    key={entry}
-                    className="inline-flex items-center gap-1 rounded bg-warning px-2 py-0.5 text-xs text-warning-contrast"
-                  >
-                    {entry}
-                    <button
-                      className="font-bold"
-                      title="Unblock"
-                      onClick={() => void mutateIp('block', 'remove', entry)}
-                      disabled={ipBusy}
-                    >
-                      &times;
-                    </button>
-                  </span>
-                ))
-              )}
-            </div>
+        <HorizontalSeparator classes="my-4" />
 
-            <Subtitle className="mt-4">IP allow list</Subtitle>
-            <Text className="text-xs text-passive-1">
-              An allowlisted IP bypasses the rate-limit tiers. Allow wins over block, so you cannot lock yourself out.
-            </Text>
-            <div className="mt-2 flex gap-2">
-              <input
-                className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
-                type="text"
-                placeholder="e.g. 198.51.100.0/24"
-                value={allowEntry}
-                onChange={(event) => setAllowEntry(event.target.value)}
+        {/* --- Data privacy / master switches ------------------------------- */}
+        <PreferencesSegment>
+          <Subtitle>Data privacy master switches</Subtitle>
+          <Text className="mt-1">
+            Operator-level switches (set in the server environment) that affect whether note content leaves the
+            end-to-end-encrypted boundary for a server-side feature. Read-only here; each is configured on the tab
+            noted.
+          </Text>
+          {statusLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : statusError ? (
+            <Text className="mt-3 text-danger">{statusError}</Text>
+          ) : (
+            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+              <PostureRow
+                name="Server-side OCR"
+                detail="When on, images are decrypted on the server to extract text — they leave the E2E boundary. Off is the privacy-safe state. (Server tab)"
+                chip={
+                  <PostureChip
+                    state={masterSwitches ? Boolean(masterSwitches.ocrServerEnabled) : null}
+                    onIsGood={false}
+                  />
+                }
               />
-              <Button label="Allow" onClick={() => void mutateIp('allow', 'add', allowEntry)} disabled={ipBusy} small />
+              <PostureRow
+                name="Workflows / n8n"
+                detail="When on, note data can be sent to the configured workflow engine. Off keeps data in-app. (Server tab)"
+                chip={
+                  <PostureChip
+                    state={masterSwitches ? Boolean(masterSwitches.workflowsEnabled) : null}
+                    onIsGood={false}
+                  />
+                }
+              />
+              <PostureRow
+                name="AI assistant providers"
+                detail={
+                  masterSwitches?.assistantConfigured && masterSwitches.assistantProviders?.length
+                    ? `Configured (${masterSwitches.assistantProviders.join(
+                        ', ',
+                      )}). Prompts/content sent to AI go to the provider. Manage on the AI tab.`
+                    : 'When configured, prompts and selected content are sent to the AI provider. Manage on the AI tab.'
+                }
+                chip={
+                  <PostureChip
+                    state={masterSwitches ? Boolean(masterSwitches.assistantConfigured) : null}
+                    on="Configured"
+                    off="Not configured"
+                    onIsGood={false}
+                  />
+                }
+              />
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {antiAbuse.ipLists.allow.length === 0 ? (
-                <Text className="text-xs text-passive-1">No allowlisted IPs.</Text>
-              ) : (
-                antiAbuse.ipLists.allow.map((entry) => (
-                  <span
-                    key={entry}
-                    className="inline-flex items-center gap-1 rounded bg-success px-2 py-0.5 text-xs text-success-contrast"
-                  >
-                    {entry}
-                    <button
-                      className="font-bold"
-                      title="Remove"
-                      onClick={() => void mutateIp('allow', 'remove', entry)}
-                      disabled={ipBusy}
-                    >
-                      &times;
-                    </button>
-                  </span>
-                ))
-              )}
-            </div>
+          )}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button label="Server master switches" onClick={() => goToTab('server')} small />
+            <Button label="AI settings" onClick={() => goToTab('ai')} small />
           </div>
-        ) : null}
+        </PreferencesSegment>
 
-        {/* Throttle telemetry */}
-        {antiAbuse?.available ? (
-          <div className="mt-5">
-            <Subtitle>Throttle activity (last 24h)</Subtitle>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <span className="rounded border border-border px-2 py-0.5 text-xs">
-                IP blocks: <strong>{antiAbuse.metrics.blockHits}</strong>
-              </span>
-              {Object.keys(antiAbuse.metrics.tierHits).length === 0 ? (
-                <span className="rounded border border-border px-2 py-0.5 text-xs">No throttle hits recorded.</span>
-              ) : (
-                Object.entries(antiAbuse.metrics.tierHits).map(([bucket, count]) => (
-                  <span key={bucket} className="rounded border border-border px-2 py-0.5 text-xs">
-                    {bucket}: <strong>{count}</strong>
-                  </span>
-                ))
-              )}
+        <HorizontalSeparator classes="my-4" />
+
+        {/* --- Session infrastructure --------------------------------------- */}
+        <PreferencesSegment>
+          <Subtitle>Sessions &amp; tokens</Subtitle>
+          <Text className="mt-1">
+            Sessions are backed by refreshable access/refresh tokens issued by the auth server. Token lifetimes are
+            fixed in the server configuration and are not exposed to this panel. The session/token cache state (Redis)
+            is shown below when the server reports it.
+          </Text>
+          {statusLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : (
+            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+              <PostureRow
+                name="Auth session cache (Redis)"
+                detail="Backs sessions and revocation."
+                chip={<PostureChip state={authRedis} on="Reachable" off="Unreachable" unknown="Not reported" />}
+              />
+              <PostureRow
+                name="Gateway cache (Redis)"
+                detail="Cross-service token/session cache at the API gateway."
+                chip={<PostureChip state={gatewayRedis} on="Reachable" off="Unreachable" unknown="Not configured" />}
+              />
             </div>
-            {antiAbuse.metrics.recent.length > 0 ? (
-              <div className="mt-3 flex flex-col gap-1">
-                {antiAbuse.metrics.recent.slice(0, SECURITY_EVENTS_PREVIEW).map((event, index) => (
-                  <Text key={`${event.at}-${index}`} className="text-xs text-passive-1">
-                    {formatTimestamp(new Date(event.at).toISOString())} &middot; {event.bucket} &middot; {event.ip}{' '}
-                    &middot; {event.method} {event.path}
-                  </Text>
+          )}
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        {/* --- Configured-via-env honesty note ------------------------------ */}
+        <PreferencesSegment>
+          <Subtitle>Configured via the server environment</Subtitle>
+          <Text className="mt-1">
+            Several security-relevant settings are intentionally not runtime-editable and are changed only by editing
+            the server environment and redeploying: <strong>ADMIN_EMAILS</strong> (who is an admin),{' '}
+            <strong>DISABLE_USER_REGISTRATION</strong> (hard signup block), token lifetimes, and the OCR / Workflows /
+            AI-provider master switches shown above. This tab reflects their live values but does not change them.
+          </Text>
+        </PreferencesSegment>
+      </TabPanel>
+
+      {/* ================= ANTI-ABUSE & RATE LIMITS ================= */}
+      <TabPanel state={subTab} id="antiabuse">
+        {/* --- Anti-abuse & rate limiting ----------------------------------- */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <Subtitle>Anti-abuse &amp; rate limiting</Subtitle>
+            {antiAbuseLoading ? (
+              <Spinner className="h-4 w-4" />
+            ) : (
+              <PostureChip
+                state={antiAbuse?.config ? antiAbuse.config.enabled : null}
+                on="Rate limiting on"
+                off="Rate limiting off"
+                unknown="Unavailable"
+              />
+            )}
+          </div>
+          <Text className="mt-1">
+            Per-IP rate limiting on the unauthenticated auth surfaces (login, registration, magic-link, recovery), an
+            admin-managed IP allow/block list, and live throttle counters. Tiers are tunable at runtime; a Redis outage
+            fails <em>open</em> (limits and the block list are best-effort, so a cache blip never locks users out).
+          </Text>
+
+          {antiAbuseError ? <Text className="mt-3 text-danger">{antiAbuseError}</Text> : null}
+
+          {antiAbuse && !antiAbuse.available ? (
+            <Text className="mt-3">
+              This deployment has no Redis cache configured, so the rate-limit tiers, IP lists and telemetry are
+              inactive.
+            </Text>
+          ) : null}
+
+          {/* Tier configuration */}
+          {configDraft ? (
+            <div className="mt-4">
+              <Subtitle>Rate-limit tiers</Subtitle>
+              <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="flex items-center justify-between gap-2">
+                  <Text>Enabled</Text>
+                  <input
+                    type="checkbox"
+                    checked={configDraft.enabled}
+                    onChange={(event) => setConfigDraft({ ...configDraft, enabled: event.target.checked })}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2">
+                  <Text>Adaptive escalation</Text>
+                  <input
+                    type="checkbox"
+                    checked={configDraft.adaptiveEscalation}
+                    onChange={(event) => setConfigDraft({ ...configDraft, adaptiveEscalation: event.target.checked })}
+                  />
+                </label>
+                {(
+                  [
+                    ['Window (seconds)', 'windowSeconds'],
+                    ['Login max / window', 'loginMax'],
+                    ['Registration max / window', 'registrationMax'],
+                    ['Per-user window (seconds)', 'userWindowSeconds'],
+                    ['Per-user max (0 = off)', 'userMax'],
+                  ] as Array<[string, keyof AntiAbuseConfig]>
+                ).map(([label, key]) => (
+                  <label key={key} className="flex items-center justify-between gap-2">
+                    <Text>{label}</Text>
+                    <input
+                      className="w-24 rounded border border-border bg-default px-2 py-1 text-right text-sm"
+                      type="number"
+                      min={0}
+                      value={String(configDraft[key] as number)}
+                      onChange={(event) =>
+                        setConfigDraft({ ...configDraft, [key]: Math.max(0, Number(event.target.value) || 0) })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3">
+                <Button
+                  label={configSaving ? 'Saving…' : 'Save rate-limit tiers'}
+                  onClick={() => void saveConfig()}
+                  disabled={configSaving}
+                  primary
+                  small
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {/* IP block/allow lists */}
+          {antiAbuse?.available ? (
+            <div className="mt-5">
+              <Subtitle>IP block list</Subtitle>
+              <Text className="text-xs text-passive-1">
+                A blocklisted client IP is rejected (403) before any rate-limit tier. Accepts an IP, an IPv4 CIDR
+                (a.b.c.d/24) or an IPv6 literal.
+              </Text>
+              <div className="mt-2 flex gap-2">
+                <input
+                  className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                  type="text"
+                  placeholder="e.g. 203.0.113.7 or 203.0.113.0/24"
+                  value={blockEntry}
+                  onChange={(event) => setBlockEntry(event.target.value)}
+                />
+                <Button
+                  label="Block"
+                  onClick={() => void mutateIp('block', 'add', blockEntry)}
+                  disabled={ipBusy}
+                  small
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {antiAbuse.ipLists.block.length === 0 ? (
+                  <Text className="text-xs text-passive-1">No blocked IPs.</Text>
+                ) : (
+                  antiAbuse.ipLists.block.map((entry) => (
+                    <span
+                      key={entry}
+                      className="inline-flex items-center gap-1 rounded bg-warning px-2 py-0.5 text-xs text-warning-contrast"
+                    >
+                      {entry}
+                      <button
+                        className="font-bold"
+                        title="Unblock"
+                        onClick={() => void mutateIp('block', 'remove', entry)}
+                        disabled={ipBusy}
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+
+              <Subtitle className="mt-4">IP allow list</Subtitle>
+              <Text className="text-xs text-passive-1">
+                An allowlisted IP bypasses the rate-limit tiers. Allow wins over block, so you cannot lock yourself out.
+              </Text>
+              <div className="mt-2 flex gap-2">
+                <input
+                  className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                  type="text"
+                  placeholder="e.g. 198.51.100.0/24"
+                  value={allowEntry}
+                  onChange={(event) => setAllowEntry(event.target.value)}
+                />
+                <Button
+                  label="Allow"
+                  onClick={() => void mutateIp('allow', 'add', allowEntry)}
+                  disabled={ipBusy}
+                  small
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {antiAbuse.ipLists.allow.length === 0 ? (
+                  <Text className="text-xs text-passive-1">No allowlisted IPs.</Text>
+                ) : (
+                  antiAbuse.ipLists.allow.map((entry) => (
+                    <span
+                      key={entry}
+                      className="inline-flex items-center gap-1 rounded bg-success px-2 py-0.5 text-xs text-success-contrast"
+                    >
+                      {entry}
+                      <button
+                        className="font-bold"
+                        title="Remove"
+                        onClick={() => void mutateIp('allow', 'remove', entry)}
+                        disabled={ipBusy}
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Throttle telemetry */}
+          {antiAbuse?.available ? (
+            <div className="mt-5">
+              <Subtitle>Throttle activity (last 24h)</Subtitle>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span className="rounded border border-border px-2 py-0.5 text-xs">
+                  IP blocks: <strong>{antiAbuse.metrics.blockHits}</strong>
+                </span>
+                {Object.keys(antiAbuse.metrics.tierHits).length === 0 ? (
+                  <span className="rounded border border-border px-2 py-0.5 text-xs">No throttle hits recorded.</span>
+                ) : (
+                  Object.entries(antiAbuse.metrics.tierHits).map(([bucket, count]) => (
+                    <span key={bucket} className="rounded border border-border px-2 py-0.5 text-xs">
+                      {bucket}: <strong>{count}</strong>
+                    </span>
+                  ))
+                )}
+              </div>
+              {antiAbuse.metrics.recent.length > 0 ? (
+                <div className="mt-3 flex flex-col gap-1">
+                  {antiAbuse.metrics.recent.slice(0, SECURITY_EVENTS_PREVIEW).map((event, index) => (
+                    <Text key={`${event.at}-${index}`} className="text-xs text-passive-1">
+                      {formatTimestamp(new Date(event.at).toISOString())} &middot; {event.bucket} &middot; {event.ip}{' '}
+                      &middot; {event.method} {event.path}
+                    </Text>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </PreferencesSegment>
+      </TabPanel>
+
+      {/* ================= ACCOUNT LOCKOUT ================= */}
+      <TabPanel state={subTab} id="lockout">
+        <PreferencesSegment>
+          <Title>Account lockout</Title>
+          <Text className="mt-1">
+            Accounts currently rate-limited by the failed-login lockout, and the container CLI equivalents.
+          </Text>
+          {/* Locked accounts (failed-login lockout) */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-2">
+              <Subtitle>Locked accounts</Subtitle>
+              <Button label="Refresh" onClick={() => void loadLockedAccounts()} disabled={lockedLoading} small />
+            </div>
+            <Text className="text-xs text-passive-1">
+              Accounts currently rate-limited by the failed-login lockout. Unlocking clears the attempt counters so the
+              user can sign in again. The identifier is whatever the failed attempts were keyed on (a user id or email).
+            </Text>
+            {lockedError ? <Text className="mt-2 text-danger">{lockedError}</Text> : null}
+            {lockedLoading && !lockedAccounts ? (
+              <div className="mt-2">
+                <Spinner className="h-4 w-4" />
+              </div>
+            ) : lockedAccounts && !lockedAccounts.available ? (
+              <Text className="mt-2 text-xs text-passive-1">
+                Locked-account listing is not available on this deployment (requires a Redis-backed cache).
+              </Text>
+            ) : lockedAccounts && lockedAccounts.accounts.length === 0 ? (
+              <Text className="mt-2 text-xs text-passive-1">No accounts are currently locked.</Text>
+            ) : lockedAccounts ? (
+              <div className="mt-2 flex flex-col gap-1">
+                {lockedAccounts.accounts.map((account) => (
+                  <div
+                    key={account.identifier}
+                    className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-semibold">{account.identifier}</span>
+                        {account.locked ? (
+                          <span className="rounded bg-danger px-1.5 py-0.5 text-xs text-danger-contrast">locked</span>
+                        ) : (
+                          <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">
+                            tracking
+                          </span>
+                        )}
+                      </div>
+                      <Text className="text-xs text-passive-1">
+                        attempts: {account.counter} &middot; captcha: {account.captchaCounter}
+                        {account.ttlSeconds >= 0 ? <> &middot; expires in {account.ttlSeconds}s</> : null}
+                      </Text>
+                    </div>
+                    <Button
+                      label="Unlock"
+                      onClick={() => void unlockAccount(account.identifier)}
+                      disabled={unlockBusy === account.identifier}
+                      small
+                    />
+                  </div>
                 ))}
               </div>
             ) : null}
           </div>
-        ) : null}
 
-        {/* Locked accounts (failed-login lockout) */}
-        <div className="mt-5">
-          <div className="flex items-center justify-between gap-2">
-            <Subtitle>Locked accounts</Subtitle>
-            <Button label="Refresh" onClick={() => void loadLockedAccounts()} disabled={lockedLoading} small />
-          </div>
-          <Text className="text-xs text-passive-1">
-            Accounts currently rate-limited by the failed-login lockout. Unlocking clears the attempt counters so the
-            user can sign in again. The identifier is whatever the failed attempts were keyed on (a user id or email).
-          </Text>
-          {lockedError ? <Text className="mt-2 text-danger">{lockedError}</Text> : null}
-          {lockedLoading && !lockedAccounts ? (
-            <div className="mt-2">
-              <Spinner className="h-4 w-4" />
-            </div>
-          ) : lockedAccounts && !lockedAccounts.available ? (
-            <Text className="mt-2 text-xs text-passive-1">
-              Locked-account listing is not available on this deployment (requires a Redis-backed cache).
+          <div className="mt-3">
+            <Text className="text-xs text-passive-1">
+              The same tiers, IP lists and lockout config are viewable/manageable from the container CLI:{' '}
+              <code>srn-admin limits</code>, <code>srn-admin ip list</code>, <code>srn-admin ip block &lt;ip&gt;</code>.
             </Text>
-          ) : lockedAccounts && lockedAccounts.accounts.length === 0 ? (
-            <Text className="mt-2 text-xs text-passive-1">No accounts are currently locked.</Text>
-          ) : lockedAccounts ? (
-            <div className="mt-2 flex flex-col gap-1">
-              {lockedAccounts.accounts.map((account) => (
-                <div
-                  key={account.identifier}
-                  className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-semibold">{account.identifier}</span>
-                      {account.locked ? (
-                        <span className="rounded bg-danger px-1.5 py-0.5 text-xs text-danger-contrast">locked</span>
-                      ) : (
-                        <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">tracking</span>
-                      )}
-                    </div>
-                    <Text className="text-xs text-passive-1">
-                      attempts: {account.counter} &middot; captcha: {account.captchaCounter}
-                      {account.ttlSeconds >= 0 ? <> &middot; expires in {account.ttlSeconds}s</> : null}
-                    </Text>
-                  </div>
-                  <Button
-                    label="Unlock"
-                    onClick={() => void unlockAccount(account.identifier)}
-                    disabled={unlockBusy === account.identifier}
-                    small
-                  />
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="mt-3">
-          <Text className="text-xs text-passive-1">
-            The same tiers, IP lists and lockout config are viewable/manageable from the container CLI:{' '}
-            <code>srn-admin limits</code>, <code>srn-admin ip list</code>, <code>srn-admin ip block &lt;ip&gt;</code>.
-          </Text>
-        </div>
-      </PreferencesSegment>
-
-      <HorizontalSeparator classes="my-4" />
-
-      {/* --- Configured-via-env honesty note ------------------------------ */}
-      <PreferencesSegment>
-        <Subtitle>Configured via the server environment</Subtitle>
-        <Text className="mt-1">
-          Several security-relevant settings are intentionally not runtime-editable and are changed only by editing the
-          server environment and redeploying: <strong>ADMIN_EMAILS</strong> (who is an admin),{' '}
-          <strong>DISABLE_USER_REGISTRATION</strong> (hard signup block), token lifetimes, and the OCR / Workflows /
-          AI-provider master switches shown above. This tab reflects their live values but does not change them.
-        </Text>
-      </PreferencesSegment>
+          </div>
+        </PreferencesSegment>
+      </TabPanel>
     </>
   )
 }

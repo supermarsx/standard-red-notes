@@ -152,9 +152,7 @@ export const formatAdminUserDate = (value: string | null | undefined): string =>
 }
 
 /** Human summary of a user's subscription cell. */
-export const formatAdminUserSubscription = (
-  subscription: { plan: string | null; active: boolean } | null,
-): string => {
+export const formatAdminUserSubscription = (subscription: { plan: string | null; active: boolean } | null): string => {
   if (!subscription) {
     return 'None'
   }
@@ -482,6 +480,19 @@ export type AdminServerSettings = {
     emailConfirmationBaseUrl?: string
     /** Gating-mode choices for the selector. */
     gatingModes?: Array<'block_signin' | 'warn'>
+    // Standard Red Notes: SIGNUP CAPS (t50). Resolved values from the server view.
+    // A "max" of 0 means unlimited; windows are in hours. per-device is a
+    // best-effort, per-browser soft cap (client-supplied device id; bypassable).
+    signupsPerIpMax?: number | null
+    signupsPerIpWindowHours?: number | null
+    signupsPerWeekMax?: number | null
+    signupsPerDeviceMax?: number | null
+    signupsPerDeviceWindowHours?: number | null
+  }
+  // Standard Red Notes: runtime LOG VERBOSITY (t50). The persisted/env/default
+  // resolved level, surfaced with a `logging.level` source key.
+  logging?: {
+    level?: string | null
   }
   // Standard Red Notes: OCR config (server-side E2E-downgrade endpoint + the
   // browser-OCR intent). serverEnabled/defaultLanguage/maxPages/maxImageBytes are
@@ -552,10 +563,7 @@ export const settingSourceChipClass = (source: string | null | undefined): strin
  * ("anthropicApiKey") or dotted ("ai.anthropicApiKey") key styles so a server
  * revision cannot silently break the chips. Missing = 'default'.
  */
-export const settingSource = (
-  sources: Record<string, string> | null | undefined,
-  ...keys: string[]
-): SettingSource => {
+export const settingSource = (sources: Record<string, string> | null | undefined, ...keys: string[]): SettingSource => {
   if (sources) {
     for (const key of keys) {
       const value = sources[key]
@@ -631,6 +639,56 @@ export const buildTokenLimitSettingUpdate = (input: string): SettingUpdateResult
     return { ok: false, error: 'Enter a whole number of tokens, or 0 / empty for unlimited.' }
   }
   return { ok: true, value: value === 0 ? null : value }
+}
+
+// ---------------------------------------------------------------------------
+// Registration signup caps (t50) + runtime log verbosity — validators + options.
+// ---------------------------------------------------------------------------
+
+/**
+ * Winston log levels the server accepts for runtime verbosity, ordered from
+ * least to most verbose. Mirrors the FROZEN overlay contract (logging.level).
+ */
+export const LOG_LEVEL_OPTIONS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'] as const
+export type LogLevel = (typeof LOG_LEVEL_OPTIONS)[number]
+
+/** True when `value` is one of the accepted winston log levels. */
+export const isLogLevel = (value: string | null | undefined): value is LogLevel =>
+  typeof value === 'string' && (LOG_LEVEL_OPTIONS as readonly string[]).includes(value)
+
+/**
+ * Validate + normalise a signup-cap "max" input. Empty or 0 means unlimited and
+ * is sent as explicit null so any persisted cap is cleared; otherwise a positive
+ * integer. Mirrors buildDailyLimitSettingUpdate (same 0/blank = unlimited rule).
+ */
+export const buildSignupCapUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '' || trimmed === '0') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return { ok: false, error: 'Enter a whole number, or 0 / empty for unlimited.' }
+  }
+  // Any spelling of zero ("00", "0.0") is unlimited too.
+  return { ok: true, value: value === 0 ? null : value }
+}
+
+/**
+ * Validate + normalise a signup-window (hours) input. Empty clears the override
+ * (falls back to env/default); otherwise a whole number of hours from 1 to 168
+ * (7 days), matching the server-side clamp in the frozen contract.
+ */
+export const buildSignupWindowUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1 || value > 168) {
+    return { ok: false, error: 'Enter a whole number of hours from 1 to 168, or empty to reset.' }
+  }
+  return { ok: true, value }
 }
 
 // ---------------------------------------------------------------------------
