@@ -10,7 +10,7 @@
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
-import { PAGE_TOKEN, TOTAL_TOKEN, type PageLayoutOptions } from './PageLayoutOptions'
+import { PAGE_TOKEN, TOTAL_TOKEN, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from './PageLayoutOptions'
 
 export const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
@@ -364,23 +364,54 @@ const docxAlignment = (docx: Docx, align: HeaderFooterAlign) => {
 }
 
 /**
+ * The `TextRun` options a band's style contributes. Absent fields ⇒ empty opts ⇒
+ * the run is byte-identical to the un-styled baseline. `color` drops its leading
+ * `#` (docx wants a bare `rrggbb`); size is in half-points (pt × 2).
+ */
+const hfRunOpts = (style: HeaderFooterStyle): Record<string, unknown> => {
+  const opts: Record<string, unknown> = {}
+  const font = resolveFont(style.fontId).docx
+  if (font) {
+    opts.font = font
+  }
+  if (style.fontSizePt != null) {
+    opts.size = Math.round(style.fontSizePt * 2)
+  }
+  if (style.bold) {
+    opts.bold = true
+  }
+  if (style.italic) {
+    opts.italics = true
+  }
+  if (style.underline) {
+    opts.underline = {}
+  }
+  if (style.color) {
+    opts.color = style.color.replace(/^#/, '')
+  }
+  return opts
+}
+
+/**
  * Turn a header/footer text (which may embed the `{page}`/`{total}` tokens) into
  * docx runs: literal spans become plain TextRuns; the tokens become PageNumber
- * fields (CURRENT / TOTAL_PAGES) so the live page number renders in Word.
+ * fields (CURRENT / TOTAL_PAGES) so the live page number renders in Word. Every
+ * run also carries the band's style opts (empty ⇒ unchanged baseline output).
  */
-const headerFooterTextRuns = (docx: Docx, text: string): InstanceType<Docx['TextRun']>[] => {
+const headerFooterTextRuns = (docx: Docx, text: string, style: HeaderFooterStyle = {}): InstanceType<Docx['TextRun']>[] => {
   const { TextRun, PageNumber } = docx
+  const opts = hfRunOpts(style)
   const runs: InstanceType<Docx['TextRun']>[] = []
   for (const part of text.split(/(\{page\}|\{total\})/g)) {
     if (part === '') {
       continue
     }
     if (part === PAGE_TOKEN) {
-      runs.push(new TextRun({ children: [PageNumber.CURRENT] }))
+      runs.push(new TextRun({ ...opts, children: [PageNumber.CURRENT] }))
     } else if (part === TOTAL_TOKEN) {
-      runs.push(new TextRun({ children: [PageNumber.TOTAL_PAGES] }))
+      runs.push(new TextRun({ ...opts, children: [PageNumber.TOTAL_PAGES] }))
     } else {
-      runs.push(new TextRun(part))
+      runs.push(new TextRun({ ...opts, text: part }))
     }
   }
   return runs
@@ -412,7 +443,10 @@ const headerFooterParagraphs = (
   const section = location === 'header' ? options.header : options.footer
   if (section) {
     paragraphs.push(
-      new Paragraph({ alignment: docxAlignment(docx, section.align), children: headerFooterTextRuns(docx, section.text) }),
+      new Paragraph({
+        alignment: docxAlignment(docx, section.align),
+        children: headerFooterTextRuns(docx, section.text, section),
+      }),
     )
   }
   const pageNumber = options.pageNumber

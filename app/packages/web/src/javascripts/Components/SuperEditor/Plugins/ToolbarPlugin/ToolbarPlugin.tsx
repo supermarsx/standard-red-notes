@@ -111,11 +111,16 @@ import {
 import {
   CUSTOM_MARGIN_ID,
   HEADER_FOOTER_ALIGNS,
+  HEADER_FOOTER_FONTS,
+  HeaderFooter,
   HeaderFooterAlign,
+  HeaderFooterFontId,
   MARGIN_PRESETS,
   MAX_COLUMNS,
+  MAX_HF_FONT_PT,
   MAX_PAGE_START,
   MIN_COLUMNS,
+  MIN_HF_FONT_PT,
   NoteLayout,
   PAGE_SIZE_OPTIONS,
   PageNumberFormat,
@@ -684,6 +689,25 @@ const ToolbarPlugin = () => {
     (patch: Partial<NoteLayout>) => {
       setNoteLayout((prev) => {
         const next = { ...prev, ...patch }
+        saveNoteLayout(activeNoteUuid, next)
+        return next
+      })
+    },
+    [activeNoteUuid],
+  )
+  // Patch one header/footer band. A patch value of `undefined` CLEARS that key
+  // (rather than persisting an undefined), keeping the record minimal so an
+  // un-styled band still exports byte-identically.
+  const updateBand = useCallback(
+    (band: 'header' | 'footer', patch: Partial<HeaderFooter>) => {
+      setNoteLayout((prev) => {
+        const merged: HeaderFooter = { ...prev[band], ...patch }
+        for (const key of Object.keys(patch) as (keyof HeaderFooter)[]) {
+          if (patch[key] === undefined) {
+            delete merged[key]
+          }
+        }
+        const next = { ...prev, [band]: merged }
         saveNoteLayout(activeNoteUuid, next)
         return next
       })
@@ -3940,181 +3964,253 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="w-72 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
+        <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
           <p className="mb-3 text-xs text-passive-1">
             Applied when exporting to PDF, Word (.docx) or OpenDocument (.odt). Browser print cannot render these.
           </p>
 
-          {/* Page numbering */}
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={noteLayout.pageNumbering.enabled}
-              onChange={(event) =>
-                updateNoteLayout({ pageNumbering: { ...noteLayout.pageNumbering, enabled: event.target.checked } })
-              }
-            />
-            Page numbers
-          </label>
-          {noteLayout.pageNumbering.enabled && (
-            <div className="mb-3 mt-2 flex flex-col gap-2 pl-6">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Format</span>
-                <select
-                  aria-label="Page number format"
-                  value={noteLayout.pageNumbering.format}
-                  onChange={(event) =>
-                    updateNoteLayout({
-                      pageNumbering: { ...noteLayout.pageNumbering, format: event.target.value as PageNumberFormat },
-                    })
-                  }
-                  className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
-                >
-                  <option value="page-n">Page 1</option>
-                  <option value="n">1</option>
-                  <option value="n-of-total">1 / N</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Position</span>
-                <select
-                  aria-label="Page number position"
-                  value={noteLayout.pageNumbering.location}
-                  onChange={(event) =>
-                    updateNoteLayout({
-                      pageNumbering: {
-                        ...noteLayout.pageNumbering,
-                        location: event.target.value === 'header' ? 'header' : 'footer',
-                      },
-                    })
-                  }
-                  className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
-                >
-                  <option value="header">Header (top)</option>
-                  <option value="footer">Footer (bottom)</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Align</span>
-                <select
-                  aria-label="Page number alignment"
-                  value={noteLayout.pageNumbering.align}
-                  onChange={(event) =>
-                    updateNoteLayout({
-                      pageNumbering: { ...noteLayout.pageNumbering, align: event.target.value as HeaderFooterAlign },
-                    })
-                  }
-                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
-                >
-                  {HEADER_FOOTER_ALIGNS.map((align) => (
-                    <option key={align} value={align}>
-                      {align}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Start at</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_PAGE_START}
-                  aria-label="Start page number"
-                  value={noteLayout.pageNumbering.startAt}
-                  onChange={(event) => {
-                    const next = parseInt(event.target.value, 10)
-                    if (!Number.isNaN(next)) {
+          {/* Subsection 1 — Page numbers (styling is out of scope for this band). */}
+          <div className="rounded-md border border-border p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={noteLayout.pageNumbering.enabled}
+                onChange={(event) =>
+                  updateNoteLayout({ pageNumbering: { ...noteLayout.pageNumbering, enabled: event.target.checked } })
+                }
+              />
+              Page numbers
+            </label>
+            {noteLayout.pageNumbering.enabled && (
+              <div className="mt-2 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-passive-1">Format</span>
+                  <select
+                    aria-label="Page number format"
+                    value={noteLayout.pageNumbering.format}
+                    onChange={(event) =>
+                      updateNoteLayout({
+                        pageNumbering: { ...noteLayout.pageNumbering, format: event.target.value as PageNumberFormat },
+                      })
+                    }
+                    className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                  >
+                    <option value="page-n">Page 1</option>
+                    <option value="n">1</option>
+                    <option value="n-of-total">1 / N</option>
+                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-passive-1">Position</span>
+                  <select
+                    aria-label="Page number position"
+                    value={noteLayout.pageNumbering.location}
+                    onChange={(event) =>
                       updateNoteLayout({
                         pageNumbering: {
                           ...noteLayout.pageNumbering,
-                          startAt: Math.min(MAX_PAGE_START, Math.max(1, next)),
+                          location: event.target.value === 'header' ? 'header' : 'footer',
                         },
                       })
                     }
-                  }}
-                  className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
-                />
+                    className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                  >
+                    <option value="header">Header (top)</option>
+                    <option value="footer">Footer (bottom)</option>
+                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-passive-1">Align</span>
+                  <select
+                    aria-label="Page number alignment"
+                    value={noteLayout.pageNumbering.align}
+                    onChange={(event) =>
+                      updateNoteLayout({
+                        pageNumbering: { ...noteLayout.pageNumbering, align: event.target.value as HeaderFooterAlign },
+                      })
+                    }
+                    className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                  >
+                    {HEADER_FOOTER_ALIGNS.map((align) => (
+                      <option key={align} value={align}>
+                        {align}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-passive-1">Start at</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_PAGE_START}
+                    aria-label="Start page number"
+                    value={noteLayout.pageNumbering.startAt}
+                    onChange={(event) => {
+                      const next = parseInt(event.target.value, 10)
+                      if (!Number.isNaN(next)) {
+                        updateNoteLayout({
+                          pageNumbering: {
+                            ...noteLayout.pageNumbering,
+                            startAt: Math.min(MAX_PAGE_START, Math.max(1, next)),
+                          },
+                        })
+                      }
+                    }}
+                    className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                  />
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* Header */}
-          <label className="mt-1 flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={noteLayout.header.enabled}
-              onChange={(event) => updateNoteLayout({ header: { ...noteLayout.header, enabled: event.target.checked } })}
-            />
-            Header text
-          </label>
-          {noteLayout.header.enabled && (
-            <div className="mb-3 mt-2 flex flex-col gap-2 pl-6">
-              <input
-                type="text"
-                aria-label="Header text"
-                placeholder="e.g. My document"
-                value={noteLayout.header.text}
-                onChange={(event) => updateNoteLayout({ header: { ...noteLayout.header, text: event.target.value } })}
-                className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
-              />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Align</span>
-                <select
-                  aria-label="Header alignment"
-                  value={noteLayout.header.align}
-                  onChange={(event) =>
-                    updateNoteLayout({ header: { ...noteLayout.header, align: event.target.value as HeaderFooterAlign } })
-                  }
-                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
-                >
-                  {HEADER_FOOTER_ALIGNS.map((align) => (
-                    <option key={align} value={align}>
-                      {align}
-                    </option>
-                  ))}
-                </select>
+          {/* Subsections 2 & 3 — Header and Footer, each fully styleable. */}
+          {(['header', 'footer'] as const).map((band) => {
+            const value = noteLayout[band]
+            const title = band === 'header' ? 'Header' : 'Footer'
+            const placeholder = band === 'header' ? 'e.g. My document' : 'e.g. Confidential'
+            return (
+              <div key={band} className="mt-3 rounded-md border border-border p-3">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={value.enabled}
+                    onChange={(event) => updateBand(band, { enabled: event.target.checked })}
+                  />
+                  {title}
+                </label>
+                {value.enabled && (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <input
+                      type="text"
+                      aria-label={`${title} text`}
+                      placeholder={placeholder}
+                      value={value.text}
+                      onChange={(event) => updateBand(band, { text: event.target.value })}
+                      className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-passive-1">Align</span>
+                      <select
+                        aria-label={`${title} alignment`}
+                        value={value.align}
+                        onChange={(event) => updateBand(band, { align: event.target.value as HeaderFooterAlign })}
+                        className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                      >
+                        {HEADER_FOOTER_ALIGNS.map((align) => (
+                          <option key={align} value={align}>
+                            {align}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-passive-1">Font</span>
+                      <select
+                        aria-label={`${title} font`}
+                        value={value.fontId ?? 'default'}
+                        onChange={(event) => {
+                          const fontId = event.target.value as HeaderFooterFontId
+                          updateBand(band, { fontId: fontId === 'default' ? undefined : fontId })
+                        }}
+                        className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                      >
+                        {HEADER_FOOTER_FONTS.map((font) => (
+                          <option key={font.id} value={font.id}>
+                            {font.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-passive-1">Size</span>
+                      <input
+                        type="number"
+                        min={MIN_HF_FONT_PT}
+                        max={MAX_HF_FONT_PT}
+                        aria-label={`${title} font size`}
+                        placeholder="Default"
+                        value={value.fontSizePt ?? ''}
+                        onChange={(event) => {
+                          const raw = event.target.value
+                          if (raw === '') {
+                            updateBand(band, { fontSizePt: undefined })
+                            return
+                          }
+                          const next = parseInt(raw, 10)
+                          if (!Number.isNaN(next)) {
+                            updateBand(band, { fontSizePt: Math.min(MAX_HF_FONT_PT, Math.max(MIN_HF_FONT_PT, next)) })
+                          }
+                        }}
+                        className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-passive-1">Style</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label={`${title} bold`}
+                          aria-pressed={value.bold === true}
+                          onClick={() => updateBand(band, { bold: value.bold ? undefined : true })}
+                          className={classNames(
+                            'h-8 w-8 rounded-md border border-border text-sm font-bold',
+                            value.bold ? '!bg-info !text-info-contrast' : 'bg-default',
+                          )}
+                        >
+                          B
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${title} italic`}
+                          aria-pressed={value.italic === true}
+                          onClick={() => updateBand(band, { italic: value.italic ? undefined : true })}
+                          className={classNames(
+                            'h-8 w-8 rounded-md border border-border text-sm italic',
+                            value.italic ? '!bg-info !text-info-contrast' : 'bg-default',
+                          )}
+                        >
+                          I
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${title} underline`}
+                          aria-pressed={value.underline === true}
+                          onClick={() => updateBand(band, { underline: value.underline ? undefined : true })}
+                          className={classNames(
+                            'h-8 w-8 rounded-md border border-border text-sm underline',
+                            value.underline ? '!bg-info !text-info-contrast' : 'bg-default',
+                          )}
+                        >
+                          U
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-passive-1">Color</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          aria-label={`${title} text color`}
+                          value={value.color ?? '#000000'}
+                          onChange={(event) => updateBand(band, { color: event.target.value })}
+                          className="h-8 w-10 cursor-pointer rounded-md border border-border bg-default"
+                        />
+                        <button
+                          type="button"
+                          aria-label={`${title} color auto`}
+                          onClick={() => updateBand(band, { color: undefined })}
+                          className="h-8 rounded-md border border-border bg-default px-2 text-xs"
+                        >
+                          Auto
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-
-          {/* Footer */}
-          <label className="mt-1 flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={noteLayout.footer.enabled}
-              onChange={(event) => updateNoteLayout({ footer: { ...noteLayout.footer, enabled: event.target.checked } })}
-            />
-            Footer text
-          </label>
-          {noteLayout.footer.enabled && (
-            <div className="mt-2 flex flex-col gap-2 pl-6">
-              <input
-                type="text"
-                aria-label="Footer text"
-                placeholder="e.g. Confidential"
-                value={noteLayout.footer.text}
-                onChange={(event) => updateNoteLayout({ footer: { ...noteLayout.footer, text: event.target.value } })}
-                className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
-              />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-passive-1">Align</span>
-                <select
-                  aria-label="Footer alignment"
-                  value={noteLayout.footer.align}
-                  onChange={(event) =>
-                    updateNoteLayout({ footer: { ...noteLayout.footer, align: event.target.value as HeaderFooterAlign } })
-                  }
-                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
-                >
-                  {HEADER_FOOTER_ALIGNS.map((align) => (
-                    <option key={align} value={align}>
-                      {align}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
+            )
+          })}
 
           <p className="mt-3 text-xs text-passive-1">
             Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.

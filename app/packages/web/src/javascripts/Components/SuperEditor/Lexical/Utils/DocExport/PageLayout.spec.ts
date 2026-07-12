@@ -32,6 +32,12 @@ const OPTIONS: PageLayoutOptions = {
   footer: { text: 'Confidential', align: 'right' },
 }
 
+/** t59: header + footer carrying the new per-band text style. */
+const STYLED_OPTIONS: PageLayoutOptions = {
+  header: { text: 'Doc Title {page}', align: 'left', fontId: 'serif', fontSizePt: 14, bold: true, color: '#ff0000' },
+  footer: { text: 'Confidential', align: 'right', italic: true, underline: true },
+}
+
 /** Unzip helper: filename → text reader. */
 const unzip = async (blob: Blob): Promise<Record<string, () => Promise<string>>> => {
   const zip = await import('@zip.js/zip.js')
@@ -130,5 +136,55 @@ describe('buildOdtBlob with page-layout options', () => {
     expect(stylesXml).not.toContain('<style:header>')
     // The baseline styles.xml still has its named paragraph styles.
     expect(stylesXml).toContain('Heading_20_1')
+  })
+})
+
+describe('t59 — styled header/footer bands', () => {
+  it('DOCX: header/footer runs carry font, size (half-points), bold/italic/underline and color', async () => {
+    const files = await unzip(await buildDocxBlob(model(), STYLED_OPTIONS))
+    const headerXml = (await files['word/header1.xml']()).toLowerCase()
+    const footerXml = (await files['word/footer1.xml']()).toLowerCase()
+
+    assertWellFormedXml(await files['word/header1.xml']())
+    assertWellFormedXml(await files['word/footer1.xml']())
+
+    // Header: serif font (Times New Roman), 14pt → w:sz 28, bold, red.
+    expect(headerXml).toContain('times new roman')
+    expect(headerXml).toContain('w:val="28"')
+    expect(headerXml).toContain('<w:b')
+    expect(headerXml).toContain('w:color w:val="ff0000"')
+    // Footer: italic + single underline.
+    expect(footerXml).toContain('<w:i')
+    expect(footerXml).toContain('<w:u')
+  })
+
+  it('ODT: styled bands get a per-band automatic paragraph style with text-properties', async () => {
+    const files = await unzip(await buildOdtBlob(model(), STYLED_OPTIONS))
+    const stylesXml = await files['styles.xml']()
+
+    assertWellFormedXml(stylesXml)
+    // Per-band style names, referenced by the band paragraphs.
+    expect(stylesXml).toContain('<style:style style:name="SRN_hf_header"')
+    expect(stylesXml).toContain('<style:style style:name="SRN_hf_footer"')
+    expect(stylesXml).toContain('text:style-name="SRN_hf_header"')
+    expect(stylesXml).toContain('text:style-name="SRN_hf_footer"')
+    // Header text-properties: serif font, 14pt, bold, red.
+    expect(stylesXml).toContain('style:font-name="Times New Roman"')
+    expect(stylesXml).toContain('fo:font-size="14pt"')
+    expect(stylesXml).toContain('fo:font-weight="bold"')
+    expect(stylesXml).toContain('fo:color="#ff0000"')
+    // Footer: italic + underline.
+    expect(stylesXml).toContain('fo:font-style="italic"')
+    expect(stylesXml).toContain('style:text-underline-style="solid"')
+  })
+
+  it('ODT: an UN-styled band still references the shared align-only style (back-compat)', async () => {
+    const files = await unzip(await buildOdtBlob(model(), OPTIONS))
+    const stylesXml = await files['styles.xml']()
+    // OPTIONS bands carry no style ⇒ no per-band styles, only align-only refs.
+    expect(stylesXml).not.toContain('SRN_hf_header')
+    expect(stylesXml).not.toContain('SRN_hf_footer')
+    expect(stylesXml).toContain('text:style-name="SRN_hf_left"')
+    expect(stylesXml).toContain('text:style-name="SRN_hf_right"')
   })
 })

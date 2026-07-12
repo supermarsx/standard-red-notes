@@ -12,7 +12,7 @@
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
-import { PAGE_TOKEN, TOTAL_TOKEN, type PageLayoutOptions } from './PageLayoutOptions'
+import { PAGE_TOKEN, TOTAL_TOKEN, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from './PageLayoutOptions'
 
 export const ODT_MIME_TYPE = 'application/vnd.oasis.opendocument.text'
 
@@ -329,6 +329,77 @@ const HF_ALIGN_STYLES = (['left', 'center', 'right'] as HeaderFooterAlign[])
   )
   .join('')
 
+/** Distinct per-band style name used only when a band carries a text style. */
+const HF_BAND_STYLE_NAME: Record<'header' | 'footer', string> = {
+  header: 'SRN_hf_header',
+  footer: 'SRN_hf_footer',
+}
+
+/** True when a band carries any text style beyond plain alignment. */
+const hasBandStyle = (style: HeaderFooterStyle): boolean =>
+  style.fontId != null ||
+  style.fontSizePt != null ||
+  style.bold === true ||
+  style.italic === true ||
+  style.underline === true ||
+  style.color != null
+
+/**
+ * The `<style:text-properties>` body for a styled band. Underline maps to a single
+ * solid underline (ODF's only form we offer); `color` is already `#rrggbb`.
+ */
+const odfBandTextProps = (style: HeaderFooterStyle): string => {
+  const props: string[] = []
+  const font = resolveFont(style.fontId).odf
+  if (font) {
+    props.push(`style:font-name="${font}" fo:font-family="&apos;${font}&apos;"`)
+  }
+  if (style.fontSizePt != null) {
+    props.push(`fo:font-size="${style.fontSizePt}pt"`)
+  }
+  if (style.bold) {
+    props.push('fo:font-weight="bold"')
+  }
+  if (style.italic) {
+    props.push('fo:font-style="italic"')
+  }
+  if (style.underline) {
+    props.push(
+      'style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"',
+    )
+  }
+  if (style.color) {
+    props.push(`fo:color="${style.color}"`)
+  }
+  return props.join(' ')
+}
+
+/** The paragraph style a band references: a per-band styled one, else align-only. */
+const hfParagraphStyleName = (
+  location: 'header' | 'footer',
+  section: { align: HeaderFooterAlign } & HeaderFooterStyle,
+): string => (hasBandStyle(section) ? HF_BAND_STYLE_NAME[location] : `SRN_hf_${section.align}`)
+
+/**
+ * The `<style:style>` definition for a styled band (paragraph-properties align +
+ * text-properties), or '' when the band has no style ⇒ it reuses the shared
+ * align-only style and the output stays byte-identical to the pre-t59 baseline.
+ */
+const hfBandStyleDefinition = (
+  location: 'header' | 'footer',
+  section: { align: HeaderFooterAlign } & HeaderFooterStyle,
+): string => {
+  if (!hasBandStyle(section)) {
+    return ''
+  }
+  return (
+    `<style:style style:name="${HF_BAND_STYLE_NAME[location]}" style:family="paragraph" style:parent-style-name="Standard">` +
+    `<style:paragraph-properties fo:text-align="${odfTextAlign(section.align)}"/>` +
+    `<style:text-properties ${odfBandTextProps(section)}/>` +
+    '</style:style>'
+  )
+}
+
 /** A `<text:page-number>` field, offset by `startAt` (page 1 shows startAt). */
 const odfPageNumberField = (startAt = 1): string => {
   const adjust = startAt !== 1 ? ` text:page-adjust="${startAt - 1}"` : ''
@@ -374,7 +445,9 @@ const odfHeaderFooter = (location: 'header' | 'footer', options: PageLayoutOptio
   }
   const paragraphs: string[] = []
   if (section) {
-    paragraphs.push(`<text:p text:style-name="SRN_hf_${section.align}">${odfHeaderFooterText(section.text)}</text:p>`)
+    paragraphs.push(
+      `<text:p text:style-name="${hfParagraphStyleName(location, section)}">${odfHeaderFooterText(section.text)}</text:p>`,
+    )
   }
   if (pageNumber) {
     paragraphs.push(
@@ -397,7 +470,10 @@ const buildPageStylesInsertion = (options: PageLayoutOptions): string => {
     '<style:header-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-bottom="0.2cm"/></style:header-style>' +
     '<style:footer-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-top="0.2cm"/></style:footer-style>' +
     '</style:page-layout>'
-  const automaticStyles = `<office:automatic-styles>${pageLayout}${HF_ALIGN_STYLES}</office:automatic-styles>`
+  const bandStyles =
+    (options.header ? hfBandStyleDefinition('header', options.header) : '') +
+    (options.footer ? hfBandStyleDefinition('footer', options.footer) : '')
+  const automaticStyles = `<office:automatic-styles>${pageLayout}${HF_ALIGN_STYLES}${bandStyles}</office:automatic-styles>`
   const masterStyles =
     '<office:master-styles>' +
     '<style:master-page style:name="Standard" style:page-layout-name="SRNpm1">' +

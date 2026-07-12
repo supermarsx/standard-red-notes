@@ -75,6 +75,25 @@ export type PageNumberFormat = 'n' | 'n-of-total' | 'page-n' // "1" | "1 / 8" | 
 /** Horizontal placement of header/footer/page-number content. */
 export type HeaderFooterAlign = 'left' | 'center' | 'right'
 
+/**
+ * Portable font-family choice for header/footer text. Deliberately a tiny generic
+ * whitelist (not arbitrary names) so every output format — docx, ODF, and the
+ * react-pdf standard-14 set (no font registration) — maps it to a concrete font
+ * that renders predictably. `default` means "no font override" (format default).
+ */
+export type HeaderFooterFontId = 'default' | 'serif' | 'sans' | 'mono'
+export const HEADER_FOOTER_FONTS: { id: HeaderFooterFontId; label: string }[] = [
+  { id: 'default', label: 'Default' },
+  { id: 'serif', label: 'Serif' },
+  { id: 'sans', label: 'Sans-serif' },
+  { id: 'mono', label: 'Monospace' },
+]
+export const HEADER_FOOTER_FONT_IDS: HeaderFooterFontId[] = HEADER_FOOTER_FONTS.map((f) => f.id)
+
+/** Inclusive bounds for a header/footer font size (points). */
+export const MIN_HF_FONT_PT = 6
+export const MAX_HF_FONT_PT = 72
+
 /** Page numbering config carried in the paginated output (default OFF). */
 export type PageNumbering = {
   enabled: boolean
@@ -96,6 +115,20 @@ export type HeaderFooter = {
   enabled: boolean
   text: string
   align: HeaderFooterAlign
+  /**
+   * Optional per-band text style. ALL optional and absent by default — a legacy
+   * record or the default carries NONE of these keys, so it maps to the minimal
+   * options shape and exports byte-identically. Each generator omits its output
+   * for an absent field (⇒ format default).
+   */
+  fontId?: HeaderFooterFontId
+  /** Font size in points, clamped to MIN_HF_FONT_PT..MAX_HF_FONT_PT. */
+  fontSizePt?: number
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  /** Validated lowercase `#rrggbb`; any invalid value is dropped, never emitted. */
+  color?: string
 }
 
 export type NoteLayout = {
@@ -161,14 +194,63 @@ function normalizePageNumbering(raw: unknown): PageNumbering {
   }
 }
 
-/** Coerce a persisted value into a safe HeaderFooter. Never throws. */
+/** Clamp a persisted header/footer font size into range, or omit when not a finite number. */
+const normalizeHfFontSize = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.min(MAX_HF_FONT_PT, Math.max(MIN_HF_FONT_PT, Math.round(value)))
+}
+
+/** Validate + normalize a hex color to lowercase `#rrggbb`, or omit when invalid. */
+const normalizeHexColor = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const match = value.trim().match(/^#?([0-9a-fA-F]{6})$/)
+  return match ? `#${match[1].toLowerCase()}` : undefined
+}
+
+/**
+ * Coerce a persisted value into a safe HeaderFooter. Never throws.
+ *
+ * The optional style fields are set ONLY when validly present, so a legacy record
+ * (and the default) keeps the minimal `{ enabled, text, align }` shape — that is
+ * what keeps the mapper/export byte-identical with no migration. A `fontId` of
+ * `default` is treated as "no font" and dropped for the same reason.
+ */
 function normalizeHeaderFooter(raw: unknown, fallback: HeaderFooter): HeaderFooter {
   const c = (raw && typeof raw === 'object' ? raw : {}) as Partial<HeaderFooter>
-  return {
+  const hf: HeaderFooter = {
     enabled: c.enabled === true,
     text: asString(c.text, fallback.text),
     align: asEnum(c.align, HEADER_FOOTER_ALIGNS, fallback.align),
   }
+  if (
+    typeof c.fontId === 'string' &&
+    (HEADER_FOOTER_FONT_IDS as readonly string[]).includes(c.fontId) &&
+    c.fontId !== 'default'
+  ) {
+    hf.fontId = c.fontId as HeaderFooterFontId
+  }
+  const fontSizePt = normalizeHfFontSize(c.fontSizePt)
+  if (fontSizePt != null) {
+    hf.fontSizePt = fontSizePt
+  }
+  if (c.bold === true) {
+    hf.bold = true
+  }
+  if (c.italic === true) {
+    hf.italic = true
+  }
+  if (c.underline === true) {
+    hf.underline = true
+  }
+  const color = normalizeHexColor(c.color)
+  if (color) {
+    hf.color = color
+  }
+  return hf
 }
 
 /** Coerce an arbitrary persisted value into a safe NoteLayout. Never throws. */

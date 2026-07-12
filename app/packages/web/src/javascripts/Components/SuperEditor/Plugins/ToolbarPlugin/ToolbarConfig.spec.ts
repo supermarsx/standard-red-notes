@@ -148,6 +148,38 @@ describe('Insert-sections vanish guard (static source assertion)', () => {
   })
 })
 
+describe('Header/Footer styled subsections (t59, static source assertion)', () => {
+  // The popover was split into three bordered subsections (Page numbers / Header
+  // / Footer), each Header/Footer carrying the full style control set. The full
+  // ToolbarPlugin can't be jsdom-mounted, so — like the vanish guards above —
+  // assert the split copy + style controls exist literally in source (MEMORY:
+  // verify UI render paths; the Page group vanished twice before).
+  const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
+
+  it('renders each band as a bordered subsection card', () => {
+    // The Page-numbers card + the Header/Footer card (emitted once in source but
+    // mapped over ['header','footer'] at runtime) both use the bordered card class.
+    const cardMatches = source.match(/rounded-md border border-border p-3/g) || []
+    expect(cardMatches.length).toBeGreaterThanOrEqual(2)
+    // The two styled bands are produced by mapping over header + footer.
+    expect(source).toContain("(['header', 'footer'] as const).map")
+  })
+
+  it('keeps the three subsection headings (Page numbers / Header / Footer)', () => {
+    expect(source).toContain('Page numbers')
+    expect(source).toContain("band === 'header' ? 'Header' : 'Footer'")
+  })
+
+  it('exposes the full style control set (font list, size bounds, B/I/U, color + Auto reset)', () => {
+    expect(source).toContain('HEADER_FOOTER_FONTS.map')
+    expect(source).toContain('MIN_HF_FONT_PT')
+    expect(source).toContain('MAX_HF_FONT_PT')
+    expect(source).toContain('type="color"')
+    expect(source).toContain('color: undefined') // the "Auto" reset clears the key
+    expect(source).toContain('updateBand(band, { bold:')
+  })
+})
+
 describe('Page group includes the Header/footer button (t48)', () => {
   it('lists PageHeaderFooter as the last button of the Page group', () => {
     const page = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.Page)

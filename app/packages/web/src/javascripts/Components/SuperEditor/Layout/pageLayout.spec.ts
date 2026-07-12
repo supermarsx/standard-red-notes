@@ -107,4 +107,90 @@ describe('noteLayoutToPageLayoutOptions', () => {
     const options = noteLayoutToPageLayoutOptions(withLayout({ header: { enabled: true, text: '', align: 'left' } }))
     expect(options).toEqual({ header: { text: '', align: 'left' } })
   })
+
+  it('an enabled but UN-styled band maps to exactly { text, align } (no style keys — back-compat)', () => {
+    const options = noteLayoutToPageLayoutOptions(
+      withLayout({ header: { enabled: true, text: 'Hi', align: 'center' } }),
+    )
+    // Must NOT gain any style keys, so its export stays byte-identical to t48.
+    expect(options).toEqual({ header: { text: 'Hi', align: 'center' } })
+  })
+
+  it('carries only the set style fields into a styled band (dropping the no-op default font)', () => {
+    const options = noteLayoutToPageLayoutOptions(
+      withLayout({
+        header: {
+          enabled: true,
+          text: 'Title',
+          align: 'left',
+          fontId: 'serif',
+          fontSizePt: 14,
+          bold: true,
+          color: '#ff0000',
+        },
+        footer: { enabled: true, text: 'Foot', align: 'right', fontId: 'default', italic: true, underline: true },
+      }),
+    )
+    expect(options?.header).toEqual({
+      text: 'Title',
+      align: 'left',
+      fontId: 'serif',
+      fontSizePt: 14,
+      bold: true,
+      color: '#ff0000',
+    })
+    // fontId 'default' is a no-op ⇒ dropped; only the real style keys survive.
+    expect(options?.footer).toEqual({ text: 'Foot', align: 'right', italic: true, underline: true })
+  })
+})
+
+describe('normalizeHeaderFooter — optional style fields', () => {
+  it('leaves legacy / default records with NO style keys (byte-identical export)', () => {
+    const legacy = normalizeNoteLayout({ header: { enabled: true, text: 'x', align: 'left' } }).header
+    expect(legacy).toEqual({ enabled: true, text: 'x', align: 'left' })
+    expect('fontId' in legacy).toBe(false)
+    expect('bold' in legacy).toBe(false)
+    expect('color' in legacy).toBe(false)
+  })
+
+  it('whitelists fontId and drops unknown ids and the no-op "default"', () => {
+    expect(normalizeNoteLayout({ header: { fontId: 'serif' } }).header.fontId).toBe('serif')
+    expect('fontId' in normalizeNoteLayout({ header: { fontId: 'comic-sans' } }).header).toBe(false)
+    // 'default' means "no font" ⇒ never stored as a key.
+    expect('fontId' in normalizeNoteLayout({ header: { fontId: 'default' } }).header).toBe(false)
+  })
+
+  it('clamps fontSizePt into range and omits non-numbers', () => {
+    expect(normalizeNoteLayout({ header: { fontSizePt: 14 } }).header.fontSizePt).toBe(14)
+    expect(normalizeNoteLayout({ header: { fontSizePt: 2 } }).header.fontSizePt).toBe(6) // MIN
+    expect(normalizeNoteLayout({ header: { fontSizePt: 999 } }).header.fontSizePt).toBe(72) // MAX
+    expect(normalizeNoteLayout({ header: { fontSizePt: 12.6 } }).header.fontSizePt).toBe(13) // rounded
+    expect('fontSizePt' in normalizeNoteLayout({ header: { fontSizePt: 'big' } }).header).toBe(false)
+    expect('fontSizePt' in normalizeNoteLayout({ header: { fontSizePt: '' } }).header).toBe(false)
+  })
+
+  it('sets bold/italic/underline only when strictly true', () => {
+    const on = normalizeNoteLayout({ header: { bold: true, italic: true, underline: true } }).header
+    expect(on.bold).toBe(true)
+    expect(on.italic).toBe(true)
+    expect(on.underline).toBe(true)
+    const off = normalizeNoteLayout({ header: { bold: 'yes', italic: 1, underline: 0 } }).header
+    expect('bold' in off).toBe(false)
+    expect('italic' in off).toBe(false)
+    expect('underline' in off).toBe(false)
+  })
+
+  it('validates + normalizes color to lowercase #rrggbb, dropping invalid values', () => {
+    expect(normalizeNoteLayout({ header: { color: '#AABBCC' } }).header.color).toBe('#aabbcc')
+    expect(normalizeNoteLayout({ header: { color: 'ff0000' } }).header.color).toBe('#ff0000')
+    expect('color' in normalizeNoteLayout({ header: { color: 'red' } }).header).toBe(false)
+    expect('color' in normalizeNoteLayout({ header: { color: '#12345' } }).header).toBe(false)
+    expect('color' in normalizeNoteLayout({ header: { color: 42 } }).header).toBe(false)
+  })
+
+  it('never throws on garbage style values', () => {
+    expect(() =>
+      normalizeNoteLayout({ header: { fontId: {}, fontSizePt: [], bold: null, color: [] } }),
+    ).not.toThrow()
+  })
 })

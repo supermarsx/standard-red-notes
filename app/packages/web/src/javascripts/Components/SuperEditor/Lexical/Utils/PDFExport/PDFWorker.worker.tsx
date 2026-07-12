@@ -19,7 +19,7 @@ import {
 import { expose } from 'comlink'
 import { FontFamily, registerPDFFonts } from './FontConfig'
 import { PDF_BASE_FONT_SIZE, PDF_BLOCK_GAP, PDF_PAGE_PADDING } from './PDFLayoutConstants'
-import { hasBandAt, pageStartOffset, type PageLayoutOptions } from '../DocExport/PageLayoutOptions'
+import { hasBandAt, pageStartOffset, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from '../DocExport/PageLayoutOptions'
 import { formatPdfPageNumber, substitutePageTokens } from './pageLayoutRender'
 
 /** Fixed-position font styling for the running header/footer bands. */
@@ -27,6 +27,35 @@ const PDF_HEADER_FOOTER_FONT_SIZE = 9
 const PDF_HEADER_FOOTER_COLOR = '#555555'
 /** Extra top/bottom padding reserved for a header/footer band so it never overlaps content. */
 const PDF_HEADER_FOOTER_RESERVE = 22
+
+/**
+ * The react-pdf `<Text>` style a band's style contributes, overriding the band's
+ * default font size / color. Font family resolves to a standard-14 name (no
+ * registration); an absent field is omitted so the band inherits its default.
+ */
+const hfTextStyle = (style: HeaderFooterStyle): TextProps['style'] => {
+  const s: Record<string, unknown> = {}
+  const font = resolveFont(style.fontId).pdf
+  if (font) {
+    s.fontFamily = font
+  }
+  if (style.fontSizePt != null) {
+    s.fontSize = style.fontSizePt
+  }
+  if (style.bold) {
+    s.fontWeight = 'bold'
+  }
+  if (style.italic) {
+    s.fontStyle = 'italic'
+  }
+  if (style.underline) {
+    s.textDecoration = 'underline'
+  }
+  if (style.color) {
+    s.color = style.color
+  }
+  return s as TextProps['style']
+}
 
 export type PDFDataNode =
   | ((
@@ -113,7 +142,7 @@ const HeaderFooterBand = ({ location, options }: { location: 'header' | 'footer'
       {section ? (
         <Text
           fixed
-          style={{ textAlign: section.align, width: '100%' }}
+          style={{ textAlign: section.align, width: '100%', ...hfTextStyle(section) }}
           render={({ pageNumber: current, totalPages }) =>
             substitutePageTokens(section.text, current, totalPages, offset)
           }
