@@ -20,6 +20,7 @@ import { parseFileName } from '@standardnotes/utils'
 import { $dfs } from '@lexical/utils'
 import { $isFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { $generateNodesFromSerializedNodes, $insertGeneratedNodes } from '@lexical/clipboard'
+import type { PageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
 
 export class HeadlessSuperConverter implements SuperConverterServiceInterface {
   private importEditor: LexicalEditor
@@ -60,6 +61,8 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       getFileBase64?: (id: string) => Promise<string | undefined>
       pdf?: {
         pageSize?: PrefValue[PrefKey.SuperNoteExportPDFPageSize]
+        /** Standard Red Notes: per-note page numbering / header / footer (from NoteLayout). */
+        pageLayout?: PageLayoutOptions
       }
     },
   ): Promise<string> {
@@ -166,7 +169,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
             break
           case 'pdf': {
             void import('../Lexical/Utils/PDFExport/PDFExport').then(({ $generatePDFFromNodes }): void => {
-              void $generatePDFFromNodes(this.exportEditor, config?.pdf?.pageSize || 'A4')
+              void $generatePDFFromNodes(this.exportEditor, config?.pdf?.pageSize || 'A4', config?.pdf?.pageLayout)
                 .then((pdf) => {
                   content = pdf
                   resolve()

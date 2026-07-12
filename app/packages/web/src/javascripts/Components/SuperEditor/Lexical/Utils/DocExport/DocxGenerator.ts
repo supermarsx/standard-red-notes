@@ -9,6 +9,8 @@
  * spreadsheet / PDF / zip.js precedent — heavy export libs load on demand).
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
+import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
+import { PAGE_TOKEN, TOTAL_TOKEN, type PageLayoutOptions } from './PageLayoutOptions'
 
 export const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
@@ -350,8 +352,88 @@ const blockToDocx = (ctx: Ctx, block: DocBlock): (DocxParagraph | DocxTable)[] =
   }
 }
 
-/** Build a real .docx (OOXML) Blob from the shared DocModel. */
-export const buildDocxBlob = async (blocks: DocBlock[]): Promise<Blob> => {
+const docxAlignment = (docx: Docx, align: HeaderFooterAlign) => {
+  switch (align) {
+    case 'left':
+      return docx.AlignmentType.LEFT
+    case 'right':
+      return docx.AlignmentType.RIGHT
+    default:
+      return docx.AlignmentType.CENTER
+  }
+}
+
+/**
+ * Turn a header/footer text (which may embed the `{page}`/`{total}` tokens) into
+ * docx runs: literal spans become plain TextRuns; the tokens become PageNumber
+ * fields (CURRENT / TOTAL_PAGES) so the live page number renders in Word.
+ */
+const headerFooterTextRuns = (docx: Docx, text: string): InstanceType<Docx['TextRun']>[] => {
+  const { TextRun, PageNumber } = docx
+  const runs: InstanceType<Docx['TextRun']>[] = []
+  for (const part of text.split(/(\{page\}|\{total\})/g)) {
+    if (part === '') {
+      continue
+    }
+    if (part === PAGE_TOKEN) {
+      runs.push(new TextRun({ children: [PageNumber.CURRENT] }))
+    } else if (part === TOTAL_TOKEN) {
+      runs.push(new TextRun({ children: [PageNumber.TOTAL_PAGES] }))
+    } else {
+      runs.push(new TextRun(part))
+    }
+  }
+  return runs
+}
+
+/** Runs rendering a formatted page-number field per the configured format. */
+const pageNumberRuns = (docx: Docx, format: PageNumberFormat): InstanceType<Docx['TextRun']>[] => {
+  const { TextRun, PageNumber } = docx
+  const current = new TextRun({ children: [PageNumber.CURRENT] })
+  switch (format) {
+    case 'n':
+      return [current]
+    case 'n-of-total':
+      return [current, new TextRun(' / '), new TextRun({ children: [PageNumber.TOTAL_PAGES] })]
+    case 'page-n':
+    default:
+      return [new TextRun('Page '), current]
+  }
+}
+
+/** The paragraphs for a header or footer band (section text line + number line). */
+const headerFooterParagraphs = (
+  docx: Docx,
+  location: 'header' | 'footer',
+  options: PageLayoutOptions,
+): DocxParagraph[] => {
+  const { Paragraph } = docx
+  const paragraphs: DocxParagraph[] = []
+  const section = location === 'header' ? options.header : options.footer
+  if (section) {
+    paragraphs.push(
+      new Paragraph({ alignment: docxAlignment(docx, section.align), children: headerFooterTextRuns(docx, section.text) }),
+    )
+  }
+  const pageNumber = options.pageNumber
+  if (pageNumber && pageNumber.location === location) {
+    paragraphs.push(
+      new Paragraph({
+        alignment: docxAlignment(docx, pageNumber.align),
+        children: pageNumberRuns(docx, pageNumber.format),
+      }),
+    )
+  }
+  return paragraphs
+}
+
+/**
+ * Build a real .docx (OOXML) Blob from the shared DocModel. `options` is additive
+ * and optional: when omitted the section is exactly `{ children }` (byte-identical
+ * to the pre-t48 baseline); when present it adds a running header/footer and/or a
+ * page-number field, plus the section's starting page number.
+ */
+export const buildDocxBlob = async (blocks: DocBlock[], options?: PageLayoutOptions): Promise<Blob> => {
   const docx = await import('docx')
   const ctx: Ctx = { docx, numberingConfigs: [], orderedRefCount: 0 }
 
@@ -359,10 +441,25 @@ export const buildDocxBlob = async (blocks: DocBlock[]): Promise<Blob> => {
   const docChildren =
     children.length > 0 ? children : [new docx.Paragraph({ children: [new docx.TextRun({ text: '' })] })]
 
+  const section: Record<string, unknown> = { children: docChildren }
+  if (options) {
+    const headerParagraphs = headerFooterParagraphs(docx, 'header', options)
+    const footerParagraphs = headerFooterParagraphs(docx, 'footer', options)
+    if (headerParagraphs.length > 0) {
+      section.headers = { default: new docx.Header({ children: headerParagraphs }) }
+    }
+    if (footerParagraphs.length > 0) {
+      section.footers = { default: new docx.Footer({ children: footerParagraphs }) }
+    }
+    if (options.pageNumber) {
+      section.properties = { page: { pageNumbers: { start: options.pageNumber.startAt } } }
+    }
+  }
+
   const doc = new docx.Document({
     numbering: ctx.numberingConfigs.length > 0 ? { config: ctx.numberingConfigs } : undefined,
-    sections: [{ children: docChildren }],
-  } as ConstructorParameters<Docx['Document']>[0])
+    sections: [section],
+  } as unknown as ConstructorParameters<Docx['Document']>[0])
 
   return docx.Packer.toBlob(doc)
 }

@@ -110,11 +110,15 @@ import {
 } from '../CheckListAutoMovePlugin/autoMoveSetting'
 import {
   CUSTOM_MARGIN_ID,
+  HEADER_FOOTER_ALIGNS,
+  HeaderFooterAlign,
   MARGIN_PRESETS,
   MAX_COLUMNS,
+  MAX_PAGE_START,
   MIN_COLUMNS,
   NoteLayout,
   PAGE_SIZE_OPTIONS,
+  PageNumberFormat,
   loadNoteLayout,
   resolvePageSize,
   saveNoteLayout,
@@ -692,6 +696,8 @@ const ToolbarPlugin = () => {
   const pageMarginsAnchorRef = useRef<HTMLButtonElement>(null)
   const [isPageColumnsMenuOpen, setIsPageColumnsMenuOpen] = useState(false)
   const pageColumnsAnchorRef = useRef<HTMLButtonElement>(null)
+  const [isPageHeaderFooterMenuOpen, setIsPageHeaderFooterMenuOpen] = useState(false)
+  const pageHeaderFooterAnchorRef = useRef<HTMLButtonElement>(null)
 
   // Format painter (Word-style) armed state + formatting marks (¶) toggle.
   const painter = useFormatPainter()
@@ -2491,6 +2497,24 @@ const ToolbarPlugin = () => {
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
+    // Combined page numbering + header + footer popover. These are honored in the
+    // paginated EXPORTS (docx/odt/pdf); browser print can't render them (see
+    // applyPrintLayout.ts). An accent dot marks when any of the three is enabled.
+    [ToolbarButtonId.PageHeaderFooter]: (
+      <ToolbarButton
+        name="Header, footer & page numbers"
+        onSelect={() => setIsPageHeaderFooterMenuOpen(!isPageHeaderFooterMenuOpen)}
+        ref={pageHeaderFooterAnchorRef}
+        className={isPageHeaderFooterMenuOpen ? 'md:bg-default' : ''}
+      >
+        <Icon type="hashtag" className="-mt-px mr-1.5 flex-shrink-0" />
+        <span className="text-sm leading-none">Header/Footer</span>
+        {(noteLayout.pageNumbering.enabled || noteLayout.header.enabled || noteLayout.footer.enabled) && (
+          <span className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-info" aria-hidden="true" />
+        )}
+        <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
+      </ToolbarButton>
+    ),
     // Standalone group: opens the Customize Toolbar dialog directly from the bar.
     [ToolbarButtonId.CustomizeToolbar]: (
       <ToolbarButton name={t('customizeToolbar')} className="w-full justify-center" onSelect={openCustomizeDialog}>
@@ -3897,6 +3921,204 @@ const ToolbarPlugin = () => {
             }}
             className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
           />
+        </div>
+      </Popover>
+      {/* Standard Red Notes — combined page numbering + header + footer control.
+          Drives the paginated exports (docx/odt/pdf); browser print cannot render
+          them (see applyPrintLayout.ts). All literal strings (no ttag). */}
+      <Popover
+        title="Header, footer & page numbers"
+        anchorElement={pageHeaderFooterAnchorRef}
+        open={isPageHeaderFooterMenuOpen}
+        togglePopover={() => setIsPageHeaderFooterMenuOpen(!isPageHeaderFooterMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="w-72 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
+          <p className="mb-3 text-xs text-passive-1">
+            Applied when exporting to PDF, Word (.docx) or OpenDocument (.odt). Browser print cannot render these.
+          </p>
+
+          {/* Page numbering */}
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={noteLayout.pageNumbering.enabled}
+              onChange={(event) =>
+                updateNoteLayout({ pageNumbering: { ...noteLayout.pageNumbering, enabled: event.target.checked } })
+              }
+            />
+            Page numbers
+          </label>
+          {noteLayout.pageNumbering.enabled && (
+            <div className="mb-3 mt-2 flex flex-col gap-2 pl-6">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Format</span>
+                <select
+                  aria-label="Page number format"
+                  value={noteLayout.pageNumbering.format}
+                  onChange={(event) =>
+                    updateNoteLayout({
+                      pageNumbering: { ...noteLayout.pageNumbering, format: event.target.value as PageNumberFormat },
+                    })
+                  }
+                  className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                >
+                  <option value="page-n">Page 1</option>
+                  <option value="n">1</option>
+                  <option value="n-of-total">1 / N</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Position</span>
+                <select
+                  aria-label="Page number position"
+                  value={noteLayout.pageNumbering.location}
+                  onChange={(event) =>
+                    updateNoteLayout({
+                      pageNumbering: {
+                        ...noteLayout.pageNumbering,
+                        location: event.target.value === 'header' ? 'header' : 'footer',
+                      },
+                    })
+                  }
+                  className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                >
+                  <option value="header">Header (top)</option>
+                  <option value="footer">Footer (bottom)</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Align</span>
+                <select
+                  aria-label="Page number alignment"
+                  value={noteLayout.pageNumbering.align}
+                  onChange={(event) =>
+                    updateNoteLayout({
+                      pageNumbering: { ...noteLayout.pageNumbering, align: event.target.value as HeaderFooterAlign },
+                    })
+                  }
+                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                >
+                  {HEADER_FOOTER_ALIGNS.map((align) => (
+                    <option key={align} value={align}>
+                      {align}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Start at</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_PAGE_START}
+                  aria-label="Start page number"
+                  value={noteLayout.pageNumbering.startAt}
+                  onChange={(event) => {
+                    const next = parseInt(event.target.value, 10)
+                    if (!Number.isNaN(next)) {
+                      updateNoteLayout({
+                        pageNumbering: {
+                          ...noteLayout.pageNumbering,
+                          startAt: Math.min(MAX_PAGE_START, Math.max(1, next)),
+                        },
+                      })
+                    }
+                  }}
+                  className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Header */}
+          <label className="mt-1 flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={noteLayout.header.enabled}
+              onChange={(event) => updateNoteLayout({ header: { ...noteLayout.header, enabled: event.target.checked } })}
+            />
+            Header text
+          </label>
+          {noteLayout.header.enabled && (
+            <div className="mb-3 mt-2 flex flex-col gap-2 pl-6">
+              <input
+                type="text"
+                aria-label="Header text"
+                placeholder="e.g. My document"
+                value={noteLayout.header.text}
+                onChange={(event) => updateNoteLayout({ header: { ...noteLayout.header, text: event.target.value } })}
+                className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Align</span>
+                <select
+                  aria-label="Header alignment"
+                  value={noteLayout.header.align}
+                  onChange={(event) =>
+                    updateNoteLayout({ header: { ...noteLayout.header, align: event.target.value as HeaderFooterAlign } })
+                  }
+                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                >
+                  {HEADER_FOOTER_ALIGNS.map((align) => (
+                    <option key={align} value={align}>
+                      {align}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <label className="mt-1 flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={noteLayout.footer.enabled}
+              onChange={(event) => updateNoteLayout({ footer: { ...noteLayout.footer, enabled: event.target.checked } })}
+            />
+            Footer text
+          </label>
+          {noteLayout.footer.enabled && (
+            <div className="mt-2 flex flex-col gap-2 pl-6">
+              <input
+                type="text"
+                aria-label="Footer text"
+                placeholder="e.g. Confidential"
+                value={noteLayout.footer.text}
+                onChange={(event) => updateNoteLayout({ footer: { ...noteLayout.footer, text: event.target.value } })}
+                className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-passive-1">Align</span>
+                <select
+                  aria-label="Footer alignment"
+                  value={noteLayout.footer.align}
+                  onChange={(event) =>
+                    updateNoteLayout({ footer: { ...noteLayout.footer, align: event.target.value as HeaderFooterAlign } })
+                  }
+                  className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                >
+                  {HEADER_FOOTER_ALIGNS.map((align) => (
+                    <option key={align} value={align}>
+                      {align}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          <p className="mt-3 text-xs text-passive-1">
+            Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.
+          </p>
         </div>
       </Popover>
       <Popover

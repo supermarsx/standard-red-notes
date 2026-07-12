@@ -67,6 +67,37 @@ export const CUSTOM_MARGIN_ID = 'custom'
 export const MIN_COLUMNS = 1
 export const MAX_COLUMNS = 6
 
+/** Highest start-at page number we accept (guards against absurd persisted values). */
+export const MAX_PAGE_START = 100000
+
+/** How a page number is rendered in the paginated (docx/odt/pdf) output. */
+export type PageNumberFormat = 'n' | 'n-of-total' | 'page-n' // "1" | "1 / 8" | "Page 1"
+/** Horizontal placement of header/footer/page-number content. */
+export type HeaderFooterAlign = 'left' | 'center' | 'right'
+
+/** Page numbering config carried in the paginated output (default OFF). */
+export type PageNumbering = {
+  enabled: boolean
+  format: PageNumberFormat
+  align: HeaderFooterAlign
+  /** Where the number sits — in the running header or footer. */
+  location: 'header' | 'footer'
+  /** First page's displayed number (clamped >= 1). */
+  startAt: number
+}
+
+/**
+ * A running header/footer line (default OFF). `text` is free text that may embed
+ * the `{page}` / `{total}` tokens, substituted with the live page-number /
+ * page-count field by each generator (docx field, ODF `<text:page-number>`,
+ * PDF `render`). Without a token it is static text.
+ */
+export type HeaderFooter = {
+  enabled: boolean
+  text: string
+  align: HeaderFooterAlign
+}
+
 export type NoteLayout = {
   /** Id from PAGE_SIZE_OPTIONS. */
   pageSizeId: string
@@ -77,6 +108,16 @@ export type NoteLayout = {
   customMargin: string
   /** Number of text columns the note content flows into (1 == single column). */
   columns: number
+  /**
+   * Page numbering / header / footer for the paginated exports (docx/odt/pdf).
+   * ALL default OFF, so an un-opted-in note exports byte-identically to before —
+   * `normalizeNoteLayout` back-fills these onto legacy records (no migration).
+   * Browser print cannot honor them (CSS `@page` margin boxes are unsupported);
+   * see applyPrintLayout.ts.
+   */
+  pageNumbering: PageNumbering
+  header: HeaderFooter
+  footer: HeaderFooter
 }
 
 export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
@@ -85,7 +126,13 @@ export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
   marginId: DEFAULT_MARGIN_ID,
   customMargin: '1cm',
   columns: 1,
+  pageNumbering: { enabled: false, format: 'page-n', align: 'center', location: 'footer', startAt: 1 },
+  header: { enabled: false, text: '', align: 'center' },
+  footer: { enabled: false, text: '', align: 'center' },
 }
+
+export const PAGE_NUMBER_FORMATS: PageNumberFormat[] = ['n', 'n-of-total', 'page-n']
+export const HEADER_FOOTER_ALIGNS: HeaderFooterAlign[] = ['left', 'center', 'right']
 
 const STORAGE_KEY = 'standardnotes.note.layout.v1'
 
@@ -98,6 +145,31 @@ const clampInt = (value: unknown, min: number, max: number, fallback: number): n
 }
 
 const asString = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback)
+
+const asEnum = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+  typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
+
+/** Coerce a persisted value into a safe PageNumbering. Never throws. */
+function normalizePageNumbering(raw: unknown): PageNumbering {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as Partial<PageNumbering>
+  return {
+    enabled: c.enabled === true,
+    format: asEnum(c.format, PAGE_NUMBER_FORMATS, DEFAULT_NOTE_LAYOUT.pageNumbering.format),
+    align: asEnum(c.align, HEADER_FOOTER_ALIGNS, DEFAULT_NOTE_LAYOUT.pageNumbering.align),
+    location: c.location === 'header' ? 'header' : 'footer',
+    startAt: clampInt(c.startAt, 1, MAX_PAGE_START, DEFAULT_NOTE_LAYOUT.pageNumbering.startAt),
+  }
+}
+
+/** Coerce a persisted value into a safe HeaderFooter. Never throws. */
+function normalizeHeaderFooter(raw: unknown, fallback: HeaderFooter): HeaderFooter {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as Partial<HeaderFooter>
+  return {
+    enabled: c.enabled === true,
+    text: asString(c.text, fallback.text),
+    align: asEnum(c.align, HEADER_FOOTER_ALIGNS, fallback.align),
+  }
+}
 
 /** Coerce an arbitrary persisted value into a safe NoteLayout. Never throws. */
 export function normalizeNoteLayout(raw: unknown): NoteLayout {
@@ -122,6 +194,9 @@ export function normalizeNoteLayout(raw: unknown): NoteLayout {
     marginId,
     customMargin: asString(candidate.customMargin, DEFAULT_NOTE_LAYOUT.customMargin),
     columns: clampInt(candidate.columns, MIN_COLUMNS, MAX_COLUMNS, DEFAULT_NOTE_LAYOUT.columns),
+    pageNumbering: normalizePageNumbering(candidate.pageNumbering),
+    header: normalizeHeaderFooter(candidate.header, DEFAULT_NOTE_LAYOUT.header),
+    footer: normalizeHeaderFooter(candidate.footer, DEFAULT_NOTE_LAYOUT.footer),
   }
 }
 

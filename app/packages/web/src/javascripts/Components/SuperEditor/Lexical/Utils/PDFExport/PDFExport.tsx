@@ -35,6 +35,7 @@ import {
   getFontFamiliesFromLexicalNode,
 } from './FontConfig'
 import { getPDFColorForCodeHighlight } from './CodeHighlightColors'
+import type { PageLayoutOptions } from '../DocExport/PageLayoutOptions'
 import {
   PDF_BASE_FONT_SIZE,
   PDF_BLOCK_GAP,
@@ -689,7 +690,11 @@ const shouldUseCustomFonts = async () => {
 /**
  * @returns The PDF as an object url
  */
-export function $generatePDFFromNodes(editor: LexicalEditor, pageSize: PrefValue[PrefKey.SuperNoteExportPDFPageSize]) {
+export function $generatePDFFromNodes(
+  editor: LexicalEditor,
+  pageSize: PrefValue[PrefKey.SuperNoteExportPDFPageSize],
+  options?: PageLayoutOptions,
+) {
   return new Promise<string>((resolve, reject) => {
     shouldUseCustomFonts()
       .then((useCustomFonts) => {
@@ -704,7 +709,7 @@ export function $generatePDFFromNodes(editor: LexicalEditor, pageSize: PrefValue
           void loadPDFImageDimensionsMap(imageSources)
             .then((imageDimensions) => {
               patchPDFImageStyles(pdfDataNodes, contentWidth, imageDimensions)
-              return PDFWorkerComlink.renderPDF(pdfDataNodes, pageSize, fontFamilies, useCustomFonts)
+              return PDFWorkerComlink.renderPDF(pdfDataNodes, pageSize, fontFamilies, useCustomFonts, options)
             })
             .then((blob) => {
               const url = URL.createObjectURL(blob)

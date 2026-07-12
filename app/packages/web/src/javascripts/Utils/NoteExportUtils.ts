@@ -16,6 +16,8 @@ import {
 } from '@/Components/SuperEditor/Lexical/Utils/DocExport/DocModel'
 import { buildDocxBlob } from '@/Components/SuperEditor/Lexical/Utils/DocExport/DocxGenerator'
 import { buildOdtBlob } from '@/Components/SuperEditor/Lexical/Utils/DocExport/OdtGenerator'
+import { noteLayoutToPageLayoutOptions } from '@/Components/SuperEditor/Lexical/Utils/DocExport/PageLayoutOptions'
+import { loadNoteLayout } from '@/Components/SuperEditor/Layout/layoutSettings'
 import { parseFileName, parseAndCreateZippableFileName, sanitizeFileName } from '@standardnotes/utils'
 import { getFullNoteText } from './Items/rehydrateLazyDecryptedNote'
 
@@ -95,6 +97,11 @@ export const getNoteBlob = async (
     return await getBase64FromBlob(fileBlob)
   }
 
+  // Per-note page numbering / headers / footers come from the note's Page layout
+  // (toolbar Page group). Undefined when nothing is enabled ⇒ generators stay on
+  // their baseline output.
+  const pageLayoutOptions = noteLayoutToPageLayoutOptions(loadNoteLayout(note.uuid))
+
   // Structured DOCX / ODT: build the shared DocModel (a real Lexical-tree walk)
   // and emit genuine OOXML / ODF — replacing the old Word-only altChunk hack, so
   // the files open faithfully in Word, LibreOffice, Google Docs and Pages.
@@ -103,7 +110,7 @@ export const getNoteBlob = async (
       note.noteType === NoteType.Super
         ? await superStringToDocModel(noteText, { embedBehavior: superEmbedBehavior, getFileItem, getFileBase64 })
         : buildPlainTextDocModel(noteText)
-    return format === 'docx' ? buildDocxBlob(blocks) : buildOdtBlob(blocks)
+    return format === 'docx' ? buildDocxBlob(blocks, pageLayoutOptions) : buildOdtBlob(blocks, pageLayoutOptions)
   }
 
   let type: string
@@ -137,6 +144,7 @@ export const getNoteBlob = async (
             PrefKey.SuperNoteExportPDFPageSize,
             PrefDefaults[PrefKey.SuperNoteExportPDFPageSize],
           ),
+          pageLayout: pageLayoutOptions,
         },
       },
     )

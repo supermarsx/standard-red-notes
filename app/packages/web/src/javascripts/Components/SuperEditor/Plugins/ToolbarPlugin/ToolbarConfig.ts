@@ -115,6 +115,8 @@ export enum ToolbarButtonId {
   PageOrientation = 'pageOrientation',
   PageMargins = 'pageMargins',
   PageColumns = 'pageColumns',
+  /** Combined page numbering + header + footer popover (drives the paginated exports). */
+  PageHeaderFooter = 'pageHeaderFooter',
   // Toolbar
   CustomizeToolbar = 'customizeToolbar',
   /**
@@ -383,6 +385,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.PageOrientation, label: 'Orientation', group: ToolbarGroupId.Page },
       { id: ToolbarButtonId.PageMargins, label: 'Margins', group: ToolbarGroupId.Page },
       { id: ToolbarButtonId.PageColumns, label: 'Columns', group: ToolbarGroupId.Page },
+      { id: ToolbarButtonId.PageHeaderFooter, label: 'Header & footer', group: ToolbarGroupId.Page },
     ],
   },
   {

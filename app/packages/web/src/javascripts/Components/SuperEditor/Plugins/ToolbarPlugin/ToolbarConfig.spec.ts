@@ -136,6 +136,39 @@ describe('Insert-sections vanish guard (static source assertion)', () => {
   it('keeps the Insert group unconditionally in resolvedGroups', () => {
     expect(source).toContain('group.id === ToolbarGroupId.Insert ||')
   })
+
+  // t48: the new Page → Header/footer button. The Page group survives the
+  // "drop groups with nothing renderable" filter only via renderer-backed
+  // buttons, so its new button MUST have a render-map entry or it silently
+  // won't render. The full ToolbarPlugin can't be jsdom-mounted (it closes over
+  // deep editor state), so — as with the Insert/BlockStyle guards above — assert
+  // the render-map entry exists literally in source.
+  it('has a render-map entry for the new PageHeaderFooter button', () => {
+    expect(source).toContain('[ToolbarButtonId.PageHeaderFooter]:')
+  })
+})
+
+describe('Page group includes the Header/footer button (t48)', () => {
+  it('lists PageHeaderFooter as the last button of the Page group', () => {
+    const page = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.Page)
+    expect(page).toBeDefined()
+    const ids = page!.buttons.map((b) => b.id)
+    expect(ids).toContain(ToolbarButtonId.PageHeaderFooter)
+    expect(ids).toEqual([
+      ToolbarButtonId.PageSize,
+      ToolbarButtonId.PageOrientation,
+      ToolbarButtonId.PageMargins,
+      ToolbarButtonId.PageColumns,
+      ToolbarButtonId.PageHeaderFooter,
+    ])
+  })
+
+  it('keeps the Page group present (not filtered) after applying a default config', () => {
+    const resolved = applyToolbarConfig({ groupOrder: [], hiddenButtonIds: [] })
+    const page = resolved.find((g) => g.id === ToolbarGroupId.Page)
+    expect(page).toBeDefined()
+    expect(page!.buttons.map((b) => b.id)).toContain(ToolbarButtonId.PageHeaderFooter)
+  })
 })
 
 describe('normalizeToolbarConfig', () => {

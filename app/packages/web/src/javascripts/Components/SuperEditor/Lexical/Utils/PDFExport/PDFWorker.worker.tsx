@@ -19,6 +19,14 @@ import {
 import { expose } from 'comlink'
 import { FontFamily, registerPDFFonts } from './FontConfig'
 import { PDF_BASE_FONT_SIZE, PDF_BLOCK_GAP, PDF_PAGE_PADDING } from './PDFLayoutConstants'
+import { hasBandAt, pageStartOffset, type PageLayoutOptions } from '../DocExport/PageLayoutOptions'
+import { formatPdfPageNumber, substitutePageTokens } from './pageLayoutRender'
+
+/** Fixed-position font styling for the running header/footer bands. */
+const PDF_HEADER_FOOTER_FONT_SIZE = 9
+const PDF_HEADER_FOOTER_COLOR = '#555555'
+/** Extra top/bottom padding reserved for a header/footer band so it never overlaps content. */
+const PDF_HEADER_FOOTER_RESERVE = 22
 
 export type PDFDataNode =
   | ((
@@ -75,18 +83,80 @@ const Node = ({ node }: { node: PDFDataNode }) => {
   }
 }
 
-const PDFDocument = ({ nodes, pageSize }: { nodes: PDFDataNode[]; pageSize: PageProps['size'] }) => {
+/**
+ * The fixed (repeated-on-every-page) header or footer band, built worker-side
+ * from the serializable options — the `render` callbacks can't cross the comlink
+ * boundary, so they MUST be constructed here. Returns null when the band carries
+ * nothing at this location.
+ */
+const HeaderFooterBand = ({ location, options }: { location: 'header' | 'footer'; options: PageLayoutOptions }) => {
+  if (!hasBandAt(options, location)) {
+    return null
+  }
+  const section = location === 'header' ? options.header : options.footer
+  const pageNumber = options.pageNumber && options.pageNumber.location === location ? options.pageNumber : undefined
+  const offset = pageStartOffset(options)
+  const edge = location === 'header' ? { top: PDF_PAGE_PADDING / 2 } : { bottom: PDF_PAGE_PADDING / 2 }
+  return (
+    <View
+      fixed
+      style={{
+        position: 'absolute',
+        left: PDF_PAGE_PADDING,
+        right: PDF_PAGE_PADDING,
+        ...edge,
+        fontSize: PDF_HEADER_FOOTER_FONT_SIZE,
+        color: PDF_HEADER_FOOTER_COLOR,
+        gap: 2,
+      }}
+    >
+      {section ? (
+        <Text
+          fixed
+          style={{ textAlign: section.align, width: '100%' }}
+          render={({ pageNumber: current, totalPages }) =>
+            substitutePageTokens(section.text, current, totalPages, offset)
+          }
+        />
+      ) : null}
+      {pageNumber ? (
+        <Text
+          fixed
+          style={{ textAlign: pageNumber.align, width: '100%' }}
+          render={({ pageNumber: current, totalPages }) =>
+            formatPdfPageNumber(pageNumber.format, current + offset, totalPages)
+          }
+        />
+      ) : null}
+    </View>
+  )
+}
+
+const PDFDocument = ({
+  nodes,
+  pageSize,
+  options,
+}: {
+  nodes: PDFDataNode[]
+  pageSize: PageProps['size']
+  options?: PageLayoutOptions
+}) => {
+  const hasHeader = options != null && hasBandAt(options, 'header')
+  const hasFooter = options != null && hasBandAt(options, 'footer')
   return (
     <Document>
       <Page
         size={pageSize}
         style={{
-          paddingVertical: PDF_PAGE_PADDING,
+          paddingTop: PDF_PAGE_PADDING + (hasHeader ? PDF_HEADER_FOOTER_RESERVE : 0),
+          paddingBottom: PDF_PAGE_PADDING + (hasFooter ? PDF_HEADER_FOOTER_RESERVE : 0),
           paddingHorizontal: PDF_PAGE_PADDING,
           fontSize: PDF_BASE_FONT_SIZE,
           gap: PDF_BLOCK_GAP,
         }}
       >
+        {options ? <HeaderFooterBand location="header" options={options} /> : null}
+        {options ? <HeaderFooterBand location="footer" options={options} /> : null}
         {nodes.map((node, index) => {
           return <Node node={node} key={index} />
         })}
@@ -100,11 +170,12 @@ const renderPDF = (
   pageSize: PageProps['size'],
   fontFamilies: FontFamily[],
   useCustomFonts: boolean = false,
+  options?: PageLayoutOptions,
 ) => {
   if (useCustomFonts) {
     registerPDFFonts(fontFamilies)
   }
-  return pdf(<PDFDocument pageSize={pageSize} nodes={nodes} />).toBlob()
+  return pdf(<PDFDocument pageSize={pageSize} nodes={nodes} options={options} />).toBlob()
 }
 
 expose({

@@ -11,6 +11,16 @@
  *
  * The injected style id is fixed so a previous (un-removed) style is always
  * replaced rather than duplicated. `removePrintLayout()` cleans it up after.
+ *
+ * HONEST LIMITATION — page numbering / headers / footers (NoteLayout.pageNumbering
+ * / header / footer, added in t48) are deliberately NOT applied here. Browsers do
+ * not implement CSS `@page` margin boxes (`@bottom-center { content: counter(page) }`
+ * et al.) — only print-specific engines (Prince, paged.js) do — and the browser's
+ * own print dialog injects its own header/footer. Faking them with fixed-position
+ * DOM would overlap content and repeat on the wrong pages. Those features are
+ * honored only in the paginated EXPORTS (DOCX/ODT/PDF via NoteExportUtils →
+ * DocxGenerator/OdtGenerator/PDFWorker); steer users there for real running
+ * headers/footers and page numbers.
  */
 import { ElementIds } from '@/Constants/ElementIDs'
 import { loadNoteLayout, resolveMargin, resolvePageSize } from './layoutSettings'

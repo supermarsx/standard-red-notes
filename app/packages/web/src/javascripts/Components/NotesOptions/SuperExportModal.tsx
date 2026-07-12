@@ -113,6 +113,11 @@ const ModalContent = observer(() => {
         {(superNoteExportFormat as string) === 'txt' && (
           <div className="mt-2 text-xs text-passive-0">Exports plain text with all formatting removed.</div>
         )}
+        {['docx', 'odt', 'pdf'].includes(superNoteExportFormat) && (
+          <div className="mt-2 text-xs text-passive-0">
+            Headers, footers and page numbers follow this note&apos;s Page layout (toolbar → Page → Header/Footer).
+          </div>
+        )}
       </div>
       {superNoteExportFormat === 'pdf' && (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2">

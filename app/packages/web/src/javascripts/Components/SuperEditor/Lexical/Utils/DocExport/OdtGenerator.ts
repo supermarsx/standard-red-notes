@@ -11,6 +11,8 @@
  * requirement is met via the low-level `ZipWriter` with `{ level: 0 }`).
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
+import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
+import { PAGE_TOKEN, TOTAL_TOKEN, type PageLayoutOptions } from './PageLayoutOptions'
 
 export const ODT_MIME_TYPE = 'application/vnd.oasis.opendocument.text'
 
@@ -315,6 +317,110 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </office:styles>
 </office:document-styles>`
 
+/** ODF text-align keyword for a header/footer alignment. */
+const odfTextAlign = (align: HeaderFooterAlign): string =>
+  align === 'left' ? 'start' : align === 'right' ? 'end' : 'center'
+
+/** The three header/footer alignment paragraph styles (added only when options present). */
+const HF_ALIGN_STYLES = (['left', 'center', 'right'] as HeaderFooterAlign[])
+  .map(
+    (align) =>
+      `<style:style style:name="SRN_hf_${align}" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="${odfTextAlign(align)}"/></style:style>`,
+  )
+  .join('')
+
+/** A `<text:page-number>` field, offset by `startAt` (page 1 shows startAt). */
+const odfPageNumberField = (startAt = 1): string => {
+  const adjust = startAt !== 1 ? ` text:page-adjust="${startAt - 1}"` : ''
+  return `<text:page-number text:select-page="current"${adjust}/>`
+}
+
+const ODF_PAGE_COUNT_FIELD = '<text:page-count/>'
+
+/** Formatted page-number field content per format. */
+const odfPageNumberContent = (format: PageNumberFormat, startAt: number): string => {
+  const current = odfPageNumberField(startAt)
+  switch (format) {
+    case 'n':
+      return current
+    case 'n-of-total':
+      return `${current} / ${ODF_PAGE_COUNT_FIELD}`
+    case 'page-n':
+    default:
+      return `Page ${current}`
+  }
+}
+
+/** Header/footer free text with `{page}`/`{total}` substituted for ODF fields. */
+const odfHeaderFooterText = (text: string): string =>
+  text
+    .split(/(\{page\}|\{total\})/g)
+    .filter((part) => part !== '')
+    .map((part) =>
+      part === PAGE_TOKEN
+        ? '<text:page-number text:select-page="current"/>'
+        : part === TOTAL_TOKEN
+          ? ODF_PAGE_COUNT_FIELD
+          : xmlEscape(part),
+    )
+    .join('')
+
+/** `<style:header>` / `<style:footer>` for one band, or '' when it carries nothing. */
+const odfHeaderFooter = (location: 'header' | 'footer', options: PageLayoutOptions): string => {
+  const section = location === 'header' ? options.header : options.footer
+  const pageNumber = options.pageNumber && options.pageNumber.location === location ? options.pageNumber : undefined
+  if (!section && !pageNumber) {
+    return ''
+  }
+  const paragraphs: string[] = []
+  if (section) {
+    paragraphs.push(`<text:p text:style-name="SRN_hf_${section.align}">${odfHeaderFooterText(section.text)}</text:p>`)
+  }
+  if (pageNumber) {
+    paragraphs.push(
+      `<text:p text:style-name="SRN_hf_${pageNumber.align}">${odfPageNumberContent(pageNumber.format, pageNumber.startAt)}</text:p>`,
+    )
+  }
+  return `<style:${location}>${paragraphs.join('')}</style:${location}>`
+}
+
+/**
+ * The automatic-styles page-layout + master-styles block appended to styles.xml
+ * when page-layout options are present. The master page is named "Standard" (the
+ * default LibreOffice master page applied to the body), so its header/footer show
+ * on every page. Absent options ⇒ this is never called ⇒ styles.xml is unchanged.
+ */
+const buildPageStylesInsertion = (options: PageLayoutOptions): string => {
+  const pageLayout =
+    '<style:page-layout style:name="SRNpm1">' +
+    '<style:page-layout-properties/>' +
+    '<style:header-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-bottom="0.2cm"/></style:header-style>' +
+    '<style:footer-style><style:header-footer-properties fo:min-height="0.4cm" fo:margin-top="0.2cm"/></style:footer-style>' +
+    '</style:page-layout>'
+  const automaticStyles = `<office:automatic-styles>${pageLayout}${HF_ALIGN_STYLES}</office:automatic-styles>`
+  const masterStyles =
+    '<office:master-styles>' +
+    '<style:master-page style:name="Standard" style:page-layout-name="SRNpm1">' +
+    odfHeaderFooter('header', options) +
+    odfHeaderFooter('footer', options) +
+    '</style:master-page>' +
+    '</office:master-styles>'
+  return automaticStyles + masterStyles
+}
+
+/**
+ * styles.xml for the package. Without options it returns the baseline `STYLES_XML`
+ * const verbatim (byte-identical to the pre-t48 export). With options it appends
+ * the automatic page-layout + master-styles carrying the header/footer, in the
+ * ODF-required order (styles → automatic-styles → master-styles).
+ */
+const buildStylesXml = (options?: PageLayoutOptions): string => {
+  if (!options) {
+    return STYLES_XML
+  }
+  return STYLES_XML.replace('</office:document-styles>', `${buildPageStylesInsertion(options)}</office:document-styles>`)
+}
+
 const META_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-meta ${CONTENT_NS} xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.2">
 <office:meta><meta:generator>Standard Red Notes</meta:generator></office:meta>
@@ -341,12 +447,18 @@ ${pictureEntries}
 </manifest:manifest>`
 }
 
-/** Build a valid .odt Blob from the shared DocModel. */
-export const buildOdtBlob = async (blocks: DocBlock[]): Promise<Blob> => {
+/**
+ * Build a valid .odt Blob from the shared DocModel. `options` is additive and
+ * optional: when omitted styles.xml is byte-identical to the pre-t48 baseline;
+ * when present it adds a running header/footer and/or page-number field via a
+ * "Standard" master page + page-layout.
+ */
+export const buildOdtBlob = async (blocks: DocBlock[], options?: PageLayoutOptions): Promise<Blob> => {
   const builder = new OdtBuilder()
   const bodyXml = blocks.map((block) => builder.blockToXml(block)).join('')
   const contentXml = buildContentXml(builder, bodyXml)
   const manifestXml = buildManifestXml(builder.pictures)
+  const stylesXml = buildStylesXml(options)
 
   const zip = await import('@zip.js/zip.js')
   const { ZipWriter, BlobWriter, TextReader, Uint8ArrayReader } = zip
@@ -355,7 +467,7 @@ export const buildOdtBlob = async (blocks: DocBlock[]): Promise<Blob> => {
   // ODF spec: mimetype MUST be the first entry and STORED (uncompressed).
   await writer.add('mimetype', new TextReader(ODT_MIME_TYPE), { level: 0, dataDescriptor: false })
   await writer.add('content.xml', new TextReader(contentXml))
-  await writer.add('styles.xml', new TextReader(STYLES_XML))
+  await writer.add('styles.xml', new TextReader(stylesXml))
   await writer.add('meta.xml', new TextReader(META_XML))
   for (const picture of builder.pictures) {
     await writer.add(picture.path, new Uint8ArrayReader(picture.bytes))
