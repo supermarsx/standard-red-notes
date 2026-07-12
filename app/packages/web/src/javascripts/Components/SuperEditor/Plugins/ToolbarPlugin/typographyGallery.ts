@@ -370,6 +370,18 @@ export const GALLERY_SQUARE_WIDTH = 88
 export const GALLERY_SQUARE_GAP = 6
 /** Reserved track (toggle width + its leading gap) for the overflow "▾" button. */
 export const GALLERY_OVERFLOW_TOGGLE_WIDTH = 34 + GALLERY_SQUARE_GAP
+/** The thin (1px) divider that separates the leading "current style" indicator from the sortable track. */
+export const GALLERY_LEADING_DIVIDER_WIDTH = 1
+/**
+ * Reserved track for the persistent LEADING "current style" indicator square that
+ * precedes the sortable palette: one square + the 1px divider, each flanked by the
+ * flex gap (gap-1.5 = GALLERY_SQUARE_GAP px). `BlockStyleGalleryBar` subtracts this
+ * from the measured track before calling `computeGalleryFit`, so the leading prefix
+ * consumes the front of the row and the remaining sub-track (which has no leading
+ * gap of its own — exactly what `computeGalleryFit` assumes) fits the rest. 88 + 1 + 12 = 101.
+ */
+export const GALLERY_LEADING_INDICATOR_WIDTH =
+  GALLERY_SQUARE_WIDTH + GALLERY_LEADING_DIVIDER_WIDTH + 2 * GALLERY_SQUARE_GAP
 
 export type GalleryFit = {
   /** How many squares render inline in the bar. */

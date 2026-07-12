@@ -7,6 +7,8 @@ import {
   computeGalleryFit,
   DEFAULT_GALLERY_ORDER,
   GALLERY_BLOCKS,
+  GALLERY_LEADING_DIVIDER_WIDTH,
+  GALLERY_LEADING_INDICATOR_WIDTH,
   GALLERY_SQUARE_GAP,
   GALLERY_SQUARE_WIDTH,
   orderGalleryBlocks,
@@ -81,6 +83,25 @@ describe('computeGalleryFit', () => {
     const fit = computeGalleryFit({ containerWidth: 200, total: 10, squareWidth: 40, gap: 0, overflowWidth: 0 })
     // 200 / 40 = 5 fit; total 10 → 5 inline, 5 overflow.
     expect(fit).toEqual({ inlineCount: 5, overflowCount: 5 })
+  })
+})
+
+describe('GALLERY_LEADING_INDICATOR_WIDTH (leading "current style" slot reservation)', () => {
+  it('is one square + a 1px divider, each flanked by the flex gap (88 + 1 + 12 = 101)', () => {
+    expect(GALLERY_LEADING_INDICATOR_WIDTH).toBe(GALLERY_SQUARE_WIDTH + GALLERY_LEADING_DIVIDER_WIDTH + 2 * GALLERY_SQUARE_GAP)
+    expect(GALLERY_LEADING_INDICATOR_WIDTH).toBe(101)
+  })
+
+  it('reserving the leading width costs exactly one inline square vs. the un-reduced track', () => {
+    // With a large total (forces overflow in both cases), a 1000px track fits 10
+    // inline; subtracting the leading indicator (1000 − 101 = 899) fits 9 — exactly
+    // one fewer, the slot the persistent leading square occupies at the front.
+    const total = 20
+    const full = computeGalleryFit({ containerWidth: 1000, total })
+    const reduced = computeGalleryFit({ containerWidth: 1000 - GALLERY_LEADING_INDICATOR_WIDTH, total })
+    expect(full.inlineCount).toBe(10)
+    expect(reduced.inlineCount).toBe(9)
+    expect(full.inlineCount - reduced.inlineCount).toBe(1)
   })
 })
 

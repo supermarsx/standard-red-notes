@@ -163,11 +163,62 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
     )
     const heading1 = squareButtons.find((b) => b.getAttribute('title') === 'Heading 1')
     expect(heading1?.getAttribute('aria-pressed')).toBe('true')
-    // Every other square is not pressed.
+    // Every other square (other than a "Heading 1"-titled one — the leading
+    // indicator is a second "Heading 1" and is also pressed) is not pressed.
     for (const button of squareButtons) {
       if (button.getAttribute('title') !== 'Heading 1') {
         expect(button.getAttribute('aria-pressed')).toBe('false')
       }
+    }
+  })
+})
+
+describe('BlockStyleGalleryBar leading "current style" indicator', () => {
+  // Titled preview-square buttons in DOM order (both the persistent leading
+  // indicator and the in-track copies match a descriptor label).
+  const titledSquares = () =>
+    Array.from(container.querySelectorAll('button')).filter((b) =>
+      GALLERY_BLOCKS.some((d) => b.getAttribute('title') === d.label),
+    )
+
+  it('renders the active style up front: the FIRST titled square is the active one and is pressed', () => {
+    render({ activeBlockType: 'h1' })
+    const squares = titledSquares()
+    // The leading indicator precedes the in-track copy, so the very first titled
+    // square is the active "Heading 1"…
+    expect(squares[0]?.getAttribute('title')).toBe('Heading 1')
+    expect(squares[0]?.getAttribute('aria-pressed')).toBe('true')
+    // …and it is a genuine second "Heading 1" (leading + in-track), both pressed.
+    const heading1s = squares.filter((b) => b.getAttribute('title') === 'Heading 1')
+    expect(heading1s.length).toBe(2)
+    for (const b of heading1s) {
+      expect(b.getAttribute('aria-pressed')).toBe('true')
+    }
+  })
+
+  it('tracks the active type live: re-rendering with a new active type updates the leading square', () => {
+    render({ activeBlockType: 'h1' })
+    expect(titledSquares()[0]?.getAttribute('title')).toBe('Heading 1')
+    // Same root, new active block type → the leading square follows the selection.
+    render({ activeBlockType: 'quote' })
+    const squares = titledSquares()
+    expect(squares[0]?.getAttribute('title')).toBe('Quote')
+    expect(squares[0]?.getAttribute('aria-pressed')).toBe('true')
+    // The leading "Heading 1" is gone; only the in-track Quote + leading Quote remain.
+    expect(squares.filter((b) => b.getAttribute('title') === 'Heading 1').length).toBe(1)
+    expect(squares.filter((b) => b.getAttribute('title') === 'Quote').length).toBe(2)
+  })
+
+  it('shows a neutral "None" placeholder (no titled duplicate) when the active block has no gallery match', () => {
+    render({ activeBlockType: 'h6' })
+    // h6 → resolveActiveGalleryKey null → leading slot is the placeholder.
+    expect(container.textContent).toContain('None')
+    // The placeholder is NOT a titled descriptor button, so the titled-square count
+    // stays exactly the palette size (no leading duplicate).
+    expect(titledSquares().length).toBe(GALLERY_BLOCKS.length)
+    // No square is pressed (nothing in the palette matches h6).
+    for (const b of titledSquares()) {
+      expect(b.getAttribute('aria-pressed')).toBe('false')
     }
   })
 })

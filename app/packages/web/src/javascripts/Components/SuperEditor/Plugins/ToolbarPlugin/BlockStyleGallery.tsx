@@ -24,6 +24,7 @@ import Popover from '@/Components/Popover/Popover'
 import { blockStyleToInlineStyle } from '@/Utils/typographyProfiles'
 import {
   GALLERY_BLOCKS,
+  GALLERY_LEADING_INDICATOR_WIDTH,
   GALLERY_OVERFLOW_TOGGLE_WIDTH,
   GALLERY_SQUARE_WIDTH,
   GalleryBlockDescriptor,
@@ -251,12 +252,41 @@ const OverflowSquares = ({
 }
 
 /**
- * The responsive full-width squares track. Renders as many truthful preview
- * squares as fit the group width (measured via ResizeObserver) and collapses the
- * rest into an overflow "▾" dropdown, never causing horizontal overflow. This is
- * the squares row only; the block group's first-line action buttons (Smart
- * checklist, Restore completed tasks, Edit styles) are rendered by the caller
- * above it, NOT here.
+ * The neutral leading slot shown when the active block has NO gallery
+ * representation (h6, tables, images, dividers, decorator blocks — where
+ * `resolveActiveGalleryKey` returns null). A muted, NON-interactive `div` of the
+ * same width as a square so the row budget stays constant, showing an em-dash and
+ * the caption "None". Deliberately NOT a `BlockStyleSquare` and NOT a `<button>`:
+ * it carries no descriptor `title` (so it is uncounted by the specs' titled-button
+ * filter), no active ring/check, and no `scale()` preview wrapper. It never shows
+ * "Normal" — that would misrepresent a table/h6/image as a paragraph.
+ */
+const LeadingActivePlaceholder = () => (
+  <div
+    aria-hidden
+    style={{ width: GALLERY_SQUARE_WIDTH }}
+    className="flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border border-dashed border-border bg-default p-1.5 opacity-60"
+  >
+    <div className="flex h-[2.9rem] items-center justify-center overflow-hidden rounded-sm px-1.5 text-passive-1">
+      <span className="text-lg leading-none">—</span>
+    </div>
+    <span className="flex items-center justify-center overflow-hidden">
+      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-1">
+        None
+      </span>
+    </span>
+  </div>
+)
+
+/**
+ * The responsive full-width squares track. It opens with a persistent LEADING
+ * "current style" indicator (a truthful preview of the active style, or a neutral
+ * "None" placeholder when the block has no gallery representation) and a thin
+ * divider, then renders as many truthful preview squares as fit the remaining
+ * group width (measured via ResizeObserver) and collapses the rest into an
+ * overflow "▾" dropdown, never causing horizontal overflow. This is the squares
+ * row only; the block group's first-line action buttons (Smart checklist, Restore
+ * completed tasks, Edit styles) are rendered by the caller above it, NOT here.
  */
 export const BlockStyleGalleryBar = ({
   profile,
@@ -292,9 +322,14 @@ export const BlockStyleGalleryBar = ({
   }, [])
 
   const total = blocks.length
+  // The persistent leading indicator + its divider consume a fixed slice of the
+  // front of the row, so the sortable track fits into the remaining width. The
+  // leftover sub-track has no leading gap of its own, which is exactly what
+  // `computeGalleryFit` assumes — so it is reused unchanged.
+  const availableWidth = Math.max(0, trackWidth - GALLERY_LEADING_INDICATOR_WIDTH)
   const { inlineCount } = useMemo(
-    () => computeGalleryFit({ containerWidth: trackWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
-    [trackWidth, total],
+    () => computeGalleryFit({ containerWidth: availableWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
+    [availableWidth, total],
   )
   const inlineBlocks = blocks.slice(0, inlineCount)
   const overflowBlocks = blocks.slice(inlineCount)
@@ -304,6 +339,13 @@ export const BlockStyleGalleryBar = ({
     () => resolveActiveGalleryKey({ blockType: activeBlockType ?? '', style: activeBlockStyle ?? '', profile }),
     [activeBlockType, activeBlockStyle, profile],
   )
+  // The descriptor for the leading "you are here" indicator: the active style's
+  // own descriptor when it maps to a gallery square, else null → neutral "None"
+  // placeholder. Derived each render, so the leading square tracks the selection live.
+  const activeDescriptor = useMemo(
+    () => (activeKey != null ? blocks.find((d) => d.key === activeKey) ?? null : null),
+    [activeKey, blocks],
+  )
 
   return (
     <div
@@ -311,6 +353,18 @@ export const BlockStyleGalleryBar = ({
       className="flex w-full min-w-0 items-stretch gap-1.5 overflow-hidden"
       onMouseDown={(event) => event.preventDefault()}
     >
+      {/* Persistent LEADING "current style" indicator: always shows the active
+          style up front ("you are here") — even when its palette copy is scrolled
+          into the "▾" overflow — so it stays visible as the selection moves. It is
+          intentionally redundant with the in-track active square (which keeps its
+          t40 ring as the orderable copy). Clicking re-applies the active descriptor
+          (idempotent). No gallery match → the neutral, non-interactive placeholder. */}
+      {activeDescriptor ? (
+        <BlockStyleSquare descriptor={activeDescriptor} profile={profile} isActive onApply={onApplyBlock} />
+      ) : (
+        <LeadingActivePlaceholder />
+      )}
+      <span aria-hidden className="w-px flex-shrink-0 self-stretch bg-border" />
       {inlineBlocks.map((descriptor) => (
         <BlockStyleSquare
           key={descriptor.key}
