@@ -57,6 +57,7 @@ import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
 import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
+import { RuntimeLogLevelApplier } from '../Service/Logging/RuntimeLogLevelApplier'
 import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
 import { DockerServiceControlService } from '../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
@@ -351,6 +352,30 @@ export class ContainerConfigLoader {
       registrationEmailConfirmationSubject: env.get('REGISTRATION_EMAIL_CONFIRMATION_SUBJECT', true) || undefined,
       registrationEmailConfirmationBody: env.get('REGISTRATION_EMAIL_CONFIRMATION_BODY', true) || undefined,
       registrationEmailConfirmationBaseUrl: env.get('REGISTRATION_EMAIL_CONFIRMATION_URL', true) || undefined,
+      // Standard Red Notes: SIGNUP-CAP env baseline. The gateway persists + views
+      // these; the AUTH server reads the SAME overlay file and enforces the caps
+      // in Register. undefined when unset so the source map reports 'default' (the
+      // resolver applies the unlimited/24h fallbacks). Caps: 0 = unlimited.
+      registrationSignupsPerIpMax: env.get('REGISTRATION_SIGNUPS_PER_IP_MAX', true)
+        ? +env.get('REGISTRATION_SIGNUPS_PER_IP_MAX', true)
+        : undefined,
+      registrationSignupsPerIpWindowHours: env.get('REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS', true)
+        ? +env.get('REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS', true)
+        : undefined,
+      registrationSignupsPerWeekMax: env.get('REGISTRATION_SIGNUPS_PER_WEEK_MAX', true)
+        ? +env.get('REGISTRATION_SIGNUPS_PER_WEEK_MAX', true)
+        : undefined,
+      registrationSignupsPerDeviceMax: env.get('REGISTRATION_SIGNUPS_PER_DEVICE_MAX', true)
+        ? +env.get('REGISTRATION_SIGNUPS_PER_DEVICE_MAX', true)
+        : undefined,
+      registrationSignupsPerDeviceWindowHours: env.get('REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS', true)
+        ? +env.get('REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS', true)
+        : undefined,
+      // Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
+      // gateway persists + views `logging.level`; the RuntimeLogLevelApplier poller
+      // applies the effective level to the live logger. undefined when unset so the
+      // source map reports 'default' (the resolver falls back to 'info').
+      logLevel: env.get('LOG_LEVEL', true) || undefined,
       // Standard Red Notes: OCR env baseline. The SERVER-side knobs (OCR_SERVER_*)
       // are enforced by the gateway (OcrController/OcrService read the resolver per
       // request). The BROWSER-OCR knobs mirror OCR_ENABLED / OCR_DEFAULT_LANGUAGE
@@ -396,6 +421,18 @@ export class ContainerConfigLoader {
     container
       .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
       .toConstantValue(serverSettingsResolver)
+
+    // Standard Red Notes: RUNTIME LOG VERBOSITY. Start an in-process poller that
+    // re-reads the effective `logging.level` from the overlay (persisted admin >
+    // env LOG_LEVEL > 'info') once at boot and every 30s, mutating the live winston
+    // logger + transport levels so an admin can change how verbose the server writes
+    // WITHOUT a restart. Fully guarded and unref'd — a broken overlay can never
+    // crash startup or keep the event loop alive (memory: verify container boot).
+    try {
+      new RuntimeLogLevelApplier(logger, () => serverSettingsResolver.resolveLoggingLevel()).start()
+    } catch (error) {
+      logger.error(`Failed to start runtime log-level applier: ${(error as Error).message}`)
+    }
 
     // Standard Red Notes: anti-abuse infrastructure. The IP allow/block lists and
     // throttle telemetry are Redis-backed, so bind them only when a Redis cache is

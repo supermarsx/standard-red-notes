@@ -94,6 +94,22 @@ export interface EnvSettingsBaseline {
   registrationEmailConfirmationBody?: string
   registrationEmailConfirmationBaseUrl?: string
   /**
+   * Standard Red Notes: SIGNUP-CAP env baseline (REGISTRATION_SIGNUPS_PER_*). The
+   * gateway persists + views these; the AUTH server reads the SAME overlay and
+   * ENFORCES the caps. undefined = env var unset (falls through to default).
+   */
+  registrationSignupsPerIpMax?: number
+  registrationSignupsPerIpWindowHours?: number
+  registrationSignupsPerWeekMax?: number
+  registrationSignupsPerDeviceMax?: number
+  registrationSignupsPerDeviceWindowHours?: number
+  /**
+   * Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
+   * gateway persists + views `logging.level`; a poller applies the effective
+   * level to the live logger. undefined = env var unset (falls through to 'info').
+   */
+  logLevel?: string
+  /**
    * Standard Red Notes: OCR env baseline. serverEnabled/defaultLanguage/maxPages/
    * maxImageBytes drive the SERVER-side /v1/ocr endpoint (gateway-enforced,
    * runtime). clientEnabled/clientDefaultLanguage mirror the BROWSER-OCR
@@ -161,6 +177,16 @@ export interface ResolvedRegistrationConfig {
   emailConfirmationSubject: string
   emailConfirmationBody: string
   emailConfirmationBaseUrl: string
+  /**
+   * Standard Red Notes: SIGNUP CAPS (resolved + clamped). Caps of 0 = unlimited;
+   * windows are in hours. The auth server enforces these; the gateway view
+   * carries them so the admin pane can show the effective values.
+   */
+  signupsPerIpMax: number
+  signupsPerIpWindowHours: number
+  signupsPerWeekMax: number
+  signupsPerDeviceMax: number
+  signupsPerDeviceWindowHours: number
 }
 
 /** Hardcoded registration defaults (apply last, after persisted then env). */
@@ -173,6 +199,28 @@ const REGISTRATION_DEFAULTS: ResolvedRegistrationConfig = {
   emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
   emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
   emailConfirmationBaseUrl: '',
+  // Caps default to unlimited (0) so a stock deploy is unchanged until an admin
+  // opts in; windows default to 24h.
+  signupsPerIpMax: 0,
+  signupsPerIpWindowHours: 24,
+  signupsPerWeekMax: 0,
+  signupsPerDeviceMax: 0,
+  signupsPerDeviceWindowHours: 24,
+}
+
+/**
+ * Standard Red Notes: the winston log levels an admin may select for the runtime
+ * log-verbosity control. A persisted/env value outside this set is ignored so a
+ * bad value can never leave the logger in an invalid state — the resolver falls
+ * through to the next candidate (env then 'info').
+ */
+export const LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly']
+
+/** Hardcoded default log level (applies last, after persisted then env). */
+export const DEFAULT_LOG_LEVEL = 'info'
+
+const validLogLevel = (value: string | undefined): string | undefined => {
+  return typeof value === 'string' && LOG_LEVELS.includes(value.trim()) ? value.trim() : undefined
 }
 
 /**
@@ -400,6 +448,11 @@ export interface ServerSettingsView {
       assignableRoles: string[]
       gatingModes: EmailConfirmationGatingMode[]
     }
+    /**
+     * Standard Red Notes: runtime log verbosity — the effective level plus the
+     * selectable level set (for the admin dropdown).
+     */
+    logging: { level: string; levels: string[] }
     ocr: ResolvedOcrConfig
     workflows: ResolvedWorkflowsConfig
     /**
@@ -683,6 +736,16 @@ export class ServerSettingsResolver {
       env.registrationEmailConfirmationBaseUrl ??
       REGISTRATION_DEFAULTS.emailConfirmationBaseUrl
 
+    // Signup caps: persisted admin value (clamped) wins over env (clamped), over
+    // the hardcoded default. A bad value clamps rather than disabling the cap.
+    const cap = (
+      persisted: number | undefined,
+      envValue: number | undefined,
+      fallback: number,
+      min: number,
+      max: number,
+    ): number => boundedInt(persisted, min, max) ?? boundedInt(envValue, min, max) ?? fallback
+
     return {
       defaultRole: REGISTRATION_ASSIGNABLE_ROLES.includes(rawRole) ? rawRole : REGISTRATION_DEFAULTS.defaultRole,
       domainMode: (['off', 'allowlist', 'blocklist'] as string[]).includes(rawMode)
@@ -700,7 +763,56 @@ export class ServerSettingsResolver {
       emailConfirmationBody:
         typeof rawBody === 'string' && rawBody.trim().length > 0 ? rawBody : REGISTRATION_DEFAULTS.emailConfirmationBody,
       emailConfirmationBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() : '',
+      signupsPerIpMax: cap(
+        registration.signupsPerIpMax,
+        env.registrationSignupsPerIpMax,
+        REGISTRATION_DEFAULTS.signupsPerIpMax,
+        0,
+        100000,
+      ),
+      signupsPerIpWindowHours: cap(
+        registration.signupsPerIpWindowHours,
+        env.registrationSignupsPerIpWindowHours,
+        REGISTRATION_DEFAULTS.signupsPerIpWindowHours,
+        1,
+        168,
+      ),
+      signupsPerWeekMax: cap(
+        registration.signupsPerWeekMax,
+        env.registrationSignupsPerWeekMax,
+        REGISTRATION_DEFAULTS.signupsPerWeekMax,
+        0,
+        1000000,
+      ),
+      signupsPerDeviceMax: cap(
+        registration.signupsPerDeviceMax,
+        env.registrationSignupsPerDeviceMax,
+        REGISTRATION_DEFAULTS.signupsPerDeviceMax,
+        0,
+        100000,
+      ),
+      signupsPerDeviceWindowHours: cap(
+        registration.signupsPerDeviceWindowHours,
+        env.registrationSignupsPerDeviceWindowHours,
+        REGISTRATION_DEFAULTS.signupsPerDeviceWindowHours,
+        1,
+        168,
+      ),
     }
+  }
+
+  /**
+   * The effective RUNTIME LOG LEVEL: persisted `logging.level` (admin-set) wins
+   * over the LOG_LEVEL env baseline, which falls back to 'info'. Every candidate
+   * is validated against the winston level set so a bad value can never leave the
+   * logger in an invalid state — it simply falls through to the next candidate,
+   * and this ALWAYS resolves to a valid level (never undefined). Re-read per call
+   * so the log-level poller picks up an admin change on its next tick.
+   */
+  async resolveLoggingLevel(): Promise<string> {
+    const persisted = await this.safeRead()
+
+    return validLogLevel(persisted.logging?.level) ?? validLogLevel(this.envBaseline.logLevel) ?? DEFAULT_LOG_LEVEL
   }
 
   /**
@@ -808,6 +920,8 @@ export class ServerSettingsResolver {
     const rateLimit = await this.resolveRateLimitConfig()
     const registration = persisted.registration ?? {}
     const registrationConfig = await this.resolveRegistrationConfig()
+    const logging = persisted.logging ?? {}
+    const loggingLevel = await this.resolveLoggingLevel()
     const ocr = persisted.ocr ?? {}
     const ocrConfig = await this.resolveOcrConfig()
     const workflows = persisted.workflows ?? {}
@@ -870,6 +984,21 @@ export class ServerSettingsResolver {
         registration.emailConfirmationBaseUrl,
         env.registrationEmailConfirmationBaseUrl,
       ),
+      'registration.signupsPerIpMax': this.source(registration.signupsPerIpMax, env.registrationSignupsPerIpMax),
+      'registration.signupsPerIpWindowHours': this.source(
+        registration.signupsPerIpWindowHours,
+        env.registrationSignupsPerIpWindowHours,
+      ),
+      'registration.signupsPerWeekMax': this.source(registration.signupsPerWeekMax, env.registrationSignupsPerWeekMax),
+      'registration.signupsPerDeviceMax': this.source(
+        registration.signupsPerDeviceMax,
+        env.registrationSignupsPerDeviceMax,
+      ),
+      'registration.signupsPerDeviceWindowHours': this.source(
+        registration.signupsPerDeviceWindowHours,
+        env.registrationSignupsPerDeviceWindowHours,
+      ),
+      'logging.level': this.source(logging.level, env.logLevel),
       'ocr.serverEnabled': this.source(ocr.serverEnabled, env.ocrServerEnabled),
       'ocr.defaultLanguage': this.source(ocr.defaultLanguage, env.ocrDefaultLanguage),
       'ocr.maxPages': this.source(ocr.maxPages, env.ocrMaxPages),
@@ -912,6 +1041,7 @@ export class ServerSettingsResolver {
           assignableRoles: REGISTRATION_ASSIGNABLE_ROLES,
           gatingModes: EMAIL_CONFIRMATION_GATING_MODES,
         },
+        logging: { level: loggingLevel, levels: LOG_LEVELS },
         ocr: ocrConfig,
         workflows: workflowsConfig,
         plugins: { repoUrl: pluginsRepoUrl, sameOriginRendering: pluginsSameOriginRendering },

@@ -27,6 +27,15 @@ const confirmationDefaults = {
   emailConfirmationBaseUrl: '',
 }
 
+/** Signup-cap defaults (unlimited caps, 24h windows), spread into expectations. */
+const signupCapDefaults = {
+  signupsPerIpMax: 0,
+  signupsPerIpWindowHours: 24,
+  signupsPerWeekMax: 0,
+  signupsPerDeviceMax: 0,
+  signupsPerDeviceWindowHours: 24,
+}
+
 // Only which providers are configured matters for the server-status payload.
 jest.mock('../../Service/Assistant/providers/factory', () => ({
   configuredProviders: jest.fn().mockReturnValue(['anthropic']),
@@ -492,6 +501,7 @@ describe('AdminController server-status', () => {
         domainMode: 'allowlist',
         domainList: ['company.com', 'partner.com'],
         ...confirmationDefaults,
+        ...signupCapDefaults,
       })
       expect(logger.info).toHaveBeenCalledWith(
         'admin server-settings updated',
@@ -535,6 +545,105 @@ describe('AdminController server-status', () => {
       expect(resolved.emailConfirmationGating).toBe('warn')
       expect(resolved.emailConfirmationBaseUrl).toBe('https://notes.example.com')
       expect(resolved.emailConfirmationSubject).toBe('Verify')
+    })
+
+    it('PUT validates signup caps: out-of-range / non-integer values are 400s that persist nothing', async () => {
+      for (const bad of [
+        { registration: { signupsPerIpMax: -1 } },
+        { registration: { signupsPerIpMax: 1.5 } },
+        { registration: { signupsPerIpMax: 100001 } },
+        { registration: { signupsPerIpWindowHours: 0 } },
+        { registration: { signupsPerIpWindowHours: 169 } },
+        { registration: { signupsPerWeekMax: 1000001 } },
+        { registration: { signupsPerDeviceWindowHours: 0 } },
+        { registration: { signupsPerDeviceMax: 'lots' } },
+      ]) {
+        statusMock.mockClear()
+        await settingsController().setServerSettings(
+          { body: bad } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      const resolved = await resolver.resolveRegistrationConfig()
+      expect(resolved.signupsPerIpMax).toBe(0)
+      expect(resolved.signupsPerWeekMax).toBe(0)
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    it('PUT persists valid signup caps (audit NAMES only) and auth resolves them; null clears', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            registration: {
+              signupsPerIpMax: 10,
+              signupsPerIpWindowHours: 6,
+              signupsPerWeekMax: 500,
+              signupsPerDeviceMax: 2,
+              signupsPerDeviceWindowHours: 48,
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(await resolver.resolveRegistrationConfig()).toMatchObject({
+        signupsPerIpMax: 10,
+        signupsPerIpWindowHours: 6,
+        signupsPerWeekMax: 500,
+        signupsPerDeviceMax: 2,
+        signupsPerDeviceWindowHours: 48,
+      })
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          changedSettings: [
+            'registration.signupsPerIpMax',
+            'registration.signupsPerIpWindowHours',
+            'registration.signupsPerWeekMax',
+            'registration.signupsPerDeviceMax',
+            'registration.signupsPerDeviceWindowHours',
+          ],
+        }),
+      )
+
+      // null clears a persisted cap → resolves back to the unlimited default.
+      await settingsController().setServerSettings(
+        { body: { registration: { signupsPerIpMax: null } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect((await resolver.resolveRegistrationConfig()).signupsPerIpMax).toBe(0)
+    })
+
+    it('PUT validates logging.level: an unknown level is a 400 that persists nothing', async () => {
+      await settingsController().setServerSettings(
+        { body: { logging: { level: 'chatty' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(400)
+      expect(await resolver.resolveLoggingLevel()).toBe('info')
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    it('PUT persists logging.level and the view + resolver report it; null clears back to default', async () => {
+      await settingsController().setServerSettings(
+        { body: { logging: { level: 'debug' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(await resolver.resolveLoggingLevel()).toBe('debug')
+      const payload = jsonMock.mock.calls[jsonMock.mock.calls.length - 1][0]
+      expect(payload.settings.logging.level).toBe('debug')
+      expect(payload.sources['logging.level']).toBe('persisted')
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({ changedSettings: ['logging.level'] }),
+      )
+
+      await settingsController().setServerSettings(
+        { body: { logging: { level: null } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(await resolver.resolveLoggingLevel()).toBe('info')
     })
 
     it('PUT with an explicit null CLEARS the persisted override (source falls back to env)', async () => {

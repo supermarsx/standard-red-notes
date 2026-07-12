@@ -18,6 +18,15 @@ const confirmationDefaults = {
   emailConfirmationBaseUrl: '',
 }
 
+/** Signup-cap defaults (unlimited caps, 24h windows), spread into expectations. */
+const signupCapDefaults = {
+  signupsPerIpMax: 0,
+  signupsPerIpWindowHours: 24,
+  signupsPerWeekMax: 0,
+  signupsPerDeviceMax: 0,
+  signupsPerDeviceWindowHours: 24,
+}
+
 describe('ServerSettingsStore + ServerSettingsResolver', () => {
   let dir: string
   let filePath: string
@@ -69,6 +78,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainMode: 'off',
         domainList: [],
         ...confirmationDefaults,
+        ...signupCapDefaults,
       })
     })
 
@@ -84,6 +94,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainMode: 'allowlist',
         domainList: ['env.com', 'other.com'],
         ...confirmationDefaults,
+        ...signupCapDefaults,
       })
     })
 
@@ -98,6 +109,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainMode: 'blocklist',
         domainList: ['persisted.com'],
         ...confirmationDefaults,
+        ...signupCapDefaults,
       })
 
       // An admin role must never survive resolution as a default.
@@ -132,6 +144,154 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(view.sources['registration.domainMode']).toEqual('persisted')
       expect(view.sources['registration.defaultRole']).toEqual('env')
       expect(view.sources['registration.domainList']).toEqual('default')
+    })
+  })
+
+  describe('signup caps (registration.signupsPer*)', () => {
+    it('defaults to unlimited caps with 24h windows when nothing is persisted or in env', async () => {
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.signupsPerIpMax).toBe(0)
+      expect(config.signupsPerIpWindowHours).toBe(24)
+      expect(config.signupsPerWeekMax).toBe(0)
+      expect(config.signupsPerDeviceMax).toBe(0)
+      expect(config.signupsPerDeviceWindowHours).toBe(24)
+    })
+
+    it('falls back to the env baseline', async () => {
+      const config = await makeResolver({
+        registrationSignupsPerIpMax: 5,
+        registrationSignupsPerIpWindowHours: 12,
+        registrationSignupsPerWeekMax: 100,
+        registrationSignupsPerDeviceMax: 3,
+        registrationSignupsPerDeviceWindowHours: 48,
+      }).resolveRegistrationConfig()
+
+      expect(config).toMatchObject({
+        signupsPerIpMax: 5,
+        signupsPerIpWindowHours: 12,
+        signupsPerWeekMax: 100,
+        signupsPerDeviceMax: 3,
+        signupsPerDeviceWindowHours: 48,
+      })
+    })
+
+    it('lets persisted admin values WIN over env', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { signupsPerIpMax: 7, signupsPerWeekMax: 250 },
+      })
+      const config = await makeResolver({
+        registrationSignupsPerIpMax: 5,
+        registrationSignupsPerWeekMax: 100,
+      }).resolveRegistrationConfig()
+
+      expect(config.signupsPerIpMax).toBe(7)
+      expect(config.signupsPerWeekMax).toBe(250)
+    })
+
+    it('clamps out-of-range persisted/env values to the bounds (a bad value never disables a cap)', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { signupsPerIpWindowHours: 9999, signupsPerDeviceWindowHours: 0, signupsPerIpMax: -4 },
+      })
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.signupsPerIpWindowHours).toBe(168) // clamped to max
+      expect(config.signupsPerDeviceWindowHours).toBe(1) // clamped to min
+      expect(config.signupsPerIpMax).toBe(0) // clamped to min
+    })
+
+    it('exposes each cap in the view source map (persisted / env / default)', async () => {
+      await new ServerSettingsStore(filePath).update({ registration: { signupsPerIpMax: 9 } })
+      const view = await makeResolver({ registrationSignupsPerWeekMax: 50 }).view()
+
+      expect(view.settings.registration.signupsPerIpMax).toBe(9)
+      expect(view.sources['registration.signupsPerIpMax']).toBe('persisted')
+      expect(view.sources['registration.signupsPerWeekMax']).toBe('env')
+      expect(view.sources['registration.signupsPerDeviceMax']).toBe('default')
+      expect(view.sources['registration.signupsPerIpWindowHours']).toBe('default')
+      expect(view.sources['registration.signupsPerDeviceWindowHours']).toBe('default')
+    })
+  })
+
+  describe('runtime log level (logging.level)', () => {
+    it("defaults to 'info' when nothing is persisted or in env", async () => {
+      expect(await makeResolver().resolveLoggingLevel()).toBe('info')
+    })
+
+    it('falls back to the env LOG_LEVEL baseline', async () => {
+      expect(await makeResolver({ logLevel: 'debug' }).resolveLoggingLevel()).toBe('debug')
+    })
+
+    it('lets the persisted admin level WIN over env', async () => {
+      await new ServerSettingsStore(filePath).update({ logging: { level: 'warn' } })
+      expect(await makeResolver({ logLevel: 'debug' }).resolveLoggingLevel()).toBe('warn')
+    })
+
+    it('ignores an invalid persisted level and falls through to env then default', async () => {
+      await new ServerSettingsStore(filePath).update({ logging: { level: 'bogus' } })
+      expect(await makeResolver({ logLevel: 'http' }).resolveLoggingLevel()).toBe('http')
+
+      await new ServerSettingsStore(filePath).update({ logging: { level: 'also-bad' } })
+      expect(await makeResolver({ logLevel: 'nonsense' }).resolveLoggingLevel()).toBe('info')
+    })
+
+    it('clearing the persisted level (null) falls back to env', async () => {
+      const store = new ServerSettingsStore(filePath)
+      await store.update({ logging: { level: 'silly' } })
+      await store.update({ logging: { level: null } })
+      expect(await store.read()).toEqual({}) // section pruned when empty
+
+      expect(await makeResolver({ logLevel: 'verbose' }).resolveLoggingLevel()).toBe('verbose')
+    })
+
+    it('reports the effective level + selectable set + source in the view', async () => {
+      await new ServerSettingsStore(filePath).update({ logging: { level: 'error' } })
+      const view = await makeResolver().view()
+
+      expect(view.settings.logging.level).toBe('error')
+      expect(view.settings.logging.levels).toEqual(['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'])
+      expect(view.sources['logging.level']).toBe('persisted')
+    })
+  })
+
+  describe('view() no-regression: every pre-existing key still present', () => {
+    it('carries all pre-existing settings sections and source keys alongside the new ones', async () => {
+      const view = await makeResolver().view()
+
+      // Pre-existing settings sections must all still be present.
+      for (const section of [
+        'ai',
+        'updateCheck',
+        'nextcloudBackups',
+        'security',
+        'registration',
+        'ocr',
+        'workflows',
+        'plugins',
+      ] as const) {
+        expect(view.settings).toHaveProperty(section)
+      }
+      // The new logging section joins them.
+      expect(view.settings).toHaveProperty('logging')
+
+      // A representative pre-existing source key from each section must survive
+      // (dotted keys are LITERAL map keys, so assert via the key set — a dotted
+      // toHaveProperty path would be read as nesting).
+      const sourceKeys = Object.keys(view.sources)
+      for (const key of [
+        'ai.anthropicApiKey',
+        'updateCheck.url',
+        'nextcloudBackups.enabled',
+        'security.proofOfWork.registerEnabled',
+        'security.rateLimit.enabled',
+        'registration.defaultRole',
+        'registration.emailConfirmationEnabled',
+        'ocr.serverEnabled',
+        'workflows.enabled',
+        'plugins.repoUrl',
+      ]) {
+        expect(sourceKeys).toContain(key)
+      }
     })
   })
 

@@ -133,6 +133,38 @@ export interface PersistedRegistrationSettings {
   emailConfirmationSubject?: string
   emailConfirmationBody?: string
   emailConfirmationBaseUrl?: string
+  /**
+   * Standard Red Notes: SIGNUP CAPS (part of the anti-abuse posture). The
+   * api-gateway PERSISTS + VIEWS these; the AUTH server reads the SAME overlay
+   * file and ENFORCES them in its Register use case (per-IP + global per-week
+   * durable caps, plus a SOFT per-device best-effort cap). Key names/nesting are
+   * a CONTRACT shared with auth (RegistrationConfigOverlay / SignupLimitsConfig)
+   * — keep them in sync. Every field optional; absence = fall back to auth's
+   * env/default. Caps: 0 = unlimited. Windows are in hours.
+   */
+  /** Per-IP signup cap over the window; 0 = unlimited. Integer 0..100000. */
+  signupsPerIpMax?: number
+  /** Per-IP window length in hours. Integer 1..168 (1h..7d). */
+  signupsPerIpWindowHours?: number
+  /** Global rolling-7-day signup cap; 0 = unlimited. Integer 0..1000000. */
+  signupsPerWeekMax?: number
+  /** Per-device SOFT signup cap; 0 = unlimited. Integer 0..100000. */
+  signupsPerDeviceMax?: number
+  /** Per-device window length in hours. Integer 1..168 (1h..7d). */
+  signupsPerDeviceWindowHours?: number
+}
+
+/**
+ * Standard Red Notes: RUNTIME LOG VERBOSITY. The api-gateway PERSISTS + VIEWS
+ * `logging.level`; a small in-process poller (RuntimeLogLevelApplier) re-reads it
+ * on an interval and mutates the live winston logger + transport levels, so the
+ * server's log verbosity changes WITHOUT a restart. The auth server reads the
+ * SAME overlay key and runs its own poller. Key name/nesting is a CONTRACT shared
+ * with auth — keep it in sync. Absent = fall back to env LOG_LEVEL then 'info'.
+ */
+export interface PersistedLoggingSettings {
+  /** One of error|warn|info|http|verbose|debug|silly. */
+  level?: string
 }
 
 /**
@@ -214,6 +246,7 @@ export interface PersistedServerSettings {
   nextcloudBackups?: { enabled?: boolean }
   security?: PersistedSecuritySettings
   registration?: PersistedRegistrationSettings
+  logging?: PersistedLoggingSettings
   ocr?: PersistedOcrSettings
   workflows?: PersistedWorkflowsSettings
   plugins?: PersistedPluginsSettings
@@ -267,6 +300,14 @@ export interface ServerSettingsPatch {
     emailConfirmationSubject?: string | null
     emailConfirmationBody?: string | null
     emailConfirmationBaseUrl?: string | null
+    signupsPerIpMax?: number | null
+    signupsPerIpWindowHours?: number | null
+    signupsPerWeekMax?: number | null
+    signupsPerDeviceMax?: number | null
+    signupsPerDeviceWindowHours?: number | null
+  }
+  logging?: {
+    level?: string | null
   }
   ocr?: {
     serverEnabled?: boolean | null
@@ -391,8 +432,20 @@ export class ServerSettingsStore {
         this.applyKey(data.registration, 'emailConfirmationSubject', patch.registration.emailConfirmationSubject)
         this.applyKey(data.registration, 'emailConfirmationBody', patch.registration.emailConfirmationBody)
         this.applyKey(data.registration, 'emailConfirmationBaseUrl', patch.registration.emailConfirmationBaseUrl)
+        this.applyKey(data.registration, 'signupsPerIpMax', patch.registration.signupsPerIpMax)
+        this.applyKey(data.registration, 'signupsPerIpWindowHours', patch.registration.signupsPerIpWindowHours)
+        this.applyKey(data.registration, 'signupsPerWeekMax', patch.registration.signupsPerWeekMax)
+        this.applyKey(data.registration, 'signupsPerDeviceMax', patch.registration.signupsPerDeviceMax)
+        this.applyKey(data.registration, 'signupsPerDeviceWindowHours', patch.registration.signupsPerDeviceWindowHours)
         if (Object.keys(data.registration).length === 0) {
           delete data.registration
+        }
+      }
+      if (patch.logging) {
+        data.logging = data.logging ?? {}
+        this.applyKey(data.logging, 'level', patch.logging.level)
+        if (Object.keys(data.logging).length === 0) {
+          delete data.logging
         }
       }
       if (patch.ocr) {

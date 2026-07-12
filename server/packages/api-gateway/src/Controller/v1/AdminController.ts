@@ -9,7 +9,11 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 import { AssistantProviderConfig, configuredProviders } from '../../Service/Assistant/providers/factory'
 import { UpdateCheckService } from '../../Service/Updates/UpdateCheckService'
 import { AdminLogsService } from '../../Service/AdminLogs/AdminLogsService'
-import { REGISTRATION_ASSIGNABLE_ROLES, ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import {
+  LOG_LEVELS,
+  REGISTRATION_ASSIGNABLE_ROLES,
+  ServerSettingsResolver,
+} from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
 import {
   PersistedAiProfile,
@@ -1445,6 +1449,75 @@ export class AdminController extends BaseHttpController {
           }
         }
         changedSettings.push('registration.emailConfirmationBaseUrl')
+      }
+
+      // Standard Red Notes: SIGNUP CAPS. The gateway only PERSISTS these; the AUTH
+      // server reads the same overlay file and ENFORCES them in Register (per-IP +
+      // global per-week durable caps; a SOFT per-device best-effort cap). Each is
+      // a bounded integer (maxes: 0 = unlimited; windows are hours 1..168) so a bad
+      // value can never silently disable a cap. `null` clears any of them.
+      const regBoundedInt = (
+        key:
+          | 'signupsPerIpMax'
+          | 'signupsPerIpWindowHours'
+          | 'signupsPerWeekMax'
+          | 'signupsPerDeviceMax'
+          | 'signupsPerDeviceWindowHours',
+        min: number,
+        max: number,
+      ): { error: string } | undefined => {
+        if (registration[key] === undefined) {
+          return undefined
+        }
+        if (registration[key] === null) {
+          patch.registration![key] = null
+        } else if (
+          typeof registration[key] === 'number' &&
+          Number.isInteger(registration[key]) &&
+          (registration[key] as number) >= min &&
+          (registration[key] as number) <= max
+        ) {
+          patch.registration![key] = registration[key] as number
+        } else {
+          return { error: `registration.${key} must be an integer between ${min} and ${max}, or null to clear it.` }
+        }
+        changedSettings.push(`registration.${key}`)
+
+        return undefined
+      }
+
+      for (const [key, min, max] of [
+        ['signupsPerIpMax', 0, 100000],
+        ['signupsPerIpWindowHours', 1, 168],
+        ['signupsPerWeekMax', 0, 1000000],
+        ['signupsPerDeviceMax', 0, 100000],
+        ['signupsPerDeviceWindowHours', 1, 168],
+      ] as const) {
+        const invalid = regBoundedInt(key, min, max)
+        if (invalid) {
+          return invalid
+        }
+      }
+    }
+
+    // Standard Red Notes: RUNTIME LOG VERBOSITY. The gateway PERSISTS `logging.level`
+    // and its own poller (RuntimeLogLevelApplier) applies it to the live logger; the
+    // auth server reads the same overlay key and runs its own poller. Must be one of
+    // the winston levels, or null to clear (fall back to LOG_LEVEL env, then 'info').
+    if (root.logging !== undefined) {
+      if (!root.logging || typeof root.logging !== 'object' || Array.isArray(root.logging)) {
+        return { error: 'logging must be an object.' }
+      }
+      const logging = root.logging as Record<string, unknown>
+      if (logging.level !== undefined) {
+        if (logging.level === null) {
+          patch.logging = { level: null }
+        } else if (typeof logging.level === 'string' && LOG_LEVELS.includes(logging.level)) {
+          patch.logging = { level: logging.level }
+        } else {
+          return { error: `logging.level must be one of ${LOG_LEVELS.join(', ')}, or null to clear it.` }
+        }
+        changedSettings.push('logging.level')
       }
     }
 
