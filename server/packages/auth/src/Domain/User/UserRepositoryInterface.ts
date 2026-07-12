@@ -28,6 +28,9 @@ export interface AdminUserListQuery {
   // Standard Red Notes: filter by admin SUSPENSION state (a reversible hold,
   // separate from `banned`). Mirrors the `banned` filter.
   suspended?: boolean
+  // Standard Red Notes: filter by APPROVAL state (false = the pending-approval
+  // queue). Mirrors the `banned` filter.
+  approved?: boolean
   subscription?: 'active' | 'inactive' | 'none'
 }
 
@@ -53,6 +56,11 @@ export interface AdminUserRow {
   // (reversible; separate from `banned`). Lets the admin list render a per-row
   // suspended badge without a per-user round trip.
   suspended: boolean
+  // Standard Red Notes: whether the account is awaiting administrator approval
+  // (approved=false). Lets the admin list render a per-row pending badge and
+  // powers the pending-approvals queue.
+  pendingApproval: boolean
+  approvalNote: string | null
   mfaEnabled: boolean
   storageUsedBytes: number | null
   storageLimitBytes: number | null

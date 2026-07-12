@@ -144,6 +144,9 @@ export class ServerSettingsOverlayReader {
     if (registration.signupsCloseAt === null || typeof registration.signupsCloseAt === 'string') {
       result.signupsCloseAt = registration.signupsCloseAt
     }
+    if (typeof registration.approvalRequired === 'boolean') {
+      result.approvalRequired = registration.approvalRequired
+    }
 
     return result
   }

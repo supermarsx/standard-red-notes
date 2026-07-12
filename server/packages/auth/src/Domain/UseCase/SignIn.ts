@@ -146,18 +146,24 @@ export class SignIn implements UseCaseInterface {
      * no longer blocks sign-in.
      */
     if (user.isAccessBlocked()) {
-      // Standard Red Notes: suspension and ban both hard-block access via
-      // isAccessBlocked; record the distinct reason so the audit log tells them
-      // apart. The user-facing message stays generic either way (status is not
-      // disclosed beyond "suspended, contact an administrator").
-      const blockReason = user.isSuspended() ? 'suspended' : 'banned'
+      // Standard Red Notes: pending-approval, suspension and ban all hard-block
+      // access via isAccessBlocked; record the distinct reason so the audit log
+      // tells them apart. A pending-approval account gets a friendly "awaiting
+      // approval" message (it is a normal, not punitive, state); suspension/ban
+      // stay generic (status is not disclosed beyond "suspended, contact an
+      // administrator"). Pending-approval is checked first so a not-yet-approved
+      // account is never mislabeled as suspended.
+      const isPendingApproval = user.isPendingApproval()
+      const blockReason = isPendingApproval ? 'pending_approval' : user.isSuspended() ? 'suspended' : 'banned'
       this.logger.debug(`[sign-in][${user.uuid}] Access-blocked (${blockReason}) user attempted to sign in.`)
 
       await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, blockReason)
 
       return {
         success: false,
-        errorMessage: 'This account has been suspended. Please contact an administrator.',
+        errorMessage: isPendingApproval
+          ? 'Your account is awaiting administrator approval.'
+          : 'This account has been suspended. Please contact an administrator.',
         errorCode: HttpStatusCode.Forbidden,
       }
     }

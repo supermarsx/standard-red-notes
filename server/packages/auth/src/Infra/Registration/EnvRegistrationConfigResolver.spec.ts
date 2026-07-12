@@ -20,6 +20,7 @@ const confirmationDefaults = {
   maxTotalAccounts: 0,
   signupsOpenAt: null,
   signupsCloseAt: null,
+  approvalRequired: false,
 }
 
 describe('EnvRegistrationConfigResolver', () => {

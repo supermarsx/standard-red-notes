@@ -211,6 +211,10 @@ import { ConsumeSignupInvite } from '../Domain/UseCase/ConsumeSignupInvite/Consu
 import { CreateSignupInviteLink } from '../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
 import { ListSignupInviteLinks } from '../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
 import { RevokeSignupInviteLink } from '../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
+import { ListPendingUsers } from '../Domain/UseCase/ListPendingUsers/ListPendingUsers'
+import { ApproveUser } from '../Domain/UseCase/ApproveUser/ApproveUser'
+import { RejectUser } from '../Domain/UseCase/RejectUser/RejectUser'
+import { SendApprovalNotification } from '../Domain/UseCase/SendApprovalNotification/SendApprovalNotification'
 import { VerifyEmailConfirmation } from '../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
@@ -2231,6 +2235,32 @@ export class ContainerConfigLoader {
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
+    // Standard Red Notes: APPROVAL / WAITLIST QUEUE. SendApprovalNotification +
+    // ListPendingUsers + ApproveUser are bound here; RejectUser depends on
+    // Auth_DeleteAccount and is bound just after it (see below) so its eager
+    // resolution never precedes the DeleteAccount binding.
+    container
+      .bind<SendApprovalNotification>(TYPES.Auth_SendApprovalNotification)
+      .toConstantValue(
+        new SendApprovalNotification(
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
+      .bind<ListPendingUsers>(TYPES.Auth_ListPendingUsers)
+      .toConstantValue(new ListPendingUsers(container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)))
+    container
+      .bind<ApproveUser>(TYPES.Auth_ApproveUser)
+      .toConstantValue(
+        new ApproveUser(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<SendApprovalNotification>(TYPES.Auth_SendApprovalNotification),
+          env.get('REGISTRATION_EMAIL_CONFIRMATION_URL', true) || undefined,
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
     container
       .bind<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation)
       .toConstantValue(
@@ -2496,6 +2526,16 @@ export class ContainerConfigLoader {
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<VerifyUserServerPassword>(TYPES.Auth_VerifyUserServerPassword),
+        ),
+      )
+    // Standard Red Notes: APPROVAL QUEUE reject reuses the DeleteAccount pipeline,
+    // so it is bound right after Auth_DeleteAccount (which it resolves eagerly).
+    container
+      .bind<RejectUser>(TYPES.Auth_RejectUser)
+      .toConstantValue(
+        new RejectUser(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
         ),
       )
     container
@@ -3417,6 +3457,11 @@ export class ContainerConfigLoader {
             container.get<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink),
             container.get<ListSignupInviteLinks>(TYPES.Auth_ListSignupInviteLinks),
             container.get<RevokeSignupInviteLink>(TYPES.Auth_RevokeSignupInviteLink),
+            // Standard Red Notes: APPROVAL QUEUE — wired on the single-container
+            // path too so the admin panel's pending-users list/approve/reject work.
+            container.get<ListPendingUsers>(TYPES.Auth_ListPendingUsers),
+            container.get<ApproveUser>(TYPES.Auth_ApproveUser),
+            container.get<RejectUser>(TYPES.Auth_RejectUser),
           ),
         )
       container

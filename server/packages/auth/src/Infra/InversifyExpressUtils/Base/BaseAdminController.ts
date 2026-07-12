@@ -57,6 +57,9 @@ import { CreateSignupInviteLink } from '../../../Domain/UseCase/CreateSignupInvi
 import { ListSignupInviteLinks } from '../../../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
 import { RevokeSignupInviteLink } from '../../../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
 import { SignupInviteLink } from '../../../Domain/SignupInvite/SignupInviteLink'
+import { ListPendingUsers } from '../../../Domain/UseCase/ListPendingUsers/ListPendingUsers'
+import { ApproveUser } from '../../../Domain/UseCase/ApproveUser/ApproveUser'
+import { RejectUser } from '../../../Domain/UseCase/RejectUser/RejectUser'
 
 /**
  * Standard Red Notes: settings an admin (ADMIN_USER) is allowed to set
@@ -206,6 +209,11 @@ export class BaseAdminController extends BaseHttpController {
     protected doCreateSignupInviteLink?: CreateSignupInviteLink,
     protected doListSignupInviteLinks?: ListSignupInviteLinks,
     protected doRevokeSignupInviteLink?: RevokeSignupInviteLink,
+    // Standard Red Notes: APPROVAL QUEUE admin surface (list pending / approve /
+    // reject). Optional trailing deps so existing constructions keep compiling.
+    protected doListPendingUsers?: ListPendingUsers,
+    protected doApproveUser?: ApproveUser,
+    protected doRejectUser?: RejectUser,
   ) {
     super()
 
@@ -2084,5 +2092,105 @@ export class BaseAdminController extends BaseHttpController {
     })
 
     return this.json({ success: true, uuid })
+  }
+
+  /**
+   * Standard Red Notes: APPROVAL QUEUE — list users awaiting approval
+   * (approved=false), paginated. Read-only, admin-gated. Same shape as getUsers.
+   */
+  async listPendingUsers(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doListPendingUsers === undefined) {
+      return this.json({ error: { message: 'Approval queue is not available.' } }, 500)
+    }
+
+    const query = request.query as Record<string, string | undefined>
+    const limit = query.limit !== undefined ? Number.parseInt(query.limit, 10) : undefined
+    const offset = query.offset !== undefined ? Number.parseInt(query.offset, 10) : undefined
+
+    const result = await this.doListPendingUsers.execute({ limit, offset })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const { rows, total } = result.getValue()
+
+    return this.json({ users: rows, total })
+  }
+
+  /**
+   * Standard Red Notes: APPROVAL QUEUE — approve a pending user by uuid.
+   * Admin-gated + audited + webhook. Best-effort approval email (in the use case).
+   */
+  async approveUser(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doApproveUser === undefined) {
+      return this.json({ error: { message: 'Approval queue is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { approvalNote } = request.body as { approvalNote?: string | null }
+
+    const result = await this.doApproveUser.execute({ userUuid, approvalNote: approvalNote ?? null })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.UserApproved,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.UserApproved,
+      targetUuid: userUuid,
+    })
+
+    return this.json({ success: true, userUuid })
+  }
+
+  /**
+   * Standard Red Notes: APPROVAL QUEUE — reject a pending user by uuid (hard
+   * delete via the existing DeleteAccount pipeline). Admin-gated + audited +
+   * webhook. Guarded to pending accounts only (see RejectUser).
+   */
+  async rejectUser(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doRejectUser === undefined) {
+      return this.json({ error: { message: 'Approval queue is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+
+    const result = await this.doRejectUser.execute({ userUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.UserRejected,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.UserRejected,
+      targetUuid: userUuid,
+    })
+
+    return this.json({ success: true, userUuid })
   }
 }

@@ -266,6 +266,37 @@ export class User {
   })
   declare emailConfirmedAt: Date | null
 
+  /**
+   * Standard Red Notes: APPROVAL / WAITLIST QUEUE. Defaults to TRUE at the
+   * database level so (a) existing rows backfilled by the migration and (b) every
+   * new signup created while the feature is OFF are treated as approved — the
+   * gate only affects NEW signups made while an admin has approvalRequired ON, for
+   * which Register explicitly sets this false. A pending (approved=0) user is a
+   * real user row whose ACCESS is gated (folded into isAccessBlocked), exactly
+   * like suspension. `approvedAt` records when approval happened (null until then).
+   */
+  @Column({
+    name: 'approved',
+    type: 'tinyint',
+    default: 1,
+  })
+  declare approved: boolean
+
+  @Column({
+    name: 'approved_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare approvedAt: Date | null
+
+  @Column({
+    name: 'approval_note',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  declare approvalNote: string | null
+
   @OneToMany(
     /* istanbul ignore next */
     () => RevokedSession,
@@ -399,6 +430,26 @@ export class User {
   }
 
   /**
+   * Standard Red Notes: whether the account is APPROVED. The column is a
+   * tinyint(1): TypeORM hydrates it as the NUMBER 0/1 while a freshly built entity
+   * may carry a boolean. A NULL/undefined value (a legacy row read before the
+   * backfill, or an entity built without the column set) is treated as approved so
+   * the gate can never lock out an account by accident (mirrors isEmailConfirmed).
+   */
+  isApproved(): boolean {
+    if (this.approved === null || this.approved === undefined) {
+      return true
+    }
+
+    return Number(this.approved) === 1
+  }
+
+  /** Standard Red Notes: whether the account is awaiting administrator approval. */
+  isPendingApproval(): boolean {
+    return !this.isApproved()
+  }
+
+  /**
    * Whether access must be HARD-blocked (rejected at sign-in and on every
    * authenticated request): an active admin suspension, or an active permanent
    * or not-yet-expired temporary ban. A shadow ban is deliberately NOT
@@ -408,6 +459,10 @@ export class User {
    * AuthenticateUser) reject a suspended user with zero new call sites.
    */
   isAccessBlocked(now: Date = new Date()): boolean {
-    return this.isSuspended() || (this.isBanned(now) && this.effectiveBanType() !== 'shadow')
+    return (
+      this.isPendingApproval() ||
+      this.isSuspended() ||
+      (this.isBanned(now) && this.effectiveBanType() !== 'shadow')
+    )
   }
 }

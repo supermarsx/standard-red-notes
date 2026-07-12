@@ -1370,4 +1370,104 @@ describe('Register', () => {
       expect(result.success).toBe(true)
     })
   })
+
+  describe('Standard Red Notes: approval / waitlist queue (#13)', () => {
+    const makeResolver = (config: Partial<RegistrationConfig>): RegistrationConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        emailConfirmationEnabled: false,
+        emailConfirmationGating: 'block_signin',
+        emailConfirmationSubject: 's',
+        emailConfirmationBody: 'b',
+        emailConfirmationBaseUrl: '',
+        inviteOnly: false,
+        maxTotalAccounts: 0,
+        signupsOpenAt: null,
+        signupsCloseAt: null,
+        approvalRequired: false,
+        ...config,
+      } as RegistrationConfig),
+    })
+
+    const dtoFor = (overrides: { inviteToken?: string } = {}) => ({
+      email: 'person@example.com',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      inviteToken: overrides.inviteToken,
+    })
+
+    const createWith = (resolver: RegistrationConfigResolverInterface, consumer?: ConsumeSignupInvite) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        resolver,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        consumer,
+      )
+
+    it('creates a PENDING user (no session) and returns pendingApproval when approvalRequired is on', async () => {
+      const result = await createWith(makeResolver({ approvalRequired: true })).execute(dtoFor())
+
+      expect(result).toEqual({ success: true, pendingApproval: true })
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.approved).toBe(false)
+      // No session/auth response was created for a pending signup.
+      expect(authResponseFactory.createResponse).not.toHaveBeenCalled()
+    })
+
+    it('an admin invite with auto_approve BYPASSES the queue (created approved, session issued)', async () => {
+      const { repo } = makeFakeInviteRepo({ token: 'tok', maxUses: 1, autoApprove: true })
+      const result = await createWith(makeResolver({ approvalRequired: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect('pendingApproval' in result).toBe(false)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.approved).toBeUndefined()
+      expect(authResponseFactory.createResponse).toHaveBeenCalled()
+    })
+
+    it('a self-serve (non-auto-approve) invite still creates a PENDING user when approvalRequired is on', async () => {
+      const { repo } = makeFakeInviteRepo({
+        token: 'tok',
+        maxUses: 1,
+        autoApprove: false,
+        createdByKind: 'user',
+        createdByUserUuid: 'ref-1',
+      })
+      const result = await createWith(makeResolver({ approvalRequired: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result).toEqual({ success: true, pendingApproval: true })
+    })
+
+    it('leaves approved unset (DB default applies) when approvalRequired is off', async () => {
+      const result = await createWith(makeResolver({ approvalRequired: false })).execute(dtoFor())
+
+      expect(result.success).toBe(true)
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.approved).toBeUndefined()
+    })
+  })
 })

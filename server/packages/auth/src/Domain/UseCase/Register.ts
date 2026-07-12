@@ -250,6 +250,21 @@ export class Register implements UseCaseInterface {
       user.emailConfirmedAt = null
     }
 
+    // Standard Red Notes: APPROVAL QUEUE. When approvalRequired is ON the account
+    // is created PENDING (approved=false → access-blocked) UNLESS the consumed
+    // invite link auto-approves (admin links are themselves the vetting act and
+    // bypass the queue; self-serve/user links force auto_approve=false, so a
+    // referred user still faces the queue). A pending user is fully provisioned
+    // but gets NO session (see the pendingApproval return below). When
+    // approvalRequired is OFF the column is left unset and the DB default
+    // (approved=1) applies, so the persisted row is unchanged.
+    const autoApproveViaInvite = consumedInvite?.autoApprove === true
+    const pendingApproval = registrationConfig.approvalRequired === true && !autoApproveViaInvite
+    if (pendingApproval) {
+      user.approved = false
+      user.approvedAt = null
+    }
+
     // Standard Red Notes: assign the admin-configurable default role (validated
     // to a canonical NON-admin role; CORE_USER by default). A consumed invite
     // link MAY override it with its own per-link role (validated NON-admin via
@@ -315,6 +330,19 @@ export class Register implements UseCaseInterface {
           success: false,
           errorMessage: activationResult.getError(),
         }
+      }
+    }
+
+    // Standard Red Notes: a PENDING user gets NO session — a session that dies on
+    // its next authenticated request (isAccessBlocked) is a bad UX. Return the
+    // distinct terminal response instead; the controller returns a 200 with the
+    // pendingApproval flag and NO Set-Cookie, and the web UI shows "awaiting
+    // approval". (Contrast email-confirmation, which DOES return a session and
+    // gates only at later sign-in — approval is stricter, so no session at all.)
+    if (pendingApproval) {
+      return {
+        success: true,
+        pendingApproval: true,
       }
     }
 

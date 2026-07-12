@@ -269,6 +269,7 @@ describe('SignIn', () => {
       version: ProtocolVersion.V004,
       isBanned: () => true,
       isSuspended: () => false,
+      isPendingApproval: () => false,
       isAccessBlocked: () => true,
     } as unknown as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
@@ -301,6 +302,7 @@ describe('SignIn', () => {
       version: ProtocolVersion.V004,
       isBanned: () => false,
       isSuspended: () => true,
+      isPendingApproval: () => false,
       isAccessBlocked: () => true,
     } as unknown as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
@@ -319,6 +321,39 @@ describe('SignIn', () => {
       success: false,
       errorCode: 403,
       errorMessage: 'This account has been suspended. Please contact an administrator.',
+    })
+
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  // Standard Red Notes: APPROVAL QUEUE — a pending (approved=false) user is folded
+  // into isAccessBlocked and gets the friendly "awaiting approval" message.
+  it('should not sign in a pending-approval user, with a friendly message', async () => {
+    user = {
+      uuid: '1-2-3',
+      email: 'test@test.com',
+      version: ProtocolVersion.V004,
+      isBanned: () => false,
+      isSuspended: () => false,
+      isPendingApproval: () => true,
+      isAccessBlocked: () => true,
+    } as unknown as jest.Mocked<User>
+    user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+
+    expect(
+      await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      }),
+    ).toEqual({
+      success: false,
+      errorCode: 403,
+      errorMessage: 'Your account is awaiting administrator approval.',
     })
 
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()

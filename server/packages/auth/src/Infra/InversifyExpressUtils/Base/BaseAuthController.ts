@@ -600,6 +600,13 @@ export class BaseAuthController extends BaseHttpController {
       )
     }
 
+    // Standard Red Notes: APPROVAL QUEUE. A pending signup created no session and
+    // hands back no user/keyParams — return a 200 with a pendingApproval flag and
+    // NO Set-Cookie so the web UI shows "awaiting approval" instead of signing in.
+    if ('pendingApproval' in registerResult) {
+      return this.json({ pendingApproval: true })
+    }
+
     const registeredUser = registerResult.result.response
       ? registerResult.result.response.user
       : (registerResult.result.legacyResponse as AuthResponse20161215).user

@@ -50,6 +50,7 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
     const maxTotalAccountsRaw = overlay?.maxTotalAccounts ?? this.baseline.maxTotalAccounts
     const signupsOpenAtRaw = overlay?.signupsOpenAt ?? this.baseline.signupsOpenAt
     const signupsCloseAtRaw = overlay?.signupsCloseAt ?? this.baseline.signupsCloseAt
+    const approvalRequiredRaw = overlay?.approvalRequired ?? this.baseline.approvalRequired
 
     return {
       defaultRole: sanitizeDefaultRole(defaultRoleRaw),
@@ -77,6 +78,10 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
       maxTotalAccounts: normalizeMaxTotalAccounts(maxTotalAccountsRaw),
       signupsOpenAt: normalizeSignupWindowValue(signupsOpenAtRaw),
       signupsCloseAt: normalizeSignupWindowValue(signupsCloseAtRaw),
+      approvalRequired:
+        typeof approvalRequiredRaw === 'boolean'
+          ? approvalRequiredRaw
+          : DEFAULT_REGISTRATION_CONFIG.approvalRequired,
     }
   }
 }
@@ -100,6 +105,7 @@ export const registrationBaselineFromEnv = (raw: {
   maxTotalAccounts?: string
   signupsOpenAt?: string
   signupsCloseAt?: string
+  approvalRequired?: string
 }): RegistrationConfig => ({
   defaultRole: sanitizeDefaultRole(raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined),
   domainMode: isRegistrationDomainMode(raw.domainMode) ? raw.domainMode : DEFAULT_REGISTRATION_CONFIG.domainMode,
@@ -124,4 +130,6 @@ export const registrationBaselineFromEnv = (raw: {
   maxTotalAccounts: normalizeMaxTotalAccounts(raw.maxTotalAccounts),
   signupsOpenAt: normalizeSignupWindowValue(raw.signupsOpenAt),
   signupsCloseAt: normalizeSignupWindowValue(raw.signupsCloseAt),
+  // REGISTRATION_APPROVAL_REQUIRED is opt-in: only 'true' enables it.
+  approvalRequired: raw.approvalRequired === 'true',
 })

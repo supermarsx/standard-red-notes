@@ -192,6 +192,11 @@ const TYPES = {
   Auth_CreateSignupInviteLink: Symbol.for('Auth_CreateSignupInviteLink'),
   Auth_ListSignupInviteLinks: Symbol.for('Auth_ListSignupInviteLinks'),
   Auth_RevokeSignupInviteLink: Symbol.for('Auth_RevokeSignupInviteLink'),
+  // Standard Red Notes: APPROVAL / WAITLIST QUEUE use cases.
+  Auth_ListPendingUsers: Symbol.for('Auth_ListPendingUsers'),
+  Auth_ApproveUser: Symbol.for('Auth_ApproveUser'),
+  Auth_RejectUser: Symbol.for('Auth_RejectUser'),
+  Auth_SendApprovalNotification: Symbol.for('Auth_SendApprovalNotification'),
   Auth_GetActiveSessionsForUser: Symbol.for('Auth_GetActiveSessionsForUser'),
   Auth_DeleteOtherSessionsForUser: Symbol.for('Auth_DeleteOtherSessionsForUser'),
   Auth_DeleteSessionForUser: Symbol.for('Auth_DeleteSessionForUser'),

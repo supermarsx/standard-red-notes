@@ -44,6 +44,9 @@ import { FixStorageQuotaForUser } from '../../Domain/UseCase/FixStorageQuotaForU
 import { CreateSignupInviteLink } from '../../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
 import { ListSignupInviteLinks } from '../../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
 import { RevokeSignupInviteLink } from '../../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
+import { ListPendingUsers } from '../../Domain/UseCase/ListPendingUsers/ListPendingUsers'
+import { ApproveUser } from '../../Domain/UseCase/ApproveUser/ApproveUser'
+import { RejectUser } from '../../Domain/UseCase/RejectUser/RejectUser'
 
 @controller('/admin')
 export class AnnotatedAdminController extends BaseAdminController {
@@ -106,6 +109,10 @@ export class AnnotatedAdminController extends BaseAdminController {
     @inject(TYPES.Auth_CreateSignupInviteLink) override doCreateSignupInviteLink: CreateSignupInviteLink,
     @inject(TYPES.Auth_ListSignupInviteLinks) override doListSignupInviteLinks: ListSignupInviteLinks,
     @inject(TYPES.Auth_RevokeSignupInviteLink) override doRevokeSignupInviteLink: RevokeSignupInviteLink,
+    // Standard Red Notes: APPROVAL QUEUE admin surface (list pending / approve / reject).
+    @inject(TYPES.Auth_ListPendingUsers) override doListPendingUsers: ListPendingUsers,
+    @inject(TYPES.Auth_ApproveUser) override doApproveUser: ApproveUser,
+    @inject(TYPES.Auth_RejectUser) override doRejectUser: RejectUser,
   ) {
     super(
       doDeleteSetting,
@@ -149,6 +156,9 @@ export class AnnotatedAdminController extends BaseAdminController {
       doCreateSignupInviteLink,
       doListSignupInviteLinks,
       doRevokeSignupInviteLink,
+      doListPendingUsers,
+      doApproveUser,
+      doRejectUser,
     )
   }
 
@@ -394,5 +404,23 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpDelete('/invite-links/:uuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   async revokeInviteLinkEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
     return super.revokeInviteLink(request, response)
+  }
+
+  // Standard Red Notes: APPROVAL QUEUE — the gateway proxies
+  // /v1/admin/pending-users(+/:userUuid/approve|reject) here; all re-gate on
+  // ADMIN_USER in the base controller.
+  @httpGet('/pending-users', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async listPendingUsersEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.listPendingUsers(request, response)
+  }
+
+  @httpPost('/pending-users/:userUuid/approve', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async approveUserEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.approveUser(request, response)
+  }
+
+  @httpPost('/pending-users/:userUuid/reject', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async rejectUserEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.rejectUser(request, response)
   }
 }
