@@ -336,6 +336,35 @@ export class HomeServer implements HomeServerInterface {
             })
           })
         }
+
+        // Standard Red Notes: mount the read-only CalDAV router and the
+        // authenticated Workflows-UI proxy INSIDE setConfig — i.e. BEFORE
+        // server.build(). build() mounts the inversify controller router at '/',
+        // whose LAST route is the trailing @all('/{*splat}') catch-all
+        // (FallbackController). A route registered AFTER build() sits behind that
+        // catch-all, so a functioning catch-all answers first and the route is
+        // unreachable. (The current catch-all uses an empty @controller('') base that
+        // mergePaths turns into a never-matching '//{*splat}' under Express 5 — inert
+        // TODAY — but this placement keeps these routes correct regardless of that
+        // latent defect.) Registering here also keeps them after all the middleware
+        // above (like the e2e route just above). Each router gates itself internally
+        // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when
+        // WORKFLOWS_ENABLED is off and 403s without the UI-access cookie + an active
+        // pairing), so mounting them unconditionally is safe.
+        const routingLogger = winston.loggers.get('home-server')
+        try {
+          registerCaldavRoutes(app, container)
+          routingLogger.info('CalDAV router mounted')
+        } catch (error) {
+          routingLogger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+        }
+
+        try {
+          registerWorkflowsUiProxy(app, container)
+          routingLogger.info('Workflows editor proxy mounted')
+        } catch (error) {
+          routingLogger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
+        }
       })
 
       const logger: winston.Logger = winston.loggers.get('home-server')
@@ -371,28 +400,11 @@ export class HomeServer implements HomeServerInterface {
 
       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
 
+      // Standard Red Notes: build() mounts the inversify controller router (with its
+      // trailing catch-all) at '/'. The CalDAV router and the Workflows-UI proxy are
+      // registered INSIDE setConfig above (before this call) so the catch-all cannot
+      // shadow them — see the note there.
       const app = server.build()
-
-      // Standard Red Notes: mount the read-only CalDAV router. It gates itself on
-      // the CALDAV_ENABLED master switch (404s when off) and authenticates every
-      // request with a scoped CalDAV token over HTTP Basic.
-      try {
-        registerCaldavRoutes(app, container)
-        logger.info('CalDAV router mounted')
-      } catch (error) {
-        logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
-      }
-
-      // Standard Red Notes: mount the authenticated same-origin proxy for the
-      // embedded n8n workflows editor. It gates itself (404 when the
-      // WORKFLOWS_ENABLED master switch is off; 403 without the UI-access cookie
-      // + an active pairing), so mounting it unconditionally is safe.
-      try {
-        registerWorkflowsUiProxy(app, container)
-        logger.info('Workflows editor proxy mounted')
-      } catch (error) {
-        logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
-      }
 
       // Standard Red Notes: start the reminder-delivery scheduler. It gates itself
       // on the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off) and

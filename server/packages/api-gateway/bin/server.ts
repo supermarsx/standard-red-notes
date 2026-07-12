@@ -109,6 +109,14 @@ void container
   const logger: winston.Logger = container.get(TYPES.ApiGateway_Logger)
   fatalLogger = logger
 
+  // Standard Red Notes: the realtime WS token-mint route is registered on the app
+  // INSIDE setConfig (before build(), so the catch-all cannot shadow it), but its
+  // handler only exists once the gateway is attached to the http server — which
+  // requires the http.Server returned by app.listen(). Bridge the two with this
+  // late-bound handler: setConfig registers a route that dispatches to it, and the
+  // gateway attach (post-listen) assigns gateway.handleMintToken into it.
+  let mintConnectionTokenHandler: ((request: Request, response: Response) => void) | undefined
+
   const server = new InversifyExpressServer(container)
 
   server.setConfig((app) => {
@@ -292,6 +300,48 @@ void container
       env.get('SHARED_SERVER_ACCESS_KEY_MODE', true),
     )
     app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
+
+    // Standard Red Notes: mount the CalDAV router, the Workflows-UI proxy and the
+    // realtime WS token-mint route INSIDE setConfig — i.e. BEFORE server.build().
+    // build() mounts the inversify controller router at '/', whose LAST route is the
+    // trailing @all('/{*splat}') catch-all (Legacy/FallbackController). A route
+    // registered AFTER build() sits behind that catch-all in the layer stack, so a
+    // functioning catch-all answers first and the route is unreachable. (The current
+    // catch-all uses an empty @controller('') base that mergePaths turns into a
+    // never-matching '//{*splat}' under Express 5 — so it is inert TODAY — but this
+    // placement keeps these routes correct regardless of that latent defect.)
+    // Registering here also keeps them after all the body/cookie/CORS/rate-limit/
+    // shared-key middleware above. CalDAV + Workflows gate themselves internally
+    // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when WORKFLOWS_ENABLED
+    // is off and 403s without the UI-access cookie + an active pairing), so mounting
+    // them unconditionally is safe.
+    try {
+      registerCaldavRoutes(app, container)
+      logger.info('CalDAV router mounted')
+    } catch (error) {
+      logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+    }
+
+    try {
+      registerWorkflowsUiProxy(app, container)
+      logger.info('Workflows editor proxy mounted')
+    } catch (error) {
+      logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
+    }
+
+    // The realtime WS token-mint endpoint must also precede the catch-all, but its
+    // real handler is only available once the gateway is attached to the http server
+    // (post-listen, below). Register the route now and dispatch to the late-bound
+    // handler; reply 503 until it is wired / when token minting is disabled (no
+    // WEB_SOCKET_CONNECTION_TOKEN_SECRET), instead of silently falling through to the
+    // catch-all as before.
+    app.post('/sockets/tokens', (request: Request, response: Response) => {
+      if (mintConnectionTokenHandler) {
+        mintConnectionTokenHandler(request, response)
+      } else {
+        response.status(503).json({ error: { message: 'Realtime token minting is not enabled.' } })
+      }
+    })
   })
 
   server.setErrorConfig((app) => {
@@ -335,31 +385,11 @@ void container
   // `server.build()` returns the underlying Express application; keep a handle
   // so the realtime WebSocket gateway can register its token route on it, then
   // `.listen()` to get the Node http.Server the ws upgrade attaches to.
+  // Standard Red Notes: build() mounts the inversify controller router (with its
+  // trailing catch-all) at '/'. The CalDAV router, the Workflows-UI proxy and the
+  // WS token-mint route are registered INSIDE setConfig above (before this call) so
+  // the catch-all cannot shadow them — see the note there.
   const app = server.build()
-
-  // Standard Red Notes: mount the read-only CalDAV router (OPTIONS/PROPFIND/
-  // REPORT/GET) at CALDAV_BASE_PATH (default /dav). The router gates itself on
-  // the CALDAV_ENABLED master switch (404s when off) and authenticates every
-  // request with a scoped CalDAV token over HTTP Basic.
-  try {
-    registerCaldavRoutes(app, container)
-    logger.info('CalDAV router mounted')
-  } catch (error) {
-    logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
-  }
-
-  // Standard Red Notes: mount the authenticated same-origin proxy for the
-  // embedded n8n workflows editor at WORKFLOWS_UI_BASE_PATH (default
-  // /workflows-ui). The proxy gates itself: 404 when the WORKFLOWS_ENABLED
-  // master switch is off, 403 unless the request carries the short-lived
-  // UI-access cookie minted by the session-authed /v1/workflows endpoints AND
-  // the user has an active pairing. Mounting it unconditionally is safe.
-  try {
-    registerWorkflowsUiProxy(app, container)
-    logger.info('Workflows editor proxy mounted')
-  } catch (error) {
-    logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
-  }
 
   // Standard Red Notes: start the reminder-delivery scheduler. It gates itself on
   // the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off).
@@ -379,8 +409,10 @@ void container
 
   // Standard Red Notes: run the realtime WebSocket gateway IN-PROCESS on the same
   // http server / port (3000) instead of a separate listener (formerly :3106).
-  // It binds the ws upgrade to `serverInstance`, registers `POST /sockets/tokens`
-  // on the Express app, and starts the Redis bridge + (optional) SQS consumer.
+  // It binds the ws upgrade to `serverInstance` and starts the Redis bridge +
+  // (optional) SQS consumer. The `POST /sockets/tokens` route is registered on the
+  // Express app in setConfig (before build(), so the catch-all does not shadow it);
+  // here we just point that route's late-bound handler at gateway.handleMintToken.
   // Adapt the winston logger to the gateway's minimal Logger interface
   // (variadic info/warn/error returning void). winston's leveled methods accept
   // a message + meta, so join the args into one message string.
@@ -395,7 +427,6 @@ void container
     try {
       const gateway = attachWebSocketGateway({
         httpServer: serverInstance,
-        app,
         logger: gatewayLogger,
         config: {
           connectionTokenSecret: env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true),
@@ -414,6 +445,7 @@ void container
         },
       })
       stopWebSocketGateway = gateway.stop
+      mintConnectionTokenHandler = gateway.handleMintToken
       logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
     } catch (error) {
       logger.error(`Failed to attach the realtime WebSocket gateway: ${(error as Error).message}`)
