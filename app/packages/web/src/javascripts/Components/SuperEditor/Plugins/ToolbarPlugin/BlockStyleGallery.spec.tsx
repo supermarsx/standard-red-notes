@@ -163,8 +163,8 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
     )
     const heading1 = squareButtons.find((b) => b.getAttribute('title') === 'Heading 1')
     expect(heading1?.getAttribute('aria-pressed')).toBe('true')
-    // Every other square (other than a "Heading 1"-titled one — the leading
-    // indicator is a second "Heading 1" and is also pressed) is not pressed.
+    // After dedup there is exactly ONE "Heading 1" (the leading slot); the track no
+    // longer contains it. Every other titled square is not pressed.
     for (const button of squareButtons) {
       if (button.getAttribute('title') !== 'Heading 1') {
         expect(button.getAttribute('aria-pressed')).toBe('false')
@@ -174,26 +174,27 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
 })
 
 describe('BlockStyleGalleryBar leading "current style" indicator', () => {
-  // Titled preview-square buttons in DOM order (both the persistent leading
-  // indicator and the in-track copies match a descriptor label).
+  // Titled preview-square buttons in DOM order. The persistent leading indicator
+  // is the sole copy of the active style; the track holds only the non-active ones.
   const titledSquares = () =>
     Array.from(container.querySelectorAll('button')).filter((b) =>
       GALLERY_BLOCKS.some((d) => b.getAttribute('title') === d.label),
     )
 
-  it('renders the active style up front: the FIRST titled square is the active one and is pressed', () => {
+  it('renders the active style up front ONCE (leading slot only, not duplicated in the track)', () => {
     render({ activeBlockType: 'h1' })
     const squares = titledSquares()
-    // The leading indicator precedes the in-track copy, so the very first titled
-    // square is the active "Heading 1"…
+    // The very first titled square is the active "Heading 1", pressed.
     expect(squares[0]?.getAttribute('title')).toBe('Heading 1')
     expect(squares[0]?.getAttribute('aria-pressed')).toBe('true')
-    // …and it is a genuine second "Heading 1" (leading + in-track), both pressed.
-    const heading1s = squares.filter((b) => b.getAttribute('title') === 'Heading 1')
-    expect(heading1s.length).toBe(2)
-    for (const b of heading1s) {
-      expect(b.getAttribute('aria-pressed')).toBe('true')
+    // Dedup: the active style shows ONLY in the leading slot — its in-track copy is removed.
+    expect(squares.filter((b) => b.getAttribute('title') === 'Heading 1').length).toBe(1)
+    // The leading slot is the sole active square; every other titled square is unpressed.
+    for (const b of squares.slice(1)) {
+      expect(b.getAttribute('aria-pressed')).toBe('false')
     }
+    // Total titled = leading + (palette − the one deduped active) = GALLERY_BLOCKS.length.
+    expect(squares.length).toBe(GALLERY_BLOCKS.length)
   })
 
   it('tracks the active type live: re-rendering with a new active type updates the leading square', () => {
@@ -204,9 +205,10 @@ describe('BlockStyleGalleryBar leading "current style" indicator', () => {
     const squares = titledSquares()
     expect(squares[0]?.getAttribute('title')).toBe('Quote')
     expect(squares[0]?.getAttribute('aria-pressed')).toBe('true')
-    // The leading "Heading 1" is gone; only the in-track Quote + leading Quote remain.
+    // Quote is now deduped from the track → it appears once (leading only); the
+    // previously-active Heading 1 returns to the track exactly once.
     expect(squares.filter((b) => b.getAttribute('title') === 'Heading 1').length).toBe(1)
-    expect(squares.filter((b) => b.getAttribute('title') === 'Quote').length).toBe(2)
+    expect(squares.filter((b) => b.getAttribute('title') === 'Quote').length).toBe(1)
   })
 
   it('shows a neutral "None" placeholder (no titled duplicate) when the active block has no gallery match', () => {

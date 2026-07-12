@@ -186,19 +186,13 @@ const OverflowSquares = ({
   descriptors,
   profile,
   onApply,
-  activeKey,
 }: {
   descriptors: GalleryBlockDescriptor[]
   profile: TypographyProfile | null | undefined
   onApply: (descriptor: GalleryBlockDescriptor) => void
-  /** The resolved active gallery key, so the toggle can signal a hidden active style. */
-  activeKey?: string | null
 }) => {
   const [open, setOpen] = useState(false)
   const anchorRef = useRef<HTMLButtonElement>(null)
-  // When the active style is one of the collapsed squares, signal it on the "▾"
-  // toggle so the user still sees that a style is in use even while hidden.
-  const hasActive = activeKey != null && descriptors.some((d) => d.key === activeKey)
   return (
     <>
       <button
@@ -211,13 +205,10 @@ const OverflowSquares = ({
         className={classNames(
           'relative flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border bg-default px-1.5',
           'text-xs text-passive-0 transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
-          hasActive || open ? 'border-info' : 'border-border',
+          open ? 'border-info' : 'border-border',
           open ? 'bg-contrast' : '',
         )}
       >
-        {hasActive && (
-          <span aria-hidden className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-info shadow-sm" />
-        )}
         <span className="tabular-nums">{descriptors.length}</span>
         <Icon type="chevron-down" size="custom" className="h-3.5 w-3.5" />
       </button>
@@ -238,7 +229,6 @@ const OverflowSquares = ({
               key={descriptor.key}
               descriptor={descriptor}
               profile={profile}
-              isActive={descriptor.key === activeKey}
               onApply={(d) => {
                 onApply(d)
                 setOpen(false)
@@ -321,19 +311,6 @@ export const BlockStyleGalleryBar = ({
     return () => observer.disconnect()
   }, [])
 
-  const total = blocks.length
-  // The persistent leading indicator + its divider consume a fixed slice of the
-  // front of the row, so the sortable track fits into the remaining width. The
-  // leftover sub-track has no leading gap of its own, which is exactly what
-  // `computeGalleryFit` assumes — so it is reused unchanged.
-  const availableWidth = Math.max(0, trackWidth - GALLERY_LEADING_INDICATOR_WIDTH)
-  const { inlineCount } = useMemo(
-    () => computeGalleryFit({ containerWidth: availableWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
-    [availableWidth, total],
-  )
-  const inlineBlocks = blocks.slice(0, inlineCount)
-  const overflowBlocks = blocks.slice(inlineCount)
-
   // Which square (if any) matches the current selection/cursor's block style.
   const activeKey = useMemo(
     () => resolveActiveGalleryKey({ blockType: activeBlockType ?? '', style: activeBlockStyle ?? '', profile }),
@@ -346,6 +323,27 @@ export const BlockStyleGalleryBar = ({
     () => (activeKey != null ? blocks.find((d) => d.key === activeKey) ?? null : null),
     [activeKey, blocks],
   )
+  // The active style is shown ONCE, in the persistent leading indicator, so drop
+  // its square from the sortable track — otherwise it appears twice ("Normal and
+  // Normal"). The track carries only the NON-active styles. When the active block
+  // has no gallery square (leading shows the "None" placeholder), nothing is removed.
+  const trackBlocks = useMemo(
+    () => (activeDescriptor ? blocks.filter((d) => d.key !== activeDescriptor.key) : blocks),
+    [blocks, activeDescriptor],
+  )
+
+  const total = trackBlocks.length
+  // The persistent leading indicator + its divider consume a fixed slice of the
+  // front of the row, so the sortable track fits into the remaining width. The
+  // leftover sub-track has no leading gap of its own, which is exactly what
+  // `computeGalleryFit` assumes — so it is reused unchanged.
+  const availableWidth = Math.max(0, trackWidth - GALLERY_LEADING_INDICATOR_WIDTH)
+  const { inlineCount } = useMemo(
+    () => computeGalleryFit({ containerWidth: availableWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
+    [availableWidth, total],
+  )
+  const inlineBlocks = trackBlocks.slice(0, inlineCount)
+  const overflowBlocks = trackBlocks.slice(inlineCount)
 
   return (
     <div
@@ -353,12 +351,11 @@ export const BlockStyleGalleryBar = ({
       className="flex w-full min-w-0 items-stretch gap-1.5 overflow-hidden"
       onMouseDown={(event) => event.preventDefault()}
     >
-      {/* Persistent LEADING "current style" indicator: always shows the active
-          style up front ("you are here") — even when its palette copy is scrolled
-          into the "▾" overflow — so it stays visible as the selection moves. It is
-          intentionally redundant with the in-track active square (which keeps its
-          t40 ring as the orderable copy). Clicking re-applies the active descriptor
-          (idempotent). No gallery match → the neutral, non-interactive placeholder. */}
+      {/* Persistent LEADING "current style" indicator: the SOLE copy of the active
+          style, shown up front ("you are here") so it stays visible as the selection
+          moves. The sortable track excludes it (see `trackBlocks`) to avoid showing
+          the same style twice. Clicking re-applies the active descriptor (idempotent).
+          No gallery match → the neutral, non-interactive "None" placeholder. */}
       {activeDescriptor ? (
         <BlockStyleSquare descriptor={activeDescriptor} profile={profile} isActive onApply={onApplyBlock} />
       ) : (
@@ -366,16 +363,10 @@ export const BlockStyleGalleryBar = ({
       )}
       <span aria-hidden className="w-px flex-shrink-0 self-stretch bg-border" />
       {inlineBlocks.map((descriptor) => (
-        <BlockStyleSquare
-          key={descriptor.key}
-          descriptor={descriptor}
-          profile={profile}
-          isActive={descriptor.key === activeKey}
-          onApply={onApplyBlock}
-        />
+        <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
       ))}
       {overflowBlocks.length > 0 && (
-        <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} activeKey={activeKey} />
+        <OverflowSquares descriptors={overflowBlocks} profile={profile} onApply={onApplyBlock} />
       )}
     </div>
   )
