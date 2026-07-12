@@ -2,7 +2,6 @@ import 'reflect-metadata'
 
 import busboy from 'connect-busboy'
 
-import '../src/Infra/InversifyExpress/AnnotatedFallbackController'
 import '../src/Infra/InversifyExpress/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpress/AnnotatedFilesController'
 import '../src/Infra/InversifyExpress/AnnotatedSharedVaultFilesController'
@@ -17,6 +16,7 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { parseTrustProxyValue } from '../src/Bootstrap/TrustProxy'
+import { registerNotFoundFallback } from '../src/Infra/InversifyExpress/registerNotFoundFallback'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
 // rejection or uncaught exception leaves the process in an unknown state, so we
@@ -166,7 +166,14 @@ void container
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  const app = server.build()
+
+  // Standard Red Notes: replaces the inert empty-base AnnotatedFallbackController.
+  // Registered AFTER build() so it catches only genuinely-unmatched requests and
+  // never shadows a real route. See registerNotFoundFallback for the full rationale.
+  registerNotFoundFallback(app)
+
+  const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 
