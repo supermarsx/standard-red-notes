@@ -16,8 +16,7 @@ import AdminUsersTab, { LookedUpUser } from './AdminUsersTab'
 import AdminGroupsTab from './AdminGroupsTab'
 import AdminServerTab from './AdminServerTab'
 import AdminAiTab from './AdminAiTab'
-import AdminAuditTab from './AdminAuditTab'
-import AdminLogsTab from './AdminLogsTab'
+import AdminLogsContainer from './AdminLogsContainer'
 import AdminSecurityTab from './AdminSecurityTab'
 
 type Props = {
@@ -30,7 +29,6 @@ const ADMIN_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }[] =
   { id: 'server', title: 'Server', icon: 'server' },
   { id: 'ai', title: 'AI', icon: 'dashboard' },
   { id: 'logs', title: 'Logs', icon: 'list-bulleted' },
-  { id: 'audit', title: 'Audit log', icon: 'history' },
   { id: 'security', title: 'Security', icon: 'security' },
 ]
 
@@ -64,6 +62,18 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
 
   // The last-selected tab is remembered for as long as the pane stays open.
   const tabState = useTabState({ defaultTab: 'users' })
+
+  // Back-compat alias for cross-tab jumps: the old top-level `audit` tab was
+  // folded into `logs` as a subtab, so a `goToTab('audit')` (still emitted by
+  // AdminSecurityTab until its call is retargeted) must land on Logs rather than
+  // a now-nonexistent tab id (which would render an empty panel).
+  const { setActiveTab } = tabState
+  const goToTab = useCallback(
+    (tabId: string) => {
+      setActiveTab(tabId === 'audit' ? 'logs' : tabId)
+    },
+    [setActiveTab],
+  )
 
   if (!isAdmin) {
     return (
@@ -142,17 +152,10 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           <AdminAiTab application={application} noteIfForbidden={noteIfForbidden} />
         </TabPanel>
         <TabPanel state={tabState} id="logs" className="p-6">
-          <AdminLogsTab application={application} noteIfForbidden={noteIfForbidden} />
-        </TabPanel>
-        <TabPanel state={tabState} id="audit" className="p-6">
-          <AdminAuditTab application={application} noteIfForbidden={noteIfForbidden} />
+          <AdminLogsContainer application={application} noteIfForbidden={noteIfForbidden} />
         </TabPanel>
         <TabPanel state={tabState} id="security" className="p-6">
-          <AdminSecurityTab
-            application={application}
-            noteIfForbidden={noteIfForbidden}
-            goToTab={tabState.setActiveTab}
-          />
+          <AdminSecurityTab application={application} noteIfForbidden={noteIfForbidden} goToTab={goToTab} />
         </TabPanel>
       </div>
     </PreferencesPane>

@@ -300,9 +300,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const toggleSimRole = useCallback(
     (roleName: string) => {
       setSimRoles((current) => {
-        const next = current.includes(roleName)
-          ? current.filter((name) => name !== roleName)
-          : [...current, roleName]
+        const next = current.includes(roleName) ? current.filter((name) => name !== roleName) : [...current, roleName]
         void runSimulation(next)
         return next
       })
@@ -545,6 +543,14 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               <Icon type="accessibility" size="medium" />
               Roles
             </Tab>
+            <Tab id="catalog" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="list-check" size="medium" />
+              Permission catalog
+            </Tab>
+            <Tab id="effective" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="user-switch" size="medium" />
+              Effective permissions
+            </Tab>
             <Tab id="groups" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="group" size="medium" />
               Groups
@@ -596,9 +602,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           <div className="flex min-w-0 flex-col">
                             <Subtitle>{role.label ?? canonicalRoleLabel(role.name)}</Subtitle>
                             <Text className="text-xs text-passive-1">{role.name}</Text>
-                            {description && (
-                              <Text className="mt-0.5 text-xs text-passive-1">{description}</Text>
-                            )}
+                            {description && <Text className="mt-0.5 text-xs text-passive-1">{description}</Text>}
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-3 py-2.5 tabular-nums">
@@ -733,170 +737,178 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               )
             })()}
         </PreferencesSegment>
+      </TabPanel>
 
-        {/* ================= PERMISSION CATALOG ================= */}
+      {/* ================= PERMISSION CATALOG TAB ================= */}
+      <TabPanel state={subTab} id="catalog">
         <PreferencesSegment>
-        <Title>Permission catalog</Title>
-        <Text>
-          Every permission the server knows about, grouped by category, with the roles that currently grant each one.
-        </Text>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <DecoratedInput
-            className={{ container: 'min-w-[220px] flex-grow' }}
-            placeholder="Search permissions or granting roles…"
-            value={catalogSearch}
-            onChange={setCatalogSearch}
-          />
-          <select
-            className="rounded border border-border bg-default px-2 py-1.5 text-sm text-text"
-            value={catalogCategory}
-            onChange={(event) => setCatalogCategory(event.target.value)}
-          >
-            <option value="">All categories ({catalog.length})</option>
-            {catalogCategories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {catalogLoading ? (
-          <Spinner className="mt-3 h-5 w-5" />
-        ) : catalog.length === 0 ? (
-          <Text className="mt-3">This server reports no permission catalog.</Text>
-        ) : groupedCatalog.length === 0 ? (
-          <Text className="mt-3">No permissions match your filter.</Text>
-        ) : (
-          <div className="mt-3 flex flex-col gap-3">
-            {groupedCatalog.map(({ category, permissions }) => (
-              <div key={category} className="rounded-md border border-border p-3">
-                <Subtitle>
-                  {category} ({permissions.length})
-                </Subtitle>
-                <div className="mt-2 divide-y divide-border">
-                  {permissions.map((permission) => {
-                    const grantedBy = grantedByLookup.get(permission) ?? []
-                    return (
-                      <div key={permission} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
-                        <div className="flex min-w-0 flex-col">
-                          <Text>{permissionLabel(permission)}</Text>
-                          <Text className="text-xs text-passive-1">{permission}</Text>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {grantedBy.length > 0 ? (
-                            grantedBy.map((roleName) => (
-                              <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
-                            ))
-                          ) : (
-                            <Text className="text-xs italic text-passive-1">Granted by no role</Text>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </PreferencesSegment>
-
-      {/* ================= SIMULATOR ================= */}
-      <PreferencesSegment>
-        <Title>Effective-permissions simulator</Title>
-        <Text>
-          Select a set of roles to see the union of the permissions they grant, or test a specific user by email to see
-          their direct + group roles and resolved permissions.
-        </Text>
-
-        <div className="mt-3 rounded-md border border-border p-3">
-          <Subtitle>Resolve a role set</Subtitle>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {groupRolePickerBase.map((roleName) => (
-              <ToggleChip
-                key={roleName}
-                name={canonicalRoleLabel(roleName)}
-                title={roleName}
-                selected={simRoles.includes(roleName)}
-                onToggle={() => toggleSimRole(roleName)}
-              />
-            ))}
-          </div>
-          {simLoading ? (
-            <Spinner className="mt-3 h-5 w-5" />
-          ) : simResult ? (
-            <div className="mt-3">
-              <Text className="text-xs text-passive-1">
-                {simResult.effectivePermissionNames.length} effective permission
-                {simResult.effectivePermissionNames.length === 1 ? '' : 's'} across {simResult.roleNames.length} role
-                {simResult.roleNames.length === 1 ? '' : 's'}
-                {simResult.unknownRoleNames.length > 0 ? ` (${simResult.unknownRoleNames.join(', ')} not found)` : ''}.
-              </Text>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {simResult.effectivePermissionNames.map((permission) => (
-                  <Chip key={permission} name={permission} title={permissionLabel(permission)} />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <Text className="mt-2 text-xs italic text-passive-1">Select one or more roles above.</Text>
-          )}
-        </div>
-
-        <div className="mt-3 rounded-md border border-border p-3">
-          <Subtitle>Test a user</Subtitle>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Title>Permission catalog</Title>
+          <Text>
+            Every permission the server knows about, grouped by category, with the roles that currently grant each one.
+          </Text>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <DecoratedInput
               className={{ container: 'min-w-[220px] flex-grow' }}
-              placeholder="user@example.com"
-              value={testEmail}
-              onChange={setTestEmail}
-              onEnter={() => void testUser()}
+              placeholder="Search permissions or granting roles…"
+              value={catalogSearch}
+              onChange={setCatalogSearch}
             />
-            <Button label={testLoading ? 'Testing…' : 'Test user'} disabled={testLoading} onClick={() => void testUser()} />
+            <select
+              className="rounded border border-border bg-default px-2 py-1.5 text-sm text-text"
+              value={catalogCategory}
+              onChange={(event) => setCatalogCategory(event.target.value)}
+            >
+              <option value="">All categories ({catalog.length})</option>
+              {catalogCategories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
           </div>
-          {testResult && (
-            <div className="mt-3 flex flex-col gap-2">
-              <div>
-                <Text className="text-xs font-semibold uppercase text-passive-1">Direct roles</Text>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {testResult.directRoleNames.length > 0 ? (
-                    testResult.directRoleNames.map((roleName) => (
-                      <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
-                    ))
-                  ) : (
-                    <Text className="text-xs italic text-passive-1">None</Text>
-                  )}
+
+          {catalogLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : catalog.length === 0 ? (
+            <Text className="mt-3">This server reports no permission catalog.</Text>
+          ) : groupedCatalog.length === 0 ? (
+            <Text className="mt-3">No permissions match your filter.</Text>
+          ) : (
+            <div className="mt-3 flex flex-col gap-3">
+              {groupedCatalog.map(({ category, permissions }) => (
+                <div key={category} className="rounded-md border border-border p-3">
+                  <Subtitle>
+                    {category} ({permissions.length})
+                  </Subtitle>
+                  <div className="mt-2 divide-y divide-border">
+                    {permissions.map((permission) => {
+                      const grantedBy = grantedByLookup.get(permission) ?? []
+                      return (
+                        <div key={permission} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                          <div className="flex min-w-0 flex-col">
+                            <Text>{permissionLabel(permission)}</Text>
+                            <Text className="text-xs text-passive-1">{permission}</Text>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {grantedBy.length > 0 ? (
+                              grantedBy.map((roleName) => (
+                                <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
+                              ))
+                            ) : (
+                              <Text className="text-xs italic text-passive-1">Granted by no role</Text>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <Text className="text-xs font-semibold uppercase text-passive-1">Group-conferred roles</Text>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {testResult.groupRoleNames.length > 0 ? (
-                    testResult.groupRoleNames.map((roleName) => (
-                      <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
-                    ))
-                  ) : (
-                    <Text className="text-xs italic text-passive-1">None</Text>
-                  )}
-                </div>
-              </div>
-              <div>
-                <Text className="text-xs font-semibold uppercase text-passive-1">
-                  Effective permissions ({testResult.effectivePermissionNames.length})
+              ))}
+            </div>
+          )}
+        </PreferencesSegment>
+      </TabPanel>
+
+      {/* ================= EFFECTIVE PERMISSIONS TAB ================= */}
+      <TabPanel state={subTab} id="effective">
+        <PreferencesSegment>
+          <Title>Effective-permissions simulator</Title>
+          <Text>
+            Select a set of roles to see the union of the permissions they grant, or test a specific user by email to
+            see their direct + group roles and resolved permissions.
+          </Text>
+
+          <div className="mt-3 rounded-md border border-border p-3">
+            <Subtitle>Resolve a role set</Subtitle>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {groupRolePickerBase.map((roleName) => (
+                <ToggleChip
+                  key={roleName}
+                  name={canonicalRoleLabel(roleName)}
+                  title={roleName}
+                  selected={simRoles.includes(roleName)}
+                  onToggle={() => toggleSimRole(roleName)}
+                />
+              ))}
+            </div>
+            {simLoading ? (
+              <Spinner className="mt-3 h-5 w-5" />
+            ) : simResult ? (
+              <div className="mt-3">
+                <Text className="text-xs text-passive-1">
+                  {simResult.effectivePermissionNames.length} effective permission
+                  {simResult.effectivePermissionNames.length === 1 ? '' : 's'} across {simResult.roleNames.length} role
+                  {simResult.roleNames.length === 1 ? '' : 's'}
+                  {simResult.unknownRoleNames.length > 0 ? ` (${simResult.unknownRoleNames.join(', ')} not found)` : ''}
+                  .
                 </Text>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {testResult.effectivePermissionNames.map((permission) => (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {simResult.effectivePermissionNames.map((permission) => (
                     <Chip key={permission} name={permission} title={permissionLabel(permission)} />
                   ))}
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </PreferencesSegment>
+            ) : (
+              <Text className="mt-2 text-xs italic text-passive-1">Select one or more roles above.</Text>
+            )}
+          </div>
 
+          <div className="mt-3 rounded-md border border-border p-3">
+            <Subtitle>Test a user</Subtitle>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <DecoratedInput
+                className={{ container: 'min-w-[220px] flex-grow' }}
+                placeholder="user@example.com"
+                value={testEmail}
+                onChange={setTestEmail}
+                onEnter={() => void testUser()}
+              />
+              <Button
+                label={testLoading ? 'Testing…' : 'Test user'}
+                disabled={testLoading}
+                onClick={() => void testUser()}
+              />
+            </div>
+            {testResult && (
+              <div className="mt-3 flex flex-col gap-2">
+                <div>
+                  <Text className="text-xs font-semibold uppercase text-passive-1">Direct roles</Text>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {testResult.directRoleNames.length > 0 ? (
+                      testResult.directRoleNames.map((roleName) => (
+                        <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
+                      ))
+                    ) : (
+                      <Text className="text-xs italic text-passive-1">None</Text>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Text className="text-xs font-semibold uppercase text-passive-1">Group-conferred roles</Text>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {testResult.groupRoleNames.length > 0 ? (
+                      testResult.groupRoleNames.map((roleName) => (
+                        <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
+                      ))
+                    ) : (
+                      <Text className="text-xs italic text-passive-1">None</Text>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Text className="text-xs font-semibold uppercase text-passive-1">
+                    Effective permissions ({testResult.effectivePermissionNames.length})
+                  </Text>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {testResult.effectivePermissionNames.map((permission) => (
+                      <Chip key={permission} name={permission} title={permissionLabel(permission)} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </PreferencesSegment>
       </TabPanel>
 
       {/* ================= GROUPS TAB ================= */}
