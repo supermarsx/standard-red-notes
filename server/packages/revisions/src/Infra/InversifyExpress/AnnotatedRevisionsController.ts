@@ -13,7 +13,7 @@ import { RevisionMetadata } from '../../Domain/Revision/RevisionMetadata'
 import { RevisionHttpRepresentation } from '../../Mapping/Http/RevisionHttpRepresentation'
 import { RevisionMetadataHttpRepresentation } from '../../Mapping/Http/RevisionMetadataHttpRepresentation'
 
-@controller('', TYPES.Revisions_ApiGatewayAuthMiddleware)
+@controller('/items', TYPES.Revisions_ApiGatewayAuthMiddleware)
 export class AnnotatedRevisionsController extends BaseRevisionsController {
   constructor(
     @inject(TYPES.Revisions_GetRevisionsMetada) override getRevisionsMetadata: GetRevisionsMetada,
@@ -27,17 +27,17 @@ export class AnnotatedRevisionsController extends BaseRevisionsController {
     super(getRevisionsMetadata, doGetRevision, doDeleteRevision, revisionHttpMapper, revisionMetadataHttpMapper)
   }
 
-  @httpGet('/items/:itemUuid/revisions')
+  @httpGet('/:itemUuid/revisions')
   override async getRevisions(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getRevisions(request, response)
   }
 
-  @httpGet('/items/:itemUuid/revisions/:uuid')
+  @httpGet('/:itemUuid/revisions/:uuid')
   override async getRevision(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getRevision(request, response)
   }
 
-  @httpDelete('/items/:itemUuid/revisions/:uuid')
+  @httpDelete('/:itemUuid/revisions/:uuid')
   override async deleteRevision(request: Request, response: Response): Promise<results.JsonResult> {
     return super.deleteRevision(request, response)
   }
