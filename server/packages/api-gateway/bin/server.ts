@@ -1,6 +1,5 @@
 import 'reflect-metadata'
 
-import '../src/Controller/LegacyController'
 import '../src/Controller/HealthCheckController'
 
 import '../src/Controller/v1/SessionsController'
@@ -56,6 +55,7 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import { TYPES } from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { ResponseLocals } from '../src/Controller/ResponseLocals'
+import { createFallbackHandler, API_GATEWAY_WELCOME_HTML } from '../src/Controller/FallbackController'
 import {
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
@@ -303,15 +303,13 @@ void container
 
     // Standard Red Notes: mount the CalDAV router, the Workflows-UI proxy and the
     // realtime WS token-mint route INSIDE setConfig — i.e. BEFORE server.build().
-    // build() mounts the inversify controller router at '/', whose LAST route is the
-    // trailing @all('/{*splat}') catch-all (Legacy/FallbackController). A route
-    // registered AFTER build() sits behind that catch-all in the layer stack, so a
-    // functioning catch-all answers first and the route is unreachable. (The current
-    // catch-all uses an empty @controller('') base that mergePaths turns into a
-    // never-matching '//{*splat}' under Express 5 — so it is inert TODAY — but this
-    // placement keeps these routes correct regardless of that latent defect.)
-    // Registering here also keeps them after all the body/cookie/CORS/rate-limit/
-    // shared-key middleware above. CalDAV + Workflows gate themselves internally
+    // build() mounts the inversify controller router at '/'. The trailing unmatched
+    // handler is now a POST-BUILD app.use() fallback (see after build(), replacing the
+    // former inert @controller('') catch-all), so these routes are no longer at risk
+    // of being shadowed — but keeping them pre-build (ahead of the controller router)
+    // remains the correct, defensive placement and matches the boot-mounted route
+    // ordering guard. Registering here also keeps them after all the body/cookie/CORS/
+    // rate-limit/shared-key middleware above. CalDAV + Workflows gate themselves internally
     // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when WORKFLOWS_ENABLED
     // is off and 403s without the UI-access cookie + an active pairing), so mounting
     // them unconditionally is safe.
@@ -385,11 +383,22 @@ void container
   // `server.build()` returns the underlying Express application; keep a handle
   // so the realtime WebSocket gateway can register its token route on it, then
   // `.listen()` to get the Node http.Server the ws upgrade attaches to.
-  // Standard Red Notes: build() mounts the inversify controller router (with its
-  // trailing catch-all) at '/'. The CalDAV router, the Workflows-UI proxy and the
-  // WS token-mint route are registered INSIDE setConfig above (before this call) so
-  // the catch-all cannot shadow them — see the note there.
+  // Standard Red Notes: build() mounts the inversify controller router at '/'. The
+  // CalDAV router, the Workflows-UI proxy and the WS token-mint route are registered
+  // INSIDE setConfig above (before this call), ahead of the controller router — see
+  // the note there.
   const app = server.build()
+
+  // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback. This
+  // replaces the former @controller('') LegacyController catch-all, which declared an
+  // empty base that mergePaths turned into a never-matching '//{*splat}' under Express
+  // 5 — so it was INERT and unmatched requests fell through to Express's default
+  // `Cannot GET /path` HTML. Registered as a POST-BUILD app.use() so it runs strictly
+  // AFTER the controller router (and the setErrorConfig 500-handler): it catches only
+  // genuinely-unmatched requests and cannot shadow any controller or the pre-build
+  // CalDAV/Workflows/sockets routes. The old LegacyController's un-versioned legacy
+  // proxy is intentionally NOT restored (dead since the Express-5 upgrade).
+  app.use(createFallbackHandler({ welcomeHtml: API_GATEWAY_WELCOME_HTML }))
 
   // Standard Red Notes: start the reminder-delivery scheduler. It gates itself on
   // the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off).

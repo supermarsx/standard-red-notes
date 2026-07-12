@@ -9,6 +9,8 @@ import {
   registerCaldavRoutes,
   registerWorkflowsUiProxy,
   startReminderDeliveryScheduler,
+  createFallbackHandler,
+  HOME_SERVER_WELCOME_HTML,
   decideCorsOrigin,
   resolveCorsStrictMode,
   buildDefaultRateLimitRules,
@@ -339,14 +341,12 @@ export class HomeServer implements HomeServerInterface {
 
         // Standard Red Notes: mount the read-only CalDAV router and the
         // authenticated Workflows-UI proxy INSIDE setConfig — i.e. BEFORE
-        // server.build(). build() mounts the inversify controller router at '/',
-        // whose LAST route is the trailing @all('/{*splat}') catch-all
-        // (FallbackController). A route registered AFTER build() sits behind that
-        // catch-all, so a functioning catch-all answers first and the route is
-        // unreachable. (The current catch-all uses an empty @controller('') base that
-        // mergePaths turns into a never-matching '//{*splat}' under Express 5 — inert
-        // TODAY — but this placement keeps these routes correct regardless of that
-        // latent defect.) Registering here also keeps them after all the middleware
+        // server.build(). build() mounts the inversify controller router at '/'. The
+        // trailing unmatched handler is now a POST-BUILD app.use() fallback (see after
+        // build(), replacing the former inert @controller('') FallbackController
+        // catch-all), so these routes are no longer at risk of being shadowed — but
+        // keeping them pre-build (ahead of the controller router) remains the correct,
+        // defensive placement. Registering here also keeps them after all the middleware
         // above (like the e2e route just above). Each router gates itself internally
         // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when
         // WORKFLOWS_ENABLED is off and 403s without the UI-access cookie + an active
@@ -400,11 +400,23 @@ export class HomeServer implements HomeServerInterface {
 
       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
 
-      // Standard Red Notes: build() mounts the inversify controller router (with its
-      // trailing catch-all) at '/'. The CalDAV router and the Workflows-UI proxy are
-      // registered INSIDE setConfig above (before this call) so the catch-all cannot
-      // shadow them — see the note there.
+      // Standard Red Notes: build() mounts the inversify controller router at '/'. The
+      // CalDAV router and the Workflows-UI proxy are registered INSIDE setConfig above
+      // (before this call), ahead of the controller router — see the note there.
       const app = server.build()
+
+      // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback for the
+      // bundled home-server. This replaces the former @controller('') FallbackController
+      // catch-all, which declared an empty base that mergePaths turned into a
+      // never-matching '//{*splat}' under Express 5 — so it was INERT and unmatched
+      // requests fell through to Express's default `Cannot GET /path` HTML. Registered
+      // as a POST-BUILD app.use() so it runs strictly AFTER the controller router of
+      // ALL five bundled services (and the setErrorConfig 500-handler): it catches only
+      // genuinely-unmatched requests and cannot shadow any bundled controller or the
+      // pre-build CalDAV/Workflows routes. A live in-router catch-all here would front
+      // every bundled service (FallbackController registered first), which is exactly
+      // why this is a post-build handler and not a repaired controller.
+      app.use(createFallbackHandler({ welcomeHtml: HOME_SERVER_WELCOME_HTML }))
 
       // Standard Red Notes: start the reminder-delivery scheduler. It gates itself
       // on the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off) and

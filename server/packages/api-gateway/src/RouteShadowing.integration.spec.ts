@@ -23,25 +23,24 @@ import { WorkflowsPairingStore } from './Service/Workflows/WorkflowsPairingStore
 // INVARIANT UNDER TEST: the opt-in CalDAV router (/dav), the Workflows-UI proxy
 // (/workflows-ui) and the WS token-mint route (POST /sockets/tokens) must be
 // registered BEFORE server.build(). build() mounts the inversify controller router
-// at rootPath '/'; that router's LAST route is a trailing catch-all
-// @all('/{*splat}') (Legacy/FallbackController). Any of the three routes registered
-// AFTER build() sits behind that catch-all in the app's layer stack, so a
-// FUNCTIONING catch-all answers first and the opt-in route is unreachable. The fix
-// (bin/server.ts + home-server HomeServer.ts) moves all three into setConfig, ahead
-// of the controller router. This spec pins that ordering both ways.
+// at rootPath '/'. A route registered AFTER build() sits behind that router in the
+// app's layer stack, so if any controller ever contributes a FUNCTIONING trailing
+// catch-all @all('/{*splat}') it answers first and the opt-in route is unreachable.
+// The fix (bin/server.ts + home-server HomeServer.ts) moves all three into setConfig,
+// ahead of the controller router. This spec pins that ordering both ways.
 //
-// NOTE ON THE PRODUCTION CATCH-ALL (why this uses @controller('/')): the real
-// Legacy/FallbackController use @controller('') — an EMPTY base. inversify-express-
-// utils' mergePaths('', '/{*splat}') collapses the empty base to '/' and joins to a
-// DOUBLE-slash '//{*splat}', which under Express 5 / path-to-regexp 8 matches NO
-// single-slash path — so today the production catch-all is INERT and never actually
-// shadows /dav etc. (the same empty-base class as the t53 revisions bug, but here it
-// makes the catch-all dead rather than mis-placed). That is a separate, latent bug:
-// the moment those controllers are repaired to a functioning catch-all (base '/'),
-// every post-build route would be shadowed. So this guard deliberately models a
-// WORKING catch-all with @controller('/') (which mergePaths resolves to the
-// single-slash '/{*splat}' that matches everything), proving the fix keeps the three
-// routes reachable in front of a catch-all that actually does its job.
+// NOTE ON THE PRODUCTION FALLBACK (why this uses @controller('/')): production no
+// longer has an in-router catch-all at all. The former root Legacy/FallbackController
+// used @controller('') — an EMPTY base, which inversify-express-utils' mergePaths
+// collapses to a DOUBLE-slash '//{*splat}' that matches NO single-slash path under
+// Express 5 / path-to-regexp 8, so they were INERT (never shadowed /dav etc.). Rather
+// than repair them into a live in-router catch-all (which, registered FIRST on the
+// shared router, would shadow the whole service), t57 replaced them with a POST-BUILD
+// app.use() fallback that runs AFTER the controller router — so it can never shadow a
+// pre-build route. This guard still deliberately models a WORKING in-router catch-all
+// with @controller('/') (mergePaths -> the single-slash '/{*splat}' that matches
+// everything) as the defensive worst case, proving the pre-build ordering keeps the
+// three routes reachable even if a future controller ever reintroduces one.
 const CATCH_ALL_SENTINEL = 'CATCH-ALL-SENTINEL'
 
 @controller('/')
