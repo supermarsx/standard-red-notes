@@ -6,6 +6,7 @@ import {
   isRegistrationDomainMode,
   RegistrationConfigOverlay,
 } from '../../Domain/Registration/RegistrationConfig'
+import { SignupLimitsConfigOverlay } from '../../Domain/Registration/SignupLimitsConfig'
 
 /**
  * Standard Red Notes: read-only view of the api-gateway's persisted runtime
@@ -29,6 +30,9 @@ import {
  * file degrades to `undefined`.
  */
 export class ServerSettingsOverlayReader {
+  /** Known winston levels an admin may persist under `logging.level`. */
+  static readonly VALID_LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly']
+
   constructor(private readonly filePath: string | undefined) {}
 
   async nextcloudBackupsEnabled(): Promise<boolean | undefined> {
@@ -128,6 +132,57 @@ export class ServerSettingsOverlayReader {
     }
 
     return result
+  }
+
+  /**
+   * Reads the admin-set SIGNUP CAP overrides from `registration.signupsPer*`
+   * (per-IP / per-week / per-device caps + their windows). Returns only the
+   * NUMERIC fields an admin has actually persisted (each undefined when unset, so
+   * the caller falls through to env then default). Never throws.
+   */
+  async signupLimits(): Promise<SignupLimitsConfigOverlay | undefined> {
+    const overlay = await this.read()
+    const registration = overlay?.registration as Record<string, unknown> | undefined
+    if (!registration || typeof registration !== 'object') {
+      return undefined
+    }
+
+    const result: SignupLimitsConfigOverlay = {}
+    if (typeof registration.signupsPerIpMax === 'number') {
+      result.perIpMax = registration.signupsPerIpMax
+    }
+    if (typeof registration.signupsPerIpWindowHours === 'number') {
+      result.perIpWindowHours = registration.signupsPerIpWindowHours
+    }
+    if (typeof registration.signupsPerWeekMax === 'number') {
+      result.perWeekMax = registration.signupsPerWeekMax
+    }
+    if (typeof registration.signupsPerDeviceMax === 'number') {
+      result.perDeviceMax = registration.signupsPerDeviceMax
+    }
+    if (typeof registration.signupsPerDeviceWindowHours === 'number') {
+      result.perDeviceWindowHours = registration.signupsPerDeviceWindowHours
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  /**
+   * Reads the admin-set runtime log level from `logging.level`. Returns the raw
+   * string an admin has persisted (validated to a known winston level), or
+   * undefined when unset/invalid so the caller falls through to env LOG_LEVEL
+   * then 'info'. Never throws.
+   */
+  async loggingLevel(): Promise<string | undefined> {
+    const overlay = await this.read()
+    const logging = overlay?.logging as { level?: unknown } | undefined
+    const level = logging?.level
+    if (typeof level !== 'string') {
+      return undefined
+    }
+    const normalized = level.trim().toLowerCase()
+
+    return ServerSettingsOverlayReader.VALID_LOG_LEVELS.includes(normalized) ? normalized : undefined
   }
 
   private async read(): Promise<Record<string, unknown> | undefined> {

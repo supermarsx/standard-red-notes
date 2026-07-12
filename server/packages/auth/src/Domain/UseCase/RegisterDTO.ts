@@ -20,4 +20,12 @@ export type RegisterDTO = {
    * workspaces; an absent/empty value resolves to the 'default' workspace.
    */
   workspaceIdentifier?: string
+  /**
+   * Standard Red Notes: optional, CLIENT-SUPPLIED per-browser device id used ONLY
+   * for the SOFT per-device signup cap. It is trivially forgeable (the client
+   * fully controls the value) so it is NOT a security boundary — the cap is a
+   * best-effort speed bump enforced ONLY when this is present. Absent on
+   * mobile/desktop clients (the per-device cap simply does not apply there).
+   */
+  deviceId?: string
 }

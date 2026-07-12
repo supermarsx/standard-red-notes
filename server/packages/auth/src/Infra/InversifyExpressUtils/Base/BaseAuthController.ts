@@ -579,6 +579,10 @@ export class BaseAuthController extends BaseHttpController {
       // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
       // Ignored by the use case unless the server flag is on.
       workspaceIdentifier: request.body.workspace_identifier as string | undefined,
+      // Standard Red Notes: optional client-supplied device id — the SOFT
+      // per-device signup cap consults it only when the per-device cap is on and
+      // the client actually sent one. Forgeable by design (not a security signal).
+      deviceId: request.body.device_id as string | undefined,
     })
 
     if (!registerResult.success) {

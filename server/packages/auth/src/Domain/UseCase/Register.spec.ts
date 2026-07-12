@@ -16,6 +16,9 @@ import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremi
 import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
 import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
 import { RegistrationConfig } from '../Registration/RegistrationConfig'
+import { SignupLimitsConfig } from '../Registration/SignupLimitsConfig'
+import { SignupLimitsConfigResolverInterface } from '../Registration/SignupLimitsConfigResolverInterface'
+import { SignupRateLimiterInterface } from '../Registration/SignupRateLimiterInterface'
 
 describe('Register', () => {
   let userRepository: UserRepositoryInterface
@@ -565,6 +568,201 @@ describe('Register', () => {
       ).execute(dtoFor('person@anywhere.example'))
 
       expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalled()
+    })
+  })
+
+  describe('Standard Red Notes: configurable signup caps (per-week / per-IP / per-device)', () => {
+    const GENERIC_REFUSAL = 'User registration is currently not allowed.'
+
+    const makeLimitsResolver = (config: Partial<SignupLimitsConfig>): SignupLimitsConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        perIpMax: 0,
+        perIpWindowHours: 24,
+        perWeekMax: 0,
+        perDeviceMax: 0,
+        perDeviceWindowHours: 24,
+        ...config,
+      } as SignupLimitsConfig),
+    })
+
+    const createUseCaseWithLimits = (
+      resolver: SignupLimitsConfigResolverInterface,
+      rateLimiter?: SignupRateLimiterInterface,
+    ) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        rateLimiter,
+        resolver,
+      )
+
+    const dtoFor = (overrides: { ipAddress?: string | null; deviceId?: string } = {}) => ({
+      email: 'person@example.com',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      ipAddress: overrides.ipAddress,
+      deviceId: overrides.deviceId,
+    })
+
+    describe('per-week global cap', () => {
+      it('refuses once the rolling-7-day count has reached the cap', async () => {
+        userRepository.countAllCreatedBetween = jest.fn().mockResolvedValue(5)
+
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perWeekMax: 5 })).execute(dtoFor())
+
+        expect(result).toEqual({ success: false, errorMessage: GENERIC_REFUSAL })
+        expect(userRepository.save).not.toHaveBeenCalled()
+        // Reads a ~7-day window ending "now" (timer.getUTCDate mocked to new Date(1)).
+        const [start, end] = (userRepository.countAllCreatedBetween as jest.Mock).mock.calls[0]
+        expect(end.getTime() - start.getTime()).toBe(7 * 24 * 60 * 60 * 1000)
+      })
+
+      it('allows a signup while under the cap', async () => {
+        userRepository.countAllCreatedBetween = jest.fn().mockResolvedValue(4)
+
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perWeekMax: 5 })).execute(dtoFor())
+
+        expect(result.success).toBe(true)
+        expect(userRepository.save).toHaveBeenCalled()
+      })
+
+      it('FAILS OPEN when the DB count throws', async () => {
+        userRepository.countAllCreatedBetween = jest.fn().mockRejectedValue(new Error('db down'))
+
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perWeekMax: 5 })).execute(dtoFor())
+
+        expect(result.success).toBe(true)
+        expect(userRepository.save).toHaveBeenCalled()
+      })
+    })
+
+    describe('per-IP cap', () => {
+      it('refuses once the post-increment count exceeds the cap', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(4) }
+
+        const result = await createUseCaseWithLimits(
+          makeLimitsResolver({ perIpMax: 3, perIpWindowHours: 24 }),
+          rateLimiter,
+        ).execute(dtoFor({ ipAddress: '1.2.3.4' }))
+
+        expect(result).toEqual({ success: false, errorMessage: GENERIC_REFUSAL })
+        expect(rateLimiter.incrementAndCount).toHaveBeenCalledWith('signup:ip:1.2.3.4', 24 * 3600)
+        expect(userRepository.save).not.toHaveBeenCalled()
+      })
+
+      it('allows a signup at exactly the cap', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(3) }
+
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perIpMax: 3 }), rateLimiter).execute(
+          dtoFor({ ipAddress: '1.2.3.4' }),
+        )
+
+        expect(result.success).toBe(true)
+        expect(userRepository.save).toHaveBeenCalled()
+      })
+
+      it('FAILS OPEN when the limiter cannot determine a count (Redis absent/error -> null)', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(null) }
+
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perIpMax: 1 }), rateLimiter).execute(
+          dtoFor({ ipAddress: '1.2.3.4' }),
+        )
+
+        expect(result.success).toBe(true)
+        expect(userRepository.save).toHaveBeenCalled()
+      })
+
+      it('is a no-op when no rate limiter is wired even if the cap is set', async () => {
+        const result = await createUseCaseWithLimits(makeLimitsResolver({ perIpMax: 1 })).execute(
+          dtoFor({ ipAddress: '1.2.3.4' }),
+        )
+
+        expect(result.success).toBe(true)
+        expect(userRepository.save).toHaveBeenCalled()
+      })
+    })
+
+    describe('per-device SOFT cap', () => {
+      it('is enforced ONLY when the client supplied a device id', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(2) }
+
+        // No deviceId on the request: the per-device counter is never consulted.
+        const allowed = await createUseCaseWithLimits(makeLimitsResolver({ perDeviceMax: 1 }), rateLimiter).execute(
+          dtoFor(),
+        )
+        expect(allowed.success).toBe(true)
+        expect(rateLimiter.incrementAndCount).not.toHaveBeenCalled()
+      })
+
+      it('refuses once a present device id exceeds the cap', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(2) }
+
+        const result = await createUseCaseWithLimits(
+          makeLimitsResolver({ perDeviceMax: 1, perDeviceWindowHours: 24 }),
+          rateLimiter,
+        ).execute(dtoFor({ deviceId: 'dev-abc' }))
+
+        expect(result).toEqual({ success: false, errorMessage: GENERIC_REFUSAL })
+        expect(rateLimiter.incrementAndCount).toHaveBeenCalledWith('signup:dev:dev-abc', 24 * 3600)
+        expect(userRepository.save).not.toHaveBeenCalled()
+      })
+
+      it('never stamps the client-supplied device id onto the persisted user entity', async () => {
+        const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(1) }
+
+        await createUseCaseWithLimits(makeLimitsResolver({ perDeviceMax: 5 }), rateLimiter).execute(
+          dtoFor({ deviceId: 'dev-abc' }),
+        )
+
+        const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0]
+        expect(savedUser.deviceId).toBeUndefined()
+      })
+    })
+
+    it('all caps = 0 (unlimited) is a complete no-op even with a limiter present', async () => {
+      const rateLimiter = { incrementAndCount: jest.fn().mockResolvedValue(999) }
+      userRepository.countAllCreatedBetween = jest.fn().mockResolvedValue(999)
+
+      const result = await createUseCaseWithLimits(makeLimitsResolver({}), rateLimiter).execute(
+        dtoFor({ ipAddress: '1.2.3.4', deviceId: 'dev-abc' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(rateLimiter.incrementAndCount).not.toHaveBeenCalled()
+      expect(userRepository.countAllCreatedBetween).not.toHaveBeenCalled()
+      expect(userRepository.save).toHaveBeenCalled()
+    })
+
+    it('FAILS OPEN when the limits resolver itself throws (registration is never taken down)', async () => {
+      const rateLimiter = { incrementAndCount: jest.fn() }
+      const resolver: SignupLimitsConfigResolverInterface = {
+        resolve: jest.fn().mockRejectedValue(new Error('overlay unreadable')),
+      }
+
+      const result = await createUseCaseWithLimits(resolver, rateLimiter).execute(
+        dtoFor({ ipAddress: '1.2.3.4', deviceId: 'dev-abc' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(rateLimiter.incrementAndCount).not.toHaveBeenCalled()
       expect(userRepository.save).toHaveBeenCalled()
     })
   })

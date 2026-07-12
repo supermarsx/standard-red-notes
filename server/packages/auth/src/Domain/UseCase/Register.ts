@@ -21,6 +21,9 @@ import {
   emailAllowedByPolicy,
   RegistrationConfig,
 } from '../Registration/RegistrationConfig'
+import { DEFAULT_SIGNUP_LIMITS, SignupLimitsConfig } from '../Registration/SignupLimitsConfig'
+import { SignupLimitsConfigResolverInterface } from '../Registration/SignupLimitsConfigResolverInterface'
+import { SignupRateLimiterInterface } from '../Registration/SignupRateLimiterInterface'
 import { SendEmailConfirmation } from './SendEmailConfirmation/SendEmailConfirmation'
 
 export class Register implements UseCaseInterface {
@@ -59,6 +62,13 @@ export class Register implements UseCaseInterface {
     // confirmation email is ever sent (feature effectively off).
     private sendEmailConfirmation?: SendEmailConfirmation,
     private logger?: { error: (message: string) => void },
+    // Standard Red Notes: SIGNUP CAPS (part of the admin anti-abuse surface).
+    // The rate limiter backs the per-IP + per-device SOFT caps (atomic Redis
+    // INCR/EXPIRE, fail-open); the resolver supplies the effective cap policy
+    // (persisted admin overlay -> env -> default). Both are trailing-optional so
+    // existing call sites / specs keep compiling; when absent, no caps apply.
+    private signupRateLimiter?: SignupRateLimiterInterface,
+    private signupLimitsResolver?: SignupLimitsConfigResolverInterface,
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
@@ -84,6 +94,10 @@ export class Register implements UseCaseInterface {
       apiVersion,
       ephemeralSession,
       workspaceIdentifier: requestedWorkspaceIdentifier,
+      // Standard Red Notes: pulled out of the spread so the client-supplied
+      // device id (SOFT per-device cap signal only) is NEVER Object.assign'd onto
+      // the persisted User entity.
+      deviceId,
       ...registrationFields
     } = dto
 
@@ -151,6 +165,19 @@ export class Register implements UseCaseInterface {
           errorMessage: 'This email is already registered.',
         }
       }
+    }
+
+    // Standard Red Notes: configurable SIGNUP CAPS (per-week global / per-IP /
+    // per-device SOFT), resolved once (persisted admin overlay -> env -> default)
+    // and enforced right before the account is created — after the duplicate
+    // check so the per-IP/per-device counters are only spent on a signup that
+    // would otherwise succeed. Each cap is checked INDEPENDENTLY and each FAILS
+    // OPEN: a broken overlay / cache / DB read must never block a legitimate
+    // signup. A single GENERIC refusal message is used so the specific cap that
+    // tripped is not enumerable by a probing client.
+    const signupLimitsRefusal = await this.enforceSignupLimits(dto.ipAddress, deviceId)
+    if (signupLimitsRefusal !== undefined) {
+      return signupLimitsRefusal
     }
 
     let user = new User()
@@ -316,6 +343,84 @@ export class Register implements UseCaseInterface {
       return await this.registrationConfigResolver.resolve()
     } catch {
       return DEFAULT_REGISTRATION_CONFIG
+    }
+  }
+
+  /**
+   * Standard Red Notes: enforces the configurable signup caps. Returns a refusal
+   * RegisterResponse when a cap is exceeded, or undefined to allow the signup.
+   *
+   * Each of the three caps (per-week global, per-IP, per-device SOFT) is checked
+   * independently and FAILS OPEN — an error in one never blocks the signup and
+   * never short-circuits the others. Caps set to 0 (unlimited) are a no-op. The
+   * per-IP / per-device counters increment only when a rate limiter is wired; the
+   * per-device counter additionally requires the client to have supplied a device
+   * id (a forgeable, best-effort signal — NOT a security boundary).
+   */
+  private async enforceSignupLimits(
+    ipAddress: string | null | undefined,
+    deviceId: string | undefined,
+  ): Promise<RegisterResponse | undefined> {
+    const limits = await this.resolveSignupLimits()
+
+    // per-week (global, DB-backed): refuse once the rolling-7-day signup count
+    // has reached the cap. Read-only; fails open on any DB error.
+    if (limits.perWeekMax > 0) {
+      try {
+        const now = this.timer.getUTCDate()
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        const recentCount = await this.userRepository.countAllCreatedBetween(weekAgo, now)
+        if (recentCount >= limits.perWeekMax) {
+          return { success: false, errorMessage: 'User registration is currently not allowed.' }
+        }
+      } catch (error) {
+        this.logger?.error(`Signup per-week cap check failed (allowing signup): ${(error as Error).message}`)
+      }
+    }
+
+    // per-IP: atomic INCR keyed on the client IP with the configured window TTL.
+    // The limiter fails open internally (returns null), so a null count never
+    // refuses.
+    if (limits.perIpMax > 0 && this.signupRateLimiter !== undefined && ipAddress) {
+      const ipCount = await this.signupRateLimiter.incrementAndCount(
+        `signup:ip:${ipAddress}`,
+        limits.perIpWindowHours * 3600,
+      )
+      if (ipCount !== null && ipCount > limits.perIpMax) {
+        return { success: false, errorMessage: 'User registration is currently not allowed.' }
+      }
+    }
+
+    // per-device (SOFT): same mechanism keyed on the CLIENT-SUPPLIED device id,
+    // enforced ONLY when the client actually sent one. Best-effort speed bump.
+    if (limits.perDeviceMax > 0 && this.signupRateLimiter !== undefined && deviceId) {
+      const deviceCount = await this.signupRateLimiter.incrementAndCount(
+        `signup:dev:${deviceId}`,
+        limits.perDeviceWindowHours * 3600,
+      )
+      if (deviceCount !== null && deviceCount > limits.perDeviceMax) {
+        return { success: false, errorMessage: 'User registration is currently not allowed.' }
+      }
+    }
+
+    return undefined
+  }
+
+  /**
+   * Standard Red Notes: resolves the effective signup-cap policy (persisted admin
+   * overlay -> env -> default). Never throws — a resolver failure or an unwired
+   * resolver degrades to DEFAULT_SIGNUP_LIMITS (all caps off) so registration is
+   * never taken down by an unreadable overlay.
+   */
+  private async resolveSignupLimits(): Promise<SignupLimitsConfig> {
+    if (this.signupLimitsResolver === undefined) {
+      return DEFAULT_SIGNUP_LIMITS
+    }
+
+    try {
+      return await this.signupLimitsResolver.resolve()
+    } catch {
+      return DEFAULT_SIGNUP_LIMITS
     }
   }
 

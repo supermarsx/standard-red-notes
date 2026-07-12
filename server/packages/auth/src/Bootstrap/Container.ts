@@ -462,6 +462,14 @@ import {
   EnvRegistrationConfigResolver,
   registrationBaselineFromEnv,
 } from '../Infra/Registration/EnvRegistrationConfigResolver'
+import { SignupLimitsConfigResolverInterface } from '../Domain/Registration/SignupLimitsConfigResolverInterface'
+import {
+  EnvSignupLimitsConfigResolver,
+  signupLimitsBaselineFromEnv,
+} from '../Infra/Registration/EnvSignupLimitsConfigResolver'
+import { SignupRateLimiterInterface } from '../Domain/Registration/SignupRateLimiterInterface'
+import { RedisSignupRateLimiter } from '../Infra/Registration/RedisSignupRateLimiter'
+import { RuntimeLogLevelApplier } from '../Infra/Logging/RuntimeLogLevelApplier'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -529,6 +537,29 @@ export class ContainerConfigLoader {
       })
     }
     container.bind<winston.Logger>(TYPES.Auth_Logger).toConstantValue(logger)
+
+    // Standard Red Notes: apply the admin-set runtime log verbosity
+    // (`logging.level` in the shared ServerSettings overlay) WITHOUT a restart.
+    // The applier reads the same overlay file the gateway admin surface writes,
+    // polls every 30s, and is DEFENSIVE — it never throws during bootstrap and
+    // its interval is unref'd so it can never keep the process alive. Skipped for
+    // the short-lived CLI (it would otherwise poll for the life of a one-shot
+    // command). Precedence: persisted logging.level > env LOG_LEVEL > 'info'.
+    if (this.mode !== 'cli') {
+      try {
+        const logLevelOverlayReader = new ServerSettingsOverlayReader(
+          env.get('SERVER_SETTINGS_PATH', true) || undefined,
+        )
+        const logLevelApplier = new RuntimeLogLevelApplier(
+          logger,
+          () => logLevelOverlayReader.loggingLevel(),
+          env.get('LOG_LEVEL', true) || 'info',
+        )
+        logLevelApplier.start()
+      } catch {
+        // A failure to start the log-level poller must never take down bootstrap.
+      }
+    }
 
     container.bind<CryptoNode>(TYPES.Auth_CryptoNode).toConstantValue(new CryptoNode())
 
@@ -2248,6 +2279,32 @@ export class ContainerConfigLoader {
           container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
         ),
       )
+    // Standard Red Notes: signup-cap policy resolver (persisted admin overlay ->
+    // REGISTRATION_SIGNUPS_PER_* env baseline -> default). Reads the SAME
+    // ServerSettings overlay file the gateway admin surface writes so an admin
+    // change applies without a restart. Constructed as a local (not a container
+    // binding) since only Register consumes it.
+    const signupLimitsOverlayReader = new ServerSettingsOverlayReader(
+      env.get('SERVER_SETTINGS_PATH', true) || undefined,
+    )
+    const signupLimitsBaseline = signupLimitsBaselineFromEnv({
+      perIpMax: env.get('REGISTRATION_SIGNUPS_PER_IP_MAX', true) || undefined,
+      perIpWindowHours: env.get('REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS', true) || undefined,
+      perWeekMax: env.get('REGISTRATION_SIGNUPS_PER_WEEK_MAX', true) || undefined,
+      perDeviceMax: env.get('REGISTRATION_SIGNUPS_PER_DEVICE_MAX', true) || undefined,
+      perDeviceWindowHours: env.get('REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS', true) || undefined,
+    })
+    const signupLimitsResolver: SignupLimitsConfigResolverInterface = new EnvSignupLimitsConfigResolver(
+      signupLimitsBaseline,
+      () => signupLimitsOverlayReader.signupLimits(),
+    )
+    // Redis-backed counter for the per-IP + per-device SOFT caps. Bound only when
+    // Auth_Redis is present (same topology guard as the IP escalation checker);
+    // absent under the in-memory/TypeORM cache, where those two caps simply do not
+    // apply. The per-week cap is DB-backed and always available regardless.
+    const signupRateLimiter: SignupRateLimiterInterface | undefined = container.isBound(TYPES.Auth_Redis)
+      ? new RedisSignupRateLimiter(container.get<Redis>(TYPES.Auth_Redis))
+      : undefined
     container
       .bind<Register>(TYPES.Auth_Register)
       .toConstantValue(
@@ -2278,6 +2335,10 @@ export class ContainerConfigLoader {
           // verification link when the resolved policy enables it.
           container.get<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          // Standard Red Notes: SIGNUP CAPS — the Redis-backed counter (per-IP +
+          // per-device SOFT) and the cap-policy resolver. Both fail open.
+          signupRateLimiter,
+          signupLimitsResolver,
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
