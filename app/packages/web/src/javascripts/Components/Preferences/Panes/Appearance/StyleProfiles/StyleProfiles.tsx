@@ -163,7 +163,7 @@ const StyleProfiles: FunctionComponent = () => {
 
         <HorizontalSeparator classes="my-4" />
 
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <Subtitle>Profiles</Subtitle>
           <div className="flex flex-shrink-0 items-center gap-2">
             <Button small label="Import…" onClick={() => void handleImport()} />
@@ -207,7 +207,7 @@ const StyleProfiles: FunctionComponent = () => {
                   {isActive && <span className="flex-shrink-0 text-xs font-bold text-info">active</span>}
                 </div>
 
-                <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
                   <Button small label="Edit styles…" onClick={() => setEditingProfileId(profile.id)} />
                   <Button small label="Rename" onClick={() => startRename(profile.id, profile.name)} />
                   <Button
