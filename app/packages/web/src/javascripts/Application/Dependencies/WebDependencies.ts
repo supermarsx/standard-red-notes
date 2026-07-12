@@ -52,6 +52,8 @@ import { LoadPurchaseFlowUrl } from '../UseCase/LoadPurchaseFlowUrl'
 import { GetPurchaseFlowUrl } from '../UseCase/GetPurchaseFlowUrl'
 import { OpenSubscriptionDashboard } from '../UseCase/OpenSubscriptionDashboard'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
+import { DocxConverter } from '@/Components/SuperEditor/Lexical/Utils/DocImport/DocxConverter'
+import { OdtConverter } from '@/Components/SuperEditor/Lexical/Utils/DocImport/OdtConverter'
 import { WebApplication } from '../WebApplication'
 import { CommandService } from '../../Components/CommandPalette/CommandService'
 
@@ -94,6 +96,8 @@ export class WebDependencies extends DependencyContainer {
             })),
           }
         },
+        // Web-only DOCX/ODT converters (keep mammoth out of the mobile bundle).
+        [new DocxConverter(), new OdtConverter()],
       )
     })
 

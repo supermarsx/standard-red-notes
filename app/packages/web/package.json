@@ -129,6 +129,7 @@
     "i18next-browser-languagedetector": "^8.0.0",
     "katex": "^0.16.47",
     "lexical": "0.45.0",
+    "mammoth": "^1.9.0",
     "mermaid": "^11.15.0",
     "pdfjs-dist": "4.10.38",
     "react-i18next": "^15.1.0",

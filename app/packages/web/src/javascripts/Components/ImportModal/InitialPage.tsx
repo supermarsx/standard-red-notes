@@ -96,6 +96,40 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
           <Icon type="file-doc" className="mr-2 text-accessory-tint-1" />
           Super (JSON)
         </Button>
+        <Button
+          className="flex items-center !py-2"
+          onClick={() => {
+            const isEntitledToSuper =
+              application.features.getFeatureStatus(
+                NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue(),
+              ) === FeatureStatus.Entitled
+            if (!isEntitledToSuper) {
+              application.showPremiumModal(FeatureName.Super)
+              return
+            }
+            selectFiles('docx').catch(console.error)
+          }}
+        >
+          <Icon type="rich-text" className="mr-2 text-[#2b579a]" />
+          Word (.docx)
+        </Button>
+        <Button
+          className="flex items-center !py-2"
+          onClick={() => {
+            const isEntitledToSuper =
+              application.features.getFeatureStatus(
+                NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue(),
+              ) === FeatureStatus.Entitled
+            if (!isEntitledToSuper) {
+              application.showPremiumModal(FeatureName.Super)
+              return
+            }
+            selectFiles('odt').catch(console.error)
+          }}
+        >
+          <Icon type="file-doc" className="mr-2 text-[#0b7cb8]" />
+          OpenDocument (.odt)
+        </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('csv-markdown')}>
           <Icon type="toc" className="mr-2 text-info" />
           {c('ImportSource').t`CSV (Markdown table)`}

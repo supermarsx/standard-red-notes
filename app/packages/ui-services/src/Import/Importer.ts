@@ -89,6 +89,13 @@ export class Importer {
      * when needed). Injected by the host app since it needs the full application.
      */
     private importStandardNotesBackup?: (file: File) => Promise<ConversionResult>,
+    /**
+     * Host-supplied extra converters appended after the native set. The web app
+     * uses this to register the DOCX/ODT converters (which pull heavy, web-only
+     * parsing deps) without adding those deps to this shared package or the
+     * mobile bundle.
+     */
+    private additionalConverters?: Converter[],
   ) {
     this.registerNativeConverters()
   }
@@ -108,6 +115,12 @@ export class Importer {
     this.converters.add(new SuperConverter(this.superConverterService))
     this.converters.add(new CSVMarkdownConverter())
     this.converters.add(new CSVSpreadsheetConverter())
+
+    if (this.additionalConverters) {
+      for (const converter of this.additionalConverters) {
+        this.converters.add(converter)
+      }
+    }
   }
 
   detectService = async (file: File): Promise<string | null> => {
