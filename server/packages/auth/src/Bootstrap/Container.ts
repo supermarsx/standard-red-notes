@@ -207,6 +207,11 @@ import { TypeORMSignupInviteLink } from '../Infra/TypeORM/TypeORMSignupInviteLin
 import { SignupInviteLinkPersistenceMapper } from '../Mapping/SignupInviteLinkPersistenceMapper'
 import { SignupInviteLinkRepositoryInterface } from '../Domain/SignupInvite/SignupInviteLinkRepositoryInterface'
 import { TypeORMSignupInviteLinkRepository } from '../Infra/TypeORM/TypeORMSignupInviteLinkRepository'
+import { SignupInviteUse } from '../Domain/SignupInvite/SignupInviteUse'
+import { TypeORMSignupInviteUse } from '../Infra/TypeORM/TypeORMSignupInviteUse'
+import { SignupInviteUsePersistenceMapper } from '../Mapping/SignupInviteUsePersistenceMapper'
+import { SignupInviteUseRepositoryInterface } from '../Domain/SignupInvite/SignupInviteUseRepositoryInterface'
+import { TypeORMSignupInviteUseRepository } from '../Infra/TypeORM/TypeORMSignupInviteUseRepository'
 import { ConsumeSignupInvite } from '../Domain/UseCase/ConsumeSignupInvite/ConsumeSignupInvite'
 import { CreateSignupInviteLink } from '../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
 import { ListSignupInviteLinks } from '../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
@@ -808,6 +813,9 @@ export class ContainerConfigLoader {
       )
       .toConstantValue(new SignupInviteLinkPersistenceMapper())
     container
+      .bind<MapperInterface<SignupInviteUse, TypeORMSignupInviteUse>>(TYPES.Auth_SignupInviteUsePersistenceMapper)
+      .toConstantValue(new SignupInviteUsePersistenceMapper())
+    container
       .bind<MapperInterface<CacheEntry, TypeORMCacheEntry>>(TYPES.Auth_CacheEntryPersistenceMapper)
       .toConstantValue(new CacheEntryPersistenceMapper())
     container
@@ -914,6 +922,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMSignupInviteLink>>(TYPES.Auth_ORMSignupInviteLinkRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMSignupInviteLink))
+    container
+      .bind<Repository<TypeORMSignupInviteUse>>(TYPES.Auth_ORMSignupInviteUseRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMSignupInviteUse))
     container
       .bind<Repository<TypeORMCacheEntry>>(TYPES.Auth_ORMCacheEntryRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMCacheEntry))
@@ -1096,6 +1107,14 @@ export class ContainerConfigLoader {
         new TypeORMSignupInviteLinkRepository(
           container.get(TYPES.Auth_ORMSignupInviteLinkRepository),
           container.get(TYPES.Auth_SignupInviteLinkPersistenceMapper),
+        ),
+      )
+    container
+      .bind<SignupInviteUseRepositoryInterface>(TYPES.Auth_SignupInviteUseRepository)
+      .toConstantValue(
+        new TypeORMSignupInviteUseRepository(
+          container.get(TYPES.Auth_ORMSignupInviteUseRepository),
+          container.get(TYPES.Auth_SignupInviteUsePersistenceMapper),
         ),
       )
     container
@@ -2366,6 +2385,8 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new ConsumeSignupInvite(
           container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+          // Standard Red Notes: ATTRIBUTION sink (#14) — one use row per consumed slot.
+          container.get<SignupInviteUseRepositoryInterface>(TYPES.Auth_SignupInviteUseRepository),
         ),
       )
     container

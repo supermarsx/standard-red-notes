@@ -25,6 +25,7 @@ import { TypeORMAuthenticatorChallenge } from '../Infra/TypeORM/TypeORMAuthentic
 import { TypeORMMagicLinkToken } from '../Infra/TypeORM/TypeORMMagicLinkToken'
 import { TypeORMEmailConfirmationToken } from '../Infra/TypeORM/TypeORMEmailConfirmationToken'
 import { TypeORMSignupInviteLink } from '../Infra/TypeORM/TypeORMSignupInviteLink'
+import { TypeORMSignupInviteUse } from '../Infra/TypeORM/TypeORMSignupInviteUse'
 import { TypeORMCacheEntry } from '../Infra/TypeORM/TypeORMCacheEntry'
 import { TypeORMEmergencyAccessInvitation } from '../Infra/TypeORM/TypeORMEmergencyAccessInvitation'
 import { TypeORMSessionTrace } from '../Infra/TypeORM/TypeORMSessionTrace'
@@ -98,6 +99,7 @@ export class AppDataSource {
         TypeORMMagicLinkToken,
         TypeORMEmailConfirmationToken,
         TypeORMSignupInviteLink,
+        TypeORMSignupInviteUse,
         TypeORMEmergencyAccessInvitation,
         TypeORMCacheEntry,
         TypeORMSharedVaultUser,

@@ -1,5 +1,10 @@
+import { UniqueEntityId } from '@standardnotes/domain-core'
+import { v4 as uuidv4 } from 'uuid'
+
 import { UseCaseInterface } from '../UseCaseInterface'
 import { SignupInviteLinkRepositoryInterface } from '../../SignupInvite/SignupInviteLinkRepositoryInterface'
+import { SignupInviteUseRepositoryInterface } from '../../SignupInvite/SignupInviteUseRepositoryInterface'
+import { SignupInviteUse } from '../../SignupInvite/SignupInviteUse'
 import { hashSignupInviteToken } from '../../SignupInvite/hashSignupInviteToken'
 import { domainMatchesList, emailDomain } from '../../Registration/RegistrationConfig'
 
@@ -16,7 +21,14 @@ import { ConsumeSignupInviteResponse } from './ConsumeSignupInviteResponse'
  * authority on slot availability — the UPDATE re-checks every condition.
  */
 export class ConsumeSignupInvite implements UseCaseInterface {
-  constructor(private inviteLinkRepository: SignupInviteLinkRepositoryInterface) {}
+  constructor(
+    private inviteLinkRepository: SignupInviteLinkRepositoryInterface,
+    // Standard Red Notes: ATTRIBUTION / usage-audit sink (#14). Trailing-optional
+    // so existing call sites / specs keep compiling; when wired, one row is
+    // written per consumed slot (best-effort — a write failure never fails the
+    // consume, since the slot is already atomically spent).
+    private inviteUseRepository?: SignupInviteUseRepositoryInterface,
+  ) {}
 
   async execute(dto: ConsumeSignupInviteDTO): Promise<ConsumeSignupInviteResponse> {
     const token = typeof dto.token === 'string' ? dto.token.trim() : ''
@@ -50,6 +62,25 @@ export class ConsumeSignupInvite implements UseCaseInterface {
       const consumed = await this.inviteLinkRepository.consumeSlot(hashedToken, dto.now)
       if (!consumed) {
         return { outcome: 'invalid' }
+      }
+
+      // Attribution row (best-effort): the slot is already spent, so a write
+      // failure here must never turn a successful consume into a refusal.
+      if (this.inviteUseRepository !== undefined) {
+        try {
+          const use = SignupInviteUse.create(
+            {
+              inviteLinkUuid: link.id.toString(),
+              newUserUuid: dto.newUserUuid,
+              referrerUserUuid: link.props.createdByUserUuid,
+              createdAt: dto.now,
+            },
+            new UniqueEntityId(uuidv4()),
+          ).getValue()
+          await this.inviteUseRepository.save(use)
+        } catch {
+          // swallow — attribution is a reporting nicety, not part of the gate
+        }
       }
 
       return {

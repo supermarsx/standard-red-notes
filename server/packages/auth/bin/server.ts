@@ -16,6 +16,7 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedSubscriptionInvitesControlle
 import '../src/Infra/InversifyExpressUtils/AnnotatedUserRequestsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedWebSocketsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedUsersController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedMeInviteLinksController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedValetTokenController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedAdminController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSubscriptionTokensController'

@@ -1,8 +1,10 @@
 import 'reflect-metadata'
 
 import { SignupInviteLinkRepositoryInterface } from '../../SignupInvite/SignupInviteLinkRepositoryInterface'
+import { SignupInviteUseRepositoryInterface } from '../../SignupInvite/SignupInviteUseRepositoryInterface'
 import { SignupInviteLink } from '../../SignupInvite/SignupInviteLink'
 import { SignupInviteLinkProps } from '../../SignupInvite/SignupInviteLinkProps'
+import { SignupInviteUse } from '../../SignupInvite/SignupInviteUse'
 import { UniqueEntityId } from '@standardnotes/domain-core'
 
 import { ConsumeSignupInvite } from './ConsumeSignupInvite'
@@ -108,5 +110,38 @@ describe('ConsumeSignupInvite', () => {
     repo.findByHashedToken.mockRejectedValue(new Error('db down'))
 
     expect(await new ConsumeSignupInvite(repo).execute(dto)).toEqual({ outcome: 'error' })
+  })
+
+  it('writes an attribution use row on a successful consume (referrer from the link)', async () => {
+    repo.findByHashedToken.mockResolvedValue(link({ createdByUserUuid: 'ref-1', createdByKind: 'user' }))
+    repo.consumeSlot.mockResolvedValue(true)
+    const useRepo = {
+      save: jest.fn(),
+      countByReferrer: jest.fn(),
+      countByLink: jest.fn(),
+    } as unknown as jest.Mocked<SignupInviteUseRepositoryInterface>
+
+    const result = await new ConsumeSignupInvite(repo, useRepo).execute(dto)
+
+    expect(result.outcome).toBe('consumed')
+    expect(useRepo.save).toHaveBeenCalledTimes(1)
+    const savedUse = (useRepo.save as jest.Mock).mock.calls[0][0] as SignupInviteUse
+    expect(savedUse.props.newUserUuid).toBe('u1')
+    expect(savedUse.props.referrerUserUuid).toBe('ref-1')
+    expect(savedUse.props.inviteLinkUuid).toBe('link-uuid')
+  })
+
+  it('still reports consumed when the attribution write throws (best-effort)', async () => {
+    repo.findByHashedToken.mockResolvedValue(link())
+    repo.consumeSlot.mockResolvedValue(true)
+    const useRepo = {
+      save: jest.fn().mockRejectedValue(new Error('write failed')),
+      countByReferrer: jest.fn(),
+      countByLink: jest.fn(),
+    } as unknown as jest.Mocked<SignupInviteUseRepositoryInterface>
+
+    const result = await new ConsumeSignupInvite(repo, useRepo).execute(dto)
+
+    expect(result.outcome).toBe('consumed')
   })
 })

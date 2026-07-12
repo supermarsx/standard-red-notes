@@ -147,6 +147,9 @@ export class ServerSettingsOverlayReader {
     if (typeof registration.approvalRequired === 'boolean') {
       result.approvalRequired = registration.approvalRequired
     }
+    if (typeof registration.invitesPerUser === 'number') {
+      result.invitesPerUser = registration.invitesPerUser
+    }
 
     return result
   }

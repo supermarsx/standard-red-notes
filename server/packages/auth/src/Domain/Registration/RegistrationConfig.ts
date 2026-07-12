@@ -90,6 +90,11 @@ export interface RegistrationConfig {
    * the queue). Orthogonal to inviteOnly (both can be on).
    */
   approvalRequired: boolean
+  /**
+   * Standard Red Notes: SELF-SERVE / referral invites. The number of ACTIVE
+   * invite links a non-admin user may hold. 0 = self-serve DISABLED (default).
+   */
+  invitesPerUser: number
 }
 
 /**
@@ -111,6 +116,7 @@ export interface RegistrationConfigOverlay {
   signupsOpenAt?: string | null
   signupsCloseAt?: string | null
   approvalRequired?: boolean
+  invitesPerUser?: number
 }
 
 export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
@@ -127,6 +133,7 @@ export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
   signupsOpenAt: null,
   signupsCloseAt: null,
   approvalRequired: false,
+  invitesPerUser: 0,
 }
 
 export const isRegistrationDomainMode = (value: unknown): value is RegistrationDomainMode =>

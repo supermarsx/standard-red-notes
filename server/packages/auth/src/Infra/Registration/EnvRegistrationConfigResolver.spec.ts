@@ -21,6 +21,7 @@ const confirmationDefaults = {
   signupsOpenAt: null,
   signupsCloseAt: null,
   approvalRequired: false,
+  invitesPerUser: 0,
 }
 
 describe('EnvRegistrationConfigResolver', () => {

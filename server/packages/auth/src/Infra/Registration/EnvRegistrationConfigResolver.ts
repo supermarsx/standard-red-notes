@@ -51,6 +51,7 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
     const signupsOpenAtRaw = overlay?.signupsOpenAt ?? this.baseline.signupsOpenAt
     const signupsCloseAtRaw = overlay?.signupsCloseAt ?? this.baseline.signupsCloseAt
     const approvalRequiredRaw = overlay?.approvalRequired ?? this.baseline.approvalRequired
+    const invitesPerUserRaw = overlay?.invitesPerUser ?? this.baseline.invitesPerUser
 
     return {
       defaultRole: sanitizeDefaultRole(defaultRoleRaw),
@@ -82,6 +83,7 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
         typeof approvalRequiredRaw === 'boolean'
           ? approvalRequiredRaw
           : DEFAULT_REGISTRATION_CONFIG.approvalRequired,
+      invitesPerUser: normalizeMaxTotalAccounts(invitesPerUserRaw),
     }
   }
 }
@@ -106,6 +108,7 @@ export const registrationBaselineFromEnv = (raw: {
   signupsOpenAt?: string
   signupsCloseAt?: string
   approvalRequired?: string
+  invitesPerUser?: string
 }): RegistrationConfig => ({
   defaultRole: sanitizeDefaultRole(raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined),
   domainMode: isRegistrationDomainMode(raw.domainMode) ? raw.domainMode : DEFAULT_REGISTRATION_CONFIG.domainMode,
@@ -132,4 +135,5 @@ export const registrationBaselineFromEnv = (raw: {
   signupsCloseAt: normalizeSignupWindowValue(raw.signupsCloseAt),
   // REGISTRATION_APPROVAL_REQUIRED is opt-in: only 'true' enables it.
   approvalRequired: raw.approvalRequired === 'true',
+  invitesPerUser: normalizeMaxTotalAccounts(raw.invitesPerUser),
 })
