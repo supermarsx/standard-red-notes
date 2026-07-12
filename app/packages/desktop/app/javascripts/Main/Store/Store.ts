@@ -54,6 +54,13 @@ export class Store {
 
   set<T extends keyof StoreData>(key: T, val: StoreData[T]): void {
     this.data[key] = val
-    fs.writeFileSync(this.path, serializeStoreData(this.data))
+    // Write to a temp file then rename into place. rename is atomic on the same
+    // volume, so a crash/power-loss mid-write can only leave a throwaway temp
+    // file behind and never truncates user-preferences.json — a torn primary
+    // file would make parseDataFile silently reset every desktop setting to
+    // defaults.
+    const tempPath = `${this.path}.${process.pid}.tmp`
+    fs.writeFileSync(tempPath, serializeStoreData(this.data))
+    fs.renameSync(tempPath, this.path)
   }
 }

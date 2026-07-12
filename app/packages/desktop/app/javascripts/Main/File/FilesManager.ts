@@ -225,6 +225,13 @@ export class FilesManager implements FilesManagerInterface {
           return tryReject(new Error('zipFile === undefined'))
         }
 
+        // yauzl emits an 'error' event on the zipFile for a hostile/malformed
+        // archive (e.g. an entry whose name fails its `../`/absolute-path
+        // validation). Without a listener, EventEmitter would rethrow it and
+        // crash the whole process; route it through tryReject so the promise
+        // rejects cleanly instead.
+        zipFile.on('error', tryReject)
+
         zipFile.readEntry()
 
         zipFile.on('close', resolve)
