@@ -102,6 +102,8 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:admin/users/:userUuid/feature-flags', 'admin.setUserFeatureFlag'],
     ['[GET]:admin/users/:email/ban-status', 'admin.getUserBanStatus'],
     ['[PUT]:admin/users/:userUuid/ban-status', 'admin.setUserBanStatus'],
+    ['[GET]:admin/users/:email/suspension-status', 'admin.getUserSuspensionStatus'],
+    ['[PUT]:admin/users/:userUuid/suspension', 'admin.setUserSuspension'],
     ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
     ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
     ['[GET]:admin/audit-log', 'admin.getAuditLog'],
@@ -125,6 +127,9 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:admin/users/:userUuid/admin-role', 'admin.setUserAdminRole'],
     ['[DELETE]:admin/users/:userUuid/mfa-secret', 'admin.resetUserMFA'],
     ['[POST]:admin/users/:userUuid/fix-quota', 'admin.fixUserQuota'],
+    // Declared AFTER the more specific '/users/:userUuid/*' admin deletes so the
+    // bare ':userUuid' hard-delete never shadows them.
+    ['[DELETE]:admin/users/:userUuid', 'admin.deleteUser'],
     // Anti-abuse: locked-account list + unlock (proxied to the auth admin controller)
     ['[GET]:admin/anti-abuse/locked-accounts', 'admin.getLockedAccounts'],
     ['[POST]:admin/anti-abuse/unlock', 'admin.unlockAccount'],

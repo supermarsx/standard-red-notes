@@ -217,6 +217,38 @@ export class AdminController extends BaseHttpController {
     )
   }
 
+  // Standard Red Notes: reversible administrative SUSPENSION (a neutral hold,
+  // distinct from a punitive ban). Status is looked up by email (like ban-status)
+  // and set by uuid; both proxy to the auth admin controller, which re-gates on
+  // the ADMIN_USER role and enforces the self / last-admin guards.
+  @httpGet('/users/:email/suspension-status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserSuspensionStatus(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'admin/users/:email/suspension-status',
+        request.params.email as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpPut('/users/:userUuid/suspension', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async setUserSuspension(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'PUT',
+        'admin/users/:userUuid/suspension',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
   @httpGet('/registration', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getRegistrationFlag(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(
@@ -502,6 +534,26 @@ export class AdminController extends BaseHttpController {
       this.endpointResolver.resolveEndpointOrMethodIdentifier(
         'POST',
         'admin/users/:userUuid/fix-quota',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  // Standard Red Notes: admin-initiated HARD DELETE of a target account across all
+  // services (reuses the existing DeleteAccount pipeline server-side). Declared
+  // AFTER the more specific '/users/:userUuid/mfa-secret' DELETE above so this
+  // bare ':userUuid' route never shadows it. The auth admin controller re-gates on
+  // ADMIN_USER and enforces the self / last-admin / confirm-email guards; the
+  // type-the-email confirmation rides along in the request body.
+  @httpDelete('/users/:userUuid', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async deleteUser(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'admin/users/:userUuid',
         request.params.userUuid as string,
       ),
       request.body,

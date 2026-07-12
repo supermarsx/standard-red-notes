@@ -824,6 +824,35 @@ export class LegacyApiService
     })
   }
 
+  /** Standard Red Notes: read a user's SUSPENSION status (by email, like ban). */
+  async adminGetUserSuspensionStatus(email: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.userSuspensionStatus(email)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get user suspension status.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: suspend or unsuspend a user (reversible administrative
+   * hold, distinct from a ban). Suspending signs the user out immediately and
+   * blocks access until unsuspended.
+   */
+  async adminSetUserSuspension(
+    userUuid: UuidString,
+    suspended: boolean,
+    suspendedReason?: string | null,
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.userSuspension(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to set user suspension.',
+      params: { suspended, suspendedReason: suspendedReason ?? null },
+    })
+  }
+
   async adminGetRegistrationFlag(): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Get,
@@ -1210,6 +1239,22 @@ export class LegacyApiService
       url: joinPaths(this.host, Paths.v1.userMfaSecret(userUuid)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to reset 2FA.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: admin-initiated HARD DELETE of a user account across all
+   * services. `confirmEmail` must equal the target's email (belt-and-suspenders
+   * for the type-the-email UI dialog); the server refuses a mismatch, deleting
+   * self, or the last remaining admin.
+   */
+  async adminDeleteUser(userUuid: string, confirmEmail: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.userDelete(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to delete user.',
+      params: { confirmEmail },
     })
   }
 

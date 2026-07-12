@@ -61,6 +61,11 @@ const AdminPaths = {
   userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
+  // Standard Red Notes: reversible administrative SUSPENSION (distinct from ban).
+  // Status looked up by email; set + hard delete by uuid.
+  userSuspensionStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/suspension-status`,
+  userSuspension: (userUuid: string) => `/v1/admin/users/${userUuid}/suspension`,
+  userDelete: (userUuid: string) => `/v1/admin/users/${userUuid}`,
   registration: '/v1/admin/registration',
   // Standard Red Notes: admin audit log (paginated, newest-first).
   auditLog: '/v1/admin/audit-log',

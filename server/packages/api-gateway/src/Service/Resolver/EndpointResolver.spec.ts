@@ -52,5 +52,29 @@ describe('EndpointResolver', () => {
 
       expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'items/sync')).toEqual('sync.items.sync')
     })
+
+    // Standard Red Notes: admin suspend/unsuspend + hard-delete routes.
+    it('maps the admin suspension status/set and delete identifiers', () => {
+      const resolver = createResolver(true)
+
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/users/:email/suspension-status'),
+      ).toEqual('admin.getUserSuspensionStatus')
+      expect(resolver.resolveEndpointOrMethodIdentifier('PUT', 'admin/users/:userUuid/suspension')).toEqual(
+        'admin.setUserSuspension',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'admin/users/:userUuid')).toEqual('admin.deleteUser')
+    })
+
+    // The bare ':userUuid' DELETE must not collide with the more specific
+    // '/users/:userUuid/mfa-secret' DELETE — each maps to its own identifier.
+    it('keeps the bare-uuid delete distinct from the mfa-secret delete', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'admin/users/:userUuid/mfa-secret')).toEqual(
+        'admin.resetUserMFA',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'admin/users/:userUuid')).toEqual('admin.deleteUser')
+    })
   })
 })

@@ -174,6 +174,19 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     bannedUntil: string | null
   } | null>(null)
 
+  // Reversible administrative SUSPENSION (a neutral hold, distinct from ban).
+  const [suspended, setSuspended] = useState(false)
+  const [suspendingInProgress, setSuspendingInProgress] = useState(false)
+  const [suspendReasonInput, setSuspendReasonInput] = useState('')
+  const [currentSuspension, setCurrentSuspension] = useState<{
+    suspendedAt: string | null
+    suspendedReason: string | null
+  } | null>(null)
+
+  // Type-the-email hard-delete confirmation.
+  const [deleteEmailInput, setDeleteEmailInput] = useState('')
+  const [deletingInProgress, setDeletingInProgress] = useState(false)
+
   // Effective roles/permissions readout + the direct admin-role toggle.
   const [permissions, setPermissions] = useState<EffectivePermissions | null>(null)
   const [permissionsVisible, setPermissionsVisible] = useState(false)
@@ -268,6 +281,36 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     [application],
   )
 
+  const loadSuspensionStatus = useCallback(
+    async (lookupEmail: string) => {
+      try {
+        const response = await application.legacyApi.adminGetUserSuspensionStatus(lookupEmail)
+        if (isErrorResponse(response)) {
+          return
+        }
+        const data = (
+          response as {
+            data?: { suspended?: boolean; suspendedAt?: string | null; suspendedReason?: string | null }
+          }
+        ).data
+        const isSuspended = Boolean(data?.suspended)
+        setSuspended(isSuspended)
+        if (isSuspended) {
+          setCurrentSuspension({
+            suspendedAt: data?.suspendedAt ?? null,
+            suspendedReason: data?.suspendedReason ?? null,
+          })
+          setSuspendReasonInput(data?.suspendedReason ?? '')
+        } else {
+          setCurrentSuspension(null)
+        }
+      } catch (error) {
+        console.error(error)
+      }
+    },
+    [application],
+  )
+
   const loadPermissions = useCallback(
     async (userUuid: string) => {
       try {
@@ -308,10 +351,19 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     setBanReasonInput('')
     setBanTypeInput('permanent')
     setBanUntilInput('')
+    setSuspended(false)
+    setCurrentSuspension(null)
+    setSuspendReasonInput('')
+    setDeleteEmailInput('')
     setPermissions(null)
     setPermissionsVisible(false)
-    void Promise.all([loadFlags(user.uuid), loadBanStatus(user.email), loadPermissions(user.uuid)])
-  }, [user, loadFlags, loadBanStatus, loadPermissions])
+    void Promise.all([
+      loadFlags(user.uuid),
+      loadBanStatus(user.email),
+      loadSuspensionStatus(user.email),
+      loadPermissions(user.uuid),
+    ])
+  }, [user, loadFlags, loadBanStatus, loadSuspensionStatus, loadPermissions])
 
   const lookupUser = useCallback(async () => {
     if (!email.trim()) {
@@ -862,6 +914,130 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
   }, [application, user, patchUserRow])
 
+  // Self-guard: the admin's own account must not be offered Suspend or Delete in
+  // the UI (the server refuses both anyway). Compared by uuid against the current
+  // session user.
+  const isSelf = user != null && user.uuid === application.sessions.getUser()?.uuid
+
+  const applySuspension = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Suspend user',
+      text: `Suspend ${user.email}? They will be signed out immediately and blocked from signing in or using any existing session until you unsuspend them. This is reversible — unsuspending restores their access (they sign in fresh).`,
+      confirmButtonText: 'Suspend user',
+      confirmButtonStyle: 'danger',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setSuspendingInProgress(true)
+    try {
+      const response = await application.legacyApi.adminSetUserSuspension(
+        user.uuid,
+        true,
+        suspendReasonInput.trim() === '' ? null : suspendReasonInput.trim(),
+      )
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to suspend user.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'User has been suspended and signed out.' })
+      setSuspended(true)
+      setCurrentSuspension({
+        suspendedAt: new Date().toISOString(),
+        suspendedReason: suspendReasonInput.trim() === '' ? null : suspendReasonInput.trim(),
+      })
+      patchUserRow(user.uuid, { suspended: true })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to suspend user.' })
+    } finally {
+      setSuspendingInProgress(false)
+    }
+  }, [application, user, suspendReasonInput, patchUserRow])
+
+  const liftSuspension = useCallback(async () => {
+    if (!user) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Unsuspend user',
+      text: `Unsuspend ${user.email}? They will be able to sign in again and regain full access to their account.`,
+      confirmButtonText: 'Unsuspend user',
+      confirmButtonStyle: 'info',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setSuspendingInProgress(true)
+    try {
+      const response = await application.legacyApi.adminSetUserSuspension(user.uuid, false)
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to unsuspend user.' })
+        return
+      }
+      addToast({ type: ToastType.Success, message: 'User has been unsuspended.' })
+      setSuspended(false)
+      setCurrentSuspension(null)
+      setSuspendReasonInput('')
+      patchUserRow(user.uuid, { suspended: false })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to unsuspend user.' })
+    } finally {
+      setSuspendingInProgress(false)
+    }
+  }, [application, user, patchUserRow])
+
+  // Enabled only once the admin has typed the target's exact email — the same
+  // value the server re-checks (case-insensitive) as a belt-and-suspenders guard.
+  const deleteConfirmed = user != null && deleteEmailInput.trim().toLowerCase() === user.email.trim().toLowerCase()
+
+  const deleteUser = useCallback(async () => {
+    if (!user || !deleteConfirmed) {
+      return
+    }
+    const confirmed = await confirmDialog({
+      title: 'Delete account',
+      text: `Permanently delete ${user.email}? This removes the account and ALL of its notes, files and revisions across every service. This CANNOT be undone. Removal completes across services shortly after you confirm.`,
+      confirmButtonText: 'Delete account',
+      confirmButtonStyle: 'danger',
+    })
+    if (!confirmed) {
+      return
+    }
+
+    setDeletingInProgress(true)
+    try {
+      const response = await application.legacyApi.adminDeleteUser(user.uuid, deleteEmailInput.trim())
+      if (isErrorResponse(response)) {
+        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
+        addToast({ type: ToastType.Error, message: message ?? 'Failed to delete user.' })
+        return
+      }
+      addToast({
+        type: ToastType.Success,
+        message: 'Account deletion requested. Removal completes across services shortly.',
+      })
+      // Drop the deleted account from the table and clear the manage panel.
+      const deletedUuid = user.uuid
+      setRows((current) => current.filter((row) => row.uuid !== deletedUuid))
+      setDeleteEmailInput('')
+      setUser(undefined)
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to delete user.' })
+    } finally {
+      setDeletingInProgress(false)
+    }
+  }, [application, user, deleteConfirmed, deleteEmailInput, setUser])
+
   const userIsAdmin = permissions?.directRoleNames.includes(ADMIN_USER) ?? false
 
   const toggleAdminRole = useCallback(async () => {
@@ -1304,19 +1480,28 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       <td className="px-3 py-2.5">{formatAdminUserRoles(row.roles)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserSubscription(row.subscription)}</td>
                       <td className="px-3 py-2.5">
-                        {row.banned ? (
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
-                              (row.banType ?? 'permanent') === 'shadow'
-                                ? 'border-warning text-warning'
-                                : 'border-danger text-danger'
-                            }`}
-                          >
-                            {(row.banType ?? 'permanent') === 'shadow'
-                              ? 'Shadow'
-                              : (row.banType ?? 'permanent') === 'temporary'
-                                ? 'Temporary'
-                                : 'Permanent'}
+                        {row.banned || row.suspended ? (
+                          <span className="flex flex-wrap gap-1">
+                            {row.banned && (
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                                  (row.banType ?? 'permanent') === 'shadow'
+                                    ? 'border-warning text-warning'
+                                    : 'border-danger text-danger'
+                                }`}
+                              >
+                                {(row.banType ?? 'permanent') === 'shadow'
+                                  ? 'Shadow'
+                                  : (row.banType ?? 'permanent') === 'temporary'
+                                    ? 'Temporary'
+                                    : 'Permanent'}
+                              </span>
+                            )}
+                            {row.suspended && (
+                              <span className="rounded-full border border-danger px-2 py-0.5 text-xs font-medium text-danger">
+                                Suspended
+                              </span>
+                            )}
                           </span>
                         ) : (
                           'No'
@@ -1664,6 +1849,62 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 </div>
               </div>
 
+              {/* Suspend section — a reversible administrative hold, distinct
+                  from ban. Hidden for the admin's own account (self-guard). */}
+              {!isSelf && (
+                <>
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex flex-col gap-2">
+                    <Subtitle>Account suspension</Subtitle>
+                    {suspended && currentSuspension ? (
+                      <Text>
+                        This account is currently <strong>suspended</strong>
+                        {currentSuspension.suspendedAt
+                          ? ` since ${new Date(currentSuspension.suspendedAt).toLocaleString()}`
+                          : ''}
+                        {currentSuspension.suspendedReason ? ` — reason: "${currentSuspension.suspendedReason}"` : ''}.
+                        The user is signed out and blocked from signing in until you unsuspend them.
+                      </Text>
+                    ) : (
+                      <Text>
+                        Suspend this user as a reversible administrative hold. Suspending signs them out immediately and
+                        blocks access until you unsuspend them; unsuspending restores access (they sign in fresh). This
+                        is separate from a ban.
+                      </Text>
+                    )}
+
+                    <div className="mt-1 flex flex-wrap items-end gap-3">
+                      <div className="flex flex-grow flex-col">
+                        <Text className="mb-1 text-xs font-medium text-passive-1">Reason (optional)</Text>
+                        <DecoratedInput
+                          className={{ container: 'w-full' }}
+                          placeholder="e.g. pending account review"
+                          value={suspendReasonInput}
+                          onChange={setSuspendReasonInput}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-1 flex items-center gap-3">
+                      <Button
+                        label={suspended ? 'Update suspension' : 'Suspend user'}
+                        colorStyle="danger"
+                        onClick={() => void applySuspension()}
+                        disabled={suspendingInProgress}
+                      />
+                      {suspended && (
+                        <Button
+                          label="Unsuspend user"
+                          onClick={() => void liftSuspension()}
+                          disabled={suspendingInProgress}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
               <HorizontalSeparator classes="my-3" />
 
               <div className="flex flex-col gap-2">
@@ -1760,6 +2001,45 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   Fix quota
                 </Button>
               </div>
+
+              {/* Delete section — last, most dangerous. A type-the-email
+                  confirmation gates the button; hidden for the admin's own
+                  account (self-guard; the server refuses it anyway). */}
+              {!isSelf && (
+                <>
+                  <HorizontalSeparator classes="my-3" />
+
+                  <div className="flex flex-col gap-2 rounded-md border border-danger p-3">
+                    <Subtitle>Delete account</Subtitle>
+                    <Text>
+                      <strong>Permanently delete this account.</strong> This removes the account and all of its notes,
+                      files and revisions across every service. It <strong>cannot be undone</strong>. Removal completes
+                      across services shortly after you confirm.
+                    </Text>
+                    <Text>
+                      To confirm, type the user's exact email (<strong>{user.email}</strong>) below.
+                    </Text>
+                    <div className="mt-1 flex flex-wrap items-center gap-3">
+                      <DecoratedInput
+                        className={{ container: 'min-w-[280px] flex-grow' }}
+                        placeholder={user.email}
+                        value={deleteEmailInput}
+                        onChange={setDeleteEmailInput}
+                        type="email"
+                      />
+                      <Button
+                        className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
+                        colorStyle="danger"
+                        onClick={() => void deleteUser()}
+                        disabled={!deleteConfirmed || deletingInProgress}
+                      >
+                        <Icon type="trash" size="small" />
+                        Delete account
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>

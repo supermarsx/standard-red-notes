@@ -134,6 +134,9 @@ export type AdminUserRow = {
   // Standard Red Notes: the effective ban KIND for a banned row, or null. Older
   // servers omit it, so the row badge falls back to a generic "Banned".
   banType?: 'temporary' | 'permanent' | 'shadow' | null
+  // Standard Red Notes: reversible administrative suspension (distinct from ban).
+  // Older servers omit it, so it is optional and treated as not-suspended.
+  suspended?: boolean
   mfaEnabled: boolean
   storageUsedBytes: number | null
   storageLimitBytes: number | null
