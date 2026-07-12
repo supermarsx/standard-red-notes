@@ -1,7 +1,8 @@
 import { observer } from 'mobx-react-lite'
-import { Subtitle, Title } from '@/Components/Preferences/PreferencesComponents/Content'
+import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
+import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import ContactItem from './Contacts/ContactItem'
 import CollaborationIDSection from './Contacts/CollaborationIDSection'
@@ -151,6 +152,39 @@ const Vaults = observer(() => {
         creatingSharedVault={isCreatingSharedVault}
         closeVaultModal={closeVaultModal}
       />
+      {/* What are vaults? — short, non-intrusive explainer at the top of the pane. */}
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>What are vaults?</Title>
+          <Subtitle>
+            A vault is a private, encrypted collection that groups notes and files under their own separate key — like a
+            safe inside your account.
+          </Subtitle>
+          <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
+            <div className="mb-1.5 flex items-center gap-2 font-semibold">
+              <Icon type="info" size="small" />
+              How vaults help
+            </div>
+            <ul className="ml-4 list-disc space-y-1">
+              <li>
+                Each vault has its <strong>own encryption key</strong>, so its contents stay protected even while the
+                rest of your account is open.
+              </li>
+              <li>
+                <strong>Lock</strong> a vault to hide its notes and require your vault password (or account) to reopen
+                it.
+              </li>
+              <li>
+                Turn a vault into a <strong>shared vault</strong> to collaborate: invite a trusted contact and co-edit
+                notes together with end-to-end encryption.
+              </li>
+            </ul>
+            <Text className="mt-2">
+              Use vaults to wall off sensitive material — finances, journals, credentials — from your everyday notes.
+            </Text>
+          </div>
+        </PreferencesSegment>
+      </PreferencesGroup>
       {invites.length > 0 && (
         <PreferencesGroup>
           <PreferencesSegment>

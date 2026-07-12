@@ -131,7 +131,20 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
 
   'home-server': ['self host', 'self-hosted', 'server', 'database', 'environment', 'home server settings'],
 
-  shares: ['share links', 'public links', 'read only', 'read-only', 'sharing'],
+  sharing: [
+    'sharing',
+    'share links',
+    'public links',
+    'read only',
+    'read-only',
+    'revoke',
+    'shared vaults',
+    'collaboration',
+    'collaborators',
+    'invites',
+    'co-editing',
+    'shared notes',
+  ],
 
   'survivor-switch': ['dead man switch', 'inheritance', 'survivor', 'designate survivor', 'legacy'],
 

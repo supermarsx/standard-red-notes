@@ -19,17 +19,17 @@ import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesCompo
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
+import PreferencesSubtabs, {
+  PreferencesSubtab,
+} from '@/Components/Preferences/PreferencesComponents/PreferencesSubtabs'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import Switch from '@/Components/Switch/Switch'
 import { formatDateAndTimeForNote } from '@/Utils/DateUtils'
 import { useConnectionStatus } from '@/Hooks/useConnectionStatus'
-import {
-  getManualSyncModeEnabled,
-  setManualSyncModeEnabled,
-  subscribeManualSyncMode,
-} from '@/Utils/ManualSyncSetting'
+import { useTabState } from '@/Components/Tabs/useTabState'
+import { getManualSyncModeEnabled, setManualSyncModeEnabled, subscribeManualSyncMode } from '@/Utils/ManualSyncSetting'
 
 import Conflicts from '@/Components/Preferences/Panes/Conflicts/Conflicts'
 
@@ -120,7 +120,10 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
   // partition is derived from it, so it reacts immediately to sign-in/out
   // (which flips `hasAccount`) without needing to re-scan every item.
   const [items, setItems] = useState<SyncItemLike[]>(() => collectSyncItems(application))
-  const summary = useMemo(() => summarizeSync(items, { hasAccount: syncStatus.hasAccount }), [items, syncStatus.hasAccount])
+  const summary = useMemo(
+    () => summarizeSync(items, { hasAccount: syncStatus.hasAccount }),
+    [items, syncStatus.hasAccount],
+  )
   const [busyUuid, setBusyUuid] = useState<string | undefined>(undefined)
 
   // --- Manual sync mode (web-local toggle) -----------------------------------
@@ -293,225 +296,262 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
 
   const totalLocalOnly = summary.localOnly.total
 
-  return (
-    <PreferencesPane>
-      {/* Overview */}
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Sync</Title>
-          <Subtitle>See what’s synced to your account versus kept on this device, and choose what stays local.</Subtitle>
+  const tabState = useTabState({ defaultTab: 'overview' })
 
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
-              <Icon type={connectionIcon} size="medium" className="flex-shrink-0 text-info" />
-              <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">Status</div>
-                <div className="text-sm font-bold text-text">{connectionLabel}</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
-              <Icon type="clock" size="medium" className="flex-shrink-0 text-info" />
-              <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">Last successful sync</div>
-                {/* A last-sync timestamp is only meaningful with an account; a
+  const tabs: PreferencesSubtab[] = [
+    {
+      id: 'overview',
+      title: 'Overview',
+      icon: 'sync',
+      content: (
+        <>
+          {/* Overview */}
+          <PreferencesGroup>
+            <PreferencesSegment>
+              <Title>Sync</Title>
+              <Subtitle>
+                See what’s synced to your account versus kept on this device, and choose what stays local.
+              </Subtitle>
+
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
+                  <Icon type={connectionIcon} size="medium" className="flex-shrink-0 text-info" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">Status</div>
+                    <div className="text-sm font-bold text-text">{connectionLabel}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
+                  <Icon type="clock" size="medium" className="flex-shrink-0 text-info" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">
+                      Last successful sync
+                    </div>
+                    {/* A last-sync timestamp is only meaningful with an account; a
                     purely-local install has no server sync to report. */}
-                <div className="truncate text-sm font-bold text-text">
-                  {syncStatus.showLastSync ? lastSyncLabel : 'Not signed in'}
+                    <div className="truncate text-sm font-bold text-text">
+                      {syncStatus.showLastSync ? lastSyncLabel : 'Not signed in'}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="mt-4 rounded-md border border-border bg-default p-3">
-            <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-passive-1">
-              <span>Type</span>
-              <span>Synced · Local-only</span>
-            </div>
-            <StatRow icon="notes" label="Notes" synced={summary.synced.note} localOnly={summary.localOnly.note} />
-            <StatRow icon="hashtag" label="Tags" synced={summary.synced.tag} localOnly={summary.localOnly.tag} />
-            <StatRow icon="file" label="Files" synced={summary.synced.file} localOnly={summary.localOnly.file} />
-            <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm font-bold">
-              <span className="text-text">Total</span>
-              <span>
-                <span className="text-success">{summary.synced.total} synced</span>
-                <span className="mx-1 text-passive-1">·</span>
-                <span className={totalLocalOnly > 0 ? 'text-warning' : 'text-passive-1'}>
-                  {totalLocalOnly} local-only
-                </span>
-              </span>
-            </div>
-          </div>
-        </PreferencesSegment>
-      </PreferencesGroup>
-
-      {/* Manual sync mode */}
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Manual sync</Title>
-          <div className="flex items-center justify-between gap-2 md:items-center">
-            <div className="flex flex-col">
-              <Subtitle>Only sync when I press “Sync now”</Subtitle>
-              <Text>
-                When on, automatic syncing is turned off: edits stay on this device and are not sent to your account
-                until you sync manually. Background syncing, the periodic timer, and live updates from other devices are
-                paused. Turn this off to resume automatic syncing.
-              </Text>
-            </div>
-            <Switch onChange={(checked) => void toggleManualSyncMode(checked)} checked={manualSyncMode} />
-          </div>
-
-          {manualSyncMode && (
-            <div className="mt-3 rounded-md border border-warning bg-warning-faded p-3 text-sm">
-              <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
-                <Icon type="warning" size="small" className="flex-shrink-0" />
-                Unsynced changes are at risk
+              <div className="mt-4 rounded-md border border-border bg-default p-3">
+                <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-passive-1">
+                  <span>Type</span>
+                  <span>Synced · Local-only</span>
+                </div>
+                <StatRow icon="notes" label="Notes" synced={summary.synced.note} localOnly={summary.localOnly.note} />
+                <StatRow icon="hashtag" label="Tags" synced={summary.synced.tag} localOnly={summary.localOnly.tag} />
+                <StatRow icon="file" label="Files" synced={summary.synced.file} localOnly={summary.localOnly.file} />
+                <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm font-bold">
+                  <span className="text-text">Total</span>
+                  <span>
+                    <span className="text-success">{summary.synced.total} synced</span>
+                    <span className="mx-1 text-passive-1">·</span>
+                    <span className={totalLocalOnly > 0 ? 'text-warning' : 'text-passive-1'}>
+                      {totalLocalOnly} local-only
+                    </span>
+                  </span>
+                </div>
               </div>
-              <Text>
-                While manual sync is on, your latest changes live only on this device. If this device is lost, wiped, or
-                its data is cleared before you sync, those changes will be gone. Press “Sync now” regularly, and always
-                before closing the app or switching devices.
-              </Text>
-            </div>
-          )}
+            </PreferencesSegment>
+          </PreferencesGroup>
 
-          <HorizontalSeparator classes="my-4" />
+          {/* Manual sync mode */}
+          <PreferencesGroup>
+            <PreferencesSegment>
+              <Title>Manual sync</Title>
+              <div className="flex items-center justify-between gap-2 md:items-center">
+                <div className="flex flex-col">
+                  <Subtitle>Only sync when I press “Sync now”</Subtitle>
+                  <Text>
+                    When on, automatic syncing is turned off: edits stay on this device and are not sent to your account
+                    until you sync manually. Background syncing, the periodic timer, and live updates from other devices
+                    are paused. Turn this off to resume automatic syncing.
+                  </Text>
+                </div>
+                <Switch onChange={(checked) => void toggleManualSyncMode(checked)} checked={manualSyncMode} />
+              </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex flex-col">
-              <Subtitle>Sync now</Subtitle>
-              <Text>
-                Push local changes and pull the latest from your account.{' '}
-                {!syncStatus.hasAccount
-                  ? 'Sign in to an account to sync.'
-                  : connection.lastSyncDate
-                    ? `Last synced ${lastSyncLabel}.`
-                    : 'No sync yet this session.'}
-              </Text>
-            </div>
-            <Button
-              primary
-              className="shrink-0 whitespace-nowrap"
-              label={syncingNow ? 'Syncing…' : 'Sync now'}
-              disabled={syncingNow || connection.signedOut}
-              onClick={() => void syncNow()}
-            />
-          </div>
-        </PreferencesSegment>
-      </PreferencesGroup>
-
-      {/* What's local-only */}
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Kept on this device only</Title>
-          <Subtitle>
-            These items are excluded from sync and never leave this device. Switch any of them back to syncing.
-          </Subtitle>
-          {!syncStatus.hasAccount ? (
-            // No account: everything is on this device because there's nowhere to
-            // sync to — not because individual items were excluded. Say so plainly
-            // so this agrees with the "Local only" status and the all-local counts.
-            <Text className="mt-2">
-              You’re not signed in, so everything is kept on this device. Sign in to an account to start syncing.
-            </Text>
-          ) : summary.localOnlyItems.length === 0 ? (
-            <Text className="mt-2">
-              Nothing is local-only right now — every note, tag and file is syncing to your account.
-            </Text>
-          ) : (
-            <ul className="mt-3 space-y-1.5">
-              {summary.localOnlyItems.map((item) => (
-                <li
-                  key={item.uuid}
-                  className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Icon type={ICON_FOR_KIND[item.kind]} size="small" className="flex-shrink-0 text-neutral" />
-                    <span className="truncate text-sm text-text">{item.title}</span>
+              {manualSyncMode && (
+                <div className="mt-3 rounded-md border border-warning bg-warning-faded p-3 text-sm">
+                  <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
+                    <Icon type="warning" size="small" className="flex-shrink-0" />
+                    Unsynced changes are at risk
                   </div>
-                  <Button
-                    small
-                    label="Sync this"
-                    disabled={busyUuid === item.uuid}
-                    onClick={() => setItemLocalOnly(item.uuid, false)}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </PreferencesSegment>
-      </PreferencesGroup>
+                  <Text>
+                    While manual sync is on, your latest changes live only on this device. If this device is lost,
+                    wiped, or its data is cleared before you sync, those changes will be gone. Press “Sync now”
+                    regularly, and always before closing the app or switching devices.
+                  </Text>
+                </div>
+              )}
 
-      {/* Configure */}
-      <PreferencesGroup>
-        <PreferencesSegment>
-          <Title>Configure selective sync</Title>
-          <Subtitle>Mark a tag or folder local-only to keep all of its notes on this device.</Subtitle>
-          <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
-            <div className="mb-1.5 flex items-center gap-2 font-semibold">
-              <Icon type="info" size="small" />
-              How this works
-            </div>
-            <ul className="ml-4 list-disc space-y-1">
-              <li>
-                Marking a tag/folder local-only sets every member note to local-only. The notes’ content stays on this
-                device; only a tag’s membership reference may remain visible on the server.
-              </li>
-              <li>
-                Individual notes and files can also be made local-only from their own options menu. Large files (over
-                100&nbsp;MB) are kept local-only automatically.
-              </li>
-            </ul>
-          </div>
+              <HorizontalSeparator classes="my-4" />
 
-          <HorizontalSeparator classes="my-4" />
-
-          {tagsAndFolders.length === 0 ? (
-            <Text>You don’t have any tags or folders yet.</Text>
-          ) : (
-            <ul className="space-y-1.5">
-              {tagsAndFolders.map((tagOrFolder) => {
-                const hasLocalOnly = application.navigationController.tagOrFolderHasAnyLocalOnlyNotes(tagOrFolder)
-                const isFolder = (tagOrFolder as unknown as { isFolder?: boolean }).isFolder === true
-                return (
-                  <li
-                    key={tagOrFolder.uuid}
-                    className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Icon type={isFolder ? 'folder' : 'hashtag'} size="small" className="flex-shrink-0 text-neutral" />
-                      <span className="truncate text-sm text-text">{tagOrFolder.title || 'Untitled'}</span>
-                      {hasLocalOnly && (
-                        <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">
-                          local-only
-                        </span>
-                      )}
-                    </div>
-                    {hasLocalOnly ? (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col">
+                  <Subtitle>Sync now</Subtitle>
+                  <Text>
+                    Push local changes and pull the latest from your account.{' '}
+                    {!syncStatus.hasAccount
+                      ? 'Sign in to an account to sync.'
+                      : connection.lastSyncDate
+                        ? `Last synced ${lastSyncLabel}.`
+                        : 'No sync yet this session.'}
+                  </Text>
+                </div>
+                <Button
+                  primary
+                  className="shrink-0 whitespace-nowrap"
+                  label={syncingNow ? 'Syncing…' : 'Sync now'}
+                  disabled={syncingNow || connection.signedOut}
+                  onClick={() => void syncNow()}
+                />
+              </div>
+            </PreferencesSegment>
+          </PreferencesGroup>
+        </>
+      ),
+    },
+    {
+      id: 'selective',
+      title: 'Selective sync',
+      icon: 'eye-off',
+      content: (
+        <>
+          {/* What's local-only */}
+          <PreferencesGroup>
+            <PreferencesSegment>
+              <Title>Kept on this device only</Title>
+              <Subtitle>
+                These items are excluded from sync and never leave this device. Switch any of them back to syncing.
+              </Subtitle>
+              {!syncStatus.hasAccount ? (
+                // No account: everything is on this device because there's nowhere to
+                // sync to — not because individual items were excluded. Say so plainly
+                // so this agrees with the "Local only" status and the all-local counts.
+                <Text className="mt-2">
+                  You’re not signed in, so everything is kept on this device. Sign in to an account to start syncing.
+                </Text>
+              ) : summary.localOnlyItems.length === 0 ? (
+                <Text className="mt-2">
+                  Nothing is local-only right now — every note, tag and file is syncing to your account.
+                </Text>
+              ) : (
+                <ul className="mt-3 space-y-1.5">
+                  {summary.localOnlyItems.map((item) => (
+                    <li
+                      key={item.uuid}
+                      className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Icon type={ICON_FOR_KIND[item.kind]} size="small" className="flex-shrink-0 text-neutral" />
+                        <span className="truncate text-sm text-text">{item.title}</span>
+                      </div>
                       <Button
                         small
-                        label="Sync notes"
-                        disabled={busyUuid === tagOrFolder.uuid}
-                        onClick={() => setTagOrFolderLocalOnly(tagOrFolder, false)}
+                        label="Sync this"
+                        disabled={busyUuid === item.uuid}
+                        onClick={() => setItemLocalOnly(item.uuid, false)}
                       />
-                    ) : (
-                      <Button
-                        small
-                        label="Keep local-only"
-                        disabled={busyUuid === tagOrFolder.uuid}
-                        onClick={() => setTagOrFolderLocalOnly(tagOrFolder, true)}
-                      />
-                    )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </PreferencesSegment>
+          </PreferencesGroup>
+
+          {/* Configure */}
+          <PreferencesGroup>
+            <PreferencesSegment>
+              <Title>Configure selective sync</Title>
+              <Subtitle>Mark a tag or folder local-only to keep all of its notes on this device.</Subtitle>
+              <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
+                <div className="mb-1.5 flex items-center gap-2 font-semibold">
+                  <Icon type="info" size="small" />
+                  How this works
+                </div>
+                <ul className="ml-4 list-disc space-y-1">
+                  <li>
+                    Marking a tag/folder local-only sets every member note to local-only. The notes’ content stays on
+                    this device; only a tag’s membership reference may remain visible on the server.
                   </li>
-                )
-              })}
-            </ul>
-          )}
-        </PreferencesSegment>
-      </PreferencesGroup>
+                  <li>
+                    Individual notes and files can also be made local-only from their own options menu. Large files
+                    (over 100&nbsp;MB) are kept local-only automatically.
+                  </li>
+                </ul>
+              </div>
 
-      {/* Sync conflicts — review & resolve conflicted copies. Merged in from the
-          former standalone "Sync Conflicts" pane so all sync controls live here. */}
-      <Conflicts application={application} />
+              <HorizontalSeparator classes="my-4" />
+
+              {tagsAndFolders.length === 0 ? (
+                <Text>You don’t have any tags or folders yet.</Text>
+              ) : (
+                <ul className="space-y-1.5">
+                  {tagsAndFolders.map((tagOrFolder) => {
+                    const hasLocalOnly = application.navigationController.tagOrFolderHasAnyLocalOnlyNotes(tagOrFolder)
+                    const isFolder = (tagOrFolder as unknown as { isFolder?: boolean }).isFolder === true
+                    return (
+                      <li
+                        key={tagOrFolder.uuid}
+                        className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Icon
+                            type={isFolder ? 'folder' : 'hashtag'}
+                            size="small"
+                            className="flex-shrink-0 text-neutral"
+                          />
+                          <span className="truncate text-sm text-text">{tagOrFolder.title || 'Untitled'}</span>
+                          {hasLocalOnly && (
+                            <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">
+                              local-only
+                            </span>
+                          )}
+                        </div>
+                        {hasLocalOnly ? (
+                          <Button
+                            small
+                            label="Sync notes"
+                            disabled={busyUuid === tagOrFolder.uuid}
+                            onClick={() => setTagOrFolderLocalOnly(tagOrFolder, false)}
+                          />
+                        ) : (
+                          <Button
+                            small
+                            label="Keep local-only"
+                            disabled={busyUuid === tagOrFolder.uuid}
+                            onClick={() => setTagOrFolderLocalOnly(tagOrFolder, true)}
+                          />
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </PreferencesSegment>
+          </PreferencesGroup>
+        </>
+      ),
+    },
+    {
+      id: 'conflicts',
+      title: 'Conflicts',
+      icon: 'warning',
+      content: (
+        // Sync conflicts — review & resolve conflicted copies. Merged in from the
+        // former standalone "Sync Conflicts" pane so all sync controls live here.
+        <Conflicts application={application} />
+      ),
+    },
+  ]
+
+  return (
+    <PreferencesPane>
+      <PreferencesSubtabs state={tabState} tabs={tabs} />
     </PreferencesPane>
   )
 }

@@ -10,20 +10,21 @@ import {
   SharedVaultUserServerHash,
   TrustedContactInterface,
   VaultInviteServiceEvent,
-  VaultListingInterface,
   VaultUserServiceEvent,
   compareVersions,
   isClientDisplayableError,
 } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
-import { useApplication } from '@/Components/ApplicationProvider'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
+import PreferencesSubtabs, { PreferencesSubtab } from '../../PreferencesComponents/PreferencesSubtabs'
 import Button from '@/Components/Button/Button'
 import Icon from '@/Components/Icon/Icon'
 import { PreferencesProps } from '../../PreferencesProps'
+import { useTabState } from '@/Components/Tabs/useTabState'
+import Shares from '../Shares/Shares'
 import {
   canLeaveVault,
   canRemoveMembers,
@@ -50,9 +51,15 @@ function itemTitle(item: DecryptedItemInterface): string {
 
 type SharingPaneProps = Pick<PreferencesProps, 'application'>
 
-const Sharing = observer(({ application }: SharingPaneProps) => {
+const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
   const hasAccount = application.hasAccount()
   const isSharedVaultsEnabled = application.featuresController.isEntitledToSharedVaults()
+
+  // V004 protocol gate — pushed down from the former SharingWrapper so it only
+  // replaces THIS subtab. The Share links subtab stays reachable regardless.
+  const accountProtocolVersion = application.getUserVersion()
+  const isAccountProtocolNotSupported =
+    accountProtocolVersion && compareVersions(accountProtocolVersion, ProtocolVersion.V004) < 0
 
   const [overviews, setOverviews] = useState<SharedVaultOverview[]>([])
   const [incomingInvites, setIncomingInvites] = useState<InviteRecord[]>([])
@@ -235,26 +242,37 @@ const Sharing = observer(({ application }: SharingPaneProps) => {
     [overviews],
   )
 
+  if (hasAccount && isAccountProtocolNotSupported) {
+    return (
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Account update required</Title>
+          <Subtitle>
+            To use sharing, update your account to the latest encryption version (from the Vaults pane).
+          </Subtitle>
+        </PreferencesSegment>
+      </PreferencesGroup>
+    )
+  }
+
   if (!hasAccount || !isSharedVaultsEnabled) {
     return (
-      <PreferencesPane>
-        <PreferencesGroup>
-          <PreferencesSegment>
-            <Title>Sharing</Title>
-            <Subtitle>Shared vaults let you collaborate on notes with trusted contacts.</Subtitle>
-            <Text className="mt-2">
-              {hasAccount
-                ? 'Shared vaults are not enabled for your plan.'
-                : 'Sign in to an account to use shared vaults and collaboration.'}
-            </Text>
-          </PreferencesSegment>
-        </PreferencesGroup>
-      </PreferencesPane>
+      <PreferencesGroup>
+        <PreferencesSegment>
+          <Title>Sharing</Title>
+          <Subtitle>Shared vaults let you collaborate on notes with trusted contacts.</Subtitle>
+          <Text className="mt-2">
+            {hasAccount
+              ? 'Shared vaults are not enabled for your plan.'
+              : 'Sign in to an account to use shared vaults and collaboration.'}
+          </Text>
+        </PreferencesSegment>
+      </PreferencesGroup>
     )
   }
 
   return (
-    <PreferencesPane>
+    <>
       {/* Disclosure / honesty banner */}
       <PreferencesGroup>
         <PreferencesSegment>
@@ -267,8 +285,8 @@ const Sharing = observer(({ application }: SharingPaneProps) => {
             </div>
             <ul className="ml-4 list-disc space-y-1">
               <li>
-                Notes in a shared vault support <strong>live, character-by-character co-editing</strong> with
-                end-to-end encryption — edits appear in real time for everyone with the note open.
+                Notes in a shared vault support <strong>live, character-by-character co-editing</strong> with end-to-end
+                encryption — edits appear in real time for everyone with the note open.
               </li>
               <li>
                 Collaborative editing of <strong>folder, tag, and workspace metadata is not yet supported</strong> and
@@ -438,29 +456,42 @@ const Sharing = observer(({ application }: SharingPaneProps) => {
           </PreferencesSegment>
         </PreferencesGroup>
       )}
-    </PreferencesPane>
+    </>
   )
 })
 
-const SharingWrapper = ({ application }: SharingPaneProps) => {
-  const accountProtocolVersion = application.getUserVersion()
-  const isAccountProtocolNotSupported =
-    accountProtocolVersion && compareVersions(accountProtocolVersion, ProtocolVersion.V004) < 0
+/**
+ * Unified Sharing pane: two subtabs.
+ *  - "Shared vaults" — the shared-vault collaboration overview (with its own
+ *    sign-in / entitlement / V004-protocol gating, pushed down from the former
+ *    SharingWrapper so it only affects this tab).
+ *  - "Share links" — the public read-only note share-link manager, reused as-is
+ *    from the former standalone Shares pane. Kept reachable even when vaults are
+ *    disabled (the menu entry is now registered unconditionally).
+ */
+const Sharing = ({ application }: SharingPaneProps) => {
+  const tabState = useTabState({ defaultTab: 'vaults' })
 
-  if (application.hasAccount() && isAccountProtocolNotSupported) {
-    return (
-      <PreferencesPane>
-        <PreferencesGroup>
-          <PreferencesSegment>
-            <Title>Account update required</Title>
-            <Subtitle>To use sharing, update your account to the latest encryption version (from the Vaults pane).</Subtitle>
-          </PreferencesSegment>
-        </PreferencesGroup>
-      </PreferencesPane>
-    )
-  }
+  const tabs: PreferencesSubtab[] = [
+    {
+      id: 'vaults',
+      title: 'Shared vaults',
+      icon: 'safe-square',
+      content: <SharedVaultsOverview application={application} />,
+    },
+    {
+      id: 'links',
+      title: 'Share links',
+      icon: 'link',
+      content: <Shares application={application} />,
+    },
+  ]
 
-  return <Sharing application={application} />
+  return (
+    <PreferencesPane>
+      <PreferencesSubtabs state={tabState} tabs={tabs} />
+    </PreferencesPane>
+  )
 }
 
-export default observer(SharingWrapper)
+export default observer(Sharing)

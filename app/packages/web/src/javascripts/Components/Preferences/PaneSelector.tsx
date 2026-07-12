@@ -14,7 +14,6 @@ import Vaults from './Panes/Vaults/Vaults'
 import PluginsPane from './Panes/Plugins/PluginsPane'
 import Assistant from './Panes/Assistant/Assistant'
 import Admin from './Panes/Admin/Admin'
-import Shares from './Panes/Shares/Shares'
 import SurvivorSwitch from './Panes/SurvivorSwitch/SurvivorSwitch'
 import RecentNotes from './Panes/RecentNotes/RecentNotes'
 import SearchIndexing from './Panes/SearchIndexing/SearchIndexing'
@@ -40,7 +39,9 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
     case 'admin':
       return <Admin application={application} />
     case 'shares':
-      return <Shares application={application} />
+      // Alias: the standalone Share Links pane was folded into Sharing (as its
+      // "Share links" subtab). Any stale deep-link to 'shares' lands on Sharing.
+      return <Sharing application={application} />
     case 'survivor-switch':
       return <SurvivorSwitch application={application} />
     case 'recent-notes':

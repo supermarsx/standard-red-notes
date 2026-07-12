@@ -33,12 +33,14 @@ export class PreferencesSessionController {
 
     if (application.featuresController.isVaultsEnabled()) {
       menuItems.push({ id: 'vaults', label: 'Vaults', icon: 'safe-square', order: 5 })
-
-      // Standard Red Notes: Sharing overview pane — surfaces what's shared,
-      // collaborators, live presence, and pending invites. Complements (does not
-      // replace) the Vaults pane's full contact/invite management.
-      menuItems.push({ id: 'sharing', label: 'Sharing', icon: 'user-switch', order: 5 })
     }
+
+    // Standard Red Notes: Sharing pane — "Shared vaults" collaboration overview
+    // PLUS the "Share links" public-link manager, as subtabs. Registered
+    // unconditionally (NOT gated on isVaultsEnabled) so the Share Links subtab
+    // stays reachable even when vaults are disabled; the Shared-vaults subtab
+    // keeps its own sign-in / entitlement / protocol gating internally.
+    menuItems.push({ id: 'sharing', label: 'Sharing', icon: 'user-switch', order: 9 })
 
     // Standard Red Notes: the Admin pane is only added to the menu for users who
     // carry the ADMIN_USER role. Non-admins never see the entry, and the
@@ -52,9 +54,6 @@ export class PreferencesSessionController {
     if (isDesktopApplication()) {
       menuItems.push({ id: 'home-server', label: 'Home Server', icon: 'server', order: 5 })
     }
-
-    // Standard Red Notes: public read-only share links management pane.
-    menuItems.push({ id: 'shares', label: 'Share Links', icon: 'link', order: 9 })
 
     // Standard Red Notes: survivor switch (dead man's switch) management pane.
     menuItems.push({ id: 'survivor-switch', label: 'Survivor Switch', icon: 'pencil-off', order: 9 })
