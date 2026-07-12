@@ -9,7 +9,9 @@ import {
   DEFAULT_NOTE_LAYOUT,
   MAX_PAGE_START,
   NoteLayout,
+  loadNoteLayout,
   normalizeNoteLayout,
+  saveNoteLayout,
 } from './layoutSettings'
 import { noteLayoutToPageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
 
@@ -192,5 +194,64 @@ describe('normalizeHeaderFooter — optional style fields', () => {
     expect(() =>
       normalizeNoteLayout({ header: { fontId: {}, fontSizePt: [], bold: null, color: [] } }),
     ).not.toThrow()
+  })
+})
+
+describe('normalizeNoteLayout — navigation sidebar (on-screen only)', () => {
+  it('defaults navigation to hidden with bookmarks enabled', () => {
+    expect(DEFAULT_NOTE_LAYOUT.navigation).toEqual({ visible: false, showBookmarks: true })
+    // Back-filled onto a legacy record that predates the field.
+    const legacy = { pageSizeId: 'a4', orientation: 'portrait', marginId: 'normal', customMargin: '1cm', columns: 1 }
+    expect(normalizeNoteLayout(legacy).navigation).toEqual({ visible: false, showBookmarks: true })
+  })
+
+  it('coerces navigation: only strict true shows it, only strict false disables bookmarks', () => {
+    expect(normalizeNoteLayout({ navigation: { visible: true, showBookmarks: false } }).navigation).toEqual({
+      visible: true,
+      showBookmarks: false,
+    })
+    // Non-boolean / missing → safe defaults.
+    expect(normalizeNoteLayout({ navigation: { visible: 'yes', showBookmarks: 0 } }).navigation).toEqual({
+      visible: false,
+      showBookmarks: true,
+    })
+    expect(normalizeNoteLayout({ navigation: 'nonsense' }).navigation).toEqual({ visible: false, showBookmarks: true })
+    expect(normalizeNoteLayout({ navigation: null }).navigation).toEqual({ visible: false, showBookmarks: true })
+  })
+
+  it('round-trips navigation through save/load', () => {
+    const uuid = 'nav-roundtrip-note'
+    saveNoteLayout(uuid, { ...DEFAULT_NOTE_LAYOUT, navigation: { visible: true, showBookmarks: false } })
+    expect(loadNoteLayout(uuid).navigation).toEqual({ visible: true, showBookmarks: false })
+  })
+
+  it('never throws on garbage navigation values', () => {
+    expect(() => normalizeNoteLayout({ navigation: { visible: [], showBookmarks: {} } })).not.toThrow()
+  })
+})
+
+describe('noteLayoutToPageLayoutOptions — navigation is NOT an export band', () => {
+  it('ignores navigation entirely (export byte-identical whether the sidebar is on or off)', () => {
+    // Default layout (everything off) still maps to undefined even with navigation present.
+    expect(noteLayoutToPageLayoutOptions(DEFAULT_NOTE_LAYOUT)).toBeUndefined()
+
+    const hidden = normalizeNoteLayout({ ...DEFAULT_NOTE_LAYOUT, navigation: { visible: false, showBookmarks: true } })
+    const visible = normalizeNoteLayout({ ...DEFAULT_NOTE_LAYOUT, navigation: { visible: true, showBookmarks: false } })
+    // Toggling the on-screen sidebar must not change export output at all.
+    expect(noteLayoutToPageLayoutOptions(visible)).toEqual(noteLayoutToPageLayoutOptions(hidden))
+    expect(noteLayoutToPageLayoutOptions(visible)).toBeUndefined()
+
+    // With an actual export band enabled, the mapped options are identical
+    // regardless of the navigation flag (navigation contributes nothing).
+    const withHeader = (nav: { visible: boolean; showBookmarks: boolean }) =>
+      noteLayoutToPageLayoutOptions(
+        normalizeNoteLayout({
+          ...DEFAULT_NOTE_LAYOUT,
+          header: { enabled: true, text: 'Title', align: 'center' },
+          navigation: nav,
+        }),
+      )
+    expect(withHeader({ visible: true, showBookmarks: true })).toEqual(withHeader({ visible: false, showBookmarks: false }))
+    expect(withHeader({ visible: true, showBookmarks: true })).toEqual({ header: { text: 'Title', align: 'center' } })
   })
 })

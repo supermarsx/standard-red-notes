@@ -41,6 +41,7 @@ import AutoPairPlugin from './Plugins/AutoPairPlugin/AutoPairPlugin'
 import FormattingMarksPlugin from './Plugins/FormattingMarksPlugin/FormattingMarksPlugin'
 import { FormatPainterPlugin } from './Plugins/FormatPainterPlugin'
 import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
+import NavigationSidebar from './Plugins/NavigationSidebarPlugin/NavigationSidebarPlugin'
 import { WebApplication } from '@/Application/WebApplication'
 
 type BlocksEditorProps = {
@@ -216,32 +217,43 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   return (
     <>
       {!isMobile && <ToolbarPlugin />}
-      <div className="relative min-h-0 flex-grow">
-        <RichTextPlugin
-          contentEditable={
-            <div id="blocks-editor" className="editor-scroller h-full min-h-0">
-              <div className="editor z-0 overflow-hidden" ref={onRef}>
-                <ContentEditable
-                  id={SuperEditorContentId}
-                  className={classNames(
-                    'ContentEditable__root relative overflow-y-auto p-4 text-[length:--font-size] leading-[--line-height] focus:shadow-none focus:outline-none',
-                    className,
-                  )}
-                  spellCheck={spellcheck}
-                  onFocus={onFocus}
-                  onBlur={handleBlur}
-                />
-                <div className="search-highlight-container pointer-events-none absolute left-0 top-0 h-full w-full" />
+      {/*
+        Standard Red Notes: dock the on-screen navigation sidebar (Word-style
+        outline of headings + bookmarks) to the LEFT of the editor content. The
+        inner `relative min-h-0 flex-grow` wrapper is preserved verbatim —
+        `#blocks-editor` height and the `.editor` floatingAnchorElem (used by the
+        Draggable-block / Table-action-menu floating plugins) depend on it. The
+        sidebar renders null when hidden or on mobile.
+      */}
+      <div className="flex min-h-0 flex-grow flex-row overflow-hidden">
+        <NavigationSidebar />
+        <div className="relative min-h-0 flex-grow">
+          <RichTextPlugin
+            contentEditable={
+              <div id="blocks-editor" className="editor-scroller h-full min-h-0">
+                <div className="editor z-0 overflow-hidden" ref={onRef}>
+                  <ContentEditable
+                    id={SuperEditorContentId}
+                    className={classNames(
+                      'ContentEditable__root relative overflow-y-auto p-4 text-[length:--font-size] leading-[--line-height] focus:shadow-none focus:outline-none',
+                      className,
+                    )}
+                    spellCheck={spellcheck}
+                    onFocus={onFocus}
+                    onBlur={handleBlur}
+                  />
+                  <div className="search-highlight-container pointer-events-none absolute left-0 top-0 h-full w-full" />
+                </div>
               </div>
-            </div>
-          }
-          placeholder={
-            <div className="pointer-events-none absolute left-4 top-4 text-[length:--font-size] text-passive-1">
-              Type <span className="rounded bg-passive-4-opacity-variant p-0.5">/</span> for commands...
-            </div>
-          }
-          ErrorBoundary={LexicalErrorBoundary}
-        />
+            }
+            placeholder={
+              <div className="pointer-events-none absolute left-4 top-4 text-[length:--font-size] text-passive-1">
+                Type <span className="rounded bg-passive-4-opacity-variant p-0.5">/</span> for commands...
+              </div>
+            }
+            ErrorBoundary={LexicalErrorBoundary}
+          />
+        </div>
       </div>
       {isMobile && <ToolbarPlugin />}
       <ListPlugin />

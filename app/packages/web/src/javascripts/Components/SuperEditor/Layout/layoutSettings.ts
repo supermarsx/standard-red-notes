@@ -131,6 +131,23 @@ export type HeaderFooter = {
   color?: string
 }
 
+/**
+ * On-screen navigation sidebar (Word-style document outline) settings.
+ *
+ * This is a PURELY ON-SCREEN affordance — it drives a live outline of the note's
+ * headings + bookmarks rendered beside the editor content, and has NOTHING to do
+ * with print/export. It lives on `NoteLayout` only because that is the note's
+ * per-note web-local settings bag the Layout popover already owns; the export
+ * mapper (`noteLayoutToPageLayoutOptions`) deliberately IGNORES it so exported
+ * docx/odt/pdf output stays byte-identical whether the sidebar is on or off.
+ */
+export type NavigationSettings = {
+  /** Whether the outline sidebar is shown beside the editor (default OFF). */
+  visible: boolean
+  /** Whether the sidebar also lists the note's bookmarks (default ON). */
+  showBookmarks: boolean
+}
+
 export type NoteLayout = {
   /** Id from PAGE_SIZE_OPTIONS. */
   pageSizeId: string
@@ -151,6 +168,12 @@ export type NoteLayout = {
   pageNumbering: PageNumbering
   header: HeaderFooter
   footer: HeaderFooter
+  /**
+   * On-screen navigation sidebar (outline of headings + bookmarks). Defaults to
+   * hidden. This is NOT an export band — the export mapper ignores it entirely.
+   * `normalizeNoteLayout` back-fills it onto legacy records (no migration).
+   */
+  navigation: NavigationSettings
 }
 
 export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
@@ -162,6 +185,7 @@ export const DEFAULT_NOTE_LAYOUT: NoteLayout = {
   pageNumbering: { enabled: false, format: 'page-n', align: 'center', location: 'footer', startAt: 1 },
   header: { enabled: false, text: '', align: 'center' },
   footer: { enabled: false, text: '', align: 'center' },
+  navigation: { visible: false, showBookmarks: true },
 }
 
 export const PAGE_NUMBER_FORMATS: PageNumberFormat[] = ['n', 'n-of-total', 'page-n']
@@ -253,6 +277,20 @@ function normalizeHeaderFooter(raw: unknown, fallback: HeaderFooter): HeaderFoot
   return hf
 }
 
+/**
+ * Coerce a persisted value into a safe NavigationSettings. Never throws.
+ * `visible` defaults OFF (only strict `true` shows it); `showBookmarks` defaults
+ * ON (only strict `false` disables it) so a legacy record without the field still
+ * lists bookmarks once the sidebar is turned on.
+ */
+function normalizeNavigation(raw: unknown): NavigationSettings {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as Partial<NavigationSettings>
+  return {
+    visible: c.visible === true,
+    showBookmarks: c.showBookmarks !== false,
+  }
+}
+
 /** Coerce an arbitrary persisted value into a safe NoteLayout. Never throws. */
 export function normalizeNoteLayout(raw: unknown): NoteLayout {
   if (!raw || typeof raw !== 'object') {
@@ -279,6 +317,7 @@ export function normalizeNoteLayout(raw: unknown): NoteLayout {
     pageNumbering: normalizePageNumbering(candidate.pageNumbering),
     header: normalizeHeaderFooter(candidate.header, DEFAULT_NOTE_LAYOUT.header),
     footer: normalizeHeaderFooter(candidate.footer, DEFAULT_NOTE_LAYOUT.footer),
+    navigation: normalizeNavigation(candidate.navigation),
   }
 }
 
