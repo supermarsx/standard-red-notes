@@ -28,4 +28,12 @@ export type RegisterDTO = {
    * mobile/desktop clients (the per-device cap simply does not apply there).
    */
   deviceId?: string
+  /**
+   * Standard Red Notes: optional raw signup-invite token (from the `?invite=`
+   * URL). When invite-only mode is ON a valid token is REQUIRED (fail-closed);
+   * when OFF it is optional but still honored + consumed if present (fail-open).
+   * Pulled out of the DTO spread in Register so it is never Object.assign'd onto
+   * the persisted User entity.
+   */
+  inviteToken?: string
 }

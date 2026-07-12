@@ -583,6 +583,10 @@ export class BaseAuthController extends BaseHttpController {
       // per-device signup cap consults it only when the per-device cap is on and
       // the client actually sent one. Forgeable by design (not a security signal).
       deviceId: request.body.device_id as string | undefined,
+      // Standard Red Notes: optional raw signup-invite token (from the `?invite=`
+      // URL). Required in invite-only mode (fail-closed), honored + consumed when
+      // present in open mode. Passes through the gateway register proxy untouched.
+      inviteToken: request.body.invite_token as string | undefined,
     })
 
     if (!registerResult.success) {

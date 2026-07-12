@@ -20,7 +20,10 @@ import {
   DEFAULT_REGISTRATION_CONFIG,
   emailAllowedByPolicy,
   RegistrationConfig,
+  sanitizeDefaultRole,
 } from '../Registration/RegistrationConfig'
+import { ConsumeSignupInvite } from './ConsumeSignupInvite/ConsumeSignupInvite'
+import { ConsumeSignupInviteResponse } from './ConsumeSignupInvite/ConsumeSignupInviteResponse'
 import { DEFAULT_SIGNUP_LIMITS, SignupLimitsConfig } from '../Registration/SignupLimitsConfig'
 import { SignupLimitsConfigResolverInterface } from '../Registration/SignupLimitsConfigResolverInterface'
 import { SignupRateLimiterInterface } from '../Registration/SignupRateLimiterInterface'
@@ -69,6 +72,13 @@ export class Register implements UseCaseInterface {
     // existing call sites / specs keep compiling; when absent, no caps apply.
     private signupRateLimiter?: SignupRateLimiterInterface,
     private signupLimitsResolver?: SignupLimitsConfigResolverInterface,
+    // Standard Red Notes: SIGNUP INVITE LINKS. Atomically consumes an invite slot
+    // (and applies the link's per-link role / domain-lock / auto-approve /
+    // referrer). Trailing-optional so existing call sites / specs keep compiling.
+    // When invite-only mode is ON this dep MUST be wired — an unwired consumer in
+    // invite-only mode FAILS CLOSED (registration is refused) so the gate is never
+    // silently bypassable. When invite-only is OFF an unwired consumer is a no-op.
+    private signupInviteConsumer?: ConsumeSignupInvite,
   ) {}
 
   async execute(dto: RegisterDTO): Promise<RegisterResponse> {
@@ -98,6 +108,9 @@ export class Register implements UseCaseInterface {
       // device id (SOFT per-device cap signal only) is NEVER Object.assign'd onto
       // the persisted User entity.
       deviceId,
+      // Standard Red Notes: pulled out of the spread so the raw invite token is
+      // NEVER Object.assign'd onto the persisted User entity.
+      inviteToken,
       ...registrationFields
     } = dto
 
@@ -180,8 +193,28 @@ export class Register implements UseCaseInterface {
       return signupLimitsRefusal
     }
 
+    // Standard Red Notes: SIGNUP INVITE gate — the LAST gate before the user is
+    // built + saved (after every read-only validation gate above has passed), so
+    // an invite slot is only spent on a signup that would otherwise succeed. The
+    // user uuid is generated up front so the atomic consume can attribute the use
+    // to this exact new account. Invite-only mode is FAIL-CLOSED (a missing /
+    // invalid / errored token refuses registration with a single non-enumerable
+    // message); open mode is FAIL-OPEN (a present token is honored + consumed but
+    // an error/invalid token just proceeds as a normal open signup).
+    const newUserUuid = uuidv4()
+    const inviteOutcome = await this.resolveInviteConsume(
+      registrationConfig,
+      inviteToken,
+      username.value,
+      newUserUuid,
+    )
+    if ('refuse' in inviteOutcome) {
+      return inviteOutcome.refuse
+    }
+    const consumedInvite = inviteOutcome.invite
+
     let user = new User()
-    user.uuid = uuidv4()
+    user.uuid = newUserUuid
     user.email = username.value
     // Standard Red Notes: only stamp the workspace identifier on the entity when
     // the feature is ON. When OFF we leave it unset so the database column
@@ -209,12 +242,18 @@ export class Register implements UseCaseInterface {
     }
 
     // Standard Red Notes: assign the admin-configurable default role (validated
-    // to a canonical NON-admin role; CORE_USER by default). If the configured
-    // role is somehow not seeded in the database, fall back to CORE_USER so a new
-    // account is never left role-less by a misconfiguration.
+    // to a canonical NON-admin role; CORE_USER by default). A consumed invite
+    // link MAY override it with its own per-link role (validated NON-admin via
+    // sanitizeDefaultRole — only ADMIN links can set one; user links never do). If
+    // the configured role is somehow not seeded in the database, fall back to
+    // CORE_USER so a new account is never left role-less by a misconfiguration.
+    const effectiveDefaultRole =
+      consumedInvite?.defaultRole != null && consumedInvite.defaultRole !== ''
+        ? sanitizeDefaultRole(consumedInvite.defaultRole)
+        : registrationConfig.defaultRole
     const roles = []
-    let defaultRole = await this.roleRepository.findOneByName(registrationConfig.defaultRole)
-    if (!defaultRole && registrationConfig.defaultRole !== RoleName.NAMES.CoreUser) {
+    let defaultRole = await this.roleRepository.findOneByName(effectiveDefaultRole)
+    if (!defaultRole && effectiveDefaultRole !== RoleName.NAMES.CoreUser) {
       defaultRole = await this.roleRepository.findOneByName(RoleName.NAMES.CoreUser)
     }
     if (defaultRole) {
@@ -422,6 +461,65 @@ export class Register implements UseCaseInterface {
     } catch {
       return DEFAULT_SIGNUP_LIMITS
     }
+  }
+
+  /**
+   * Standard Red Notes: the SIGNUP INVITE gate. Returns `{ refuse }` to reject the
+   * registration, or `{ invite }` (the consumed invite metadata, or null when no
+   * invite applies) to allow it.
+   *
+   * INVITE-ONLY (config.inviteOnly === true) — FAIL CLOSED: a valid, non-exhausted,
+   * non-expired, non-revoked, domain-matching token is REQUIRED. A missing token,
+   * an unwired consumer, or an invalid/errored consume all refuse with a SINGLE
+   * generic non-enumerable message. A DB outage blocking signups is acceptable
+   * when signups are intentionally restricted.
+   *
+   * OPEN mode (inviteOnly === false) — FAIL OPEN: a token is optional. When present
+   * it is still honored + consumed (so batch links work in open mode); but an
+   * invalid/errored token (or an unwired consumer) simply proceeds as a normal
+   * open signup — the link is a bonus, not a gate.
+   */
+  private async resolveInviteConsume(
+    config: RegistrationConfig,
+    inviteToken: string | undefined,
+    email: string,
+    newUserUuid: string,
+  ): Promise<{ refuse: RegisterResponse } | { invite: (ConsumeSignupInviteResponse & { outcome: 'consumed' }) | null }> {
+    const inviteOnly = config.inviteOnly === true
+    const token = typeof inviteToken === 'string' ? inviteToken.trim() : ''
+
+    // Open mode with no token: nothing to do.
+    if (!inviteOnly && token.length === 0) {
+      return { invite: null }
+    }
+
+    // Invite-only with no token, or no consumer wired: FAIL CLOSED.
+    if (inviteOnly && (this.signupInviteConsumer === undefined || token.length === 0)) {
+      return { refuse: { success: false, errorMessage: 'User registration is currently not allowed.' } }
+    }
+
+    // Open mode with a token but no consumer wired: FAIL OPEN (ignore the token).
+    if (this.signupInviteConsumer === undefined) {
+      return { invite: null }
+    }
+
+    const result = await this.signupInviteConsumer.execute({
+      token,
+      email,
+      newUserUuid,
+      now: this.timer.getUTCDate(),
+    })
+
+    if (result.outcome === 'consumed') {
+      return { invite: result }
+    }
+
+    // invalid / error.
+    if (inviteOnly) {
+      return { refuse: { success: false, errorMessage: 'User registration is currently not allowed.' } }
+    }
+
+    return { invite: null }
   }
 
   /**

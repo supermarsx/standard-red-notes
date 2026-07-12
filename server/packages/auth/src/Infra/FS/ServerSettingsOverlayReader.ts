@@ -130,6 +130,9 @@ export class ServerSettingsOverlayReader {
     if (typeof registration.emailConfirmationBaseUrl === 'string') {
       result.emailConfirmationBaseUrl = registration.emailConfirmationBaseUrl
     }
+    if (typeof registration.inviteOnly === 'boolean') {
+      result.inviteOnly = registration.inviteOnly
+    }
 
     return result
   }

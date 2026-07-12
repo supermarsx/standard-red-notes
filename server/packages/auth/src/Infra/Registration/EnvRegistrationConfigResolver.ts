@@ -44,6 +44,8 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
     const emailConfirmationBodyRaw = overlay?.emailConfirmationBody ?? this.baseline.emailConfirmationBody
     const emailConfirmationBaseUrlRaw = overlay?.emailConfirmationBaseUrl ?? this.baseline.emailConfirmationBaseUrl
 
+    const inviteOnlyRaw = overlay?.inviteOnly ?? this.baseline.inviteOnly
+
     return {
       defaultRole: sanitizeDefaultRole(defaultRoleRaw),
       domainMode: isRegistrationDomainMode(domainModeRaw) ? domainModeRaw : DEFAULT_REGISTRATION_CONFIG.domainMode,
@@ -65,6 +67,8 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
           : DEFAULT_REGISTRATION_CONFIG.emailConfirmationBody,
       emailConfirmationBaseUrl:
         typeof emailConfirmationBaseUrlRaw === 'string' ? emailConfirmationBaseUrlRaw.trim() : '',
+      inviteOnly:
+        typeof inviteOnlyRaw === 'boolean' ? inviteOnlyRaw : DEFAULT_REGISTRATION_CONFIG.inviteOnly,
     }
   }
 }
@@ -84,6 +88,7 @@ export const registrationBaselineFromEnv = (raw: {
   emailConfirmationSubject?: string
   emailConfirmationBody?: string
   emailConfirmationBaseUrl?: string
+  inviteOnly?: string
 }): RegistrationConfig => ({
   defaultRole: sanitizeDefaultRole(raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined),
   domainMode: isRegistrationDomainMode(raw.domainMode) ? raw.domainMode : DEFAULT_REGISTRATION_CONFIG.domainMode,
@@ -103,4 +108,6 @@ export const registrationBaselineFromEnv = (raw: {
       ? raw.emailConfirmationBody
       : DEFAULT_REGISTRATION_CONFIG.emailConfirmationBody,
   emailConfirmationBaseUrl: (raw.emailConfirmationBaseUrl ?? '').trim(),
+  // REGISTRATION_INVITE_ONLY is opt-in: only the exact string 'true' enables it.
+  inviteOnly: raw.inviteOnly === 'true',
 })

@@ -202,6 +202,15 @@ import { EmailConfirmationTokenPersistenceMapper } from '../Mapping/EmailConfirm
 import { EmailConfirmationTokenRepositoryInterface } from '../Domain/EmailConfirmation/EmailConfirmationTokenRepositoryInterface'
 import { TypeORMEmailConfirmationTokenRepository } from '../Infra/TypeORM/TypeORMEmailConfirmationTokenRepository'
 import { SendEmailConfirmation } from '../Domain/UseCase/SendEmailConfirmation/SendEmailConfirmation'
+import { SignupInviteLink } from '../Domain/SignupInvite/SignupInviteLink'
+import { TypeORMSignupInviteLink } from '../Infra/TypeORM/TypeORMSignupInviteLink'
+import { SignupInviteLinkPersistenceMapper } from '../Mapping/SignupInviteLinkPersistenceMapper'
+import { SignupInviteLinkRepositoryInterface } from '../Domain/SignupInvite/SignupInviteLinkRepositoryInterface'
+import { TypeORMSignupInviteLinkRepository } from '../Infra/TypeORM/TypeORMSignupInviteLinkRepository'
+import { ConsumeSignupInvite } from '../Domain/UseCase/ConsumeSignupInvite/ConsumeSignupInvite'
+import { CreateSignupInviteLink } from '../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
+import { ListSignupInviteLinks } from '../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
+import { RevokeSignupInviteLink } from '../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
 import { VerifyEmailConfirmation } from '../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
@@ -790,6 +799,11 @@ export class ContainerConfigLoader {
       )
       .toConstantValue(new EmailConfirmationTokenPersistenceMapper())
     container
+      .bind<MapperInterface<SignupInviteLink, TypeORMSignupInviteLink>>(
+        TYPES.Auth_SignupInviteLinkPersistenceMapper,
+      )
+      .toConstantValue(new SignupInviteLinkPersistenceMapper())
+    container
       .bind<MapperInterface<CacheEntry, TypeORMCacheEntry>>(TYPES.Auth_CacheEntryPersistenceMapper)
       .toConstantValue(new CacheEntryPersistenceMapper())
     container
@@ -893,6 +907,9 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMEmailConfirmationToken>>(TYPES.Auth_ORMEmailConfirmationTokenRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMEmailConfirmationToken))
+    container
+      .bind<Repository<TypeORMSignupInviteLink>>(TYPES.Auth_ORMSignupInviteLinkRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMSignupInviteLink))
     container
       .bind<Repository<TypeORMCacheEntry>>(TYPES.Auth_ORMCacheEntryRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMCacheEntry))
@@ -1067,6 +1084,14 @@ export class ContainerConfigLoader {
         new TypeORMEmailConfirmationTokenRepository(
           container.get(TYPES.Auth_ORMEmailConfirmationTokenRepository),
           container.get(TYPES.Auth_EmailConfirmationTokenPersistenceMapper),
+        ),
+      )
+    container
+      .bind<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository)
+      .toConstantValue(
+        new TypeORMSignupInviteLinkRepository(
+          container.get(TYPES.Auth_ORMSignupInviteLinkRepository),
+          container.get(TYPES.Auth_SignupInviteLinkPersistenceMapper),
         ),
       )
     container
@@ -2305,6 +2330,35 @@ export class ContainerConfigLoader {
     const signupRateLimiter: SignupRateLimiterInterface | undefined = container.isBound(TYPES.Auth_Redis)
       ? new RedisSignupRateLimiter(container.get<Redis>(TYPES.Auth_Redis))
       : undefined
+    // Standard Red Notes: SIGNUP INVITE LINKS use cases.
+    container
+      .bind<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite)
+      .toConstantValue(
+        new ConsumeSignupInvite(
+          container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+        ),
+      )
+    container
+      .bind<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink)
+      .toConstantValue(
+        new CreateSignupInviteLink(
+          container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+        ),
+      )
+    container
+      .bind<ListSignupInviteLinks>(TYPES.Auth_ListSignupInviteLinks)
+      .toConstantValue(
+        new ListSignupInviteLinks(
+          container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+        ),
+      )
+    container
+      .bind<RevokeSignupInviteLink>(TYPES.Auth_RevokeSignupInviteLink)
+      .toConstantValue(
+        new RevokeSignupInviteLink(
+          container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+        ),
+      )
     container
       .bind<Register>(TYPES.Auth_Register)
       .toConstantValue(
@@ -2339,6 +2393,10 @@ export class ContainerConfigLoader {
           // per-device SOFT) and the cap-policy resolver. Both fail open.
           signupRateLimiter,
           signupLimitsResolver,
+          // Standard Red Notes: SIGNUP INVITE LINKS — atomically consumes an
+          // invite slot (invite-only mode fails closed; open mode honors a present
+          // token, fails open). Always wired so invite-only is enforceable.
+          container.get<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite),
         ),
       )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
@@ -3353,6 +3411,12 @@ export class ContainerConfigLoader {
             // cross-service DeleteAccount pipeline (Auth_DeleteAccount).
             container.get<SetUserSuspension>(TYPES.Auth_SetUserSuspension),
             container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
+            // Standard Red Notes: SIGNUP INVITE LINKS admin surface — wired on the
+            // single-container path too so the admin panel's invite-link
+            // create/list/revoke endpoints work there.
+            container.get<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink),
+            container.get<ListSignupInviteLinks>(TYPES.Auth_ListSignupInviteLinks),
+            container.get<RevokeSignupInviteLink>(TYPES.Auth_RevokeSignupInviteLink),
           ),
         )
       container

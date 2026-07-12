@@ -19,6 +19,84 @@ import { RegistrationConfig } from '../Registration/RegistrationConfig'
 import { SignupLimitsConfig } from '../Registration/SignupLimitsConfig'
 import { SignupLimitsConfigResolverInterface } from '../Registration/SignupLimitsConfigResolverInterface'
 import { SignupRateLimiterInterface } from '../Registration/SignupRateLimiterInterface'
+import { UniqueEntityId } from '@standardnotes/domain-core'
+import { ConsumeSignupInvite } from './ConsumeSignupInvite/ConsumeSignupInvite'
+import { SignupInviteLink } from '../SignupInvite/SignupInviteLink'
+import { SignupInviteLinkRepositoryInterface } from '../SignupInvite/SignupInviteLinkRepositoryInterface'
+import { SignupInviteLinkProps } from '../SignupInvite/SignupInviteLinkProps'
+import { hashSignupInviteToken } from '../SignupInvite/hashSignupInviteToken'
+
+/**
+ * Standard Red Notes: an in-memory invite-link repository whose consumeSlot
+ * emulates the DB's atomic conditional UPDATE — the check-and-increment is
+ * SYNCHRONOUS (no await between reading used_count and incrementing it), which is
+ * exactly the serialization the DB row lock provides. This lets the concurrency
+ * test assert that two concurrent consumes on a 1-slot link cannot both succeed
+ * at the use-case layer; the SQL UPDATE is the authority in production.
+ */
+const makeFakeInviteRepo = (
+  seed: Partial<SignupInviteLinkProps> & { token: string; maxUses: number },
+): { repo: SignupInviteLinkRepositoryInterface; state: { usedCount: number } } => {
+  const hashedToken = hashSignupInviteToken(seed.token)
+  const state = {
+    usedCount: seed.usedCount ?? 0,
+    revoked: seed.revoked ?? false,
+    expiresAt: seed.expiresAt ?? null,
+  }
+  const buildLink = (): SignupInviteLink =>
+    SignupInviteLink.create(
+      {
+        hashedToken,
+        label: seed.label ?? null,
+        maxUses: seed.maxUses,
+        usedCount: state.usedCount,
+        expiresAt: state.expiresAt,
+        revoked: state.revoked,
+        defaultRole: seed.defaultRole ?? null,
+        allowedDomain: seed.allowedDomain ?? null,
+        createdBy: seed.createdBy ?? null,
+        createdByUserUuid: seed.createdByUserUuid ?? null,
+        createdByKind: seed.createdByKind ?? 'admin',
+        autoApprove: seed.autoApprove ?? true,
+        createdAt: new Date(1),
+        updatedAt: new Date(1),
+      },
+      new UniqueEntityId('invite-link-uuid'),
+    ).getValue()
+
+  const repo = {
+    save: jest.fn(),
+    findByUuid: jest.fn(),
+    listAll: jest.fn(),
+    listByCreatorUser: jest.fn(),
+    countActiveByCreatorUser: jest.fn(),
+    revokeByUuid: jest.fn(),
+    findByHashedToken: jest.fn(async (hash: string) => (hash === hashedToken ? buildLink() : null)),
+    // Synchronous check-and-increment inside the promise executor — models the
+    // atomic UPDATE ... WHERE used_count < max_uses under the row lock.
+    consumeSlot: jest.fn(
+      (hash: string, now: Date) =>
+        new Promise<boolean>((resolve) => {
+          if (hash !== hashedToken) {
+            resolve(false)
+            return
+          }
+          const valid =
+            !state.revoked &&
+            state.usedCount < seed.maxUses &&
+            (state.expiresAt === null || state.expiresAt.getTime() > now.getTime())
+          if (!valid) {
+            resolve(false)
+            return
+          }
+          state.usedCount += 1
+          resolve(true)
+        }),
+    ),
+  } as unknown as SignupInviteLinkRepositoryInterface
+
+  return { repo, state }
+}
 
 describe('Register', () => {
   let userRepository: UserRepositoryInterface
@@ -986,6 +1064,199 @@ describe('Register', () => {
       const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
 
       expect(result.success).toBe(true)
+    })
+  })
+
+  describe('Standard Red Notes: signup invite links (invite-only gate + atomic slot consume)', () => {
+    const makeResolver = (config: Partial<RegistrationConfig>): RegistrationConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        emailConfirmationEnabled: false,
+        emailConfirmationGating: 'block_signin',
+        emailConfirmationSubject: 's',
+        emailConfirmationBody: 'b',
+        emailConfirmationBaseUrl: '',
+        inviteOnly: false,
+        ...config,
+      } as RegistrationConfig),
+    })
+
+    const dtoFor = (overrides: { email?: string; inviteToken?: string } = {}) => ({
+      email: overrides.email ?? 'person@example.com',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+      inviteToken: overrides.inviteToken,
+    })
+
+    const createWithInvite = (
+      resolver: RegistrationConfigResolverInterface,
+      consumer?: ConsumeSignupInvite,
+    ) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        resolver,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        consumer,
+      )
+
+    it('invite-only ON with NO token is refused (fail closed, generic message)', async () => {
+      const { repo } = makeFakeInviteRepo({ token: 'tok', maxUses: 1 })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor(),
+      )
+
+      expect(result).toEqual({ success: false, errorMessage: 'User registration is currently not allowed.' })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('invite-only ON with NO consumer wired is refused (fail closed)', async () => {
+      const result = await createWithInvite(makeResolver({ inviteOnly: true })).execute(
+        dtoFor({ inviteToken: 'anything' }),
+      )
+
+      expect(result.success).toBe(false)
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('invite-only ON with a VALID token succeeds and consumes exactly one slot', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 1 })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(state.usedCount).toBe(1)
+    })
+
+    it('invite-only ON with an EXPIRED link is refused', async () => {
+      const { repo } = makeFakeInviteRepo({ token: 'tok', maxUses: 1, expiresAt: new Date(0) })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(false)
+    })
+
+    it('invite-only ON with a REVOKED link is refused', async () => {
+      const { repo } = makeFakeInviteRepo({ token: 'tok', maxUses: 1, revoked: true })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(false)
+    })
+
+    it('CONCURRENCY: two concurrent registrations on a 1-slot link — exactly one succeeds, used_count ends at 1', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 1 })
+      const consumer = new ConsumeSignupInvite(repo)
+
+      const [a, b] = await Promise.all([
+        createWithInvite(makeResolver({ inviteOnly: true }), consumer).execute(dtoFor({ inviteToken: 'tok' })),
+        createWithInvite(makeResolver({ inviteOnly: true }), consumer).execute(dtoFor({ inviteToken: 'tok' })),
+      ])
+
+      const successes = [a, b].filter((r) => r.success).length
+      expect(successes).toBe(1)
+      expect(state.usedCount).toBe(1)
+    })
+
+    it('BATCH: a max_uses=2 link allows exactly two signups then refuses the third', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 2 })
+      const consumer = new ConsumeSignupInvite(repo)
+      const run = () =>
+        createWithInvite(makeResolver({ inviteOnly: true }), consumer).execute(dtoFor({ inviteToken: 'tok' }))
+
+      expect((await run()).success).toBe(true)
+      expect((await run()).success).toBe(true)
+      expect((await run()).success).toBe(false)
+      expect(state.usedCount).toBe(2)
+    })
+
+    it('invite-only OFF with a VALID token still honors + consumes it (batch links work in open mode)', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 5 })
+      const result = await createWithInvite(makeResolver({ inviteOnly: false }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(state.usedCount).toBe(1)
+    })
+
+    it('invite-only OFF with an INVALID token still succeeds (fail open — the link is a bonus)', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 1 })
+      const result = await createWithInvite(makeResolver({ inviteOnly: false }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'wrong-token' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(state.usedCount).toBe(0)
+    })
+
+    it('invite-only OFF with NO token succeeds and never touches the consumer', async () => {
+      const { repo } = makeFakeInviteRepo({ token: 'tok', maxUses: 1 })
+      const consumer = new ConsumeSignupInvite(repo)
+      const result = await createWithInvite(makeResolver({ inviteOnly: false }), consumer).execute(dtoFor())
+
+      expect(result.success).toBe(true)
+      expect(repo.consumeSlot).not.toHaveBeenCalled()
+    })
+
+    it('a per-link email-domain lock refuses a mismatching email (invite-only) and never consumes', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 1, allowedDomain: 'company.com' })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ email: 'person@other.com', inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(false)
+      expect(state.usedCount).toBe(0)
+    })
+
+    it('a per-link email-domain lock accepts a matching email (and its subdomains)', async () => {
+      const { repo, state } = makeFakeInviteRepo({ token: 'tok', maxUses: 1, allowedDomain: 'company.com' })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ email: 'person@mail.company.com', inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(state.usedCount).toBe(1)
+    })
+
+    it('applies the link default_role override to the new account', async () => {
+      const proRole = new Role()
+      proRole.name = RoleName.NAMES.ProUser
+      roleRepository.findOneByName = jest.fn().mockResolvedValue(proRole)
+
+      const { repo } = makeFakeInviteRepo({
+        token: 'tok',
+        maxUses: 1,
+        defaultRole: RoleName.NAMES.ProUser,
+      })
+      const result = await createWithInvite(makeResolver({ inviteOnly: true }), new ConsumeSignupInvite(repo)).execute(
+        dtoFor({ inviteToken: 'tok' }),
+      )
+
+      expect(result.success).toBe(true)
+      expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.ProUser)
     })
   })
 })

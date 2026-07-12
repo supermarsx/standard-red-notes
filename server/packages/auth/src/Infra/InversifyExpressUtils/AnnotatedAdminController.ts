@@ -41,6 +41,9 @@ import { GetSubscriptionSetting } from '../../Domain/UseCase/GetSubscriptionSett
 import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 import { RoleServiceInterface } from '../../Domain/Role/RoleServiceInterface'
 import { FixStorageQuotaForUser } from '../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
+import { CreateSignupInviteLink } from '../../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
+import { ListSignupInviteLinks } from '../../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
+import { RevokeSignupInviteLink } from '../../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
 
 @controller('/admin')
 export class AnnotatedAdminController extends BaseAdminController {
@@ -99,6 +102,10 @@ export class AnnotatedAdminController extends BaseAdminController {
     // (delete reuses the existing cross-service DeleteAccount pipeline).
     @inject(TYPES.Auth_SetUserSuspension) override doSetUserSuspension: SetUserSuspension,
     @inject(TYPES.Auth_DeleteAccount) override doDeleteAccount: DeleteAccount,
+    // Standard Red Notes: SIGNUP INVITE LINKS admin surface (create/list/revoke).
+    @inject(TYPES.Auth_CreateSignupInviteLink) override doCreateSignupInviteLink: CreateSignupInviteLink,
+    @inject(TYPES.Auth_ListSignupInviteLinks) override doListSignupInviteLinks: ListSignupInviteLinks,
+    @inject(TYPES.Auth_RevokeSignupInviteLink) override doRevokeSignupInviteLink: RevokeSignupInviteLink,
   ) {
     super(
       doDeleteSetting,
@@ -139,6 +146,9 @@ export class AnnotatedAdminController extends BaseAdminController {
       lockRepository,
       doSetUserSuspension,
       doDeleteAccount,
+      doCreateSignupInviteLink,
+      doListSignupInviteLinks,
+      doRevokeSignupInviteLink,
     )
   }
 
@@ -365,5 +375,24 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPost('/anti-abuse/unlock', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   async unlockAccountEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
     return super.unlockAccount(request, response)
+  }
+
+  // Standard Red Notes: SIGNUP INVITE LINKS — create / list / soft-revoke. The
+  // gateway proxies /v1/admin/invite-links* here; all re-gate on ADMIN_USER in
+  // the base controller. NOTE: the ':uuid' revoke is declared last so the bare
+  // param path never shadows the exact '/invite-links'.
+  @httpPost('/invite-links', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async createInviteLinkEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.createInviteLink(request, response)
+  }
+
+  @httpGet('/invite-links', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async listInviteLinksEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.listInviteLinks(request, response)
+  }
+
+  @httpDelete('/invite-links/:uuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  async revokeInviteLinkEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.revokeInviteLink(request, response)
   }
 }

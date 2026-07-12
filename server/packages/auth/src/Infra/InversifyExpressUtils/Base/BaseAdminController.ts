@@ -53,6 +53,10 @@ import { SetSubscriptionSettingValue } from '../../../Domain/UseCase/SetSubscrip
 import { RoleServiceInterface } from '../../../Domain/Role/RoleServiceInterface'
 import { CANONICAL_ADMIN_ROLES, CANONICAL_ADMIN_ROLE_NAMES } from '../../../Domain/Role/CanonicalRoles'
 import { FixStorageQuotaForUser } from '../../../Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
+import { CreateSignupInviteLink } from '../../../Domain/UseCase/CreateSignupInviteLink/CreateSignupInviteLink'
+import { ListSignupInviteLinks } from '../../../Domain/UseCase/ListSignupInviteLinks/ListSignupInviteLinks'
+import { RevokeSignupInviteLink } from '../../../Domain/UseCase/RevokeSignupInviteLink/RevokeSignupInviteLink'
+import { SignupInviteLink } from '../../../Domain/SignupInvite/SignupInviteLink'
 
 /**
  * Standard Red Notes: settings an admin (ADMIN_USER) is allowed to set
@@ -195,6 +199,13 @@ export class BaseAdminController extends BaseHttpController {
     // DeleteAccount pipeline — no hand-rolled multi-service deletion.
     protected doSetUserSuspension?: SetUserSuspension,
     protected doDeleteAccount?: DeleteAccount,
+    // Standard Red Notes: SIGNUP INVITE LINKS admin surface (create/list/revoke).
+    // Optional trailing deps so every existing construction (tests, home server,
+    // microservice) keeps compiling; the endpoints fail gracefully (500 "not
+    // available") when a dep is absent.
+    protected doCreateSignupInviteLink?: CreateSignupInviteLink,
+    protected doListSignupInviteLinks?: ListSignupInviteLinks,
+    protected doRevokeSignupInviteLink?: RevokeSignupInviteLink,
   ) {
     super()
 
@@ -1925,5 +1936,153 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     return this.json(result.getValue())
+  }
+
+  /**
+   * Standard Red Notes: the admin/creator-facing projection of an invite link.
+   * NEVER includes the raw token (shown only once at create). `status`/
+   * `remainingUses` are derived against `now`.
+   */
+  protected inviteLinkView(link: SignupInviteLink, now: Date): Record<string, unknown> {
+    return {
+      uuid: link.id.toString(),
+      label: link.props.label,
+      maxUses: link.props.maxUses,
+      usedCount: link.props.usedCount,
+      remainingUses: link.remainingUses(),
+      expiresAt: link.props.expiresAt ? link.props.expiresAt.toISOString() : null,
+      revoked: link.props.revoked,
+      status: link.status(now),
+      defaultRole: link.props.defaultRole,
+      allowedDomain: link.props.allowedDomain,
+      autoApprove: link.props.autoApprove,
+      createdByKind: link.props.createdByKind,
+      createdByUserUuid: link.props.createdByUserUuid,
+      createdAt: link.props.createdAt.toISOString(),
+    }
+  }
+
+  /**
+   * Standard Red Notes: create a signup INVITE link (admin). Returns the raw
+   * token + relative path exactly ONCE — the web admin composes the absolute URL
+   * from window.location.origin. Admin-gated + audited + webhook.
+   */
+  async createInviteLink(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doCreateSignupInviteLink === undefined) {
+      return this.json({ error: { message: 'Signup invite links are not available.' } }, 500)
+    }
+
+    const { maxUses, expiresInHours, label, defaultRole, allowedDomain, autoApprove } = request.body as {
+      maxUses?: number
+      expiresInHours?: number | null
+      label?: string | null
+      defaultRole?: string | null
+      allowedDomain?: string | null
+      autoApprove?: boolean
+    }
+
+    const result = await this.doCreateSignupInviteLink.execute({
+      creatorKind: 'admin',
+      adminUuid: this.actorUuid(response),
+      maxUses,
+      expiresInHours,
+      label,
+      defaultRole,
+      allowedDomain,
+      autoApprove,
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const { link, token } = result.getValue()
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.InviteLinkCreated,
+      targetType: 'signup_invite_link',
+      targetUuid: link.id.toString(),
+      ip: this.clientIp(request),
+      // Never the raw token — only non-sensitive metadata.
+      metadata: { maxUses: link.props.maxUses, allowedDomain: link.props.allowedDomain },
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.InviteLinkCreated,
+      targetUuid: link.id.toString(),
+      metadata: { maxUses: link.props.maxUses },
+    })
+
+    const now = new Date()
+
+    return this.json({
+      inviteLink: {
+        ...this.inviteLinkView(link, now),
+        token,
+        path: `/?invite=${encodeURIComponent(token)}`,
+      },
+    })
+  }
+
+  /**
+   * Standard Red Notes: list every signup invite link (admin). Read-only, so no
+   * audit entry. Never returns the raw token.
+   */
+  async listInviteLinks(_request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doListSignupInviteLinks === undefined) {
+      return this.json({ error: { message: 'Signup invite links are not available.' } }, 500)
+    }
+
+    const result = await this.doListSignupInviteLinks.execute({})
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const now = new Date()
+
+    return this.json({ inviteLinks: result.getValue().map((link) => this.inviteLinkView(link, now)) })
+  }
+
+  /**
+   * Standard Red Notes: soft-revoke a signup invite link by uuid (admin).
+   * Admin-gated + audited + webhook.
+   */
+  async revokeInviteLink(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doRevokeSignupInviteLink === undefined) {
+      return this.json({ error: { message: 'Signup invite links are not available.' } }, 500)
+    }
+
+    const { uuid } = request.params as Record<string, string>
+
+    const result = await this.doRevokeSignupInviteLink.execute({ uuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.InviteLinkRevoked,
+      targetType: 'signup_invite_link',
+      targetUuid: uuid,
+      ip: this.clientIp(request),
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.InviteLinkRevoked,
+      targetUuid: uuid,
+    })
+
+    return this.json({ success: true, uuid })
   }
 }

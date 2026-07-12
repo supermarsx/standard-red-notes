@@ -63,6 +63,13 @@ export interface RegistrationConfig {
    * back to a relative path (only useful behind a same-origin reverse proxy).
    */
   emailConfirmationBaseUrl: string
+  /**
+   * Standard Red Notes: INVITE-ONLY mode. OFF by default so a stock deploy is
+   * unchanged. When ON, registration REQUIRES a valid unique invite URL/token
+   * (fail-closed in Register); when OFF a token is optional but still honored +
+   * consumed if present (fail-open). See §2.4.
+   */
+  inviteOnly: boolean
 }
 
 /**
@@ -79,6 +86,7 @@ export interface RegistrationConfigOverlay {
   emailConfirmationSubject?: string
   emailConfirmationBody?: string
   emailConfirmationBaseUrl?: string
+  inviteOnly?: boolean
 }
 
 export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
@@ -90,6 +98,7 @@ export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
   emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
   emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
   emailConfirmationBaseUrl: '',
+  inviteOnly: false,
 }
 
 export const isRegistrationDomainMode = (value: unknown): value is RegistrationDomainMode =>
