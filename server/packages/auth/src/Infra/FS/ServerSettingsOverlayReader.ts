@@ -133,6 +133,17 @@ export class ServerSettingsOverlayReader {
     if (typeof registration.inviteOnly === 'boolean') {
       result.inviteOnly = registration.inviteOnly
     }
+    if (typeof registration.maxTotalAccounts === 'number') {
+      result.maxTotalAccounts = registration.maxTotalAccounts
+    }
+    // Nullable ISO instants: a null clears the bound; a string is validated by the
+    // resolver (bad value → null). Only pass through the two admissible shapes.
+    if (registration.signupsOpenAt === null || typeof registration.signupsOpenAt === 'string') {
+      result.signupsOpenAt = registration.signupsOpenAt
+    }
+    if (registration.signupsCloseAt === null || typeof registration.signupsCloseAt === 'string') {
+      result.signupsCloseAt = registration.signupsCloseAt
+    }
 
     return result
   }

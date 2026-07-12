@@ -151,6 +151,15 @@ export class Register implements UseCaseInterface {
       }
     }
 
+    // Standard Red Notes: GLOBAL registration gates that read off the resolved
+    // policy — the time-window (#12) and the max-total-accounts cap (#11). Both
+    // use a single generic non-enumerable refusal; the window is a pure clock
+    // check and the total cap FAILS OPEN on a count error.
+    const registrationGateRefusal = await this.enforceRegistrationGates(registrationConfig)
+    if (registrationGateRefusal !== undefined) {
+      return registrationGateRefusal
+    }
+
     // Standard Red Notes: when the workspaces-per-email feature is ON, the
     // account is keyed by the composite (email, workspaceIdentifier). An
     // absent/empty workspace name resolves to the 'default' workspace so the
@@ -461,6 +470,48 @@ export class Register implements UseCaseInterface {
     } catch {
       return DEFAULT_SIGNUP_LIMITS
     }
+  }
+
+  /**
+   * Standard Red Notes: GLOBAL registration gates read off the resolved policy.
+   *   - #12 TIME WINDOW: refuse when now < signupsOpenAt (not yet open) or
+   *     now > signupsCloseAt (closed), evaluated against the SERVER clock in UTC.
+   *     Either bound may be null (open-ended). A malformed persisted value was
+   *     already cleared to null by the resolver, so it can never wedge signups.
+   *   - #11 MAX-TOTAL-ACCOUNTS: when maxTotalAccounts > 0, refuse once the total
+   *     user count reaches it. FAILS OPEN on a count error (a broken count must
+   *     never block a legitimate signup — matches the caps' philosophy). A
+   *     pending-approval signup still creates a real row, so it counts here too.
+   * A single generic non-enumerable message is used for both.
+   */
+  private async enforceRegistrationGates(config: RegistrationConfig): Promise<RegisterResponse | undefined> {
+    const now = this.timer.getUTCDate()
+
+    if (config.signupsOpenAt !== null) {
+      const openAt = new Date(config.signupsOpenAt)
+      if (!Number.isNaN(openAt.getTime()) && now.getTime() < openAt.getTime()) {
+        return { success: false, errorMessage: 'User registration is currently not allowed.' }
+      }
+    }
+    if (config.signupsCloseAt !== null) {
+      const closeAt = new Date(config.signupsCloseAt)
+      if (!Number.isNaN(closeAt.getTime()) && now.getTime() > closeAt.getTime()) {
+        return { success: false, errorMessage: 'User registration is currently not allowed.' }
+      }
+    }
+
+    if (config.maxTotalAccounts > 0) {
+      try {
+        const total = await this.userRepository.countAll()
+        if (total >= config.maxTotalAccounts) {
+          return { success: false, errorMessage: 'User registration is currently not allowed.' }
+        }
+      } catch (error) {
+        this.logger?.error(`Signup total-accounts cap check failed (allowing signup): ${(error as Error).message}`)
+      }
+    }
+
+    return undefined
   }
 
   /**

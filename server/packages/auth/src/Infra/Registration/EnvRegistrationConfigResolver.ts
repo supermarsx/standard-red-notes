@@ -3,6 +3,8 @@ import {
   isEmailConfirmationGatingMode,
   isRegistrationDomainMode,
   normalizeDomainList,
+  normalizeMaxTotalAccounts,
+  normalizeSignupWindowValue,
   RegistrationConfig,
   RegistrationConfigOverlay,
   sanitizeDefaultRole,
@@ -45,6 +47,9 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
     const emailConfirmationBaseUrlRaw = overlay?.emailConfirmationBaseUrl ?? this.baseline.emailConfirmationBaseUrl
 
     const inviteOnlyRaw = overlay?.inviteOnly ?? this.baseline.inviteOnly
+    const maxTotalAccountsRaw = overlay?.maxTotalAccounts ?? this.baseline.maxTotalAccounts
+    const signupsOpenAtRaw = overlay?.signupsOpenAt ?? this.baseline.signupsOpenAt
+    const signupsCloseAtRaw = overlay?.signupsCloseAt ?? this.baseline.signupsCloseAt
 
     return {
       defaultRole: sanitizeDefaultRole(defaultRoleRaw),
@@ -69,6 +74,9 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
         typeof emailConfirmationBaseUrlRaw === 'string' ? emailConfirmationBaseUrlRaw.trim() : '',
       inviteOnly:
         typeof inviteOnlyRaw === 'boolean' ? inviteOnlyRaw : DEFAULT_REGISTRATION_CONFIG.inviteOnly,
+      maxTotalAccounts: normalizeMaxTotalAccounts(maxTotalAccountsRaw),
+      signupsOpenAt: normalizeSignupWindowValue(signupsOpenAtRaw),
+      signupsCloseAt: normalizeSignupWindowValue(signupsCloseAtRaw),
     }
   }
 }
@@ -89,6 +97,9 @@ export const registrationBaselineFromEnv = (raw: {
   emailConfirmationBody?: string
   emailConfirmationBaseUrl?: string
   inviteOnly?: string
+  maxTotalAccounts?: string
+  signupsOpenAt?: string
+  signupsCloseAt?: string
 }): RegistrationConfig => ({
   defaultRole: sanitizeDefaultRole(raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined),
   domainMode: isRegistrationDomainMode(raw.domainMode) ? raw.domainMode : DEFAULT_REGISTRATION_CONFIG.domainMode,
@@ -110,4 +121,7 @@ export const registrationBaselineFromEnv = (raw: {
   emailConfirmationBaseUrl: (raw.emailConfirmationBaseUrl ?? '').trim(),
   // REGISTRATION_INVITE_ONLY is opt-in: only the exact string 'true' enables it.
   inviteOnly: raw.inviteOnly === 'true',
+  maxTotalAccounts: normalizeMaxTotalAccounts(raw.maxTotalAccounts),
+  signupsOpenAt: normalizeSignupWindowValue(raw.signupsOpenAt),
+  signupsCloseAt: normalizeSignupWindowValue(raw.signupsCloseAt),
 })

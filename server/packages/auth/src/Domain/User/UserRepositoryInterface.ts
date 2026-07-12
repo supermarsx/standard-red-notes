@@ -89,6 +89,11 @@ export interface UserRepositoryInterface {
   ): Promise<User | null>
   findAllCreatedBetween(dto: { start: Date; end: Date; offset: number; limit: number }): Promise<User[]>
   countAllCreatedBetween(start: Date, end: Date): Promise<number>
+  /**
+   * Standard Red Notes: total number of user rows, for the GLOBAL
+   * max-total-accounts cap. Mirrors countAllCreatedBetween with no WHERE.
+   */
+  countAll(): Promise<number>
   save(user: User): Promise<User>
   remove(user: User): Promise<User>
 }

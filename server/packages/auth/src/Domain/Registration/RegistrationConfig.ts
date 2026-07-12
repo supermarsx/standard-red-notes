@@ -70,6 +70,19 @@ export interface RegistrationConfig {
    * consumed if present (fail-open). See §2.4.
    */
   inviteOnly: boolean
+  /**
+   * Standard Red Notes: GLOBAL max-total-accounts cap. 0 = unlimited (default).
+   * When > 0, Register refuses once the total user count reaches it. FAIL-OPEN on
+   * a count error (a broken count never blocks a signup).
+   */
+  maxTotalAccounts: number
+  /**
+   * Standard Red Notes: time-windowed signups. Nullable ISO-8601 instants; both
+   * null = always open (default). Evaluated against the SERVER clock in UTC:
+   * refuse when now < openAt (not yet open) or now > closeAt (closed).
+   */
+  signupsOpenAt: string | null
+  signupsCloseAt: string | null
 }
 
 /**
@@ -87,6 +100,9 @@ export interface RegistrationConfigOverlay {
   emailConfirmationBody?: string
   emailConfirmationBaseUrl?: string
   inviteOnly?: boolean
+  maxTotalAccounts?: number
+  signupsOpenAt?: string | null
+  signupsCloseAt?: string | null
 }
 
 export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
@@ -99,6 +115,9 @@ export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
   emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
   emailConfirmationBaseUrl: '',
   inviteOnly: false,
+  maxTotalAccounts: 0,
+  signupsOpenAt: null,
+  signupsCloseAt: null,
 }
 
 export const isRegistrationDomainMode = (value: unknown): value is RegistrationDomainMode =>
@@ -173,6 +192,37 @@ export const normalizeDomainList = (list: string[] | undefined): string[] => {
   }
 
   return result
+}
+
+/**
+ * Standard Red Notes: normalizes a configured signup-window bound to a valid
+ * absolute ISO-8601 instant string, or null. A non-string, empty or unparseable
+ * value clears to null so a bad value can never wedge signups shut. The value is
+ * canonicalized to the instant's ISO string (UTC) so comparison is unambiguous.
+ */
+export const normalizeSignupWindowValue = (value: unknown): string | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return null
+  }
+  const parsed = new Date(value.trim())
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+
+  return parsed.toISOString()
+}
+
+/**
+ * Standard Red Notes: clamps a configured max-total-accounts value to a
+ * non-negative safe integer (0 = unlimited). Anything invalid falls back to 0.
+ */
+export const normalizeMaxTotalAccounts = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    return 0
+  }
+
+  return Math.min(n, Number.MAX_SAFE_INTEGER)
 }
 
 /** Extracts the lowercased domain (after the last '@') from an email address. */

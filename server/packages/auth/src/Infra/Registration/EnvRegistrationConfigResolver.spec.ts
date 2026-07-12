@@ -14,6 +14,12 @@ const confirmationDefaults = {
   emailConfirmationSubject: DEFAULT_EMAIL_CONFIRMATION_SUBJECT,
   emailConfirmationBody: DEFAULT_EMAIL_CONFIRMATION_BODY,
   emailConfirmationBaseUrl: '',
+  // Standard Red Notes: signup-control defaults (invite-only + global-total-cap +
+  // time-window), all off/unlimited/open so a stock deploy is unchanged.
+  inviteOnly: false,
+  maxTotalAccounts: 0,
+  signupsOpenAt: null,
+  signupsCloseAt: null,
 }
 
 describe('EnvRegistrationConfigResolver', () => {

@@ -239,6 +239,10 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
       .getCount()
   }
 
+  async countAll(): Promise<number> {
+    return this.ormRepository.createQueryBuilder('user').getCount()
+  }
+
   async save(user: User): Promise<User> {
     return this.ormRepository.save(user)
   }

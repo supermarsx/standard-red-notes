@@ -123,6 +123,7 @@ describe('Register', () => {
     })
     userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(null)
     userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(null)
+    userRepository.countAll = jest.fn().mockResolvedValue(0)
 
     roleRepository = {} as jest.Mocked<RoleRepositoryInterface>
     roleRepository.findOneByName = jest.fn().mockReturnValue(null)
@@ -1257,6 +1258,116 @@ describe('Register', () => {
 
       expect(result.success).toBe(true)
       expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.ProUser)
+    })
+  })
+
+  describe('Standard Red Notes: global total cap (#11) + time-windowed signups (#12)', () => {
+    const makeResolver = (config: Partial<RegistrationConfig>): RegistrationConfigResolverInterface => ({
+      resolve: jest.fn().mockResolvedValue({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        emailConfirmationEnabled: false,
+        emailConfirmationGating: 'block_signin',
+        emailConfirmationSubject: 's',
+        emailConfirmationBody: 'b',
+        emailConfirmationBaseUrl: '',
+        inviteOnly: false,
+        maxTotalAccounts: 0,
+        signupsOpenAt: null,
+        signupsCloseAt: null,
+        ...config,
+      } as RegistrationConfig),
+    })
+
+    const dto = {
+      email: 'person@example.com',
+      password: 'asdzxc',
+      updatedWithUserAgent: 'Mozilla',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      version: '004',
+    }
+
+    const createWith = (resolver: RegistrationConfigResolverInterface) =>
+      new Register(
+        userRepository,
+        roleRepository,
+        authResponseFactory,
+        crypter,
+        false,
+        timer,
+        applyDefaultSettings,
+        'subscription',
+        undefined,
+        36500,
+        -1,
+        false,
+        undefined,
+        resolver,
+      )
+
+    it('#11 refuses once the total reaches the cap', async () => {
+      userRepository.countAll = jest.fn().mockResolvedValue(5)
+      const result = await createWith(makeResolver({ maxTotalAccounts: 5 })).execute(dto)
+
+      expect(result).toEqual({ success: false, errorMessage: 'User registration is currently not allowed.' })
+      expect(userRepository.save).not.toHaveBeenCalled()
+    })
+
+    it('#11 allows the last slot (total < cap)', async () => {
+      userRepository.countAll = jest.fn().mockResolvedValue(4)
+      const result = await createWith(makeResolver({ maxTotalAccounts: 5 })).execute(dto)
+
+      expect(result.success).toBe(true)
+    })
+
+    it('#11 FAILS OPEN when the count throws (a broken count never blocks signup)', async () => {
+      userRepository.countAll = jest.fn().mockRejectedValue(new Error('db down'))
+      const result = await createWith(makeResolver({ maxTotalAccounts: 1 })).execute(dto)
+
+      expect(result.success).toBe(true)
+    })
+
+    it('#11 unlimited (0) never counts', async () => {
+      userRepository.countAll = jest.fn()
+      const result = await createWith(makeResolver({ maxTotalAccounts: 0 })).execute(dto)
+
+      expect(result.success).toBe(true)
+      expect(userRepository.countAll).not.toHaveBeenCalled()
+    })
+
+    it('#12 refuses when the close time is in the past (closed)', async () => {
+      timer.getUTCDate = jest.fn().mockReturnValue(new Date('2026-06-01T00:00:00Z'))
+      const result = await createWith(
+        makeResolver({ signupsCloseAt: '2026-01-01T00:00:00.000Z' }),
+      ).execute(dto)
+
+      expect(result.success).toBe(false)
+    })
+
+    it('#12 refuses when the open time is in the future (not yet open)', async () => {
+      timer.getUTCDate = jest.fn().mockReturnValue(new Date('2026-06-01T00:00:00Z'))
+      const result = await createWith(
+        makeResolver({ signupsOpenAt: '2026-12-01T00:00:00.000Z' }),
+      ).execute(dto)
+
+      expect(result.success).toBe(false)
+    })
+
+    it('#12 allows inside an open window', async () => {
+      timer.getUTCDate = jest.fn().mockReturnValue(new Date('2026-06-01T00:00:00Z'))
+      const result = await createWith(
+        makeResolver({ signupsOpenAt: '2026-01-01T00:00:00.000Z', signupsCloseAt: '2026-12-01T00:00:00.000Z' }),
+      ).execute(dto)
+
+      expect(result.success).toBe(true)
+    })
+
+    it('#12 both-null is always open', async () => {
+      const result = await createWith(makeResolver({ signupsOpenAt: null, signupsCloseAt: null })).execute(dto)
+
+      expect(result.success).toBe(true)
     })
   })
 })
