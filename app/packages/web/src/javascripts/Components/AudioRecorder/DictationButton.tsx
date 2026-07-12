@@ -87,7 +87,7 @@ const DictationButton = () => {
         aria-pressed={listening}
         onClick={toggle}
       >
-        <Icon type={listening ? 'close' : 'file-music'} size="custom" className="h-5 w-5" />
+        <Icon type={listening ? 'close' : 'mic'} size="custom" className="h-5 w-5" />
       </button>
     </StyledTooltip>
   )

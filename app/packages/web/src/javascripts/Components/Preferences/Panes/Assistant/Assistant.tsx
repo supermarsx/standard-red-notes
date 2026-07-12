@@ -325,7 +325,7 @@ const ASSISTANT_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }
   { id: 'behavior', title: 'Behavior', icon: 'tune' },
   { id: 'model', title: 'Model', icon: 'box' },
   { id: 'search', title: 'Search', icon: 'search' },
-  { id: 'voice', title: 'Voice', icon: 'file-music' },
+  { id: 'voice', title: 'Voice', icon: 'mic' },
   { id: 'actions', title: 'Actions', icon: 'tasks' },
 ]
 

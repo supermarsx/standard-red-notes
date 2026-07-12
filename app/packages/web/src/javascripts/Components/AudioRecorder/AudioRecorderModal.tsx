@@ -273,7 +273,7 @@ const AudioRecorderContent = observer(
                   onClick={() => void startRecording()}
                   disabled={!supported}
                 >
-                  <Icon type="file-music" size="small" />
+                  <Icon type="mic" size="small" />
                   Record
                 </button>
               )}
