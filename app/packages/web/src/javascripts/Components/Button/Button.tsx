@@ -80,6 +80,7 @@ interface ButtonProps extends ComponentPropsWithoutRef<'button'> {
   fullWidth?: boolean
   small?: boolean
   rounded?: boolean
+  disabledReason?: string
 }
 
 const Button = forwardRef(
@@ -90,19 +91,29 @@ const Button = forwardRef(
       className = '',
       colorStyle = primary ? 'info' : 'default',
       disabled = false,
+      disabledReason,
       children,
       fullWidth,
       small,
       rounded = true,
+      onClick,
+      title,
       ...props
     }: ButtonProps,
     ref: Ref<HTMLButtonElement>,
   ) => {
+    // A native `disabled` button swallows pointer events, so its tooltip never
+    // fires. When we have a reason to surface, drop the native attribute and use
+    // `aria-disabled` + `title` instead so the greyed button stays hoverable.
+    const showReason = disabled && !!disabledReason
     return (
       <button
         type="button"
         className={`${getClassName(primary, colorStyle, disabled, fullWidth, small, rounded)} ${className}`}
-        disabled={disabled}
+        disabled={disabled && !showReason}
+        aria-disabled={showReason || undefined}
+        title={showReason ? disabledReason : title}
+        onClick={showReason ? (e) => e.preventDefault() : onClick}
         ref={ref}
         {...props}
       >

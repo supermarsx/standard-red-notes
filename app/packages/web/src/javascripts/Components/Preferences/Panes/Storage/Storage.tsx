@@ -531,11 +531,29 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
               <Button
                 small
                 disabled={busy || selectedRows.length === 0}
+                disabledReason={
+                  selectedRows.length === 0
+                    ? 'Select at least one item to export.'
+                    : busy
+                      ? 'Export in progress…'
+                      : undefined
+                }
                 onClick={() => handleExport(selectedRows)}
               >
                 Export selected ({selectedRows.length})
               </Button>
-              <Button small disabled={busy || largest.length === 0} onClick={() => handleExport(largest)}>
+              <Button
+                small
+                disabled={busy || largest.length === 0}
+                disabledReason={
+                  largest.length === 0
+                    ? 'Nothing stored on this device to export yet.'
+                    : busy
+                      ? 'Export in progress…'
+                      : undefined
+                }
+                onClick={() => handleExport(largest)}
+              >
                 Export all {largest.length}
               </Button>
             </div>

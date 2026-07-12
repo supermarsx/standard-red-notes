@@ -47,6 +47,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
               className="mt-3 min-w-20"
               label={c('Action').t`Sync now`}
               disabled={isSyncingInProgress}
+              disabledReason={isSyncingInProgress ? c('Info').t`A sync is already in progress.` : undefined}
               onClick={doSynchronization}
             />
           </div>

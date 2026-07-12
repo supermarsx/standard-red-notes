@@ -95,6 +95,7 @@ const ExportModal = ({ exportModalController }: { exportModalController: ExportM
                 primary
                 small
                 disabled={option.disabled || busy !== null}
+                disabledReason={option.disabled ? option.disabledHint : undefined}
                 onClick={() => runExport(option.kind)}
                 className="flex items-center whitespace-nowrap"
               >
