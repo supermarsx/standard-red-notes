@@ -54,6 +54,7 @@ export type BlockCatalogContext = {
   openInsertTableDialog: () => void
   openInsertImageFromUrlDialog: () => void
   openFileUpload: () => void
+  openInsertSymbolPicker: () => void
 }
 
 /** Fixed, ordered set of categories the Insert menu groups blocks under. */
@@ -111,6 +112,27 @@ export const BLOCK_CATALOG: BlockCatalogEntry[] = [
   fromBlock(DividerBlock, 'Basic'),
   fromBlock(PageBreakBlock, 'Basic'),
   fromBlock(CollapsibleBlock, 'Basic'),
+  {
+    key: 'Symbol',
+    name: 'Symbol',
+    iconName: 'plain-text',
+    keywords: [
+      'symbol',
+      'special character',
+      'character',
+      'unicode',
+      'glyph',
+      'omega',
+      'arrow',
+      'math',
+      'greek',
+      'currency',
+      'punctuation',
+      'emoji',
+    ],
+    category: 'Basic',
+    onSelect: (_editor, ctx) => ctx.openInsertSymbolPicker(),
+  },
 
   // ----- Lists -----------------------------------------------------------
   fromBlock(BulletedListBlock, 'Lists'),

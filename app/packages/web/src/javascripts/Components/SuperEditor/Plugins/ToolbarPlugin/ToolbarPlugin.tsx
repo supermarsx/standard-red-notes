@@ -77,6 +77,7 @@ import {
 } from '../SearchPlugin/searchCommands'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { InsertRemoteImageDialog } from '../RemoteImagePlugin/RemoteImagePlugin'
+import SymbolPickerDialog from '../SymbolPicker/SymbolPickerDialog'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { Toolbar, ToolbarItem, useToolbarStore } from '@ariakit/react'
 import { URL_REGEX } from '@/Constants/Constants'
@@ -339,6 +340,7 @@ const BLOCK_NAME_I18N_KEYS: Record<string, string> = {
   Comment: 'blockComment',
   Divider: 'blockDivider',
   Collapsible: 'blockCollapsible',
+  Symbol: 'blockSymbol',
   'Bulleted List': 'bulletedList',
   'Numbered List': 'numberedList',
   'Check List': 'checkList',
@@ -2596,6 +2598,8 @@ const ToolbarPlugin = () => {
       openInsertImageFromUrlDialog: () =>
         showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
+      openInsertSymbolPicker: () =>
+        showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
     }),
     [showModal, editor, activeEditor, t],
   )

@@ -35,6 +35,14 @@ describe('buildInsertSections', () => {
     expect(BLOCK_CATALOG.some((entry) => entry.name === 'Comment')).toBe(true)
   })
 
+  it('places the Symbol entry in the Basic section (opens the Insert -> Symbol picker)', () => {
+    expect(namesIn('basic')).toContain('Symbol')
+    // Present in the flat catalog too, so both insert surfaces surface it.
+    const symbol = BLOCK_CATALOG.find((entry) => entry.key === 'Symbol')
+    expect(symbol).toBeDefined()
+    expect(symbol?.category).toBe('Basic')
+  })
+
   it('places representative catalog items in their expected section', () => {
     expect(namesIn('basic')).toEqual(expect.arrayContaining(['Paragraph', 'Heading 1']))
     expect(namesIn('lists')).toContain('Bulleted List')

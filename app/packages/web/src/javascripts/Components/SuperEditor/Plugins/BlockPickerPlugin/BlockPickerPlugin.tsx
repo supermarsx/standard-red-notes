@@ -22,6 +22,7 @@ import {
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
 import { LexicalIconName } from '@/Components/Icon/LexicalIcons'
 import { getFullBlockCatalog, BlockCatalogContext } from '../Blocks/blockCatalog'
+import SymbolPickerDialog from '../SymbolPicker/SymbolPickerDialog'
 import { useTranslation } from 'react-i18next'
 
 export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex?: string }): React.JSX.Element {
@@ -43,6 +44,8 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       openInsertImageFromUrlDialog: () =>
         showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => editor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
+      openInsertSymbolPicker: () =>
+        showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
     }
 
     // The slash picker shares the toolbar Insert menu's single source of truth

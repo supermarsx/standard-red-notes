@@ -225,7 +225,13 @@ const editor = {
   // Modal titles
   insertTable: 'Insert Table',
   insertImageFromUrl: 'Insert image from URL',
+  insertSymbol: 'Insert symbol',
   sortLinesModalTitle: 'Sort lines',
+
+  // Symbol picker
+  searchSymbols: 'Search symbols',
+  recentSymbols: 'Recently used',
+  noSymbolsFound: 'No symbols found',
 
   // Block picker
   blockPicker: 'Block picker',
@@ -238,6 +244,7 @@ const editor = {
   blockComment: 'Comment',
   blockDivider: 'Divider',
   blockCollapsible: 'Collapsible',
+  blockSymbol: 'Symbol',
   blockImageFromUrl: 'Image from URL',
   blockUploadFile: 'Upload file',
   blockDrawing: 'Drawing',
