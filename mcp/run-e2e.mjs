@@ -10,12 +10,35 @@ import path from 'node:path'
 const require = createRequire(import.meta.url)
 const sumoShim = fileURLToPath(new URL('./src/libsodium-sumo-shim.mjs', import.meta.url))
 
+// Opt-in override: by default the e2e bundle resolves the published
+// @standardnotes/snjs pinned in package.json (what the MCP ships against). Set
+// SNJS_DIST=<abs path to a snjs.js webpack bundle> to instead bundle a specific
+// build — e.g. the workspace app/packages/snjs/dist after `yarn workspace
+// @standardnotes/snjs build`, which is the ONLY build carrying unreleased fixes
+// like the local-only persistence fix (commit 55785604). Leaves default runs
+// untouched for anyone not setting the var.
+const snjsDistOverride = process.env.SNJS_DIST ? path.resolve(process.env.SNJS_DIST).replace(/\\/g, '/') : undefined
+const snjsOverridePlugin = snjsDistOverride
+  ? [
+      {
+        name: 'snjs-dist-override',
+        setup(b) {
+          b.onResolve({ filter: /^@standardnotes\/snjs$/ }, () => ({ path: snjsDistOverride }))
+        },
+      },
+    ]
+  : []
+if (snjsDistOverride) {
+  console.log(`[run-e2e] SNJS_DIST override active -> @standardnotes/snjs resolves to ${snjsDistOverride}`)
+}
+
 const commonBuild = {
   bundle: true,
   platform: 'node',
   target: 'node22',
   format: 'cjs',
   legalComments: 'none',
+  plugins: snjsOverridePlugin,
   alias: { 'libsodium-wrappers': sumoShim },
   banner: {
     js: [
