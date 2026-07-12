@@ -66,22 +66,25 @@ export type GalleryBlockDescriptor = {
  */
 export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
   {
-    key: 'title',
-    label: 'Title',
-    iconName: 'text',
-    // Renders as a styled paragraph (no heading semantics / not in the TOC); its
-    // large-title look comes entirely from `baseStyle` layered over the paragraph.
+    key: 'paragraph',
+    label: 'Normal',
+    iconName: 'paragraph',
     themeClass: 'Lexical__paragraph',
     kind: 'block',
-    sample: 'Title',
+    sample: 'Normal body text',
+    setType: (editor) => ParagraphBlock.onSelect(editor),
+  },
+  {
+    key: 'normalSpaced',
+    label: 'Normal (spaced)',
+    iconName: 'plain-text',
+    themeClass: 'Lexical__paragraph',
+    kind: 'block',
+    sample: 'Spaced body text',
     setType: (editor) => ParagraphBlock.onSelect(editor),
     baseStyle: {
-      fontSize: '2rem',
-      fontWeight: '800',
-      lineHeight: '1.2',
-      color: 'var(--sn-stylekit-editor-foreground-color)',
       marginTop: '0',
-      marginBottom: '0.5rem',
+      marginBottom: '0.75rem',
     },
   },
   {
@@ -130,25 +133,22 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     setType: (editor) => H5Block.onSelect(editor),
   },
   {
-    key: 'paragraph',
-    label: 'Normal',
-    iconName: 'paragraph',
+    key: 'title',
+    label: 'Title',
+    iconName: 'text',
+    // Renders as a styled paragraph (no heading semantics / not in the TOC); its
+    // large-title look comes entirely from `baseStyle` layered over the paragraph.
     themeClass: 'Lexical__paragraph',
     kind: 'block',
-    sample: 'Normal body text',
-    setType: (editor) => ParagraphBlock.onSelect(editor),
-  },
-  {
-    key: 'normalSpaced',
-    label: 'Normal (spaced)',
-    iconName: 'plain-text',
-    themeClass: 'Lexical__paragraph',
-    kind: 'block',
-    sample: 'Spaced body text',
+    sample: 'Title',
     setType: (editor) => ParagraphBlock.onSelect(editor),
     baseStyle: {
+      fontSize: '2rem',
+      fontWeight: '800',
+      lineHeight: '1.2',
+      color: 'var(--sn-stylekit-editor-foreground-color)',
       marginTop: '0',
-      marginBottom: '0.75rem',
+      marginBottom: '0.5rem',
     },
   },
   {
@@ -234,6 +234,52 @@ export const GALLERY_BLOCKS: GalleryBlockDescriptor[] = [
     setType: (editor) => ChecklistBlock.onSelect(editor),
   },
 ]
+
+/** The built-in default display order (drives everything when the user hasn't reordered). */
+export const DEFAULT_GALLERY_ORDER: BlockTypeKey[] = GALLERY_BLOCKS.map((d) => d.key)
+
+/**
+ * Resolve the user's saved gallery order into concrete descriptors:
+ *  - saved keys map to descriptors in saved order (unknown/stale keys and duplicates dropped);
+ *  - any descriptor NOT named in the saved order is appended in default (GALLERY_BLOCKS) order,
+ *    so block styles added after the user's last reorder always appear (at the end);
+ *  - an empty / missing order yields the full default order.
+ * Pure; order-INDEPENDENT of detection (see resolveActiveGalleryKey note below).
+ */
+export const orderGalleryBlocks = (order: readonly BlockTypeKey[] | null | undefined): GalleryBlockDescriptor[] => {
+  const byKey = new Map(GALLERY_BLOCKS.map((d) => [d.key, d]))
+  const seen = new Set<BlockTypeKey>()
+  const ordered: GalleryBlockDescriptor[] = []
+  for (const key of order ?? []) {
+    const descriptor = byKey.get(key)
+    if (descriptor && !seen.has(key)) {
+      ordered.push(descriptor)
+      seen.add(key)
+    }
+  }
+  for (const descriptor of GALLERY_BLOCKS) {
+    if (!seen.has(descriptor.key)) {
+      ordered.push(descriptor)
+    }
+  }
+  return ordered
+}
+
+/** Move `key` one slot up (-1) or down (+1) within `keys`; bounds-safe, immutable. */
+export const reorderGalleryKeys = (
+  keys: readonly BlockTypeKey[],
+  key: BlockTypeKey,
+  direction: -1 | 1,
+): BlockTypeKey[] => {
+  const index = keys.indexOf(key)
+  const target = index + direction
+  if (index < 0 || target < 0 || target >= keys.length) {
+    return [...keys]
+  }
+  const next = [...keys]
+  ;[next[index], next[target]] = [next[target], next[index]]
+  return next
+}
 
 /** Resolve the active profile's style for a block type (undefined when unstyled). */
 export const getProfileBlockStyle = (

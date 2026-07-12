@@ -263,6 +263,7 @@ export const BlockStyleGalleryBar = ({
   onApplyBlock,
   activeBlockType,
   activeBlockStyle,
+  blocks = GALLERY_BLOCKS,
 }: {
   profile: TypographyProfile | null | undefined
   onApplyBlock: (descriptor: GalleryBlockDescriptor) => void
@@ -270,6 +271,8 @@ export const BlockStyleGalleryBar = ({
   activeBlockType?: string
   /** The current block's stamped inline style string (disambiguates paragraph variants). */
   activeBlockStyle?: string
+  /** The gallery descriptors, in display order. Defaults to the built-in default order. */
+  blocks?: GalleryBlockDescriptor[]
 }) => {
   // The full-width track the squares live in; its width drives the fit math.
   const trackRef = useRef<HTMLDivElement>(null)
@@ -288,13 +291,13 @@ export const BlockStyleGalleryBar = ({
     return () => observer.disconnect()
   }, [])
 
-  const total = GALLERY_BLOCKS.length
+  const total = blocks.length
   const { inlineCount } = useMemo(
     () => computeGalleryFit({ containerWidth: trackWidth, total, overflowWidth: GALLERY_OVERFLOW_TOGGLE_WIDTH }),
     [trackWidth, total],
   )
-  const inlineBlocks = GALLERY_BLOCKS.slice(0, inlineCount)
-  const overflowBlocks = GALLERY_BLOCKS.slice(inlineCount)
+  const inlineBlocks = blocks.slice(0, inlineCount)
+  const overflowBlocks = blocks.slice(inlineCount)
 
   // Which square (if any) matches the current selection/cursor's block style.
   const activeKey = useMemo(

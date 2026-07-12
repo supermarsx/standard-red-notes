@@ -24,6 +24,7 @@
  * profile-write live in `Utils/typographyProfileEditor`.
  */
 import { CSSProperties, ReactNode, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { classNames, PrefKey } from '@standardnotes/snjs'
 import type { BlockStyle, BlockTypeKey, TypographyProfile } from '@standardnotes/models'
 import { useApplication } from '@/Components/ApplicationProvider'
@@ -36,7 +37,7 @@ import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import { blockStyleToInlineStyle, resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
 import { sanitizeBlockStyle, setProfileBlocks } from '@/Utils/typographyProfileEditor'
 import { BlockStylePreview } from './BlockStyleGallery'
-import { GALLERY_BLOCKS } from './typographyGallery'
+import { GALLERY_BLOCKS, orderGalleryBlocks, reorderGalleryKeys } from './typographyGallery'
 import { INDENT_STEP, LINE_HEIGHT_PRESETS, SPACING_PRESETS } from './blockFormatting'
 
 type DraftBlocks = Partial<Record<BlockTypeKey, BlockStyle>>
@@ -237,9 +238,27 @@ const isListBlock = (key: BlockTypeKey): boolean =>
 /* ------------------------------------------------------------------- content */
 
 const ModalContent = ({ close, profileId }: { close: () => void; profileId?: string }) => {
+  const { t } = useTranslation('editor')
   const application = useApplication()
   const profiles = usePreference(PrefKey.TypographyProfiles)
   const activeId = usePreference(PrefKey.ActiveTypographyProfileId)
+
+  // The block-style gallery display order (synced pref; empty = built-in default),
+  // resolved to ordered descriptors for the left selector column. Reordering is a
+  // GLOBAL preference, orthogonal to `draftBlocks` and to this modal's Save/Cancel:
+  // its `setPreference` writes take effect immediately and are never part of the
+  // profile draft, so switching order never touches the style edits in progress.
+  const galleryOrder = usePreference(PrefKey.BlockStyleGalleryOrder)
+  const orderedBlocks = useMemo(() => orderGalleryBlocks(galleryOrder), [galleryOrder])
+  const [reordering, setReordering] = useState(false)
+
+  const moveBlock = (key: BlockTypeKey, direction: -1 | 1): void => {
+    const orderedKeys = orderedBlocks.map((descriptor) => descriptor.key)
+    void application.setPreference(PrefKey.BlockStyleGalleryOrder, reorderGalleryKeys(orderedKeys, key, direction))
+  }
+  const resetOrder = (): void => {
+    void application.setPreference(PrefKey.BlockStyleGalleryOrder, [])
+  }
 
   // The profile being edited: an explicit `profileId` (P4 — edit ANY profile from
   // Settings) when given, otherwise the ACTIVE profile (P3 — in-editor button).
@@ -301,42 +320,108 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
       ]}
     >
       <div className="flex flex-col md:flex-row md:divide-x md:divide-border">
-        {/* Left: block-type selector (P2 preview squares, now live on the draft). */}
+        {/* Left: block-type selector (P2 preview squares, now live on the draft),
+            in the user's saved gallery order. A "Reorder" toggle swaps the grid
+            for a dependency-free move-up/down list that writes the global order
+            pref immediately (independent of this modal's Save/Cancel). */}
         <div className="flex-shrink-0 border-b border-border p-2 md:w-52 md:border-b-0">
-          <div className="mb-1 px-1 text-xs text-passive-1">Block type</div>
-          <div className="grid grid-cols-3 gap-1.5 md:grid-cols-2">
-            {GALLERY_BLOCKS.map((descriptor) => (
-              <button
-                key={descriptor.key}
-                type="button"
-                aria-label={descriptor.label}
-                aria-pressed={descriptor.key === selectedKey}
-                onClick={() => setSelectedKey(descriptor.key)}
-                className={classNames(
-                  'flex select-none flex-col items-stretch gap-1 rounded border p-1.5 transition-colors duration-75',
-                  descriptor.key === selectedKey
-                    ? 'border-info bg-contrast'
-                    : 'border-border bg-default hover:border-info',
-                )}
-              >
+          <div className="mb-1 flex items-center justify-between gap-2 px-1">
+            <span className="text-xs text-passive-1">Block type</span>
+            <button
+              type="button"
+              aria-pressed={reordering}
+              onClick={() => setReordering((prev) => !prev)}
+              className={classNames(
+                'flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs transition-colors duration-75',
+                reordering
+                  ? 'border-info bg-info text-info-contrast'
+                  : 'border-border text-passive-0 hover:bg-contrast',
+              )}
+            >
+              <Icon type="arrows-vertical" size="custom" className="h-3.5 w-3.5 flex-shrink-0" />
+              {reordering ? t('doneReordering') : t('reorderBlockStyles')}
+            </button>
+          </div>
+          {reordering ? (
+            <div className="flex flex-col gap-1">
+              {orderedBlocks.map((descriptor, index) => (
                 <div
-                  className="flex h-10 items-center overflow-hidden rounded-sm px-1.5"
-                  style={{
-                    backgroundColor: 'var(--sn-stylekit-editor-background-color)',
-                    color: 'var(--sn-stylekit-editor-foreground-color)',
-                  }}
+                  key={descriptor.key}
+                  className="flex items-center gap-1 rounded border border-border bg-default px-2 py-1"
                 >
-                  <BlockStylePreview descriptor={descriptor} style={inlineFor(descriptor.key)} />
-                </div>
-                <span className="flex items-center gap-1 overflow-hidden">
                   <Icon type={descriptor.iconName} size="custom" className="h-3.5 w-3.5 flex-shrink-0 text-passive-1" />
-                  <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-0">
+                  <span className="min-w-0 flex-grow overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text">
                     {descriptor.label}
                   </span>
-                </span>
+                  <button
+                    type="button"
+                    aria-label={t('moveBlockStyleUp')}
+                    title={t('moveBlockStyleUp')}
+                    disabled={index === 0}
+                    onClick={() => moveBlock(descriptor.key, -1)}
+                    className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast disabled:opacity-30 disabled:hover:bg-transparent"
+                  >
+                    <Icon type="chevron-up" size="custom" className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('moveBlockStyleDown')}
+                    title={t('moveBlockStyleDown')}
+                    disabled={index === orderedBlocks.length - 1}
+                    onClick={() => moveBlock(descriptor.key, 1)}
+                    className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast disabled:opacity-30 disabled:hover:bg-transparent"
+                  >
+                    <Icon type="chevron-down" size="custom" className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={resetOrder}
+                className="mt-1 rounded border border-border px-2 py-1 text-xs text-passive-0 hover:bg-contrast"
+              >
+                {t('resetBlockStyleOrder')}
               </button>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-1.5 md:grid-cols-2">
+              {orderedBlocks.map((descriptor) => (
+                <button
+                  key={descriptor.key}
+                  type="button"
+                  aria-label={descriptor.label}
+                  aria-pressed={descriptor.key === selectedKey}
+                  onClick={() => setSelectedKey(descriptor.key)}
+                  className={classNames(
+                    'flex select-none flex-col items-stretch gap-1 rounded border p-1.5 transition-colors duration-75',
+                    descriptor.key === selectedKey
+                      ? 'border-info bg-contrast'
+                      : 'border-border bg-default hover:border-info',
+                  )}
+                >
+                  <div
+                    className="flex h-10 items-center overflow-hidden rounded-sm px-1.5"
+                    style={{
+                      backgroundColor: 'var(--sn-stylekit-editor-background-color)',
+                      color: 'var(--sn-stylekit-editor-foreground-color)',
+                    }}
+                  >
+                    <BlockStylePreview descriptor={descriptor} style={inlineFor(descriptor.key)} />
+                  </div>
+                  <span className="flex items-center gap-1 overflow-hidden">
+                    <Icon
+                      type={descriptor.iconName}
+                      size="custom"
+                      className="h-3.5 w-3.5 flex-shrink-0 text-passive-1"
+                    />
+                    <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-0">
+                      {descriptor.label}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Right: live preview + grouped controls for the selected block. */}

@@ -7,7 +7,7 @@ import { EditorLineWidth } from './EditorLineWidth'
 import { EditorFontSize } from './EditorFontSize'
 import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { AllComponentPreferences } from './ComponentPreferences'
-import { TypographyProfile } from './TypographyProfile'
+import { BlockTypeKey, TypographyProfile } from './TypographyProfile'
 
 export enum PrefKey {
   TagsPanelWidth = 'tagsPanelWidth',
@@ -135,6 +135,13 @@ export enum PrefKey {
   // (#77 inline style) always wins by the cascade.
   TypographyProfiles = 'typographyProfiles',
   ActiveTypographyProfileId = 'activeTypographyProfileId',
+  // Standard Red Notes: the user's custom display order for the Super editor's
+  // block-style gallery squares, as an ordered list of gallery block-type keys.
+  // An empty array (the default) means "use the built-in code default order"
+  // (GALLERY_BLOCKS). Unknown/stale keys are ignored on read and any block styles
+  // added after the user last reordered are appended at the end, so the stored
+  // value is forward/backward compatible and never needs migrating.
+  BlockStyleGalleryOrder = 'blockStyleGalleryOrder',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -278,4 +285,11 @@ export type PrefValue = {
    * `TypographyProfiles`). Falls back to the Default profile when unset/missing.
    */
   [PrefKey.ActiveTypographyProfileId]: string
+  /**
+   * The user's custom block-style gallery order — an ordered list of gallery
+   * block-type keys. Empty = use the built-in default order. Unknown keys are
+   * ignored and newly-added block styles append at the end (forward/backward
+   * compatible), so the stored value never needs migrating.
+   */
+  [PrefKey.BlockStyleGalleryOrder]: BlockTypeKey[]
 }

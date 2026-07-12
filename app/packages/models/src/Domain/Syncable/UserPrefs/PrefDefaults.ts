@@ -118,6 +118,10 @@ export const PrefDefaults = {
   // zero-visual-change no-op for existing notes.
   [PrefKey.TypographyProfiles]: [DEFAULT_TYPOGRAPHY_PROFILE],
   [PrefKey.ActiveTypographyProfileId]: DEFAULT_TYPOGRAPHY_PROFILE_ID,
+  // Standard Red Notes: empty = "no customization → use the code default gallery
+  // order" (GALLERY_BLOCKS). Storing the full default here instead would fossilize
+  // the order and force sync migrations whenever the block-style set changes.
+  [PrefKey.BlockStyleGalleryOrder]: [],
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

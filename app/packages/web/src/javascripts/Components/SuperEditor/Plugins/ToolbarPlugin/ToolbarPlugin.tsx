@@ -210,7 +210,7 @@ import { useTranslation } from 'react-i18next'
 import BlockStyleGalleryBar from './BlockStyleGallery'
 import InsertSectionsBar from './InsertSectionsBar'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
-import { GalleryBlockDescriptor, applyTypographyBlockToSelection } from './typographyGallery'
+import { GalleryBlockDescriptor, applyTypographyBlockToSelection, orderGalleryBlocks } from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
@@ -705,6 +705,12 @@ const ToolbarPlugin = () => {
     () => resolveActiveTypographyProfile(typographyProfiles, activeTypographyProfileId),
     [typographyProfiles, activeTypographyProfileId],
   )
+
+  // Standard Red Notes: the user's custom block-style gallery order (synced pref;
+  // empty = built-in default). Resolved to ordered descriptors for the gallery
+  // bar — re-renders live when the reorder UI in the Edit-styles modal writes it.
+  const galleryOrder = usePreference(PrefKey.BlockStyleGalleryOrder)
+  const orderedGalleryBlocks = useMemo(() => orderGalleryBlocks(galleryOrder), [galleryOrder])
 
   // Clicking a gallery square: set the block TYPE + stamp the active profile's
   // per-block style (reusing the block ops + blockFormatting).
@@ -3135,6 +3141,7 @@ const ToolbarPlugin = () => {
                               onApplyBlock={applyTypographyBlock}
                               activeBlockType={blockType}
                               activeBlockStyle={activeBlockStyle}
+                              blocks={orderedGalleryBlocks}
                             />
                           </div>
                         </div>

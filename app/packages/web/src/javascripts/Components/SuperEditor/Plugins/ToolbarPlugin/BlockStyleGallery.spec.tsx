@@ -16,7 +16,11 @@ import { createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { act } from 'react'
 import BlockStyleGalleryBar from '@/Components/SuperEditor/Plugins/ToolbarPlugin/BlockStyleGallery'
-import { GALLERY_BLOCKS } from '@/Components/SuperEditor/Plugins/ToolbarPlugin/typographyGallery'
+import {
+  GALLERY_BLOCKS,
+  GalleryBlockDescriptor,
+  orderGalleryBlocks,
+} from '@/Components/SuperEditor/Plugins/ToolbarPlugin/typographyGallery'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 
@@ -76,7 +80,9 @@ afterEach(() => {
   Element.prototype.getBoundingClientRect = originalGetBoundingClientRect
 })
 
-const render = (extraProps: { activeBlockType?: string; activeBlockStyle?: string } = {}) => {
+const render = (
+  extraProps: { activeBlockType?: string; activeBlockStyle?: string; blocks?: GalleryBlockDescriptor[] } = {},
+) => {
   act(() => {
     root.render(
       createElement(ApplicationProvider, {
@@ -129,6 +135,25 @@ describe('BlockStyleGalleryBar (post-restack)', () => {
       (d.getAttribute('style') ?? '').includes('scale('),
     )
     expect(scaled.length).toBe(GALLERY_BLOCKS.length) // one scaling wrapper per inline square
+  })
+
+  it('renders the new default order: first square is Normal, second is Normal (spaced)', () => {
+    render()
+    const squareButtons = Array.from(container.querySelectorAll('button')).filter((b) =>
+      GALLERY_BLOCKS.some((d) => b.getAttribute('title') === d.label),
+    )
+    expect(squareButtons[0]?.getAttribute('title')).toBe('Normal')
+    expect(squareButtons[1]?.getAttribute('title')).toBe('Normal (spaced)')
+  })
+
+  it('honours an injected block order: a reordered `blocks` prop renders Code first', () => {
+    render({ blocks: orderGalleryBlocks(['code']) })
+    const squareButtons = Array.from(container.querySelectorAll('button')).filter((b) =>
+      GALLERY_BLOCKS.some((d) => b.getAttribute('title') === d.label),
+    )
+    expect(squareButtons[0]?.getAttribute('title')).toBe('Code')
+    // The injected order is still the complete set (merge appends the rest).
+    expect(squareButtons.length).toBe(GALLERY_BLOCKS.length)
   })
 
   it('marks the square matching the active block type as pressed (and only that one)', () => {

@@ -5,12 +5,20 @@
  */
 import {
   computeGalleryFit,
+  DEFAULT_GALLERY_ORDER,
   GALLERY_BLOCKS,
   GALLERY_SQUARE_GAP,
   GALLERY_SQUARE_WIDTH,
+  orderGalleryBlocks,
+  reorderGalleryKeys,
   resolveActiveGalleryKey,
 } from './typographyGallery'
+import type { BlockTypeKey } from '@standardnotes/models'
 import { blockStyleToStyleEntries } from '@/Utils/typographyProfiles'
+
+/** Resolve a saved order to its concrete key sequence (test convenience). */
+const resolvedKeys = (order?: BlockTypeKey[] | null): BlockTypeKey[] =>
+  orderGalleryBlocks(order).map((descriptor) => descriptor.key)
 
 const S = GALLERY_SQUARE_WIDTH
 const G = GALLERY_SQUARE_GAP
@@ -111,6 +119,113 @@ describe('resolveActiveGalleryKey', () => {
   it('detects the Title variant from a paragraph carrying its merged style', () => {
     expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: styleStringFor('title'), profile: null })).toBe(
       'title',
+    )
+  })
+})
+
+describe('GALLERY_BLOCKS default order', () => {
+  it('leads with Normal, Normal (spaced), the headings h1–h5, then Title', () => {
+    expect(GALLERY_BLOCKS.map((d) => d.key).slice(0, 8)).toEqual([
+      'paragraph',
+      'normalSpaced',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'title',
+    ])
+  })
+
+  it('DEFAULT_GALLERY_ORDER mirrors the GALLERY_BLOCKS key sequence', () => {
+    expect(DEFAULT_GALLERY_ORDER).toEqual(GALLERY_BLOCKS.map((d) => d.key))
+  })
+})
+
+describe('orderGalleryBlocks (merge rules)', () => {
+  it('yields the full default order for empty / undefined / null', () => {
+    expect(resolvedKeys([])).toEqual(DEFAULT_GALLERY_ORDER)
+    expect(resolvedKeys(undefined)).toEqual(DEFAULT_GALLERY_ORDER)
+    expect(resolvedKeys(null)).toEqual(DEFAULT_GALLERY_ORDER)
+  })
+
+  it('hoists a partial saved order, then appends the rest in default order (no dupes, full length)', () => {
+    const out = resolvedKeys(['title', 'code'])
+    expect(out.slice(0, 2)).toEqual(['title', 'code'])
+    expect(out).toHaveLength(GALLERY_BLOCKS.length)
+    expect(new Set(out).size).toBe(out.length)
+    expect(out.slice(2)).toEqual(DEFAULT_GALLERY_ORDER.filter((k) => k !== 'title' && k !== 'code'))
+  })
+
+  it('drops unknown/stale keys and appends every real block in default order', () => {
+    const out = resolvedKeys(['bogus' as BlockTypeKey, 'h1'])
+    expect(out[0]).toBe('h1')
+    expect(out).not.toContain('bogus')
+    expect(out).toHaveLength(GALLERY_BLOCKS.length)
+    expect(out.slice(1)).toEqual(DEFAULT_GALLERY_ORDER.filter((k) => k !== 'h1'))
+  })
+
+  it('collapses duplicate keys to the first occurrence', () => {
+    const out = resolvedKeys(['code', 'code', 'h2'])
+    expect(out.slice(0, 2)).toEqual(['code', 'h2'])
+    expect(out).toHaveLength(GALLERY_BLOCKS.length)
+    expect(new Set(out).size).toBe(out.length)
+  })
+
+  it('is idempotent: resolving an already-resolved full order is stable', () => {
+    const once = resolvedKeys(['emphasis', 'title', 'bulletList'])
+    expect(resolvedKeys(once)).toEqual(once)
+  })
+})
+
+describe('reorderGalleryKeys (bounds-safe, immutable)', () => {
+  const base: BlockTypeKey[] = ['paragraph', 'normalSpaced', 'h1', 'h2']
+
+  it('moves a key down (+1) by swapping with its successor', () => {
+    expect(reorderGalleryKeys(base, 'normalSpaced', 1)).toEqual(['paragraph', 'h1', 'normalSpaced', 'h2'])
+  })
+
+  it('moves a key up (-1) by swapping with its predecessor', () => {
+    expect(reorderGalleryKeys(base, 'h1', -1)).toEqual(['paragraph', 'h1', 'normalSpaced', 'h2'])
+  })
+
+  it('is a no-op moving the first item up', () => {
+    expect(reorderGalleryKeys(base, 'paragraph', -1)).toEqual(base)
+  })
+
+  it('is a no-op moving the last item down', () => {
+    expect(reorderGalleryKeys(base, 'h2', 1)).toEqual(base)
+  })
+
+  it('returns an unchanged copy for an unknown key (never mutates input)', () => {
+    const out = reorderGalleryKeys(base, 'code', 1)
+    expect(out).toEqual(base)
+    expect(out).not.toBe(base)
+  })
+})
+
+describe('detection order is decoupled from display order (regression)', () => {
+  // The gallery's DEFAULT order now leads with paragraph/normalSpaced and places
+  // Title AFTER the headings, but resolveActiveGalleryKey disambiguates paragraph
+  // variants via the SEPARATE fixed PARAGRAPH_VARIANT_PRIORITY (most-specific
+  // first), NOT GALLERY_BLOCKS array order. So Title's 6-property superset must
+  // still win over the 2-property normalSpaced/accented despite trailing them.
+  const styleStringFor = (key: string): string => {
+    const base = GALLERY_BLOCKS.find((d) => d.key === key)?.baseStyle ?? {}
+    return blockStyleToStyleEntries(base)
+      .map(([prop, value]) => `${prop}: ${value}`)
+      .join('; ')
+  }
+
+  it('Title still wins over normalSpaced/accented even though it now trails them in display order', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: styleStringFor('title'), profile: null })).toBe(
+      'title',
+    )
+  })
+
+  it('an italic paragraph still resolves to Emphasis', () => {
+    expect(resolveActiveGalleryKey({ blockType: 'paragraph', style: 'font-style: italic', profile: null })).toBe(
+      'emphasis',
     )
   })
 })
