@@ -2,7 +2,6 @@ import 'reflect-metadata'
 
 import { MapperInterface } from '@standardnotes/domain-core'
 
-import '../src/Infra/InversifyExpressUtils/AnnotatedFallbackController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedItemsController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedMessagesController'
@@ -21,6 +20,7 @@ import { SyncResponse, SyncingService } from '@standardnotes/grpc'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
+import { notFoundFallback } from '../src/Infra/InversifyExpressUtils/notFoundFallback'
 import { SyncingServer } from '../src/Infra/gRPC/SyncingServer'
 import { SyncItems } from '../src/Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { SyncResponseFactoryResolverInterface } from '../src/Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
@@ -107,7 +107,15 @@ void container
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  const app = server.build()
+
+  // Post-build JSON-404 fallback. Mounted AFTER build() so it sits behind the
+  // controller router and the setErrorConfig 500 handler, catching only
+  // genuinely-unmatched requests. Replaces the inert empty-base
+  // AnnotatedFallbackController (dead under Express 5). See notFoundFallback.ts.
+  app.use(notFoundFallback)
+
+  const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 
