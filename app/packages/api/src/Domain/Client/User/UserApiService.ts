@@ -82,6 +82,9 @@ export class UserApiService implements UserApiServiceInterface {
     // the client is resubmitting with the echoed seed and solved nonce.
     powSeed?: string
     powNonce?: string
+    // Standard Red Notes: optional invite-URL token (INVITE-URL signup control).
+    // Sent as invite_token; only included in the body when supplied.
+    inviteToken?: string
   }): Promise<HttpResponse<UserRegistrationResponseBody>> {
     this.lockOperation(UserApiOperations.Registering)
 
@@ -101,6 +104,10 @@ export class UserApiService implements UserApiServiceInterface {
         // when the feature is unused.
         ...(registerDTO.powSeed ? { pow_seed: registerDTO.powSeed } : {}),
         ...(registerDTO.powNonce ? { pow_nonce: registerDTO.powNonce } : {}),
+        // Standard Red Notes: only include the invite token when supplied, so the
+        // request body is byte-for-byte identical to today when the feature is
+        // unused (mirror workspace_identifier / pow_*).
+        ...(registerDTO.inviteToken ? { invite_token: registerDTO.inviteToken } : {}),
         ...registerDTO.keyParams.getPortableValue(),
       })
 

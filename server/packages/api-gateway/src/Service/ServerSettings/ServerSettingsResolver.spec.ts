@@ -27,6 +27,19 @@ const signupCapDefaults = {
   signupsPerDeviceWindowHours: 24,
 }
 
+/**
+ * Invite-URL signup control + extended-capability defaults (all OFF/unlimited/open),
+ * spread into the full resolveRegistrationConfig() expectations.
+ */
+const signupControlDefaults = {
+  inviteOnly: false,
+  approvalRequired: false,
+  maxTotalAccounts: 0,
+  signupsOpenAt: null,
+  signupsCloseAt: null,
+  invitesPerUser: 0,
+}
+
 describe('ServerSettingsStore + ServerSettingsResolver', () => {
   let dir: string
   let filePath: string
@@ -79,6 +92,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainList: [],
         ...confirmationDefaults,
         ...signupCapDefaults,
+        ...signupControlDefaults,
       })
     })
 
@@ -95,6 +109,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainList: ['env.com', 'other.com'],
         ...confirmationDefaults,
         ...signupCapDefaults,
+        ...signupControlDefaults,
       })
     })
 
@@ -110,6 +125,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         domainList: ['persisted.com'],
         ...confirmationDefaults,
         ...signupCapDefaults,
+        ...signupControlDefaults,
       })
 
       // An admin role must never survive resolution as a default.
@@ -210,6 +226,88 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(view.sources['registration.signupsPerDeviceMax']).toBe('default')
       expect(view.sources['registration.signupsPerIpWindowHours']).toBe('default')
       expect(view.sources['registration.signupsPerDeviceWindowHours']).toBe('default')
+    })
+  })
+
+  describe('invite-URL signup control (registration.inviteOnly / approvalRequired / maxTotalAccounts / window / invitesPerUser)', () => {
+    it('defaults every knob OFF/unlimited/open when nothing is persisted or in env', async () => {
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.inviteOnly).toBe(false)
+      expect(config.approvalRequired).toBe(false)
+      expect(config.maxTotalAccounts).toBe(0)
+      expect(config.signupsOpenAt).toBeNull()
+      expect(config.signupsCloseAt).toBeNull()
+      expect(config.invitesPerUser).toBe(0)
+    })
+
+    it('round-trips persisted booleans/ints and reports them as persisted in the view', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { inviteOnly: true, approvalRequired: true, maxTotalAccounts: 500, invitesPerUser: 3 },
+      })
+      const resolver = makeResolver({ registrationInviteOnly: false, registrationMaxTotalAccounts: 10 })
+      const view = await resolver.view()
+
+      // Persisted admin values WIN over env.
+      expect(view.settings.registration.inviteOnly).toBe(true)
+      expect(view.settings.registration.approvalRequired).toBe(true)
+      expect(view.settings.registration.maxTotalAccounts).toBe(500)
+      expect(view.settings.registration.invitesPerUser).toBe(3)
+      expect(view.sources['registration.inviteOnly']).toBe('persisted')
+      expect(view.sources['registration.approvalRequired']).toBe('persisted')
+      expect(view.sources['registration.maxTotalAccounts']).toBe('persisted')
+      expect(view.sources['registration.invitesPerUser']).toBe('persisted')
+    })
+
+    it('falls back to env then default for each knob (source map reflects the origin)', async () => {
+      const view = await makeResolver({ registrationInviteOnly: true, registrationInvitesPerUser: 2 }).view()
+
+      expect(view.settings.registration.inviteOnly).toBe(true)
+      expect(view.settings.registration.invitesPerUser).toBe(2)
+      expect(view.sources['registration.inviteOnly']).toBe('env')
+      expect(view.sources['registration.invitesPerUser']).toBe('env')
+      expect(view.sources['registration.approvalRequired']).toBe('default')
+      expect(view.sources['registration.maxTotalAccounts']).toBe('default')
+    })
+
+    it('normalizes a persisted signup window to a canonical UTC ISO instant', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { signupsOpenAt: '2030-01-01T00:00:00+02:00', signupsCloseAt: '2030-12-31T23:59:59Z' },
+      })
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.signupsOpenAt).toBe('2029-12-31T22:00:00.000Z')
+      expect(config.signupsCloseAt).toBe('2030-12-31T23:59:59.000Z')
+    })
+
+    it('coerces an unparseable persisted window value to null so signups can never wedge shut', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { signupsOpenAt: 'not-a-date' as string, signupsCloseAt: '' as string },
+      })
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.signupsOpenAt).toBeNull()
+      expect(config.signupsCloseAt).toBeNull()
+    })
+
+    it('clamps out-of-range totals (a bad value never becomes an accidental cap of its own)', async () => {
+      await new ServerSettingsStore(filePath).update({
+        registration: { maxTotalAccounts: 9_999_999_999, invitesPerUser: -5 },
+      })
+      const config = await makeResolver().resolveRegistrationConfig()
+
+      expect(config.maxTotalAccounts).toBe(1000000) // clamped to max
+      expect(config.invitesPerUser).toBe(0) // clamped to min
+    })
+
+    it('clears a persisted knob on null and falls back through to the default', async () => {
+      const store = new ServerSettingsStore(filePath)
+      await store.update({ registration: { inviteOnly: true } })
+      expect((await store.read()).registration?.inviteOnly).toBe(true)
+
+      await store.update({ registration: { inviteOnly: null } })
+      expect(await store.read()).toEqual({})
+      expect((await makeResolver().resolveRegistrationConfig()).inviteOnly).toBe(false)
     })
   })
 

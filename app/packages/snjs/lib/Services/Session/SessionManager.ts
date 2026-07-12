@@ -592,6 +592,10 @@ export class SessionManager
     // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
     // callers are unaffected; ignored by the server unless the flag is on.
     workspaceIdentifier?: string,
+    // Standard Red Notes: optional invite-URL token (INVITE-URL signup control).
+    // Trailing optional param so existing callers are unaffected; only sent to the
+    // server when the client captured a `?invite=<token>` param.
+    inviteToken?: string,
   ): Promise<UserRegistrationResponseBody> {
     if (password.length < MINIMUM_PASSWORD_LENGTH) {
       throw new ApiCallError(
@@ -635,6 +639,7 @@ export class SessionManager
         workspaceIdentifier,
         powSeed,
         powNonce,
+        inviteToken,
       })
 
       if (isErrorResponse(registerResponse)) {
@@ -651,6 +656,14 @@ export class SessionManager
           continue
         }
         throw new ApiCallError(error.message)
+      }
+
+      // Standard Red Notes: APPROVAL / waitlist queue. When approval mode is on the
+      // server creates the account pending and returns `pendingApproval: true` with
+      // NO session — there is nothing to authenticate. Return the terminal response
+      // as-is so the caller can show "awaiting approval" instead of signing in.
+      if (registerResponse.data.pendingApproval) {
+        return registerResponse.data
       }
 
       await this.handleAuthentication({

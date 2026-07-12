@@ -782,8 +782,11 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
     // callers are unaffected; ignored by the server unless the flag is on.
     workspaceIdentifier?: string,
+    // Standard Red Notes: optional invite-URL token (INVITE-URL signup control).
+    // Trailing optional param; only sent when the client captured `?invite=`.
+    inviteToken?: string,
   ): Promise<UserRegistrationResponseBody> {
-    return this.user.register(email, password, hvmToken, ephemeral, mergeLocal, workspaceIdentifier)
+    return this.user.register(email, password, hvmToken, ephemeral, mergeLocal, workspaceIdentifier, inviteToken)
   }
 
   /**

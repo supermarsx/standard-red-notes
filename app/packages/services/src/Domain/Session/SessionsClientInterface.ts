@@ -45,6 +45,8 @@ export interface SessionsClientInterface {
     ephemeral: boolean,
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string,
+    // Standard Red Notes: optional invite-URL token (INVITE-URL signup control).
+    inviteToken?: string,
   ): Promise<UserRegistrationResponseBody>
   signIn(
     email: string,

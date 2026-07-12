@@ -22,6 +22,9 @@ export interface UserApiServiceInterface {
     // when resubmitting after a `proof-of-work-required` challenge.
     powSeed?: string
     powNonce?: string
+    // Standard Red Notes: optional invite-URL token, sent as invite_token only
+    // when supplied (INVITE-URL signup control).
+    inviteToken?: string
   }): Promise<HttpResponse<UserRegistrationResponseBody>>
   updateUser(updateDTO: { userUuid: string }): Promise<HttpResponse<UserUpdateResponse>>
 

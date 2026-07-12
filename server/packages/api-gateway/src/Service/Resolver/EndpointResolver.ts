@@ -96,6 +96,11 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:offline/users/subscription', 'auth.users.getOfflineSubscriptionByToken'],
     ['[POST]:users/:userUuid/requests', 'auth.users.createRequest'],
     ['[GET]:users/:userUuid/mfa-secret', 'auth.users.getMfaSecret'],
+    // Self-serve / referral invite links (AUTHENTICATED user, not admin). The auth
+    // controller scopes every call to response.locals.user.uuid. ':uuid' delete last.
+    ['[POST]:users/me/invite-links', 'auth.meInviteLinks.create'],
+    ['[GET]:users/me/invite-links', 'auth.meInviteLinks.list'],
+    ['[DELETE]:users/me/invite-links/:uuid', 'auth.meInviteLinks.revoke'],
     // Admin Controller (Standard Red Notes admin panel)
     ['[GET]:admin/lookup-user/:email', 'admin.lookupUser'],
     ['[GET]:admin/users/:userUuid/feature-flags', 'admin.getUserFeatureFlags'],
@@ -106,6 +111,14 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[PUT]:admin/users/:userUuid/suspension', 'admin.setUserSuspension'],
     ['[GET]:admin/registration', 'admin.getRegistrationFlag'],
     ['[PUT]:admin/registration', 'admin.setRegistrationFlag'],
+    // Invite-URL signup control: admin invite-link CRUD (':uuid' delete last).
+    ['[POST]:admin/invite-links', 'admin.createInviteLink'],
+    ['[GET]:admin/invite-links', 'admin.listInviteLinks'],
+    ['[DELETE]:admin/invite-links/:uuid', 'admin.revokeInviteLink'],
+    // Approval / waitlist queue: list pending + approve/reject by uuid.
+    ['[GET]:admin/pending-users', 'admin.listPendingUsers'],
+    ['[POST]:admin/pending-users/:userUuid/approve', 'admin.approveUser'],
+    ['[POST]:admin/pending-users/:userUuid/reject', 'admin.rejectUser'],
     ['[GET]:admin/audit-log', 'admin.getAuditLog'],
     ['[GET]:admin/users', 'admin.getUsers'],
     ['[GET]:admin/roles', 'admin.getAvailableRoles'],

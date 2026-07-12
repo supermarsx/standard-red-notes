@@ -371,6 +371,31 @@ export class ContainerConfigLoader {
       registrationSignupsPerDeviceWindowHours: env.get('REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS', true)
         ? +env.get('REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS', true)
         : undefined,
+      // Standard Red Notes: INVITE-URL signup control + extended capabilities env
+      // baseline. The gateway persists + views these; the AUTH server reads the
+      // SAME overlay file and enforces them. undefined when unset so the source map
+      // reports 'default' (the resolver applies the OFF/unlimited/open fallbacks).
+      // All default OFF so a stock deploy is unchanged until an admin opts in.
+      registrationInviteOnly:
+        env.get('REGISTRATION_INVITE_ONLY', true) === 'true'
+          ? true
+          : env.get('REGISTRATION_INVITE_ONLY', true) === 'false'
+            ? false
+            : undefined,
+      registrationApprovalRequired:
+        env.get('REGISTRATION_APPROVAL_REQUIRED', true) === 'true'
+          ? true
+          : env.get('REGISTRATION_APPROVAL_REQUIRED', true) === 'false'
+            ? false
+            : undefined,
+      registrationMaxTotalAccounts: env.get('REGISTRATION_MAX_TOTAL_ACCOUNTS', true)
+        ? +env.get('REGISTRATION_MAX_TOTAL_ACCOUNTS', true)
+        : undefined,
+      registrationSignupsOpenAt: env.get('REGISTRATION_SIGNUPS_OPEN_AT', true) || undefined,
+      registrationSignupsCloseAt: env.get('REGISTRATION_SIGNUPS_CLOSE_AT', true) || undefined,
+      registrationInvitesPerUser: env.get('REGISTRATION_INVITES_PER_USER', true)
+        ? +env.get('REGISTRATION_INVITES_PER_USER', true)
+        : undefined,
       // Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
       // gateway persists + views `logging.level`; the RuntimeLogLevelApplier poller
       // applies the effective level to the live logger. undefined when unset so the

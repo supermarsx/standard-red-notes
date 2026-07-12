@@ -36,6 +36,16 @@ const signupCapDefaults = {
   signupsPerDeviceWindowHours: 24,
 }
 
+/** Invite-URL signup control + extended-capability defaults (all OFF/unlimited/open). */
+const signupControlDefaults = {
+  inviteOnly: false,
+  approvalRequired: false,
+  maxTotalAccounts: 0,
+  signupsOpenAt: null,
+  signupsCloseAt: null,
+  invitesPerUser: 0,
+}
+
 // Only which providers are configured matters for the server-status payload.
 jest.mock('../../Service/Assistant/providers/factory', () => ({
   configuredProviders: jest.fn().mockReturnValue(['anthropic']),
@@ -502,6 +512,7 @@ describe('AdminController server-status', () => {
         domainList: ['company.com', 'partner.com'],
         ...confirmationDefaults,
         ...signupCapDefaults,
+        ...signupControlDefaults,
       })
       expect(logger.info).toHaveBeenCalledWith(
         'admin server-settings updated',
@@ -613,6 +624,84 @@ describe('AdminController server-status', () => {
         responseWith([{ name: RoleName.NAMES.AdminUser }]),
       )
       expect((await resolver.resolveRegistrationConfig()).signupsPerIpMax).toBe(0)
+    })
+
+    it('PUT validates invite-URL signup control: bad boolean/int/datetime values are 400s that persist nothing', async () => {
+      for (const bad of [
+        { registration: { inviteOnly: 'yes' } },
+        { registration: { approvalRequired: 1 } },
+        { registration: { maxTotalAccounts: -1 } },
+        { registration: { maxTotalAccounts: 1.5 } },
+        { registration: { maxTotalAccounts: 1000001 } },
+        { registration: { invitesPerUser: 100001 } },
+        { registration: { signupsOpenAt: 'not-a-date' } },
+        { registration: { signupsCloseAt: 12345 } },
+      ]) {
+        statusMock.mockClear()
+        await settingsController().setServerSettings(
+          { body: bad } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      const resolved = await resolver.resolveRegistrationConfig()
+      expect(resolved.inviteOnly).toBe(false)
+      expect(resolved.maxTotalAccounts).toBe(0)
+      expect(resolved.signupsOpenAt).toBeNull()
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    it('PUT persists invite-URL signup control (normalizing the window to UTC), audit NAMES only, view shows source', async () => {
+      await settingsController().setServerSettings(
+        {
+          body: {
+            registration: {
+              inviteOnly: true,
+              approvalRequired: true,
+              maxTotalAccounts: 250,
+              invitesPerUser: 3,
+              signupsOpenAt: '2030-01-01T00:00:00+02:00',
+              signupsCloseAt: '2030-12-31T23:59:59Z',
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      const resolved = await resolver.resolveRegistrationConfig()
+      expect(resolved).toMatchObject({
+        inviteOnly: true,
+        approvalRequired: true,
+        maxTotalAccounts: 250,
+        invitesPerUser: 3,
+        signupsOpenAt: '2029-12-31T22:00:00.000Z',
+        signupsCloseAt: '2030-12-31T23:59:59.000Z',
+      })
+
+      const payload = jsonMock.mock.calls[jsonMock.mock.calls.length - 1][0]
+      expect(payload.sources['registration.inviteOnly']).toBe('persisted')
+      expect(payload.sources['registration.maxTotalAccounts']).toBe('persisted')
+      expect(payload.sources['registration.invitesPerUser']).toBe('persisted')
+      expect(logger.info).toHaveBeenCalledWith(
+        'admin server-settings updated',
+        expect.objectContaining({
+          changedSettings: [
+            'registration.inviteOnly',
+            'registration.approvalRequired',
+            'registration.maxTotalAccounts',
+            'registration.invitesPerUser',
+            'registration.signupsOpenAt',
+            'registration.signupsCloseAt',
+          ],
+        }),
+      )
+
+      // null clears a persisted knob → resolves back to the OFF default.
+      await settingsController().setServerSettings(
+        { body: { registration: { inviteOnly: null } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect((await resolver.resolveRegistrationConfig()).inviteOnly).toBe(false)
     })
 
     it('PUT validates logging.level: an unknown level is a 400 that persists nothing', async () => {

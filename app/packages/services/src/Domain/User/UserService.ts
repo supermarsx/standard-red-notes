@@ -153,6 +153,9 @@ export class UserService
     // email" (WORKSPACES_PER_EMAIL_ENABLED). Trailing optional param so existing
     // callers are unaffected; ignored by the server unless the flag is on.
     workspaceIdentifier?: string,
+    // Standard Red Notes: optional invite-URL token (INVITE-URL signup control).
+    // Trailing optional param so existing callers are unaffected.
+    inviteToken?: string,
   ): Promise<UserRegistrationResponseBody> {
     if (this.encryption.hasAccount()) {
       throw Error('Tried to register when an account already exists.')
@@ -166,7 +169,25 @@ export class UserService
 
     try {
       this.lockSyncing()
-      const response = await this.sessions.register(email, password, hvmToken, ephemeral, workspaceIdentifier)
+      const response = await this.sessions.register(
+        email,
+        password,
+        hvmToken,
+        ephemeral,
+        workspaceIdentifier,
+        inviteToken,
+      )
+
+      // Standard Red Notes: APPROVAL / waitlist queue. A pending-approval signup
+      // never established a session (SessionManager returned early with no root
+      // key), so there is nothing to sync or set up — skip the account-setup event
+      // and hand the terminal response back for the UI to show "awaiting approval".
+      if (response.pendingApproval) {
+        this.unlockSyncing()
+        this.registering = false
+
+        return response
+      }
 
       await this.notifyEventSync(AccountEvent.SignedInOrRegistered, {
         payload: {

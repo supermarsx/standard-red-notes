@@ -104,6 +104,19 @@ export interface EnvSettingsBaseline {
   registrationSignupsPerDeviceMax?: number
   registrationSignupsPerDeviceWindowHours?: number
   /**
+   * Standard Red Notes: INVITE-URL signup control + extended capabilities env
+   * baseline (REGISTRATION_INVITE_ONLY / _APPROVAL_REQUIRED / _MAX_TOTAL_ACCOUNTS
+   * / _SIGNUPS_OPEN_AT / _SIGNUPS_CLOSE_AT / _INVITES_PER_USER). The gateway
+   * persists + views these; the AUTH server reads the SAME overlay and enforces
+   * them. undefined = env var unset (falls through to default).
+   */
+  registrationInviteOnly?: boolean
+  registrationApprovalRequired?: boolean
+  registrationMaxTotalAccounts?: number
+  registrationSignupsOpenAt?: string | null
+  registrationSignupsCloseAt?: string | null
+  registrationInvitesPerUser?: number
+  /**
    * Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
    * gateway persists + views `logging.level`; a poller applies the effective
    * level to the live logger. undefined = env var unset (falls through to 'info').
@@ -187,6 +200,18 @@ export interface ResolvedRegistrationConfig {
   signupsPerWeekMax: number
   signupsPerDeviceMax: number
   signupsPerDeviceWindowHours: number
+  /**
+   * Standard Red Notes: INVITE-URL signup control + extended capabilities
+   * (resolved). All default OFF/unlimited so a stock deploy is unchanged. The
+   * auth server enforces these; the gateway view carries them for the admin pane.
+   * signupsOpenAt/CloseAt are ISO-8601 instants or null (open-ended on that side).
+   */
+  inviteOnly: boolean
+  approvalRequired: boolean
+  maxTotalAccounts: number
+  signupsOpenAt: string | null
+  signupsCloseAt: string | null
+  invitesPerUser: number
 }
 
 /** Hardcoded registration defaults (apply last, after persisted then env). */
@@ -206,6 +231,14 @@ const REGISTRATION_DEFAULTS: ResolvedRegistrationConfig = {
   signupsPerWeekMax: 0,
   signupsPerDeviceMax: 0,
   signupsPerDeviceWindowHours: 24,
+  // Invite-URL signup control + extended capabilities: all OFF/unlimited so a
+  // stock deploy behaves exactly as before until an admin opts in.
+  inviteOnly: false,
+  approvalRequired: false,
+  maxTotalAccounts: 0,
+  signupsOpenAt: null,
+  signupsCloseAt: null,
+  invitesPerUser: 0,
 }
 
 /**
@@ -379,6 +412,25 @@ export const normalizePluginsRepoUrl = (value: string | undefined): string | und
 const OCR_LANGUAGE_PATTERN = /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/
 const validOcrLanguage = (value: string | undefined): string | undefined =>
   typeof value === 'string' && OCR_LANGUAGE_PATTERN.test(value.trim()) ? value.trim() : undefined
+
+/**
+ * Standard Red Notes: normalize a signup-window datetime candidate to a canonical
+ * ISO-8601 string, or null. A parseable date returns its `toISOString()` (UTC);
+ * anything unparseable/empty returns null so a bad persisted/env value can never
+ * wedge signups shut — the resolver falls through to the next candidate, then to
+ * the default (null = open-ended on that side).
+ */
+const normalizeSignupWindowAt = (value: string | null | undefined): string | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return null
+  }
+  const ms = Date.parse(value.trim())
+  if (Number.isNaN(ms)) {
+    return null
+  }
+
+  return new Date(ms).toISOString()
+}
 
 /** Clamp an integer-ish overlay/env value into [min, max]; undefined passes through. */
 const boundedInt = (value: number | undefined, min: number, max: number): number | undefined => {
@@ -798,6 +850,44 @@ export class ServerSettingsResolver {
         1,
         168,
       ),
+      // Invite-URL signup control + extended capabilities. Booleans: persisted
+      // admin value wins over env, over the default (false). Ints: clamped like
+      // the caps. Datetimes: normalized to canonical ISO or null (a bad value
+      // can never wedge signups shut).
+      inviteOnly:
+        typeof registration.inviteOnly === 'boolean'
+          ? registration.inviteOnly
+          : env.registrationInviteOnly ?? REGISTRATION_DEFAULTS.inviteOnly,
+      approvalRequired:
+        typeof registration.approvalRequired === 'boolean'
+          ? registration.approvalRequired
+          : env.registrationApprovalRequired ?? REGISTRATION_DEFAULTS.approvalRequired,
+      maxTotalAccounts: cap(
+        registration.maxTotalAccounts,
+        env.registrationMaxTotalAccounts,
+        REGISTRATION_DEFAULTS.maxTotalAccounts,
+        0,
+        1000000,
+      ),
+      signupsOpenAt:
+        registration.signupsOpenAt !== undefined
+          ? normalizeSignupWindowAt(registration.signupsOpenAt)
+          : env.registrationSignupsOpenAt !== undefined
+            ? normalizeSignupWindowAt(env.registrationSignupsOpenAt)
+            : REGISTRATION_DEFAULTS.signupsOpenAt,
+      signupsCloseAt:
+        registration.signupsCloseAt !== undefined
+          ? normalizeSignupWindowAt(registration.signupsCloseAt)
+          : env.registrationSignupsCloseAt !== undefined
+            ? normalizeSignupWindowAt(env.registrationSignupsCloseAt)
+            : REGISTRATION_DEFAULTS.signupsCloseAt,
+      invitesPerUser: cap(
+        registration.invitesPerUser,
+        env.registrationInvitesPerUser,
+        REGISTRATION_DEFAULTS.invitesPerUser,
+        0,
+        100000,
+      ),
     }
   }
 
@@ -998,6 +1088,12 @@ export class ServerSettingsResolver {
         registration.signupsPerDeviceWindowHours,
         env.registrationSignupsPerDeviceWindowHours,
       ),
+      'registration.inviteOnly': this.source(registration.inviteOnly, env.registrationInviteOnly),
+      'registration.approvalRequired': this.source(registration.approvalRequired, env.registrationApprovalRequired),
+      'registration.maxTotalAccounts': this.source(registration.maxTotalAccounts, env.registrationMaxTotalAccounts),
+      'registration.signupsOpenAt': this.source(registration.signupsOpenAt, env.registrationSignupsOpenAt),
+      'registration.signupsCloseAt': this.source(registration.signupsCloseAt, env.registrationSignupsCloseAt),
+      'registration.invitesPerUser': this.source(registration.invitesPerUser, env.registrationInvitesPerUser),
       'logging.level': this.source(logging.level, env.logLevel),
       'ocr.serverEnabled': this.source(ocr.serverEnabled, env.ocrServerEnabled),
       'ocr.defaultLanguage': this.source(ocr.defaultLanguage, env.ocrDefaultLanguage),

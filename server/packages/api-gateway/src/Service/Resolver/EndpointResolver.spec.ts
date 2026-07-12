@@ -76,5 +76,48 @@ describe('EndpointResolver', () => {
       )
       expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'admin/users/:userUuid')).toEqual('admin.deleteUser')
     })
+
+    // Standard Red Notes: INVITE-URL signup control — admin invite-link CRUD +
+    // approval queue. These identifiers must match what the auth side registers on
+    // its controllerContainer, or the DirectCall proxy throws "Method X not found"
+    // at runtime (build stays green).
+    it('maps the admin invite-link CRUD identifiers', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'admin/invite-links')).toEqual('admin.createInviteLink')
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/invite-links')).toEqual('admin.listInviteLinks')
+      expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'admin/invite-links/:uuid')).toEqual(
+        'admin.revokeInviteLink',
+      )
+    })
+
+    it('maps the admin approval-queue identifiers', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/pending-users')).toEqual('admin.listPendingUsers')
+      expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'admin/pending-users/:userUuid/approve')).toEqual(
+        'admin.approveUser',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'admin/pending-users/:userUuid/reject')).toEqual(
+        'admin.rejectUser',
+      )
+    })
+
+    // Standard Red Notes: SELF-SERVE invite links — AUTHENTICATED user surface (not
+    // admin). The ':uuid' delete is declared after the collection route and maps to
+    // its own identifier.
+    it('maps the self-serve invite-link identifiers', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'users/me/invite-links')).toEqual(
+        'auth.meInviteLinks.create',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'users/me/invite-links')).toEqual(
+        'auth.meInviteLinks.list',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('DELETE', 'users/me/invite-links/:uuid')).toEqual(
+        'auth.meInviteLinks.revoke',
+      )
+    })
   })
 })

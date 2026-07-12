@@ -67,6 +67,14 @@ const AdminPaths = {
   userSuspension: (userUuid: string) => `/v1/admin/users/${userUuid}/suspension`,
   userDelete: (userUuid: string) => `/v1/admin/users/${userUuid}`,
   registration: '/v1/admin/registration',
+  // Standard Red Notes: INVITE-URL signup control — admin invite-link CRUD. Create
+  // returns the raw token ONCE; list never returns it; delete soft-revokes by uuid.
+  inviteLinks: '/v1/admin/invite-links',
+  inviteLink: (uuid: string) => `/v1/admin/invite-links/${uuid}`,
+  // Standard Red Notes: APPROVAL / waitlist queue — list pending + approve/reject.
+  pendingUsers: '/v1/admin/pending-users',
+  approvePendingUser: (userUuid: string) => `/v1/admin/pending-users/${userUuid}/approve`,
+  rejectPendingUser: (userUuid: string) => `/v1/admin/pending-users/${userUuid}/reject`,
   // Standard Red Notes: admin audit log (paginated, newest-first).
   auditLog: '/v1/admin/audit-log',
   // Standard Red Notes: read-only gateway server status (master switches + health).
@@ -121,6 +129,17 @@ const AdminPaths = {
 // /v1/app-passwords routes (cross-service-token protected), which proxy to the
 // auth server. They let headless clients (e.g. the MCP bridge) satisfy the 2FA
 // challenge without an interactive TOTP code.
+// Standard Red Notes: SELF-SERVE / REFERRAL invite links. These hit the gateway
+// /v1/users/me/invite-links routes (cross-service-token protected), which proxy to
+// the auth server's authenticated surface (scoped to response.locals.user.uuid). A
+// signed-in user creates/lists/revokes their OWN links; the raw invite token is
+// returned exactly once on create. Gated by the `registration.invitesPerUser`
+// overlay (0 = disabled).
+const MeInviteLinkPaths = {
+  meInviteLinks: '/v1/users/me/invite-links',
+  meInviteLink: (uuid: string) => `/v1/users/me/invite-links/${uuid}`,
+}
+
 const AppPasswordPaths = {
   appPasswords: '/v1/app-passwords',
   // Default DELETE soft-revokes (keeps the audit trail).
@@ -236,6 +255,7 @@ export const Paths = {
     ...SubscriptionPaths,
     ...UserPaths,
     ...AdminPaths,
+    ...MeInviteLinkPaths,
     ...AppPasswordPaths,
     ...TrustedDevicePaths,
     ...McpTokenPaths,

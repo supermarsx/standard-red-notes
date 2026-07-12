@@ -866,6 +866,107 @@ export class LegacyApiService
   }
 
   /**
+   * Standard Red Notes: INVITE-URL signup control — admin invite-link management.
+   * These hit the gateway /v1/admin/invite-links routes (admin-gated at the auth
+   * server via the cross-service token). `adminCreateInviteLink` returns the raw
+   * invite token + relative path EXACTLY ONCE; `adminListInviteLinks` never returns
+   * the token; `adminRevokeInviteLink` soft-revokes by uuid. Only the fields the
+   * admin actually sets are sent (0-valued/absent fields fall through server-side).
+   */
+  async adminCreateInviteLink(body: {
+    maxUses?: number
+    expiresInHours?: number | null
+    label?: string | null
+    defaultRole?: string | null
+    allowedDomain?: string | null
+  }): Promise<HttpResponse> {
+    const params: Record<string, unknown> = {}
+    if (body.maxUses !== undefined) {
+      params.maxUses = body.maxUses
+    }
+    if (body.expiresInHours !== undefined) {
+      params.expiresInHours = body.expiresInHours
+    }
+    if (body.label !== undefined) {
+      params.label = body.label
+    }
+    if (body.defaultRole !== undefined) {
+      params.defaultRole = body.defaultRole
+    }
+    if (body.allowedDomain !== undefined) {
+      params.allowedDomain = body.allowedDomain
+    }
+
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.inviteLinks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create invite link.',
+      params,
+    })
+  }
+
+  async adminListInviteLinks(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.inviteLinks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list invite links.',
+    })
+  }
+
+  async adminRevokeInviteLink(uuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.inviteLink(uuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke invite link.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: APPROVAL / waitlist queue — admin review. `listPendingUsers`
+   * returns the pending (approved=0) users; `approveUser` flips the access gate (and
+   * best-effort notifies); `rejectUser` hard-deletes the pending row via the auth
+   * DeleteAccount pipeline. All admin-gated at the auth server.
+   */
+  async listPendingUsers(options?: { limit?: number; offset?: number }): Promise<HttpResponse> {
+    const params: Record<string, string> = {}
+    if (options?.limit !== undefined) {
+      params.limit = String(options.limit)
+    }
+    if (options?.offset !== undefined) {
+      params.offset = String(options.offset)
+    }
+
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.pendingUsers),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list pending users.',
+      params,
+    })
+  }
+
+  async approveUser(userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.approvePendingUser(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to approve user.',
+    })
+  }
+
+  async rejectUser(userUuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.rejectPendingUser(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to reject user.',
+    })
+  }
+
+  /**
    * Standard Red Notes: paginated admin audit log (newest first). All filters
    * are optional; the server clamps `limit` to its own maximum (200).
    */
@@ -1517,6 +1618,58 @@ export class LegacyApiService
       url: joinPaths(this.host, Paths.v1.appPasswordPermanent(appPasswordId)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to delete app password.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: SELF-SERVE / REFERRAL invite links. These hit the gateway
+   * /v1/users/me/invite-links routes (cross-service-token protected); the auth
+   * server scopes every call to the authenticated user. A user creates/lists/revokes
+   * their OWN links only; the raw invite token + relative path are returned EXACTLY
+   * ONCE on create. A user link can never carry a role/domain override or bypass
+   * approval — the auth server enforces that privilege guard. Gated by the
+   * `registration.invitesPerUser` overlay (0 = self-serve disabled).
+   */
+  async createMyInviteLink(body: {
+    maxUses?: number
+    expiresInHours?: number | null
+    label?: string | null
+  }): Promise<HttpResponse> {
+    const params: Record<string, unknown> = {}
+    if (body.maxUses !== undefined) {
+      params.maxUses = body.maxUses
+    }
+    if (body.expiresInHours !== undefined) {
+      params.expiresInHours = body.expiresInHours
+    }
+    if (body.label !== undefined) {
+      params.label = body.label
+    }
+
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.meInviteLinks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to create invite link.',
+      params,
+    })
+  }
+
+  async listMyInviteLinks(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.meInviteLinks),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list invite links.',
+    })
+  }
+
+  async revokeMyInviteLink(uuid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.meInviteLink(uuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke invite link.',
     })
   }
 

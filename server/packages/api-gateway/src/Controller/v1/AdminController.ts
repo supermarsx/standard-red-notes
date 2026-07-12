@@ -273,6 +273,87 @@ export class AdminController extends BaseHttpController {
     )
   }
 
+  // Standard Red Notes: INVITE-URL signup control — admin invite-link CRUD. These
+  // proxy to the auth admin controller (re-gated on ADMIN_USER via the cross-service
+  // token). Create returns the raw invite token EXACTLY ONCE; list never returns it;
+  // delete soft-revokes. The ':uuid' DELETE is declared after the collection routes
+  // so it cannot shadow them.
+  @httpPost('/invite-links', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async createInviteLink(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'admin/invite-links'),
+      request.body,
+    )
+  }
+
+  @httpGet('/invite-links', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async listInviteLinks(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/invite-links'),
+      request.body,
+    )
+  }
+
+  @httpDelete('/invite-links/:uuid', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async revokeInviteLink(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'admin/invite-links/:uuid',
+        request.params.uuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  // Standard Red Notes: APPROVAL / waitlist queue — admin review. List the pending
+  // (approved=0) users and approve/reject one by uuid. Proxied to the auth admin
+  // controller (re-gated on ADMIN_USER). Reject hard-deletes the pending row via the
+  // existing DeleteAccount pipeline; approve flips the access gate + notifies.
+  @httpGet('/pending-users', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async listPendingUsers(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'admin/pending-users'),
+      request.body,
+    )
+  }
+
+  @httpPost('/pending-users/:userUuid/approve', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async approveUser(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'POST',
+        'admin/pending-users/:userUuid/approve',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpPost('/pending-users/:userUuid/reject', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async rejectUser(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'POST',
+        'admin/pending-users/:userUuid/reject',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
   @httpGet('/audit-log', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getAuditLog(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(
@@ -1462,7 +1543,9 @@ export class AdminController extends BaseHttpController {
           | 'signupsPerIpWindowHours'
           | 'signupsPerWeekMax'
           | 'signupsPerDeviceMax'
-          | 'signupsPerDeviceWindowHours',
+          | 'signupsPerDeviceWindowHours'
+          | 'maxTotalAccounts'
+          | 'invitesPerUser',
         min: number,
         max: number,
       ): { error: string } | undefined => {
@@ -1496,6 +1579,50 @@ export class AdminController extends BaseHttpController {
         const invalid = regBoundedInt(key, min, max)
         if (invalid) {
           return invalid
+        }
+      }
+
+      // Standard Red Notes: INVITE-URL signup control + extended capabilities.
+      // Enforced auth-side; the gateway only persists these. inviteOnly /
+      // approvalRequired are booleans; maxTotalAccounts (0 = unlimited) and
+      // invitesPerUser (0 = self-serve disabled) are bounded integers;
+      // signupsOpenAt/CloseAt are parseable ISO-8601 datetimes normalized to
+      // canonical UTC (or null to clear = open-ended on that side).
+      for (const key of ['inviteOnly', 'approvalRequired'] as const) {
+        if (registration[key] !== undefined) {
+          if (registration[key] !== null && typeof registration[key] !== 'boolean') {
+            return { error: `registration.${key} must be a boolean, or null to clear it.` }
+          }
+          patch.registration[key] = registration[key] as boolean | null
+          changedSettings.push(`registration.${key}`)
+        }
+      }
+
+      for (const [key, min, max] of [
+        ['maxTotalAccounts', 0, 1000000],
+        ['invitesPerUser', 0, 100000],
+      ] as const) {
+        const invalid = regBoundedInt(key, min, max)
+        if (invalid) {
+          return invalid
+        }
+      }
+
+      for (const key of ['signupsOpenAt', 'signupsCloseAt'] as const) {
+        if (registration[key] !== undefined) {
+          const value = registration[key]
+          if (value === null) {
+            patch.registration[key] = null
+          } else if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value.trim()))) {
+            // Persist the canonical UTC instant so the admin view + auth enforcement
+            // compare an unambiguous absolute time regardless of the input offset.
+            patch.registration[key] = new Date(Date.parse(value.trim())).toISOString()
+          } else {
+            return {
+              error: `registration.${key} must be a parseable ISO-8601 datetime, or null to clear it.`,
+            }
+          }
+          changedSettings.push(`registration.${key}`)
         }
       }
     }

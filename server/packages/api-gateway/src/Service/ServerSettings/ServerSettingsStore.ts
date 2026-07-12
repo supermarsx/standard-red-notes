@@ -152,6 +152,28 @@ export interface PersistedRegistrationSettings {
   signupsPerDeviceMax?: number
   /** Per-device window length in hours. Integer 1..168 (1h..7d). */
   signupsPerDeviceWindowHours?: number
+  /**
+   * Standard Red Notes: INVITE-URL signup control + the extended signup-control
+   * capabilities (approval queue, global total cap, time window, self-serve
+   * invites). The api-gateway PERSISTS + VIEWS these; the AUTH server reads the
+   * SAME overlay file and ENFORCES them in Register / the admin+user endpoints.
+   * Key names/nesting are a CONTRACT shared with auth (RegistrationConfigOverlay)
+   * — keep them in sync. Every field optional; absence = fall back to auth's
+   * env/default. All default OFF so a stock deploy is unchanged until an admin
+   * opts in.
+   */
+  /** INVITE-ONLY mode: registration requires a valid invite URL. Default false. */
+  inviteOnly?: boolean
+  /** APPROVAL queue: new signups are created pending admin approval. Default false. */
+  approvalRequired?: boolean
+  /** Global max total accounts; 0 = unlimited. Integer 0..1000000. */
+  maxTotalAccounts?: number
+  /** Signup window OPEN instant (ISO-8601), or null/absent = open-ended on this side. */
+  signupsOpenAt?: string | null
+  /** Signup window CLOSE instant (ISO-8601), or null/absent = open-ended on this side. */
+  signupsCloseAt?: string | null
+  /** Self-serve referral: max ACTIVE links a user may hold; 0 = disabled. Integer 0..100000. */
+  invitesPerUser?: number
 }
 
 /**
@@ -305,6 +327,13 @@ export interface ServerSettingsPatch {
     signupsPerWeekMax?: number | null
     signupsPerDeviceMax?: number | null
     signupsPerDeviceWindowHours?: number | null
+    // Standard Red Notes: invite-URL signup control + extended capabilities.
+    inviteOnly?: boolean | null
+    approvalRequired?: boolean | null
+    maxTotalAccounts?: number | null
+    signupsOpenAt?: string | null
+    signupsCloseAt?: string | null
+    invitesPerUser?: number | null
   }
   logging?: {
     level?: string | null
@@ -437,6 +466,12 @@ export class ServerSettingsStore {
         this.applyKey(data.registration, 'signupsPerWeekMax', patch.registration.signupsPerWeekMax)
         this.applyKey(data.registration, 'signupsPerDeviceMax', patch.registration.signupsPerDeviceMax)
         this.applyKey(data.registration, 'signupsPerDeviceWindowHours', patch.registration.signupsPerDeviceWindowHours)
+        this.applyKey(data.registration, 'inviteOnly', patch.registration.inviteOnly)
+        this.applyKey(data.registration, 'approvalRequired', patch.registration.approvalRequired)
+        this.applyKey(data.registration, 'maxTotalAccounts', patch.registration.maxTotalAccounts)
+        this.applyKey(data.registration, 'signupsOpenAt', patch.registration.signupsOpenAt)
+        this.applyKey(data.registration, 'signupsCloseAt', patch.registration.signupsCloseAt)
+        this.applyKey(data.registration, 'invitesPerUser', patch.registration.invitesPerUser)
         if (Object.keys(data.registration).length === 0) {
           delete data.registration
         }
