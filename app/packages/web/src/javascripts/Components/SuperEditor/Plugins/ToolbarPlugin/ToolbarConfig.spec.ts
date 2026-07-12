@@ -180,6 +180,25 @@ describe('Header/Footer styled subsections (t59, static source assertion)', () =
   })
 })
 
+describe('Navigation subsection (t61, static source assertion)', () => {
+  // t61 adds a 4th bordered subsection — "Navigation" — INSIDE the same popover,
+  // toggling the on-screen document-outline sidebar. Its render path is proven by
+  // NavigationLayoutSubsection.spec.tsx (the actual mounted component); this guard
+  // asserts the subsection is actually WIRED INTO the popover next to the others,
+  // since the full ToolbarPlugin can't be jsdom-mounted (MEMORY: verify UI render
+  // paths; the Page group vanished twice before).
+  const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
+
+  it('renders the NavigationLayoutSubsection in the popover, wired to setNavigation', () => {
+    expect(source).toContain('<NavigationLayoutSubsection')
+    expect(source).toContain('onChange={setNavigation}')
+  })
+
+  it('routes the toggle through applyNavigationPatch (persist + bridge dispatch)', () => {
+    expect(source).toContain('applyNavigationPatch(noteLayout.navigation, patch, updateNoteLayout, editor.getRootElement())')
+  })
+})
+
 describe('Page group includes the Header/footer button (t48)', () => {
   it('lists PageHeaderFooter as the last button of the Page group', () => {
     const page = DEFAULT_TOOLBAR_GROUPS.find((g) => g.id === ToolbarGroupId.Page)

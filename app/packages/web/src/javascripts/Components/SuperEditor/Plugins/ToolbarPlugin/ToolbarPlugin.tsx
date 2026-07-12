@@ -122,6 +122,7 @@ import {
   MAX_PAGE_START,
   MIN_COLUMNS,
   MIN_HF_FONT_PT,
+  NavigationSettings,
   NoteLayout,
   PAGE_SIZE_OPTIONS,
   PageNumberFormat,
@@ -142,6 +143,7 @@ import {
 import { $selectAllText } from './selectAllText'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
+import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
 import { Fragment } from 'react'
 import {
   BlockCatalogContext,
@@ -715,6 +717,15 @@ const ToolbarPlugin = () => {
       })
     },
     [activeNoteUuid],
+  )
+  // The Navigation subsection is on-screen only (NOT an export band): persist the
+  // toggle through updateNoteLayout AND fire the DOM bridge event on the editor
+  // root so the live NavigationSidebar re-syncs immediately (it listens there).
+  const setNavigation = useCallback(
+    (patch: Partial<NavigationSettings>) => {
+      applyNavigationPatch(noteLayout.navigation, patch, updateNoteLayout, editor.getRootElement())
+    },
+    [noteLayout.navigation, updateNoteLayout, editor],
   )
   const [isPageSizeMenuOpen, setIsPageSizeMenuOpen] = useState(false)
   const pageSizeAnchorRef = useRef<HTMLButtonElement>(null)
@@ -4215,6 +4226,10 @@ const ToolbarPlugin = () => {
               </div>
             )
           })}
+
+          {/* Subsection 4 — Navigation (on-screen document-outline sidebar). Not an
+              export band; toggling it shows/hides the live sidebar via the DOM bridge. */}
+          <NavigationLayoutSubsection navigation={noteLayout.navigation} onChange={setNavigation} />
 
           <p className="mt-3 text-xs text-passive-1">
             Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.
