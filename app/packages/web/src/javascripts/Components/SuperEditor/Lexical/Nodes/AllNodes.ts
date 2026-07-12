@@ -25,6 +25,7 @@ import { KanbanNode } from './KanbanNode'
 import { CalendarNode } from './CalendarNode'
 import { DataTableNode } from './DataTableNode'
 import { CalloutNode } from './CalloutNode'
+import { CommentNode } from './CommentNode'
 import { EmbedNode } from './EmbedNode'
 import { WebEmbedNode } from './WebEmbedNode'
 import { TweetEmbedNode } from './TweetEmbedNode'
@@ -76,6 +77,7 @@ const CommonNodes = [
   CalendarNode,
   DataTableNode,
   CalloutNode,
+  CommentNode,
   EmbedNode,
   WebEmbedNode,
   TweetEmbedNode,

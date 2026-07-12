@@ -235,6 +235,7 @@ const editor = {
   // the original English string, so these are display-only.
   blockParagraph: 'Paragraph',
   blockCallout: 'Callout',
+  blockComment: 'Comment',
   blockDivider: 'Divider',
   blockCollapsible: 'Collapsible',
   blockImageFromUrl: 'Image from URL',

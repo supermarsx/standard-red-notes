@@ -18,6 +18,7 @@ import { CodeBlock } from './Code'
 import { DividerBlock } from './Divider'
 import { PageBreakBlock } from './PageBreak'
 import { CalloutBlock } from './Callout'
+import { CommentBlock } from './Comment'
 import { CollapsibleBlock } from './Collapsible'
 import { TableOfContentsBlock } from './TableOfContents'
 import { BulletedListBlock, NumberedListBlock, ChecklistBlock } from './List'
@@ -106,6 +107,7 @@ export const BLOCK_CATALOG: BlockCatalogEntry[] = [
   fromBlock(QuoteBlock, 'Basic'),
   fromBlock(CodeBlock, 'Basic'),
   fromBlock(CalloutBlock, 'Basic'),
+  fromBlock(CommentBlock, 'Basic'),
   fromBlock(DividerBlock, 'Basic'),
   fromBlock(PageBreakBlock, 'Basic'),
   fromBlock(CollapsibleBlock, 'Basic'),

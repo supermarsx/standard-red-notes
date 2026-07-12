@@ -62,6 +62,7 @@ export const DECORATOR_BLOCK_LABELS: Record<string, string> = {
   calendar: 'Calendar',
   datatable: 'Data Table',
   callout: 'Callout',
+  comment: 'Comment',
   'qr-code': 'QR Code',
   excalidraw: 'Drawing',
   mermaid: 'Diagram',

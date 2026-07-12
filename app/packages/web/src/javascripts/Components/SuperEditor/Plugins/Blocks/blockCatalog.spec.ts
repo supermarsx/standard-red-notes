@@ -28,6 +28,13 @@ describe('buildInsertSections', () => {
     expect(sections.map((section) => section.id)).toEqual(INSERT_SECTION_ORDER)
   })
 
+  it('places the Comment block in the Basic section (insertable annotation node)', () => {
+    expect(namesIn('basic')).toContain('Comment')
+    // Present in the flat catalog too, so both insert surfaces (toolbar + slash
+    // picker) surface it — they derive from the same BLOCK_CATALOG.
+    expect(BLOCK_CATALOG.some((entry) => entry.name === 'Comment')).toBe(true)
+  })
+
   it('places representative catalog items in their expected section', () => {
     expect(namesIn('basic')).toEqual(expect.arrayContaining(['Paragraph', 'Heading 1']))
     expect(namesIn('lists')).toContain('Bulleted List')

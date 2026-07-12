@@ -327,6 +327,7 @@ const BLOCK_NAME_I18N_KEYS: Record<string, string> = {
   Quote: 'quote',
   'Code Block': 'codeBlock',
   Callout: 'blockCallout',
+  Comment: 'blockComment',
   Divider: 'blockDivider',
   Collapsible: 'blockCollapsible',
   'Bulleted List': 'bulletedList',
