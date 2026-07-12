@@ -66,6 +66,7 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
       subscription: subscriptionByUser.get(user.uuid) ?? null,
       banned: user.isBanned(),
       banType: user.isBanned() ? user.effectiveBanType() : null,
+      suspended: user.isSuspended(),
       mfaEnabled: mfaEnabledUuids.has(user.uuid),
       storageUsedBytes: storageByUser.get(user.uuid)?.used ?? null,
       storageLimitBytes: storageByUser.get(user.uuid)?.limit ?? null,
@@ -89,6 +90,9 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
     }
     if (query.banned !== undefined) {
       queryBuilder.andWhere('user.banned = :banned', { banned: query.banned ? 1 : 0 })
+    }
+    if (query.suspended !== undefined) {
+      queryBuilder.andWhere('user.suspended = :suspended', { suspended: query.suspended ? 1 : 0 })
     }
     if (query.role !== undefined && query.role !== '') {
       queryBuilder.andWhere(

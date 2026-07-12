@@ -9,6 +9,8 @@ import { DeleteSetting } from '../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { GetSetting } from './../../Domain/UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { SetUserBanStatus } from '../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
+import { SetUserSuspension } from '../../Domain/UseCase/SetUserSuspension/SetUserSuspension'
+import { DeleteAccount } from '../../Domain/UseCase/DeleteAccount/DeleteAccount'
 import { QueryAuditLog } from '../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { AuditLogEntry } from '../../Domain/AuditLog/AuditLogEntry'
 import { AuditLogEntryHttpProjection } from '../Http/Projection/AuditLogEntryHttpProjection'
@@ -93,6 +95,10 @@ export class AnnotatedAdminController extends BaseAdminController {
     // Standard Red Notes: failed-login lock repository for the anti-abuse
     // "Locked accounts" list + unlock endpoints.
     @inject(TYPES.Auth_LockRepository) override lockRepository: LockRepositoryInterface,
+    // Standard Red Notes: admin SUSPEND/UNSUSPEND + admin-initiated DELETE
+    // (delete reuses the existing cross-service DeleteAccount pipeline).
+    @inject(TYPES.Auth_SetUserSuspension) override doSetUserSuspension: SetUserSuspension,
+    @inject(TYPES.Auth_DeleteAccount) override doDeleteAccount: DeleteAccount,
   ) {
     super(
       doDeleteSetting,
@@ -131,6 +137,8 @@ export class AnnotatedAdminController extends BaseAdminController {
       doGetRoleHolders,
       doResolveRoleSetPermissions,
       lockRepository,
+      doSetUserSuspension,
+      doDeleteAccount,
     )
   }
 
@@ -197,6 +205,17 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpPut('/users/:userUuid/ban-status', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async setUserBanStatusEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
     return super.setUserBanStatusEndpoint(request, response)
+  }
+
+  // Standard Red Notes: SUSPENSION — a reversible admin hold, separate from ban.
+  @httpGet('/users/:email/suspension-status', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async getUserSuspensionStatus(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getUserSuspensionStatus(request, response)
+  }
+
+  @httpPut('/users/:userUuid/suspension', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async setUserSuspensionEndpoint(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.setUserSuspensionEndpoint(request, response)
   }
 
   @httpGet('/registration', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
@@ -319,6 +338,15 @@ export class AnnotatedAdminController extends BaseAdminController {
   @httpDelete('/users/:userUuid/mfa-secret', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
   override async resetUserMFA(request: Request, response: Response): Promise<results.JsonResult> {
     return super.resetUserMFA(request, response)
+  }
+
+  // Standard Red Notes: admin-initiated HARD DELETE of a user. Declared AFTER
+  // every specific '/users/:userUuid/...' delete above (mfa, mfa-secret) so the
+  // bare ':userUuid' path can never shadow them. Reuses the cross-service
+  // DeleteAccount pipeline; body must carry a matching `confirmEmail`.
+  @httpDelete('/users/:userUuid', TYPES.Auth_RequiredCrossServiceTokenMiddleware)
+  override async deleteUser(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.deleteUser(request, response)
   }
 
   @httpPost('/users/:userUuid/fix-quota', TYPES.Auth_RequiredCrossServiceTokenMiddleware)

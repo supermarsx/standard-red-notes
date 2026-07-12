@@ -215,6 +215,36 @@ export class User {
   declare bannedUntil: Date | null
 
   /**
+   * Standard Red Notes: reversible admin SUSPENSION — a neutral administrative
+   * hold, first-class and SEPARATE from a ban. Defaults to false so existing
+   * users are unaffected. A suspended user is hard-blocked from signing in and
+   * any existing session/token is rejected (folded into isAccessBlocked), and
+   * on suspend their sessions are additionally revoked for immediacy. Unsuspend
+   * clears every suspension column; the user then signs in fresh.
+   */
+  @Column({
+    name: 'suspended',
+    type: 'tinyint',
+    default: 0,
+  })
+  declare suspended: boolean
+
+  @Column({
+    name: 'suspended_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  declare suspendedAt: Date | null
+
+  @Column({
+    name: 'suspended_reason',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  declare suspendedReason: string | null
+
+  /**
    * Standard Red Notes: EMAIL CONFIRMATION. Defaults to TRUE at the database
    * level so that (a) existing rows backfilled by the migration and (b) every
    * new signup created while the feature is OFF are treated as confirmed — the
@@ -357,12 +387,27 @@ export class User {
   }
 
   /**
+   * Standard Red Notes: whether the account is currently under an admin
+   * SUSPENSION hold. The column is a tinyint(1): TypeORM hydrates it from
+   * MySQL/MariaDB as the NUMBER 0/1 while SetUserSuspension assigns a real
+   * boolean before saving, so coerce both representations (mirrors isBanned /
+   * isEmailConfirmed — a strict `=== true` check would report every persisted
+   * suspension as inactive and silently never enforce it).
+   */
+  isSuspended(): boolean {
+    return Number(this.suspended) === 1
+  }
+
+  /**
    * Whether access must be HARD-blocked (rejected at sign-in and on every
-   * authenticated request): an active permanent or not-yet-expired temporary
-   * ban. A shadow ban is deliberately NOT access-blocking — the shadow user
-   * connects and is degraded silently instead.
+   * authenticated request): an active admin suspension, or an active permanent
+   * or not-yet-expired temporary ban. A shadow ban is deliberately NOT
+   * access-blocking — the shadow user connects and is degraded silently
+   * instead. Suspension is unconditionally access-blocking (it has no shadow
+   * variant), so folding it in here means BOTH existing gates (SignIn and
+   * AuthenticateUser) reject a suspended user with zero new call sites.
    */
   isAccessBlocked(now: Date = new Date()): boolean {
-    return this.isBanned(now) && this.effectiveBanType() !== 'shadow'
+    return this.isSuspended() || (this.isBanned(now) && this.effectiveBanType() !== 'shadow')
   }
 }

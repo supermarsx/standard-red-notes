@@ -139,4 +139,38 @@ describe('User', () => {
     expect(user.isAccessBlocked()).toBe(false)
     expect(user.effectiveBanType()).toBe('shadow')
   })
+
+  // Standard Red Notes: reversible admin SUSPENSION. Like the ban columns,
+  // `suspended` is a tinyint(1): isSuspended() must treat BOTH the number 1 and
+  // the boolean true as suspended, and an unset value as not suspended.
+  it('isSuspended treats 1 / true as suspended and 0 / false / unset as not', () => {
+    const user = createUser()
+
+    expect(user.isSuspended()).toBe(false)
+    user.suspended = 1 as unknown as boolean
+    expect(user.isSuspended()).toBe(true)
+    user.suspended = true
+    expect(user.isSuspended()).toBe(true)
+    user.suspended = 0 as unknown as boolean
+    expect(user.isSuspended()).toBe(false)
+    user.suspended = false
+    expect(user.isSuspended()).toBe(false)
+  })
+
+  it('a suspended user is access-blocked (folded into isAccessBlocked) even with no ban', () => {
+    const user = createUser()
+    user.banned = false
+    user.suspended = true
+
+    expect(user.isBanned()).toBe(false)
+    expect(user.isSuspended()).toBe(true)
+    expect(user.isAccessBlocked()).toBe(true)
+  })
+
+  it('a not-suspended, not-banned user is not access-blocked', () => {
+    const user = createUser()
+
+    expect(user.isSuspended()).toBe(false)
+    expect(user.isAccessBlocked()).toBe(false)
+  })
 })

@@ -59,7 +59,7 @@ export function parseArgs(argv: string[], booleanFlags: ReadonlySet<string> = BO
 }
 
 /** Flags that never take a value. */
-export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['json', 'help'])
+export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['json', 'help', 'force'])
 
 /* ------------------------------------------------------------------------- *
  * Ban option parsing (pure — used by the `ban` command in bin/srn_admin.ts)
@@ -909,6 +909,13 @@ USERS
                                      temporary ban needs --until/--duration; a
                                      shadow ban lets them connect but degrades sync)
   unban <user>                       Lift a ban
+  suspend <user> [--reason TEXT]     Suspend a user (reversible hold: signs them
+                                     out now + blocks sign-in until unsuspended)
+  unsuspend <user>                   Lift a suspension
+  delete-user <user> --confirm EMAIL [--force]
+                                     Permanently delete a user across all services
+                                     (--confirm must equal their email; --force to
+                                     override the last-admin guard)
   reset-mfa <user>                   Clear a user's 2FA (and recovery codes)
   fix-quota <user>                   Recalculate a user's storage quota
 
@@ -993,12 +1000,12 @@ const COMMAND_HELP: Record<string, string> = {
 USAGE
   srn-admin users list [--limit N] [--offset N] [--sort createdAt|email|updatedAt]
                        [--email CONTAINS] [--role ROLE] [--banned true|false]
-                       [--subscription active|inactive|none]
+                       [--suspended true|false] [--subscription active|inactive|none]
                        [--created-after DATE] [--created-before DATE] [--json]
 
   DATE is ISO-8601 (e.g. 2026-01-31) or epoch milliseconds.
   Default: 100 rows, newest first. Columns: email, uuid, created, roles,
-  banned, MFA, storage used/limit.`,
+  banned, suspended, MFA, storage used/limit.`,
   user: `user <user> — rich whois (absorbs the old 'whois' and 'list-roles')
 
 Shows uuid/email/created, direct + group-conferred + effective roles,
@@ -1018,6 +1025,25 @@ Bans a user. --type selects the KIND (default 'permanent'):
     disabled real-time push in the syncing-server). They are never told.
 Permanent/temporary take effect on the next authenticated request; a shadow ban
 takes effect once the session token refreshes. 'unban <user>' lifts any ban.`,
+  suspend: `suspend <user> [--reason TEXT]
+
+Suspends a user — a REVERSIBLE administrative hold, distinct from a ban. The
+user is signed out immediately (all sessions revoked) and blocked from signing
+in until unsuspended; any surviving token is rejected on its next request.
+'unsuspend <user>' lifts the hold and lets them sign in again (a fresh sign-in;
+sessions are not restored). --reason is recorded for the audit log.`,
+  'delete-user': `delete-user <user> --confirm <email> [--force]
+
+PERMANENTLY deletes a user and ALL their data across every service (notes,
+files, revisions, analytics) by publishing the account-deletion event — the
+same pipeline as self-service account deletion. This CANNOT be undone.
+
+  --confirm <email>   REQUIRED. Must exactly equal the target's email; guards
+                      against deleting the wrong account.
+  --force             Override the last-administrator guard (by default the CLI
+                      refuses to delete the final admin).
+
+Removal completes across services shortly after the command returns.`,
   'roles grant': `roles grant|revoke <user> <ROLE>
 
 ROLE is validated against the known role names (see 'roles list').
@@ -1221,6 +1247,7 @@ export function helpFor(topic: string | undefined, subTopic?: string): string {
     whois: 'user',
     'list-roles': 'user',
     unban: 'ban',
+    unsuspend: 'suspend',
     'grant-admin': 'roles grant',
     'revoke-admin': 'roles grant',
     roles: 'roles grant',

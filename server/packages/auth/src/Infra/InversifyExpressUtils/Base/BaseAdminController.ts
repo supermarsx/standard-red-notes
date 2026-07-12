@@ -35,8 +35,10 @@ import { SetSettingValue } from '../../../Domain/UseCase/SetSettingValue/SetSett
 import { DeleteSetting } from '../../../Domain/UseCase/DeleteSetting/DeleteSetting'
 import { AdminUserSort, UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
 import { LockRepositoryInterface } from '../../../Domain/User/LockRepositoryInterface'
-import { BanType } from '../../../Domain/User/User'
+import { BanType, User } from '../../../Domain/User/User'
 import { SetUserBanStatus } from '../../../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
+import { SetUserSuspension } from '../../../Domain/UseCase/SetUserSuspension/SetUserSuspension'
+import { DeleteAccount } from '../../../Domain/UseCase/DeleteAccount/DeleteAccount'
 import { QueryAuditLog } from '../../../Domain/UseCase/QueryAuditLog/QueryAuditLog'
 import { AuditLogEntry } from '../../../Domain/AuditLog/AuditLogEntry'
 import { AuditLogEntryHttpProjection } from '../../Http/Projection/AuditLogEntryHttpProjection'
@@ -186,6 +188,13 @@ export class BaseAdminController extends BaseHttpController {
     // server, tests) keep compiling; the endpoints degrade gracefully when absent
     // or when the bound repository (TypeORM cache) cannot list locks.
     protected lockRepository?: LockRepositoryInterface,
+    // Standard Red Notes: admin SUSPEND/UNSUSPEND + admin-initiated DELETE.
+    // Optional trailing deps so every existing construction (tests, home server,
+    // microservice) keeps compiling; the endpoints fail gracefully (500 "not
+    // available") when a dep is absent. Delete reuses the EXISTING cross-service
+    // DeleteAccount pipeline — no hand-rolled multi-service deletion.
+    protected doSetUserSuspension?: SetUserSuspension,
+    protected doDeleteAccount?: DeleteAccount,
   ) {
     super()
 
@@ -202,6 +211,9 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.setRegistrationFlag', this.setRegistrationFlag.bind(this))
       this.controllerContainer.register('admin.getUserBanStatus', this.getUserBanStatus.bind(this))
       this.controllerContainer.register('admin.setUserBanStatus', this.setUserBanStatusEndpoint.bind(this))
+      this.controllerContainer.register('admin.getUserSuspensionStatus', this.getUserSuspensionStatus.bind(this))
+      this.controllerContainer.register('admin.setUserSuspension', this.setUserSuspensionEndpoint.bind(this))
+      this.controllerContainer.register('admin.deleteUser', this.deleteUser.bind(this))
       this.controllerContainer.register('admin.getAuditLog', this.getAuditLog.bind(this))
       this.controllerContainer.register('admin.getUsers', this.getUsers.bind(this))
       this.controllerContainer.register('admin.listGroups', this.listGroups.bind(this))
@@ -778,6 +790,225 @@ export class BaseAdminController extends BaseHttpController {
       bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
       shadowBanned: user.isShadowBanned(),
     })
+  }
+
+  /**
+   * Standard Red Notes: whether the given target is the LAST remaining
+   * administrator — used by the suspend + delete guards so an admin can never
+   * lock every administrator out of the instance. Returns false unless the
+   * target actually holds ADMIN_USER (removing/holding a non-admin never
+   * threatens the admin population), then counts admins via the same
+   * findUsersForAdmin role filter (bounded LIMIT 2 — we only care whether the
+   * total is ≤ 1).
+   */
+  private async targetIsLastAdmin(user: User): Promise<boolean> {
+    const targetRoles = await user.roles
+    const targetIsAdmin = targetRoles.some((role) => role.name === RoleName.NAMES.AdminUser)
+    if (!targetIsAdmin) {
+      return false
+    }
+
+    const admins = await this.userRepository.findUsersForAdmin({
+      role: RoleName.NAMES.AdminUser,
+      limit: 2,
+      offset: 0,
+      sort: 'createdAt',
+    })
+
+    return admins.total <= 1
+  }
+
+  /**
+   * Standard Red Notes: read a user's current SUSPENSION status for the admin
+   * panel. Mirrors getUserBanStatus (by email).
+   */
+  async getUserSuspensionStatus(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+
+    const usernameOrError = Username.create((request.params.email as string) ?? '', { skipValidation: true })
+    if (usernameOrError.isFailed()) {
+      return this.json({ error: { message: 'Missing email parameter.' } }, 400)
+    }
+
+    const user = await this.userRepository.findOneByUsernameOrEmail(usernameOrError.getValue())
+    if (!user) {
+      return this.json({ error: { message: `No user with email '${usernameOrError.getValue().value}'.` } }, 400)
+    }
+
+    return this.json({
+      uuid: user.uuid,
+      email: user.email,
+      suspended: user.isSuspended(),
+      suspendedAt: user.suspendedAt ? new Date(user.suspendedAt).toISOString() : null,
+      suspendedReason: user.suspendedReason ?? null,
+    })
+  }
+
+  /**
+   * Standard Red Notes: SUSPEND or UNSUSPEND a user by uuid. Admin-only. The
+   * body must carry a boolean `suspended` flag and may include `suspendedReason`.
+   * Suspension is a reversible administrative hold, SEPARATE from a ban; it is
+   * folded into User.isAccessBlocked() so SignIn + AuthenticateUser reject the
+   * user, and the use-case additionally revokes their sessions on suspend for
+   * immediacy. The suspend-only guards mirror delete: an admin cannot suspend
+   * their own account, nor the last remaining administrator.
+   */
+  async setUserSuspensionEndpoint(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doSetUserSuspension === undefined) {
+      return this.json({ error: { message: 'Account suspension is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { suspended, suspendedReason } = request.body as { suspended?: boolean; suspendedReason?: string | null }
+
+    if (typeof suspended !== 'boolean') {
+      return this.json({ error: { message: 'A boolean `suspended` flag is required.' } }, 400)
+    }
+
+    const uuidOrError = Uuid.create(userUuid)
+    if (uuidOrError.isFailed()) {
+      return this.json({ error: { message: 'Invalid user uuid.' } }, 400)
+    }
+
+    const user = await this.userRepository.findOneByUuid(uuidOrError.getValue())
+    if (!user) {
+      return this.json({ error: { message: `No user with uuid '${userUuid}'.` } }, 400)
+    }
+
+    // Guards apply only when SUSPENDING; unsuspending is always safe.
+    if (suspended) {
+      if (this.actorUuid(response) === userUuid) {
+        return this.json(
+          { error: { message: 'You cannot suspend your own account from the admin panel.' } },
+          400,
+        )
+      }
+      if (await this.targetIsLastAdmin(user)) {
+        return this.json({ error: { message: 'Cannot suspend the last remaining administrator.' } }, 400)
+      }
+    }
+
+    const result = await this.doSetUserSuspension.execute({
+      userUuid,
+      suspended,
+      suspendedReason: suspendedReason ?? null,
+    })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const savedUser = result.getValue()
+
+    const auditMetadata = {
+      suspended,
+      suspendedReason: savedUser.suspendedReason ?? null,
+    }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SuspensionChanged,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      metadata: auditMetadata,
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.SuspensionChanged,
+      targetUuid: userUuid,
+      metadata: auditMetadata,
+    })
+
+    return this.json({
+      success: true,
+      uuid: savedUser.uuid,
+      suspended: savedUser.isSuspended(),
+      suspendedAt: savedUser.suspendedAt ? new Date(savedUser.suspendedAt).toISOString() : null,
+      suspendedReason: savedUser.suspendedReason ?? null,
+    })
+  }
+
+  /**
+   * Standard Red Notes: admin-initiated HARD DELETE of a target account by uuid.
+   * Admin-only. Reuses the EXISTING cross-service DeleteAccount pipeline (no
+   * password verification, no hand-rolled multi-service deletion): it publishes
+   * AccountDeletionRequestedEvent, whose handlers remove the auth row + sessions
+   * and the other services' data. Guards: cannot delete self, cannot delete the
+   * last administrator, and a `confirmEmail` in the body MUST match the target's
+   * email (belt-and-suspenders for the type-the-email UI dialog so a bare API
+   * call can never nuke the wrong account). Returns once the event is published.
+   */
+  async deleteUser(request: Request, response?: Response): Promise<results.JsonResult> {
+    if (!this.requestorIsAdmin(response)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (this.doDeleteAccount === undefined) {
+      return this.json({ error: { message: 'Account deletion is not available.' } }, 500)
+    }
+
+    const { userUuid } = request.params as Record<string, string>
+    const { confirmEmail } = request.body as { confirmEmail?: string }
+
+    const uuidOrError = Uuid.create(userUuid)
+    if (uuidOrError.isFailed()) {
+      return this.json({ error: { message: 'Invalid user uuid.' } }, 400)
+    }
+
+    const user = await this.userRepository.findOneByUuid(uuidOrError.getValue())
+    if (!user) {
+      return this.json({ error: { message: `No user with uuid '${userUuid}'.` } }, 400)
+    }
+
+    if (this.actorUuid(response) === userUuid) {
+      return this.json(
+        { error: { message: 'You cannot delete your own account from the admin panel.' } },
+        400,
+      )
+    }
+
+    if (await this.targetIsLastAdmin(user)) {
+      return this.json({ error: { message: 'Cannot delete the last remaining administrator.' } }, 400)
+    }
+
+    if (
+      typeof confirmEmail !== 'string' ||
+      confirmEmail.trim().toLowerCase() !== (user.email ?? '').trim().toLowerCase()
+    ) {
+      return this.json({ error: { message: 'Confirmation email does not match.' } }, 400)
+    }
+
+    const email = user.email
+
+    const result = await this.doDeleteAccount.execute({ userUuid })
+    if (result.isFailed()) {
+      return this.json({ error: { message: result.getError() } }, 400)
+    }
+
+    const auditMetadata = { email }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.AccountDeleted,
+      targetType: 'user',
+      targetUuid: userUuid,
+      ip: this.clientIp(request),
+      metadata: auditMetadata,
+    })
+
+    await this.dispatchAdminActionWebhook({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.AccountDeleted,
+      targetUuid: userUuid,
+      metadata: auditMetadata,
+    })
+
+    return this.json({ success: true, userUuid, email })
   }
 
   /**

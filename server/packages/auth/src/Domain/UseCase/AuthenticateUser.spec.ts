@@ -87,6 +87,31 @@ describe('AuthenticateUser', () => {
     expect((response as { failureType?: string }).failureType).toEqual('INVALID_AUTH')
   })
 
+  // Standard Red Notes: suspension is folded into isAccessBlocked, so an
+  // already-signed-in suspended user loses access on their next authenticated
+  // request exactly like a hard-banned one.
+  it('should not authenticate a suspended user', async () => {
+    user.encryptedPassword = 'test'
+    user.isBanned = jest.fn().mockReturnValue(false)
+    user.isAccessBlocked = jest.fn().mockReturnValue(true)
+
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'jwt',
+      claims: {
+        pw_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      },
+      user,
+    })
+
+    const response = await createUseCase().execute({
+      authTokenFromHeaders: 'test',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(response.success).toBeFalsy()
+    expect((response as { failureType?: string }).failureType).toEqual('INVALID_AUTH')
+  })
+
   it('should not authenticate a user if the password hashed in JWT token is inavlid', async () => {
     user.encryptedPassword = 'test2'
 

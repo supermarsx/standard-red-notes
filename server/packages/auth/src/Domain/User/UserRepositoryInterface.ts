@@ -25,6 +25,9 @@ export interface AdminUserListQuery {
   createdBefore?: number
   role?: string
   banned?: boolean
+  // Standard Red Notes: filter by admin SUSPENSION state (a reversible hold,
+  // separate from `banned`). Mirrors the `banned` filter.
+  suspended?: boolean
   subscription?: 'active' | 'inactive' | 'none'
 }
 
@@ -46,6 +49,10 @@ export interface AdminUserRow {
   // ('temporary' | 'permanent' | 'shadow'), or null when not banned. Lets the
   // admin list render a per-row ban badge without a per-user round trip.
   banType: BanType | null
+  // Standard Red Notes: whether the account is under an admin SUSPENSION hold
+  // (reversible; separate from `banned`). Lets the admin list render a per-row
+  // suspended badge without a per-user round trip.
+  suspended: boolean
   mfaEnabled: boolean
   storageUsedBytes: number | null
   storageLimitBytes: number | null

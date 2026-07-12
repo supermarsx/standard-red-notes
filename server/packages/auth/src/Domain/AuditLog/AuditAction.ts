@@ -9,6 +9,11 @@ export const AuditAction = {
   SessionRevoked: 'session.revoked',
   RoleChanged: 'role.changed',
   BanChanged: 'ban.changed',
+  // Standard Red Notes: admin panel "suspend / unsuspend user" (a reversible
+  // administrative hold, separate from a ban) and "delete user" (admin-initiated
+  // hard delete that reuses the cross-service account-deletion pipeline).
+  SuspensionChanged: 'user.suspension_changed',
+  AccountDeleted: 'user.account_deleted',
   SettingChanged: 'setting.changed',
   // Standard Red Notes: admin panel "reset 2FA" (clears the user's MFA secret
   // and recovery codes) and "fix quota" (recalculates FILE_UPLOAD_BYTES_USED).

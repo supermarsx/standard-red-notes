@@ -420,6 +420,7 @@ import { KeyParamsFactoryInterface } from '../Domain/User/KeyParamsFactoryInterf
 import { TypeORMSubscriptionSetting } from '../Infra/TypeORM/TypeORMSubscriptionSetting'
 import { SetSettingValue } from '../Domain/UseCase/SetSettingValue/SetSettingValue'
 import { SetUserBanStatus } from '../Domain/UseCase/SetUserBanStatus/SetUserBanStatus'
+import { SetUserSuspension } from '../Domain/UseCase/SetUserSuspension/SetUserSuspension'
 import { ApplyDefaultSubscriptionSettings } from '../Domain/UseCase/ApplyDefaultSubscriptionSettings/ApplyDefaultSubscriptionSettings'
 import { GetSubscriptionSetting } from '../Domain/UseCase/GetSubscriptionSetting/GetSubscriptionSetting'
 import { SetSubscriptionSettingValue } from '../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
@@ -2034,6 +2035,17 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<SetUserSuspension>(TYPES.Auth_SetUserSuspension)
+      .toConstantValue(
+        new SetUserSuspension(
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<SessionRepositoryInterface>(TYPES.Auth_SessionRepository),
+          container.get<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository),
+          container.get<RevokedSessionRepositoryInterface>(TYPES.Auth_RevokedSessionRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+        ),
+      )
+    container
       .bind<GenerateRecoveryCodes>(TYPES.Auth_GenerateRecoveryCodes)
       .toConstantValue(
         new GenerateRecoveryCodes(
@@ -3274,6 +3286,12 @@ export class ContainerConfigLoader {
             // topology it correctly reports `available:false` (see
             // BaseAdminController.getLockedAccounts / LockRepositoryInterface).
             container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
+            // Standard Red Notes: admin SUSPEND/UNSUSPEND + admin-initiated
+            // DELETE. Wired on the single-container path too so the admin panel's
+            // suspend/delete endpoints work there. Delete reuses the existing
+            // cross-service DeleteAccount pipeline (Auth_DeleteAccount).
+            container.get<SetUserSuspension>(TYPES.Auth_SetUserSuspension),
+            container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
           ),
         )
       container

@@ -286,6 +286,11 @@ async function cmdUsersList(args: ParsedArgs): Promise<number> {
     throw new UsageError("--banned takes 'true' or 'false'")
   }
 
+  const suspendedRaw = stringOption(options, 'suspended')
+  if (suspendedRaw !== undefined && !['true', 'false'].includes(suspendedRaw)) {
+    throw new UsageError("--suspended takes 'true' or 'false'")
+  }
+
   const subscriptionRaw = stringOption(options, 'subscription')
   if (subscriptionRaw !== undefined && !['active', 'inactive', 'none'].includes(subscriptionRaw)) {
     throw new UsageError('--subscription takes active | inactive | none')
@@ -316,6 +321,7 @@ async function cmdUsersList(args: ParsedArgs): Promise<number> {
     email: stringOption(options, 'email'),
     role: stringOption(options, 'role'),
     banned: bannedRaw !== undefined ? bannedRaw === 'true' : undefined,
+    suspended: suspendedRaw !== undefined ? suspendedRaw === 'true' : undefined,
     subscription: subscriptionRaw as 'active' | 'inactive' | 'none' | undefined,
     createdAfter,
     createdBefore,
@@ -339,10 +345,11 @@ async function cmdUsersList(args: ParsedArgs): Promise<number> {
     row.createdAt.slice(0, 10),
     row.roles.join(',') || '-',
     row.banned ? 'yes' : 'no',
+    row.suspended ? 'yes' : 'no',
     row.mfaEnabled ? 'on' : 'off',
     `${formatBytes(row.storageUsedBytes)} / ${formatBytes(row.storageLimitBytes)}`,
   ])
-  outLine(formatTable(['EMAIL', 'UUID', 'CREATED', 'ROLES', 'BANNED', 'MFA', 'STORAGE USED/LIMIT'], rows))
+  outLine(formatTable(['EMAIL', 'UUID', 'CREATED', 'ROLES', 'BANNED', 'SUSPENDED', 'MFA', 'STORAGE USED/LIMIT'], rows))
   outLine(`\n${offset + 1}-${offset + result.rows.length} of ${result.total} user(s)`)
 
   return 0
@@ -421,6 +428,9 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
       banType: user.effectiveBanType(),
       bannedUntil: user.bannedUntil ? new Date(user.bannedUntil).toISOString() : null,
       shadowBanned: user.isShadowBanned(),
+      suspended: user.isSuspended(),
+      suspendedAt: user.suspendedAt ? new Date(user.suspendedAt).toISOString() : null,
+      suspendedReason: user.suspendedReason ?? null,
       mfaEnabled: row?.mfaEnabled ?? null,
       roles: {
         direct: directRoles,
@@ -448,6 +458,15 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
               ? `, until ${new Date(user.bannedUntil).toISOString()}`
               : ''
           }${user.banReason ? `, reason: ${user.banReason}` : ''})`
+        : 'no'
+    }`,
+  )
+  outLine(
+    `suspended: ${
+      user.isSuspended()
+        ? `yes (since ${user.suspendedAt ? new Date(user.suspendedAt).toISOString() : '?'}${
+            user.suspendedReason ? `, reason: ${user.suspendedReason}` : ''
+          })`
         : 'no'
     }`,
   )
@@ -535,6 +554,91 @@ async function cmdBan(args: ParsedArgs, banned: boolean): Promise<number> {
   } else {
     outLine(`Unbanned ${user.email} (${user.uuid}).`)
   }
+
+  return 0
+}
+
+async function cmdSuspend(args: ParsedArgs, suspended: boolean): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError(`${suspended ? 'suspend' : 'unsuspend'} <user> — a <user> (email or uuid) is required`)
+  }
+  const suspendedReason = suspended ? (stringOption(args.options, 'reason') ?? null) : null
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  const setUserSuspension = container.get<
+    UseCase<{ userUuid: string; suspended: boolean; suspendedReason?: string | null }, User>
+  >(TYPES.Auth_SetUserSuspension)
+  requireResult(await setUserSuspension.execute({ userUuid: user.uuid, suspended, suspendedReason }))
+
+  await writeAudit(
+    container,
+    AuditAction.SuspensionChanged,
+    { type: 'user', uuid: user.uuid },
+    { suspended, suspendedReason },
+  )
+
+  if (suspended) {
+    outLine(
+      `Suspended ${user.email} (${user.uuid})${suspendedReason ? ` — reason: ${suspendedReason}` : ''}. ` +
+        'They are signed out immediately and blocked from signing in until unsuspended.',
+    )
+  } else {
+    outLine(`Unsuspended ${user.email} (${user.uuid}). They can sign in again.`)
+  }
+
+  return 0
+}
+
+async function cmdDeleteUser(args: ParsedArgs): Promise<number> {
+  const identifier = args.positionals[0]
+  if (!identifier) {
+    throw new UsageError('delete-user <user> --confirm <email> — a <user> (email or uuid) is required')
+  }
+
+  const container = await loadContainer()
+  const user = await resolveUser(container, identifier)
+
+  // Belt-and-suspenders: --confirm MUST equal the resolved email so a mistyped
+  // <user> can never delete the wrong account.
+  const confirm = stringOption(args.options, 'confirm')
+  if (typeof confirm !== 'string' || confirm.trim().toLowerCase() !== user.email.trim().toLowerCase()) {
+    throw new UsageError(
+      `refusing to delete: --confirm must equal the target email (${user.email}).`,
+    )
+  }
+
+  // Last-admin guard: refuse deleting the final administrator unless --force.
+  const force = args.options.force === true
+  if (!force) {
+    const directRoles = (await user.roles).map((role) => role.name)
+    if (directRoles.includes(RoleName.NAMES.AdminUser)) {
+      const userRepository = container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)
+      const admins = await userRepository.findUsersForAdmin({
+        role: RoleName.NAMES.AdminUser,
+        limit: 2,
+        offset: 0,
+        sort: 'createdAt',
+      })
+      if (admins.total <= 1) {
+        throw new UsageError(
+          'refusing to delete the last remaining administrator. Grant another admin first, or pass --force.',
+        )
+      }
+    }
+  }
+
+  const deleteAccount = container.get<UseCase<{ userUuid: string }, string>>(TYPES.Auth_DeleteAccount)
+  requireResult(await deleteAccount.execute({ userUuid: user.uuid }))
+
+  await writeAudit(container, AuditAction.AccountDeleted, { type: 'user', uuid: user.uuid }, { email: user.email })
+
+  outLine(
+    `Deleting ${user.email} (${user.uuid}). Removal completes across services shortly ` +
+      '(auth row + sessions, then items, revisions, files and analytics via the deletion event).',
+  )
 
   return 0
 }
@@ -2442,6 +2546,14 @@ async function main(): Promise<number> {
       return cmdBan(args, true)
     case 'unban':
       return cmdBan(args, false)
+
+    case 'suspend':
+      return cmdSuspend(args, true)
+    case 'unsuspend':
+      return cmdSuspend(args, false)
+
+    case 'delete-user':
+      return cmdDeleteUser(args)
 
     case 'reset-mfa':
       return cmdResetMfa(args)

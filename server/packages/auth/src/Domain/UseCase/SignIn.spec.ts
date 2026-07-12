@@ -268,6 +268,39 @@ describe('SignIn', () => {
       email: 'test@test.com',
       version: ProtocolVersion.V004,
       isBanned: () => true,
+      isSuspended: () => false,
+      isAccessBlocked: () => true,
+    } as unknown as jest.Mocked<User>
+    user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue(user)
+
+    expect(
+      await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      }),
+    ).toEqual({
+      success: false,
+      errorCode: 403,
+      errorMessage: 'This account has been suspended. Please contact an administrator.',
+    })
+
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  // Standard Red Notes: suspension is folded into isAccessBlocked, so a
+  // suspended user is rejected at sign-in exactly like a hard-banned one.
+  it('should not sign in a suspended user even with valid credentials', async () => {
+    user = {
+      uuid: '1-2-3',
+      email: 'test@test.com',
+      version: ProtocolVersion.V004,
+      isBanned: () => false,
+      isSuspended: () => true,
       isAccessBlocked: () => true,
     } as unknown as jest.Mocked<User>
     user.encryptedPassword = '$2a$11$K3g6XoTau8VmLJcai1bB0eD9/YvBSBRtBhMprJOaVZ0U3SgasZH3a'

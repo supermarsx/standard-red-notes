@@ -146,9 +146,14 @@ export class SignIn implements UseCaseInterface {
      * no longer blocks sign-in.
      */
     if (user.isAccessBlocked()) {
-      this.logger.debug(`[sign-in][${user.uuid}] Banned user attempted to sign in.`)
+      // Standard Red Notes: suspension and ban both hard-block access via
+      // isAccessBlocked; record the distinct reason so the audit log tells them
+      // apart. The user-facing message stays generic either way (status is not
+      // disclosed beyond "suspended, contact an administrator").
+      const blockReason = user.isSuspended() ? 'suspended' : 'banned'
+      this.logger.debug(`[sign-in][${user.uuid}] Access-blocked (${blockReason}) user attempted to sign in.`)
 
-      await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, 'banned')
+      await this.recordLoginFailure(user.uuid, dto.email, dto.ipAddress, blockReason)
 
       return {
         success: false,
