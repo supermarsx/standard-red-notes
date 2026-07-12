@@ -10,7 +10,12 @@ import snColorsCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"mod
 // @ts-ignore inline webpack loader imports
 import exportOverridesCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/export-overrides.scss'
 import { getBase64FromBlob } from './Utils'
-import { buildDocxBlobFromHtml, DOCX_MIME_TYPE } from './DocxExport'
+import {
+  superStringToDocModel,
+  buildPlainTextDocModel,
+} from '@/Components/SuperEditor/Lexical/Utils/DocExport/DocModel'
+import { buildDocxBlob } from '@/Components/SuperEditor/Lexical/Utils/DocExport/DocxGenerator'
+import { buildOdtBlob } from '@/Components/SuperEditor/Lexical/Utils/DocExport/OdtGenerator'
 import { parseFileName, parseAndCreateZippableFileName, sanitizeFileName } from '@standardnotes/utils'
 import { getFullNoteText } from './Items/rehydrateLazyDecryptedNote'
 
@@ -76,8 +81,33 @@ export const getNoteBlob = async (
   noteText: string = note.text,
 ) => {
   const format = getNoteFormat(application, note)
+
+  const getFileItem = (id: string) => application.items.findItem<FileItem>(id)
+  const getFileBase64 = async (id: string) => {
+    const fileItem = application.items.findItem<FileItem>(id)
+    if (!fileItem) {
+      return
+    }
+    const fileBlob = await application.filesController.getFileBlob(fileItem)
+    if (!fileBlob) {
+      return
+    }
+    return await getBase64FromBlob(fileBlob)
+  }
+
+  // Structured DOCX / ODT: build the shared DocModel (a real Lexical-tree walk)
+  // and emit genuine OOXML / ODF — replacing the old Word-only altChunk hack, so
+  // the files open faithfully in Word, LibreOffice, Google Docs and Pages.
+  if (format === 'docx' || format === 'odt') {
+    const blocks =
+      note.noteType === NoteType.Super
+        ? await superStringToDocModel(noteText, { embedBehavior: superEmbedBehavior, getFileItem, getFileBase64 })
+        : buildPlainTextDocModel(noteText)
+    return format === 'docx' ? buildDocxBlob(blocks) : buildOdtBlob(blocks)
+  }
+
   let type: string
-  switch (format as string) {
+  switch (format) {
     case 'html':
       type = 'text/html'
       break
@@ -90,41 +120,26 @@ export const getNoteBlob = async (
     case 'pdf':
       type = 'application/pdf'
       break
-    case 'docx':
-      type = DOCX_MIME_TYPE
-      break
     default:
       type = 'text/plain'
       break
   }
   if (note.noteType === NoteType.Super) {
-    const isDocx = (format as string) === 'docx'
-    // A Word document is produced from the HTML export, embedded as an altChunk.
-    const converterFormat = (isDocx ? 'html' : format) as 'txt' | 'md' | 'html' | 'json' | 'pdf'
-    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(noteText, converterFormat, {
-      embedBehavior: superEmbedBehavior,
-      getFileItem: (id) => application.items.findItem<FileItem>(id),
-      getFileBase64: async (id) => {
-        const fileItem = application.items.findItem<FileItem>(id)
-        if (!fileItem) {
-          return
-        }
-        const fileBlob = await application.filesController.getFileBlob(fileItem)
-        if (!fileBlob) {
-          return
-        }
-        return await getBase64FromBlob(fileBlob)
+    const content = await headlessSuperConverter.convertSuperStringToOtherFormat(
+      noteText,
+      format as 'txt' | 'md' | 'html' | 'json' | 'pdf',
+      {
+        embedBehavior: superEmbedBehavior,
+        getFileItem,
+        getFileBase64,
+        pdf: {
+          pageSize: application.getPreference(
+            PrefKey.SuperNoteExportPDFPageSize,
+            PrefDefaults[PrefKey.SuperNoteExportPDFPageSize],
+          ),
+        },
       },
-      pdf: {
-        pageSize: application.getPreference(
-          PrefKey.SuperNoteExportPDFPageSize,
-          PrefDefaults[PrefKey.SuperNoteExportPDFPageSize],
-        ),
-      },
-    })
-    if (isDocx) {
-      return buildDocxBlobFromHtml(superHTML(note, content))
-    }
+    )
     const useMDFrontmatter =
       format === 'md' &&
       application.getPreference(
@@ -168,7 +183,8 @@ const noteRequiresFolder = (
   if (
     superExportFormat === 'json' ||
     superExportFormat === 'pdf' ||
-    (superExportFormat as string) === 'docx' ||
+    superExportFormat === 'docx' ||
+    superExportFormat === 'odt' ||
     (superExportFormat as string) === 'txt'
   ) {
     return false
@@ -233,7 +249,7 @@ export const createNoteExport = async (
     PrefDefaults[PrefKey.SuperNoteExportFormat],
   )
   const superEmbedBehaviorPref =
-    superExportFormatPref === 'pdf' || (superExportFormatPref as string) === 'docx'
+    superExportFormatPref === 'pdf' || superExportFormatPref === 'docx' || superExportFormatPref === 'odt'
       ? 'inline'
       : application.getPreference(
           PrefKey.SuperNoteExportEmbedBehavior,

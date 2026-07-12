@@ -29,16 +29,19 @@ const ModalContent = observer(() => {
     if (superNoteExportFormat === 'pdf' && superNoteExportEmbedBehavior !== 'inline') {
       void application.setPreference(PrefKey.SuperNoteExportEmbedBehavior, 'inline')
     }
-    // Word docs embed images inline (as base64 in the HTML altChunk).
-    if ((superNoteExportFormat as string) === 'docx' && superNoteExportEmbedBehavior !== 'inline') {
+    // DOCX and ODT embed images inline (base64 in the document) as a single file.
+    if (
+      (superNoteExportFormat === 'docx' || superNoteExportFormat === 'odt') &&
+      superNoteExportEmbedBehavior !== 'inline'
+    ) {
       void application.setPreference(PrefKey.SuperNoteExportEmbedBehavior, 'inline')
     }
   }, [application, superNoteExportEmbedBehavior, superNoteExportFormat])
 
   const someNotesHaveEmbeddedFiles = notes.some((note) => noteHasEmbeddedFiles(note))
 
-  // json/pdf bundle everything in one file; docx embeds inline; txt strips files.
-  const canShowEmbeddedFileOptions = !['json', 'pdf', 'docx', 'txt'].includes(superNoteExportFormat)
+  // json/pdf bundle everything in one file; docx/odt embed inline; txt strips files.
+  const canShowEmbeddedFileOptions = !['json', 'pdf', 'docx', 'odt', 'txt'].includes(superNoteExportFormat)
 
   return (
     <Modal
@@ -73,6 +76,7 @@ const ModalContent = observer(() => {
               { label: 'Markdown (.md)', value: 'md' },
               { label: 'HTML', value: 'html' },
               { label: 'Word (.docx)', value: 'docx' },
+              { label: 'OpenDocument (.odt)', value: 'odt' },
               { label: 'Plain text (.txt)', value: 'txt' },
               { label: 'PDF', value: 'pdf' },
             ]}
@@ -94,10 +98,16 @@ const ModalContent = observer(() => {
             superscript/subscript may not be correctly converted.
           </div>
         )}
-        {(superNoteExportFormat as string) === 'docx' && (
+        {superNoteExportFormat === 'docx' && (
           <div className="mt-2 text-xs text-passive-0">
-            Exports a Word document that keeps the note&apos;s formatting when opened in Microsoft Word. Other word
-            processors may render it less faithfully.
+            Exports a Word document (.docx) with structured formatting that opens faithfully in Word, LibreOffice,
+            Google Docs and Pages. Some interactive blocks (e.g. Mermaid, embeds) are included as text.
+          </div>
+        )}
+        {superNoteExportFormat === 'odt' && (
+          <div className="mt-2 text-xs text-passive-0">
+            Exports an OpenDocument Text file (.odt) that opens in LibreOffice, OpenOffice, Word and Google Docs. Some
+            interactive blocks (e.g. Mermaid, embeds) are included as text.
           </div>
         )}
         {(superNoteExportFormat as string) === 'txt' && (
