@@ -1412,7 +1412,20 @@ export class SyncService
      */
     const uploadItems = SyncService.excludeLocalOnlyItems(items)
 
-    return { items: uploadItems, beginDate, frozenDirtyIndex, neverSyncedDeleted }
+    /**
+     * Persisted-but-not-uploaded local-only items. `items` still contains the local-only items
+     * (only `uploadItems` is the filtered copy); they were just written to disk via persistPayloads
+     * above, so they survive reload. But because they are excluded from the upload set, no server
+     * response (DeltaRemoteSaved/DeltaOfflineSaved) will ever clear their dirty flag — leaving them
+     * dirty forever, which makes itemsNeedingSync() perpetually non-empty and
+     * potentiallySyncAgainAfterSyncCompletion re-spawn sync endlessly (sync() never resolves).
+     * Thread them to handleSyncOperationFinish so their dirty state is cleared locally, race-safely.
+     */
+    const localOnlyPersistedItems = items.filter(
+      (item) => !isDeletedItem(item) && (item as DecryptedItemInterface).localOnly === true,
+    ) as DecryptedItemInterface[]
+
+    return { items: uploadItems, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems }
   }
 
   /**
@@ -1694,7 +1707,8 @@ export class SyncService
   private async performSync(options: SyncOptions): Promise<unknown> {
     const { shouldExecuteSync, releaseLock } = this.configureSyncLock(options)
 
-    const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted } = await this.prepareForSync(options)
+    const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems } =
+      await this.prepareForSync(options)
     const shouldSkipUploadsForReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true
 
     if (options.mode === SyncMode.LocalOnly) {
@@ -1773,7 +1787,14 @@ export class SyncService
 
     releaseLock()
 
-    const { hasError } = await this.handleSyncOperationFinish(operation, options, neverSyncedDeleted, syncMode)
+    const { hasError } = await this.handleSyncOperationFinish(
+      operation,
+      options,
+      neverSyncedDeleted,
+      syncMode,
+      localOnlyPersistedItems,
+      frozenDirtyIndex,
+    )
 
     this.applyOnlineSyncResult(hasError, online)
 
@@ -2141,6 +2162,8 @@ export class SyncService
     options: SyncOptions,
     neverSyncedDeleted: DeletedItemInterface[],
     syncMode: SyncMode,
+    localOnlyPersistedItems: DecryptedItemInterface[] = [],
+    frozenDirtyIndex = getCurrentDirtyIndex(),
   ) {
     this.opStatus.setDidEnd()
 
@@ -2161,6 +2184,8 @@ export class SyncService
     if (neverSyncedDeleted.length > 0) {
       await this.handleNeverSyncedDeleted(neverSyncedDeleted)
     }
+
+    await this.clearDirtyStateForPersistedLocalOnlyItems(localOnlyPersistedItems, frozenDirtyIndex)
 
     if (syncMode !== SyncMode.DownloadFirst) {
       await this.notifyEvent(SyncEvent.SyncCompletedWithAllItemsUploaded, {
@@ -2262,6 +2287,63 @@ export class SyncService
     })
 
     await this.payloadManager.emitPayloads(payloads, PayloadEmitSource.LocalChanged)
+    await this.persistPayloads(payloads)
+  }
+
+  /**
+   * A dirty local-only item is PERSISTED locally (prepareForSync writes it to disk so it survives
+   * reload) but is deliberately excluded from the upload set, so no server response
+   * (DeltaRemoteSaved/DeltaOfflineSaved) will ever clear its dirty flag. Left dirty, it makes
+   * itemsNeedingSync() perpetually non-empty and potentiallySyncAgainAfterSyncCompletion re-spawn
+   * sync forever (sync() never resolves — the infinite-loop regression from 55785604).
+   *
+   * Clear it locally here, at sync-finish, mirroring handleNeverSyncedDeleted (persist/handle →
+   * clear dirty locally). Race-safe: mirror payloadByFinalizingSyncState — keep it dirty only if a
+   * newer edit advanced its dirtyIndex PAST the sync-begin snapshot (frozenDirtyIndex, the exact
+   * comparison the server/offline finalize path uses), so a concurrent edit is never clobbered (it
+   * re-persists + re-attempts next cycle). Its CONTENT and localOnly flag are unchanged; only dirty
+   * is cleared. Runs BEFORE potentiallySyncAgainAfterSyncCompletion, so the now-clean item is no
+   * longer returned by itemsNeedingSync() and the re-sync loop terminates. Success-path only
+   * (handleSyncOperationFinish early-returns on error before reaching here).
+   */
+  private async clearDirtyStateForPersistedLocalOnlyItems(
+    items: DecryptedItemInterface[],
+    frozenDirtyIndex: number,
+  ): Promise<void> {
+    if (items.length === 0) {
+      return
+    }
+
+    const payloads: DecryptedPayloadInterface[] = []
+    for (const item of items) {
+      const live = this.itemManager.findItem(item.uuid)
+      if (!live || isLitePayload(live.payload)) {
+        /** Gone or body-stripped since sync began — skip (never persist a lite/absent payload). */
+        continue
+      }
+
+      const dirtyIndex = live.payload.dirtyIndex
+      if (dirtyIndex != null && dirtyIndex > frozenDirtyIndex) {
+        /** Re-dirtied by a concurrent edit after sync began — leave dirty so the edit is preserved. */
+        continue
+      }
+
+      payloads.push(
+        new DecryptedPayload({
+          ...live.payload.ejected(),
+          dirty: false,
+          dirtyIndex: undefined,
+        }),
+      )
+    }
+
+    if (payloads.length === 0) {
+      return
+    }
+
+    /** LocalChanged (not LocalDatabaseLoaded) so the dirty:false is honored as a real local change. */
+    await this.payloadManager.emitPayloads(payloads, PayloadEmitSource.LocalChanged)
+    /** Persist the now-clean copy so it stays clean across reloads (no re-clear next session). */
     await this.persistPayloads(payloads)
   }
 

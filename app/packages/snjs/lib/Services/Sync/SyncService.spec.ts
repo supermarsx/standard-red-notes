@@ -1,5 +1,5 @@
 import { LoggerInterface } from '@standardnotes/utils'
-import { SyncEvent, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
+import { SyncEvent, SyncMode, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
 import { SNLog } from '../../Log'
 import {
@@ -10,9 +10,12 @@ import {
   ImmutablePayloadCollection,
   LitePayloadSafetyError,
   NoteContent,
+  PayloadEmitSource,
   PayloadSource,
   PayloadTimestampDefaults,
   createLitePayloadFromDecrypted,
+  getCurrentDirtyIndex,
+  getIncrementedDirtyIndex,
   isLitePayload,
 } from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
@@ -1796,5 +1799,298 @@ describe('SyncService D4: download-page persist failure must not advance the syn
     await expect(invoke(service, buildOperation(), buildResponse())).resolves.toBeUndefined()
 
     expect(setLastSyncToken).toHaveBeenCalledWith('server-token-NEXT')
+  })
+})
+
+describe('SyncService local-only dirty-clear (infinite sync-loop regression — t54-e1)', () => {
+  /**
+   * REGRESSION GUARD for the hang t54-e1 found LIVE. Commit 55785604 made itemsNeedingSync() return
+   * dirty local-only items (so prepareForSync persists them and they survive reload) but excludes
+   * them from the UPLOAD set. Since only the upload/server-response path clears an item's dirty
+   * flag, a dirty local-only item stayed dirty forever → itemsNeedingSync() was perpetually
+   * non-empty → potentiallySyncAgainAfterSyncCompletion re-spawned sync() endlessly → sync() never
+   * resolved (hung syncing app-wide). The 5 pure prepareForSync tests above shipped GREEN twice
+   * without catching it because they never drive the re-sync loop.
+   *
+   * The fix clears the dirty flag LOCALLY at sync-finish (clearDirtyStateForPersistedLocalOnlyItems),
+   * race-guarded on frozenDirtyIndex. These tests drive the REAL loop seam with a STATEFUL
+   * itemManager fake (getDirtyItems reflects the emitted clean state) so:
+   *  - a hang FAILS via a Promise.race timeout (it does not stall the whole runner),
+   *  - the clear fires only for local-only items and is race-safe,
+   *  - unmark-local-only still uploads.
+   */
+
+  const LOCAL_ONLY_UUID = 'loop-local-only-uuid'
+  const NORMAL_UUID = 'loop-normal-uuid'
+
+  type FakeItem = DecryptedItemInterface & { localOnly: boolean }
+
+  const makeItem = (uuid: string, localOnly: boolean, dirtyIndex: number): FakeItem => {
+    // A REAL DecryptedPayload so payload.ejected()/dirtyIndex/isLitePayload behave like production.
+    const payload = new DecryptedPayload<NoteContent>(
+      {
+        uuid,
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: uuid, text: `${uuid}-body` }),
+        dirty: true,
+        dirtyIndex,
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+    return {
+      uuid,
+      localOnly,
+      neverSynced: false,
+      payload,
+      payloadRepresentation: () => payload,
+    } as unknown as FakeItem
+  }
+
+  interface LoopHarness {
+    service: SyncService
+    dirtySet: Set<string>
+    emitPayloads: jest.Mock
+    persistPayloads: jest.Mock
+    itemsNeedingSync: () => DecryptedItemInterface[]
+    clearSeam: (items: DecryptedItemInterface[], frozenDirtyIndex: number) => Promise<void>
+    prepareForSync: () => Promise<{ items: DecryptedItemInterface[]; localOnlyPersistedItems: DecryptedItemInterface[] }>
+    potentiallySyncAgain: () => Promise<boolean>
+    syncAgainSpy: jest.Mock
+  }
+
+  const buildHarness = (items: FakeItem[]): LoopHarness => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    // The single source of truth for "still dirty". emitPayloads(dirty:false) drops the uuid, so
+    // getDirtyItems()/itemsNeedingSync() reflect the clear — exactly what the live loop re-checks.
+    const dirtySet = new Set(items.map((i) => i.uuid))
+
+    const emitPayloads = jest.fn(async (payloads: { uuid: string; dirty?: boolean }[]) => {
+      for (const p of payloads) {
+        if (p.dirty === false) {
+          dirtySet.delete(p.uuid)
+        }
+      }
+    })
+
+    const itemManager = {
+      getDirtyItems: jest.fn(() => items.filter((i) => dirtySet.has(i.uuid))),
+      findItem: jest.fn((uuid: string) => items.find((i) => i.uuid === uuid)),
+      getCollection: jest.fn(() => ({ findAll: () => [] })),
+      findAnyItems: jest.fn(() => []),
+    }
+    const sessionManager = {
+      online: jest.fn(() => false),
+      isCurrentSessionReadOnly: jest.fn(() => false),
+    }
+    const syncFrequencyGuard = {
+      isSyncCallsThresholdReachedThisMinute: jest.fn(() => false),
+      incrementCallsPerMinute: jest.fn(),
+    }
+    const syncBackoffService = { isItemInBackoff: jest.fn(() => false) }
+    const payloadManager = { emitPayloads }
+
+    const service = new SyncService(
+      itemManager as never,
+      sessionManager as never,
+      {} as never,
+      {} as never,
+      payloadManager as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      syncFrequencyGuard as never,
+      syncBackoffService as never,
+      { addEventHandler: noop } as never,
+    )
+
+    const persistPayloads = jest.fn().mockResolvedValue(undefined)
+    const syncAgainSpy = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { persistPayloads: unknown }).persistPayloads = persistPayloads
+    ;(service as unknown as { notifyEvent: unknown }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { notifyEventSync: unknown }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { syncAgainByHandlingNewDirtyItems: unknown }).syncAgainByHandlingNewDirtyItems =
+      syncAgainSpy
+    ;(service as unknown as { createSyncOperation: unknown }).createSyncOperation = jest.fn().mockResolvedValue({
+      operation: { run: async () => undefined, numberOfItemsInvolved: 0 },
+      mode: SyncMode.Default,
+    })
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { syncLock: boolean }).syncLock = false
+    ;(service as unknown as { opStatus: unknown }).opStatus = {
+      syncInProgress: false,
+      setDidBegin: jest.fn(),
+      setDidEnd: jest.fn(),
+      hasError: jest.fn(() => false),
+      reset: jest.fn(),
+      setError: jest.fn(),
+    }
+
+    const itemsNeedingSync = () =>
+      (service as unknown as { itemsNeedingSync: () => DecryptedItemInterface[] }).itemsNeedingSync()
+    const clearSeam = (toClear: DecryptedItemInterface[], frozenDirtyIndex: number) =>
+      (
+        service as unknown as {
+          clearDirtyStateForPersistedLocalOnlyItems: (i: DecryptedItemInterface[], f: number) => Promise<void>
+        }
+      ).clearDirtyStateForPersistedLocalOnlyItems(toClear, frozenDirtyIndex)
+    const prepareForSync = () =>
+      (
+        service as unknown as {
+          prepareForSync: (o: Record<string, unknown>) => Promise<{
+            items: DecryptedItemInterface[]
+            localOnlyPersistedItems: DecryptedItemInterface[]
+          }>
+        }
+      ).prepareForSync({})
+    const potentiallySyncAgain = () =>
+      (
+        service as unknown as {
+          potentiallySyncAgainAfterSyncCompletion: (
+            m: SyncMode,
+            o: Record<string, unknown>,
+            q: unknown[],
+            online: boolean,
+          ) => Promise<boolean>
+        }
+      ).potentiallySyncAgainAfterSyncCompletion(SyncMode.Default, {}, [], false)
+
+    return {
+      service,
+      dirtySet,
+      emitPayloads,
+      persistPayloads,
+      itemsNeedingSync,
+      clearSeam,
+      prepareForSync,
+      potentiallySyncAgain,
+      syncAgainSpy,
+    }
+  }
+
+  function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`sync() did not resolve within ${ms}ms — infinite sync-loop regression`)),
+        ms,
+      )
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>
+  }
+
+  it('FULL DRIVE (offline): sync() RESOLVES for a dirty local-only note and stops re-selecting it (loop terminates)', async () => {
+    const dirtyIndex = getIncrementedDirtyIndex()
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, dirtyIndex)
+    const h = buildHarness([localOnly])
+
+    // Pre-condition: this is exactly the state that hung — the local-only item needs sync.
+    expect(h.itemsNeedingSync().map((i) => i.uuid)).toEqual([LOCAL_ONLY_UUID])
+
+    // A hang here FAILS the test via the race timeout instead of stalling the whole suite.
+    await expect(withTimeout(h.service.sync({}), 3000)).resolves.toBeUndefined()
+
+    // The loop terminated: the local-only item is no longer dirty / no longer re-selected.
+    expect(h.dirtySet.has(LOCAL_ONLY_UUID)).toBe(false)
+    expect(h.itemsNeedingSync()).toHaveLength(0)
+
+    // Its dirty flag was cleared locally (emit + persist of a dirty:false copy).
+    const clearedEmit = h.emitPayloads.mock.calls.find(([payloads]) =>
+      (payloads as { uuid: string; dirty?: boolean }[]).some((p) => p.uuid === LOCAL_ONLY_UUID && p.dirty === false),
+    )
+    expect(clearedEmit).toBeDefined()
+    const clearedPersist = h.persistPayloads.mock.calls.find(([payloads]) =>
+      (payloads as { uuid: string; dirty?: boolean }[]).some((p) => p.uuid === LOCAL_ONLY_UUID && p.dirty === false),
+    )
+    expect(clearedPersist).toBeDefined()
+  }, 8000)
+
+  it('is the precise INVERSE of the loop: potentiallySyncAgain would re-spawn BEFORE the clear, and does NOT after', async () => {
+    const dirtyIndex = getIncrementedDirtyIndex()
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, dirtyIndex)
+    const h = buildHarness([localOnly])
+
+    // BEFORE the clear: the still-dirty local-only item makes the re-sync loop fire (returns true).
+    expect(h.itemsNeedingSync().map((i) => i.uuid)).toEqual([LOCAL_ONLY_UUID])
+    await expect(h.potentiallySyncAgain()).resolves.toBe(true)
+    expect(h.syncAgainSpy).toHaveBeenCalledTimes(1)
+
+    // Apply the local dirty-clear (frozenDirtyIndex >= the item's dirtyIndex → not re-dirtied).
+    await h.clearSeam([localOnly], dirtyIndex)
+
+    // AFTER the clear: itemsNeedingSync is empty and the loop does NOT re-spawn.
+    expect(h.itemsNeedingSync()).toHaveLength(0)
+    h.syncAgainSpy.mockClear()
+    await expect(h.potentiallySyncAgain()).resolves.toBe(false)
+    expect(h.syncAgainSpy).not.toHaveBeenCalled()
+  })
+
+  it('prepareForSync collects ONLY non-deleted local-only items into localOnlyPersistedItems (not normals)', async () => {
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, getIncrementedDirtyIndex())
+    const normal = makeItem(NORMAL_UUID, false, getIncrementedDirtyIndex())
+    const h = buildHarness([localOnly, normal])
+
+    const { items, localOnlyPersistedItems } = await h.prepareForSync()
+
+    // The clear-seam feed carries the local-only item only …
+    expect(localOnlyPersistedItems.map((i) => i.uuid)).toEqual([LOCAL_ONLY_UUID])
+    // … and the normal item still goes to the upload set (never force-cleared locally).
+    expect(items.map((i) => i.uuid)).toContain(NORMAL_UUID)
+    expect(items.map((i) => i.uuid)).not.toContain(LOCAL_ONLY_UUID)
+  })
+
+  it('clear seam fires ONLY for the items it is given and NEVER touches a co-dirty normal item', async () => {
+    const dirtyIndex = getIncrementedDirtyIndex()
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, dirtyIndex)
+    const normal = makeItem(NORMAL_UUID, false, dirtyIndex)
+    const h = buildHarness([localOnly, normal])
+
+    await h.clearSeam([localOnly], dirtyIndex)
+
+    // Local-only cleared; the normal item is untouched by this seam (still dirty, no clean emit).
+    expect(h.dirtySet.has(LOCAL_ONLY_UUID)).toBe(false)
+    expect(h.dirtySet.has(NORMAL_UUID)).toBe(true)
+    for (const [payloads] of h.emitPayloads.mock.calls) {
+      for (const p of payloads as { uuid: string; dirty?: boolean }[]) {
+        expect(p.uuid).not.toEqual(NORMAL_UUID)
+      }
+    }
+  })
+
+  it('RACE GUARD: does NOT clear a local-only item re-dirtied mid-sync (dirtyIndex advanced past frozenDirtyIndex)', async () => {
+    const frozenDirtyIndex = getIncrementedDirtyIndex()
+    // Simulate a concurrent edit that landed AFTER sync began: its dirtyIndex is past the snapshot.
+    const reDirtied = makeItem(LOCAL_ONLY_UUID, true, frozenDirtyIndex + 1)
+    const h = buildHarness([reDirtied])
+
+    await h.clearSeam([reDirtied], frozenDirtyIndex)
+
+    // The concurrent edit is preserved: item stays dirty, no clean emit/persist happened.
+    expect(h.dirtySet.has(LOCAL_ONLY_UUID)).toBe(true)
+    expect(h.emitPayloads).not.toHaveBeenCalled()
+    expect(h.persistPayloads).not.toHaveBeenCalled()
+    expect(h.itemsNeedingSync().map((i) => i.uuid)).toEqual([LOCAL_ONLY_UUID])
+  })
+
+  it('UNMARK local-only: a no-longer-local-only item is NOT collected for local clear and IS returned for upload', async () => {
+    // Toggling localOnly off re-dirties the item; excludeLocalOnlyItems no longer excludes it.
+    const unmarked = makeItem(LOCAL_ONLY_UUID, false, getIncrementedDirtyIndex())
+    const h = buildHarness([unmarked])
+
+    const { items, localOnlyPersistedItems } = await h.prepareForSync()
+
+    expect(localOnlyPersistedItems).toHaveLength(0)
+    expect(items.map((i) => i.uuid)).toContain(LOCAL_ONLY_UUID)
   })
 })
