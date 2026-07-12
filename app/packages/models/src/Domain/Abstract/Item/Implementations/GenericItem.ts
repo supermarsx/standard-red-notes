@@ -154,6 +154,18 @@ export abstract class GenericItem<P extends PayloadInterface = PayloadInterface>
       if (this.payload.source === PayloadSource.FileImport) {
         return ConflictStrategy.KeepBase
       }
+      /**
+       * The incoming/server item is deleted, but our local item is a genuine,
+       * un-synced edit (decrypted and dirty). Applying the deletion outright would
+       * silently discard that edit with no recoverable copy. Instead, duplicate our
+       * edit into a fresh conflict copy and apply the server deletion to the original
+       * uuid — mirroring the edit-vs-edit safety net below (DuplicateBaseKeepApply).
+       * A clean (non-dirty) local item has no pending edit to preserve, so it still
+       * just takes the deletion (KeepApply).
+       */
+      if (isDecryptedItem(this) && this.dirty) {
+        return ConflictStrategy.DuplicateBaseKeepApply
+      }
       return ConflictStrategy.KeepApply
     }
 
