@@ -54,27 +54,64 @@ export class MigrationService extends AbstractService implements InternalEventHa
 
     if (this.activeMigrations.length > 0) {
       /**
-       * PERSIST-M1: checkpoint the stored version PER migration. Previously the stored
-       * SnjsVersion was only stamped on the LAST migration's onDone, so a crash mid-run
-       * re-ran ALL migrations on next launch (and additive merges like 2_202_1 could
-       * re-clobber user edits). We now stamp the stored version after EACH migration
-       * completes, so an interrupted run resumes from the last completed migration.
+       * PERSIST-M1: checkpoint the stored version as migrations complete, so an interrupted
+       * run resumes from where it left off instead of re-running everything from scratch.
        *
-       * getRequiredMigrations skips any migration whose version is <= the stored
-       * version, so these per-migration stamps are what make resumption idempotent.
+       * The subtlety that makes a naive per-migration stamp WRONG: migrations complete in
+       * STAGE order, not version order (a higher-version migration can register on an earlier
+       * stage than a lower-version one — e.g. 2.168.6 runs at Launched_10, 2.0.15 at the later
+       * LoadedDatabase_12). getRequiredMigrations selects purely by `version > stored`, so
+       * stamping each migration's own version as it finishes breaks BOTH ways:
+       *   - it can regress (2.168.6 -> 2.0.15), re-running already-completed higher migrations;
+       *   - a plain max() guard would instead lock the stamp forward at 2.168.6 after the
+       *     earliest stage, permanently SKIPPING the still-pending lower-version migrations
+       *     (2.0.15 creates the default items key — a data-integrity hazard).
+       *
+       * Fix: advance the stamp only to the top of the CONTIGUOUS completed prefix (by version).
+       * `activeMigrations` is version-ascending (getRequiredMigrations sorts ascending and
+       * assertMigrationsAreWellRegistered enforces it), so we stamp version V only once every
+       * active migration with version <= V is done — never regressing and never skipping a
+       * pending migration. The cost is that an out-of-order-completed HIGHER migration may
+       * harmlessly re-run after a crash, which is the safe, idempotent direction.
        */
-      this.activeMigrations.forEach((migration, index) => {
-        const isLast = index === this.activeMigrations!.length - 1
-        const migrationConstructor = migration.constructor as typeof Migration
-        const checkpointVersion = migrationConstructor.version()
+      const migrations = this.activeMigrations
+      const completed = new Array<boolean>(migrations.length).fill(false)
+      let highestStampedVersion: string | undefined
 
+      migrations.forEach((migration, index) => {
         migration.onDone(async () => {
+          completed[index] = true
+
+          let prefixLength = 0
+          while (prefixLength < completed.length && completed[prefixLength]) {
+            prefixLength++
+          }
+
+          if (prefixLength === 0) {
+            return
+          }
+
           /**
-           * For the last migration we stamp the full current SnjsVersion (not just the
-           * migration's own version) so the app is marked fully up to date even when the
+           * When the whole set is done we stamp the full current SnjsVersion (not just the
+           * top migration's version) so the app is marked fully up to date even when the
            * last migration's version is lower than the running SnjsVersion.
            */
-          await this.stampStoredVersion(isLast ? SnjsVersion : checkpointVersion)
+          const allDone = prefixLength === migrations.length
+          const versionToStamp = allDone
+            ? SnjsVersion
+            : (migrations[prefixLength - 1].constructor as typeof Migration).version()
+
+          // Defensive never-regress guard; also skips redundant identical re-writes when an
+          // out-of-order completion did not extend the contiguous prefix.
+          if (
+            highestStampedVersion !== undefined &&
+            !isRightVersionGreaterThanLeft(highestStampedVersion, versionToStamp)
+          ) {
+            return
+          }
+
+          highestStampedVersion = versionToStamp
+          await this.stampStoredVersion(versionToStamp)
         })
       })
     } else {
