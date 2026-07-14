@@ -18,19 +18,35 @@ import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
 import {
+  AdminInviteLinkCreated,
+  AdminInviteLinkView,
+  AdminPendingUserRow,
   AdminServerSettings,
   AdminServerSettingsResponse,
+  CreateInviteLinkForm,
   DockerControl,
   LOG_LEVEL_OPTIONS,
   ServerService,
   ServiceControlAction,
   WS_GATEWAY_SERVICE,
+  buildCreateInviteLinkBody,
+  buildInvitesPerUserUpdate,
+  buildMaxTotalAccountsUpdate,
   buildSignupCapUpdate,
   buildSignupWindowUpdate,
   buildUrlSettingUpdate,
+  datetimeLocalUtcToISO,
   dockerContainerLabel,
   dockerRestartDialogCopy,
+  emptyCreateInviteLinkForm,
+  formatInviteLinkDate,
   formatServiceLatency,
+  formatUtcClock,
+  inviteLinkAbsoluteUrl,
+  inviteLinkStatusChipClass,
+  inviteLinkStatusLabel,
+  inviteLinkUsesLabel,
+  isoToDatetimeLocalUtc,
   serviceActionDialogCopy,
   serviceActionIsSelfInterrupting,
   serviceActionPastTense,
@@ -46,6 +62,24 @@ import {
 type Props = {
   application: WebApplication
   noteIfForbidden: (response: { status?: number }) => void
+}
+
+// The snjs client's PUT param type for /v1/admin/server-settings.
+type AdminSetServerSettingsPartial = Parameters<WebApplication['legacyApi']['adminSetServerSettings']>[0]
+
+// Standard Red Notes (t69): the invite-URL signup-control registration overlay keys
+// the gateway already accepts but the snjs param type (a different executor's
+// package) does not yet enumerate. We widen the local save-partial with them and
+// cast at the adminSetServerSettings boundary.
+type ServerSettingsPatch = AdminSetServerSettingsPartial & {
+  registration?: {
+    inviteOnly?: boolean | null
+    approvalRequired?: boolean | null
+    maxTotalAccounts?: number | null
+    signupsOpenAt?: string | null
+    signupsCloseAt?: string | null
+    invitesPerUser?: number | null
+  }
 }
 
 // Standard Red Notes: friendly labels for the assignable default-registration
@@ -224,6 +258,40 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [signupsPerDeviceMax, setSignupsPerDeviceMax] = useState('')
   const [signupsPerDeviceWindowHours, setSignupsPerDeviceWindowHours] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
+
+  // Standard Red Notes: INVITE-URL signup control (t69). Extra config-field inputs
+  // (global total cap, signup window bounds, per-user invite quota) — save-on-button
+  // text rows, populated from the server view below. The window bounds are entered
+  // and displayed in UTC (see the live UTC clock note by those controls).
+  const [maxTotalAccounts, setMaxTotalAccounts] = useState('')
+  const [signupsOpenAt, setSignupsOpenAt] = useState('')
+  const [signupsCloseAt, setSignupsCloseAt] = useState('')
+  const [invitesPerUser, setInvitesPerUser] = useState('')
+
+  // Live UTC clock for the signup-window note (ticks each second while mounted). The
+  // window is evaluated on the SERVER clock in UTC — this shows the current UTC
+  // instant so the admin sets the bounds unambiguously.
+  const [utcNowMs, setUtcNowMs] = useState(() => Date.now())
+
+  // Standard Red Notes: INVITE LINKS management. The list is loaded on mount; a
+  // create returns the raw token+path EXACTLY ONCE, held in `createdInviteLink`
+  // until the admin dismisses it (it can never be re-listed).
+  const [inviteLinks, setInviteLinks] = useState<AdminInviteLinkView[]>([])
+  const [inviteLinksLoading, setInviteLinksLoading] = useState(false)
+  const [inviteLinksNotAvailable, setInviteLinksNotAvailable] = useState(false)
+  const [inviteForm, setInviteForm] = useState<CreateInviteLinkForm>(emptyCreateInviteLinkForm)
+  const [creatingInviteLink, setCreatingInviteLink] = useState(false)
+  const [createdInviteLink, setCreatedInviteLink] = useState<AdminInviteLinkCreated | null>(null)
+  // uuid of the link whose revoke is in flight, or null.
+  const [revokingInviteUuid, setRevokingInviteUuid] = useState<string | null>(null)
+
+  // Standard Red Notes: APPROVAL QUEUE. Pending (approved=false) users loaded on
+  // mount; Approve/Reject act per row and refresh the list.
+  const [pendingUsers, setPendingUsers] = useState<AdminPendingUserRow[]>([])
+  const [pendingUsersLoading, setPendingUsersLoading] = useState(false)
+  const [pendingUsersNotAvailable, setPendingUsersNotAvailable] = useState(false)
+  // `${action}:${uuid}` of an in-flight approve/reject, or null.
+  const [pendingActionInFlight, setPendingActionInFlight] = useState<string | null>(null)
 
   const loadRegistrationFlag = useCallback(async () => {
     setRegistrationLoading(true)
@@ -426,6 +494,13 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setSignupsPerWeekMax(capToInput(reg?.signupsPerWeekMax))
     setSignupsPerDeviceMax(capToInput(reg?.signupsPerDeviceMax))
     setSignupsPerDeviceWindowHours(windowToInput(reg?.signupsPerDeviceWindowHours))
+    // t69 invite-URL signup control config fields. maxTotalAccounts/invitesPerUser
+    // show 0 as blank (0 = unlimited/disabled); the window bounds convert the stored
+    // UTC instant back into a UTC datetime-local value for the picker.
+    setMaxTotalAccounts(capToInput(reg?.maxTotalAccounts))
+    setInvitesPerUser(capToInput(reg?.invitesPerUser))
+    setSignupsOpenAt(isoToDatetimeLocalUtc(reg?.signupsOpenAt))
+    setSignupsCloseAt(isoToDatetimeLocalUtc(reg?.signupsCloseAt))
   }, [])
 
   const loadServerSettings = useCallback(async () => {
@@ -453,22 +528,88 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     }
   }, [application, noteIfForbidden, applySettingsView])
 
+  // Standard Red Notes: INVITE LINKS list loader (t69). A 404/500 (older server
+  // without the feature) hides the section behind a "not available" note rather
+  // than erroring.
+  const loadInviteLinks = useCallback(async () => {
+    setInviteLinksLoading(true)
+    try {
+      const response = await application.legacyApi.adminListInviteLinks()
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        if (Number(response.status) === 404 || Number(response.status) === 500) {
+          setInviteLinksNotAvailable(true)
+        }
+        return
+      }
+      setInviteLinksNotAvailable(false)
+      const data = (response as { data?: { inviteLinks?: AdminInviteLinkView[] } }).data
+      setInviteLinks(Array.isArray(data?.inviteLinks) ? (data?.inviteLinks as AdminInviteLinkView[]) : [])
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setInviteLinksLoading(false)
+    }
+  }, [application, noteIfForbidden])
+
+  // Standard Red Notes: APPROVAL QUEUE list loader (t69). Same graceful-degrade as
+  // the invite links when the endpoint is missing.
+  const loadPendingUsers = useCallback(async () => {
+    setPendingUsersLoading(true)
+    try {
+      const response = await application.legacyApi.listPendingUsers({ limit: 100 })
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        if (Number(response.status) === 404 || Number(response.status) === 500) {
+          setPendingUsersNotAvailable(true)
+        }
+        return
+      }
+      setPendingUsersNotAvailable(false)
+      const data = (response as { data?: { users?: AdminPendingUserRow[] } }).data
+      setPendingUsers(Array.isArray(data?.users) ? (data?.users as AdminPendingUserRow[]) : [])
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setPendingUsersLoading(false)
+    }
+  }, [application, noteIfForbidden])
+
   useEffect(() => {
     void loadRegistrationFlag()
     void loadServerStatus()
     void loadServerSettings()
     void loadControllableServices()
-  }, [loadRegistrationFlag, loadServerStatus, loadServerSettings, loadControllableServices])
+    void loadInviteLinks()
+    void loadPendingUsers()
+  }, [
+    loadRegistrationFlag,
+    loadServerStatus,
+    loadServerSettings,
+    loadControllableServices,
+    loadInviteLinks,
+    loadPendingUsers,
+  ])
+
+  // Tick the UTC clock shown by the signup-window controls once a second.
+  useEffect(() => {
+    const id = window.setInterval(() => setUtcNowMs(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
 
   /** PUT a partial server-settings update and re-apply the returned view. */
   const saveServerSettings = useCallback(
-    async (
-      partial: Parameters<WebApplication['legacyApi']['adminSetServerSettings']>[0],
-      successMessage: string,
-    ): Promise<boolean> => {
+    async (partial: ServerSettingsPatch, successMessage: string): Promise<boolean> => {
       setSettingsSaving(true)
       try {
-        const response = await application.legacyApi.adminSetServerSettings(partial)
+        // t69: the snjs client's adminSetServerSettings param type (owned by the
+        // snjs package) does not yet list the invite-URL signup-control registration
+        // keys, though the gateway validator already accepts them. Widen locally
+        // (ServerSettingsPatch) and cast at the boundary rather than reach across
+        // into another executor's package.
+        const response = await application.legacyApi.adminSetServerSettings(
+          partial as AdminSetServerSettingsPartial,
+        )
         if (isErrorResponse(response)) {
           noteIfForbidden(response)
           addToast({ type: ToastType.Error, message: 'Failed to save the server setting.' })
@@ -653,6 +794,210 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       update.value === null ? 'Per-device window reset to default.' : 'Per-device window saved.',
     )
   }, [signupsPerDeviceWindowHours, saveServerSettings])
+
+  // Standard Red Notes: INVITE-URL signup control (t69) toggles + config saves.
+  const saveInviteOnly = useCallback(
+    async (enabled: boolean) => {
+      await saveServerSettings(
+        { registration: { inviteOnly: enabled } },
+        enabled ? 'Invite-only signups enabled — a valid invite URL is now required.' : 'Invite-only signups disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveApprovalRequired = useCallback(
+    async (enabled: boolean) => {
+      await saveServerSettings(
+        { registration: { approvalRequired: enabled } },
+        enabled
+          ? 'Approval required — new signups are held pending until an admin approves.'
+          : 'Approval requirement disabled.',
+      )
+    },
+    [saveServerSettings],
+  )
+
+  const saveMaxTotalAccounts = useCallback(async () => {
+    const update = buildMaxTotalAccountsUpdate(maxTotalAccounts)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { maxTotalAccounts: update.value } },
+      update.value === null ? 'Total-accounts cap reset to default.' : 'Total-accounts cap saved.',
+    )
+  }, [maxTotalAccounts, saveServerSettings])
+
+  const saveInvitesPerUser = useCallback(async () => {
+    const update = buildInvitesPerUserUpdate(invitesPerUser)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { invitesPerUser: update.value } },
+      update.value === null ? 'Per-user invite quota reset to default.' : 'Per-user invite quota saved.',
+    )
+  }, [invitesPerUser, saveServerSettings])
+
+  const saveSignupsOpenAt = useCallback(async () => {
+    const update = datetimeLocalUtcToISO(signupsOpenAt)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsOpenAt: update.value } },
+      update.value === null ? 'Signup window open time cleared.' : 'Signup window open time saved.',
+    )
+  }, [signupsOpenAt, saveServerSettings])
+
+  const saveSignupsCloseAt = useCallback(async () => {
+    const update = datetimeLocalUtcToISO(signupsCloseAt)
+    if (!update.ok) {
+      addToast({ type: ToastType.Error, message: update.error })
+      return
+    }
+    await saveServerSettings(
+      { registration: { signupsCloseAt: update.value } },
+      update.value === null ? 'Signup window close time cleared.' : 'Signup window close time saved.',
+    )
+  }, [signupsCloseAt, saveServerSettings])
+
+  // Standard Red Notes: create an invite link. On success the raw token + path are
+  // shown EXACTLY ONCE (held in createdInviteLink) and the list is refreshed.
+  const createInviteLink = useCallback(async () => {
+    const body = buildCreateInviteLinkBody(inviteForm)
+    if (!body.ok) {
+      addToast({ type: ToastType.Error, message: body.error })
+      return
+    }
+    setCreatingInviteLink(true)
+    try {
+      const response = await application.legacyApi.adminCreateInviteLink(body.value)
+      if (isErrorResponse(response)) {
+        noteIfForbidden(response)
+        const message =
+          (response as { data?: { error?: { message?: string } } }).data?.error?.message ??
+          'Failed to create the invite link.'
+        addToast({ type: ToastType.Error, message })
+        return
+      }
+      const created = (response as { data?: { inviteLink?: AdminInviteLinkCreated } }).data?.inviteLink ?? null
+      setCreatedInviteLink(created)
+      setInviteForm(emptyCreateInviteLinkForm())
+      addToast({ type: ToastType.Success, message: 'Invite link created. Copy the URL now — it is shown only once.' })
+      void loadInviteLinks()
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to create the invite link.' })
+    } finally {
+      setCreatingInviteLink(false)
+    }
+  }, [application, inviteForm, noteIfForbidden, loadInviteLinks])
+
+  const copyCreatedInviteUrl = useCallback(async () => {
+    if (!createdInviteLink) {
+      return
+    }
+    const url = inviteLinkAbsoluteUrl(window.location.origin, createdInviteLink.path)
+    try {
+      await navigator.clipboard.writeText(url)
+      addToast({ type: ToastType.Success, message: 'Invite URL copied.' })
+    } catch {
+      addToast({ type: ToastType.Error, message: 'Could not copy — select the URL and copy it manually.' })
+    }
+  }, [createdInviteLink])
+
+  const revokeInviteLink = useCallback(
+    async (link: AdminInviteLinkView) => {
+      const confirmed = await confirmDialog({
+        title: 'Revoke this invite link?',
+        text: `Revoking${
+          link.label ? ` "${link.label}"` : ' this link'
+        } permanently disables it — anyone who still has the URL can no longer sign up with it. This cannot be undone.`,
+        confirmButtonText: 'Revoke link',
+        confirmButtonStyle: 'danger',
+      })
+      if (!confirmed) {
+        return
+      }
+      setRevokingInviteUuid(link.uuid)
+      try {
+        const response = await application.legacyApi.adminRevokeInviteLink(link.uuid)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          addToast({ type: ToastType.Error, message: 'Failed to revoke the invite link.' })
+          return
+        }
+        addToast({ type: ToastType.Success, message: 'Invite link revoked.' })
+        void loadInviteLinks()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: 'Failed to revoke the invite link.' })
+      } finally {
+        setRevokingInviteUuid(null)
+      }
+    },
+    [application, noteIfForbidden, loadInviteLinks],
+  )
+
+  // Standard Red Notes: APPROVAL QUEUE actions. Approve flips the access gate;
+  // Reject hard-deletes the pending row (confirmed). Both refresh the list.
+  const approvePendingUser = useCallback(
+    async (row: AdminPendingUserRow) => {
+      setPendingActionInFlight(`approve:${row.uuid}`)
+      try {
+        const response = await application.legacyApi.approveUser(row.uuid)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          addToast({ type: ToastType.Error, message: `Failed to approve ${row.email}.` })
+          return
+        }
+        addToast({ type: ToastType.Success, message: `Approved ${row.email}.` })
+        void loadPendingUsers()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: `Failed to approve ${row.email}.` })
+      } finally {
+        setPendingActionInFlight(null)
+      }
+    },
+    [application, noteIfForbidden, loadPendingUsers],
+  )
+
+  const rejectPendingUser = useCallback(
+    async (row: AdminPendingUserRow) => {
+      const confirmed = await confirmDialog({
+        title: 'Reject this signup?',
+        text: `Rejecting "${row.email}" permanently deletes the pending account. They can register again later. Continue?`,
+        confirmButtonText: 'Reject signup',
+        confirmButtonStyle: 'danger',
+      })
+      if (!confirmed) {
+        return
+      }
+      setPendingActionInFlight(`reject:${row.uuid}`)
+      try {
+        const response = await application.legacyApi.rejectUser(row.uuid)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          addToast({ type: ToastType.Error, message: `Failed to reject ${row.email}.` })
+          return
+        }
+        addToast({ type: ToastType.Success, message: `Rejected ${row.email}.` })
+        void loadPendingUsers()
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: `Failed to reject ${row.email}.` })
+      } finally {
+        setPendingActionInFlight(null)
+      }
+    },
+    [application, noteIfForbidden, loadPendingUsers],
+  )
 
   // Standard Red Notes: runtime LOG VERBOSITY (t50). Saves immediately on change;
   // the server applies it to the gateway + auth loggers within the poll interval.
@@ -1611,6 +1956,423 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        {/* ===== Standard Red Notes: INVITE-ONLY signups + invite links (t69) ===== */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Title>Invite-only signups</Title>
+              <SourceChip sources={settingsSources} keys={['registration.inviteOnly']} />
+            </div>
+            {settingsLoading ? (
+              <Spinner className="h-5 w-5" />
+            ) : settingsNotAvailable ? null : (
+              <Switch
+                checked={Boolean(serverSettings?.registration?.inviteOnly)}
+                onChange={(checked) => void saveInviteOnly(checked)}
+              />
+            )}
+          </div>
+          <Text className="mt-1 text-xs">
+            When on, registration requires a valid, unused invite URL created below. Missing or invalid invites are
+            refused. This is a hard gate — if the server cannot verify an invite it fails closed (refuses), so signups
+            stay restricted even during a database blip.
+          </Text>
+
+          <Subtitle className="mt-4">Create an invite link</Subtitle>
+          {inviteLinksNotAvailable ? (
+            <Text className="mt-2 text-xs text-passive-1">
+              Invite-link management is not available on this server. Update the server image to create and manage invite
+              links from here.
+            </Text>
+          ) : (
+            <>
+              <Text className="mt-1 text-xs">
+                Set how many accounts the link may create (1 = single-use, more = a batch), an optional expiry, and
+                optional label / role / email-domain lock. The URL is shown <strong>once</strong> right after you create
+                it — copy it then.
+              </Text>
+              <div className="mt-3 flex flex-col gap-3">
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex flex-col text-xs text-passive-1">
+                    Max uses
+                    <DecoratedInput
+                      className={{ container: 'mt-1 w-28' }}
+                      placeholder="1"
+                      value={inviteForm.maxUses}
+                      onChange={(maxUses) => setInviteForm((form) => ({ ...form, maxUses }))}
+                      disabled={creatingInviteLink}
+                    />
+                  </label>
+                  <label className="flex flex-col text-xs text-passive-1">
+                    Expiry (hours, blank = never)
+                    <DecoratedInput
+                      className={{ container: 'mt-1 w-44' }}
+                      placeholder="never"
+                      value={inviteForm.expiresInHours}
+                      onChange={(expiresInHours) => setInviteForm((form) => ({ ...form, expiresInHours }))}
+                      disabled={creatingInviteLink}
+                    />
+                  </label>
+                </div>
+                <label className="flex flex-col text-xs text-passive-1">
+                  Label (optional note)
+                  <DecoratedInput
+                    className={{ container: 'mt-1 w-96 max-w-full' }}
+                    placeholder="e.g. Design team, spring cohort"
+                    value={inviteForm.label}
+                    onChange={(label) => setInviteForm((form) => ({ ...form, label }))}
+                    disabled={creatingInviteLink}
+                  />
+                </label>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex flex-col text-xs text-passive-1">
+                    Role for accounts from this link
+                    <div className="mt-1 w-64 max-w-full">
+                      <Dropdown
+                        label="Role for accounts from this link"
+                        items={[
+                          { label: 'Instance default role', value: '' },
+                          ...(
+                            serverSettings?.registration?.assignableRoles ?? ['CORE_USER', 'PRO_USER', 'VAULTS_USER']
+                          ).map((role) => ({ label: registrationRoleLabel(role), value: role })),
+                        ]}
+                        value={inviteForm.defaultRole}
+                        onChange={(defaultRole) => setInviteForm((form) => ({ ...form, defaultRole }))}
+                        disabled={creatingInviteLink}
+                      />
+                    </div>
+                  </div>
+                  <label className="flex flex-col text-xs text-passive-1">
+                    Email-domain lock (optional)
+                    <DecoratedInput
+                      className={{ container: 'mt-1 w-64 max-w-full' }}
+                      placeholder="example.com"
+                      value={inviteForm.allowedDomain}
+                      onChange={(allowedDomain) => setInviteForm((form) => ({ ...form, allowedDomain }))}
+                      disabled={creatingInviteLink}
+                    />
+                  </label>
+                </div>
+                <div>
+                  <Button
+                    primary
+                    label={creatingInviteLink ? 'Creating…' : 'Create invite link'}
+                    onClick={() => void createInviteLink()}
+                    disabled={creatingInviteLink}
+                  />
+                </div>
+              </div>
+
+              {/* The ONE-TIME URL panel: the raw token is only ever available here. */}
+              {createdInviteLink && (
+                <div className="mt-4 rounded border border-info bg-info-backdrop p-3">
+                  <div className="flex items-center gap-2">
+                    <Icon type="info" size="medium" className="text-info" />
+                    <Subtitle>Copy this invite URL now — it is shown only once</Subtitle>
+                  </div>
+                  <Text className="mt-1 text-xs">
+                    For security the URL (which contains the secret token) is never stored or shown again. If you lose
+                    it, revoke this link and create a new one.
+                  </Text>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <code className="max-w-full overflow-x-auto whitespace-nowrap rounded border border-border bg-default px-2 py-1 text-xs text-foreground">
+                      {inviteLinkAbsoluteUrl(window.location.origin, createdInviteLink.path)}
+                    </code>
+                    <Button label="Copy URL" onClick={() => void copyCreatedInviteUrl()} />
+                    <Button label="Dismiss" onClick={() => setCreatedInviteLink(null)} />
+                  </div>
+                </div>
+              )}
+
+              <Subtitle className="mt-5">Existing invite links</Subtitle>
+              {inviteLinksLoading ? (
+                <Spinner className="mt-2 h-5 w-5" />
+              ) : inviteLinks.length === 0 ? (
+                <Text className="mt-2 text-xs text-passive-1">No invite links yet.</Text>
+              ) : (
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full min-w-[40rem] text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-xs text-passive-1">
+                        <th className="py-2 pr-3 font-medium">Label</th>
+                        <th className="py-2 pr-3 font-medium">Uses</th>
+                        <th className="py-2 pr-3 font-medium">Status</th>
+                        <th className="py-2 pr-3 font-medium">Expires</th>
+                        <th className="py-2 pr-3 font-medium">Domain lock</th>
+                        <th className="py-2 pr-3 font-medium">Created</th>
+                        <th className="py-2 pr-3 font-medium"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {inviteLinks.map((link) => {
+                        const rowBusy = revokingInviteUuid === link.uuid
+                        return (
+                          <tr key={link.uuid}>
+                            <td className="py-2 pr-3">{link.label && link.label.trim() !== '' ? link.label : '—'}</td>
+                            <td className="py-2 pr-3 tabular-nums">
+                              {inviteLinkUsesLabel(link.usedCount, link.maxUses)}
+                            </td>
+                            <td className="py-2 pr-3">
+                              <span
+                                className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${inviteLinkStatusChipClass(
+                                  link.status,
+                                )}`}
+                              >
+                                {inviteLinkStatusLabel(link.status)}
+                              </span>
+                            </td>
+                            <td className="py-2 pr-3 text-xs">{formatInviteLinkDate(link.expiresAt, 'Never')}</td>
+                            <td className="py-2 pr-3 text-xs">
+                              {link.allowedDomain && link.allowedDomain.trim() !== '' ? link.allowedDomain : '—'}
+                            </td>
+                            <td className="py-2 pr-3 text-xs">{formatInviteLinkDate(link.createdAt)}</td>
+                            <td className="py-2 pr-3">
+                              {link.status !== 'revoked' && (
+                                <div className="flex items-center gap-2">
+                                  {rowBusy && <Spinner className="h-4 w-4" />}
+                                  <Button
+                                    small
+                                    colorStyle="danger"
+                                    label="Revoke"
+                                    disabled={rowBusy}
+                                    onClick={() => void revokeInviteLink(link)}
+                                  />
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        {/* ===== Standard Red Notes: APPROVAL QUEUE (t69) ===== */}
+        <PreferencesSegment>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Title>Approval queue</Title>
+              <SourceChip sources={settingsSources} keys={['registration.approvalRequired']} />
+            </div>
+            {settingsLoading ? (
+              <Spinner className="h-5 w-5" />
+            ) : settingsNotAvailable ? null : (
+              <Switch
+                checked={Boolean(serverSettings?.registration?.approvalRequired)}
+                onChange={(checked) => void saveApprovalRequired(checked)}
+              />
+            )}
+          </div>
+          <Text className="mt-1 text-xs">
+            When on, a new signup is created but cannot sign in until an admin approves it below. Existing accounts are
+            unaffected. Signups made through an admin invite link above are auto-approved (issuing the link is itself the
+            vetting step).
+          </Text>
+
+          <Subtitle className="mt-4">Pending approvals</Subtitle>
+          {pendingUsersNotAvailable ? (
+            <Text className="mt-2 text-xs text-passive-1">
+              The approval queue is not available on this server. Update the server image to review pending signups from
+              here.
+            </Text>
+          ) : pendingUsersLoading ? (
+            <Spinner className="mt-2 h-5 w-5" />
+          ) : pendingUsers.length === 0 ? (
+            <Text className="mt-2 text-xs text-passive-1">No signups are awaiting approval.</Text>
+          ) : (
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[32rem] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-border text-xs text-passive-1">
+                    <th className="py-2 pr-3 font-medium">Email</th>
+                    <th className="py-2 pr-3 font-medium">Requested</th>
+                    <th className="py-2 pr-3 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {pendingUsers.map((row) => {
+                    const approveBusy = pendingActionInFlight === `approve:${row.uuid}`
+                    const rejectBusy = pendingActionInFlight === `reject:${row.uuid}`
+                    const rowBusy = approveBusy || rejectBusy
+                    return (
+                      <tr key={row.uuid}>
+                        <td className="py-2 pr-3">{row.email}</td>
+                        <td className="py-2 pr-3 text-xs">{formatInviteLinkDate(row.createdAt)}</td>
+                        <td className="py-2 pr-3">
+                          <div className="flex items-center gap-2">
+                            {rowBusy && <Spinner className="h-4 w-4" />}
+                            <Button
+                              small
+                              colorStyle="success"
+                              label="Approve"
+                              disabled={rowBusy}
+                              onClick={() => void approvePendingUser(row)}
+                            />
+                            <Button
+                              small
+                              colorStyle="danger"
+                              label="Reject"
+                              disabled={rowBusy}
+                              onClick={() => void rejectPendingUser(row)}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </PreferencesSegment>
+
+        <HorizontalSeparator classes="my-4" />
+
+        {/* ===== Standard Red Notes: account limits + signup window (t69) ===== */}
+        <PreferencesSegment>
+          <Title>Account limits &amp; signup window</Title>
+          <Text>
+            A global cap on total accounts, an optional open/close window for signups, and the per-user quota for
+            self-serve referral invites. Saved values override the matching environment variable until cleared.
+          </Text>
+          {settingsLoading ? (
+            <Spinner className="mt-3 h-5 w-5" />
+          ) : settingsNotAvailable ? (
+            <Text className="mt-3">
+              Editable server settings are not available on this server (the /v1/admin/server-settings endpoint is
+              missing).
+            </Text>
+          ) : settingsError ? (
+            <>
+              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <div className="mt-2">
+                <Button label="Retry" onClick={() => void loadServerSettings()} />
+              </div>
+            </>
+          ) : (
+            <div className="mt-3 flex flex-col gap-4">
+              {/* Global max-total-accounts cap */}
+              <div>
+                <div className="flex items-center gap-2">
+                  <Text className="text-xs font-medium text-passive-1">Maximum total accounts</Text>
+                  <SourceChip sources={settingsSources} keys={['registration.maxTotalAccounts']} />
+                </div>
+                <Text className="mt-1 text-xs text-passive-1">
+                  Hard cap on the total number of accounts on this instance. 0 or blank means unlimited. Enforcement
+                  fails open — a counting error never blocks a signup.
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-40 max-w-full' }}
+                    placeholder="0 (no cap)"
+                    value={maxTotalAccounts}
+                    onChange={setMaxTotalAccounts}
+                    onEnter={() => void saveMaxTotalAccounts()}
+                    disabled={settingsSaving}
+                  />
+                  <Button
+                    label={settingsSaving ? 'Saving…' : 'Save'}
+                    onClick={() => void saveMaxTotalAccounts()}
+                    disabled={settingsSaving}
+                  />
+                </div>
+              </div>
+
+              {/* Signup window (UTC) */}
+              <div className="border-t border-border pt-4">
+                <Subtitle>Signup window</Subtitle>
+                <Text className="mt-1 text-xs text-passive-1">
+                  Allow signups only between an open and a close time. Leave a side blank to leave it open-ended; leave
+                  both blank for always-open. <strong>Times are in UTC</strong> and evaluated against the server clock —
+                  set them relative to the UTC time shown below. (If the server clock is wrong, the window shifts with
+                  it.)
+                </Text>
+                <Text className="mt-1 text-xs font-medium text-info">
+                  Current UTC time (this browser): {formatUtcClock(utcNowMs)}
+                </Text>
+
+                <div className="mt-3 flex flex-wrap items-end gap-4">
+                  <div className="flex flex-col text-xs text-passive-1">
+                    <div className="flex items-center gap-2">
+                      Opens at (UTC)
+                      <SourceChip sources={settingsSources} keys={['registration.signupsOpenAt']} />
+                    </div>
+                    <input
+                      type="datetime-local"
+                      aria-label="Signup window opens at (UTC)"
+                      className="mt-1 rounded border border-border bg-default p-2 text-sm text-foreground"
+                      value={signupsOpenAt}
+                      onChange={(event) => setSignupsOpenAt(event.target.value)}
+                      disabled={settingsSaving}
+                    />
+                    <Button
+                      className="mt-2 self-start"
+                      label={settingsSaving ? 'Saving…' : 'Save open time'}
+                      onClick={() => void saveSignupsOpenAt()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                  <div className="flex flex-col text-xs text-passive-1">
+                    <div className="flex items-center gap-2">
+                      Closes at (UTC)
+                      <SourceChip sources={settingsSources} keys={['registration.signupsCloseAt']} />
+                    </div>
+                    <input
+                      type="datetime-local"
+                      aria-label="Signup window closes at (UTC)"
+                      className="mt-1 rounded border border-border bg-default p-2 text-sm text-foreground"
+                      value={signupsCloseAt}
+                      onChange={(event) => setSignupsCloseAt(event.target.value)}
+                      disabled={settingsSaving}
+                    />
+                    <Button
+                      className="mt-2 self-start"
+                      label={settingsSaving ? 'Saving…' : 'Save close time'}
+                      onClick={() => void saveSignupsCloseAt()}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Per-user self-serve invite quota */}
+              <div className="border-t border-border pt-4">
+                <div className="flex items-center gap-2">
+                  <Text className="text-xs font-medium text-passive-1">Invites per user</Text>
+                  <SourceChip sources={settingsSources} keys={['registration.invitesPerUser']} />
+                </div>
+                <Text className="mt-1 text-xs text-passive-1">
+                  How many active invite links each normal user may hold, letting them invite others without an admin. 0
+                  or blank disables self-serve referral invites (only admins can create links).
+                </Text>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DecoratedInput
+                    className={{ container: 'w-40 max-w-full' }}
+                    placeholder="0 (disabled)"
+                    value={invitesPerUser}
+                    onChange={setInvitesPerUser}
+                    onEnter={() => void saveInvitesPerUser()}
+                    disabled={settingsSaving}
+                  />
+                  <Button
+                    label={settingsSaving ? 'Saving…' : 'Save'}
+                    onClick={() => void saveInvitesPerUser()}
+                    disabled={settingsSaving}
+                  />
                 </div>
               </div>
             </div>

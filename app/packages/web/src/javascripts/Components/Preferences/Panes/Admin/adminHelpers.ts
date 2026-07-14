@@ -488,6 +488,21 @@ export type AdminServerSettings = {
     signupsPerWeekMax?: number | null
     signupsPerDeviceMax?: number | null
     signupsPerDeviceWindowHours?: number | null
+    // Standard Red Notes: INVITE-URL signup control (t69). All default OFF/0 so a
+    // stock deploy is unchanged until an admin opts in.
+    // inviteOnly: registration requires a valid invite URL.
+    inviteOnly?: boolean
+    // approvalRequired: new signups are created pending until an admin approves.
+    approvalRequired?: boolean
+    // maxTotalAccounts: global hard cap on total accounts (0 = unlimited).
+    maxTotalAccounts?: number
+    // signupsOpenAt/CloseAt: signups allowed only inside this window. ISO-8601
+    // UTC instants, or null (open-ended on that side). Both null = always open.
+    signupsOpenAt?: string | null
+    signupsCloseAt?: string | null
+    // invitesPerUser: how many active links a normal user may hold (0 = self-serve
+    // referral invites disabled).
+    invitesPerUser?: number
   }
   // Standard Red Notes: runtime LOG VERBOSITY (t50). The persisted/env/default
   // resolved level, surfaced with a `logging.level` source key.
@@ -689,6 +704,243 @@ export const buildSignupWindowUpdate = (input: string): SettingUpdateResult<numb
     return { ok: false, error: 'Enter a whole number of hours from 1 to 168, or empty to reset.' }
   }
   return { ok: true, value }
+}
+
+// ---------------------------------------------------------------------------
+// Invite-URL signup control (t69) — invite links, approval queue, extra config.
+// Pure helpers backing the admin Registration subtab. Mirrors the frozen
+// /v1/admin/invite-links + /v1/admin/pending-users + server-settings contract.
+// ---------------------------------------------------------------------------
+
+/** A revocable invite-link row as returned by adminListInviteLinks (never carries the token). */
+export type AdminInviteLinkView = {
+  uuid: string
+  label?: string | null
+  maxUses: number
+  usedCount: number
+  remainingUses: number
+  expiresAt?: string | null
+  revoked: boolean
+  status: 'active' | 'exhausted' | 'expired' | 'revoked'
+  defaultRole?: string | null
+  allowedDomain?: string | null
+  createdAt: string
+}
+
+/** The one-time create response — the raw token + relative path are here ONLY at create. */
+export type AdminInviteLinkCreated = AdminInviteLinkView & {
+  token: string
+  path: string
+}
+
+/** A pending (approved=false) user row for the approval queue. */
+export type AdminPendingUserRow = {
+  uuid: string
+  email: string
+  createdAt: string
+}
+
+/** Short label for an invite-link status chip. Unknown falls back to the raw string. */
+export const inviteLinkStatusLabel = (status: string | null | undefined): string => {
+  switch (status) {
+    case 'active':
+      return 'Active'
+    case 'exhausted':
+      return 'Exhausted'
+    case 'expired':
+      return 'Expired'
+    case 'revoked':
+      return 'Revoked'
+    default:
+      return status ?? 'Unknown'
+  }
+}
+
+/** Chip classes for an invite-link status: green active, neutral spent, red revoked. */
+export const inviteLinkStatusChipClass = (status: string | null | undefined): string => {
+  switch (status) {
+    case 'active':
+      return 'bg-success text-success-contrast'
+    case 'exhausted':
+    case 'expired':
+      return 'bg-passive-4 text-foreground'
+    case 'revoked':
+      return 'bg-danger text-danger-contrast'
+    default:
+      return 'bg-passive-4 text-foreground'
+  }
+}
+
+/** "used / max" label for an invite link's uses cell. */
+export const inviteLinkUsesLabel = (usedCount: number, maxUses: number): string => `${usedCount}/${maxUses}`
+
+/**
+ * Absolute invite URL for the admin to hand out, composed from the current
+ * origin + the server-returned relative path (`/?invite=<token>`). Keeping the
+ * origin client-side avoids any server base-url dependency.
+ */
+export const inviteLinkAbsoluteUrl = (origin: string, path: string): string => `${origin}${path}`
+
+/** The editable create-invite-link form state. */
+export type CreateInviteLinkForm = {
+  maxUses: string
+  expiresInHours: string
+  label: string
+  defaultRole: string
+  allowedDomain: string
+}
+
+/** The body sent to adminCreateInviteLink (only the fields the admin actually set). */
+export type CreateInviteLinkBody = {
+  maxUses: number
+  expiresInHours: number | null
+  label: string | null
+  defaultRole: string | null
+  allowedDomain: string | null
+}
+
+export const emptyCreateInviteLinkForm = (): CreateInviteLinkForm => ({
+  maxUses: '1',
+  expiresInHours: '',
+  label: '',
+  defaultRole: '',
+  allowedDomain: '',
+})
+
+/**
+ * Validate + normalise the create-invite-link form into the request body.
+ * maxUses defaults to 1 (single-use) and is clamped to 1..100000; a blank
+ * expiry means "never"; label/role/domain are optional (blank -> null so the
+ * server treats them as unset). The domain is lower-cased with a leading
+ * '@' or '.' stripped, mirroring the server-side single-domain normalisation.
+ */
+export const buildCreateInviteLinkBody = (form: CreateInviteLinkForm): SettingUpdateResult<CreateInviteLinkBody> => {
+  const maxUsesRaw = form.maxUses.trim()
+  const maxUses = maxUsesRaw === '' ? 1 : Number(maxUsesRaw)
+  if (!Number.isFinite(maxUses) || !Number.isInteger(maxUses) || maxUses < 1 || maxUses > 100000) {
+    return { ok: false, error: 'Max uses must be a whole number from 1 to 100000 (1 = single-use).' }
+  }
+
+  const expiryRaw = form.expiresInHours.trim()
+  let expiresInHours: number | null = null
+  if (expiryRaw !== '') {
+    const value = Number(expiryRaw)
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1 || value > 8760) {
+      return { ok: false, error: 'Expiry must be a whole number of hours from 1 to 8760 (1 year), or blank for never.' }
+    }
+    expiresInHours = value
+  }
+
+  const label = form.label.trim() === '' ? null : form.label.trim()
+  const defaultRole = form.defaultRole.trim() === '' ? null : form.defaultRole.trim()
+  const domainTrimmed = form.allowedDomain.trim().toLowerCase().replace(/^[@.]+/, '')
+  const allowedDomain = domainTrimmed === '' ? null : domainTrimmed
+
+  return { ok: true, value: { maxUses, expiresInHours, label, defaultRole, allowedDomain } }
+}
+
+/**
+ * Validate + normalise the global max-total-accounts input. Blank clears the
+ * override (falls back to env/default); otherwise a whole number 0..1000000
+ * where 0 means unlimited. (0 is a valid explicit persisted value, distinct
+ * from blank which clears the override.)
+ */
+export const buildMaxTotalAccountsUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 1000000) {
+    return { ok: false, error: 'Enter a whole number from 0 to 1000000 (0 = unlimited), or empty to reset.' }
+  }
+  return { ok: true, value }
+}
+
+/**
+ * Validate + normalise the per-user invite quota input. Blank clears the
+ * override; otherwise a whole number 0..100000 where 0 disables self-serve
+ * referral invites.
+ */
+export const buildInvitesPerUserUpdate = (input: string): SettingUpdateResult<number | null> => {
+  const trimmed = input.trim()
+  if (trimmed === '') {
+    return { ok: true, value: null }
+  }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 100000) {
+    return { ok: false, error: 'Enter a whole number from 0 to 100000 (0 = disabled), or empty to reset.' }
+  }
+  return { ok: true, value }
+}
+
+/**
+ * Convert a `<input type="datetime-local">` wall-clock value into an ISO-8601
+ * instant, interpreting the entered digits as UTC (NOT the browser's local
+ * zone). The signup window is evaluated on the server clock in UTC, so the
+ * admin enters UTC directly and the "server UTC now" note lets them do so
+ * unambiguously. Blank clears the bound (open-ended on that side).
+ */
+export const datetimeLocalUtcToISO = (value: string): SettingUpdateResult<string | null> => {
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    return { ok: true, value: null }
+  }
+  // datetime-local yields "YYYY-MM-DDTHH:MM" (optionally ":SS"). Force a UTC
+  // reading by appending 'Z' (with seconds if the control omitted them).
+  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed) ? `${trimmed}:00` : trimmed
+  const asUtc = `${withSeconds}Z`
+  const parsed = new Date(asUtc)
+  if (Number.isNaN(parsed.getTime())) {
+    return { ok: false, error: 'Enter a valid date and time, or clear it to leave that side open-ended.' }
+  }
+  return { ok: true, value: parsed.toISOString() }
+}
+
+/**
+ * Convert a stored ISO instant back into a `datetime-local` value in UTC
+ * ("YYYY-MM-DDTHH:MM"), so the picker shows the same UTC wall-clock the admin
+ * entered. Null/blank/unparseable -> '' (empty control).
+ */
+export const isoToDatetimeLocalUtc = (iso: string | null | undefined): string => {
+  if (!iso) {
+    return ''
+  }
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  const pad = (n: number): string => n.toString().padStart(2, '0')
+  return (
+    `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` +
+    `T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
+  )
+}
+
+/**
+ * Fixed-width UTC clock label ("YYYY-MM-DD HH:MM:SS UTC") for the window-controls
+ * note, so the operator can read the current UTC instant. Note this is the
+ * BROWSER's clock rendered in UTC; the window is evaluated against the SERVER's
+ * clock, so a skewed server clock shifts the window (surfaced in the UI copy).
+ */
+export const formatUtcClock = (ms: number): string => {
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  const pad = (n: number): string => n.toString().padStart(2, '0')
+  const datePart = `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+  const timePart = `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
+  return `${datePart} ${timePart} UTC`
+}
+
+/** Human date-time for an invite-link expiry / created cell; blank/never -> 'Never'/'—'. */
+export const formatInviteLinkDate = (value: string | null | undefined, whenEmpty = '—'): string => {
+  if (!value) {
+    return whenEmpty
+  }
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 // ---------------------------------------------------------------------------

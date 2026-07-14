@@ -1313,8 +1313,118 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
     return 0
   }
 
+  // Standard Red Notes: SIGNUP-CONTROL overlay toggles (invite-only + approval +
+  // global-total cap + time-window + self-serve quota). All persist to the same
+  // SERVER_SETTINGS overlay the gateway/admin-panel write, effective on the next
+  // signup with no restart.
+  if (sub === 'invite-only') {
+    const value = args.positionals[0]
+    if (value === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.inviteOnly)
+      outLine(`invite-only cleared (falls back to env/default = off). Wrote ${file}.`)
+
+      return 0
+    }
+    if (value !== 'on' && value !== 'off') {
+      throw new UsageError('registration invite-only <on|off|clear>')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.inviteOnly = value === 'on'))
+    outLine(`invite-only mode ${value === 'on' ? 'ENABLED' : 'disabled'}. Effective on the next signup. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (sub === 'approval') {
+    const value = args.positionals[0]
+    if (value === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.approvalRequired)
+      outLine(`approval-required cleared (falls back to env/default = off). Wrote ${file}.`)
+
+      return 0
+    }
+    if (value !== 'on' && value !== 'off') {
+      throw new UsageError('registration approval <on|off|clear>')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.approvalRequired = value === 'on'))
+    outLine(
+      `approval queue ${value === 'on' ? 'ENABLED (new signups await admin approval)' : 'disabled'}. Wrote ${file}.`,
+    )
+
+    return 0
+  }
+
+  if (sub === 'max-total') {
+    const value = args.positionals[0]
+    if (value === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.maxTotalAccounts)
+      outLine(`max-total-accounts cleared (unlimited). Wrote ${file}.`)
+
+      return 0
+    }
+    const n = Number(value)
+    if (!Number.isInteger(n) || n < 0) {
+      throw new UsageError('registration max-total <non-negative-integer|clear> (0 = unlimited)')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.maxTotalAccounts = n))
+    outLine(`max-total-accounts set to ${n === 0 ? '0 (unlimited)' : n}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (sub === 'invites-per-user') {
+    const value = args.positionals[0]
+    if (value === 'clear') {
+      const file = await updateRegistrationOverlay((r) => delete r.invitesPerUser)
+      outLine(`invites-per-user cleared (self-serve disabled). Wrote ${file}.`)
+
+      return 0
+    }
+    const n = Number(value)
+    if (!Number.isInteger(n) || n < 0) {
+      throw new UsageError('registration invites-per-user <non-negative-integer|clear> (0 = self-serve disabled)')
+    }
+    const file = await updateRegistrationOverlay((r) => (r.invitesPerUser = n))
+    outLine(`invites-per-user set to ${n === 0 ? '0 (self-serve disabled)' : n}. Wrote ${file}.`)
+
+    return 0
+  }
+
+  if (sub === 'window') {
+    const which = args.positionals[0]
+    if (which === 'clear') {
+      const file = await updateRegistrationOverlay((r) => {
+        delete r.signupsOpenAt
+        delete r.signupsCloseAt
+      })
+      outLine(`signup window cleared (always open). Wrote ${file}.`)
+
+      return 0
+    }
+    if (which !== 'open' && which !== 'close') {
+      throw new UsageError('registration window <open|close> <iso-8601|clear> | registration window clear')
+    }
+    const value = args.positionals[1]
+    const key = which === 'open' ? 'signupsOpenAt' : 'signupsCloseAt'
+    if (value === 'clear' || value === undefined) {
+      const file = await updateRegistrationOverlay((r) => delete r[key])
+      outLine(`signup ${which} bound cleared. Wrote ${file}.`)
+
+      return 0
+    }
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) {
+      throw new UsageError(`invalid ISO-8601 instant '${value}' — e.g. 2026-08-01T00:00:00Z (evaluated in UTC)`)
+    }
+    const iso = parsed.toISOString()
+    const file = await updateRegistrationOverlay((r) => (r[key] = iso))
+    outLine(`signup ${which} bound set to ${iso} (UTC). Wrote ${file}.`)
+
+    return 0
+  }
+
   throw new UsageError(
-    `unknown registration subcommand '${sub}' — status | enable | disable | policy | confirm-email <user>`,
+    `unknown registration subcommand '${sub}' — status | enable | disable | policy | confirm-email <user> | ` +
+      `invite-only <on|off> | approval <on|off> | max-total <n> | window <open|close> <iso> | invites-per-user <n>`,
   )
 }
 
