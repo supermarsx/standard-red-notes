@@ -22,6 +22,7 @@ import Sharing from './Panes/Sharing/Sharing'
 import Sync from './Panes/Sync/Sync'
 import Shortcuts from './Panes/Shortcuts/Shortcuts'
 import Storage from './Panes/Storage/Storage'
+import Invite from './Panes/Invite/Invite'
 
 const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSessionController }> = ({
   menu,
@@ -62,6 +63,8 @@ const PaneSelector: FunctionComponent<PreferencesProps & { menu: PreferencesSess
       return <Sync application={application} />
     case 'storage':
       return <Storage application={application} />
+    case 'invite':
+      return <Invite application={application} />
     case 'backups':
       return <Backups application={application} />
     case 'shortcuts':

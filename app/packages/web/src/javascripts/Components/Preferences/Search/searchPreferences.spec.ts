@@ -89,4 +89,14 @@ describe('searchPreferences', () => {
     // "theme" only maps to appearance, which is not in the limited list.
     expect(searchPreferences('theme', limited)).toEqual([])
   })
+
+  it('routes invite/referral terms to the self-serve Invite pane', () => {
+    // The Invite pane is only registered when self-serve is enabled, so it is
+    // only searchable when it is in the provided (visible) menu.
+    const withInvite: SearchablePane[] = [...PANES, { id: 'invite', label: 'Invite friends' }]
+    expect(searchPreferences('referral', withInvite)[0].id).toBe('invite')
+    expect(searchPreferences('invite link', withInvite)[0].id).toBe('invite')
+    // Absent from the menu (self-serve disabled) → not matchable.
+    expect(searchPreferences('referral', PANES)).toEqual([])
+  })
 })

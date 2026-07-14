@@ -8,6 +8,7 @@ import { isDesktopApplication } from '@/Utils'
 import { PreferencesMenuItem } from './PreferencesMenuItem'
 import { SelectableMenuItem } from './SelectableMenuItem'
 import { PREFERENCES_MENU_ITEMS, READY_PREFERENCES_MENU_ITEMS } from './MenuItems'
+import { parseSelfServeInviteState } from '../Panes/Invite/inviteLinks'
 
 /**
  * Unlike PreferencesController, the PreferencesSessionController is ephemeral and bound to a single opening of the
@@ -88,6 +89,14 @@ export class PreferencesSessionController {
 
     this.loadLatestVersions()
 
+    // Standard Red Notes: the user-facing self-serve Invite pane is added to the
+    // menu only when the server enables referral invites (registration.
+    // invitesPerUser > 0). There is no synchronous client-side signal for that,
+    // so probe the user's own invite links once (the same call the pane makes)
+    // and add the menu entry when the feature is available. Async, like
+    // loadLatestVersions — the entry appears as soon as the probe resolves.
+    this.loadSelfServeInvites()
+
     makeAutoObservable<
       PreferencesSessionController,
       | '_selectedPane'
@@ -96,6 +105,8 @@ export class PreferencesSessionController {
       | '_extensionLatestVersions'
       | '_showWhatsNew'
       | 'loadLatestVersions'
+      | 'loadSelfServeInvites'
+      | 'addInviteMenuItem'
       | 'updateMenuBubbleCounts'
       | 'updateShowWhatsNew'
     >(this, {
@@ -105,6 +116,8 @@ export class PreferencesSessionController {
       _extensionLatestVersions: observable.ref,
       _showWhatsNew: observable,
       loadLatestVersions: action,
+      loadSelfServeInvites: action,
+      addInviteMenuItem: action,
       updateMenuBubbleCounts: action,
       updateShowWhatsNew: action,
     })
@@ -155,6 +168,32 @@ export class PreferencesSessionController {
         }
       })
       .catch(console.error)
+  }
+
+  /**
+   * Probe the server's self-serve invite availability and register the "Invite
+   * friends" menu entry when it is enabled. Uses the same listMyInviteLinks()
+   * call the pane makes; parseSelfServeInviteState() reports `enabled === false`
+   * for a non-2xx response or an explicit `invitesPerUser: 0`, so a disabled
+   * server never gets the entry.
+   */
+  private loadSelfServeInvites(): void {
+    this.application.legacyApi
+      .listMyInviteLinks()
+      .then((response) => {
+        if (parseSelfServeInviteState(response).enabled) {
+          this.addInviteMenuItem()
+        }
+      })
+      .catch(console.error)
+  }
+
+  private addInviteMenuItem(): void {
+    if (this._menu.some((item) => item.id === 'invite')) {
+      return
+    }
+    const inviteMenuItem: PreferencesMenuItem = { id: 'invite', label: 'Invite friends', icon: 'user-add', order: 9 }
+    this._menu = [...this._menu, inviteMenuItem].sort((a, b) => a.order - b.order)
   }
 
   get extensionsLatestVersions(): PackageProvider {

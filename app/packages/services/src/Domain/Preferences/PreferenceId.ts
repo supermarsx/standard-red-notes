@@ -22,6 +22,7 @@ const PREFERENCE_PANE_IDS = [
   'sharing',
   'sync',
   'storage',
+  'invite',
 ] as const
 
 export type PreferencePaneId = (typeof PREFERENCE_PANE_IDS)[number]

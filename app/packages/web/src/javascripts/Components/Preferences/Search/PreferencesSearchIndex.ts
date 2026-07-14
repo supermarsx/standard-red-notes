@@ -174,6 +174,20 @@ export const PREFERENCES_SEARCH_KEYWORDS: Partial<Record<PreferencePaneId, strin
     'body length',
   ],
 
+  invite: [
+    'invite',
+    'invite friends',
+    'invite link',
+    'invite links',
+    'referral',
+    'referrals',
+    'refer a friend',
+    'self-serve invite',
+    'signup link',
+    'sign up link',
+    'invite people',
+  ],
+
   sync: [
     'sync',
     'selective sync',
