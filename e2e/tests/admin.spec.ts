@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   apiCall,
   closePreferences,
+  clearRateLimitStateQuiet,
   freshUser,
   openPreferences,
   refreshSession,
@@ -65,6 +66,10 @@ test.setTimeout(4 * 60_000)
 
 test.describe('@chromium', () => {
   test.skip(({ browserName }) => browserName !== 'chromium', 'admin gate runs on chromium only')
+
+  test.beforeEach(() => {
+    clearRateLimitStateQuiet()
+  })
 
   test('API: grant paths + status-code matrix + HTTP grant/revoke + audit', async () => {
     const nonAdminUser = freshUser('admgate-nonadmin')

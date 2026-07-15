@@ -15,6 +15,10 @@ export default defineConfig({
   // hang the runner — so cap every test and keep retries off so a hang is loud.
   timeout: 60_000,
   expect: { timeout: 30_000 },
+  // The suite targets one shared docker-compose stack and several specs mutate
+  // instance-wide settings/rate-limit state. Keep files serialized to avoid
+  // cross-test 429s or temporary settings bleed.
+  workers: 1,
   fullyParallel: false,
   retries: 0,
   reporter: [['list']],

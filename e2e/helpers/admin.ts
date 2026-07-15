@@ -47,6 +47,11 @@ export function freshUser(tag: string): TestUser {
   return { email: `${tag}-${id}@local.test`, password: `Pw-${id}-Aa1!` }
 }
 
+export function freshUserAtDomain(tag: string, domain: string): TestUser {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return { email: `${tag}-${id}@${domain}`, password: `Pw-${id}-Aa1!` }
+}
+
 /** Raw JSON call against the app front door. Returns status + unwrapped data. */
 export async function apiCall(
   method: string,
@@ -104,7 +109,12 @@ export async function signInUser(user: TestUser): Promise<Session> {
     throw new Error(`login-params failed (${params.status}): ${JSON.stringify(params.data).slice(0, 300)}`)
   }
   const login = await apiCall('POST', '/v1/login', {
-    body: { api: API_VERSION, email: user.email, password: user.password, code_verifier: verifier },
+    body: {
+      api: API_VERSION,
+      email: user.email,
+      password: user.password,
+      code_verifier: verifier,
+    },
   })
   if (login.status !== 200 || !login.data?.session) {
     throw new Error(`login failed (${login.status}): ${JSON.stringify(login.data).slice(0, 300)}`)
@@ -115,12 +125,54 @@ export async function signInUser(user: TestUser): Promise<Session> {
 /** Refresh an existing session (POST /v1/sessions/refresh). */
 export async function refreshSession(session: Session): Promise<Session> {
   const { status, data } = await apiCall('POST', '/v1/sessions/refresh', {
-    body: { api: API_VERSION, access_token: session.access_token, refresh_token: session.refresh_token },
+    body: {
+      api: API_VERSION,
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+    },
   })
   if (status !== 200 || !data?.session) {
     throw new Error(`refresh failed (${status}): ${JSON.stringify(data).slice(0, 300)}`)
   }
   return data.session as Session
+}
+
+export async function getServerSettings(token: string): Promise<any> {
+  const response = await apiCall('GET', '/v1/admin/server-settings', { token })
+  if (response.status !== 200) {
+    throw new Error(`get server-settings failed (${response.status}): ${JSON.stringify(response.data).slice(0, 300)}`)
+  }
+
+  return response.data
+}
+
+export async function setServerSettings(token: string, body: Record<string, unknown>): Promise<any> {
+  const response = await apiCall('PUT', '/v1/admin/server-settings', {
+    token,
+    body,
+  })
+  if (response.status !== 200) {
+    throw new Error(`set server-settings failed (${response.status}): ${JSON.stringify(response.data).slice(0, 300)}`)
+  }
+
+  return response.data
+}
+
+export async function setAdminFeatureFlag(
+  token: string,
+  userUuid: string,
+  name: string,
+  value: string | null,
+): Promise<void> {
+  const response = await apiCall('PUT', `/v1/admin/users/${userUuid}/feature-flags`, {
+    token,
+    body: { name, value },
+  })
+  if (response.status !== 200) {
+    throw new Error(
+      `set feature flag ${name} failed (${response.status}): ${JSON.stringify(response.data).slice(0, 300)}`,
+    )
+  }
 }
 
 /** Run the in-container operator CLI: srn-admin <args...>. Throws on non-zero exit. */
@@ -138,6 +190,22 @@ export function srnAdminQuiet(...args: string[]): void {
     srnAdmin(...args)
   } catch {
     /* best-effort */
+  }
+}
+
+export function clearRateLimitStateQuiet(): void {
+  const deleteByPattern =
+    "local keys = redis.call('KEYS', ARGV[1]); for _, key in ipairs(keys) do redis.call('DEL', key); end; return #keys"
+
+  for (const pattern of ['rl:*', 'signup:*']) {
+    try {
+      execFileSync('docker', ['compose', 'exec', '-T', 'cache', 'redis-cli', 'EVAL', deleteByPattern, '0', pattern], {
+        cwd: REPO_ROOT,
+        stdio: ['ignore', 'ignore', 'ignore'],
+      })
+    } catch {
+      /* best-effort: remote/non-docker e2e runs should keep using the live service */
+    }
   }
 }
 
