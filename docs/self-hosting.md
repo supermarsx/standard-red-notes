@@ -478,6 +478,15 @@ docker compose exec -T db sh -c \
   < backup.sql
 ```
 
+**Drill the restore path** without touching the live database:
+
+```bash
+node scripts/verify-backup-restore.mjs
+```
+
+The drill restores the dump into a temporary `srn_restore_*` database, compares
+tables, row counts, and checksums, then drops only that temporary database.
+
 **Back up uploaded files**:
 
 ```bash

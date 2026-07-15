@@ -6,6 +6,7 @@
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
+    "test:ops-load": "playwright test ops-load.spec.ts --project=chromium",
     "install-browser": "playwright install chromium",
     "screenshot:readme": "node ../scripts/capture-readme-screenshot.mjs"
   },

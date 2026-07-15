@@ -41,6 +41,8 @@
     "lint:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
     "lint:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck",
     "lint:server": "cd server && yarn lint",
+    "ops:backup-restore": "node scripts/verify-backup-restore.mjs",
+    "ops:load": "npm --prefix e2e run test:ops-load",
     "screenshot:readme": "node scripts/capture-readme-screenshot.mjs",
     "start:mcp": "yarn workspace @standard-red-notes/mcp start",
     "start:openclaw": "yarn workspace @standard-red-notes/openclaw start",

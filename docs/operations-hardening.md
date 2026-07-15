@@ -67,6 +67,19 @@ docker compose exec -T db sh -c \
   < backup.sql
 ```
 
+Run the non-destructive restore drill before trusting a backup procedure:
+
+```bash
+node scripts/verify-backup-restore.mjs
+```
+
+The drill dumps the live MariaDB database, restores it into a temporary
+`srn_restore_*` database, compares the restored table list, row counts, and
+table checksums, then drops only the temporary database. Run it when the system
+is idle so live writes do not change the source database while the comparison is
+in progress. Use `--keep-backup` or `--output backup.sql` when you want to keep
+the generated dump for inspection.
+
 Back up the `uploads` volume with the database if you use file attachments.
 Keep `.env` backed up separately. Losing server secrets can invalidate sessions
 or make server-side encrypted settings unreadable.
@@ -223,4 +236,21 @@ Run the e2e safety gates after hardening changes:
 $env:APP_URL = "http://localhost:3001"
 npm --prefix e2e test -- app-opens.spec.ts --project=chromium
 npm --prefix e2e test -- encryption-data-safety.spec.ts --project=chromium
+npm --prefix e2e run test:ops-load
+node scripts/verify-backup-restore.mjs
 ```
+
+The ops load gate can be scaled without editing code:
+
+```powershell
+$env:OPS_LOAD_NOTES = "250"
+$env:OPS_LOAD_CLIENTS = "4"
+$env:OPS_REDIS_WORKERS = "4"
+$env:OPS_REDIS_OPS_PER_WORKER = "500"
+npm --prefix e2e run test:ops-load
+```
+
+It registers a real account, pushes encrypted notes to the server, signs in
+parallel clients, verifies pulled note integrity, runs concurrent Redis
+SET/GET/INCR churn, checks Redis throughput, and confirms MariaDB persisted the
+expected note rows.

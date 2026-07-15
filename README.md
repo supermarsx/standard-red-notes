@@ -219,6 +219,8 @@ docker compose logs -f         # follow logs (append a service name to narrow)
 docker compose down            # stop
 docker compose pull && docker compose up -d    # update and restart
 docker compose --profile mcp run --rm mcp      # optional MCP stdio bridge
+npm --prefix e2e run test:ops-load             # browser + Redis load drill
+node scripts/verify-backup-restore.mjs         # non-destructive restore drill
 ```
 
 Everything is served through the single app port: the API gateway at

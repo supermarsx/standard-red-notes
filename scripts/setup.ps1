@@ -149,6 +149,23 @@ Write-Title '4) Admin'
 Write-Info 'Comma-separated emails granted the in-app Admin panel (optional).'
 $AdminEmails = Read-Default 'Admin email(s):' ''
 
+Write-Title '5) Safety posture'
+$PublicDefault = if ([string]::IsNullOrEmpty($Domain)) { 'no' } else { 'yes' }
+Write-Info 'Public instances get explicit rate limits, signup caps, and bounded infrastructure defaults.'
+Write-Info 'Invite-only / approval-gated registration is safer after the first admin account exists.'
+$PublicSafetyAnswer = Read-Default 'Apply public-instance registration safety defaults? (yes/no):' $PublicDefault
+$UsePublicSafety = $PublicSafetyAnswer -match '^(1|true|y|yes)$'
+$RegistrationSignupsPerIpMax = if ($UsePublicSafety) { '5' } else { '0' }
+$RegistrationMaxTotalAccounts = if ($UsePublicSafety) { Read-Default 'Maximum total accounts (0 = no cap):' '0' } else { '0' }
+$GateRegistrationAnswer = if ($UsePublicSafety) {
+  Read-Default 'Require invite links and admin approval immediately? This can block first-account setup. (yes/no):' 'no'
+} else {
+  'no'
+}
+$GateRegistration = $GateRegistrationAnswer -match '^(1|true|y|yes)$'
+$RegistrationInviteOnly = if ($GateRegistration) { 'true' } else { 'false' }
+$RegistrationApprovalRequired = if ($GateRegistration) { 'true' } else { 'false' }
+
 # Derive URLs / origins. Files are served through the app front door's /files/
 # proxy, so the files URL is the app origin + /files.
 if (-not [string]::IsNullOrEmpty($Domain)) {
@@ -231,6 +248,43 @@ AUTH_SERVER_U2F_EXPECTED_ORIGIN=$U2fExpectedOrigin
 # ----- Admin -----------------------------------------------------------------
 # Comma-separated emails granted the in-app Admin panel and /admin endpoints.
 ADMIN_EMAILS=$AdminEmails
+
+# ----- Operational safety defaults ------------------------------------------
+# These values make the generated install match the documented production
+# posture. Tune them for larger instances, but do not remove them accidentally.
+DB_CONNECTION_LIMIT=20
+DB_MAX_CONNECTIONS=150
+DB_MAX_QUERY_EXECUTION_TIME=45000
+DB_INNODB_BUFFER_POOL_SIZE=512M
+DB_MAX_ALLOWED_PACKET=128M
+DB_INNODB_FLUSH_LOG_AT_TRX_COMMIT=1
+
+CACHE_MEM_LIMIT=256m
+CACHE_MAXMEMORY=192mb
+CACHE_MAXMEMORY_POLICY=noeviction
+
+HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES=50
+MAX_CHUNK_BYTES=100000000
+MAX_ATTACHMENT_BYTE_SIZE=5368709120
+
+TRUST_PROXY=loopback,linklocal,uniquelocal
+CORS_ORIGIN_STRICT_MODE_ENABLED=true
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_LOGIN_MAX=10
+RATE_LIMIT_REGISTRATION_MAX=5
+RATE_LIMIT_USER_WINDOW_SECONDS=60
+RATE_LIMIT_USER_MAX=0
+RATE_LIMIT_ADAPTIVE_ESCALATION=false
+
+REGISTRATION_SIGNUPS_PER_IP_MAX=$RegistrationSignupsPerIpMax
+REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS=24
+REGISTRATION_SIGNUPS_PER_WEEK_MAX=0
+REGISTRATION_SIGNUPS_PER_DEVICE_MAX=0
+REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS=24
+REGISTRATION_MAX_TOTAL_ACCOUNTS=$RegistrationMaxTotalAccounts
+REGISTRATION_INVITE_ONLY=$RegistrationInviteOnly
+REGISTRATION_APPROVAL_REQUIRED=$RegistrationApprovalRequired
 
 # =============================================================================
 # Optional settings (uncomment and edit as needed). Defaults are applied by

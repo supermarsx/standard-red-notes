@@ -81,3 +81,24 @@ verifies delete tombstones clear encrypted payload fields.
 
 These require a healthy local app/server and take materially longer than the
 smoke tests.
+
+## Operations Drills
+
+Use these after database, Redis, Docker, signup-safety, rate-limit, or
+production-config changes:
+
+```powershell
+$env:APP_URL = "http://localhost:3001"
+npm --prefix e2e run test:ops-load
+node scripts/verify-backup-restore.mjs
+```
+
+`test:ops-load` drives real browser clients against the running Docker stack,
+pushes encrypted notes, pulls them from parallel clients, churns Redis with
+parallel SET/GET/INCR workers, and checks MariaDB persistence. Scale it with
+`OPS_LOAD_NOTES`, `OPS_LOAD_CLIENTS`, `OPS_REDIS_WORKERS`, and
+`OPS_REDIS_OPS_PER_WORKER`.
+
+`verify-backup-restore.mjs` proves the MariaDB logical backup path by restoring
+the dump into a temporary database and comparing table lists, row counts, and
+checksums before dropping the temporary database.

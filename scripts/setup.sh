@@ -166,6 +166,42 @@ title "4) Admin"
 info "Comma-separated emails granted the in-app Admin panel (optional)."
 prompt ADMIN_EMAILS "Admin email(s):" ""
 
+title "5) Safety posture"
+PUBLIC_DEFAULT="no"
+[ -n "$DOMAIN" ] && PUBLIC_DEFAULT="yes"
+info "Public instances get explicit rate limits, signup caps, and bounded infrastructure defaults."
+info "Invite-only / approval-gated registration is safer after the first admin account exists."
+prompt PUBLIC_SAFETY "Apply public-instance registration safety defaults? (yes/no):" "$PUBLIC_DEFAULT"
+PUBLIC_SAFETY_NORMALIZED="$(printf '%s' "$PUBLIC_SAFETY" | tr '[:upper:]' '[:lower:]')"
+case "$PUBLIC_SAFETY_NORMALIZED" in
+  1|true|y|yes)
+    USE_PUBLIC_SAFETY=1
+    ;;
+  *)
+    USE_PUBLIC_SAFETY=0
+    ;;
+esac
+if [ "$USE_PUBLIC_SAFETY" -eq 1 ]; then
+  REGISTRATION_SIGNUPS_PER_IP_MAX="5"
+  prompt REGISTRATION_MAX_TOTAL_ACCOUNTS "Maximum total accounts (0 = no cap):" "0"
+  prompt GATE_REGISTRATION "Require invite links and admin approval immediately? This can block first-account setup. (yes/no):" "no"
+else
+  REGISTRATION_SIGNUPS_PER_IP_MAX="0"
+  REGISTRATION_MAX_TOTAL_ACCOUNTS="0"
+  GATE_REGISTRATION="no"
+fi
+GATE_REGISTRATION_NORMALIZED="$(printf '%s' "$GATE_REGISTRATION" | tr '[:upper:]' '[:lower:]')"
+case "$GATE_REGISTRATION_NORMALIZED" in
+  1|true|y|yes)
+    REGISTRATION_INVITE_ONLY="true"
+    REGISTRATION_APPROVAL_REQUIRED="true"
+    ;;
+  *)
+    REGISTRATION_INVITE_ONLY="false"
+    REGISTRATION_APPROVAL_REQUIRED="false"
+    ;;
+esac
+
 # Derive URLs / origins from the answers. Files are served through the app
 # front door's /files/ proxy, so the files URL is the app origin + /files.
 if [ -n "$DOMAIN" ]; then
@@ -249,6 +285,43 @@ AUTH_SERVER_U2F_EXPECTED_ORIGIN=${U2F_EXPECTED_ORIGIN}
 # ----- Admin -----------------------------------------------------------------
 # Comma-separated emails granted the in-app Admin panel and /admin endpoints.
 ADMIN_EMAILS=${ADMIN_EMAILS}
+
+# ----- Operational safety defaults ------------------------------------------
+# These values make the generated install match the documented production
+# posture. Tune them for larger instances, but do not remove them accidentally.
+DB_CONNECTION_LIMIT=20
+DB_MAX_CONNECTIONS=150
+DB_MAX_QUERY_EXECUTION_TIME=45000
+DB_INNODB_BUFFER_POOL_SIZE=512M
+DB_MAX_ALLOWED_PACKET=128M
+DB_INNODB_FLUSH_LOG_AT_TRX_COMMIT=1
+
+CACHE_MEM_LIMIT=256m
+CACHE_MAXMEMORY=192mb
+CACHE_MAXMEMORY_POLICY=noeviction
+
+HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES=50
+MAX_CHUNK_BYTES=100000000
+MAX_ATTACHMENT_BYTE_SIZE=5368709120
+
+TRUST_PROXY=loopback,linklocal,uniquelocal
+CORS_ORIGIN_STRICT_MODE_ENABLED=true
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_LOGIN_MAX=10
+RATE_LIMIT_REGISTRATION_MAX=5
+RATE_LIMIT_USER_WINDOW_SECONDS=60
+RATE_LIMIT_USER_MAX=0
+RATE_LIMIT_ADAPTIVE_ESCALATION=false
+
+REGISTRATION_SIGNUPS_PER_IP_MAX=${REGISTRATION_SIGNUPS_PER_IP_MAX}
+REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS=24
+REGISTRATION_SIGNUPS_PER_WEEK_MAX=0
+REGISTRATION_SIGNUPS_PER_DEVICE_MAX=0
+REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS=24
+REGISTRATION_MAX_TOTAL_ACCOUNTS=${REGISTRATION_MAX_TOTAL_ACCOUNTS}
+REGISTRATION_INVITE_ONLY=${REGISTRATION_INVITE_ONLY}
+REGISTRATION_APPROVAL_REQUIRED=${REGISTRATION_APPROVAL_REQUIRED}
 
 # =============================================================================
 # Optional settings (uncomment and edit as needed). Defaults are applied by
