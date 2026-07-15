@@ -10,6 +10,7 @@ const APP_URL = process.env.APP_URL ?? process.env.SRN_SCREENSHOT_URL ?? 'http:/
 
 const requireFromE2E = createRequire(join(ROOT, 'e2e', 'package.json'))
 const { chromium } = requireFromE2E('playwright')
+const DEMO_SUPER_TITLE = 'Super note demo'
 
 const chromeCandidates = [
   process.env.CHROME_PATH,
@@ -45,9 +46,9 @@ async function seedDemoNotes(page) {
     undefined,
     { timeout: 30_000 },
   )
-  await page.evaluate(async () => {
+  const seeded = await page.evaluate(async (demoSuperTitle) => {
     const app = window.mainApplicationGroup?.primaryApplication
-    if (!app?.mutator || !app?.items) return
+    if (!app?.mutator || !app?.items) return { superUuid: undefined }
 
     const titles = new Set((app.items.getItems?.('Note') ?? []).map((note) => note.title))
     const notes = [
@@ -74,18 +75,40 @@ async function seedDemoNotes(page) {
       }
     }
 
+    let superNote = (app.items.getItems?.('Note') ?? []).find((note) => note.title === demoSuperTitle)
+    if (!superNote) {
+      const template = app.items.createTemplateItem('Note', {
+        title: demoSuperTitle,
+        text: '',
+        references: [],
+        noteType: 'super',
+        editorIdentifier: 'com.standardnotes.super-editor',
+      })
+      superNote = await app.mutator.insertItem(template)
+    }
+
     try {
       await app.sync?.sync?.({ sourceDescription: 'readme-screenshot-seed' })
     } catch {
       // A static/offline web app can still render local seeded notes; sync is not
       // required for the screenshot.
     }
-  })
+    return { superUuid: superNote?.uuid }
+  }, DEMO_SUPER_TITLE)
 
   await page.waitForTimeout(800)
-  const launchBrief = page.getByText('Project launch brief').first()
-  if (await launchBrief.count()) {
-    await launchBrief.click({ timeout: 5_000 }).catch(() => undefined)
+  if (seeded.superUuid) {
+    const row = page.locator(`.content-list-item[id="${seeded.superUuid}"]`).first()
+    await row.waitFor({ state: 'visible', timeout: 20_000 })
+    await row.click({ timeout: 10_000 })
+    const editor = page.locator('#super-editor-content:visible').first()
+    await editor.waitFor({ state: 'visible', timeout: 20_000 })
+    await editor.click({ timeout: 5_000 })
+    await page.keyboard.type('Self-hosted launch plan')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Encrypted sync, admin controls, and operator drills in one workspace.')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Default theme, Super note editor, and local-first privacy.')
   }
 }
 
@@ -93,12 +116,44 @@ async function polishForScreenshot(page) {
   await page.addStyleTag({
     content: `
       * { caret-color: transparent !important; }
-      body { background: #f8f1ed !important; }
       .sk-modal-background, .modal, [role="dialog"] { display: none !important; }
+      [data-srn-readme-label] {
+        position: fixed;
+        top: 18px;
+        right: 22px;
+        z-index: 2147483647;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border: 1px solid rgba(190, 31, 45, 0.22);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+        color: #2b2020;
+        box-shadow: 0 10px 24px rgba(34, 24, 24, 0.12);
+        backdrop-filter: blur(12px);
+        font: 650 12px/1.3 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0;
+        pointer-events: none;
+      }
+      [data-srn-readme-label]::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #be1f2d;
+        box-shadow: 0 0 0 3px rgba(190, 31, 45, 0.12);
+      }
     `,
   })
   await page.evaluate(() => {
     document.documentElement.setAttribute('data-srn-readme-screenshot', 'true')
+    const existing = document.querySelector('[data-srn-readme-label]')
+    existing?.remove()
+    const label = document.createElement('div')
+    label.setAttribute('data-srn-readme-label', 'true')
+    label.textContent = 'Default theme - Super note demo'
+    document.body.append(label)
   })
   await page.waitForTimeout(500)
 }
