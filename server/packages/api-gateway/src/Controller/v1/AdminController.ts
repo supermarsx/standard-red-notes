@@ -1014,13 +1014,18 @@ export class AdminController extends BaseHttpController {
     }
     limit = Math.min(limit, MAX_LIMIT)
 
-    const result = await this.adminLogsService.tail({
-      limit,
-      service: query.service !== undefined && query.service.trim() !== '' ? query.service.trim() : undefined,
-      level: query.level !== undefined && query.level.trim() !== '' ? query.level.trim() : undefined,
-    })
+    try {
+      const result = await this.adminLogsService.tail({
+        limit,
+        service: query.service !== undefined && query.service.trim() !== '' ? query.service.trim() : undefined,
+        level: query.level !== undefined && query.level.trim() !== '' ? query.level.trim() : undefined,
+      })
+      response.json(result)
+    } catch {
+      response.json({ entries: [], truncated: false })
 
-    response.json(result)
+      return
+    }
   }
 
   /**

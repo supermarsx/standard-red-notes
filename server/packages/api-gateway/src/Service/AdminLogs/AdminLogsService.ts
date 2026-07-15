@@ -33,12 +33,35 @@ export interface AdminLogsResult {
 export interface LogFileSystem {
   readdir(directory: string): Promise<string[]>
   readFile(filePath: string): Promise<string>
+  readTail?(filePath: string, maxBytes: number): Promise<string>
 }
 
 const DEFAULT_FS: LogFileSystem = {
   readdir: (directory: string) => fs.readdir(directory),
   readFile: (filePath: string) => fs.readFile(filePath, 'utf8'),
+  readTail: async (filePath: string, maxBytes: number) => {
+    const handle = await fs.open(filePath, 'r')
+    try {
+      const stats = await handle.stat()
+      const bytesToRead = Math.min(stats.size, maxBytes)
+      const offset = Math.max(0, stats.size - bytesToRead)
+      const buffer = Buffer.alloc(bytesToRead)
+      const { bytesRead } = await handle.read(buffer, 0, bytesToRead, offset)
+      let content = buffer.subarray(0, bytesRead).toString('utf8')
+
+      if (offset > 0) {
+        const firstLineEnd = content.indexOf('\n')
+        content = firstLineEnd >= 0 ? content.slice(firstLineEnd + 1) : ''
+      }
+
+      return content
+    } finally {
+      await handle.close()
+    }
+  },
 }
+
+const MAX_BYTES_PER_LOG_FILE = 512 * 1024
 
 /**
  * Standard Red Notes: tails the per-service supervisord log files
@@ -87,7 +110,10 @@ export class AdminLogsService {
 
       let content: string
       try {
-        content = await this.fileSystem.readFile(path.join(this.logsDirectory, fileName))
+        const filePath = path.join(this.logsDirectory, fileName)
+        content = this.fileSystem.readTail
+          ? await this.fileSystem.readTail(filePath, MAX_BYTES_PER_LOG_FILE)
+          : await this.fileSystem.readFile(filePath)
       } catch {
         continue
       }

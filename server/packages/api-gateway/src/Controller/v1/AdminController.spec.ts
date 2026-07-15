@@ -227,6 +227,18 @@ describe('AdminController server-status', () => {
     expect(jsonMock).toHaveBeenCalledWith({ entries: [], truncated: false })
   })
 
+  it('degrades to an empty result when the logs service throws', async () => {
+    const tail = jest.fn().mockRejectedValue(new Error('log read failed'))
+    const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
+
+    await makeController({ adminLogsService: { tail } as unknown as AdminLogsService }).getLogs(
+      { query: {} } as unknown as Request,
+      response,
+    )
+
+    expect(jsonMock).toHaveBeenCalledWith({ entries: [], truncated: false })
+  })
+
   it('clamps the logs limit to the 500 max and forwards the service/level filters', async () => {
     const tail = jest.fn().mockResolvedValue({ entries: [{ message: 'x' }], truncated: true })
     const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
@@ -1011,6 +1023,22 @@ describe('AdminLogsService', () => {
     const result = await new Service('/nope', fileSystem).tail({ limit: 10 })
 
     expect(result).toEqual({ entries: [], truncated: false })
+  })
+
+  it('uses the bounded tail reader when one is available', async () => {
+    const fileSystem = {
+      readdir: jest.fn().mockResolvedValue(['auth.log']),
+      readFile: jest.fn(),
+      readTail: jest.fn().mockResolvedValue('{"level":"info","message":"bounded","service":"auth"}'),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { AdminLogsService: Service } = require('../../Service/AdminLogs/AdminLogsService')
+
+    const result = await new Service('/var/lib/server/logs', fileSystem).tail({ limit: 10 })
+
+    expect(fileSystem.readTail).toHaveBeenCalledWith(expect.stringMatching(/[\\/]auth\.log$/), 512 * 1024)
+    expect(fileSystem.readFile).not.toHaveBeenCalled()
+    expect(result.entries[0]).toMatchObject({ service: 'auth', level: 'info', message: 'bounded' })
   })
 })
 

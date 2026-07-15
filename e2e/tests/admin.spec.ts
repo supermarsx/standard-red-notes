@@ -211,16 +211,21 @@ test.describe('@chromium', () => {
 
       // Server tab: health section renders.
       await page.getByRole('tab', { name: 'Server' }).click()
+      await page.getByRole('tab', { name: 'Health & services', exact: true }).click()
       await expect(page.getByText('Server health').first()).toBeVisible({ timeout: 30_000 })
       await expect(staleNotice).toHaveCount(0)
 
-      // Groups tab: list renders.
+      // Groups tab: RBAC view renders.
       await page.getByRole('tab', { name: 'Groups & roles' }).click()
-      await expect(page.getByText('Groups & permissions').first()).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole('heading', { name: 'Groups & roles', exact: true }).first()).toBeVisible({
+        timeout: 30_000,
+      })
+      await expect(page.getByRole('heading', { name: 'Roles', exact: true }).first()).toBeVisible({ timeout: 30_000 })
       await expect(staleNotice).toHaveCount(0)
 
-      // Audit log tab: entries render (the grant above guarantees at least one).
-      await page.getByRole('tab', { name: 'Audit log' }).click()
+      // Logs tab: audit entries render under the Audit logs subtab (the grant above guarantees at least one).
+      await page.getByRole('tab', { name: 'Logs', exact: true }).click()
+      await page.getByRole('tab', { name: 'Audit logs', exact: true }).click()
       await expect(page.getByRole('heading', { name: 'Audit log' }).first()).toBeVisible({ timeout: 30_000 })
       await expect(staleNotice).toHaveCount(0)
     } finally {
