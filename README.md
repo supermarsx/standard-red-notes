@@ -166,6 +166,8 @@ The `docs/` folder is a GitHub Pages site with a persistent sidebar. It includes
   Standard Notes, Obsidian, Joplin, Notesnook, Notion, and adjacent tools.
 - [Validation](docs/validation.md): local checks, e2e smoke/correctness gates,
   and README screenshot automation.
+- [Operations hardening](docs/operations-hardening.md): database resilience,
+  safety limits, and Docker runtime hardening.
 
 The README screenshot is generated from an actual running app:
 

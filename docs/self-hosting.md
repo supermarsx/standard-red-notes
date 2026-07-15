@@ -149,6 +149,10 @@ to boot otherwise).
 | `MYSQL_ROOT_PASSWORD` | MariaDB root password. | `openssl rand -hex 32` / .NET RNG |
 | `MYSQL_DATABASE` | Database name. | Your choice (default `standard_notes_db`) |
 | `MYSQL_USER` | Application database user. | Your choice (default `std_notes_user`) |
+| `DB_CONNECTION_LIMIT` | Per-process TypeORM connection pool ceiling. | `20` |
+| `DB_MAX_CONNECTIONS` | MariaDB server connection ceiling. Keep above total service pools. | `150` |
+| `DB_INNODB_BUFFER_POOL_SIZE` | MariaDB InnoDB cache size. Tune with `DB_MEM_LIMIT`. | `512M` |
+| `DB_MAX_ALLOWED_PACKET` | Maximum MariaDB packet for large encrypted payloads. | `128M` |
 | `APP_PORT` | The single host port. The app's nginx front door serves the web UI and proxies the API, files, and websocket same-origin — no other service publishes a host port. | Your choice (default `3001`) |
 | `PUBLIC_FILES_SERVER_URL` | Public URL clients use to reach the files service. It is the app origin + `/files` (the front door's prefix-strip proxy). | Computed by the script |
 | `AUTH_SERVER_U2F_RELYING_PARTY_ID` | WebAuthn/hardware-key relying-party ID (your host). | Computed (host of your domain, or `localhost`) |
@@ -170,8 +174,10 @@ they're unset. These include logging (`LOG_LEVEL`), cookie tuning
 (`STANDARD_RED_FEATURES_MODE`, `STANDARD_RED_ENTITLEMENT_MODE`, defaulting to
 fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,
 `REVISIONS_MAX_COUNT_PER_ITEM`), the optional Assistant/LLM proxy
-(`ASSISTANT_*`), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
-`.env.example` for the full list.
+(`ASSISTANT_*`), operation limits (`RATE_LIMIT_*`, `REGISTRATION_*`, upload and
+request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
+`.env.example` for the full list and [Operations hardening](operations-hardening.md)
+for the database, Redis, operation-limit, and image-pinning model.
 
 ### Server-wide shared access key (optional obfuscation gate)
 
@@ -482,6 +488,8 @@ docker run --rm -v standard-red-notes_uploads:/data -v "$PWD":/backup \
 Keep your `.env` backed up in a safe place too: if you lose
 `AUTH_SERVER_ENCRYPTION_SERVER_KEY` or change the other secrets, existing users
 can be locked out and encrypted server-side data becomes unreadable.
+
+For database tuning and restore drills, see [Operations hardening](operations-hardening.md).
 
 ---
 

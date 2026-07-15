@@ -17,6 +17,8 @@ deployment documentation for people running their own instance.
 - [Onboarding](onboarding.md) explains the app from a user point of view.
 - [Self-hosting](self-hosting.md) covers the Docker stack, environment, reverse
   proxy setup, updates, and backups.
+- [Operations hardening](operations-hardening.md) covers database resilience,
+  safety limits, and Docker runtime hardening.
 - [Architecture](architecture.md) explains how the app, gateway, services, files,
   realtime, CLIs, and MCP bridge fit together.
 - [Improvements](improvements.md) lists what this fork changes beyond the

@@ -85,6 +85,19 @@ export class AppDataSource {
         username: inReplicaMode ? undefined : this.configuration.env.get('DB_USERNAME'),
         password: inReplicaMode ? undefined : this.configuration.env.get('DB_PASSWORD'),
         database: inReplicaMode ? undefined : this.configuration.env.get('DB_DATABASE'),
+        // Standard Red Notes: keep the revisions service under the same
+        // env-overridable connection ceiling as auth/syncing. Revisions can be
+        // event-driven and bursty; a bounded pool prevents it from exhausting
+        // MariaDB when the worker catches up after downtime.
+        poolSize: this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+          ? +this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+          : 20,
+        extra: {
+          waitForConnections: true,
+          connectTimeout: 10_000,
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 10_000,
+        },
       }
 
       this._dataSource = new DataSource(mySQLDataSourceOptions)

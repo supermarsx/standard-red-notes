@@ -12,6 +12,11 @@ x-server-env: &server-env
   DB_PASSWORD: ${MYSQL_PASSWORD:-changeme123}
   DB_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
   DB_TYPE: mysql
+  # Database client safety knobs. DB_CONNECTION_LIMIT is the per-process TypeORM
+  # pool ceiling; keep DB_MAX_CONNECTIONS on the MariaDB service above the sum of
+  # active server pools. DB_MAX_QUERY_EXECUTION_TIME only logs slow queries.
+  DB_CONNECTION_LIMIT: ${DB_CONNECTION_LIMIT:-20}
+  DB_MAX_QUERY_EXECUTION_TIME: ${DB_MAX_QUERY_EXECUTION_TIME:-45000}
   CACHE_TYPE: redis
   REDIS_HOST: cache
   REDIS_PORT: 6379
@@ -47,6 +52,12 @@ x-server-env: &server-env
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
   STANDARD_RED_FULL_FEATURE_DURATION_DAYS: ${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
   STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT: ${STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT:--1}
+  # Absolute upload/request bounds. HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES protects
+  # the gateway JSON/body parser; MAX_CHUNK_BYTES/MAX_ATTACHMENT_BYTE_SIZE protect
+  # the files service even for otherwise unlimited accounts.
+  HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES: ${HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES:-50}
+  MAX_CHUNK_BYTES: ${MAX_CHUNK_BYTES:-100000000}
+  MAX_ATTACHMENT_BYTE_SIZE: ${MAX_ATTACHMENT_BYTE_SIZE:-5368709120}
   # Revision history retention. Both default to 0 = unlimited (no pruning),
   # preserving the upstream behavior. When set, the revisions service prunes a
   # note/file's history on each new revision: REVISIONS_RETENTION_DAYS deletes
@@ -166,6 +177,23 @@ x-server-env: &server-env
   RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
   RATE_LIMIT_LOGIN_MAX: ${RATE_LIMIT_LOGIN_MAX:-10}
   RATE_LIMIT_REGISTRATION_MAX: ${RATE_LIMIT_REGISTRATION_MAX:-5}
+  # Authenticated per-user operation tier. Default is off (0) to preserve stock
+  # behavior; set a positive max to rate-limit expensive authenticated endpoints
+  # such as the assistant stream proxy.
+  RATE_LIMIT_USER_WINDOW_SECONDS: ${RATE_LIMIT_USER_WINDOW_SECONDS:-60}
+  RATE_LIMIT_USER_MAX: ${RATE_LIMIT_USER_MAX:-0}
+  RATE_LIMIT_ADAPTIVE_ESCALATION: ${RATE_LIMIT_ADAPTIVE_ESCALATION:-false}
+  # Signup safety caps. Defaults preserve an open self-host; set positive caps
+  # or REGISTRATION_INVITE_ONLY=true / REGISTRATION_APPROVAL_REQUIRED=true for
+  # public instances where account creation needs an operational backstop.
+  REGISTRATION_SIGNUPS_PER_IP_MAX: ${REGISTRATION_SIGNUPS_PER_IP_MAX:-0}
+  REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS: ${REGISTRATION_SIGNUPS_PER_IP_WINDOW_HOURS:-24}
+  REGISTRATION_SIGNUPS_PER_WEEK_MAX: ${REGISTRATION_SIGNUPS_PER_WEEK_MAX:-0}
+  REGISTRATION_SIGNUPS_PER_DEVICE_MAX: ${REGISTRATION_SIGNUPS_PER_DEVICE_MAX:-0}
+  REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS: ${REGISTRATION_SIGNUPS_PER_DEVICE_WINDOW_HOURS:-24}
+  REGISTRATION_MAX_TOTAL_ACCOUNTS: ${REGISTRATION_MAX_TOTAL_ACCOUNTS:-0}
+  REGISTRATION_INVITE_ONLY: ${REGISTRATION_INVITE_ONLY:-false}
+  REGISTRATION_APPROVAL_REQUIRED: ${REGISTRATION_APPROVAL_REQUIRED:-false}
   # OPT-IN, OFF-BY-DEFAULT admin container restart for the infra containers that
   # run OUTSIDE the server's supervisord (Redis `cache` + MariaDB `db`). The admin
   # panel restarts them through the locked-down `docker-socket-proxy` sidecar below
@@ -380,7 +408,7 @@ services:
       - workflows
     # Pin to a specific version tag (e.g. n8nio/n8n:1.x.y) for reproducible
     # deployments; `latest` tracks n8n's current stable release.
-    image: n8nio/n8n:latest
+    image: ${N8N_IMAGE:-n8nio/n8n:latest}
     restart: unless-stopped
     # Hardening: the image runs as the unprivileged `node` user (uid 1000) and
     # only serves HTTP on 5678 internally — no capabilities needed.
@@ -428,7 +456,7 @@ services:
       - standard-red-notes
 
   db:
-    image: mariadb:lts
+    image: ${MARIADB_IMAGE:-mariadb:lts}
     restart: unless-stopped
     # Hardening: internal-only (no host port published). Block privilege
     # escalation and drop all caps, then add back only what the official mariadb
@@ -447,6 +475,11 @@ services:
       - SETUID
     mem_limit: ${DB_MEM_LIMIT:-1g}
     pids_limit: 1024
+    stop_grace_period: 1m
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
       MYSQL_USER: ${MYSQL_USER:-std_notes_user}
@@ -455,10 +488,15 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=${DB_MAX_CONNECTIONS:-150}
+      - --max-allowed-packet=${DB_MAX_ALLOWED_PACKET:-128M}
+      - --innodb-buffer-pool-size=${DB_INNODB_BUFFER_POOL_SIZE:-512M}
+      - --innodb-flush-log-at-trx-commit=${DB_INNODB_FLUSH_LOG_AT_TRX_COMMIT:-1}
+      - --local-infile=0
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      test: ["CMD-SHELL", "mariadb -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" \"$${MYSQL_DATABASE}\" --batch --raw --skip-column-names -e 'SELECT 1' | grep -q '^1$'"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -467,7 +505,7 @@ services:
       - standard-red-notes
 
   cache:
-    image: redis:8-alpine
+    image: ${REDIS_IMAGE:-redis:8-alpine}
     restart: unless-stopped
     # Hardening: internal-only (no host port published). Block privilege
     # escalation and drop all caps, adding back only SETGID/SETUID, which the
@@ -481,7 +519,20 @@ services:
       - SETUID
     mem_limit: ${CACHE_MEM_LIMIT:-256m}
     pids_limit: 256
-    command: ["redis-server", "--appendonly", "yes"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "${CACHE_MAXMEMORY:-192mb}",
+        "--maxmemory-policy",
+        "${CACHE_MAXMEMORY_POLICY:-noeviction}",
+      ]
     volumes:
       - redis-data:/data
     healthcheck:
@@ -512,7 +563,7 @@ services:
     # The -compat image variant ships the AWS CLI + awslocal, which the
     # bootstrap init script (and the old LocalStack tooling muscle memory,
     # e.g. `docker compose exec floci awslocal sqs list-queues`) relies on.
-    image: floci/floci:1.5.29-compat
+    image: ${FLOCI_IMAGE:-floci/floci:1.5.29-compat}
     restart: unless-stopped
     # Hardening: internal-only (no host port published) and no privilege
     # escalation. Note floci's SNS/SQS state is in-memory: the ready.d bootstrap
@@ -520,6 +571,8 @@ services:
     # create/subscribe calls are idempotent), so no data volume is needed.
     security_opt:
       - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     mem_limit: ${FLOCI_MEM_LIMIT:-256m}
     pids_limit: 512
     volumes:
@@ -563,7 +616,7 @@ services:
   docker-socket-proxy:
     profiles:
       - ops
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: ${DOCKER_SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:0.3.0}
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"

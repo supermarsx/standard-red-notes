@@ -15,6 +15,8 @@ the Docker stack is available.
 yarn generate:brand-assets
 yarn --cwd app/packages/web tsc
 yarn --cwd server workspace @standardnotes/auth-server build
+docker compose config
+docker compose -f docker-compose.single.yml config
 git diff --check
 ```
 

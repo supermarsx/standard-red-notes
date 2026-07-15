@@ -8,6 +8,8 @@
       url: /self-hosting.html
     - title: Deployment
       url: /DEPLOYMENT.html
+    - title: Operations hardening
+      url: /operations-hardening.html
 - title: Project
   items:
     - title: Architecture

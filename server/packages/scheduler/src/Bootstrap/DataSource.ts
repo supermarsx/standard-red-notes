@@ -45,6 +45,13 @@ export const AppDataSource = new DataSource({
   username: inReplicaMode ? undefined : env.get('DB_USERNAME'),
   password: inReplicaMode ? undefined : env.get('DB_PASSWORD'),
   database: inReplicaMode ? undefined : env.get('DB_DATABASE'),
+  poolSize: env.get('DB_CONNECTION_LIMIT', true) ? +env.get('DB_CONNECTION_LIMIT', true) : 20,
+  extra: {
+    waitForConnections: true,
+    connectTimeout: 10_000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
+  },
   entities: [Job, Predicate],
   migrations: [env.get('DB_MIGRATIONS_PATH', true) ?? 'dist/migrations/*.js'],
   migrationsRun: true,

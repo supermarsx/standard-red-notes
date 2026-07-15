@@ -76,6 +76,19 @@ export class AppDataSource {
       username: inReplicaMode ? undefined : this.configuration.env.get('DB_USERNAME'),
       password: inReplicaMode ? undefined : this.configuration.env.get('DB_PASSWORD'),
       database: inReplicaMode ? undefined : this.configuration.env.get('DB_DATABASE'),
+      // Standard Red Notes: match the rest of the MySQL-backed services with a
+      // bounded, env-overridable pool and finite connect timeout. This package is
+      // retained for standalone websocket deployments even though the compose
+      // stack now runs the realtime gateway in-process.
+      poolSize: this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+        ? +this.configuration.env.get('DB_CONNECTION_LIMIT', true)
+        : 20,
+      extra: {
+        waitForConnections: true,
+        connectTimeout: 10_000,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10_000,
+      },
     }
 
     this._dataSource = new DataSource(mySQLDataSourceOptions)
