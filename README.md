@@ -5,7 +5,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/issues)
 [![Last commit](https://img.shields.io/github/last-commit/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/commits)
 [![Top language](https://img.shields.io/github/languages/top/supermarsx/standard-red-notes?style=flat-square)](https://github.com/supermarsx/standard-red-notes)
-[![CI](https://img.shields.io/badge/CI-see%20Actions-lightgrey?style=flat-square&logo=githubactions)](https://github.com/supermarsx/standard-red-notes/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/supermarsx/standard-red-notes/srn-home-server.yml?branch=main&style=flat-square&label=CI&logo=githubactions)](https://github.com/supermarsx/standard-red-notes/actions/workflows/srn-home-server.yml?query=branch%3Amain)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-be1f2d?style=flat-square&logo=githubpages)](https://supermarsx.github.io/standard-red-notes/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat-square)](LICENSE.md)
 
@@ -27,8 +27,8 @@ endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
 > New here and want to *use* the app? Read the
 > [onboarding guide](docs/onboarding.md) or the
 > [GitHub Pages docs site](https://supermarsx.github.io/standard-red-notes/) —
-> accounts, editors, organizing notes, the AI assistant, architecture, and what
-> stays private. Want to *run a server*? Jump to the [Docker quickstart](#docker-quickstart)
+> accounts, editors, organizing notes, the AI assistant, the mirrored in-app
+> guide, architecture, and what stays private. Want to *run a server*? Jump to the [Docker quickstart](#docker-quickstart)
 > or the full [self-hosting guide](docs/self-hosting.md).
 
 ## Table of contents

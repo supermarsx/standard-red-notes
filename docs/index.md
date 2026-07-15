@@ -15,6 +15,9 @@ deployment documentation for people running their own instance.
 ## Start Here
 
 - [Onboarding](onboarding.md) explains the app from a user point of view.
+- [In-app guide](app-guide.md) mirrors the offline Documentation pane bundled
+  inside the app, including user help for encryption, editors, files, sync,
+  backups, self-hosting, assistant features, MCP, shortcuts, and troubleshooting.
 - [Self-hosting](self-hosting.md) covers the Docker stack, environment, reverse
   proxy setup, updates, and backups.
 - [Operations hardening](operations-hardening.md) covers database resilience,

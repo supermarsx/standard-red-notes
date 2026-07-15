@@ -4,6 +4,8 @@
       url: /
     - title: Onboarding
       url: /onboarding.html
+    - title: In-app guide
+      url: /app-guide.html
     - title: Self-hosting
       url: /self-hosting.html
     - title: Deployment

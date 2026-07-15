@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'app/packages/web/src/javascripts/Components/Preferences/Panes/Documentation/content.ts'
+      - 'scripts/export-app-docs-to-pages.mjs'
       - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
 
@@ -22,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Verify app documentation mirror
+        run: node scripts/export-app-docs-to-pages.mjs --check
       - uses: actions/configure-pages@v6
       - uses: actions/jekyll-build-pages@v1
         with:
