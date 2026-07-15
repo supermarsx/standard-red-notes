@@ -19,6 +19,12 @@
     "build:openclaw": "yarn workspace @standard-red-notes/openclaw build",
     "build:server": "cd server && yarn build",
     "check": "yarn typecheck && yarn lint && yarn format:check && yarn test",
+    "coverage": "yarn coverage:clean && yarn coverage:collect:app-core && yarn coverage:collect:app-web && yarn coverage:collect:server && yarn coverage:report",
+    "coverage:clean": "node -e \"require('node:fs').rmSync('coverage/raw',{recursive:true,force:true})\"",
+    "coverage:collect:app-core": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-core --jobs 2 --workspace packages/api --workspace packages/encryption --workspace packages/features --workspace packages/filepicker --workspace packages/files --workspace packages/models --workspace packages/responses --workspace packages/services --workspace packages/snjs --workspace packages/ui-services --workspace packages/utils",
+    "coverage:collect:app-web": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-web --jobs 2 --timeout-ms 1800000 --workspace packages/web",
+    "coverage:collect:server": "node scripts/coverage.mjs collect --workspace-root server --output coverage/raw/server --jobs 2 --timeout-ms 900000",
+    "coverage:report": "node scripts/coverage.mjs report --input coverage/raw --expect app --expect server --output docs/assets/coverage.svg --summary coverage/summary.json",
     "deps:audit": "yarn deps:audit:app && yarn deps:audit:server",
     "deps:audit:app": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd app",
     "deps:audit:server": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd server",
@@ -46,8 +52,9 @@
     "screenshot:readme": "node scripts/capture-readme-screenshot.mjs",
     "start:mcp": "yarn workspace @standard-red-notes/mcp start",
     "start:openclaw": "yarn workspace @standard-red-notes/openclaw start",
-    "test": "yarn test:openclaw && yarn test:app && yarn test:server",
+    "test": "yarn test:coverage-tools && yarn test:openclaw && yarn test:app && yarn test:server",
     "test:app": "cd app && yarn test",
+    "test:coverage-tools": "node --test scripts/coverage.test.mjs",
     "test:openclaw": "yarn workspace @standard-red-notes/openclaw test",
     "test:server": "cd server && yarn test",
     "typecheck": "yarn typecheck:mcp && yarn typecheck:openclaw",
@@ -55,6 +62,8 @@
     "typecheck:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck"
   },
   "devDependencies": {
+    "istanbul-lib-coverage": "^3.2.0",
+    "istanbul-lib-instrument": "^6.0.3",
     "npm-check-updates": "^22.2.1",
     "turbo": "^2.9.16"
   }
