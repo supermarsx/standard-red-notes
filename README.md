@@ -17,10 +17,7 @@ Standard Red Notes is an open, AGPL-3.0 licensed, **self-hosted fork of
 Standard Notes great — strong end-to-end encryption, a clean cross-platform
 client, and a sync server you can host yourself — and removes the part that
 gets in the way: the subscription. Where the upstream project puts a number of
-features behind a paid plan, this fork ships **the full feature set on by
-default**. The server runs with `STANDARD_RED_FEATURES_MODE=included`, so
-feature and subscription checks return full access without any subscription
-provisioning. You host it, you own the data, and nothing is held back.
+features behind a paid plan, this fork is **fully featured by default**.
 
 This is an independent project and is **not affiliated with, sponsored by, or
 endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
