@@ -510,6 +510,20 @@ const ToolbarSeparator = () => (
   <div aria-hidden className="mx-1 my-1 h-6 w-px flex-shrink-0 self-center bg-border" role="separator" />
 )
 
+const TOOLBAR_UTILITY_BUTTON_IDS = [
+  ToolbarButtonId.Cut,
+  ToolbarButtonId.Copy,
+  ToolbarButtonId.Paste,
+  ToolbarButtonId.Divider,
+  ToolbarButtonId.Undo,
+  ToolbarButtonId.Redo,
+] as const
+
+const TOOLBAR_UTILITY_GROUP_IDS: ReadonlySet<ToolbarGroupId> = new Set([
+  ToolbarGroupId.Clipboard,
+  ToolbarGroupId.History,
+])
+
 interface ToolbarMenuItemProps extends Omit<MenuItemProps, 'children'> {
   name: string
   iconName: string
@@ -1665,6 +1679,7 @@ const ToolbarPlugin = () => {
 
   const toolbarRef = useRef<HTMLDivElement>(null)
   const toolbarStore = useToolbarStore()
+  const utilityToolbarStore = useToolbarStore()
   // Separate store for the element-specific contextual tools, which render on
   // their own line below the main toolbar.
   const contextualToolbarStore = useToolbarStore()
@@ -2853,6 +2868,7 @@ const ToolbarPlugin = () => {
   const activeGroups = isContextualActive
     ? []
     : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
+  const activeRibbonGroups = activeGroups.filter((group) => !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
 
   // Do NOT auto-select the contextual tab when an element becomes active — the
   // contextual tab is merely made *available* (rendered in the tab strip), and
@@ -3078,6 +3094,20 @@ const ToolbarPlugin = () => {
           />
         )}
         <div className="flex w-full flex-shrink-0 flex-col border-t border-border md:border-0">
+          {canShowAllItems && (
+            <Toolbar
+              className="super-toolbar flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1"
+              store={utilityToolbarStore}
+              aria-label="Clipboard and history tools"
+            >
+              {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId) => {
+                if (buttonId === ToolbarButtonId.Divider) {
+                  return <ToolbarSeparator key="clipboard-history-divider" />
+                }
+                return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
+              })}
+            </Toolbar>
+          )}
           {/* Office-ribbon tab strip: one mini tab per super group. Switching tabs
               swaps which groups render below, so the bar rarely needs to scroll. */}
           {canShowAllItems && ribbonTabs.length > 1 && (
@@ -3154,7 +3184,7 @@ const ToolbarPlugin = () => {
             store={toolbarStore}
           >
             {canShowAllItems
-              ? activeGroups.map((group) => {
+              ? activeRibbonGroups.map((group) => {
                   // Standard Red Notes: the Block-style group is a vertical stack.
                   // LINE 1 is a row of three always-visible action buttons — Smart
                   // checklist (a TOGGLE bound to autoMoveCompleted), Restore

@@ -148,6 +148,34 @@ describe('Insert-sections vanish guard (static source assertion)', () => {
   })
 })
 
+describe('Clipboard/history utility row (static source assertion)', () => {
+  // The full ToolbarPlugin closes over live Lexical/editor state and is not a
+  // practical jsdom mount target. Keep a source-level contract for the ribbon
+  // layout: clipboard + history live in the compact row above the tabs, and are
+  // filtered out of the tabbed Home groups so they do not render twice.
+  const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
+
+  it('renders Cut, Copy, Paste, divider, Undo, Redo in that utility-row order', () => {
+    const utilityIds = source.match(/const TOOLBAR_UTILITY_BUTTON_IDS = \[([\s\S]*?)\] as const/)
+    expect(utilityIds).toBeTruthy()
+    expect(utilityIds![1]).toMatch(
+      /ToolbarButtonId\.Cut[\s\S]*ToolbarButtonId\.Copy[\s\S]*ToolbarButtonId\.Paste[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Undo[\s\S]*ToolbarButtonId\.Redo/,
+    )
+  })
+
+  it('places the utility row before the ribbon tabs and gives it its own toolbar store', () => {
+    expect(source).toContain('store={utilityToolbarStore}')
+    expect(source.indexOf('store={utilityToolbarStore}')).toBeLessThan(source.indexOf('super-toolbar-tabs'))
+  })
+
+  it('filters Clipboard and History out of the tabbed ribbon groups', () => {
+    expect(source).toContain('const TOOLBAR_UTILITY_GROUP_IDS')
+    expect(source).toContain('const activeRibbonGroups = activeGroups.filter')
+    expect(source).toContain('!TOOLBAR_UTILITY_GROUP_IDS.has(group.id)')
+    expect(source).toContain('? activeRibbonGroups.map')
+  })
+})
+
 describe('Header/Footer styled subsections (t59, static source assertion)', () => {
   // The popover was split into three bordered subsections (Page numbers / Header
   // / Footer), each Header/Footer carrying the full style control set. The full
