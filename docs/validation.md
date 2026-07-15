@@ -65,10 +65,17 @@ references, or editor persistence:
 
 ```powershell
 cd e2e
+npm test -- encryption-data-safety.spec.ts --project=chromium
 npm test -- correctness.spec.ts --project=chromium
 npm test -- stress-notes.spec.ts --project=chromium
 npm test -- stress-sync.spec.ts --project=chromium
 ```
+
+`encryption-data-safety.spec.ts` is the focused safety gate: it registers real
+accounts, creates and syncs a note, verifies the HTTP API and MariaDB `items`,
+`users`, and any matching revision rows do not contain note plaintext, confirms
+a fresh client can decrypt the item, checks cross-account isolation, and
+verifies delete tombstones clear encrypted payload fields.
 
 These require a healthy local app/server and take materially longer than the
 smoke tests.
