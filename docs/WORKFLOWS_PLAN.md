@@ -1,3 +1,8 @@
+---
+title: Workflows Plan
+description: n8n-backed workflow automation plan.
+---
+
 # Workflows — n8n-backed automation engine (plan)
 
 A "Workflows" section in the sidebar (next to Files) backed by an n8n engine running

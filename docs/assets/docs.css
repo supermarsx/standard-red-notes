@@ -1,0 +1,168 @@
+:root {
+  --red: #be1f2d;
+  --red-deep: #5f121a;
+  --ink: #1e1718;
+  --muted: #6f6365;
+  --line: #e5dcda;
+  --paper: #fffaf6;
+  --panel: #ffffff;
+  --code: #f7efec;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--red);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.18em;
+}
+
+.docs-shell {
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.docs-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: #f4ebe8;
+  padding: 1.25rem 1rem;
+}
+
+.docs-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--ink);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.docs-sidebar h2 {
+  margin: 1.5rem 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.docs-sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.docs-sidebar a {
+  display: block;
+  border-radius: 6px;
+  color: var(--ink);
+  padding: 0.35rem 0.5rem;
+  text-decoration: none;
+}
+
+.docs-sidebar a:hover,
+.docs-sidebar a:focus {
+  background: #eadfdd;
+}
+
+.docs-content {
+  padding: 3rem min(7vw, 5rem);
+}
+
+.docs-content article {
+  max-width: 62rem;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+}
+
+h1 {
+  margin-top: 0;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+}
+
+h2 {
+  border-top: 1px solid var(--line);
+  margin-top: 2.4rem;
+  padding-top: 1.6rem;
+}
+
+table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 0.65rem 0.75rem;
+  vertical-align: top;
+}
+
+th {
+  background: #f1e5e2;
+  text-align: left;
+}
+
+code {
+  background: var(--code);
+  border-radius: 4px;
+  padding: 0.1rem 0.25rem;
+}
+
+pre {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+}
+
+blockquote {
+  border-left: 4px solid var(--red);
+  color: var(--muted);
+  margin-left: 0;
+  padding-left: 1rem;
+}
+
+img {
+  max-width: 100%;
+}
+
+@media (max-width: 860px) {
+  .docs-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-sidebar {
+    position: static;
+    height: auto;
+  }
+
+  .docs-content {
+    padding: 2rem 1rem;
+  }
+}

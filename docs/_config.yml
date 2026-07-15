@@ -1,0 +1,15 @@
+title: Standard Red Notes
+description: Self-hosted, end-to-end encrypted notes with the full feature set included.
+url: https://supermarsx.github.io
+baseurl: /standard-red-notes
+markdown: kramdown
+highlighter: rouge
+theme: null
+exclude:
+  - node_modules
+  - vendor
+defaults:
+  - scope:
+      path: ''
+    values:
+      layout: default

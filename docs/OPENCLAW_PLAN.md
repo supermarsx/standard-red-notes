@@ -1,3 +1,8 @@
+---
+title: OpenClaw Plan
+description: Personal assistant agent plan for Standard Red Notes.
+---
+
 # Open Claw — Personal Assistant Agent Plan
 
 Open Claw is the personal assistant agent that sits on top of the Standard Red

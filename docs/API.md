@@ -1,3 +1,8 @@
+---
+title: HTTP API Reference
+description: HTTP API exposed by a self-hosted Standard Red Notes server.
+---
+
 # HTTP API reference
 
 This document describes the HTTP API exposed by a self-hosted **Standard Red

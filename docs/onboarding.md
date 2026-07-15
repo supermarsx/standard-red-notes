@@ -1,3 +1,8 @@
+---
+title: Onboarding
+description: User guide for day-to-day Standard Red Notes usage.
+---
+
 # Getting started with Standard Red Notes
 
 Welcome! This is a friendly guide to *using* Standard Red Notes day to day. If

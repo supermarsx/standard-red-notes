@@ -1,12 +1,13 @@
 # Standard Red Notes
 
-[![GitHub stars](https://img.shields.io/github/stars/supermarsx/standard-red-notes?style=flat&logo=github)](https://github.com/supermarsx/standard-red-notes/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/supermarsx/standard-red-notes?style=flat&logo=github)](https://github.com/supermarsx/standard-red-notes/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/supermarsx/standard-red-notes?style=flat&logo=github)](https://github.com/supermarsx/standard-red-notes/issues)
-[![Last commit](https://img.shields.io/github/last-commit/supermarsx/standard-red-notes?style=flat&logo=github)](https://github.com/supermarsx/standard-red-notes/commits)
-[![Top language](https://img.shields.io/github/languages/top/supermarsx/standard-red-notes?style=flat)](https://github.com/supermarsx/standard-red-notes)
-[![CI](https://img.shields.io/badge/CI-see%20Actions-lightgrey?style=flat&logo=githubactions)](https://github.com/supermarsx/standard-red-notes/actions)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat)](LICENSE.md)
+[![GitHub stars](https://img.shields.io/github/stars/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/issues)
+[![Last commit](https://img.shields.io/github/last-commit/supermarsx/standard-red-notes?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/commits)
+[![Top language](https://img.shields.io/github/languages/top/supermarsx/standard-red-notes?style=flat-square)](https://github.com/supermarsx/standard-red-notes)
+[![CI](https://img.shields.io/badge/CI-see%20Actions-lightgrey?style=flat-square&logo=githubactions)](https://github.com/supermarsx/standard-red-notes/actions)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-be1f2d?style=flat-square&logo=githubpages)](https://supermarsx.github.io/standard-red-notes/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=flat-square)](LICENSE.md)
 
 > A friendly, private, **end-to-end encrypted** notes app you run yourself — with
 > every feature included, no paid tier, and nothing gatekept.
@@ -24,17 +25,21 @@ provisioning. You host it, you own the data, and nothing is held back.
 This is an independent project and is **not affiliated with, sponsored by, or
 endorsed by Standard Notes**. Upstream copyright and attribution are preserved.
 
+![Standard Red Notes app screenshot](docs/assets/readme-screenshot.png)
+
 > New here and want to *use* the app? Read the
-> [onboarding guide](docs/onboarding.md) — accounts, editors, organizing notes,
-> the AI assistant, and what stays private. Want to *run a server*? Jump to the
-> [Docker quickstart](#docker-quickstart) or the full
-> [self-hosting guide](docs/self-hosting.md).
+> [onboarding guide](docs/onboarding.md) or the
+> [GitHub Pages docs site](https://supermarsx.github.io/standard-red-notes/) —
+> accounts, editors, organizing notes, the AI assistant, architecture, and what
+> stays private. Want to *run a server*? Jump to the [Docker quickstart](#docker-quickstart)
+> or the full [self-hosting guide](docs/self-hosting.md).
 
 ## Table of contents
 
 - [Why this fork](#why-this-fork)
 - [What's different / improved](#whats-different--improved)
 - [Feature comparison](#feature-comparison)
+- [Documentation site](#documentation-site)
 - [Repository layout](#repository-layout)
 - [Docker quickstart](#docker-quickstart)
 - [Building from source](#building-from-source)
@@ -146,6 +151,28 @@ actually ships.
 > current plans. The right-most column reflects what this repository ships today.
 > Self-hosting means you are responsible for running, securing, and backing up
 > the server.
+
+## Documentation site
+
+The `docs/` folder is a GitHub Pages site with a persistent sidebar. It includes:
+
+- [Architecture](docs/architecture.md): app, server, gateway, files, realtime,
+  CLI, MCP, deployment profiles, and validation layers.
+- [Standard Notes base](docs/standard-notes-base.md): what this fork preserves
+  from upstream and where it intentionally changes the operating model.
+- [Improvements](docs/improvements.md): included features, admin controls,
+  operator tooling, privacy controls, and QA automation.
+- [Comparison](docs/comparison.md): a source-linked product-fit comparison with
+  Standard Notes, Obsidian, Joplin, Notesnook, Notion, and adjacent tools.
+- [Validation](docs/validation.md): local checks, e2e smoke/correctness gates,
+  and README screenshot automation.
+
+The README screenshot is generated from an actual running app:
+
+```powershell
+$env:APP_URL = "http://localhost:3001"
+npm --prefix e2e run screenshot:readme
+```
 
 ## Repository layout
 

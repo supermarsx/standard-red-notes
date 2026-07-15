@@ -1,3 +1,8 @@
+---
+title: MCP Support Plan
+description: Model Context Protocol bridge plan.
+---
+
 # MCP Support Plan
 
 ## SDK and Transport Baseline

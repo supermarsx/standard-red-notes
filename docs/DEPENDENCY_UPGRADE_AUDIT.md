@@ -1,3 +1,8 @@
+---
+title: Dependency Upgrade Audit
+description: Dependency upgrade audit notes.
+---
+
 # Dependency Upgrade Audit
 
 Audit date: 2026-06-01

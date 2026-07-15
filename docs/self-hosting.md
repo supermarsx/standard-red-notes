@@ -1,3 +1,8 @@
+---
+title: Self-hosting
+description: Run your own fully featured Standard Red Notes server.
+---
+
 # Self-hosting Standard Red Notes
 
 Run your own fully-featured Standard Red Notes server with Docker
@@ -5,7 +10,7 @@ Compose. One setup script generates a correct `.env` (with securely-generated
 secrets), then a single `docker compose up` brings the whole stack online.
 
 Standard Red Notes is licensed under AGPL-3.0; it is a self-hosted fork of
-Standard Notes. See the [LICENSE](../LICENSE) file for details.
+Standard Notes. See the [LICENSE](../LICENSE.md) file for details.
 
 - [Deploy in 5 minutes](#deploy-in-5-minutes)
 - [What the stack contains](#what-the-stack-contains)

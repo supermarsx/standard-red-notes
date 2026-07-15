@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Standard Red Notes icon</title>
+  <rect x="8" y="8" width="496" height="496" rx="28" fill="#5f121a"/>
+  <rect x="18" y="18" width="476" height="476" rx="22" fill="#be1f2d"/>
+  <path d="M18 494 494 18v476z" fill="#9f1626" opacity=".32"/>
+  <rect x="165" y="130" width="230" height="285" rx="26" fill="#65121a" opacity=".35"/>
+  <path d="M142 112h240v268a34 34 0 0 1-34 34H176a34 34 0 0 1-34-34z" fill="#fffaf6"/>
+  <path d="M302 112h80v80z" fill="#ffe8e2"/>
+  <path d="M302 112v80h80z" fill="#65121a"/>
+  <rect x="193" y="220" width="132" height="15" rx="7.5" fill="#be1f2d"/>
+  <rect x="193" y="277" width="132" height="15" rx="7.5" fill="#be1f2d"/>
+  <rect x="193" y="334" width="132" height="15" rx="7.5" fill="#be1f2d"/>
+</svg>

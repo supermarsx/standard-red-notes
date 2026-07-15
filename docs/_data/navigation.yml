@@ -1,0 +1,34 @@
+- title: Overview
+  items:
+    - title: Documentation home
+      url: /
+    - title: Onboarding
+      url: /onboarding.html
+    - title: Self-hosting
+      url: /self-hosting.html
+    - title: Deployment
+      url: /DEPLOYMENT.html
+- title: Project
+  items:
+    - title: Architecture
+      url: /architecture.html
+    - title: Standard Notes base
+      url: /standard-notes-base.html
+    - title: Improvements
+      url: /improvements.html
+    - title: Comparison
+      url: /comparison.html
+    - title: Validation
+      url: /validation.html
+- title: Reference
+  items:
+    - title: API
+      url: /API.html
+    - title: MCP support plan
+      url: /MCP_SUPPORT_PLAN.html
+    - title: OpenClaw plan
+      url: /OPENCLAW_PLAN.html
+    - title: Workflows plan
+      url: /WORKFLOWS_PLAN.html
+    - title: Dependency audit
+      url: /DEPENDENCY_UPGRADE_AUDIT.html

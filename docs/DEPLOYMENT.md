@@ -1,3 +1,8 @@
+---
+title: Deployment
+description: Deployment profiles and production guidance.
+---
+
 # Deploying Standard Red Notes
 
 There are **three** ways to run Standard Red Notes. All three self-host to
