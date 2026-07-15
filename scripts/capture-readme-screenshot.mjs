@@ -108,7 +108,7 @@ async function seedDemoNotes(page) {
     await page.keyboard.press('Enter')
     await page.keyboard.type('Encrypted sync, admin controls, and operator drills in one workspace.')
     await page.keyboard.press('Enter')
-    await page.keyboard.type('Default theme, Super note editor, and local-first privacy.')
+    await page.keyboard.type('Dark mode, Super note editor, and local-first privacy.')
   }
 }
 
@@ -126,11 +126,11 @@ async function polishForScreenshot(page) {
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
-        border: 1px solid rgba(190, 31, 45, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.9);
-        color: #2b2020;
-        box-shadow: 0 10px 24px rgba(34, 24, 24, 0.12);
+        background: rgba(28, 25, 26, 0.88);
+        color: #f8f1f2;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
         backdrop-filter: blur(12px);
         font: 650 12px/1.3 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         letter-spacing: 0;
@@ -152,7 +152,7 @@ async function polishForScreenshot(page) {
     existing?.remove()
     const label = document.createElement('div')
     label.setAttribute('data-srn-readme-label', 'true')
-    label.textContent = 'Default theme - Super note demo'
+    label.textContent = 'Dark mode - Super note demo'
     document.body.append(label)
   })
   await page.waitForTimeout(500)
@@ -165,7 +165,7 @@ try {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
-    colorScheme: 'light',
+    colorScheme: 'dark',
   })
   const page = await context.newPage()
   page.setDefaultTimeout(60_000)
