@@ -1,5 +1,6 @@
 import { NativeFeatureIdentifier } from '@standardnotes/features'
-import { noteTypeForEditorIdentifier, NoteType } from './NoteType'
+import { NoteType } from './NoteType'
+import { noteTypeForEditorIdentifier } from './NoteTypeForEditorIdentifier'
 
 describe('note type', () => {
   it('should return the correct note type for editor identifier', () => {
