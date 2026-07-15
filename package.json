@@ -35,6 +35,7 @@
     "format:mcp": "yarn workspace @standard-red-notes/mcp format",
     "format:openclaw": "yarn workspace @standard-red-notes/openclaw format",
     "format:server": "cd server && yarn format",
+    "generate:brand-assets": "node scripts/generate-brand-assets.mjs",
     "lint": "yarn lint:mcp && yarn lint:openclaw && yarn lint:app && yarn lint:server",
     "lint:app": "cd app && yarn lint",
     "lint:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
