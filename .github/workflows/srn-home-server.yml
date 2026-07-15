@@ -57,6 +57,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          # The repo root declares packageManager: yarn@4. setup-node's default
+          # cache probing runs before Corepack is enabled and sees global Yarn 1.x.
+          package-manager-cache: false
 
       - name: Enable corepack (yarn 4)
         run: corepack enable
@@ -142,6 +145,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          # This job only runs npx against a downloaded artifact; avoid setup-node
+          # auto-detecting the repo's Yarn 4 packageManager field.
+          package-manager-cache: false
 
       - name: Download bundle artifact
         uses: actions/download-artifact@v5
