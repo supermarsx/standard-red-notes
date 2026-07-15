@@ -29,6 +29,140 @@ cd app/packages/web
 yarn test --runTestsByPath src/javascripts/Components/Preferences/Search/searchPreferences.spec.ts
 ```
 
+## Normalized Jest-Instrumented JS/TS Source Coverage
+
+The Pages coverage badge at
+`https://supermarsx.github.io/standard-red-notes/assets/coverage.svg` reports
+**normalized Jest-instrumented JS/TS source coverage**. It is neither unit-test
+coverage nor whole-repository coverage. Every Jest spec selected by a package's
+normal test command runs, so Jest integration and live specs may contribute
+covered counters.
+
+The collector owns an explicit app/server Jest workspace inventory and fails on
+inventory drift, duplicate workspace names, locations or slugs, duplicate
+report paths, missing reports, malformed reports, and source/report mismatch.
+Every shard manifest carries the full scope inventory, the exact selected
+workspace subset, and one report/source inventory per selection. A completed
+selected manifest may cover only part of a scope. The final merge accepts
+multiple manifests for the same scope, independently enumerates eligible source
+files from the checkout, and requires the app/server union to contain every
+expected workspace and eligible source exactly once. Missing, duplicate, or
+unexpected workspaces; scope mismatches; incomplete selected manifests;
+overlapping or duplicate report paths; and missing, unexpected, or duplicate
+sources are fatal.
+For each inventory workspace it enumerates `src` and `lib` files ending in
+`.ts`, `.tsx`, `.js`, or `.jsx`. It excludes test/spec files and directories,
+declarations, and generated, build, vendor, and fixture directories. Jest's
+package-specific coverage exclusions and thresholds are cleared for this
+descriptive report. For each workspace, the collector loads its real CJS or
+JSON Jest config through a unique temporary config beside the original,
+preserves the package settings, and overrides inherited `collectCoverageFrom`
+with an empty array. The temporary config is the final `--config` argument and
+is removed after success, failure, or timeout; no spawned argument contains
+`collectCoverageFrom`. Function, async, and Promise config exports fail as
+unsupported instead of being evaluated with changed semantics. Jest therefore
+transforms and reports only files executed or imported by the existing tests,
+and any `Failed to collect coverage` diagnostic is fatal. Collection and test
+failures remain fatal.
+
+Source files missing from Jest's output are materialized as zero-covered maps
+directly from their TS, TSX, JS, or JSX text with `istanbul-lib-instrument`
+and the required Babel parser plugins. Existing Jest maps are never replaced.
+After synthesis, every workspace report must contain exactly its eligible
+canonical source paths once. A successful Jest process that does not emit its
+raw `coverage-final.json` fails for every normal workspace. The only exceptions
+are the explicitly reviewed source-only/no-test inventory entries
+`app/packages/responses`, `server/packages/domain-events`, and
+`server/packages/predicates`. The collector verifies that these entries remain
+in the reviewed inventory and have no package-local test/spec files, then
+synthesizes every eligible source as zero-covered if Jest emits no raw report.
+Unexpected, missing, or stale source-only flags fail inventory validation, and
+each source-only workspace still contributes a non-empty denominator. Parser
+failures name the unsupported source and fail collection. An inventory
+workspace with no eligible source must carry an explicit `emptySourceReason`;
+an undocumented empty workspace fails.
+
+The current app scope is `api`, `encryption`, `features`, `filepicker`, `files`,
+`models`, `responses`, `services`, `snjs`, `ui-services`, `utils`, and `web`.
+The current server scope is `analytics`, `api-gateway`, `auth`, `common`,
+`domain-core`, `domain-events`, `domain-events-infra`, `files`, `predicates`,
+`revisions`, `scheduler`, `security`, `sncrypto-node`, `syncing-server`, `time`,
+and `websockets`.
+
+The source denominator excludes non-Jest app workspaces (`clipper`, `desktop`,
+`filepicker/example`, `icons`, `mobile`, `releases`, `sncrypto-common`,
+`sncrypto-web`, `styles`, and `toast`), non-Jest server workspaces (`grpc`,
+`home-server`, `settings`, and `websocket-gateway`), and the root `mcp` and
+`openclaw` workspaces.
+
+The excluded non-Jest suites are the Playwright suites under `e2e/`; desktop's
+AVA suite; the app and `sncrypto-web` Mocha/Chai browser harnesses; the
+`websocket-gateway` and OpenClaw Vitest suites; `websocket-gateway`'s direct Node
+and Playwright e2e scripts; MCP's `run-e2e.mjs`; and the coverage tool's own
+`node:test` suite. Native code, Docker health/integration behavior, backup and
+restore drills, and uninstrumented runtime paths are also outside this metric.
+
+Install the three independent Yarn projects, test the coverage infrastructure,
+and reproduce the CI report with:
+
+```powershell
+corepack enable
+yarn install --immutable
+Push-Location app
+yarn install --immutable
+Pop-Location
+Push-Location server
+yarn install --immutable
+Pop-Location
+yarn test:coverage-tools
+yarn coverage
+```
+
+`collect` enforces a hard timeout for each workspace and terminates its full
+process tree on Windows and Linux. The default is 900000 ms (15 minutes), which
+the `app-core` shard uses; the server shard also passes 900000 ms explicitly.
+The isolated `app-web` shard passes 1800000 ms (30 minutes) explicitly. A Web
+coverage run has been observed to pass in 17m44s with roughly 7.5 GB peak memory,
+so its runner must retain that timeout and enough memory headroom. Override the
+default with `--timeout-ms <milliseconds>` or
+`COVERAGE_WORKSPACE_TIMEOUT_MS`; the CLI option takes precedence. Parallel
+failures are printed as an ordered workspace ledger.
+
+`yarn coverage` writes ignored reports and the JSON summary to `coverage/`. The
+tracked `docs/assets/coverage.svg` contains the most recently verified numeric
+baseline, currently **40.4%**. A local full run overwrites it, and CI regenerates
+it before building and publishing the Pages site.
+
+Aggregation uses `istanbul-lib-coverage`. Every source path is canonicalized to
+one repository-relative path, and any source overlap is rejected before file
+coverage is added. For each metric, the reported percentage is
+`100 * sum(covered counters) / sum(total counters)` over the validated union,
+rounded to one decimal place. Percentages are never averaged across reports,
+workspaces, shards, or scopes. A `0/0` metric is reported as `n/a`. The badge
+displays the **lines** result; the generated JSON summary retains statements,
+branches, functions, and lines.
+
+In CI, three isolated matrix entries run in parallel after installing the root
+instrumentation tooling and the selected scope's own lockfile. `app-core`
+collects the 11 expected app workspaces other than `packages/web`; `app-web`
+collects only `packages/web`; and `server` collects all 16 expected server
+workspaces. Each entry uploads its completed manifest and reports as a separate
+artifact. The build job downloads all three artifacts and validates their union
+before aggregation, badge generation, and the Jekyll build. Pull requests and
+manual runs execute those checks. Only a non-PR run on `main` uploads and
+deploys the Pages artifact; the deploy job alone receives `pages: write` and
+`id-token: write`.
+Repository **Settings > Pages > Build and deployment > Source** must be set to
+**GitHub Actions**. GitHub Camo may briefly continue showing an older numeric
+badge after Pages publishes the replacement image.
+
+The workflow action majors were checked against their official repositories on
+2026-07-15: `checkout@v7`, `setup-node@v7`, `upload-artifact@v7`,
+`download-artifact@v8`, `configure-pages@v6`, `jekyll-build-pages@v1`,
+`upload-pages-artifact@v5`, and `deploy-pages@v5`. All JavaScript actions in
+that set use Node 24; `jekyll-build-pages` is a Docker action, so there is no
+unavoidable legacy Node runner warning to document.
+
 ## Live App Smoke
 
 Start the app stack:

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="132" height="20" role="img" aria-label="Normalized Jest-instrumented JS/TS source coverage (lines): 40.4%">
+  <title>Normalized Jest-instrumented JS/TS source coverage (lines): 40.4%</title>
+  <g shape-rendering="crispEdges">
+    <rect width="87" height="20" fill="#555"/>
+    <rect x="87" width="45" height="20" fill="#e05d44"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="43.5" y="14">Jest source</text>
+    <text x="109.5" y="14">40.4%</text>
+  </g>
+</svg>

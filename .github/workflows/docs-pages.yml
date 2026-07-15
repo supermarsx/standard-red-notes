@@ -3,27 +3,81 @@ name: docs-pages
 on:
   push:
     branches: [main]
-    paths:
-      - 'docs/**'
-      - 'app/packages/web/src/javascripts/Components/Preferences/Panes/Documentation/content.ts'
-      - 'scripts/export-app-docs-to-pages.mjs'
-      - '.github/workflows/docs-pages.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-pages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  coverage:
+    name: coverage (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: app-core
+            workspace_root: app
+          - shard: app-web
+            workspace_root: app
+          - shard: server
+            workspace_root: server
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install coverage tooling
+        run: yarn install --immutable
+      - name: Install ${{ matrix.workspace_root }} dependencies
+        working-directory: ${{ matrix.workspace_root }}
+        run: yarn install --immutable
+      - name: Collect ${{ matrix.shard }} Jest coverage
+        run: yarn coverage:collect:${{ matrix.shard }}
+      - name: Upload raw ${{ matrix.shard }} coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: |
+            coverage/raw/${{ matrix.shard }}/manifest.json
+            coverage/raw/${{ matrix.shard }}/**/coverage-final.json
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install coverage tooling
+        run: yarn install --immutable
+      - name: Download raw coverage
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          path: coverage/raw
+      - name: Test coverage tooling
+        run: yarn test:coverage-tools
+      - name: Generate coverage badge
+        run: yarn coverage:report
       - name: Verify app documentation mirror
         run: node scripts/export-app-docs-to-pages.mjs --check
       - uses: actions/configure-pages@v6
@@ -31,11 +85,18 @@ jobs:
         with:
           source: ./docs
           destination: ./_site
-      - uses: actions/upload-pages-artifact@v4
+      - name: Verify coverage badge in site
+        run: test -s _site/assets/coverage.svg
+      - uses: actions/upload-pages-artifact@v5
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           path: ./_site
 
   deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -43,4 +104,4 @@ jobs:
     needs: build
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
