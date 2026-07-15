@@ -160,7 +160,8 @@ The `docs/` folder is a GitHub Pages site with a persistent sidebar. It includes
 - [Improvements](docs/improvements.md): included features, admin controls,
   operator tooling, privacy controls, and QA automation.
 - [Comparison](docs/comparison.md): a source-linked product-fit comparison with
-  Standard Notes, Obsidian, Joplin, Notesnook, Notion, and adjacent tools.
+  Standard Notes, Obsidian, Joplin, Trilium Notes, Notesnook, Notion, and
+  adjacent tools.
 - [Validation](docs/validation.md): local checks, e2e smoke/correctness gates,
   and README screenshot automation.
 - [Operations hardening](docs/operations-hardening.md): database resilience,

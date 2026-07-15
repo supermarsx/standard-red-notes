@@ -18,6 +18,7 @@ self-hosted Standard Notes deployment with the feature set included by default.
 | Standard Notes | Managed encrypted notes with polished clients | End-to-end encrypted hosted service | Upstream has self-hosting history/docs, hosted product is primary | Advanced productivity features are plan-based on the hosted product. |
 | Obsidian | Local markdown knowledge base and plugin-heavy personal knowledge management | Local files; Obsidian Sync is an add-on sync service | Not a web app/server product by default | Very flexible, but collaboration/server operations are a different model. |
 | Joplin | Open-source notes with many sync targets | Supports end-to-end encryption | Joplin Server can be self-hosted | Less focused on a hosted web-app experience. |
+| Trilium Notes / TriliumNext | Hierarchical, self-hostable personal knowledge base with scripting and rich note types | Local SQLite database; protected notes can be encrypted, but ordinary notes are not encrypted by default | Desktop app plus self-hosted server/web sync | Strong tree/knowledge-base model, but weaker default privacy boundary than encrypting every note and file end-to-end. |
 | Notesnook | Open-source private notes across clients | End-to-end encrypted note sync | Self-hostable sync server | Hosted-first product with its own app model. |
 | Notion | Team docs/wiki/database workspace | Workspace security controls, not a zero-knowledge notes model | No official self-hosted edition | Strong collaboration/databases, weaker privacy boundary for private notes. |
 | AppFlowy / Anytype | Local-first/open-source workspace alternatives | Local-first collaboration models vary by product | Self-host/local-first options depend on product area | Better for workspace/project structures than Standard Notes compatibility. |
@@ -40,6 +41,9 @@ Choose Standard Red Notes when you want:
   plugin ecosystem.
 - Choose Joplin if you want an open-source notebook app with flexible sync
   targets and a simpler server.
+- Choose Trilium Notes / TriliumNext if you want a self-hosted hierarchical
+  personal knowledge base with note cloning, scripting, maps, and a rich tree
+  model, and per-note protected encryption is enough for your privacy needs.
 - Choose Notesnook if you want a private open-source notes app but prefer its
   product and sync server.
 - Choose Notion if your priority is team databases, wiki pages, and collaborative
@@ -58,6 +62,11 @@ The high-level claims above are intentionally tied to official sources:
 - Joplin describes end-to-end encryption on its
   [home page](https://joplinapp.org/) and self-hosted team/server positioning in
   [Joplin Server Business](https://joplinapp.org/help/apps/joplin_server_business/).
+- Trilium Notes describes its open-source hierarchical knowledge-base model,
+  desktop/local use, self-hosted server sync, protected notes, rich note types,
+  scripting, and default database protection model on the
+  [Trilium Notes home page](https://triliumnotes.org/) and the current
+  [TriliumNext GitHub repository](https://github.com/TriliumNext/trilium).
 - Notesnook describes its open-source and self-hostable sync server stance on its
   [home page](https://notesnook.com/).
 - Notion positions itself around docs, wikis, projects, and workspace search on
