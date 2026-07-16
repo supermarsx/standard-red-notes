@@ -103,4 +103,134 @@ describe('webSocketsService', () => {
       expect(events).toContain(WebSocketsServiceEvent.WebSocketDidOpen)
     })
   })
+
+  describe('connecting guard (concurrent-dial timing)', () => {
+    // A fake WebSocket that records every construction and only transitions to
+    // OPEN / CLOSED when the test explicitly drives it — modelling the real
+    // CONNECTING handshake window during which the bug fired.
+    class FakeWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+      static instances: FakeWebSocket[] = []
+
+      readyState: number = FakeWebSocket.CONNECTING
+      onopen: (() => void) | null = null
+      onclose: ((event: { code?: number }) => void) | null = null
+      onmessage: ((event: { data: unknown }) => void) | null = null
+      sent: string[] = []
+
+      constructor(public url: string) {
+        FakeWebSocket.instances.push(this)
+      }
+
+      send(data: string): void {
+        this.sent.push(data)
+      }
+
+      close(code?: number): void {
+        this.readyState = FakeWebSocket.CLOSED
+        this.onclose?.({ code })
+      }
+
+      // Test drivers for the terminal transitions.
+      fireOpen(): void {
+        this.readyState = FakeWebSocket.OPEN
+        this.onopen?.()
+      }
+      fireClose(code: number): void {
+        this.readyState = FakeWebSocket.CLOSED
+        this.onclose?.({ code })
+      }
+    }
+
+    const DIAL_URL = 'wss://test-websocket'
+    let originalWebSocket: unknown
+
+    const createDialService = () => {
+      const service = new WebSocketsService(storageService, DIAL_URL, webSocketApiService, internalEventBus)
+      services.push(service)
+      return service
+    }
+
+    beforeEach(() => {
+      FakeWebSocket.instances = []
+      originalWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket
+      ;(globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket
+      // A well-formed token response (createWebSocketConnectionToken reads
+      // response.data.token) so the dial reaches `new WebSocket(...)`.
+      webSocketApiService.createConnectionToken = jest.fn().mockResolvedValue({ data: { token: 'tok' } })
+      // Keep reconnect backoff timers inert so a scheduled retry can't race the
+      // assertions or spawn a second real dial.
+      jest.spyOn(global, 'setTimeout').mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>)
+    })
+
+    afterEach(() => {
+      ;(globalThis as { WebSocket?: unknown }).WebSocket = originalWebSocket
+      jest.restoreAllMocks()
+    })
+
+    it('coalesces a concurrent dial while the first socket is still CONNECTING (exactly one socket + one heartbeat arm)', async () => {
+      const setIntervalSpy = jest
+        .spyOn(global, 'setInterval')
+        .mockReturnValue(0 as unknown as ReturnType<typeof setInterval>)
+
+      const service = createDialService()
+
+      // First dial completes construction; the socket is created but has NOT yet
+      // opened (still CONNECTING) — exactly the window the old `finally`-clear
+      // exposed. A second dial arrives before any open.
+      await service.startWebSocketConnection()
+      expect(FakeWebSocket.instances).toHaveLength(1)
+      expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.CONNECTING)
+
+      await service.startWebSocketConnection()
+
+      // FALSE-GREEN: pre-fix (`connecting` cleared in `finally`) the second dial
+      // sees connecting=false and !OPEN → builds a SECOND socket (length 2).
+      expect(FakeWebSocket.instances).toHaveLength(1)
+
+      // Drive every constructed socket to OPEN. Post-fix there is one → one
+      // heartbeat arm. Pre-fix there were two → beginWebSocketHeartbeat runs
+      // twice (orphaning the first socket + re-arming the interval).
+      FakeWebSocket.instances.forEach((ws) => ws.fireOpen())
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('clears connecting on the failed-token terminal path so a later dial is not dead-locked', async () => {
+      const service = createDialService()
+
+      // Force the token fetch to fail → the failed-token terminal path runs.
+      webSocketApiService.createConnectionToken = jest.fn().mockRejectedValueOnce(new Error('token fetch failed'))
+      const first = await service.startWebSocketConnection()
+      expect(first.isFailed()).toBe(true)
+      expect(FakeWebSocket.instances).toHaveLength(0)
+
+      // With the token now succeeding, a fresh dial MUST proceed and build a
+      // socket. If `connecting` were left set on the failed path the service would
+      // be permanently stuck: the guard would short-circuit to Result.ok() and
+      // construct nothing. (Removing `this.connecting = false` from that path
+      // turns this assertion red — the false-green proof for the terminal clear.)
+      webSocketApiService.createConnectionToken = jest.fn().mockResolvedValue({ data: { token: 'tok' } })
+      const second = await service.startWebSocketConnection()
+      expect(second.isFailed()).toBe(false)
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+
+    it('clears connecting on close so a reconnect dial can proceed (no dead-lock after a drop)', async () => {
+      const service = createDialService()
+
+      await service.startWebSocketConnection()
+      expect(FakeWebSocket.instances).toHaveLength(1)
+
+      // Socket drops before ever opening (non-application close code).
+      FakeWebSocket.instances[0].fireClose(1006)
+
+      // A subsequent dial must be able to build a fresh socket.
+      const again = await service.startWebSocketConnection()
+      expect(again.isFailed()).toBe(false)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+    })
+  })
 })

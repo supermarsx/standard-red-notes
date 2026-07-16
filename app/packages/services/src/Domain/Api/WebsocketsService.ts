@@ -83,7 +83,17 @@ export class WebSocketsService extends AbstractService<
   private reconnectAttempts = 0
   private reconnectTimeout?: ReturnType<typeof setTimeout>
   private stableConnectionTimeout?: ReturnType<typeof setTimeout>
-  /** Guards against concurrent dials (sign-in + close + online all racing). */
+  /**
+   * Guards against concurrent dials (sign-in + close + online all racing). Held
+   * true from the start of a dial until the socket actually OPENS or CLOSES — not
+   * merely until `new WebSocket()` returns — because during the CONNECTING
+   * handshake neither guard (this flag, nor isWebSocketConnectionOpen() which
+   * needs OPEN) would otherwise be true, so a second trigger would build a
+   * duplicate socket that orphans the first and leaks its heartbeat interval.
+   * Cleared on EVERY terminal path (onWebSocketOpen, onWebSocketClose,
+   * failed-token, catch) — miss one and the service dead-locks permanently in the
+   * "connecting" state, which is worse than the leak.
+   */
   private connecting = false
 
   private webSocket?: WebSocket
@@ -137,7 +147,11 @@ export class WebSocketsService extends AbstractService<
       const webSocketConectionToken = await this.createWebSocketConnectionToken()
       if (webSocketConectionToken === undefined) {
         // Treat a failed token fetch like a failed connection: back off instead
-        // of letting the caller hammer us with immediate retries.
+        // of letting the caller hammer us with immediate retries. This is a
+        // TERMINAL path that never wires up a socket, so nothing downstream would
+        // ever clear `connecting` — clear it here or the service dead-locks in a
+        // permanent "connecting" state and can never dial again.
+        this.connecting = false
         this.scheduleReconnect()
         return Result.fail('Failed to create WebSocket connection token')
       }
@@ -151,16 +165,26 @@ export class WebSocketsService extends AbstractService<
       this.webSocket.onclose = (event) => this.onWebSocketClose({ code: event.code ?? 0 })
       this.webSocket.onopen = this.onWebSocketOpen.bind(this)
 
+      // Deliberately DO NOT clear `connecting` here: the socket is still
+      // CONNECTING. It is cleared only once onWebSocketOpen / onWebSocketClose
+      // fires, so a concurrent dial during the handshake is coalesced away
+      // instead of building a duplicate socket.
       return Result.ok()
     } catch (error) {
+      // TERMINAL path: no socket handlers were wired, so nothing will ever clear
+      // `connecting` later — clear it here or the service dead-locks.
+      this.connecting = false
       this.scheduleReconnect()
       return Result.fail(`Error starting WebSocket connection: ${(error as Error).message}`)
-    } finally {
-      this.connecting = false
     }
   }
 
   private onWebSocketOpen(): void {
+    // The dial is now resolved (socket OPEN): release the connecting guard so a
+    // later dial can proceed. From here isWebSocketConnectionOpen() coalesces
+    // duplicate triggers instead.
+    this.connecting = false
+
     // Don't reset the backoff yet: a server that accepts then instantly drops
     // the socket must not be able to reset us into a fast loop. Only reset once
     // the connection has proven stable for RECONNECT_STABLE_MS.
@@ -344,6 +368,11 @@ export class WebSocketsService extends AbstractService<
   }
 
   private onWebSocketClose(event: { code: number }) {
+    // The dial is resolved (socket CLOSED) on every code path below: release the
+    // connecting guard so the next dial (a reconnect, or an explicit restart) can
+    // proceed. Leaving it set here would dead-lock the service permanently.
+    this.connecting = false
+
     this.clearWebSocketHeartbeat()
     // The socket didn't survive: cancel the pending "stable" reset so a flapping
     // server can't reset our backoff.
