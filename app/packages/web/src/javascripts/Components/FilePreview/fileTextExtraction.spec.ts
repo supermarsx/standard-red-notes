@@ -80,6 +80,38 @@ describe('extractFileTextForTags', () => {
     expect(result.onlyMetadataAvailable).toBe(false)
   })
 
+  it('bounds retained/decoded bytes and clamps output for a huge streamed text file', async () => {
+    // H1: without a retention bound, every streamed chunk is accumulated and decoded
+    // into memory at once (OOM on a multi-GB file). Stream far more than the cap and
+    // assert we only ever decode ~budget*4 bytes and return at most `budget` chars.
+    const budget = 100
+    const retainCap = budget * 4 // UTF-8 is <=4 bytes/char; output is only `budget` chars
+    const chunkSize = 1_000
+    const chunkCount = 200 // 200_000 bytes streamed — far past the ~400-byte cap
+    const { app } = makeApp(async (push) => {
+      for (let i = 0; i < chunkCount; i++) {
+        await push(new TextEncoder().encode('a'.repeat(chunkSize)))
+      }
+      return undefined
+    })
+
+    const decodeSpy = jest.spyOn((globalThis as unknown as { TextDecoder: typeof TextDecoder }).TextDecoder.prototype, 'decode')
+    try {
+      const result = await extractFileTextForTags(app as never, makeFile('text/plain') as never, { budget })
+
+      // FALSE-GREEN: pre-fix all 200_000 streamed bytes are retained and handed to
+      // decode(), so this <=cap assertion FAILS (decoded byteLength would be 200_000).
+      expect(decodeSpy).toHaveBeenCalledTimes(1)
+      const decoded = decodeSpy.mock.calls[0][0] as Uint8Array
+      expect(decoded.byteLength).toBeLessThanOrEqual(retainCap)
+      // And the returned text is clamped to the caller's budget regardless.
+      expect(result.text.length).toBeLessThanOrEqual(budget)
+      expect(result.onlyMetadataAvailable).toBe(false)
+    } finally {
+      decodeSpy.mockRestore()
+    }
+  })
+
   it('returns metadata-only for a non-text file WITHOUT downloading', async () => {
     const { app, downloadFile } = makeApp()
     const result = await extractFileTextForTags(app as never, makeFile('image/png') as never)

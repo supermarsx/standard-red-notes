@@ -11,9 +11,10 @@ import { installExportTestEnv } from '../DocExport/testEnvPolyfill'
 
 installExportTestEnv()
 
+import * as zip from '@zip.js/zip.js'
 import { buildOdtBlob } from '../DocExport/OdtGenerator'
 import { DocBlock } from '../DocExport/DocModel'
-import { OdtConverter, ODT_IMPORT_MIME_TYPE } from './OdtConverter'
+import { OdtConverter, ODT_IMPORT_MIME_TYPE, odfContentToHtml } from './OdtConverter'
 import { HeadlessSuperConverter } from '../../../Tools/HeadlessSuperConverter'
 import {
   makeConvertDeps,
@@ -131,5 +132,88 @@ describe('OdtConverter', () => {
     it('preserves the embedded picture as an image/file node', () => {
       expect(hasImageNode(tree)).toBe(true)
     })
+  })
+})
+
+/**
+ * Build a raw .odt zip from arbitrary entries (mirrors OdtGenerator's writer API).
+ * Lets us craft hostile inputs — a decompression bomb and pathologically deep
+ * nesting — that the well-formed `buildOdtBlob` fixture can't produce.
+ */
+const buildRawOdt = async (files: Record<string, string | Uint8Array>): Promise<Blob> => {
+  const writer = new zip.ZipWriter(new zip.BlobWriter('application/zip'))
+  for (const [name, content] of Object.entries(files)) {
+    const reader = typeof content === 'string' ? new zip.TextReader(content) : new zip.Uint8ArrayReader(content)
+    await writer.add(name, reader)
+  }
+  return (await writer.close()) as Blob
+}
+
+describe('OdtConverter resource-exhaustion guards', () => {
+  const converter = new OdtConverter()
+
+  // F1 — decompression-bomb OOM. A `content.xml` that compresses to almost nothing
+  // but reports a decompressed `uncompressedSize` far past the per-entry cap. The
+  // guard must REJECT (from the reported size) before `getData` materializes it.
+  it('rejects an ODT whose content.xml decompresses past the size cap, before materializing it', async () => {
+    // 101MB of a single byte: > the 100MB per-entry cap, deflates to a few KB.
+    const bombBytes = new Uint8Array(101 * 1_000_000)
+    bombBytes.fill(0x41 /* 'A' */)
+    const blob = await buildRawOdt({ 'content.xml': bombBytes })
+    const file = await fileFromBlob(blob, 'bomb.odt', ODT_IMPORT_MIME_TYPE)
+    const { deps } = makeConvertDeps((html) => html)
+
+    // FALSE-GREEN: pre-fix there is no size check — getData buffers the whole 101MB,
+    // DOMParser sees a non-XML "AAAA…" blob (no <office:text>), the walk returns ''
+    // and convert() RESOLVES successfully, so this rejection assertion would FAIL.
+    await expect(converter.convert(file, deps)).rejects.toThrow(/too large/i)
+  }, 120000)
+
+  // F2 — walker unbounded recursion → stack overflow. `odfContentToHtml` runs OUTSIDE
+  // the zip try/finally, so a thrown RangeError aborts the whole import. The depth
+  // guard caps recursion at MAX_WALK_DEPTH (200), which is exactly the mechanism that
+  // makes a stack overflow impossible regardless of input depth.
+  //
+  // NOTE on the test env: jsdom cannot even HOLD a ~20k-deep DOM — both its DOMParser
+  // (<parsererror>) and its `appendChild` (`_descendantAdded` recurses over ancestors)
+  // overflow long before the walker would. Real browsers build such trees fine, so the
+  // production vuln is real. We therefore assert the guard's OBSERVABLE effect on a
+  // tree that jsdom CAN build but that is deeper than the cap: content nested past
+  // MAX_WALK_DEPTH is truncated (the walk stops descending) instead of being walked to
+  // the bottom. A walker with no cap descends all the way and emits the deep leaf.
+  it('caps recursion depth so nesting past the limit is truncated, not walked to the bottom', () => {
+    const OFFICE_NS = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+    const TEXT_NS = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0'
+    const doc = document.implementation.createDocument(OFFICE_NS, 'office:document-content', null)
+    const officeText = doc.createElementNS(OFFICE_NS, 'office:text')
+    doc.documentElement.appendChild(officeText)
+
+    // 500 nested text:list > text:list-item (comfortably above the 200 cap, well below
+    // jsdom's build limit), with a marker paragraph at the very bottom. Building the
+    // tree is iterative (appendChild); only the WALK recurses.
+    const depth = 500
+    let cursor: Element = officeText
+    for (let i = 0; i < depth; i++) {
+      const list = doc.createElementNS(TEXT_NS, 'text:list')
+      const item = doc.createElementNS(TEXT_NS, 'text:list-item')
+      list.appendChild(item)
+      cursor.appendChild(list)
+      cursor = item
+    }
+    const deepPara = doc.createElementNS(TEXT_NS, 'text:p')
+    deepPara.textContent = 'DeepLeafMarker'
+    cursor.appendChild(deepPara)
+
+    // Sanity: the deep tree was actually built (guards against a vacuous test).
+    expect(doc.getElementsByTagName('office:text')).toHaveLength(1)
+
+    const html = odfContentToHtml(doc, null, new Map())
+
+    // The walk returns a bounded string (never throws / overflows) ...
+    expect(typeof html).toBe('string')
+    // ... and FALSE-GREEN: an uncapped walker descends all 500 levels and emits the
+    // bottom paragraph, so this assertion FAILS pre-fix. The cap stops at depth 200,
+    // truncating everything below it, so the marker never appears.
+    expect(html).not.toContain('DeepLeafMarker')
   })
 })

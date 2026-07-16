@@ -76,9 +76,25 @@ export async function extractFileTextForTags(
   const mime = file.mimeType ?? ''
 
   if (isExtractableTextMime(mime)) {
+    // Bound how many bytes we RETAIN and decode. Only `budget` characters are ever
+    // used, and UTF-8 encodes any character in at most 4 bytes, so `budget * 4`
+    // bytes is a safe ceiling — anything beyond it can only be trimmed away by
+    // `prepareTagInputText`. `downloadFile` streams the (possibly huge, possibly
+    // hostile) decrypted file chunk-by-chunk; without this bound the whole file is
+    // accumulated and decoded into memory at once (OOM on a multi-GB file). There
+    // is no abort hook on `downloadFile`, but not retaining the tail is enough to
+    // keep memory bounded regardless of the real file size.
+    const retainCap = Math.max(1, budget) * 4
     const chunks: Uint8Array[] = []
+    let retainedBytes = 0
     const error = await application.files.downloadFile(file, async (decryptedChunk) => {
-      chunks.push(decryptedChunk)
+      if (retainedBytes >= retainCap) {
+        return
+      }
+      const remaining = retainCap - retainedBytes
+      const slice = decryptedChunk.length > remaining ? decryptedChunk.subarray(0, remaining) : decryptedChunk
+      chunks.push(slice)
+      retainedBytes += slice.length
     })
     if (error) {
       return { text: '', onlyMetadataAvailable: true }
