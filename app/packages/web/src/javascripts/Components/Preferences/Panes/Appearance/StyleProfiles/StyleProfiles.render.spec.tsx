@@ -22,6 +22,17 @@
  * visual confirmation needs a browser at a narrow pane width (not gating).
  * False-green check performed manually (see StyleProfiles change log): reverting
  * the fix (restoring `flex-shrink-0`, dropping `min-w-0`) turns this spec RED.
+ *
+ * t73-e2 additions — REACHABILITY / vanish guard for the transfer wizard. tsc-green
+ * does NOT prove the new Import…/Export… entry points render OR that clicking them
+ * opens the wizard. So the second describe block below asserts: the top Import…,
+ * Export… buttons render and are reachable; clicking Import… opens the wizard in
+ * import mode; the top Export… and each per-row Export open it in export mode; and
+ * the wizard is ABSENT until a trigger is clicked. The wizard itself is stubbed
+ * here (its own real-render/step proof lives in ProfileTransferWizard.render.spec)
+ * — this stub reports the `isOpen`/`mode`/`initialProfileId` it is handed, so the
+ * assertions fail if a trigger is not wired to open it (the false-green guard:
+ * dropping any trigger's onClick leaves the sentinel absent → RED).
  */
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
@@ -70,6 +81,19 @@ jest.mock('@standardnotes/ui-services', () => ({
 
 jest.mock('@standardnotes/filepicker', () => ({
   ClassicFileReader: { selectFiles: jest.fn().mockResolvedValue([]) },
+}))
+
+// The transfer wizard is proven for real in ProfileTransferWizard.render.spec. Here
+// it is a sentinel that echoes the props it is opened with, so the StyleProfiles
+// wiring (which button opens which mode / pre-scoped profile) is verifiable.
+jest.mock('./ProfileTransferWizard', () => ({
+  __esModule: true,
+  default: ({ isOpen, mode, initialProfileId }: { isOpen: boolean; mode: string; initialProfileId?: string }) => {
+    if (!isOpen) {
+      return createElement('div', null, 'WIZARD_CLOSED')
+    }
+    return createElement('div', null, `WIZARD_OPEN:${mode}:${initialProfileId ?? 'none'}`)
+  },
 }))
 
 import StyleProfiles from './StyleProfiles'
@@ -123,5 +147,42 @@ describe('StyleProfiles action buttons wrap instead of overflowing', () => {
     expect(group.classList.contains('flex-wrap')).toBe(true)
     expect(group.classList.contains('min-w-0')).toBe(true)
     expect(group.classList.contains('flex-shrink-0')).toBe(false)
+  })
+})
+
+describe('StyleProfiles transfer-wizard entry points (reachability / vanish guard)', () => {
+  const click = async (button: HTMLButtonElement) => {
+    await act(async () => {
+      button.click()
+    })
+  }
+
+  it('renders the top Import… and Export… entry points', async () => {
+    await render()
+    expect(buttonsWithText('Import…')).toHaveLength(1)
+    expect(buttonsWithText('Export…')).toHaveLength(1)
+    // Per-row Export shortcuts still render (one per profile).
+    expect(buttonsWithText('Export')).toHaveLength(mockProfiles.length)
+    // Wizard is not mounted until a trigger is clicked.
+    expect(container.textContent).not.toContain('WIZARD_OPEN')
+  })
+
+  it('opens the wizard in import mode when Import… is clicked', async () => {
+    await render()
+    await click(buttonsWithText('Import…')[0])
+    expect(container.textContent).toContain('WIZARD_OPEN:import:none')
+  })
+
+  it('opens the wizard in export mode from the top Export… button (no pre-scope)', async () => {
+    await render()
+    await click(buttonsWithText('Export…')[0])
+    expect(container.textContent).toContain('WIZARD_OPEN:export:none')
+  })
+
+  it('opens the export wizard pre-scoped to the row profile from a per-row Export', async () => {
+    await render()
+    // The second profile row ("Reading", id 'reading').
+    await click(buttonsWithText('Export')[1])
+    expect(container.textContent).toContain('WIZARD_OPEN:export:reading')
   })
 })

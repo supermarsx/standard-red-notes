@@ -14,8 +14,7 @@
  */
 import { FunctionComponent, useMemo, useState } from 'react'
 import { PrefKey } from '@standardnotes/snjs'
-import { confirmDialog, alertDialog } from '@standardnotes/ui-services'
-import { ClassicFileReader } from '@standardnotes/filepicker'
+import { confirmDialog } from '@standardnotes/ui-services'
 import { useApplication } from '@/Components/ApplicationProvider'
 import usePreference from '@/Hooks/usePreference'
 import { Subtitle, Text, SmallText } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -32,14 +31,10 @@ import {
   duplicateProfile,
   renameProfile,
   setDefaultProfile,
-  uniqueProfileName,
 } from '@/Utils/typographyProfileEditor'
-import {
-  exportFileNameForProfile,
-  parseImportedProfile,
-  profileToExportJson,
-} from '@/Utils/typographyProfileImportExport'
+import type { SerializedExport } from '@/Utils/typographyProfileImportExport'
 import TypographyStyleEditorModal from '@/Components/SuperEditor/Plugins/ToolbarPlugin/TypographyStyleEditorModal'
+import ProfileTransferWizard, { ProfileTransferWizardMode } from './ProfileTransferWizard'
 
 const StyleProfiles: FunctionComponent = () => {
   const application = useApplication()
@@ -52,6 +47,7 @@ const StyleProfiles: FunctionComponent = () => {
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [wizard, setWizard] = useState<{ mode: ProfileTransferWizardMode; initialProfileId?: string } | null>(null)
 
   const persistProfiles = (updated: typeof profiles): void => {
     void application.setPreference(PrefKey.TypographyProfiles, updated)
@@ -117,32 +113,19 @@ const StyleProfiles: FunctionComponent = () => {
     }
   }
 
-  const handleExport = (profile: (typeof profiles)[number]): void => {
-    const blob = new Blob([profileToExportJson(profile)], { type: 'application/json' })
-    application.archiveService.downloadData(blob, exportFileNameForProfile(profile))
+  // The transfer wizard is application-agnostic: it hands back either the FINAL
+  // resolved profile list (import) or the serialised bytes + filename (export).
+  const handleImportApply = (resolved: typeof profiles): void => {
+    persistProfiles(resolved)
   }
 
-  const handleImport = async (): Promise<void> => {
-    const files = await ClassicFileReader.selectFiles()
-    const file = files[0]
-    if (!file) {
-      return
-    }
-    let text: string
-    try {
-      text = await file.text()
-    } catch {
-      void alertDialog({ title: 'Import failed', text: 'The selected file could not be read.' })
-      return
-    }
-    const result = parseImportedProfile(text)
-    if (!result.ok) {
-      void alertDialog({ title: 'Import failed', text: result.error })
-      return
-    }
-    const imported = { ...result.profile, name: uniqueProfileName(profiles, result.profile.name) }
-    persistProfiles([...profiles, imported])
+  const handleExportDownload = (serialized: SerializedExport): void => {
+    const blob = new Blob([serialized.json], { type: 'application/json' })
+    application.archiveService.downloadData(blob, serialized.fileName)
   }
+
+  const openImportWizard = (): void => setWizard({ mode: 'import' })
+  const openExportWizard = (initialProfileId?: string): void => setWizard({ mode: 'export', initialProfileId })
 
   return (
     <PreferencesGroup>
@@ -165,12 +148,16 @@ const StyleProfiles: FunctionComponent = () => {
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Subtitle>Profiles</Subtitle>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <Button small label="Import…" onClick={() => void handleImport()} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button small label="Import…" onClick={openImportWizard} />
+            <Button small label="Export…" onClick={() => openExportWizard()} />
             <Button small primary label="New profile" onClick={handleNew} />
           </div>
         </div>
-        <Text>Create, edit and organise your typography profiles. Import shares a profile from a .json file.</Text>
+        <Text>
+          Create, edit and organise your typography profiles. Import and export share profiles as .json files, with a
+          preview and partial (per-block) selection.
+        </Text>
 
         <div className="mt-3 flex flex-col gap-2">
           {profiles.map((profile) => {
@@ -217,7 +204,7 @@ const StyleProfiles: FunctionComponent = () => {
                     onClick={() => void handleSetDefault(profile.id, profile.name)}
                   />
                   <Button small label="Duplicate" onClick={() => handleDuplicate(profile.id)} />
-                  <Button small label="Export" onClick={() => handleExport(profile)} />
+                  <Button small label="Export" onClick={() => openExportWizard(profile.id)} />
                   <Button
                     small
                     colorStyle="danger"
@@ -238,6 +225,18 @@ const StyleProfiles: FunctionComponent = () => {
         close={() => setEditingProfileId(null)}
         profileId={editingProfileId ?? undefined}
       />
+
+      {wizard && (
+        <ProfileTransferWizard
+          mode={wizard.mode}
+          isOpen={true}
+          close={() => setWizard(null)}
+          profiles={profiles}
+          initialProfileId={wizard.initialProfileId}
+          onImportApply={handleImportApply}
+          onExportDownload={handleExportDownload}
+        />
+      )}
     </PreferencesGroup>
   )
 }
