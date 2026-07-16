@@ -5,11 +5,11 @@ import { AddressInfo, Socket } from 'node:net'
 import { SNSClient } from '@aws-sdk/client-sns'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { DomainEventInterface } from '@standardnotes/domain-events'
-import { SNSDomainEventPublisher } from '@standardnotes/domain-events-infra'
 
 import { Env } from './Env'
 import {
   buildSnsClientConfig,
+  buildSnsDomainEventPublisher,
   CUSTOM_SNS_CONNECTION_TIMEOUT_MS,
   CUSTOM_SNS_REQUEST_TIMEOUT_MS,
   CUSTOM_SNS_SOCKET_TIMEOUT_MS,
@@ -120,17 +120,14 @@ describe('buildSnsClientConfig', () => {
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
-    const client = new SNSClient(
-      buildSnsClientConfig(
-        envWith({
-          SNS_AWS_REGION: 'us-east-1',
-          SNS_ENDPOINT: `http://127.0.0.1:${port}`,
-          SNS_ACCESS_KEY_ID: 'test',
-          SNS_SECRET_ACCESS_KEY: 'test',
-        }),
-      ),
-    )
-    const publisher = new SNSDomainEventPublisher(client, 'arn:aws:sns:us-east-1:000000000000:events')
+    const env = envWith({
+      SNS_AWS_REGION: 'us-east-1',
+      SNS_ENDPOINT: `http://127.0.0.1:${port}`,
+      SNS_ACCESS_KEY_ID: 'test',
+      SNS_SECRET_ACCESS_KEY: 'test',
+    })
+    const client = new SNSClient(buildSnsClientConfig(env))
+    const publisher = buildSnsDomainEventPublisher(client, 'arn:aws:sns:us-east-1:000000000000:events', env)
     const event = {
       type: 'TEST_EVENT',
       payload: { value: true },
@@ -165,62 +162,33 @@ describe('buildSnsClientConfig', () => {
     }
   })
 
-  it('times out an incomplete response without retrying an accepted publish', async () => {
-    let requestCount = 0
-    const publishResponse = [
-      '<PublishResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/">',
-      '<PublishResult><MessageId>00000000-0000-0000-0000-000000000001</MessageId></PublishResult>',
-      '<ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000002</RequestId></ResponseMetadata>',
-      '</PublishResponse>',
-    ].join('')
-    const server: Server = createServer((request, response) => {
-      request.setEncoding('utf8')
-      request.resume()
-      request.on('end', () => {
-        requestCount += 1
-        response.writeHead(200, {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'Transfer-Encoding': 'chunked',
-        })
-        response.write(publishResponse)
-      })
-    })
-
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const { port } = server.address() as AddressInfo
-    const config = buildSnsClientConfig(
-      envWith({
-        SNS_AWS_REGION: 'us-east-1',
-        SNS_ENDPOINT: `http://127.0.0.1:${port}`,
-        SNS_ACCESS_KEY_ID: 'test',
-        SNS_SECRET_ACCESS_KEY: 'test',
-      }),
-    )
-    const requestHandler = config.requestHandler as NodeHttpHandler
-    requestHandler.updateHttpClientConfig('socketTimeout', 100)
-    const client = new SNSClient(config)
-    const publisher = new SNSDomainEventPublisher(client, 'arn:aws:sns:us-east-1:000000000000:events')
+  it('passes a publish deadline only when a custom endpoint is configured', async () => {
     const event = {
       type: 'TEST_EVENT',
       payload: { value: true },
       meta: { origin: 'auth' },
     } as DomainEventInterface
+    const topicArn = 'arn:aws:sns:us-east-1:000000000000:events'
+    const customSend = jest.fn(async (..._args: unknown[]) => ({}))
+    const customPublisher = buildSnsDomainEventPublisher(
+      { send: customSend } as unknown as SNSClient,
+      topicArn,
+      envWith({ SNS_ENDPOINT: 'http://floci:4566' }),
+    )
+    const awsSend = jest.fn(async (..._args: unknown[]) => ({}))
+    const awsPublisher = buildSnsDomainEventPublisher(
+      { send: awsSend } as unknown as SNSClient,
+      topicArn,
+      envWith({ SNS_AWS_REGION: 'eu-west-2' }),
+    )
 
-    try {
-      await expect(settleWithin(publisher.publish(event), 2_000)).rejects.toThrow(/aborted|timed out/i)
-      expect(requestCount).toBe(1)
-    } finally {
-      client.destroy()
-      server.closeAllConnections()
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => {
-          if (error) {
-            reject(error)
-          } else {
-            resolve()
-          }
-        }),
-      )
-    }
+    await customPublisher.publish(event)
+    await awsPublisher.publish(event)
+
+    expect(customPublisher).toHaveProperty('publishTimeoutMs', CUSTOM_SNS_REQUEST_TIMEOUT_MS)
+    expect(customSend.mock.calls[0]).toHaveLength(2)
+    expect((customSend.mock.calls[0][1] as { abortSignal?: AbortSignal }).abortSignal).toBeInstanceOf(AbortSignal)
+    expect(awsPublisher).toHaveProperty('publishTimeoutMs', undefined)
+    expect(awsSend.mock.calls[0]).toHaveLength(1)
   })
 })

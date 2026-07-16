@@ -85,7 +85,6 @@ import { ExtensionKeyGrantedEventHandler } from '../Domain/Handler/ExtensionKeyG
 import {
   DirectCallDomainEventPublisher,
   DirectCallEventMessageHandler,
-  SNSDomainEventPublisher,
   SQSDomainEventSubscriber,
   SQSEventMessageHandler,
 } from '@standardnotes/domain-events-infra'
@@ -515,7 +514,11 @@ import { RedisSessionTokensCooldownRepository } from '../Infra/Redis/RedisSessio
 import { InMemorySessionTokensCooldownRepository } from '../Infra/InMemory/InMemorySessionTokensCooldownRepository'
 import { GetCooldownSessionTokens } from '../Domain/UseCase/GetCooldownSessionTokens/GetCooldownSessionTokens'
 import { VerifyUserServerPassword } from '../Domain/UseCase/VerifyUserServerPassword/VerifyUserServerPassword'
-import { buildSnsClientConfig, LazyDomainEventPublisher } from './LazyDomainEventPublisher'
+import {
+  buildSnsClientConfig,
+  buildSnsDomainEventPublisher,
+  LazyDomainEventPublisher,
+} from './LazyDomainEventPublisher'
 
 export class ContainerConfigLoader {
   // Standard Red Notes: 'cli' is an additive lean-boot mode for the srn-admin
@@ -697,13 +700,14 @@ export class ContainerConfigLoader {
     if (isConfiguredForHomeServer) {
       domainEventPublisher = directCallDomainEventPublisher
     } else if (isConfiguredForCli) {
-      domainEventPublisher = new LazyDomainEventPublisher(
-        () => new SNSDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), env.get('SNS_TOPIC_ARN', true)),
+      domainEventPublisher = new LazyDomainEventPublisher(() =>
+        buildSnsDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), env.get('SNS_TOPIC_ARN', true), env),
       )
     } else {
-      domainEventPublisher = new SNSDomainEventPublisher(
+      domainEventPublisher = buildSnsDomainEventPublisher(
         container.get(TYPES.Auth_SNS),
         container.get(TYPES.Auth_SNS_TOPIC_ARN),
+        env,
       )
     }
     container.bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher).toConstantValue(domainEventPublisher)

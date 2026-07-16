@@ -1,9 +1,10 @@
 import { Agent as HttpAgent } from 'node:http'
 import { Agent as HttpsAgent } from 'node:https'
 
-import { SNSClientConfig } from '@aws-sdk/client-sns'
+import { SNSClient, SNSClientConfig } from '@aws-sdk/client-sns'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { DomainEventInterface, DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { SNSDomainEventPublisher } from '@standardnotes/domain-events-infra'
 
 import { Env } from './Env'
 
@@ -76,4 +77,14 @@ export function buildSnsClientConfig(env: Env): SNSClientConfig {
   }
 
   return snsConfig
+}
+
+export function buildSnsDomainEventPublisher(
+  snsClient: SNSClient,
+  topicArn: string,
+  env: Env,
+): SNSDomainEventPublisher {
+  const publishTimeoutMs = env.get('SNS_ENDPOINT', true) ? CUSTOM_SNS_REQUEST_TIMEOUT_MS : undefined
+
+  return new SNSDomainEventPublisher(snsClient, topicArn, publishTimeoutMs)
 }
