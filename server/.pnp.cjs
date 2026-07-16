@@ -6123,6 +6123,7 @@ const RAW_RUNTIME_STATE =
           ["@cbor-extract/cbor-extract-linux-x64", "npm:2.2.2"],\
           ["@grpc/grpc-js", "npm:1.14.4"],\
           ["@simplewebauthn/server", "npm:13.3.2"],\
+          ["@smithy/node-http-handler", "npm:4.9.6"],\
           ["@standardnotes/api", "npm:1.26.95"],\
           ["@standardnotes/auth-server", "workspace:packages/auth"],\
           ["@standardnotes/common", "workspace:packages/common"],\

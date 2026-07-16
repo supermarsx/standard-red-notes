@@ -44,6 +44,7 @@
     "@cbor-extract/cbor-extract-linux-x64": "^2.2.2",
     "@grpc/grpc-js": "1.14.4",
     "@simplewebauthn/server": "^13.3.2",
+    "@smithy/node-http-handler": "^4.9.6",
     "@standardnotes/api": "^1.26.95",
     "@standardnotes/common": "workspace:*",
     "@standardnotes/domain-core": "workspace:^",

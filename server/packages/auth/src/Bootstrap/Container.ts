@@ -1,7 +1,7 @@
 import * as winston from 'winston'
 import AgentKeepAlive from 'agentkeepalive'
 import Redis from 'ioredis'
-import { SNSClient, SNSClientConfig } from '@aws-sdk/client-sns'
+import { SNSClient } from '@aws-sdk/client-sns'
 import axios, { AxiosInstance } from 'axios'
 import { SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs'
 import { S3Client } from '@aws-sdk/client-s3'
@@ -640,19 +640,7 @@ export class ContainerConfigLoader {
     // (publishing stays available lazily — see the DomainEventPublisher
     // binding below).
     if (!isConfiguredForHomeServer && !isConfiguredForCli) {
-      const snsConfig: SNSClientConfig = {
-        region: env.get('SNS_AWS_REGION', true),
-      }
-      if (env.get('SNS_ENDPOINT', true)) {
-        snsConfig.endpoint = env.get('SNS_ENDPOINT', true)
-      }
-      if (env.get('SNS_ACCESS_KEY_ID', true) && env.get('SNS_SECRET_ACCESS_KEY', true)) {
-        snsConfig.credentials = {
-          accessKeyId: env.get('SNS_ACCESS_KEY_ID', true),
-          secretAccessKey: env.get('SNS_SECRET_ACCESS_KEY', true),
-        }
-      }
-      const snsClient = new SNSClient(snsConfig)
+      const snsClient = new SNSClient(buildSnsClientConfig(env))
       container.bind<SNSClient>(TYPES.Auth_SNS).toConstantValue(snsClient)
 
       const sqsConfig: SQSClientConfig = {
