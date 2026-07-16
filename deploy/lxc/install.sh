@@ -26,7 +26,7 @@
 #   WEB_ROOT     served SPA location   (default: /var/www/standard-red-notes/html)
 #   APP_USER     service account               (default: standard-red-notes)
 #   HTTP_PORT    nginx listen port                                (default: 80)
-#   NODE_MAJOR   Node.js major version                            (default: 24)
+#   NODE_MAJOR   Node.js major version                            (default: 26)
 # =============================================================================
 set -euo pipefail
 
@@ -37,7 +37,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/standard-red-notes}"
 WEB_ROOT="${WEB_ROOT:-/var/www/standard-red-notes/html}"
 APP_USER="${APP_USER:-standard-red-notes}"
 HTTP_PORT="${HTTP_PORT:-80}"
-NODE_MAJOR="${NODE_MAJOR:-24}"
+NODE_MAJOR="${NODE_MAJOR:-26}"
 
 HS_DIR="${APP_DIR}/server/packages/home-server"
 LAUNCHER="/usr/local/bin/standard-red-notes-run"
@@ -58,11 +58,12 @@ apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg git nginx openssl python3 make g++
 
 # -----------------------------------------------------------------------------
-log "Installing Node.js ${NODE_MAJOR}.x + Yarn (corepack)"
+log "Installing Node.js ${NODE_MAJOR}.x + Yarn (Corepack 0.35.0)"
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" != "${NODE_MAJOR}" ]; then
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
   apt-get install -y --no-install-recommends nodejs
 fi
+npm install --global corepack@0.35.0
 corepack enable
 NODE_BIN="$(command -v node)"
 log "Using $(node -v) at ${NODE_BIN}"

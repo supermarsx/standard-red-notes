@@ -406,9 +406,7 @@ services:
   n8n:
     profiles:
       - workflows
-    # Pin to a specific version tag (e.g. n8nio/n8n:1.x.y) for reproducible
-    # deployments; `latest` tracks n8n's current stable release.
-    image: ${N8N_IMAGE:-n8nio/n8n:latest}
+    image: ${N8N_IMAGE:-n8nio/n8n:2.30.5}
     restart: unless-stopped
     # Hardening: the image runs as the unprivileged `node` user (uid 1000) and
     # only serves HTTP on 5678 internally — no capabilities needed.
@@ -431,7 +429,7 @@ services:
       # handling), so run n8n's editor push channel over Server-Sent Events.
       N8N_PUSH_BACKEND: sse
       # The editor is reached over plain http inside the compose network (TLS —
-      # if any — terminates at the outer proxy); without this n8n 1.x refuses
+      # if any — terminates at the outer proxy); without this n8n refuses
       # its auth cookie on non-https origins. Set true behind real HTTPS.
       N8N_SECURE_COOKIE: "false"
       # Stable encryption key for n8n's credential store (see comment above).
@@ -456,7 +454,7 @@ services:
       - standard-red-notes
 
   db:
-    image: ${MARIADB_IMAGE:-mariadb:lts}
+    image: ${MARIADB_IMAGE:-mariadb:12.3.2}
     restart: unless-stopped
     # Hardening: internal-only (no host port published). Block privilege
     # escalation and drop all caps, then add back only what the official mariadb
@@ -505,7 +503,7 @@ services:
       - standard-red-notes
 
   cache:
-    image: ${REDIS_IMAGE:-redis:8-alpine}
+    image: ${REDIS_IMAGE:-redis:8.8.0-alpine}
     restart: unless-stopped
     # Hardening: internal-only (no host port published). Block privilege
     # escalation and drop all caps, adding back only SETGID/SETUID, which the
@@ -549,21 +547,21 @@ services:
     # (port 4566, account 000000000000 queue URLs, /etc/localstack/init/ready.d
     # init hooks, /_localstack/health endpoint), and is far lighter (a single
     # native binary, ~13 MiB-class at rest vs LocalStack's ~500 MiB Python
-    # runtime). History: we previously pinned localstack/localstack:4.4.0 — the
+    # runtime). History: we previously pinned localstack/localstack:4.4.0, the
     # last release before LocalStack 2026.3.0+ merged community+pro into one
     # image that requires a LOCALSTACK_AUTH_TOKEN even for SNS/SQS.
     #
-    # ESCAPE HATCH — to switch back to LocalStack, replace `image` below with
-    #   image: localstack/localstack:4.4.0
-    # add `SERVICES: sns,sqs` + `LS_LOG: warn` under `environment:`, change the
-    # healthcheck to `awslocal sqs list-queues`, and raise the mem limit to
-    # 512m. The bootstrap script and every URL keep working unchanged (the
-    # service keeps the `localstack` network alias below).
+    # ESCAPE HATCH — to switch back to current LocalStack, replace `image` below
+    # with `localstack/localstack:2026.06.3`; add `LOCALSTACK_AUTH_TOKEN`,
+    # `SERVICES: sns,sqs`, and `LS_LOG: warn` under `environment:`; change the
+    # healthcheck to `awslocal sqs list-queues`; and raise the mem limit to 512m.
+    # The bootstrap script and URLs remain compatible (the service keeps the
+    # `localstack` network alias below).
     #
     # The -compat image variant ships the AWS CLI + awslocal, which the
     # bootstrap init script (and the old LocalStack tooling muscle memory,
     # e.g. `docker compose exec floci awslocal sqs list-queues`) relies on.
-    image: ${FLOCI_IMAGE:-floci/floci:1.5.29-compat}
+    image: ${FLOCI_IMAGE:-floci/floci:1.5.33-compat}
     restart: unless-stopped
     # Hardening: internal-only (no host port published) and no privilege
     # escalation. Note floci's SNS/SQS state is in-memory: the ready.d bootstrap
@@ -616,7 +614,7 @@ services:
   docker-socket-proxy:
     profiles:
       - ops
-    image: ${DOCKER_SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:0.3.0}
+    image: ${DOCKER_SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:v0.4.2}
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"

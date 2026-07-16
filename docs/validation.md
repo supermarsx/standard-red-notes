@@ -106,6 +106,7 @@ Install the three independent Yarn projects, test the coverage infrastructure,
 and reproduce the CI report with:
 
 ```powershell
+npm install --global corepack@0.35.0
 corepack enable
 yarn install --immutable
 Push-Location app

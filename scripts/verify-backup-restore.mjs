@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..')
+const DATABASE_READY_TIMEOUT_MS = 120_000
+const DATABASE_READY_RETRY_MS = 1_000
 
 const args = parseArgs(process.argv.slice(2))
 
@@ -27,13 +29,10 @@ try {
   console.log('Standard Red Notes backup/restore drill')
   console.log(`Repository: ${REPO_ROOT}`)
 
-  const sourceDb = (await dockerText(['compose', 'exec', '-T', 'db', 'sh', '-c', 'printf "%s" "$MYSQL_DATABASE"'])).trim()
-  if (!sourceDb) {
-    throw new Error('MYSQL_DATABASE is empty inside the db container')
-  }
-
+  const { authenticatedUser, database: sourceDb } = await waitForDatabaseReady()
   await mysqlServer('SELECT 1;')
 
+  console.log(`Authenticated database readiness passed as ${authenticatedUser}.`)
   console.log(`Source database: ${sourceDb}`)
   console.log(`Backup file: ${backupFile}`)
   console.log(`Temporary restore database: ${restoreDb}`)
@@ -173,6 +172,45 @@ async function mysqlServer(sql) {
   )
 }
 
+async function mysqlApplication(sql) {
+  return dockerText(
+    [
+      'compose',
+      'exec',
+      '-T',
+      'db',
+      'sh',
+      '-c',
+      'exec mariadb -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" --batch --raw --skip-column-names',
+    ],
+    { input: sql },
+  )
+}
+
+async function waitForDatabaseReady() {
+  const deadline = Date.now() + DATABASE_READY_TIMEOUT_MS
+  let lastError = new Error('database readiness was not attempted')
+
+  console.log('Waiting for authenticated SQL and database grants...')
+  while (Date.now() < deadline) {
+    try {
+      const output = (await mysqlApplication('SELECT CURRENT_USER(), DATABASE();')).trim()
+      const [authenticatedUser, database] = output.split('\t')
+      if (!authenticatedUser || !database) {
+        throw new Error(`unexpected readiness response: ${JSON.stringify(output)}`)
+      }
+      return { authenticatedUser, database }
+    } catch (error) {
+      lastError = error
+      await delay(DATABASE_READY_RETRY_MS)
+    }
+  }
+
+  throw new Error(
+    `MariaDB did not accept authenticated SQL against MYSQL_DATABASE within ${DATABASE_READY_TIMEOUT_MS / 1_000}s\n${lastError.message}`,
+  )
+}
+
 async function mysqlDatabase(database, sql) {
   return dockerText(
     [
@@ -281,6 +319,10 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 async function dockerText(args, options = {}) {

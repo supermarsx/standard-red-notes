@@ -187,11 +187,11 @@ where the current images support it safely.
 Compose supports image override variables for production pinning:
 
 ```dotenv
-MARIADB_IMAGE=mariadb:lts
-REDIS_IMAGE=redis:8-alpine
-FLOCI_IMAGE=floci/floci:1.5.29-compat
-N8N_IMAGE=n8nio/n8n:latest
-DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:0.3.0
+MARIADB_IMAGE=mariadb:12.3.2
+REDIS_IMAGE=redis:8.8.0-alpine
+FLOCI_IMAGE=floci/floci:1.5.33-compat
+N8N_IMAGE=n8nio/n8n:2.30.5
+DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 ```
 
 For reproducible production pulls, replace mutable tags with exact tags or
