@@ -34,14 +34,14 @@ env:
   # Classic v1 lockfile, so Yarn Berry bootstraps Yarn 1.22.x to pack it during
   # `yarn install`. Two Classic-only problems break that bootstrap:
   #   * decrypt declares `engines.node: ">=14.0.0 <17.0.0"`, which Classic
-  #     enforces and aborts on against the runner's Node 22 ("incompatible
+  #     enforces and aborts on against the runner's Node 26 ("incompatible
   #     module"). YARN_IGNORE_ENGINES makes Classic skip the check.
   #   * decrypt's devDependencies include node-sass@7, which cannot compile on
-  #     Node 22. YARN_PRODUCTION makes Classic skip devDependencies entirely;
+  #     Node 26. YARN_PRODUCTION makes Classic skip devDependencies entirely;
   #     packing only needs the committed prebuilt `dist/decrypt.html`.
   # These env vars are read by the bootstrapped Yarn Classic; Yarn Berry (which
   # packs the other git deps, e.g. react-native-keychain) ignores them — our
-  # vendored Yarn 3.2.1 release is patched to allowlist them instead of erroring.
+  # vendored Yarn 4.17.1 release accepts them instead of erroring.
   YARN_IGNORE_ENGINES: 'true'
   YARN_PRODUCTION: 'true'
 
@@ -78,7 +78,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: macos, os: macos-14, builder: '--mac dmg zip --x64 --arm64' }
+          - { label: macos, os: macos-latest, builder: '--mac dmg zip --x64 --arm64' }
           - { label: windows, os: windows-latest, builder: '--win nsis --x64 --arm64' }
           - { label: linux-x64, os: ubuntu-latest, builder: '--linux AppImage deb --x64' }
           - { label: linux-arm64, os: ubuntu-24.04-arm, builder: '--linux AppImage deb --arm64' }
@@ -86,15 +86,15 @@ jobs:
       # Never attempt to auto-discover a macOS signing identity.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
 
-      - name: Enable corepack (yarn 3.2.1)
-        run: corepack enable
+      - name: Install Corepack (Yarn 4.17.1)
+        run: npm install --global corepack@0.35.0 && corepack enable
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -105,9 +105,9 @@ jobs:
 
       - name: Set up Python (macOS native build)
         if: runner.os == 'macOS'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: '3.14.6'
 
       - name: Install workspace dependencies
         working-directory: app
@@ -139,7 +139,7 @@ jobs:
           echo "Staged:" && ls -la staged
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: srn-desktop-${{ matrix.label }}
           path: app/packages/desktop/staged/*
@@ -155,15 +155,15 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
 
-      - name: Enable corepack
-        run: corepack enable
+      - name: Install Corepack
+        run: npm install --global corepack@0.35.0 && corepack enable
 
       - name: Install build deps
         run: |
@@ -188,7 +188,7 @@ jobs:
         run: yarn electron-builder --linux snap --x64 --publish never -c.extraMetadata.version=${{ needs.version.outputs.version }}
 
       - name: Upload snap
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: srn-desktop-linux-snap
           path: app/packages/desktop/dist/*.snap
@@ -203,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: srn-desktop-*
           path: artifacts
@@ -214,11 +214,11 @@ jobs:
         run: |
           set -euo pipefail
           ls -la
-          sha256sum * > SHA256SUMS.txt || true
+          sha256sum ./* > SHA256SUMS.txt || true
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Standard Red Notes Desktop ${{ needs.version.outputs.version }}

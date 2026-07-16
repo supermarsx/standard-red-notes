@@ -33,9 +33,9 @@ defaults:
 env:
   TOOL: srn-mcp
   TOOL_DIR: mcp
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
   PKG_NODE: node24
-  PKG_VERSION: '6.20.0'
+  PKG_VERSION: '6.21.0'
 
 jobs:
   # 1) CHECK — typecheck, format and "does it build + run" run as three
@@ -51,9 +51,9 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -80,9 +80,9 @@ jobs:
     name: format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -107,9 +107,9 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -144,9 +144,9 @@ jobs:
     outputs:
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -179,7 +179,7 @@ jobs:
           echo "Bundle fingerprint: ${fp}"
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: srn-mcp-bundle
           path: |
@@ -198,7 +198,7 @@ jobs:
     outputs:
       changed: ${{ steps.cmp.outputs.changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Compare against last released fingerprint
         id: cmp
@@ -240,9 +240,9 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           # Packaging only runs `npx @yao-pkg/pkg` against the prebuilt bundle
@@ -250,7 +250,7 @@ jobs:
           package-manager-cache: false
 
       - name: Download bundle artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: srn-mcp-bundle
           path: ${{ env.TOOL_DIR }}/dist
@@ -285,10 +285,10 @@ jobs:
       - name: Generate checksums
         working-directory: ${{ env.TOOL_DIR }}/out
         run: |
-          sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+          sha256sum "${TOOL}"-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Upload packaged binaries
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: srn-mcp-binaries
           path: ${{ env.TOOL_DIR }}/out/*
@@ -304,10 +304,10 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download packaged binaries
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: srn-mcp-binaries
           path: out
@@ -323,7 +323,7 @@ jobs:
           max=0
           while read -r tag; do
             [ -z "$tag" ] && continue
-            n="${tag#${prefix}}"
+            n="${tag#"$prefix"}"
             if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
               max="$n"
             fi

@@ -1,0 +1,65 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      root-workspaces:
+        patterns:
+          - '*'
+
+  - package-ecosystem: npm
+    directory: /cli/srn-client
+    schedule:
+      interval: weekly
+    groups:
+      srn-client:
+        patterns:
+          - '*'
+
+  - package-ecosystem: npm
+    directory: /cli/srn-server
+    schedule:
+      interval: weekly
+    groups:
+      srn-server:
+        patterns:
+          - '*'
+
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    groups:
+      e2e:
+        patterns:
+          - '*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      root-images:
+        patterns:
+          - '*'
+
+  - package-ecosystem: docker
+    directory: /mcp
+    schedule:
+      interval: weekly
+    groups:
+      mcp-images:
+        patterns:
+          - '*'

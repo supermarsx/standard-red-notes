@@ -30,12 +30,12 @@ defaults:
 env:
   TOOL: srn-client
   TOOL_DIR: cli/srn-client
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
   # @yao-pkg/pkg base-binary target Node major. 24 is confirmed supported by
-  # @yao-pkg/pkg 6.x; the tool itself is built/bundled for node22 so this is
+  # @yao-pkg/pkg 6.x; the tool itself is built/bundled for Node 26 so this is
   # purely the runtime baked into the produced executables.
   PKG_NODE: node24
-  PKG_VERSION: '6.20.0'
+  PKG_VERSION: '6.21.0'
 
 jobs:
   # 1) CHECK — lint, format and test run as three INDEPENDENT parallel jobs;
@@ -52,9 +52,9 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -81,9 +81,9 @@ jobs:
     name: format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           # This job runs only `npx prettier` (no install), so skip setup-node's
@@ -93,7 +93,7 @@ jobs:
 
       - name: Check formatting
         working-directory: ${{ env.TOOL_DIR }}
-        run: npx --yes prettier@3 --check "src/**/*.ts" "*.mjs"
+        run: npx --yes prettier@3.9.5 --check "src/**/*.ts" "*.mjs"
 
   # 1c) TEST — no unit suite yet, so the functional gate is "the bundle builds
   # and the produced CLI runs": build via esbuild, assert a non-empty bundle,
@@ -102,9 +102,9 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -136,9 +136,9 @@ jobs:
     outputs:
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -167,7 +167,7 @@ jobs:
           echo "Bundle fingerprint: ${fp}"
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: srn-client-bundle
           path: |
@@ -186,7 +186,7 @@ jobs:
     outputs:
       changed: ${{ steps.cmp.outputs.changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Compare against last released fingerprint
         id: cmp
@@ -230,9 +230,9 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           # Packaging only runs `npx @yao-pkg/pkg` against the prebuilt bundle
@@ -241,7 +241,7 @@ jobs:
           package-manager-cache: false
 
       - name: Download bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: srn-client-bundle
           path: ${{ env.TOOL_DIR }}/dist
@@ -280,10 +280,10 @@ jobs:
         working-directory: ${{ env.TOOL_DIR }}/out
         run: |
           # Checksum only the executables (exclude the fingerprint helper file).
-          sha256sum ${TOOL}-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+          sha256sum "${TOOL}"-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Upload packaged binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: srn-client-binaries
           path: ${{ env.TOOL_DIR }}/out/*
@@ -299,10 +299,10 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download packaged binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: srn-client-binaries
           path: out
@@ -321,7 +321,7 @@ jobs:
           max=0
           while read -r tag; do
             [ -z "$tag" ] && continue
-            n="${tag#${prefix}}"
+            n="${tag#"$prefix"}"
             if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
               max="$n"
             fi
@@ -334,7 +334,7 @@ jobs:
           echo "Next ${TOOL} release: ${tag} (version ${version})"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ env.TOOL }} ${{ steps.ver.outputs.version }}
