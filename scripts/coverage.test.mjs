@@ -1208,14 +1208,14 @@ test("treats a captured Failed to collect coverage diagnostic as fatal", async (
 
 test("times out and terminates the spawned process tree", async (t) => {
   const repository = await temporaryRepository(t);
-  const marker = path.join(repository, "grandchild-survived.txt");
-  const grandchildScript =
-    'setTimeout(() => require("node:fs").writeFileSync(process.env.COVERAGE_TIMEOUT_MARKER, "alive"), 700);';
+  const pidFile = path.join(repository, "grandchild.pid");
+  const grandchildScript = "setInterval(() => {}, 1000);";
   const parentScript = [
     'const { spawn } = require("node:child_process");',
-    'spawn(process.execPath, ["-e", ' +
+    'const grandchild = spawn(process.execPath, ["-e", ' +
       JSON.stringify(grandchildScript) +
       '], { stdio: "ignore", env: process.env });',
+    'require("node:fs").writeFileSync(process.env.COVERAGE_TIMEOUT_PID_FILE, String(grandchild.pid));',
     "setInterval(() => {}, 1000);",
   ].join("\n");
   const started = Date.now();
@@ -1225,15 +1225,31 @@ test("times out and terminates the spawned process tree", async (t) => {
       command: process.execPath,
       args: ["-e", parentScript],
       cwd: repository,
-      env: { ...process.env, COVERAGE_TIMEOUT_MARKER: marker },
+      env: { ...process.env, COVERAGE_TIMEOUT_PID_FILE: pidFile },
       stdio: "ignore",
-      timeoutMs: 100,
+      timeoutMs: 1000,
     }),
-    /Process timed out after 100 ms/,
+    /Process timed out after 1000 ms/,
   );
   assert.ok(Date.now() - started < 5000);
-  await new Promise((resolve) => setTimeout(resolve, 900));
-  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+
+  const grandchildPid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
+  assert.ok(Number.isInteger(grandchildPid));
+  let terminated = false;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(grandchildPid, 0);
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        throw error;
+      }
+      terminated = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(terminated, true, `Process ${grandchildPid} survived timeout`);
 });
 
 test("counts a source-only package's non-empty zero-covered map", async (t) => {
