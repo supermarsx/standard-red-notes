@@ -85,18 +85,25 @@ are the source of detail rather than an ever-growing feature count here.
 
 ### Published binaries
 
-These pinned tags are the current published releases for the published tools:
+These badges track the latest published release for each downloadable tool. The
+`srn admin` badge reads "no release" until its first tag is cut in CI, which is
+expected:
 
-[![Standard Red Notes Client CLI v26.2](https://img.shields.io/badge/Standard%20Red%20Notes%20Client%20CLI-v26.2-be1f2d?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases/tag/srn-client-v26.2)
-[![Standard Red Notes Server CLI v26.2](https://img.shields.io/badge/Standard%20Red%20Notes%20Server%20CLI-v26.2-be1f2d?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases/tag/srn-server-v26.2)
-[![Standard Red Notes Home Server v26.1](https://img.shields.io/badge/Standard%20Red%20Notes%20Home%20Server-v26.1-be1f2d?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases/tag/srn-home-server-v26.1)
+[![srn client latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-client-v*&label=srn%20client&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
+[![srn server latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-server-v*&label=srn%20server&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
+[![srn mcp latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-mcp-v*&label=srn%20mcp&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
+[![srn home server latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-home-server-v*&label=srn%20home%20server&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
+[![srn admin latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-admin-v*&label=srn%20admin&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
+[![srn openclaw latest release](https://img.shields.io/github/v/release/supermarsx/standard-red-notes?filter=srn-openclaw-v*&label=srn%20openclaw&color=be1f2d&style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
 [![All releases](https://img.shields.io/badge/All%20releases-browse-be1f2d?style=flat-square&logo=github)](https://github.com/supermarsx/standard-red-notes/releases)
 
 | Artifact                                                                 | Purpose                                                                              | Delivery                                                           |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| [`srn-client`](cli/srn-client/README.md)                                 | End-to-end encrypted note operations from a terminal.                                | Native Windows, macOS, and Linux executables with checksums.       |
-| [`srn-server`](cli/srn-server/README.md)                                 | Health, status, logs, configuration validation, and Docker Compose operator helpers. | Native Windows, macOS, and Linux executables with checksums.       |
-| [`srn-home-server`](docs/self-hosting.md#standalone-home-server-release) | All-in-one backend for a MySQL deployment.                                           | Native executables, checksums, and the required migrations bundle. |
+| [`srn-client`](cli/srn-client/README.md)                                 | End-to-end encrypted note operations from a terminal.                                | Native Windows, macOS, and Linux executables with checksums.                                                    |
+| [`srn-server`](cli/srn-server/README.md)                                 | Health, status, logs, configuration validation, and Docker Compose operator helpers. | Native Windows, macOS, and Linux executables with checksums.                                                    |
+| [`srn-mcp`](mcp/)                                                        | Stdio MCP bridge exposing scoped, credentialed access to notes for MCP-capable clients. | Native Windows, macOS, and Linux executables with checksums.                                                    |
+| [`srn-home-server`](docs/self-hosting.md#standalone-home-server-release) | All-in-one backend for a MySQL deployment.                                           | Native executables, checksums, and the required migrations bundle.                                              |
+| [`srn-admin`](server/)                                                   | Administrative operations (users, invites, registration controls, stack maintenance) against a running Standard Red Notes stack and its database — not a standalone offline tool. | Native Windows, macOS, and Linux executables with checksums; requires a reachable running stack/DB, today via `docker compose exec server srn-admin …`. |
 
 Download the asset for your operating system and architecture, then verify it
 against the release's `SHA256SUMS.txt` before running it. The
@@ -122,15 +129,17 @@ six-host validation matrix.
 
 ### Source and stack tools
 
-Desktop and MCP are source/stack tools in this guide, not entries in the
-published-binary list above.
+Desktop is a source/stack tool in this guide, not an entry in the
+published-binary list above. The MCP bridge and `srn-admin` also ship as
+published binaries (above); they remain buildable and runnable from source as
+shown here.
 
 | Tool                      | Where it lives                                   | How it is used                                                                                   |
 | ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
 | Web app and service stack | [`app/`](app/) and [`server/`](server/)          | Built and run through the repository's Docker or workspace commands.                             |
 | Desktop client            | [`app/packages/desktop/`](app/packages/desktop/) | Built from the app workspace source.                                                             |
 | MCP bridge                | [`mcp/`](mcp/)                                   | Build with `yarn build:mcp`, start with `yarn start:mcp`, or run the Compose `mcp` profile.      |
-| `srn-admin`               | Server image                                     | Run administrative operations inside the stack with `docker compose exec server srn-admin help`. |
+| `srn-admin`               | Server image, plus a published `srn-admin` binary (see above) | Run administrative operations against a running stack with `docker compose exec server srn-admin help`; the published binary still requires a reachable running stack and database (not a standalone offline tool). |
 
 ## API
 
