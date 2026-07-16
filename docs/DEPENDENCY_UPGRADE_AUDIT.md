@@ -5,66 +5,104 @@ description: Dependency upgrade audit notes.
 
 # Dependency Upgrade Audit
 
-Audit date: 2026-06-01
+Audit date: 2026-07-15
 
-Commands run:
+The audit covers the root workspaces, `cli/`, `e2e/`, `mcp/`, `openclaw/`,
+repository workflows, and deployment files. The independent `app/` and
+`server/` dependency graphs are intentionally excluded.
+
+Authoritative checks used the npm and PyPI registries, the Node.js and Python
+release indexes, GitHub repository tags, and Docker Hub image tags/manifests.
+The repeatable npm check is:
 
 ```powershell
-npx --yes npm-check-updates@22.2.1 --workspaces --root --format group --target latest
-npm view @yarnpkg/cli-dist version
-npm view @modelcontextprotocol/sdk version
-npm view turbo version
-npm view typescript version
-npm view eslint version
-npm view prettier version
+npx --yes npm-check-updates@22.2.9 --workspaces --root --format group --target latest
+yarn deps:audit:cli-client
+yarn deps:audit:cli-server
+yarn deps:audit:e2e
 ```
 
-Latest key tooling versions found:
+## Current Toolchains
 
-- Yarn CLI dist: `4.15.0`
-- MCP TypeScript SDK: `1.29.0`
-- Turborepo: `2.9.16`
-- TypeScript: `6.0.3`
-- ESLint: `10.4.1`
-- Prettier: `3.8.3`
-- npm-check-updates: `22.2.1`
+| Toolchain | Version |
+| --- | --- |
+| Root CI/tooling runtime | Node.js `26.5.0` |
+| Yarn | `4.17.1` |
+| Root CI/MCP Corepack | `0.35.0` |
+| TypeScript | `7.0.2` |
+| esbuild | `0.28.1` |
+| Prettier | `3.9.5` |
+| npm-check-updates | `22.2.9` |
+| Turborepo | `2.10.5` |
+| Python (macOS native build) | `3.14.6` |
+| `@yao-pkg/pkg` | `6.21.0` |
 
-## App Upgrade Findings
+`@yao-pkg/pkg` 6.21.0 only publishes Node 22 and Node 24 base binaries. CI
+hosts use Node 26, while packaged CLI and MCP bundles continue to target the
+latest supported embedded runtime, `node24`.
 
-The app has safe patch/minor updates available, but the latest set also includes framework and tooling major upgrades:
+## Current Images
 
-- React `18.2.0` to `19.2.6`
-- React Native `0.78.1` to `0.85.3`
-- Electron `35.2.0` to `42.3.0`
-- Jest `29` to `30`
-- ESLint `8` to `10`
-- TypeScript `5.8.3` to `6.0.3`
-- Webpack dev server `4` to `5`
-- Tailwind `3` to `4`
+| Image | Version |
+| --- | --- |
+| MCP Dockerfile frontend | `docker/dockerfile:1.25.0` |
+| MCP Node Alpine | `node:26.5.0-alpine3.23` |
+| Single-container Dockerfile frontend | `docker/dockerfile:1.7` (upgrade deferred) |
+| Single-container Node Alpine | `node:24-alpine` (upgrade deferred) |
+| Single-container Node Debian slim | `node:24-bookworm-slim` (upgrade deferred) |
+| n8n | `n8nio/n8n:2.30.5` |
+| MariaDB | `mariadb:12.3.2` |
+| Redis | `redis:8.8.0-alpine` |
+| Floci | `floci/floci:1.5.33-compat` |
+| Docker socket proxy | `tecnativa/docker-socket-proxy:v0.4.2` |
 
-These should be split by platform. Web, desktop, and mobile have different runtime constraints and should not be upgraded in one lockfile-only commit.
+`n8nio/n8n:2.31.1` exists, but the upstream npm and container registries mark
+it as `beta`/`next`/`rc`. Version `2.30.5` is the newest release on both the
+`stable` and `latest` channels, so deployments use that exact tag.
 
-## Server Upgrade Findings
+## Current Actions
 
-The server has broad patch/minor updates and several high-risk major upgrades:
+| Action | Major tag | Latest release checked |
+| --- | --- | --- |
+| `actions/checkout` | `v7` | `v7.0.0` |
+| `actions/setup-node` | `v7` | `v7.0.0` |
+| `actions/upload-artifact` | `v7` | `v7.0.1` |
+| `actions/download-artifact` | `v8` | `v8.0.1` |
+| `actions/setup-python` | `v6` | `v6.3.0` |
+| `softprops/action-gh-release` | `v3` | `v3.0.2` |
 
-- Express `4` to `5`
-- Inversify `6` to `8`
-- TypeORM `0.3` to `1`
-- SQLite `5` to `6`
-- Jest `29` to `30`
-- ESLint `9` to `10`
-- TypeScript `5.0.4` to `6.0.3`
-- OpenTelemetry packages across multiple incompatible major/minor lines
+The major tags above and their release refs were checked through the GitHub API
+on the audit date. Root workflow lint covers every file under
+`.github/workflows/`; nested `app/` and `server/` workflows remain independently
+owned and are outside this audit.
 
-Express, Inversify, and TypeORM should each have dedicated branches with integration tests because they affect routing, dependency injection, and persistence.
+## Compatibility Exceptions
+
+- `@standardnotes/domain-core@1.41.3` still declares `uuid@^9.0.0`, whose newest
+  compatible release is affected by GHSA-w5hq-g745-h8pq. The package only calls
+  `uuid.v4()` without the affected caller-provided buffer path, but the root
+  lockfile nevertheless resolves `uuid` to the first patched line, `11.1.1`.
+  Root typechecks, builds, and tests validate that narrow major override.
+- Hadolint rules DL3008 and DL3018 are ignored for distro packages. Exact
+  Alpine/Debian package revisions are architecture- and mirror-specific and can
+  make a pinned base image unbuildable after repository rotation. Outside the
+  deferred single-container exception below, container bases, language package
+  managers, Python packages, and Dockerfile frontend versions remain exact; all
+  other Hadolint warnings still fail validation.
+- The `Dockerfile.single` Node/Corepack/Supervisor upgrade is not retained. Its
+  isolated build reached the app workspace focus step, where the in-progress app
+  Yarn migration failed while loading `plugin-docker-build`. Resolving that
+  requires an independently owned `app/` change, so the single-container file
+  remains on its previously validated Node 24 contract until the app migration
+  can be tested end to end.
 
 ## Upgrade Policy
 
-1. Lock baseline build and test commands before changing runtime dependencies.
-2. Apply patch/minor updates first per project.
-3. Apply major updates one subsystem at a time.
-4. Regenerate lockfiles in the same commit as package metadata.
-5. Run web build, desktop build, server build, and MCP build before merging dependency branches.
+Dependabot checks the root Yarn workspaces, each lockless standalone npm
+package, GitHub Actions, and the owned Dockerfile locations every week. Major,
+minor, and patch updates remain enabled. No policy entry targets `app/` or
+`server/`.
 
-The root monorepo package uses the latest audited versions for new tooling and MCP support. The nested app/server dependency graph has been audited, but mass-updating every package to latest in one commit is intentionally deferred because it would mix multiple breaking migrations.
+Root lockfile changes must be generated with the declared Yarn version and land
+with the matching manifest changes. Standalone CLI and e2e packages deliberately
+retain their existing lockless `npm install --no-package-lock` CI contract.

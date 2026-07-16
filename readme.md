@@ -194,13 +194,14 @@ encryption boundaries, deployment profiles, and validation layers.
 
 ## Build, test, and operate
 
-The root package requires Node.js 22 or newer. The root, app, and server are
+The root package requires Node.js 26 or newer. The root, app, and server are
 three independent Yarn projects, so install all three from a clean checkout
 before running the coordinated build or check commands:
 
 ```bash
 git clone https://github.com/supermarsx/standard-red-notes.git
 cd standard-red-notes
+npm install --global corepack@0.35.0
 corepack enable
 yarn install --immutable
 cd app
