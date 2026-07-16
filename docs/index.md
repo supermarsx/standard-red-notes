@@ -22,6 +22,8 @@ deployment documentation for people running their own instance.
   proxy setup, updates, and backups.
 - [Operations hardening](operations-hardening.md) covers database resilience,
   safety limits, and Docker runtime hardening.
+- [CI production gates](ci-production-gates.md) documents the required,
+  scheduled, and manually dispatched release-readiness checks.
 - [Architecture](architecture.md) explains how the app, gateway, services, files,
   realtime, CLIs, and MCP bridge fit together.
 - [Improvements](improvements.md) lists what this fork changes beyond the

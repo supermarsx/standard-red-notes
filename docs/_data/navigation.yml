@@ -24,6 +24,8 @@
       url: /comparison.html
     - title: Validation
       url: /validation.html
+    - title: CI production gates
+      url: /ci-production-gates.html
 - title: Reference
   items:
     - title: API

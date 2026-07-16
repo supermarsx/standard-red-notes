@@ -1,0 +1,480 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Additional disposable-stack validation to run
+        required: true
+        default: required
+        type: choice
+        options:
+          - required
+          - load
+          - exhaustive
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: "26"
+  COREPACK_VERSION: "0.35.0"
+  YARN_ENABLE_GLOBAL_CACHE: "false"
+  APP_IMAGE: standard-red-notes/app:local
+  SERVER_IMAGE: standard-red-notes/server:local
+
+jobs:
+  contracts:
+    name: contracts and workflow policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache root Yarn packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ci-root-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock') }}
+          restore-keys: ci-root-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Validate CI, release, and documentation contracts
+        run: yarn ci:contracts
+      - name: Lint GitHub Actions workflows
+        run: >-
+          docker run --rm -v "$PWD:/repo" -w /repo
+          rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -config-file .github/actionlint.yaml
+
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache Yarn packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .yarn/cache
+            app/.yarn/cache
+            server/.yarn/cache
+          key: ci-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'app/yarn.lock', 'server/yarn.lock') }}
+          restore-keys: ci-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Install app dependencies immutably
+        working-directory: app
+        run: yarn install --immutable
+      - name: Install server dependencies immutably
+        working-directory: server
+        run: yarn install --immutable
+      - name: Run coordinated checks
+        run: yarn check
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache Yarn packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .yarn/cache
+            app/.yarn/cache
+            server/.yarn/cache
+          key: ci-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'app/yarn.lock', 'server/yarn.lock') }}
+          restore-keys: ci-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Install app dependencies immutably
+        working-directory: app
+        run: yarn install --immutable
+      - name: Install server dependencies immutably
+        working-directory: server
+        run: yarn install --immutable
+      - name: Build coordinated project
+        run: yarn build
+
+  container-smoke:
+    name: disposable stack, Redis, restore, and hardening
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache root Yarn and npm packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .yarn/cache
+            ~/.npm
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Install pinned Playwright test runner
+        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+      - name: Install Chromium
+        run: npm --prefix e2e exec -- playwright install --with-deps chromium
+      - name: Lint tracked Dockerfiles
+        run: |
+          set -euo pipefail
+          while IFS= read -r dockerfile; do
+            echo "::group::hadolint ${dockerfile}"
+            docker run --rm -i \
+              -v "$PWD/.hadolint.yaml:/root/.config/hadolint.yaml:ro" \
+              hadolint/hadolint@sha256:7aba693c1442eb31c0b015c129697cb3b6cb7da589d85c7562f9deb435a6657c \
+              < "$dockerfile"
+            echo "::endgroup::"
+          done < <(git ls-files '*Dockerfile*' | grep -v '\.dockerignore$')
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Build hardened app image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: app
+          file: app/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.APP_IMAGE }}
+          cache-from: type=gha,scope=ci-app
+          cache-to: type=gha,mode=max,scope=ci-app
+      - name: Build hardened server image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: server
+          file: server/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.SERVER_IMAGE }}
+          cache-from: type=gha,scope=ci-server
+          cache-to: type=gha,mode=max,scope=ci-server
+      - name: Configure isolated stack
+        run: |
+          set -euo pipefail
+          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
+          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
+          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
+          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
+          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
+          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
+          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::${value}"
+            echo "${name}=${value}" >> "$GITHUB_ENV"
+          done
+      - name: Start disposable stack
+        run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Run bounded browser and Redis smoke
+        working-directory: e2e
+        env:
+          OPS_LOAD_NOTES: "25"
+          OPS_LOAD_CLIENTS: "2"
+          OPS_REDIS_WORKERS: "2"
+          OPS_REDIS_OPS_PER_WORKER: "50"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-smoke.json
+        run: npx playwright test tests/app-opens.spec.ts tests/ops-load.spec.ts --project=chromium --reporter=list,json
+      - name: Reject skipped or incomplete required browser tests
+        run: yarn ci:verify-playwright -- --report e2e/artifacts/playwright-smoke.json --min-expected 4 --max-skipped 0
+      - name: Verify MariaDB backup and restore
+        run: yarn ops:backup-restore
+      - name: Verify image and live-container hardening
+        run: >-
+          yarn ci:docker-hardening --
+          --image app=${APP_IMAGE}
+          --image server=${SERVER_IMAGE}
+          --container app=${COMPOSE_PROJECT_NAME}-app-1
+          --container server=${COMPOSE_PROJECT_NAME}-server-1
+          --container db=${COMPOSE_PROJECT_NAME}-db-1
+          --container cache=${COMPOSE_PROJECT_NAME}-cache-1
+          --container floci=${COMPOSE_PROJECT_NAME}-floci-1
+      - name: Collect stack diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose ps --all > artifacts/compose-ps.txt 2>&1
+          docker compose logs --no-color > artifacts/compose.log 2>&1
+          docker inspect "${COMPOSE_PROJECT_NAME}-app-1" "${COMPOSE_PROJECT_NAME}-server-1" > artifacts/container-inspect.json 2>&1
+      - name: Upload stack diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: required-stack-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/
+            e2e/artifacts/
+            e2e/test-results/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove disposable stack and volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans --timeout 60
+
+  load-drill:
+    name: scheduled heavy sync and Redis load
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.profile == 'load' || inputs.profile == 'all'))
+    needs: container-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-load
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache root Yarn and npm packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .yarn/cache
+            ~/.npm
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Install pinned Playwright test runner
+        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+      - name: Install Chromium
+        run: npm --prefix e2e exec -- playwright install --with-deps chromium
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Restore app image from build cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: app
+          file: app/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.APP_IMAGE }}
+          cache-from: type=gha,scope=ci-app
+      - name: Restore server image from build cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: server
+          file: server/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.SERVER_IMAGE }}
+          cache-from: type=gha,scope=ci-server
+      - name: Configure isolated stack
+        run: |
+          set -euo pipefail
+          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
+          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
+          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
+          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
+          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
+          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
+          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::${value}"
+            echo "${name}=${value}" >> "$GITHUB_ENV"
+          done
+      - name: Start disposable stack
+        run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Run heavy browser and Redis load
+        working-directory: e2e
+        env:
+          OPS_LOAD_NOTES: "250"
+          OPS_LOAD_CLIENTS: "4"
+          OPS_REDIS_WORKERS: "4"
+          OPS_REDIS_OPS_PER_WORKER: "500"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-load.json
+        run: npx playwright test tests/ops-load.spec.ts --project=chromium --reporter=list,json
+      - name: Verify heavy-load report
+        run: yarn ci:verify-playwright -- --report e2e/artifacts/playwright-load.json --min-expected 1 --max-skipped 0
+      - name: Collect load diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose ps --all > artifacts/compose-ps.txt 2>&1
+          docker compose logs --no-color > artifacts/compose.log 2>&1
+          docker stats --no-stream > artifacts/docker-stats.txt 2>&1
+      - name: Upload load diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: heavy-load-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/
+            e2e/artifacts/
+            e2e/test-results/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove disposable stack and volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans --timeout 60
+
+  exhaustive-e2e:
+    name: scheduled full Playwright matrix
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.profile == 'exhaustive' || inputs.profile == 'all'))
+    needs: container-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-e2e
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Corepack
+        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+      - name: Cache root Yarn and npm packages
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .yarn/cache
+            ~/.npm
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install root dependencies immutably
+        run: yarn install --immutable
+      - name: Install pinned Playwright test runner
+        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+      - name: Install browser matrix
+        run: npm --prefix e2e exec -- playwright install --with-deps chromium firefox webkit
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Restore app image from build cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: app
+          file: app/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.APP_IMAGE }}
+          cache-from: type=gha,scope=ci-app
+      - name: Restore server image from build cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: server
+          file: server/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.SERVER_IMAGE }}
+          cache-from: type=gha,scope=ci-server
+      - name: Configure isolated stack
+        run: |
+          set -euo pipefail
+          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
+          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
+          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
+          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
+          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
+          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
+          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::${value}"
+            echo "${name}=${value}" >> "$GITHUB_ENV"
+          done
+      - name: Start disposable stack
+        run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Run full browser matrix without duplicate load drill
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-exhaustive.json
+        run: npx playwright test --grep-invert "ops load and Redis throughput" --reporter=list,json
+      - name: Verify exhaustive report and explicit skips
+        run: >-
+          yarn ci:verify-playwright --
+          --report e2e/artifacts/playwright-exhaustive.json
+          --min-expected 45
+          --max-skipped 25
+          --require-explicit-skips
+      - name: Collect exhaustive diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose ps --all > artifacts/compose-ps.txt 2>&1
+          docker compose logs --no-color > artifacts/compose.log 2>&1
+          docker stats --no-stream > artifacts/docker-stats.txt 2>&1
+      - name: Upload exhaustive diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: exhaustive-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/
+            e2e/artifacts/
+            e2e/test-results/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove disposable stack and volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans --timeout 60
+
+  production-gate:
+    name: production gate
+    if: always()
+    needs: [contracts, check, build, container-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every production lane
+        env:
+          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CONTAINER_RESULT: ${{ needs.container-smoke.result }}
+        run: |
+          set -euo pipefail
+          for result in "$CONTRACTS_RESULT" "$CHECK_RESULT" "$BUILD_RESULT" "$CONTAINER_RESULT"; do
+            if [ "$result" != success ]; then
+              echo "A required production lane finished with: $result" >&2
+              exit 1
+            fi
+          done
+          echo 'All required production lanes passed.'
