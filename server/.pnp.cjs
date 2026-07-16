@@ -6149,6 +6149,7 @@ const RAW_RUNTIME_STATE =
           ["@types/nodemailer", "npm:8.0.1"],\
           ["@types/prettyjson", "npm:0.0.33"],\
           ["@types/semver", "npm:7.7.1"],\
+          ["@yarnpkg/esbuild-plugin-pnp", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15"],\
           ["agentkeepalive", "npm:4.6.0"],\
           ["axios", "npm:1.18.1"],\
           ["bcryptjs", "npm:3.0.3"],\
@@ -6157,6 +6158,7 @@ const RAW_RUNTIME_STATE =
           ["cors", "npm:2.8.6"],\
           ["dayjs", "npm:1.11.21"],\
           ["dotenv", "npm:17.4.2"],\
+          ["esbuild", "npm:0.28.1"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.1.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
@@ -6361,7 +6363,7 @@ const RAW_RUNTIME_STATE =
           ["@types/express", "npm:5.0.6"],\
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:26.1.1"],\
-          ["@yarnpkg/esbuild-plugin-pnp", "virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15"],\
+          ["@yarnpkg/esbuild-plugin-pnp", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15"],\
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
           ["dotenv", "npm:17.4.2"],\
@@ -8169,11 +8171,11 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15", {\
-        "packageLocation": "./.yarn/__virtual__/@yarnpkg-esbuild-plugin-pnp-virtual-5cb806a287/0/cache/@yarnpkg-esbuild-plugin-pnp-npm-3.0.0-rc.15-b916c218b3-454f521088.zip/node_modules/@yarnpkg/esbuild-plugin-pnp/",\
+      ["virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15", {\
+        "packageLocation": "./.yarn/__virtual__/@yarnpkg-esbuild-plugin-pnp-virtual-fd5780bf31/0/cache/@yarnpkg-esbuild-plugin-pnp-npm-3.0.0-rc.15-b916c218b3-454f521088.zip/node_modules/@yarnpkg/esbuild-plugin-pnp/",\
         "packageDependencies": [\
           ["@types/esbuild", null],\
-          ["@yarnpkg/esbuild-plugin-pnp", "virtual:c4433efc288693562553e92e3c7b1c10c8d52a1bb58e03fe670c565b3ba0b61a2461ec032a29c13b8e030b53c73d7e6c512d126264e698828c2f82bdbc7430cd#npm:3.0.0-rc.15"],\
+          ["@yarnpkg/esbuild-plugin-pnp", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15"],\
           ["esbuild", "npm:0.28.1"],\
           ["tslib", "npm:2.8.1"]\
         ],\

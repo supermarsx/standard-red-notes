@@ -39,6 +39,21 @@ test("a missing native tool target is rejected", () => {
   );
 });
 
+test("a missing srn-admin native tool target is rejected", () => {
+  const file = ".github/workflows/srn-admin.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      '["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"',
+      "",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-admin\.yml: expected one linux-arm64 target/,
+  );
+});
+
 test("a missing OpenClaw native smoke target is rejected", () => {
   const file = ".github/workflows/srn-openclaw.yml";
   const files = withFileChanged(file, (content) =>

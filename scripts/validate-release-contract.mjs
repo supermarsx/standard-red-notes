@@ -12,6 +12,7 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   ".github/workflows/srn-server.yml",
   ".github/workflows/srn-mcp.yml",
   ".github/workflows/srn-home-server.yml",
+  ".github/workflows/srn-admin.yml",
   ".github/workflows/srn-openclaw.yml",
   ".github/workflows/srn-desktop.yml",
   ".github/workflows/srn-mobile.yml",
@@ -31,6 +32,7 @@ const TOOL_WORKFLOWS = Object.freeze([
   ".github/workflows/srn-server.yml",
   ".github/workflows/srn-mcp.yml",
   ".github/workflows/srn-home-server.yml",
+  ".github/workflows/srn-admin.yml",
 ]);
 
 const TOOL_TARGETS = Object.freeze([
