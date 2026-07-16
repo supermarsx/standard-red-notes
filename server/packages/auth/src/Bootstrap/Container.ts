@@ -250,6 +250,7 @@ import { RevokeAppPassword } from '../Domain/UseCase/RevokeAppPassword/RevokeApp
 import { VerifyAppPassword } from '../Domain/UseCase/VerifyAppPassword/VerifyAppPassword'
 import { AppPasswordsController } from '../Controller/AppPasswordsController'
 import { BaseAppPasswordsController } from '../Infra/InversifyExpressUtils/Base/BaseAppPasswordsController'
+import { BaseMeInviteLinksController } from '../Infra/InversifyExpressUtils/Base/BaseMeInviteLinksController'
 import { McpToken } from '../Domain/McpToken/McpToken'
 import { TypeORMMcpToken } from '../Infra/TypeORM/TypeORMMcpToken'
 import { McpTokenPersistenceMapper } from '../Mapping/McpTokenPersistenceMapper'
@@ -3250,6 +3251,23 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseAppPasswordsController(
             container.get(TYPES.Auth_AppPasswordsController),
+            container.get(TYPES.Auth_ControllerContainer),
+          ),
+        )
+      // Standard Red Notes: SELF-SERVE invite links (auth.meInviteLinks.*). Bound
+      // here on the home-server path so the constructor registers the three
+      // DirectCall handlers with the controllerContainer; the multi-container path
+      // reaches these via AnnotatedMeInviteLinksController's @httpX routes instead.
+      container
+        .bind<BaseMeInviteLinksController>(TYPES.Auth_BaseMeInviteLinksController)
+        .toConstantValue(
+          new BaseMeInviteLinksController(
+            container.get(TYPES.Auth_RegistrationConfigResolver),
+            container.get(TYPES.Auth_SignupInviteLinkRepository),
+            container.get(TYPES.Auth_SignupInviteUseRepository),
+            container.get(TYPES.Auth_CreateSignupInviteLink),
+            container.get(TYPES.Auth_ListSignupInviteLinks),
+            container.get(TYPES.Auth_RevokeSignupInviteLink),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

@@ -401,6 +401,7 @@ const TYPES = {
   Auth_BaseAuthController: Symbol.for('Auth_BaseAuthController'),
   Auth_BaseAuthenticatorsController: Symbol.for('Auth_BaseAuthenticatorsController'),
   Auth_BaseAppPasswordsController: Symbol.for('Auth_BaseAppPasswordsController'),
+  Auth_BaseMeInviteLinksController: Symbol.for('Auth_BaseMeInviteLinksController'),
   Auth_BaseMcpTokensController: Symbol.for('Auth_BaseMcpTokensController'),
   Auth_BaseWebhooksController: Symbol.for('Auth_BaseWebhooksController'),
   Auth_BaseSharesController: Symbol.for('Auth_BaseSharesController'),

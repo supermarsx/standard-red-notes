@@ -1,3 +1,4 @@
+import { ControllerContainerInterface } from '@standardnotes/domain-core'
 import { Request, Response } from 'express'
 import { BaseHttpController, results } from 'inversify-express-utils'
 
@@ -30,8 +31,21 @@ export class BaseMeInviteLinksController extends BaseHttpController {
     protected doCreateSignupInviteLink: CreateSignupInviteLink,
     protected doListSignupInviteLinks: ListSignupInviteLinks,
     protected doRevokeSignupInviteLink: RevokeSignupInviteLink,
+    // Standard Red Notes: in SINGLE-CONTAINER (home-server / DirectCall) mode the
+    // gateway invokes these self-serve endpoints by identifier string rather than
+    // over HTTP, so — exactly like BaseAppPasswordsController — we register the
+    // three `auth.meInviteLinks.*` DirectCall handlers here. Optional so the
+    // HTTP-annotated construction (multi-container) keeps compiling without it;
+    // that path resolves via the @httpX decorators and needs no registration.
+    private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
+
+    if (this.controllerContainer !== undefined) {
+      this.controllerContainer.register('auth.meInviteLinks.create', this.createMyInviteLink.bind(this))
+      this.controllerContainer.register('auth.meInviteLinks.list', this.listMyInviteLinks.bind(this))
+      this.controllerContainer.register('auth.meInviteLinks.revoke', this.revokeMyInviteLink.bind(this))
+    }
   }
 
   private userUuid(response: Response): string | undefined {

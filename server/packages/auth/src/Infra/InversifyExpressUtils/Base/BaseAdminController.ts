@@ -259,6 +259,19 @@ export class BaseAdminController extends BaseHttpController {
       this.controllerContainer.register('admin.fixUserQuota', this.fixUserQuota.bind(this))
       this.controllerContainer.register('admin.getLockedAccounts', this.getLockedAccounts.bind(this))
       this.controllerContainer.register('admin.unlockAccount', this.unlockAccount.bind(this))
+      // Standard Red Notes: SIGNUP INVITE LINKS admin surface. In single-container
+      // (home-server / DirectCall) mode the gateway invokes these by identifier
+      // string; without these register lines they resolve to nothing → HTTP 500
+      // "Method not found". The strings must match the gateway EndpointResolver
+      // map exactly (api-gateway Service/Resolver/EndpointResolver.ts).
+      this.controllerContainer.register('admin.createInviteLink', this.createInviteLink.bind(this))
+      this.controllerContainer.register('admin.listInviteLinks', this.listInviteLinks.bind(this))
+      this.controllerContainer.register('admin.revokeInviteLink', this.revokeInviteLink.bind(this))
+      // Standard Red Notes: APPROVAL QUEUE admin surface (list pending / approve /
+      // reject) — same DirectCall registration requirement as above.
+      this.controllerContainer.register('admin.listPendingUsers', this.listPendingUsers.bind(this))
+      this.controllerContainer.register('admin.approveUser', this.approveUser.bind(this))
+      this.controllerContainer.register('admin.rejectUser', this.rejectUser.bind(this))
     }
   }
 
