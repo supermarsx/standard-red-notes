@@ -68,9 +68,7 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
       try {
         await this.tokenRepository.deleteExpiredOrConsumed(now)
       } catch (cleanupError) {
-        this.logger.warn(
-          `[email-confirmation] Token cleanup failed (non-fatal): ${(cleanupError as Error).message}`,
-        )
+        this.logger.warn(`[email-confirmation] Token cleanup failed (non-fatal): ${(cleanupError as Error).message}`)
       }
 
       if (!this.emailSender.isConfigured()) {
@@ -90,7 +88,9 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
 
       return Result.ok(emailed)
     } catch (error) {
-      this.logger.error(`[email-confirmation] Failed to send confirmation for user ${dto.userUuid}: ${(error as Error).message}`)
+      this.logger.error(
+        `[email-confirmation] Failed to send confirmation for user ${dto.userUuid}: ${(error as Error).message}`,
+      )
 
       return Result.fail('Could not send email confirmation.')
     }

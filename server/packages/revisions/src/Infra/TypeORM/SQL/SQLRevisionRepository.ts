@@ -268,10 +268,7 @@ export class SQLRevisionRepository implements RevisionRepositoryInterface {
         .getRawMany()
     ).map((row) => row.uuid)
 
-    const deleteQueryBuilder = this.ormRepository
-      .createQueryBuilder()
-      .delete()
-      .from('revisions_revisions')
+    const deleteQueryBuilder = this.ormRepository.createQueryBuilder().delete().from('revisions_revisions')
 
     if (uuidsToKeep.length > 0) {
       deleteQueryBuilder.where('item_uuid = :itemUuid AND uuid NOT IN (:...uuidsToKeep)', {

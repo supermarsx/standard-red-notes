@@ -2,11 +2,7 @@ import { Provider } from './types'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
 import { OllamaProvider } from './ollama'
-import {
-  DEFAULT_OPENAI_BASE_URL,
-  openAiCompatibleConfigured,
-  resolveOpenAiUpstream,
-} from './openaiAuth'
+import { DEFAULT_OPENAI_BASE_URL, openAiCompatibleConfigured, resolveOpenAiUpstream } from './openaiAuth'
 
 export { DEFAULT_OPENAI_BASE_URL }
 

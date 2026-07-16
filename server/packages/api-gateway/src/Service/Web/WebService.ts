@@ -96,10 +96,14 @@ export class WebService {
     // DNS resolver injectable for tests; defaults to the real resolver.
     private readonly resolveHost: (host: string) => Promise<string[]> = defaultResolveHost,
   ) {
-    this.maxContentChars = config.maxContentChars && config.maxContentChars > 0 ? config.maxContentChars : DEFAULT_MAX_CONTENT_CHARS
-    this.maxFetchBytes = config.maxFetchBytes && config.maxFetchBytes > 0 ? config.maxFetchBytes : DEFAULT_MAX_FETCH_BYTES
-    this.fetchTimeoutMs = config.fetchTimeoutMs && config.fetchTimeoutMs > 0 ? config.fetchTimeoutMs : DEFAULT_FETCH_TIMEOUT_MS
-    this.searchTimeoutMs = config.searchTimeoutMs && config.searchTimeoutMs > 0 ? config.searchTimeoutMs : DEFAULT_SEARCH_TIMEOUT_MS
+    this.maxContentChars =
+      config.maxContentChars && config.maxContentChars > 0 ? config.maxContentChars : DEFAULT_MAX_CONTENT_CHARS
+    this.maxFetchBytes =
+      config.maxFetchBytes && config.maxFetchBytes > 0 ? config.maxFetchBytes : DEFAULT_MAX_FETCH_BYTES
+    this.fetchTimeoutMs =
+      config.fetchTimeoutMs && config.fetchTimeoutMs > 0 ? config.fetchTimeoutMs : DEFAULT_FETCH_TIMEOUT_MS
+    this.searchTimeoutMs =
+      config.searchTimeoutMs && config.searchTimeoutMs > 0 ? config.searchTimeoutMs : DEFAULT_SEARCH_TIMEOUT_MS
   }
 
   /**

@@ -124,9 +124,7 @@ function buildMintTokenHandler(
   return function handleMintToken(req: IncomingMessage, res: ServerResponse): void {
     const xAuthToken = req.headers['x-auth-token']
     if (typeof xAuthToken === 'string' && xAuthToken.length > 0) {
-      const identity = config.authJwtSecret
-        ? decodeCrossServiceToken(xAuthToken, config.authJwtSecret)
-        : undefined
+      const identity = config.authJwtSecret ? decodeCrossServiceToken(xAuthToken, config.authJwtSecret) : undefined
       if (!identity) {
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'invalid auth token' }))
@@ -229,15 +227,14 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   const { httpServer, config, logger, app, authorizeRoomJoin } = opts
 
   if (!config.connectionTokenSecret) {
-    throw new Error(
-      'WEB_SOCKET_CONNECTION_TOKEN_SECRET is required (refusing to attach with an empty signing secret).',
-    )
+    throw new Error('WEB_SOCKET_CONNECTION_TOKEN_SECRET is required (refusing to attach with an empty signing secret).')
   }
 
   // SECURITY: default to a capability-verifying authorizer (fail closed). A caller
   // may override (tests), but production never gets allow-all: an absent override
   // still requires a valid, matching, unexpired room capability on every join.
-  const roomAuthorizer: RoomJoinAuthorizer = authorizeRoomJoin ?? defaultRoomJoinAuthorizer(config.connectionTokenSecret)
+  const roomAuthorizer: RoomJoinAuthorizer =
+    authorizeRoomJoin ?? defaultRoomJoinAuthorizer(config.connectionTokenSecret)
 
   const registry = new ConnectionRegistry<WebSocket>()
   const rooms = new RoomRegistry<WebSocket>()
@@ -286,9 +283,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     const cleanup = (): void => {
       registry.remove(identity.userUuid, conn)
       rooms.leaveAll(conn)
-      logger.info(
-        `[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`,
-      )
+      logger.info(`[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
     }
 
     socket.on('close', cleanup)

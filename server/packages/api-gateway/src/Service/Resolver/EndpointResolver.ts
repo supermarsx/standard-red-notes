@@ -198,9 +198,9 @@ export class EndpointResolver implements EndpointResolverInterface {
         // a positional replacer inserts each param at the k-th placeholder and
         // never re-scans inserted text, keeping single-param routes identical.
         let paramIndex = 0
-        return endpoint.replace(/:[a-zA-Z0-9]+/g, (match) =>
-          paramIndex < params.length ? params[paramIndex++] : match,
-        )
+        return endpoint.replace(/:[a-zA-Z0-9]+/g, (match) => {
+          return paramIndex < params.length ? params[paramIndex++] : match
+        })
       }
 
       return endpoint

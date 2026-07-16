@@ -13,7 +13,7 @@ import '../src/Infra/InversifyExpress/AnnotatedRevisionsController'
 import '../src/Infra/InversifyExpress/AnnotatedHealthCheckController'
 
 const container = new ContainerConfigLoader()
-void container.load().then((container) => {
+void container.load().then(async (container) => {
   const env: Env = container.get(TYPES.Revisions_Env)
 
   const server = new InversifyExpressServer(container)
@@ -43,7 +43,8 @@ void container.load().then((container) => {
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  const app = await server.build()
+  const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 

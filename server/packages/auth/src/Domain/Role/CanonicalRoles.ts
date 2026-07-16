@@ -40,8 +40,7 @@ export const CANONICAL_ADMIN_ROLES: CanonicalRoleDefinition[] = [
   {
     name: RoleName.NAMES.AdminUser,
     label: 'Admin user',
-    description:
-      'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
+    description: 'Full administrative access — manage users, roles, groups, server settings, and every admin panel.',
   },
   {
     name: RoleName.NAMES.ProUser,
@@ -87,5 +86,6 @@ export const canonicalAdminRoleLabel = (name: string): string | null => labelByN
 
 export const canonicalAdminRoleDescription = (name: string): string | null => descriptionByName.get(name) ?? null
 
-export const canonicalAdminRoleOrder = (name: string): number =>
-  orderByName.has(name) ? (orderByName.get(name) as number) : Number.MAX_SAFE_INTEGER
+export const canonicalAdminRoleOrder = (name: string): number => {
+  return orderByName.has(name) ? (orderByName.get(name) as number) : Number.MAX_SAFE_INTEGER
+}

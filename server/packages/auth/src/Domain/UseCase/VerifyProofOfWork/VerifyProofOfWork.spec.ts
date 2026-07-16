@@ -13,7 +13,7 @@ describe('VerifyProofOfWork', () => {
 
   const solve = (forSeed: string, forDifficulty: number): string => {
     let nonce = 0
-    // eslint-disable-next-line no-constant-condition
+
     while (true) {
       const digest = crypto.createHash('sha256').update(`${forSeed}:${nonce}`).digest('hex')
       if (countLeadingZeroBits(digest) >= forDifficulty) {

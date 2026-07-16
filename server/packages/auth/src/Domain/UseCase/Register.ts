@@ -211,12 +211,7 @@ export class Register implements UseCaseInterface {
     // message); open mode is FAIL-OPEN (a present token is honored + consumed but
     // an error/invalid token just proceeds as a normal open signup).
     const newUserUuid = uuidv4()
-    const inviteOutcome = await this.resolveInviteConsume(
-      registrationConfig,
-      inviteToken,
-      username.value,
-      newUserUuid,
-    )
+    const inviteOutcome = await this.resolveInviteConsume(registrationConfig, inviteToken, username.value, newUserUuid)
     if ('refuse' in inviteOutcome) {
       return inviteOutcome.refuse
     }
@@ -563,7 +558,9 @@ export class Register implements UseCaseInterface {
     inviteToken: string | undefined,
     email: string,
     newUserUuid: string,
-  ): Promise<{ refuse: RegisterResponse } | { invite: (ConsumeSignupInviteResponse & { outcome: 'consumed' }) | null }> {
+  ): Promise<
+    { refuse: RegisterResponse } | { invite: (ConsumeSignupInviteResponse & { outcome: 'consumed' }) | null }
+  > {
     const inviteOnly = config.inviteOnly === true
     const token = typeof inviteToken === 'string' ? inviteToken.trim() : ''
 

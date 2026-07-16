@@ -278,9 +278,7 @@ export async function listPresetModels(id: string, env: Env = process.env): Prom
     }
 
     const json = (await res.json()) as { data?: Array<{ id?: string; name?: string }> }
-    return (json.data ?? [])
-      .map((entry) => entry.id ?? entry.name)
-      .filter((value): value is string => Boolean(value))
+    return (json.data ?? []).map((entry) => entry.id ?? entry.name).filter((value): value is string => Boolean(value))
   } catch {
     return []
   }

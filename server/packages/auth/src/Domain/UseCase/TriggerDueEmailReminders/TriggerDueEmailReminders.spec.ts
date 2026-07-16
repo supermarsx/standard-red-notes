@@ -135,9 +135,7 @@ describe('TriggerDueEmailReminders', () => {
 
   it('should skip a reminder for an account with no deliverable email (private username)', async () => {
     // Private-username accounts store a 64-char hex with no "@".
-    userRepository.findOneByUuid = jest
-      .fn()
-      .mockResolvedValue({ email: 'a'.repeat(64) })
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue({ email: 'a'.repeat(64) })
 
     const result = await createUseCase().execute({})
 

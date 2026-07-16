@@ -258,7 +258,11 @@ export class UsersController extends BaseHttpController {
     await this.httpService.callAuthServer(
       request,
       response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('DELETE', 'users/:userUuid', request.params.userUuid as string),
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'users/:userUuid',
+        request.params.userUuid as string,
+      ),
     )
   }
 

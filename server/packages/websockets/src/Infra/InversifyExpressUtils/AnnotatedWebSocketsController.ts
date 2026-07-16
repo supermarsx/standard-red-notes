@@ -47,7 +47,9 @@ export class AnnotatedWebSocketsController extends BaseHttpController {
 
   @httpDelete('/connections/:connectionId')
   async deleteWebSocketsConnection(request: Request): Promise<results.OkResult | results.BadRequestResult> {
-    const result = await this.removeWebSocketsConnection.execute({ connectionId: request.params.connectionId as string })
+    const result = await this.removeWebSocketsConnection.execute({
+      connectionId: request.params.connectionId as string,
+    })
 
     if (result.isFailed()) {
       return this.badRequest()

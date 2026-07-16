@@ -1,8 +1,7 @@
 import 'reflect-metadata'
 
 import { Request, Response } from 'express'
-import { MapperInterface } from '@standardnotes/domain-core'
-import { Result } from '@standardnotes/domain-core'
+import { MapperInterface, Result } from '@standardnotes/domain-core'
 
 import { BaseRevisionsController } from './BaseRevisionsController'
 import { DeleteRevision } from '../../../Domain/UseCase/DeleteRevision/DeleteRevision'
@@ -42,7 +41,9 @@ describe('BaseRevisionsController', () => {
     doDeleteRevision.execute = jest.fn().mockResolvedValue(Result.ok('Revision deleted.'))
 
     revisionHttpMapper = {} as jest.Mocked<MapperInterface<Revision, RevisionHttpRepresentation>>
-    revisionMetadataHttpMapper = {} as jest.Mocked<MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>>
+    revisionMetadataHttpMapper = {} as jest.Mocked<
+      MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>
+    >
 
     request = {
       params: { uuid: '1-2-3', itemUuid: '2-3-4' },

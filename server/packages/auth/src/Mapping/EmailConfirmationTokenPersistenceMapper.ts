@@ -3,9 +3,10 @@ import { MapperInterface, UniqueEntityId } from '@standardnotes/domain-core'
 import { EmailConfirmationToken } from '../Domain/EmailConfirmation/EmailConfirmationToken'
 import { TypeORMEmailConfirmationToken } from '../Infra/TypeORM/TypeORMEmailConfirmationToken'
 
-export class EmailConfirmationTokenPersistenceMapper
-  implements MapperInterface<EmailConfirmationToken, TypeORMEmailConfirmationToken>
-{
+export class EmailConfirmationTokenPersistenceMapper implements MapperInterface<
+  EmailConfirmationToken,
+  TypeORMEmailConfirmationToken
+> {
   toDomain(projection: TypeORMEmailConfirmationToken): EmailConfirmationToken {
     const tokenOrError = EmailConfirmationToken.create(
       {

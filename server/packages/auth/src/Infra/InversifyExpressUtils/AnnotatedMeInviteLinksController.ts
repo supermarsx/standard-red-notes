@@ -21,7 +21,8 @@ import { RevokeSignupInviteLink } from '../../Domain/UseCase/RevokeSignupInviteL
 @controller('/users')
 export class AnnotatedMeInviteLinksController extends BaseMeInviteLinksController {
   constructor(
-    @inject(TYPES.Auth_RegistrationConfigResolver) override registrationConfigResolver: RegistrationConfigResolverInterface,
+    @inject(TYPES.Auth_RegistrationConfigResolver)
+    override registrationConfigResolver: RegistrationConfigResolverInterface,
     @inject(TYPES.Auth_SignupInviteLinkRepository) override inviteLinkRepository: SignupInviteLinkRepositoryInterface,
     @inject(TYPES.Auth_SignupInviteUseRepository) override inviteUseRepository: SignupInviteUseRepositoryInterface,
     @inject(TYPES.Auth_CreateSignupInviteLink) override doCreateSignupInviteLink: CreateSignupInviteLink,

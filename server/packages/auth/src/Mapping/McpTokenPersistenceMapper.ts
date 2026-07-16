@@ -52,8 +52,7 @@ export class McpTokenPersistenceMapper implements MapperInterface<McpToken, Type
     typeorm.label = domain.props.label
     typeorm.hashedToken = domain.props.hashedToken
     typeorm.scope = domain.props.scope
-    typeorm.scopeTagUuids =
-      domain.props.scopeTagUuids !== null ? JSON.stringify(domain.props.scopeTagUuids) : null
+    typeorm.scopeTagUuids = domain.props.scopeTagUuids !== null ? JSON.stringify(domain.props.scopeTagUuids) : null
     typeorm.wrappedKeys = domain.props.wrappedKeys
     typeorm.kdfSalt = domain.props.kdfSalt
     typeorm.kdfParams = domain.props.kdfParams

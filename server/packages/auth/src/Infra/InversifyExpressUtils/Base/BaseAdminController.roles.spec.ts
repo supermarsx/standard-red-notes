@@ -90,9 +90,11 @@ describe('BaseAdminController role endpoints', () => {
     )
 
     doSetRolePermissions = {} as jest.Mocked<SetRolePermissions>
-    doSetRolePermissions.execute = jest.fn().mockResolvedValue(
-      Result.ok({ uuid: roleUuid, name: 'CORE_USER', version: 1, isBuiltIn: true, permissionNames: ['SYNC_ITEMS'] }),
-    )
+    doSetRolePermissions.execute = jest
+      .fn()
+      .mockResolvedValue(
+        Result.ok({ uuid: roleUuid, name: 'CORE_USER', version: 1, isBuiltIn: true, permissionNames: ['SYNC_ITEMS'] }),
+      )
 
     doCreateCustomRole = {} as jest.Mocked<CreateCustomRole>
     doCreateCustomRole.execute = jest.fn().mockResolvedValue(
@@ -111,11 +113,12 @@ describe('BaseAdminController role endpoints', () => {
     doDeleteCustomRole.execute = jest.fn().mockResolvedValue(Result.ok({ uuid: roleUuid, name: 'SUPPORT_AGENT' }))
 
     doGetPermissionCatalog = {} as jest.Mocked<GetPermissionCatalog>
-    doGetPermissionCatalog.execute = jest
-      .fn()
-      .mockResolvedValue(
-        Result.ok({ permissions: [{ name: 'SYNC_ITEMS', category: 'general', grantedByRoleNames: ['CORE_USER'] }], categories: ['general'] }),
-      )
+    doGetPermissionCatalog.execute = jest.fn().mockResolvedValue(
+      Result.ok({
+        permissions: [{ name: 'SYNC_ITEMS', category: 'general', grantedByRoleNames: ['CORE_USER'] }],
+        categories: ['general'],
+      }),
+    )
 
     doGetRoleHolders = {} as jest.Mocked<GetRoleHolders>
     doGetRoleHolders.execute = jest
@@ -123,11 +126,14 @@ describe('BaseAdminController role endpoints', () => {
       .mockResolvedValue(Result.ok({ uuid: roleUuid, name: 'CORE_USER', directUserCount: 2, groups: [] }))
 
     doResolveRoleSetPermissions = {} as jest.Mocked<ResolveRoleSetPermissions>
-    doResolveRoleSetPermissions.execute = jest
-      .fn()
-      .mockResolvedValue(
-        Result.ok({ roleNames: ['CORE_USER'], unknownRoleNames: [], effectivePermissionNames: ['SYNC_ITEMS'], perRole: [] }),
-      )
+    doResolveRoleSetPermissions.execute = jest.fn().mockResolvedValue(
+      Result.ok({
+        roleNames: ['CORE_USER'],
+        unknownRoleNames: [],
+        effectivePermissionNames: ['SYNC_ITEMS'],
+        perRole: [],
+      }),
+    )
 
     auditLogWriter = {} as jest.Mocked<AuditLogWriterInterface>
     auditLogWriter.write = jest.fn().mockResolvedValue(undefined)
@@ -212,7 +218,11 @@ describe('BaseAdminController role endpoints', () => {
 
   it('createCustomRole creates a role and writes an audit entry for an admin', async () => {
     const result = await createController().createCustomRole(
-      { params: {}, body: { name: 'Support Agent', permissionNames: ['SYNC_ITEMS'] }, headers: {} } as unknown as Request,
+      {
+        params: {},
+        body: { name: 'Support Agent', permissionNames: ['SYNC_ITEMS'] },
+        headers: {},
+      } as unknown as Request,
       adminResponse,
     )
 

@@ -2,7 +2,7 @@
   "name": "@standardnotes/domain-core",
   "version": "1.41.4",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=26.0.0"
   },
   "description": "Domain Core SDK used in SN projects",
   "main": "dist/src/index.js",
@@ -30,15 +30,15 @@
     "test": "jest --coverage --no-cache --passWithNoTests --maxWorkers=2"
   },
   "dependencies": {
-    "uuid": "^11.1.0"
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.43",
+    "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.0.0",
-    "@types/uuid": "^11.0.0",
+    "@types/node": "^26.1.1",
     "jest": "^30.4.2",
-    "jest-util": "^30.2.0",
-    "ts-jest": "^29.4.11",
-    "typescript": "^6.0.3"
+    "jest-util": "^30.4.1",
+    "typescript": "6.0.3"
   }
 }

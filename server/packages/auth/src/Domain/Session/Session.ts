@@ -89,7 +89,7 @@ export class Session {
     name: 'readonly_access',
     type: 'tinyint',
     nullable: false,
-    default: 0
+    default: 0,
   })
   declare readonlyAccess: boolean
 

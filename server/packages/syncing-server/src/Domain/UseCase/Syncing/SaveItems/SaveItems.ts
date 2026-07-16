@@ -252,9 +252,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     })
 
     const canPush =
-      this.websocketSyncPushEnabled &&
-      savedItems.length > 0 &&
-      savedItems.length <= this.websocketSyncPushMaxItems
+      this.websocketSyncPushEnabled && savedItems.length > 0 && savedItems.length <= this.websocketSyncPushMaxItems
 
     if (!canPush) {
       return notification

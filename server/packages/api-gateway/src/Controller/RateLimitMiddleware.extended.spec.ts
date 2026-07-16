@@ -138,7 +138,11 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
   it('sets X-RateLimit-Limit/-Remaining on an allowed request', async () => {
     const next: NextFunction = jest.fn()
     const { response, setHeader } = buildResponse()
-    const middleware = createRateLimitMiddleware({ redis: buildRedis(), config: staticConfig, logger: { warn: jest.fn() } })
+    const middleware = createRateLimitMiddleware({
+      redis: buildRedis(),
+      config: staticConfig,
+      logger: { warn: jest.fn() },
+    })
     middleware(buildRequest(), response, next)
     await flush()
     expect(setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '2')
@@ -172,7 +176,12 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
     expect(third.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '2')
     expect(third.setHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', '0')
     expect(third.setHeader).toHaveBeenCalledWith('X-RateLimit-Reset', String(1_000_000 + 30))
-    expect(recordThrottle).toHaveBeenCalledWith({ bucket: 'auth-login', ip: '1.2.3.4', method: 'POST', path: '/v1/login' })
+    expect(recordThrottle).toHaveBeenCalledWith({
+      bucket: 'auth-login',
+      ip: '1.2.3.4',
+      method: 'POST',
+      path: '/v1/login',
+    })
     expect(onThrottle).toHaveBeenCalledWith('1.2.3.4', 'auth-login')
   })
 })

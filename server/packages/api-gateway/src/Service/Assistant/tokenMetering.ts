@@ -63,11 +63,7 @@ export function sumTokensInWindow(entries: TokenUsageEntry[], now: number, windo
 }
 
 /** The earliest in-window entry timestamp, or undefined when the window is empty. */
-export function oldestTimestampInWindow(
-  entries: TokenUsageEntry[],
-  now: number,
-  windowMs: number,
-): number | undefined {
+export function oldestTimestampInWindow(entries: TokenUsageEntry[], now: number, windowMs: number): number | undefined {
   const cutoff = now - windowMs
   let oldest: number | undefined
   for (const entry of entries) {

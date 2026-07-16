@@ -23,10 +23,11 @@ describe('AuthenticateUser - session freshness buffer', () => {
 
   const accessTokenAge = 3600
 
-  const createUseCase = (freshnessBufferSeconds?: number) =>
-    freshnessBufferSeconds === undefined
+  const createUseCase = (freshnessBufferSeconds?: number) => {
+    return freshnessBufferSeconds === undefined
       ? new AuthenticateUser(authenticationMethodResolver, timer, accessTokenAge, logger)
       : new AuthenticateUser(authenticationMethodResolver, timer, accessTokenAge, logger, freshnessBufferSeconds)
+  }
 
   beforeEach(() => {
     logger = {} as jest.Mocked<Logger>

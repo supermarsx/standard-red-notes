@@ -48,7 +48,9 @@ describe('ApproveUser', () => {
   it('still succeeds if the approval email throws (best-effort)', async () => {
     sendApprovalNotification.execute = jest.fn().mockRejectedValue(new Error('smtp down'))
 
-    const result = await new ApproveUser(userRepository, timer, sendApprovalNotification).execute({ userUuid: validUuid })
+    const result = await new ApproveUser(userRepository, timer, sendApprovalNotification).execute({
+      userUuid: validUuid,
+    })
 
     expect(result.isFailed()).toBe(false)
   })

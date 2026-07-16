@@ -59,8 +59,7 @@ export class BedrockProvider implements Provider {
   async *send(_req: ProviderRequest): AsyncIterable<ProviderEvent> {
     yield {
       kind: 'error',
-      message:
-        'AWS Bedrock requires SigV4 request signing which is not yet implemented; configure a follow-up.',
+      message: 'AWS Bedrock requires SigV4 request signing which is not yet implemented; configure a follow-up.',
     }
     yield { kind: 'finish', stopReason: 'error' }
   }

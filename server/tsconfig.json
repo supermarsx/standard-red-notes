@@ -55,6 +55,9 @@
       "path": "./packages/grpc"
     },
     {
+      "path": "./packages/inversify-express-utils"
+    },
+    {
       "path": "./packages/predicates"
     },
     {

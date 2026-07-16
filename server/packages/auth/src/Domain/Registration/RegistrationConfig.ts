@@ -199,7 +199,10 @@ export const normalizeDomainList = (list: string[] | undefined): string[] => {
     if (typeof raw !== 'string') {
       continue
     }
-    const normalized = raw.trim().toLowerCase().replace(/^[@.]+/, '')
+    const normalized = raw
+      .trim()
+      .toLowerCase()
+      .replace(/^[@.]+/, '')
     if (normalized.length === 0 || seen.has(normalized)) {
       continue
     }
@@ -248,7 +251,10 @@ export const emailDomain = (email: string): string => {
     return ''
   }
 
-  return email.slice(at + 1).trim().toLowerCase()
+  return email
+    .slice(at + 1)
+    .trim()
+    .toLowerCase()
 }
 
 /**

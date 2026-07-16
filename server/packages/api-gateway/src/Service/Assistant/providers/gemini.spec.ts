@@ -60,9 +60,7 @@ describe('GeminiProvider.send', () => {
       streamResponse([
         sse({ candidates: [{ content: { role: 'model', parts: [{ text: 'Hello' }] } }] }),
         sse({
-          candidates: [
-            { content: { parts: [{ functionCall: { name: 'get_weather', args: { city: 'SF' } } }] } },
-          ],
+          candidates: [{ content: { parts: [{ functionCall: { name: 'get_weather', args: { city: 'SF' } } }] } }],
         }),
         sse({
           candidates: [{ content: { parts: [] }, finishReason: 'STOP' }],
@@ -101,9 +99,7 @@ describe('GeminiProvider.send', () => {
 
   it('never leaks the api key in any emitted event', async () => {
     fetchMock.mockResolvedValue(
-      streamResponse([
-        sse({ candidates: [{ content: { parts: [{ text: 'hi' }] }, finishReason: 'STOP' }] }),
-      ]),
+      streamResponse([sse({ candidates: [{ content: { parts: [{ text: 'hi' }] }, finishReason: 'STOP' }] })]),
     )
 
     const events = await collect(new GeminiProvider('gemini-1.5-pro', ENV).send(baseRequest))
@@ -116,8 +112,7 @@ describe('listGeminiModels', () => {
   it('parses the model list and strips the models/ prefix', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
-      json: () =>
-        Promise.resolve({ models: [{ name: 'models/gemini-1.5-pro' }, { name: 'models/gemini-1.5-flash' }] }),
+      json: () => Promise.resolve({ models: [{ name: 'models/gemini-1.5-pro' }, { name: 'models/gemini-1.5-flash' }] }),
     })
 
     const models = await listGeminiModels(ENV)

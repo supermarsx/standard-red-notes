@@ -60,7 +60,7 @@ export class FinishUploadSession implements UseCaseInterface<void> {
         await this.safelyAbortUploadSession(uploadId, filePath)
 
         return Result.fail(
-          `Could not finish upload session. The file exceeds the maximum allowed size of ` +
+          'Could not finish upload session. The file exceeds the maximum allowed size of ' +
             `${this.maxAttachmentByteSize} bytes.`,
         )
       }

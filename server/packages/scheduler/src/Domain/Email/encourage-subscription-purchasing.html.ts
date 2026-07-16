@@ -7,7 +7,7 @@ import { safeHtml } from '@standardnotes/common'
 // so this body should never be sent. The function signature is kept for backwards compatibility
 // with EncourageSubscriptionPurchasing.ts and the JobDoneInterpreter import.
 //
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+
 export const html = (_registrationDate: string, _annualPlusPrice: number, _annualProPrice: number) => safeHtml`<div>
   <p>Hi there,</p>
   <p>We hope you've been finding great use out of Standard Red Notes.</p>

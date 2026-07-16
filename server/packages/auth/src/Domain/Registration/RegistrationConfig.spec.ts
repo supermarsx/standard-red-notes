@@ -2,17 +2,35 @@ import { RoleName } from '@standardnotes/domain-core'
 
 import {
   buildConfirmationUrl,
+  DEFAULT_EMAIL_CONFIRMATION_BODY,
   DEFAULT_REGISTRATION_CONFIG,
   domainMatchesList,
+  EMAIL_CONFIRMATION_GATING_MODES,
   emailAllowedByPolicy,
   emailDomain,
+  isEmailConfirmationGatingMode,
+  isRegistrationDomainMode,
+  normalizeMaxTotalAccounts,
   normalizeDomainList,
+  normalizeSignupWindowValue,
+  REGISTRATION_DOMAIN_MODES,
   RegistrationConfig,
   renderConfirmationEmailBody,
   sanitizeDefaultRole,
 } from './RegistrationConfig'
 
 describe('RegistrationConfig helpers', () => {
+  describe('policy mode guards', () => {
+    it('accepts every supported mode and rejects non-string or unknown values', () => {
+      expect(REGISTRATION_DOMAIN_MODES.every(isRegistrationDomainMode)).toBe(true)
+      expect(EMAIL_CONFIRMATION_GATING_MODES.every(isEmailConfirmationGatingMode)).toBe(true)
+      expect(isRegistrationDomainMode('denylist')).toBe(false)
+      expect(isRegistrationDomainMode(null)).toBe(false)
+      expect(isEmailConfirmationGatingMode('silent')).toBe(false)
+      expect(isEmailConfirmationGatingMode(1)).toBe(false)
+    })
+  })
+
   describe('sanitizeDefaultRole', () => {
     it('accepts a canonical non-admin role', () => {
       expect(sanitizeDefaultRole(RoleName.NAMES.ProUser)).toEqual(RoleName.NAMES.ProUser)
@@ -43,6 +61,10 @@ describe('RegistrationConfig helpers', () => {
 
     it('returns an empty list for a non-array', () => {
       expect(normalizeDomainList(undefined)).toEqual([])
+    })
+
+    it('ignores non-string entries supplied by an untyped settings payload', () => {
+      expect(normalizeDomainList(['valid.example', 42 as unknown as string])).toEqual(['valid.example'])
     })
   })
 
@@ -91,7 +113,9 @@ describe('RegistrationConfig helpers', () => {
     })
 
     it('off -> always allowed', () => {
-      expect(emailAllowedByPolicy('a@blocked.com', config({ domainMode: 'off', domainList: ['blocked.com'] }))).toBe(true)
+      expect(emailAllowedByPolicy('a@blocked.com', config({ domainMode: 'off', domainList: ['blocked.com'] }))).toBe(
+        true,
+      )
     })
 
     it('empty list -> always allowed even when a mode is set', () => {
@@ -139,6 +163,7 @@ describe('RegistrationConfig helpers', () => {
 
     it('falls back to a relative link when no base URL is configured', () => {
       expect(buildConfirmationUrl('', 'tok')).toBe('/?email_confirmation=tok')
+      expect(buildConfirmationUrl(null as unknown as string, 'tok')).toBe('/?email_confirmation=tok')
     })
   })
 
@@ -148,7 +173,42 @@ describe('RegistrationConfig helpers', () => {
     })
 
     it('appends the link when the template omits the placeholder', () => {
-      expect(renderConfirmationEmailBody('No placeholder here', 'https://x/y')).toBe('No placeholder here\n\nhttps://x/y')
+      expect(renderConfirmationEmailBody('No placeholder here', 'https://x/y')).toBe(
+        'No placeholder here\n\nhttps://x/y',
+      )
+    })
+
+    it('uses the secure default body when the configured template is blank', () => {
+      expect(renderConfirmationEmailBody('   ', 'https://x/y')).toBe(
+        DEFAULT_EMAIL_CONFIRMATION_BODY.replace('{{confirmation_url}}', 'https://x/y'),
+      )
+    })
+  })
+
+  describe('signup window normalization', () => {
+    it('clears missing, blank, and invalid bounds', () => {
+      expect(normalizeSignupWindowValue(undefined)).toBeNull()
+      expect(normalizeSignupWindowValue('  ')).toBeNull()
+      expect(normalizeSignupWindowValue('not-a-date')).toBeNull()
+    })
+
+    it('canonicalizes a valid absolute instant to UTC', () => {
+      expect(normalizeSignupWindowValue('2026-07-15T12:30:00+02:00')).toBe('2026-07-15T10:30:00.000Z')
+    })
+  })
+
+  describe('account cap normalization', () => {
+    it('accepts non-negative safe integers and clamps oversized input', () => {
+      expect(normalizeMaxTotalAccounts(0)).toBe(0)
+      expect(normalizeMaxTotalAccounts('12')).toBe(12)
+      expect(normalizeMaxTotalAccounts(Number.MAX_VALUE)).toBe(Number.MAX_SAFE_INTEGER)
+      expect(normalizeMaxTotalAccounts(Number.MAX_SAFE_INTEGER + 1)).toBe(Number.MAX_SAFE_INTEGER)
+    })
+
+    it('falls back to unlimited for negative, fractional, or non-numeric input', () => {
+      expect(normalizeMaxTotalAccounts(-1)).toBe(0)
+      expect(normalizeMaxTotalAccounts(1.5)).toBe(0)
+      expect(normalizeMaxTotalAccounts('invalid')).toBe(0)
     })
   })
 })

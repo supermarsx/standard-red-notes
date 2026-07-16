@@ -56,9 +56,7 @@ function buildContainer(): Container {
   // exercised, which touches neither, but the constructor injects them at
   // resolution so the bindings must exist. Redis is @optional but bound for
   // determinism.
-  container
-    .bind(TYPES.Sync_ORMItemRepository)
-    .toConstantValue({ manager: { query: async () => [] } })
+  container.bind(TYPES.Sync_ORMItemRepository).toConstantValue({ manager: { query: async () => [] } })
   container.bind(TYPES.Sync_Redis).toConstantValue({ ping: async () => 'PONG' })
 
   return container
@@ -90,7 +88,7 @@ function requestOf(baseUrl: string, method: string, routePath: string): Promise<
 
 async function bootServer(withFallback: boolean): Promise<http.Server> {
   const server = new InversifyExpressServer(buildContainer())
-  const app = server.build()
+  const app = await server.build()
   // Mirror bin/server.ts: the fallback is mounted AFTER build().
   if (withFallback) {
     app.use(notFoundFallback)

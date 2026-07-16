@@ -47,9 +47,7 @@ export class CreateCustomRole implements UseCaseInterface<RolePermissionsView> {
     }
 
     if (Object.values(RoleName.NAMES).includes(normalizedName)) {
-      return Result.fail(
-        `Could not create custom role: '${normalizedName}' is a reserved built-in role name.`,
-      )
+      return Result.fail(`Could not create custom role: '${normalizedName}' is a reserved built-in role name.`)
     }
 
     const existing = await this.roleRepository.findOneByName(normalizedName)

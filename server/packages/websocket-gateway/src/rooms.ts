@@ -187,11 +187,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
  * Wired by the caller to a real capability check; when omitted, joins are allowed
  * (standalone / test default — see gateway.ts for the production authorizer).
  */
-export type RoomJoinAuthorizer = (
-  userUuid: string,
-  room: string,
-  capability?: string,
-) => boolean | Promise<boolean>
+export type RoomJoinAuthorizer = (userUuid: string, room: string, capability?: string) => boolean | Promise<boolean>
 
 /**
  * Handle one parsed relay frame against the room registry on behalf of `conn`.

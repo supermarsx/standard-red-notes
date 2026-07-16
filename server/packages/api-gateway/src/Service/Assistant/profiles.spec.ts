@@ -80,7 +80,13 @@ describe('assistant profiles', () => {
     })
 
     it('maps ollama to the native ollama provider with its base URL', () => {
-      const r = resolveProfileProvider({ id: 'o', name: 'Ollama', provider: 'ollama', baseUrl: 'http://x:11434', enabled: true })
+      const r = resolveProfileProvider({
+        id: 'o',
+        name: 'Ollama',
+        provider: 'ollama',
+        baseUrl: 'http://x:11434',
+        enabled: true,
+      })
       expect(r.providerId).toBe('ollama')
       expect(r.config.ollamaUrl).toBe('http://x:11434')
     })
@@ -149,7 +155,15 @@ describe('assistant profiles', () => {
     it('accepts a valid array and preserves a write-only key when apiKey is omitted', () => {
       const existing = [openai]
       const result = validateProfilesPatch(
-        [{ id: 'p2', name: 'OpenRouter renamed', provider: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1', enabled: true }],
+        [
+          {
+            id: 'p2',
+            name: 'OpenRouter renamed',
+            provider: 'openai-compatible',
+            baseUrl: 'https://openrouter.ai/api/v1',
+            enabled: true,
+          },
+        ],
         'p2',
         existing,
       )
@@ -193,9 +207,18 @@ describe('assistant profiles', () => {
     })
 
     it('rejects invalid providers, missing ids/names, bad URLs, and duplicates', () => {
-      expect('error' in validateProfilesPatch([{ id: 'a', name: 'a', provider: 'nope', enabled: true }], undefined, undefined)).toBe(true)
-      expect('error' in validateProfilesPatch([{ id: '', name: 'a', provider: 'anthropic', enabled: true }], undefined, undefined)).toBe(true)
-      expect('error' in validateProfilesPatch([{ id: 'a', name: '', provider: 'anthropic', enabled: true }], undefined, undefined)).toBe(true)
+      expect(
+        'error' in
+          validateProfilesPatch([{ id: 'a', name: 'a', provider: 'nope', enabled: true }], undefined, undefined),
+      ).toBe(true)
+      expect(
+        'error' in
+          validateProfilesPatch([{ id: '', name: 'a', provider: 'anthropic', enabled: true }], undefined, undefined),
+      ).toBe(true)
+      expect(
+        'error' in
+          validateProfilesPatch([{ id: 'a', name: '', provider: 'anthropic', enabled: true }], undefined, undefined),
+      ).toBe(true)
       expect(
         'error' in
           validateProfilesPatch(
@@ -244,8 +267,18 @@ describe('backend profiles', () => {
     it('masks the secret to keyConfigured and never leaks the key', () => {
       const masked = maskBackendProfiles([apiKeyBackend, subscriptionBackend])
       expect(JSON.stringify(masked)).not.toContain('sk-backend-secret')
-      expect(masked[0]).toMatchObject({ id: 'be-anthropic', type: 'api-key', provider: 'anthropic', keyConfigured: true })
-      expect(masked[1]).toMatchObject({ id: 'be-sub', type: 'subscription', subscriptionId: 'team-1', keyConfigured: false })
+      expect(masked[0]).toMatchObject({
+        id: 'be-anthropic',
+        type: 'api-key',
+        provider: 'anthropic',
+        keyConfigured: true,
+      })
+      expect(masked[1]).toMatchObject({
+        id: 'be-sub',
+        type: 'subscription',
+        subscriptionId: 'team-1',
+        keyConfigured: false,
+      })
     })
   })
 
@@ -286,7 +319,13 @@ describe('backend profiles', () => {
     })
 
     it('returns the profile unchanged when the referenced backend is missing', () => {
-      const profile: PersistedAiProfile = { id: 'p', name: 'Ref', provider: 'anthropic', enabled: true, backendProfileId: 'gone' }
+      const profile: PersistedAiProfile = {
+        id: 'p',
+        name: 'Ref',
+        provider: 'anthropic',
+        enabled: true,
+        backendProfileId: 'gone',
+      }
       expect(resolveEffectiveAssistantProfile(profile, [apiKeyBackend])).toBe(profile)
     })
   })
@@ -298,7 +337,13 @@ describe('backend profiles', () => {
     })
 
     it('synthesizes backend profiles from embedded assistant profiles when none are persisted', () => {
-      const anthropic: PersistedAiProfile = { id: 'p1', name: 'Claude', provider: 'anthropic', enabled: true, apiKey: 'sk' }
+      const anthropic: PersistedAiProfile = {
+        id: 'p1',
+        name: 'Claude',
+        provider: 'anthropic',
+        enabled: true,
+        apiKey: 'sk',
+      }
       const codex: PersistedAiProfile = { id: 'p2', name: 'Codex', provider: 'codex-subscription', enabled: true }
       const synth = effectiveBackendProfiles(undefined, [anthropic, codex])
       expect(synth[0]).toMatchObject({ id: 'backend-of-p1', type: 'api-key', provider: 'anthropic', apiKey: 'sk' })
@@ -306,8 +351,17 @@ describe('backend profiles', () => {
     })
 
     it('backendProfileFromAssistantProfile maps openai-compatible providers', () => {
-      const openrouter: PersistedAiProfile = { id: 'p', name: 'OR', provider: 'openai-compatible', enabled: true, apiKey: 'or' }
-      expect(backendProfileFromAssistantProfile(openrouter)).toMatchObject({ type: 'api-key', provider: 'openai-compatible' })
+      const openrouter: PersistedAiProfile = {
+        id: 'p',
+        name: 'OR',
+        provider: 'openai-compatible',
+        enabled: true,
+        apiKey: 'or',
+      }
+      expect(backendProfileFromAssistantProfile(openrouter)).toMatchObject({
+        type: 'api-key',
+        provider: 'openai-compatible',
+      })
     })
   })
 

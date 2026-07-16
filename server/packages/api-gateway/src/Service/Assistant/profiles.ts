@@ -215,7 +215,7 @@ export function effectiveProfiles(
   const defaultProfileId =
     persistedDefaultId && profiles.some((profile) => profile.id === persistedDefaultId)
       ? persistedDefaultId
-      : enabled[0]?.id ?? profiles[0]?.id
+      : (enabled[0]?.id ?? profiles[0]?.id)
 
   return { profiles, defaultProfileId }
 }
@@ -247,8 +247,7 @@ export function selectActiveProfile(
 
 /** Result of validating a PUT `ai.profiles` / `ai.defaultProfileId` payload. */
 export type ProfilesValidation =
-  | { profiles?: PersistedAiProfile[] | null; defaultProfileId?: string | null }
-  | { error: string }
+  { profiles?: PersistedAiProfile[] | null; defaultProfileId?: string | null } | { error: string }
 
 const MAX_PROFILES = 50
 const MAX_NAME_LENGTH = 120
@@ -317,7 +316,10 @@ export function validateProfilesPatch(
         }
 
         const provider = raw.provider
-        if (typeof provider !== 'string' || !ASSISTANT_PROFILE_PROVIDER_KINDS.includes(provider as AssistantProfileProviderKind)) {
+        if (
+          typeof provider !== 'string' ||
+          !ASSISTANT_PROFILE_PROVIDER_KINDS.includes(provider as AssistantProfileProviderKind)
+        ) {
           return {
             error: `Profile ${id} has an invalid provider. Expected one of: ${ASSISTANT_PROFILE_PROVIDER_KINDS.join(', ')}.`,
           }
@@ -625,9 +627,7 @@ export function resolveAssignedProfileId(
 // Validation of PUT payloads for the new sections.
 // ---------------------------------------------------------------------------
 
-export type BackendProfilesValidation =
-  | { backendProfiles?: PersistedBackendProfile[] | null }
-  | { error: string }
+export type BackendProfilesValidation = { backendProfiles?: PersistedBackendProfile[] | null } | { error: string }
 
 /**
  * Validates the `backendProfiles` array from a PUT body. `null` clears the
@@ -745,9 +745,7 @@ export function validateBackendProfilesPatch(
   return { backendProfiles: backends }
 }
 
-export type AssignmentsValidation =
-  | { assignments?: AssistantProfileAssignments | null }
-  | { error: string }
+export type AssignmentsValidation = { assignments?: AssistantProfileAssignments | null } | { error: string }
 
 /**
  * Validates an `assignments` object: `{ users?: Record<id,profileId>, roles?:

@@ -275,9 +275,7 @@ describe('AdminController server-status', () => {
       const probeSpy = jest
         .spyOn(controller as unknown as ProbeSpyTarget, 'probeServiceReadiness')
         .mockImplementation(async (name: string) => ({ name, reachable: true, status: 'ok' }))
-      jest
-        .spyOn(controller as unknown as ProbeSpyTarget, 'probeAuthReadiness')
-        .mockResolvedValue({ reachable: true })
+      jest.spyOn(controller as unknown as ProbeSpyTarget, 'probeAuthReadiness').mockResolvedValue({ reachable: true })
 
       await controller.getServerStatus({} as Request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
 
@@ -300,7 +298,12 @@ describe('AdminController server-status', () => {
       const result = await (controller as unknown as ProbeSpyTarget).probeAuthReadiness(fetchFn)
 
       expect(fetchFn).toHaveBeenCalledWith('http://localhost:3103/healthcheck/readiness', expect.anything())
-      expect(result).toEqual({ reachable: true, status: 'ready', checks: { db: true }, responseTimeMs: expect.any(Number) })
+      expect(result).toEqual({
+        reachable: true,
+        status: 'ready',
+        checks: { db: true },
+        responseTimeMs: expect.any(Number),
+      })
     })
 
     it('treats a 404 readiness as "fall back to liveness": /healthcheck 200 => ok (liveness only)', async () => {
@@ -473,7 +476,12 @@ describe('AdminController server-status', () => {
         expect.objectContaining({
           audit: 'admin.server-settings.update',
           adminUuid: 'admin-1',
-          changedSettings: ['ai.anthropicApiKey', 'ai.dailyRequestLimit', 'updateCheck.url', 'nextcloudBackups.enabled'],
+          changedSettings: [
+            'ai.anthropicApiKey',
+            'ai.dailyRequestLimit',
+            'updateCheck.url',
+            'nextcloudBackups.enabled',
+          ],
         }),
       )
       expect(JSON.stringify(logger.info.mock.calls)).not.toContain('sk-new-secret')
@@ -822,7 +830,10 @@ describe('AdminController server-status', () => {
         expect(statusMock).toHaveBeenCalledWith(400)
       }
       // Nothing persisted — the resolver still returns the hardcoded defaults.
-      expect(await resolver.resolveProofOfWorkConfig()).toMatchObject({ registerDifficulty: 12, signInMode: 'adaptive' })
+      expect(await resolver.resolveProofOfWorkConfig()).toMatchObject({
+        registerDifficulty: 12,
+        signInMode: 'adaptive',
+      })
       expect(logger.info).not.toHaveBeenCalled()
     })
 
@@ -977,10 +988,7 @@ describe('AdminLogsService', () => {
       }),
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { AdminLogsService: Service } = require('../../Service/AdminLogs/AdminLogsService')
-
-    return new Service('/var/lib/server/logs', fileSystem)
+    return new AdminLogsService('/var/lib/server/logs', fileSystem)
   }
 
   it('parses winston JSON lines and infers service from the file name for plain lines', async () => {
@@ -1017,10 +1025,7 @@ describe('AdminLogsService', () => {
       readdir: jest.fn().mockRejectedValue(new Error('ENOENT')),
       readFile: jest.fn(),
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { AdminLogsService: Service } = require('../../Service/AdminLogs/AdminLogsService')
-
-    const result = await new Service('/nope', fileSystem).tail({ limit: 10 })
+    const result = await new AdminLogsService('/nope', fileSystem).tail({ limit: 10 })
 
     expect(result).toEqual({ entries: [], truncated: false })
   })
@@ -1031,10 +1036,7 @@ describe('AdminLogsService', () => {
       readFile: jest.fn(),
       readTail: jest.fn().mockResolvedValue('{"level":"info","message":"bounded","service":"auth"}'),
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { AdminLogsService: Service } = require('../../Service/AdminLogs/AdminLogsService')
-
-    const result = await new Service('/var/lib/server/logs', fileSystem).tail({ limit: 10 })
+    const result = await new AdminLogsService('/var/lib/server/logs', fileSystem).tail({ limit: 10 })
 
     expect(fileSystem.readTail).toHaveBeenCalledWith(expect.stringMatching(/[\\/]auth\.log$/), 512 * 1024)
     expect(fileSystem.readFile).not.toHaveBeenCalled()
@@ -1173,10 +1175,7 @@ describe('AdminController container-restart (docker)', () => {
 
   // The docker service is the LAST constructor arg; everything between is left
   // undefined so the controller degrades all other surfaces gracefully.
-  const buildController = (
-    docker?: unknown,
-    logger?: { info: jest.Mock },
-  ): AdminController =>
+  const buildController = (docker?: unknown, logger?: { info: jest.Mock }): AdminController =>
     new AdminController(
       {} as ServiceProxyInterface,
       {} as EndpointResolverInterface,
@@ -1224,7 +1223,10 @@ describe('AdminController container-restart (docker)', () => {
 
   it('rejects a non-admin with 403 and never touches docker', async () => {
     const docker = enabledDocker()
-    await buildController(docker).restartContainer({ params: { name: 'cache' } } as unknown as Request, responseWith(nonAdmin))
+    await buildController(docker).restartContainer(
+      { params: { name: 'cache' } } as unknown as Request,
+      responseWith(nonAdmin),
+    )
     expect(statusMock).toHaveBeenCalledWith(403)
     expect(docker.restart).not.toHaveBeenCalled()
   })

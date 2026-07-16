@@ -97,14 +97,14 @@ export class User {
   @Column({
     name: 'pw_cost',
     type: 'int',
-    nullable: true
+    nullable: true,
   })
   declare pwCost: number
 
   @Column({
     name: 'pw_key_size',
     type: 'int',
-    nullable: true
+    nullable: true,
   })
   declare pwKeySize: number
 
@@ -157,7 +157,7 @@ export class User {
   @Column({
     name: 'num_failed_attempts',
     type: 'int',
-    nullable: true
+    nullable: true,
   })
   declare numberOfFailedAttempts: number | null
 
@@ -460,9 +460,7 @@ export class User {
    */
   isAccessBlocked(now: Date = new Date()): boolean {
     return (
-      this.isPendingApproval() ||
-      this.isSuspended() ||
-      (this.isBanned(now) && this.effectiveBanType() !== 'shadow')
+      this.isPendingApproval() || this.isSuspended() || (this.isBanned(now) && this.effectiveBanType() !== 'shadow')
     )
   }
 }

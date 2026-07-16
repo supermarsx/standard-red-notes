@@ -62,7 +62,9 @@ describe('CohereProvider.send', () => {
         sse({
           type: 'tool-call-start',
           index: 0,
-          delta: { message: { tool_calls: { id: 'tc_1', type: 'function', function: { name: 'lookup', arguments: '' } } } },
+          delta: {
+            message: { tool_calls: { id: 'tc_1', type: 'function', function: { name: 'lookup', arguments: '' } } },
+          },
         }),
         sse({
           type: 'tool-call-delta',
@@ -91,9 +93,7 @@ describe('CohereProvider.send', () => {
   })
 
   it('maps a TOOL_CALL finish reason to tool_use', async () => {
-    fetchMock.mockResolvedValue(
-      streamResponse([sse({ type: 'message-end', delta: { finish_reason: 'TOOL_CALL' } })]),
-    )
+    fetchMock.mockResolvedValue(streamResponse([sse({ type: 'message-end', delta: { finish_reason: 'TOOL_CALL' } })]))
 
     const events = await collect(new CohereProvider('command-r', ENV).send(baseRequest))
     expect(events.at(-1)).toEqual({ kind: 'finish', stopReason: 'tool_use' })

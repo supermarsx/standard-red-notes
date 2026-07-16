@@ -205,7 +205,10 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
   })
 
   it('rejects a setting that is NOT admin-manageable', async () => {
-    const result = await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.MfaSecret, 'x'), adminResponse)
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.MfaSecret, 'x'),
+      adminResponse,
+    )
 
     expect(result.statusCode).toEqual(400)
     expect(setSettingValue.execute).not.toHaveBeenCalled()

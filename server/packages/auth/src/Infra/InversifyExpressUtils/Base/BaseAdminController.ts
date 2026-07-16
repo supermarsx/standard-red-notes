@@ -520,16 +520,16 @@ export class BaseAdminController extends BaseHttpController {
       value != null &&
       !VALID_EMAIL_BACKUP_FREQUENCIES.includes(value)
     ) {
-      return this.json(
-        { error: { message: `Invalid email backup frequency '${value}'.` } },
-        400,
-      )
+      return this.json({ error: { message: `Invalid email backup frequency '${value}'.` } }, 400)
     }
 
     // Standard Red Notes: the server-OCR opt-in is a strict boolean flag; only
     // 'true' or 'false' are accepted so the gateway gate reads an unambiguous value.
     if (name === SettingName.NAMES.OcrServerAllowed && value != null && value !== 'true' && value !== 'false') {
-      return this.json({ error: { message: `Invalid OCR server-allowed value '${value}'. Use 'true' or 'false'.` } }, 400)
+      return this.json(
+        { error: { message: `Invalid OCR server-allowed value '${value}'. Use 'true' or 'false'.` } },
+        400,
+      )
     }
 
     // Standard Red Notes: the Nextcloud-backup admin gate is likewise a strict
@@ -902,10 +902,7 @@ export class BaseAdminController extends BaseHttpController {
     // Guards apply only when SUSPENDING; unsuspending is always safe.
     if (suspended) {
       if (this.actorUuid(response) === userUuid) {
-        return this.json(
-          { error: { message: 'You cannot suspend your own account from the admin panel.' } },
-          400,
-        )
+        return this.json({ error: { message: 'You cannot suspend your own account from the admin panel.' } }, 400)
       }
       if (await this.targetIsLastAdmin(user)) {
         return this.json({ error: { message: 'Cannot suspend the last remaining administrator.' } }, 400)
@@ -985,10 +982,7 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     if (this.actorUuid(response) === userUuid) {
-      return this.json(
-        { error: { message: 'You cannot delete your own account from the admin panel.' } },
-        400,
-      )
+      return this.json({ error: { message: 'You cannot delete your own account from the admin panel.' } }, 400)
     }
 
     if (await this.targetIsLastAdmin(user)) {

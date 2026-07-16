@@ -17,7 +17,7 @@ services:
   # wire-compatible: port 4566, init/ready.d hooks; -compat variant ships
   # awslocal for the bootstrap script). Escape hatch: localstack/localstack:4.4.0.
   floci:
-    image: floci/floci:1.5.29-compat
+    image: floci/floci:1.5.33-compat
     container_name: floci_self_hosted
     expose:
       - 4566
@@ -31,7 +31,7 @@ services:
           - localstack
 
   db:
-    image: mysql:8
+    image: mysql:9.7.1
     container_name: db_self_hosted
     environment:
       - MYSQL_DATABASE=standard_notes_db
@@ -48,7 +48,7 @@ services:
       - standardnotes_self_hosted
 
   cache:
-    image: redis:6.0-alpine
+    image: redis:8.8.0-alpine
     container_name: cache_self_hosted
     volumes:
       - ./data/redis/:/data

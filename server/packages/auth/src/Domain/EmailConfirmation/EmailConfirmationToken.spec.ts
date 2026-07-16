@@ -1,10 +1,7 @@
 import { UniqueEntityId } from '@standardnotes/domain-core'
 
 import { EmailConfirmationToken } from './EmailConfirmationToken'
-import {
-  generateRawEmailConfirmationToken,
-  hashEmailConfirmationToken,
-} from './hashEmailConfirmationToken'
+import { generateRawEmailConfirmationToken, hashEmailConfirmationToken } from './hashEmailConfirmationToken'
 
 describe('EmailConfirmationToken + hashing', () => {
   const NOW = new Date('2026-07-06T00:00:00.000Z')

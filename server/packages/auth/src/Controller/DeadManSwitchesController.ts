@@ -36,7 +36,9 @@ export class DeadManSwitchesController {
     return {
       status: HttpStatusCode.Success,
       data: {
-        deadManSwitches: result.getValue().map((deadManSwitch) => this.deadManSwitchHttpMapper.toProjection(deadManSwitch)),
+        deadManSwitches: result
+          .getValue()
+          .map((deadManSwitch) => this.deadManSwitchHttpMapper.toProjection(deadManSwitch)),
       },
     }
   }

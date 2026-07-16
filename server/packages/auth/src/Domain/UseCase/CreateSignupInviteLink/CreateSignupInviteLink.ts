@@ -3,10 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { SignupInviteLink } from '../../SignupInvite/SignupInviteLink'
 import { SignupInviteLinkRepositoryInterface } from '../../SignupInvite/SignupInviteLinkRepositoryInterface'
-import {
-  generateRawSignupInviteToken,
-  hashSignupInviteToken,
-} from '../../SignupInvite/hashSignupInviteToken'
+import { generateRawSignupInviteToken, hashSignupInviteToken } from '../../SignupInvite/hashSignupInviteToken'
 import { isAssignableDefaultRole } from '../../Role/CanonicalRoles'
 import { normalizeDomainList } from '../../Registration/RegistrationConfig'
 
@@ -72,10 +69,9 @@ export class CreateSignupInviteLink implements UseCaseInterface<{ link: SignupIn
     }
 
     // Auto-approve: admin links honor the flag (default true); user links forced false.
-    const autoApprove = isAdmin ? dto.autoApprove ?? true : false
+    const autoApprove = isAdmin ? (dto.autoApprove ?? true) : false
 
-    const label =
-      typeof dto.label === 'string' && dto.label.trim().length > 0 ? dto.label.trim().slice(0, 255) : null
+    const label = typeof dto.label === 'string' && dto.label.trim().length > 0 ? dto.label.trim().slice(0, 255) : null
 
     const rawToken = generateRawSignupInviteToken()
     const hashedToken = hashSignupInviteToken(rawToken)
@@ -91,8 +87,8 @@ export class CreateSignupInviteLink implements UseCaseInterface<{ link: SignupIn
         revoked: false,
         defaultRole,
         allowedDomain,
-        createdBy: isAdmin ? dto.adminUuid ?? null : null,
-        createdByUserUuid: isAdmin ? null : dto.creatorUserUuid ?? null,
+        createdBy: isAdmin ? (dto.adminUuid ?? null) : null,
+        createdByUserUuid: isAdmin ? null : (dto.creatorUserUuid ?? null),
         createdByKind: dto.creatorKind,
         autoApprove,
         createdAt: now,

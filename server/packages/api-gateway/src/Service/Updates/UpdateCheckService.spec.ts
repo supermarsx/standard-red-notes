@@ -68,7 +68,9 @@ describe('UpdateCheckService', () => {
     })
 
     it('falls back to the first list entry when all are prereleases', () => {
-      const result = parseUpdateResponse([{ tag_name: 'v2.0.0-rc.1', html_url: 'https://example.com/rc', prerelease: true }])
+      const result = parseUpdateResponse([
+        { tag_name: 'v2.0.0-rc.1', html_url: 'https://example.com/rc', prerelease: true },
+      ])
       expect(result).toEqual({ version: 'v2.0.0-rc.1', url: 'https://example.com/rc' })
     })
 
@@ -102,7 +104,11 @@ describe('UpdateCheckService', () => {
 
   describe('getStatus', () => {
     const makeFetch = (body: unknown, ok = true) =>
-      jest.fn().mockResolvedValue({ ok, status: ok ? 200 : 500, json: async () => body }) as jest.MockedFunction<UpdateCheckFetchLike>
+      jest.fn().mockResolvedValue({
+        ok,
+        status: ok ? 200 : 500,
+        json: async () => body,
+      }) as jest.MockedFunction<UpdateCheckFetchLike>
 
     it('reports not configured when no url is set', async () => {
       const fetchFn = makeFetch({})

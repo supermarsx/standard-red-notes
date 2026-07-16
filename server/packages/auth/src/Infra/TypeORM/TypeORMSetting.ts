@@ -46,7 +46,7 @@ export class TypeORMSetting {
   @Column({
     type: 'tinyint',
     nullable: false,
-    default: 0
+    default: 0,
   })
   declare sensitive: boolean
 }

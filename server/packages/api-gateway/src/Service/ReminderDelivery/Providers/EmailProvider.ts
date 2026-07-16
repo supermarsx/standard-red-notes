@@ -72,13 +72,13 @@ export class EmailProvider implements ReminderDeliveryProvider {
       await session.connect()
       await session.expect(220)
 
-      const ehloLines = await session.command(`EHLO standard-red-notes`, 250)
+      const ehloLines = await session.command('EHLO standard-red-notes', 250)
 
       // Opportunistic STARTTLS when the server advertises it and we're not already secure.
       if (!this.config.secure && /\bSTARTTLS\b/i.test(ehloLines.join('\n'))) {
         await session.command('STARTTLS', 220)
         await session.upgradeToTls(host)
-        await session.command(`EHLO standard-red-notes`, 250)
+        await session.command('EHLO standard-red-notes', 250)
       }
 
       if (this.config.user && this.config.password) {
@@ -120,11 +120,11 @@ function buildMessage(from: string, to: string, message: string): string {
     `To: ${to}\r\n` +
     `Subject: ${subject}\r\n` +
     `Date: ${date}\r\n` +
-    `MIME-Version: 1.0\r\n` +
-    `Content-Type: text/plain; charset=utf-8\r\n` +
-    `\r\n` +
+    'MIME-Version: 1.0\r\n' +
+    'Content-Type: text/plain; charset=utf-8\r\n' +
+    '\r\n' +
     `${safeBody}\r\n` +
-    `.\r\n`
+    '.\r\n'
   )
 }
 

@@ -1,4 +1,12 @@
+jest.mock('dns/promises', () => ({
+  lookup: jest.fn(),
+}))
+
+import { lookup } from 'dns/promises'
+
 import { assertPublicHttpUrl, isBlockedHostname, isBlockedIp, SsrfValidationError } from './SsrfFilter'
+
+const mockedLookup = lookup as unknown as jest.Mock
 
 describe('SsrfFilter', () => {
   describe('isBlockedHostname', () => {
@@ -90,10 +98,12 @@ describe('SsrfFilter', () => {
       await expect(assertPublicHttpUrl('http://127.0.0.1/x', resolveToPublic)).rejects.toMatchObject({
         tag: 'blocked-host',
       })
-      await expect(assertPublicHttpUrl('http://169.254.169.254/latest/meta-data/', resolveToPublic)).rejects.toMatchObject(
-        { tag: 'blocked-host' },
-      )
-      await expect(assertPublicHttpUrl('http://[::1]/x', resolveToPublic)).rejects.toMatchObject({ tag: 'blocked-host' })
+      await expect(
+        assertPublicHttpUrl('http://169.254.169.254/latest/meta-data/', resolveToPublic),
+      ).rejects.toMatchObject({ tag: 'blocked-host' })
+      await expect(assertPublicHttpUrl('http://[::1]/x', resolveToPublic)).rejects.toMatchObject({
+        tag: 'blocked-host',
+      })
     })
 
     it('rejects a hostname that resolves to a private address (DNS-rebinding defense)', async () => {
@@ -124,6 +134,18 @@ describe('SsrfFilter', () => {
       expect(url).toBeInstanceOf(URL)
       expect(url.hostname).toBe('example.com')
       expect(url.pathname).toBe('/hook')
+    })
+
+    it('uses the system DNS resolver when no resolver is injected', async () => {
+      mockedLookup.mockResolvedValueOnce([
+        { address: '93.184.216.34', family: 4 },
+        { address: '2606:2800:220:1:248:1893:25c8:1946', family: 6 },
+      ])
+
+      const url = await assertPublicHttpUrl('https://example.com/hook')
+
+      expect(mockedLookup).toHaveBeenCalledWith('example.com', { all: true })
+      expect(url.hostname).toBe('example.com')
     })
 
     it('accepts a literal public IP without resolving', async () => {

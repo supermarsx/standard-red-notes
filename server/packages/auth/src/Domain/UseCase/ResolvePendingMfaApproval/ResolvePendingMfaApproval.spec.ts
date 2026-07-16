@@ -77,9 +77,7 @@ describe('ResolvePendingMfaApproval', () => {
   })
 
   it('should reject resolving an already-resolved approval (single-use)', async () => {
-    pendingMfaApprovalRepository.findByChallengeId = jest
-      .fn()
-      .mockResolvedValue(buildApproval({ status: 'approved' }))
+    pendingMfaApprovalRepository.findByChallengeId = jest.fn().mockResolvedValue(buildApproval({ status: 'approved' }))
 
     const result = await createUseCase().execute({ userUuid, challengeId, approve: true })
 

@@ -151,8 +151,7 @@ describe('createCaldavRouter', () => {
       const res = await fetch(`${h.baseUrl}/dav/calendars/user-1/todos/`, {
         method: 'REPORT',
         headers: { authorization: basic(created.token), 'content-type': 'application/xml', depth: '1' },
-        body:
-          '<?xml version="1.0"?><C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav"><C:filter><C:comp-filter name="VCALENDAR"/></C:filter></C:calendar-query>',
+        body: '<?xml version="1.0"?><C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav"><C:filter><C:comp-filter name="VCALENDAR"/></C:filter></C:calendar-query>',
       })
       const body = await res.text()
       expect(res.status).toBe(207)

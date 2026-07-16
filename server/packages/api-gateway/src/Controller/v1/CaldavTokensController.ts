@@ -71,9 +71,8 @@ export class CaldavTokensController extends BaseHttpController {
     }
 
     const userUuid = (response.locals.user as { uuid: string }).uuid
-    const label = typeof (request.body as { label?: unknown })?.label === 'string'
-      ? (request.body as { label: string }).label
-      : ''
+    const label =
+      typeof (request.body as { label?: unknown })?.label === 'string' ? (request.body as { label: string }).label : ''
 
     try {
       const created = await this.caldavService.createToken(userUuid, label)

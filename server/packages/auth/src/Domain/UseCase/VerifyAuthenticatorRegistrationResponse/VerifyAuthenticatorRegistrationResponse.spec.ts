@@ -1,10 +1,12 @@
-import * as simeplWebAuthnServer from '@simplewebauthn/server'
+import {
+  type RegistrationResponseJSON,
+  type VerifiedRegistrationResponse,
+  verifyRegistrationResponse,
+} from '@simplewebauthn/server'
 
 jest.mock('@simplewebauthn/server', () => ({
   verifyRegistrationResponse: jest.fn(),
 }))
-import { VerifiedRegistrationResponse } from '@simplewebauthn/server'
-import { RegistrationResponseJSON } from '@simplewebauthn/server'
 import { Result } from '@standardnotes/domain-core'
 import { Authenticator } from '../../Authenticator/Authenticator'
 
@@ -154,7 +156,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
+    const mock = verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: false,
@@ -199,7 +201,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
+    const mock = verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       throw new Error('Oops')
     })
@@ -233,7 +235,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
+    const mock = verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,
@@ -271,7 +273,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
+    const mock = verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,
@@ -322,7 +324,7 @@ describe('VerifyAuthenticatorRegistrationResponse', () => {
 
     const useCase = createUseCase()
 
-    const mock = simeplWebAuthnServer.verifyRegistrationResponse as jest.Mock
+    const mock = verifyRegistrationResponse as jest.Mock
     mock.mockImplementation(() => {
       return Promise.resolve({
         verified: true,

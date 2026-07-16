@@ -1,10 +1,5 @@
 import * as zlib from 'node:zlib'
-import {
-  DeleteMessageCommand,
-  ReceiveMessageCommand,
-  SQSClient,
-  type SQSClientConfig,
-} from '@aws-sdk/client-sqs'
+import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs'
 import { ConnectionRegistry, dispatch, type DispatchMessage, type SendableSocket } from './registry.js'
 import type { Logger } from './redisBridge.js'
 
@@ -49,7 +44,8 @@ export function decodeSqsBodyToDispatch(body: string): DispatchMessage | null {
   return {
     userUuid: payload.userUuid,
     message: payload.message,
-    originatingSessionUuid: typeof payload.originatingSessionUuid === 'string' ? payload.originatingSessionUuid : undefined,
+    originatingSessionUuid:
+      typeof payload.originatingSessionUuid === 'string' ? payload.originatingSessionUuid : undefined,
   }
 }
 
@@ -109,9 +105,7 @@ export function startSqsConsumer<S extends SendableSocket>(
             }
           }
           if (msg.ReceiptHandle) {
-            await client.send(
-              new DeleteMessageCommand({ QueueUrl: opts.queueUrl, ReceiptHandle: msg.ReceiptHandle }),
-            )
+            await client.send(new DeleteMessageCommand({ QueueUrl: opts.queueUrl, ReceiptHandle: msg.ReceiptHandle }))
           }
         }
       } catch (err) {

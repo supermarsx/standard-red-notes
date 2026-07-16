@@ -82,10 +82,7 @@ describe('TriggerDueDeadManSwitches', () => {
   })
 
   it('should not mark a switch triggered when the email could not be sent', async () => {
-    emailSender.sendEmail = jest
-      .fn()
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
+    emailSender.sendEmail = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
 
     const result = await createUseCase().execute({})
 
@@ -100,10 +97,7 @@ describe('TriggerDueDeadManSwitches', () => {
   })
 
   it('should continue past an individual email failure', async () => {
-    emailSender.sendEmail = jest
-      .fn()
-      .mockRejectedValueOnce(new Error('smtp blew up'))
-      .mockResolvedValueOnce(true)
+    emailSender.sendEmail = jest.fn().mockRejectedValueOnce(new Error('smtp blew up')).mockResolvedValueOnce(true)
 
     const result = await createUseCase().execute({})
 
@@ -113,10 +107,45 @@ describe('TriggerDueDeadManSwitches', () => {
     expect(deadManSwitchRepository.save).toHaveBeenCalledTimes(2)
   })
 
+  it('should log and skip a delivered switch whose persisted state can no longer be reconstructed', async () => {
+    const invalidSwitch = buildSwitch('11111111-1111-1111-1111-111111111111')
+    invalidSwitch.props.recipientEmail = ''
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([invalidSwitch])
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Could not mark dead man switch'))
+  })
+
+  it('should log and skip a failed delivery whose retry state can no longer be reconstructed', async () => {
+    const invalidSwitch = buildSwitch('11111111-1111-1111-1111-111111111111')
+    invalidSwitch.props.shareUrl = ''
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([invalidSwitch])
+    emailSender.sendEmail = jest.fn().mockResolvedValue(false)
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Could not record dead man switch'))
+  })
+
+  it('should contain a retry persistence failure and leave the switch due for a later scan', async () => {
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+    deadManSwitchRepository.save = jest.fn().mockRejectedValue(new Error('database unavailable'))
+    emailSender.sendEmail = jest.fn().mockResolvedValue(false)
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Error recording dead man switch'))
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
+  })
+
   it('should schedule the next attempt ~5 min out and increment attempts on a failed send', async () => {
-    deadManSwitchRepository.findDue = jest
-      .fn()
-      .mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
     emailSender.sendEmail = jest.fn().mockResolvedValue(false)
 
     const before = Date.now()

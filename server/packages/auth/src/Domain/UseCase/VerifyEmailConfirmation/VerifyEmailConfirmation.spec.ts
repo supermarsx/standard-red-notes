@@ -88,9 +88,7 @@ describe('VerifyEmailConfirmation', () => {
   })
 
   it('rejects an EXPIRED token with a clear error and does not confirm', async () => {
-    tokenRepository.findByHashedToken.mockResolvedValue(
-      makeToken({ expiresAt: new Date(NOW.getTime() - 1000) }),
-    )
+    tokenRepository.findByHashedToken.mockResolvedValue(makeToken({ expiresAt: new Date(NOW.getTime() - 1000) }))
     userRepository.findOneByUuid.mockResolvedValue(makeUser(false))
 
     const result = await createUseCase().execute({ token: RAW })
@@ -126,6 +124,52 @@ describe('VerifyEmailConfirmation', () => {
 
     expect(result.getValue().success).toBe(false)
     expect(result.getValue().errorMessage).toMatch(/invalid/i)
+  })
+
+  it('rejects a token containing an invalid user uuid before querying users', async () => {
+    const token = makeToken()
+    token.props.userUuid = 'not-a-uuid'
+    tokenRepository.findByHashedToken.mockResolvedValue(token)
+
+    const result = await createUseCase().execute({ token: RAW })
+
+    expect(result.getValue().success).toBe(false)
+    expect(result.getValue().errorMessage).toMatch(/invalid/i)
+    expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
+  })
+
+  it('rejects a valid token whose user no longer exists', async () => {
+    tokenRepository.findByHashedToken.mockResolvedValue(makeToken())
+    userRepository.findOneByUuid.mockResolvedValue(null)
+
+    const result = await createUseCase().execute({ token: RAW })
+
+    expect(result.getValue().success).toBe(false)
+    expect(result.getValue().errorMessage).toMatch(/invalid/i)
+    expect(tokenRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('consumes an unused token without rewriting a user already confirmed by another path', async () => {
+    const token = makeToken()
+    tokenRepository.findByHashedToken.mockResolvedValue(token)
+    userRepository.findOneByUuid.mockResolvedValue(makeUser(true))
+
+    const result = await createUseCase().execute({ token: RAW })
+
+    expect(result.getValue()).toEqual({ success: true })
+    expect(userRepository.save).not.toHaveBeenCalled()
+    expect(token.props.consumed).toBe(true)
+    expect(tokenRepository.save).toHaveBeenCalledWith(token)
+  })
+
+  it('returns a failed result and logs when token lookup throws', async () => {
+    tokenRepository.findByHashedToken.mockRejectedValue(new Error('database unavailable'))
+
+    const result = await createUseCase().execute({ token: RAW })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('Could not verify the confirmation link.')
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
   })
 
   it('rejects an empty token without hitting the repository', async () => {

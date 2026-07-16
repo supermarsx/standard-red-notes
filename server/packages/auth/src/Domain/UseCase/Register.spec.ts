@@ -10,7 +10,7 @@ import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
 import { Register } from './Register'
 import { AuthResponseFactory20200115 } from '../Auth/AuthResponseFactory20200115'
 import { Session } from '../Session/Session'
-import { Result, RoleName } from '@standardnotes/domain-core'
+import { Result, RoleName, UniqueEntityId } from '@standardnotes/domain-core'
 import { ApplyDefaultSettings } from './ApplyDefaultSettings/ApplyDefaultSettings'
 import { ActivatePremiumFeatures } from './ActivatePremiumFeatures/ActivatePremiumFeatures'
 import { SettingRepositoryInterface } from '../Setting/SettingRepositoryInterface'
@@ -19,7 +19,6 @@ import { RegistrationConfig } from '../Registration/RegistrationConfig'
 import { SignupLimitsConfig } from '../Registration/SignupLimitsConfig'
 import { SignupLimitsConfigResolverInterface } from '../Registration/SignupLimitsConfigResolverInterface'
 import { SignupRateLimiterInterface } from '../Registration/SignupRateLimiterInterface'
-import { UniqueEntityId } from '@standardnotes/domain-core'
 import { ConsumeSignupInvite } from './ConsumeSignupInvite/ConsumeSignupInvite'
 import { SignupInviteLink } from '../SignupInvite/SignupInviteLink'
 import { SignupInviteLinkRepositoryInterface } from '../SignupInvite/SignupInviteLinkRepositoryInterface'
@@ -564,9 +563,9 @@ describe('Register', () => {
       const proRole = { name: RoleName.NAMES.ProUser } as unknown as Role
       roleRepository.findOneByName = jest.fn().mockResolvedValue(proRole)
 
-      const result = await createUseCaseWithResolver(
-        makeResolver({ defaultRole: RoleName.NAMES.ProUser }),
-      ).execute(dtoFor('person@example.com'))
+      const result = await createUseCaseWithResolver(makeResolver({ defaultRole: RoleName.NAMES.ProUser })).execute(
+        dtoFor('person@example.com'),
+      )
 
       expect(result.success).toBe(true)
       expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.ProUser)
@@ -584,13 +583,13 @@ describe('Register', () => {
 
     it('falls back to CORE_USER when the configured role is not seeded in the database', async () => {
       const coreRole = { name: RoleName.NAMES.CoreUser } as unknown as Role
-      roleRepository.findOneByName = jest.fn().mockImplementation((name: string) =>
-        Promise.resolve(name === RoleName.NAMES.CoreUser ? coreRole : null),
-      )
+      roleRepository.findOneByName = jest
+        .fn()
+        .mockImplementation((name: string) => Promise.resolve(name === RoleName.NAMES.CoreUser ? coreRole : null))
 
-      const result = await createUseCaseWithResolver(
-        makeResolver({ defaultRole: RoleName.NAMES.VaultsUser }),
-      ).execute(dtoFor('person@example.com'))
+      const result = await createUseCaseWithResolver(makeResolver({ defaultRole: RoleName.NAMES.VaultsUser })).execute(
+        dtoFor('person@example.com'),
+      )
 
       expect(result.success).toBe(true)
       expect(roleRepository.findOneByName).toHaveBeenCalledWith(RoleName.NAMES.VaultsUser)
@@ -968,7 +967,7 @@ describe('Register', () => {
       expect(savedUser.workspaceIdentifier).toBe('default')
     })
 
-    it("flag ON: rejecting a duplicate default workspace keeps the legacy error message", async () => {
+    it('flag ON: rejecting a duplicate default workspace keeps the legacy error message', async () => {
       userRepository.findOneByEmailAndWorkspaceIdentifier = jest.fn().mockReturnValue(user)
 
       const result = await createUseCaseWithWorkspaces().execute({
@@ -1094,10 +1093,7 @@ describe('Register', () => {
       inviteToken: overrides.inviteToken,
     })
 
-    const createWithInvite = (
-      resolver: RegistrationConfigResolverInterface,
-      consumer?: ConsumeSignupInvite,
-    ) =>
+    const createWithInvite = (resolver: RegistrationConfigResolverInterface, consumer?: ConsumeSignupInvite) =>
       new Register(
         userRepository,
         roleRepository,
@@ -1339,18 +1335,14 @@ describe('Register', () => {
 
     it('#12 refuses when the close time is in the past (closed)', async () => {
       timer.getUTCDate = jest.fn().mockReturnValue(new Date('2026-06-01T00:00:00Z'))
-      const result = await createWith(
-        makeResolver({ signupsCloseAt: '2026-01-01T00:00:00.000Z' }),
-      ).execute(dto)
+      const result = await createWith(makeResolver({ signupsCloseAt: '2026-01-01T00:00:00.000Z' })).execute(dto)
 
       expect(result.success).toBe(false)
     })
 
     it('#12 refuses when the open time is in the future (not yet open)', async () => {
       timer.getUTCDate = jest.fn().mockReturnValue(new Date('2026-06-01T00:00:00Z'))
-      const result = await createWith(
-        makeResolver({ signupsOpenAt: '2026-12-01T00:00:00.000Z' }),
-      ).execute(dto)
+      const result = await createWith(makeResolver({ signupsOpenAt: '2026-12-01T00:00:00.000Z' })).execute(dto)
 
       expect(result.success).toBe(false)
     })

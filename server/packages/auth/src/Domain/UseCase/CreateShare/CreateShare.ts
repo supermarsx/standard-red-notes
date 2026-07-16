@@ -35,9 +35,7 @@ export class CreateShare implements UseCaseInterface<CreateShareResult> {
     }
 
     const nickname =
-      dto.nickname !== undefined && dto.nickname !== null && dto.nickname.trim().length > 0
-        ? dto.nickname.trim()
-        : null
+      dto.nickname !== undefined && dto.nickname !== null && dto.nickname.trim().length > 0 ? dto.nickname.trim() : null
 
     const oneTimeView = dto.oneTimeView === true
 

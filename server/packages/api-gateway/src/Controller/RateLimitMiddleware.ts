@@ -371,7 +371,9 @@ export const createUserRateLimitMiddleware = (options: {
         })
         response.status(429).send(TOO_MANY_REQUESTS)
       } catch (error) {
-        logger.warn(`Per-user rate limiter failing open (Redis error) for ${resolved.bucket}: ${(error as Error).message}`)
+        logger.warn(
+          `Per-user rate limiter failing open (Redis error) for ${resolved.bucket}: ${(error as Error).message}`,
+        )
         next()
       }
     })()

@@ -29,7 +29,11 @@ export class TypeORMRoleRepository implements RoleRepositoryInterface {
   }
 
   async findAll(): Promise<Role[]> {
-    return this.ormRepository.createQueryBuilder('role').orderBy('role.name', 'ASC').addOrderBy('role.version', 'DESC').getMany()
+    return this.ormRepository
+      .createQueryBuilder('role')
+      .orderBy('role.name', 'ASC')
+      .addOrderBy('role.version', 'DESC')
+      .getMany()
   }
 
   async findOneByUuid(uuid: string): Promise<Role | null> {

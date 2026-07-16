@@ -188,7 +188,8 @@ export class DockerServiceControlService {
     return {
       kind: 'error',
       container: name,
-      message: detail !== '' ? `Restart failed (HTTP ${result.status}): ${detail}` : `Restart failed (HTTP ${result.status}).`,
+      message:
+        detail !== '' ? `Restart failed (HTTP ${result.status}): ${detail}` : `Restart failed (HTTP ${result.status}).`,
     }
   }
 
@@ -204,10 +205,12 @@ export class DockerServiceControlService {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), this.timeoutMs)
       try {
-        const response = await (globalThis.fetch as unknown as (
-          url: string,
-          init: { method: string; headers: Record<string, string>; signal?: AbortSignal },
-        ) => Promise<DockerFetchResult>)(url, { ...init, signal: controller.signal })
+        const response = await (
+          globalThis.fetch as unknown as (
+            url: string,
+            init: { method: string; headers: Record<string, string>; signal?: AbortSignal },
+          ) => Promise<DockerFetchResult>
+        )(url, { ...init, signal: controller.signal })
 
         return response
       } finally {

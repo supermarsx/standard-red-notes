@@ -15,12 +15,7 @@ export class RedisProofOfWorkChallengeRepository implements ProofOfWorkChallenge
     return `${this.PREFIX}:${scope}:${seed}`
   }
 
-  async storeChallenge(
-    seed: string,
-    scope: ProofOfWorkScope,
-    difficulty: number,
-    ttlSeconds: number,
-  ): Promise<void> {
+  async storeChallenge(seed: string, scope: ProofOfWorkScope, difficulty: number, ttlSeconds: number): Promise<void> {
     // The difficulty is stored server-side and is the ONLY authority during
     // verification, so a client cannot downgrade the work it must perform.
     await this.redisClient.setex(this.key(seed, scope), Math.max(1, Math.floor(ttlSeconds)), difficulty.toString())

@@ -108,12 +108,7 @@ export class WebhooksController {
     }
   }
 
-  async delete(params: {
-    userUuid: string
-    isAdmin: boolean
-    webhookId: string
-    ip?: string
-  }): Promise<HttpResponse> {
+  async delete(params: { userUuid: string; isAdmin: boolean; webhookId: string; ip?: string }): Promise<HttpResponse> {
     const result = await this.deleteWebhook.execute({
       userUuid: params.userUuid,
       webhookId: params.webhookId,

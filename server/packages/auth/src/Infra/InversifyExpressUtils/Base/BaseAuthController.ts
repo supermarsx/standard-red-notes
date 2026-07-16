@@ -1,4 +1,4 @@
-import { ControllerContainerInterface } from '@standardnotes/domain-core'
+import { ControllerContainerInterface, Username } from '@standardnotes/domain-core'
 import { Request, Response } from 'express'
 import { Logger } from 'winston'
 
@@ -26,7 +26,6 @@ import { VerifyAppPassword } from '../../../Domain/UseCase/VerifyAppPassword/Ver
 import { VerifyTrustedDevice } from '../../../Domain/UseCase/VerifyTrustedDevice/VerifyTrustedDevice'
 import { CreatePendingMfaApproval } from '../../../Domain/UseCase/CreatePendingMfaApproval/CreatePendingMfaApproval'
 import { UserRepositoryInterface } from '../../../Domain/User/UserRepositoryInterface'
-import { Username } from '@standardnotes/domain-core'
 import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
 import { ProofOfWorkGate, ProofOfWorkChallengePayload } from '../../../Domain/ProofOfWork/ProofOfWorkGate'
 import { VerifyEmailConfirmation } from '../../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
@@ -230,13 +229,14 @@ export class BaseAuthController extends BaseHttpController {
       return this.proofOfWorkRequiredResponse(signInProofOfWork.challenge, 401)
     }
 
-    const verifyMFAResponse: VerifyMFAResponse = appPasswordSatisfiesMfa || trustedDeviceSatisfiesMfa
-      ? { success: true }
-      : await this.verifyMFA.execute({
-          email: request.body.email as string,
-          requestParams: request.body,
-          preventOTPFromFurtherUsage: true,
-        })
+    const verifyMFAResponse: VerifyMFAResponse =
+      appPasswordSatisfiesMfa || trustedDeviceSatisfiesMfa
+        ? { success: true }
+        : await this.verifyMFA.execute({
+            email: request.body.email as string,
+            requestParams: request.body,
+            preventOTPFromFurtherUsage: true,
+          })
 
     if (!verifyMFAResponse.success) {
       // Standard Red Notes: push-MFA. When an untrusted device hits the 2FA

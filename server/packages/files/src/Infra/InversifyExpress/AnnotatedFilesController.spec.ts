@@ -178,6 +178,26 @@ describe('AnnotatedFilesController', () => {
     expect(streamDownloadFile.execute).not.toHaveBeenCalled()
   })
 
+  it('honors an explicit range end', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=10-19'
+
+    await createController().download(request, response)
+
+    expect(streamDownloadFile.execute).toHaveBeenCalledWith(expect.objectContaining({ startRange: 10, endRange: 19 }))
+  })
+
+  it('responds 416 when the explicit range end precedes its start', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=10-9'
+
+    const result = (await createController().download(request, response)) as () => Writable
+    result()
+
+    expect(response.writeHead).toHaveBeenCalledWith(416, expect.objectContaining({ 'Content-Range': 'bytes */555555' }))
+    expect(streamDownloadFile.execute).not.toHaveBeenCalled()
+  })
+
   it('should return proper byte range on consecutive calls', async () => {
     response.locals.permittedOperation = ValetTokenOperation.Read
 

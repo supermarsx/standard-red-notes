@@ -156,7 +156,7 @@ describe('route ordering vs the build() catch-all (boot-mounted)', () => {
         })
       })
 
-      const app = inversifyServer.build()
+      const app = await inversifyServer.build()
       server = app.listen(0)
       baseUrl = await urlWhenListening(server)
     })
@@ -214,7 +214,7 @@ describe('route ordering vs the build() catch-all (boot-mounted)', () => {
       // The original (fragile) ordering: build() first (mounts the catch-all router at
       // '/'), THEN register the routes — so a functioning catch-all shadows them. This
       // is what the fix prevents.
-      const app = inversifyServer.build()
+      const app = await inversifyServer.build()
       registerCaldavRoutes(app, container)
       registerWorkflowsUiProxy(app, container)
       app.post('/sockets/tokens', (_request, response) => response.status(200).json({ token: 'unreachable' }))

@@ -1,7 +1,4 @@
-import {
-  DomainEventInterface,
-  DomainEventMessageHandlerInterface,
-} from '@standardnotes/domain-events'
+import { DomainEventInterface, DomainEventMessageHandlerInterface } from '@standardnotes/domain-events'
 import Redis from 'ioredis'
 import { Logger } from 'winston'
 

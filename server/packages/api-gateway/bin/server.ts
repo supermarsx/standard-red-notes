@@ -99,7 +99,7 @@ process.on('uncaughtException', (error: Error) => {
 const container = new ContainerConfigLoader()
 void container
   .load()
-  .then((container) => {
+  .then(async (container) => {
   const env: Env = new Env()
   env.load()
 
@@ -388,7 +388,7 @@ void container
   // CalDAV router, the Workflows-UI proxy and the WS token-mint route are registered
   // INSIDE setConfig above (before this call), ahead of the controller router — see
   // the note there.
-  const app = server.build()
+  const app = await server.build()
 
   // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback. This
   // replaces the former @controller('') LegacyController catch-all, which declared an

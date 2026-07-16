@@ -23,7 +23,13 @@ describe('SetUserSuspension', () => {
   const validUuid = '00000000-0000-0000-0000-000000000001'
 
   const createUseCase = () =>
-    new SetUserSuspension(userRepository, sessionRepository, ephemeralSessionRepository, revokedSessionRepository, timer)
+    new SetUserSuspension(
+      userRepository,
+      sessionRepository,
+      ephemeralSessionRepository,
+      revokedSessionRepository,
+      timer,
+    )
 
   beforeEach(() => {
     user = {

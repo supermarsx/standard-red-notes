@@ -58,8 +58,7 @@ describe('AssistantController', () => {
     } as unknown as Response
   }
 
-  const streamRequest = (): Request =>
-    ({ body: { messages: [] }, on: jest.fn() }) as unknown as Request
+  const streamRequest = (): Request => ({ body: { messages: [] }, on: jest.fn() }) as unknown as Request
 
   beforeEach(() => {
     redis = {
@@ -177,10 +176,7 @@ describe('AssistantController', () => {
       redis.zrangebyscore.mockResolvedValue([`${Date.now()}:120:abc`])
       const response = responseWith({})
 
-      await makeController(0, { fiveHour: 1000, weekly: 5000 }).usage(
-        { query: {} } as unknown as Request,
-        response,
-      )
+      await makeController(0, { fiveHour: 1000, weekly: 5000 }).usage({ query: {} } as unknown as Request, response)
 
       expect(jsonMock).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -271,9 +271,7 @@ export class SignIn implements UseCaseInterface {
       const config = await this.registrationConfigResolver.resolve()
 
       return (
-        config.emailConfirmationEnabled &&
-        config.emailConfirmationGating === 'block_signin' &&
-        !user.isEmailConfirmed()
+        config.emailConfirmationEnabled && config.emailConfirmationGating === 'block_signin' && !user.isEmailConfirmed()
       )
     } catch {
       return false

@@ -24,12 +24,17 @@ describe('ProofOfWorkDifficulty', () => {
     it('returns 0 for a leading f', () => {
       expect(countLeadingZeroBits('ffffffff')).toBe(0)
     })
+
+    it('stops safely at a malformed digest character', () => {
+      expect(countLeadingZeroBits('not-a-hex-digest')).toBe(0)
+      expect(countLeadingZeroBits('00x123')).toBe(8)
+    })
   })
 
   describe('proofOfWorkSolutionMeetsDifficulty', () => {
     const solve = (seed: string, difficulty: number): string => {
       let nonce = 0
-      // eslint-disable-next-line no-constant-condition
+
       while (true) {
         const digest = crypto.createHash('sha256').update(`${seed}:${nonce}`).digest('hex')
         if (countLeadingZeroBits(digest) >= difficulty) {

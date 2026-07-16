@@ -37,12 +37,7 @@ export class TypeORMProofOfWorkChallengeRepository implements ProofOfWorkChallen
     return `${this.PREFIX}:${scope}:${seed}`
   }
 
-  async storeChallenge(
-    seed: string,
-    scope: ProofOfWorkScope,
-    difficulty: number,
-    ttlSeconds: number,
-  ): Promise<void> {
+  async storeChallenge(seed: string, scope: ProofOfWorkScope, difficulty: number, ttlSeconds: number): Promise<void> {
     await this.cacheEntryRepository.save(
       CacheEntry.create({
         key: this.key(seed, scope),

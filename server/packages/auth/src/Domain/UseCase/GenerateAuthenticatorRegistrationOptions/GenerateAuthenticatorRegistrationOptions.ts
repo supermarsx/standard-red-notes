@@ -1,5 +1,9 @@
 import { Result, UseCaseInterface, Username, Uuid } from '@standardnotes/domain-core'
-import { generateRegistrationOptions } from '@simplewebauthn/server'
+import {
+  type AuthenticatorTransportFuture,
+  type PublicKeyCredentialCreationOptionsJSON,
+  generateRegistrationOptions,
+} from '@simplewebauthn/server'
 
 import { GenerateAuthenticatorRegistrationOptionsDTO } from './GenerateAuthenticatorRegistrationOptionsDTO'
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
@@ -8,7 +12,6 @@ import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallen
 import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { FeatureServiceInterface } from '../../Feature/FeatureServiceInterface'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
-import { AuthenticatorTransportFuture, PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/server'
 
 export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterface<PublicKeyCredentialCreationOptionsJSON> {
   constructor(

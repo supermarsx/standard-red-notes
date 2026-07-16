@@ -50,7 +50,9 @@ describe('ReminderDeliveryController', () => {
     it('reports not available when env disabled even if allowed', async () => {
       service.isEnabled.mockReturnValue(false)
       await makeController().config({} as Request, responseWith(allowed))
-      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({ reminderDeliveryEnabled: false, available: false }))
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ reminderDeliveryEnabled: false, available: false }),
+      )
     })
   })
 

@@ -29,7 +29,8 @@ describe('WorkflowsController', () => {
       pairingStore as unknown as WorkflowsPairingStore,
     )
 
-  const makeController = (enabled: boolean) => new WorkflowsController(makeService(enabled), logger as unknown as Logger)
+  const makeController = (enabled: boolean) =>
+    new WorkflowsController(makeService(enabled), logger as unknown as Logger)
 
   const responseWith = (settings?: Record<string, unknown>): Response => {
     jsonMock = jest.fn()

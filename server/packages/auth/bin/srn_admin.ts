@@ -1084,7 +1084,7 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
   if (action === 'domains') {
     const rest = args.positionals.join(' ')
     if (rest.trim() === '') {
-      throw new UsageError("registration policy domains <comma-separated-domains|clear>")
+      throw new UsageError('registration policy domains <comma-separated-domains|clear>')
     }
     if (rest.trim() === 'clear') {
       const file = await updateRegistrationOverlay((r) => delete r.domainList)
@@ -1424,7 +1424,7 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
 
   throw new UsageError(
     `unknown registration subcommand '${sub}' — status | enable | disable | policy | confirm-email <user> | ` +
-      `invite-only <on|off> | approval <on|off> | max-total <n> | window <open|close> <iso> | invites-per-user <n>`,
+      'invite-only <on|off> | approval <on|off> | max-total <n> | window <open|close> <iso> | invites-per-user <n>',
   )
 }
 
@@ -1458,7 +1458,7 @@ async function cmdIp(args: ParsedArgs, sub: string | undefined): Promise<number>
   if (sub === 'list' || sub === undefined) {
     const which = args.positionals[0]
     if (which !== undefined && which !== 'allow' && which !== 'block') {
-      throw new UsageError("ip list [allow|block]")
+      throw new UsageError('ip list [allow|block]')
     }
     const container = await loadContainer()
     const redis = await getRedisSetClient(container)

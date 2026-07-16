@@ -35,7 +35,9 @@ describe('ResendEmailConfirmation', () => {
   beforeEach(() => {
     userRepository = { findOneByUsernameOrEmail: jest.fn() } as unknown as jest.Mocked<UserRepositoryInterface>
     resolver = { resolve: jest.fn() }
-    sendEmailConfirmation = { execute: jest.fn().mockResolvedValue(Result.ok(true)) } as unknown as jest.Mocked<SendEmailConfirmation>
+    sendEmailConfirmation = {
+      execute: jest.fn().mockResolvedValue(Result.ok(true)),
+    } as unknown as jest.Mocked<SendEmailConfirmation>
     logger = { error: jest.fn() } as unknown as jest.Mocked<Logger>
   })
 

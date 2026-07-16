@@ -81,11 +81,10 @@ export class CollaborationController extends BaseHttpController {
         return
       }
 
-      const capability = sign(
-        { purpose: 'collab-room', userUuid, room: noteUuid },
-        this.capabilitySecret,
-        { algorithm: 'HS256', expiresIn: this.capabilityTtlSeconds },
-      )
+      const capability = sign({ purpose: 'collab-room', userUuid, room: noteUuid }, this.capabilitySecret, {
+        algorithm: 'HS256',
+        expiresIn: this.capabilityTtlSeconds,
+      })
 
       response.status(200).json({ capability, room: noteUuid, expiresIn: this.capabilityTtlSeconds })
     } catch (error) {
@@ -102,11 +101,7 @@ export class CollaborationController extends BaseHttpController {
    * client. Returns true ONLY on a 2xx body with `authorized === true`; ANY other
    * outcome (non-2xx, unparseable, missing flag, thrown error) returns false.
    */
-  private async checkAccessWithSyncingServer(
-    request: Request,
-    response: Response,
-    noteUuid: string,
-  ): Promise<boolean> {
+  private async checkAccessWithSyncingServer(request: Request, response: Response, noteUuid: string): Promise<boolean> {
     let capturedStatus = 0
     let capturedBody: unknown = undefined
 

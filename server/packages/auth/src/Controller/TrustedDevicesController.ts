@@ -34,7 +34,9 @@ export class TrustedDevicesController {
     return {
       status: HttpStatusCode.Success,
       data: {
-        trustedDevices: result.getValue().map((trustedDevice) => this.trustedDeviceHttpMapper.toProjection(trustedDevice)),
+        trustedDevices: result
+          .getValue()
+          .map((trustedDevice) => this.trustedDeviceHttpMapper.toProjection(trustedDevice)),
       },
     }
   }

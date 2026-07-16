@@ -51,11 +51,7 @@ function syncTokenFor(todos: PublishedTodo[]): string {
 }
 
 function xmlEscape(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 function sendXml(response: Response, status: number, body: string): void {
@@ -219,10 +215,12 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
       // Calendar-home: /calendars/<user>/  -> list the todo calendar collection.
       if (segments.length === 2) {
         const responses = [
-          propfindResponse(calendarHomeHref(userUuid), [
-            '        <resourcetype><collection/></resourcetype>',
-            '        <displayname>Calendars</displayname>',
-          ].join('\n')),
+          propfindResponse(
+            calendarHomeHref(userUuid),
+            ['        <resourcetype><collection/></resourcetype>', '        <displayname>Calendars</displayname>'].join(
+              '\n',
+            ),
+          ),
         ]
         if (depth !== '0') {
           responses.push(propfindResponse(calendarHref(userUuid), calendarCollectionProps(userUuid, syncToken)))
@@ -233,9 +231,7 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
 
       // The calendar collection itself: /calendars/<user>/todos/
       if (segments.length === 3 && segments[2] === 'todos') {
-        const responses = [
-          propfindResponse(calendarHref(userUuid), calendarCollectionProps(userUuid, syncToken)),
-        ]
+        const responses = [propfindResponse(calendarHref(userUuid), calendarCollectionProps(userUuid, syncToken))]
         if (depth !== '0') {
           for (const todo of todos) {
             responses.push(propfindResponse(objectHref(userUuid, todo.uid), objectProps(todo)))

@@ -153,7 +153,10 @@ export class AssistantController extends BaseHttpController {
       userIdentifiers.push(user.email.trim())
     }
 
-    return { userIdentifiers, roleNames: roles.map((role) => role.name).filter((name): name is string => Boolean(name)) }
+    return {
+      userIdentifiers,
+      roleNames: roles.map((role) => role.name).filter((name): name is string => Boolean(name)),
+    }
   }
 
   /** Effective provider config: persisted admin overrides win over env. */
@@ -357,9 +360,10 @@ export class AssistantController extends BaseHttpController {
     // Standard Red Notes: MULTIPLE pairings — an optional subscriptionId names the
     // slot this pairing lands in, so adding another never drops the existing ones.
     const body = (request.body ?? {}) as { subscriptionId?: unknown }
-    const subscriptionId = typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
-      ? body.subscriptionId.trim()
-      : undefined
+    const subscriptionId =
+      typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
+        ? body.subscriptionId.trim()
+        : undefined
     const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? 'admin'
     try {
       const { authorizeUrl, state } = this.subscriptionCredentialProvider.beginPairing(adminUuid, subscriptionId)
@@ -436,7 +440,10 @@ export class AssistantController extends BaseHttpController {
       return
     }
     if (query.error) {
-      response.status(400).type('html').send(this.pairingResultHtml(false, `Authorization failed: ${query.error}`))
+      response
+        .status(400)
+        .type('html')
+        .send(this.pairingResultHtml(false, `Authorization failed: ${query.error}`))
       return
     }
     if (!state || !code) {
@@ -448,7 +455,10 @@ export class AssistantController extends BaseHttpController {
       await this.subscriptionCredentialProvider.completePairing(state, code)
       response.type('html').send(this.pairingResultHtml(true, 'Pairing complete. You can close this window.'))
     } catch (error) {
-      response.status(400).type('html').send(this.pairingResultHtml(false, (error as Error).message))
+      response
+        .status(400)
+        .type('html')
+        .send(this.pairingResultHtml(false, (error as Error).message))
     }
   }
 
@@ -466,9 +476,10 @@ export class AssistantController extends BaseHttpController {
     // Standard Red Notes: an explicit subscriptionId removes ONE pairing; omitting
     // it clears ALL (back-compat with the original single-pairing unpair button).
     const body = (request.body ?? {}) as { subscriptionId?: unknown }
-    const subscriptionId = typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
-      ? body.subscriptionId.trim()
-      : undefined
+    const subscriptionId =
+      typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
+        ? body.subscriptionId.trim()
+        : undefined
     try {
       await this.subscriptionCredentialProvider.unpair(subscriptionId)
       response.json({ ok: true })
@@ -534,7 +545,7 @@ export class AssistantController extends BaseHttpController {
    * No secrets — only the success/failure boolean and a human message.
    */
   private pairingResultHtml(success: boolean, message: string): string {
-    const safeMessage = message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string))
+    const safeMessage = message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string)
     return `<!doctype html><html><head><meta charset="utf-8"><title>ChatGPT pairing</title></head>
 <body style="font-family: system-ui, sans-serif; padding: 2rem; text-align: center;">
 <h2>${success ? 'Pairing complete' : 'Pairing failed'}</h2>
@@ -551,11 +562,7 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
   // middleware (which sets response.locals.user the tier keys on). Off by default
   // (userMax 0 => pass-through), so this is behavior-preserving until an admin
   // opts in via the Anti-abuse panel.
-  @httpPost(
-    '/stream',
-    TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
-    TYPES.ApiGateway_UserRateLimitMiddleware,
-  )
+  @httpPost('/stream', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware, TYPES.ApiGateway_UserRateLimitMiddleware)
   async streamCompletion(request: Request, response: Response): Promise<void> {
     const body = (request.body ?? {}) as StreamRequestBody
 
@@ -725,9 +732,7 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       // Record the request's token spend AFTER it completes (best-effort, never
       // affects the response). Real usage when the provider reported it, else an
       // estimate. Subscription-backed calls also feed the admin aggregate meter.
-      const spentTokens = sawUsageEvent
-        ? reportedTokens
-        : this.estimateRequestTokens(body, completionChars)
+      const spentTokens = sawUsageEvent ? reportedTokens : this.estimateRequestTokens(body, completionChars)
       await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
     }
   }

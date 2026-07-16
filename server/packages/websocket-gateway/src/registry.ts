@@ -112,10 +112,7 @@ export class ConnectionRegistry<S extends SendableSocket = SendableSocket> {
  *
  * Returns the number of sockets that received the message.
  */
-export function dispatch<S extends SendableSocket>(
-  registry: ConnectionRegistry<S>,
-  parsed: DispatchMessage,
-): number {
+export function dispatch<S extends SendableSocket>(registry: ConnectionRegistry<S>, parsed: DispatchMessage): number {
   return registry.pushToUser(parsed.userUuid, parsed.message, parsed.originatingSessionUuid)
 }
 
@@ -136,7 +133,6 @@ export function parseDispatchMessage(raw: string): DispatchMessage {
   return {
     userUuid: obj.userUuid,
     message: obj.message,
-    originatingSessionUuid:
-      typeof obj.originatingSessionUuid === 'string' ? obj.originatingSessionUuid : undefined,
+    originatingSessionUuid: typeof obj.originatingSessionUuid === 'string' ? obj.originatingSessionUuid : undefined,
   }
 }

@@ -1,13 +1,16 @@
 import * as crypto from 'crypto'
 import { Result, UseCaseInterface, Username, Uuid } from '@standardnotes/domain-core'
-import { generateAuthenticationOptions } from '@simplewebauthn/server'
+import {
+  type AuthenticatorTransportFuture,
+  type PublicKeyCredentialRequestOptionsJSON,
+  generateAuthenticationOptions,
+} from '@simplewebauthn/server'
 
 import { GenerateAuthenticatorAuthenticationOptionsDTO } from './GenerateAuthenticatorAuthenticationOptionsDTO'
 import { AuthenticatorRepositoryInterface } from '../../Authenticator/AuthenticatorRepositoryInterface'
 import { AuthenticatorChallengeRepositoryInterface } from '../../Authenticator/AuthenticatorChallengeRepositoryInterface'
 import { AuthenticatorChallenge } from '../../Authenticator/AuthenticatorChallenge'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
-import { AuthenticatorTransportFuture, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/server'
 
 export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterface<PublicKeyCredentialRequestOptionsJSON> {
   constructor(

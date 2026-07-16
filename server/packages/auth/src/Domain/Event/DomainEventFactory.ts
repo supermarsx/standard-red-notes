@@ -287,7 +287,6 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
     }
   }
 
-
   createEmailBackupRequestedEvent(userUuid: string, keyParams: KeyParamsData): EmailBackupRequestedEvent {
     return {
       type: 'EMAIL_BACKUP_REQUESTED',

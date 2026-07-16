@@ -45,10 +45,7 @@ export class BaseItemsController extends BaseHttpController {
       this.controllerContainer.register('sync.items.sync', this.sync.bind(this))
       this.controllerContainer.register('sync.items.check_integrity', this.checkItemsIntegrity.bind(this))
       this.controllerContainer.register('sync.items.get_item', this.getSingleItem.bind(this))
-      this.controllerContainer.register(
-        'sync.items.authorize_collaboration',
-        this.authorizeCollaboration.bind(this),
-      )
+      this.controllerContainer.register('sync.items.authorize_collaboration', this.authorizeCollaboration.bind(this))
     }
   }
 

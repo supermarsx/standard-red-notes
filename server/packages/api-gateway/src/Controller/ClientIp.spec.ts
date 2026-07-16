@@ -50,15 +50,15 @@ describe('resolveClientIp — DEFAULT (no CLIENT_IP_HEADER)', () => {
 
 describe('resolveClientIp — CLIENT_IP_HEADER configured', () => {
   it('reads the named header (leftmost, normalized) and it takes precedence over request.ip', () => {
-    const ip = resolveClientIp(
-      req({ ip: '2.2.2.2', headers: { 'x-real-ip': '203.0.113.5' } }),
-      'x-real-ip',
-    )
+    const ip = resolveClientIp(req({ ip: '2.2.2.2', headers: { 'x-real-ip': '203.0.113.5' } }), 'x-real-ip')
     expect(ip).toBe('203.0.113.5')
   })
 
   it('takes only the leftmost value from a comma-joined header', () => {
-    const ip = resolveClientIp(req({ ip: '2.2.2.2', headers: { 'cf-connecting-ip': '203.0.113.5, 10.0.0.1' } }), 'cf-connecting-ip')
+    const ip = resolveClientIp(
+      req({ ip: '2.2.2.2', headers: { 'cf-connecting-ip': '203.0.113.5, 10.0.0.1' } }),
+      'cf-connecting-ip',
+    )
     expect(ip).toBe('203.0.113.5')
   })
 

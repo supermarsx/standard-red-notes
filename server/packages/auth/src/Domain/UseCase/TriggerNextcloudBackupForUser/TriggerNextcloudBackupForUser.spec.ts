@@ -53,7 +53,9 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
     getUserKeyParams.execute = jest.fn().mockResolvedValue({ keyParams: { identifier: 'user@test' } })
 
     domainEventFactory = {} as jest.Mocked<DomainEventFactoryInterface>
-    domainEventFactory.createNextcloudBackupRequestedEvent = jest.fn().mockReturnValue({ type: 'NEXTCLOUD_BACKUP_REQUESTED' })
+    domainEventFactory.createNextcloudBackupRequestedEvent = jest
+      .fn()
+      .mockReturnValue({ type: 'NEXTCLOUD_BACKUP_REQUESTED' })
 
     domainEventPublisher = {} as jest.Mocked<DomainEventPublisherInterface>
     domainEventPublisher.publish = jest.fn().mockResolvedValue(undefined)
@@ -71,6 +73,56 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
         nextcloudFolder: 'backups',
         nextcloudAppPassword: 'secret-app-password',
       }),
+    )
+  })
+
+  it('rejects an invalid user uuid before reading settings', async () => {
+    const result = await createUseCase().execute({ userUuid: 'not-a-uuid' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(getSetting.execute).not.toHaveBeenCalled()
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-recurring backup frequency', async () => {
+    settingValues[SettingName.NAMES.NextcloudBackupFrequency] = 'once'
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('does not have a recurring Nextcloud backup frequency configured')
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects a blank Nextcloud URL', async () => {
+    settingValues[SettingName.NAMES.NextcloudBackupUrl] = '   '
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('does not have a Nextcloud backup URL configured')
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing sensitive app password when setting retrieval fails', async () => {
+    settingValues[SettingName.NAMES.NextcloudBackupAppPassword] = null
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('does not have a Nextcloud backup app password configured')
+    expect(appPasswordRetrieval?.allowSensitiveRetrieval).toBe(true)
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('defaults a missing optional folder to the Nextcloud root', async () => {
+    settingValues[SettingName.NAMES.NextcloudBackupFolder] = null
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(false)
+    expect(domainEventFactory.createNextcloudBackupRequestedEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ nextcloudFolder: '' }),
     )
   })
 

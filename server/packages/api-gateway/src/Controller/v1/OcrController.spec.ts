@@ -12,8 +12,7 @@ describe('OcrController', () => {
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
-  const makeController = (enabled: boolean) =>
-    new OcrController(enabled, 'eng', ocrService as unknown as OcrService)
+  const makeController = (enabled: boolean) => new OcrController(enabled, 'eng', ocrService as unknown as OcrService)
 
   const responseWith = (settings?: Record<string, unknown>): Response => {
     jsonMock = jest.fn()
@@ -33,7 +32,9 @@ describe('OcrController', () => {
     it('reports available only when env enabled AND user allowed', async () => {
       response = responseWith({ [SettingName.NAMES.OcrServerAllowed]: 'true' })
       await makeController(true).config({} as Request, response)
-      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({ serverOcrEnabled: true, allowed: true, available: true }))
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ serverOcrEnabled: true, allowed: true, available: true }),
+      )
     })
 
     it('reports not available when the user is not allowed', async () => {
@@ -91,7 +92,9 @@ describe('OcrController', () => {
 
   describe('recognize', () => {
     const recognizeRequest = (): Request =>
-      ({ body: { pages: [{ pageNumber: 1, imageBase64: Buffer.from('img').toString('base64') }] } }) as unknown as Request
+      ({
+        body: { pages: [{ pageNumber: 1, imageBase64: Buffer.from('img').toString('base64') }] },
+      }) as unknown as Request
 
     it('refuses when the env master switch is off', async () => {
       response = responseWith({ [SettingName.NAMES.OcrServerAllowed]: 'true' })

@@ -39,10 +39,46 @@ describe('CreateSignupInviteLink', () => {
   it('admin link cannot set the ADMIN role as the default (privilege guard)', async () => {
     const result = await new CreateSignupInviteLink(repo).execute({
       creatorKind: 'admin',
+      adminUuid: 'admin-1',
       defaultRole: RoleName.NAMES.AdminUser,
     })
 
     expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('must be a non-admin assignable role')
+    expect(repo.save).not.toHaveBeenCalled()
+  })
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects an invalid invite expiry of %s hours',
+    async (expiresInHours) => {
+      const result = await new CreateSignupInviteLink(repo).execute({
+        creatorKind: 'admin',
+        adminUuid: 'admin-1',
+        expiresInHours,
+      })
+
+      expect(result.isFailed()).toBe(true)
+      expect(result.getError()).toBe('expiresInHours must be a positive number, or null for never-expires.')
+      expect(repo.save).not.toHaveBeenCalled()
+    },
+  )
+
+  it('stores a positive invite expiry relative to creation time', async () => {
+    const now = Date.parse('2026-07-15T20:00:00.000Z')
+    const dateNow = jest.spyOn(Date, 'now').mockReturnValue(now)
+
+    try {
+      const result = await new CreateSignupInviteLink(repo).execute({
+        creatorKind: 'admin',
+        adminUuid: 'admin-1',
+        expiresInHours: 2.5,
+      })
+
+      expect(result.isFailed()).toBe(false)
+      expect(result.getValue().link.props.expiresAt).toEqual(new Date(now + 2.5 * 60 * 60 * 1000))
+    } finally {
+      dateNow.mockRestore()
+    }
   })
 
   it('USER link forces auto_approve=false and carries the referrer', async () => {
@@ -82,8 +118,8 @@ describe('CreateSignupInviteLink', () => {
 
   it('rejects an out-of-range maxUses', async () => {
     expect((await new CreateSignupInviteLink(repo).execute({ creatorKind: 'admin', maxUses: 0 })).isFailed()).toBe(true)
-    expect(
-      (await new CreateSignupInviteLink(repo).execute({ creatorKind: 'admin', maxUses: 999999 })).isFailed(),
-    ).toBe(true)
+    expect((await new CreateSignupInviteLink(repo).execute({ creatorKind: 'admin', maxUses: 999999 })).isFailed()).toBe(
+      true,
+    )
   })
 })

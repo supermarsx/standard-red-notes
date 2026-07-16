@@ -40,14 +40,14 @@ export class OfflineUserSubscription {
   @Column({
     type: 'tinyint',
     nullable: false,
-    default: 0
+    default: 0,
   })
   declare cancelled: boolean
 
   @Column({
     name: 'subscription_id',
     type: 'int',
-    nullable: true
+    nullable: true,
   })
   declare subscriptionId: number | null
 

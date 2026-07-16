@@ -14,15 +14,21 @@ describe('ListRolesWithPermissions', () => {
   let permissionRepository: PermissionRepositoryInterface
 
   const permission = (name: string): Permission => ({ name }) as Permission
-  const role = (name: string, version = 1, description: string | null = null): Role =>
-    ({ uuid: `${name}-uuid`, name, version, description, permissions: Promise.resolve([]) }) as unknown as Role
+  const role = (name: string, version = 1, description: string | null = null, permissions: string[] = []): Role =>
+    ({
+      uuid: `${name}-uuid`,
+      name,
+      version,
+      description,
+      permissions: Promise.resolve(permissions.map((name) => permission(name))),
+    }) as unknown as Role
 
   const createUseCase = () => new ListRolesWithPermissions(roleRepository, permissionRepository)
 
   beforeEach(() => {
     roleRepository = {} as jest.Mocked<RoleRepositoryInterface>
     roleRepository.findAll = jest.fn().mockResolvedValue([
-      role(RoleName.NAMES.CoreUser),
+      role(RoleName.NAMES.CoreUser, 1, null, ['SYNC_ITEMS', 'MANAGE_USERS']),
       role(RoleName.NAMES.ProUser),
       role(RoleName.NAMES.AdminUser),
       role(RoleName.NAMES.VaultsUser),
@@ -32,7 +38,7 @@ describe('ListRolesWithPermissions', () => {
     ])
 
     permissionRepository = {} as jest.Mocked<PermissionRepositoryInterface>
-    permissionRepository.findAll = jest.fn().mockResolvedValue([permission('SYNC_ITEMS')])
+    permissionRepository.findAll = jest.fn().mockResolvedValue([permission('SYNC_ITEMS'), permission('MANAGE_USERS')])
   })
 
   it('exposes exactly the canonical four roles, labelled and in display order', async () => {
@@ -48,6 +54,12 @@ describe('ListRolesWithPermissions', () => {
       RoleName.NAMES.VaultsUser,
     ])
     expect(roles.map((r) => r.label)).toEqual(['Admin user', 'Full user', 'Core user', 'Vaults user'])
+
+    expect(roles.find((r) => r.name === RoleName.NAMES.CoreUser)?.permissionNames).toEqual([
+      'MANAGE_USERS',
+      'SYNC_ITEMS',
+    ])
+    expect(result.getValue().permissions).toEqual(['MANAGE_USERS', 'SYNC_ITEMS'])
 
     // PLUS_USER and legacy roles are hidden.
     expect(roles.some((r) => r.name === RoleName.NAMES.PlusUser)).toBe(false)

@@ -96,7 +96,11 @@ describe('RateLimitMiddleware', () => {
     it('is a no-op pass-through when disabled', async () => {
       const next: NextFunction = jest.fn()
       const { response, status } = buildResponse()
-      const middleware = createRateLimitMiddleware({ redis: buildRedis(), config: { ...config, enabled: false }, logger: { warn: jest.fn() } })
+      const middleware = createRateLimitMiddleware({
+        redis: buildRedis(),
+        config: { ...config, enabled: false },
+        logger: { warn: jest.fn() },
+      })
       middleware(buildRequest(), response, next)
       await flush()
       expect(next).toHaveBeenCalledTimes(1)

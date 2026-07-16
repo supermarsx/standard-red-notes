@@ -2,7 +2,7 @@
   "name": "@standardnotes/domain-events-infra",
   "version": "1.23.5",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=26.0.0"
   },
   "description": "Domain Events Infrastructure SDK used in SN projects",
   "main": "dist/src/index.js",
@@ -30,36 +30,36 @@
     "test": "jest --coverage --no-cache --maxWorkers=2"
   },
   "dependencies": {
-    "@aws-sdk/client-sns": "^3.1057.0",
-    "@aws-sdk/client-sqs": "^3.1057.0",
+    "@aws-sdk/client-sns": "^3.1088.0",
+    "@aws-sdk/client-sqs": "^3.1088.0",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-metrics-otlp-proto": "^0.218.0",
-    "@opentelemetry/exporter-trace-otlp-grpc": "^0.218.0",
+    "@opentelemetry/exporter-metrics-otlp-proto": "^0.220.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.220.0",
     "@opentelemetry/id-generator-aws-xray": "^2.1.0",
-    "@opentelemetry/instrumentation-aws-sdk": "^0.73.0",
-    "@opentelemetry/instrumentation-express": "^0.66.0",
-    "@opentelemetry/instrumentation-grpc": "^0.218.0",
-    "@opentelemetry/instrumentation-http": "^0.218.0",
-    "@opentelemetry/instrumentation-ioredis": "^0.66.0",
-    "@opentelemetry/instrumentation-typeorm": "^0.18.0",
-    "@opentelemetry/instrumentation-winston": "^0.62.0",
+    "@opentelemetry/instrumentation-aws-sdk": "^0.75.0",
+    "@opentelemetry/instrumentation-express": "^0.68.0",
+    "@opentelemetry/instrumentation-grpc": "^0.220.0",
+    "@opentelemetry/instrumentation-http": "^0.220.0",
+    "@opentelemetry/instrumentation-ioredis": "^0.68.0",
+    "@opentelemetry/instrumentation-typeorm": "^0.20.0",
+    "@opentelemetry/instrumentation-winston": "^0.64.0",
     "@opentelemetry/propagator-aws-xray": "^2.2.0",
-    "@opentelemetry/resource-detector-aws": "^2.18.0",
-    "@opentelemetry/sdk-node": "^0.218.0",
-    "@opentelemetry/semantic-conventions": "^1.41.1",
+    "@opentelemetry/resource-detector-aws": "^2.20.0",
+    "@opentelemetry/sdk-node": "^0.220.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
     "@standardnotes/domain-events": "workspace:*",
-    "ioredis": "^5.11.0",
+    "ioredis": "^5.11.1",
     "reflect-metadata": "^0.2.2",
     "sqs-consumer": "^15.0.2",
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "@types/ioredis": "^5.0.0",
+    "@swc/core": "^1.15.43",
+    "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.1.1",
     "jest": "^30.4.2",
-    "jest-util": "^30.2.0",
-    "ts-jest": "^29.4.11",
-    "typescript": "^6.0.3"
+    "jest-util": "^30.4.1",
+    "typescript": "6.0.3"
   }
 }

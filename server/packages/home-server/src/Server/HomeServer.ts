@@ -403,7 +403,7 @@ export class HomeServer implements HomeServerInterface {
       // Standard Red Notes: build() mounts the inversify controller router at '/'. The
       // CalDAV router and the Workflows-UI proxy are registered INSIDE setConfig above
       // (before this call), ahead of the controller router — see the note there.
-      const app = server.build()
+      const app = await server.build()
 
       // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback for the
       // bundled home-server. This replaces the former @controller('') FallbackController

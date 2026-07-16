@@ -50,7 +50,11 @@ export class SharesController extends BaseHttpController {
     await this.httpService.callAuthServer(
       request,
       response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('DELETE', 'shares/:shareId', request.params.shareId as string),
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'DELETE',
+        'shares/:shareId',
+        request.params.shareId as string,
+      ),
       request.body,
     )
   }
@@ -61,7 +65,11 @@ export class SharesController extends BaseHttpController {
     await this.httpService.callAuthServer(
       request,
       response,
-      this.endpointResolver.resolveEndpointOrMethodIdentifier('GET', 'shares/:shareId', request.params.shareId as string),
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'shares/:shareId',
+        request.params.shareId as string,
+      ),
       request.body,
     )
   }

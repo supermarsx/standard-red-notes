@@ -75,7 +75,12 @@ describe('SetUserBanStatus', () => {
   })
 
   it('should shadow-ban a user', async () => {
-    const result = await createUseCase().execute({ userUuid: validUuid, banned: true, banType: 'shadow', banReason: 'suspicious' })
+    const result = await createUseCase().execute({
+      userUuid: validUuid,
+      banned: true,
+      banType: 'shadow',
+      banReason: 'suspicious',
+    })
 
     expect(result.isFailed()).toBeFalsy()
     const saved = result.getValue()
@@ -88,7 +93,12 @@ describe('SetUserBanStatus', () => {
   it('should set a temporary ban with a future expiry', async () => {
     const until = new Date('2026-07-10T00:00:00.000Z')
 
-    const result = await createUseCase().execute({ userUuid: validUuid, banned: true, banType: 'temporary', bannedUntil: until })
+    const result = await createUseCase().execute({
+      userUuid: validUuid,
+      banned: true,
+      banType: 'temporary',
+      bannedUntil: until,
+    })
 
     expect(result.isFailed()).toBeFalsy()
     const saved = result.getValue()
@@ -106,7 +116,12 @@ describe('SetUserBanStatus', () => {
   it('should reject a temporary ban whose expiry is in the past', async () => {
     const past = new Date('2026-06-01T00:00:00.000Z')
 
-    const result = await createUseCase().execute({ userUuid: validUuid, banned: true, banType: 'temporary', bannedUntil: past })
+    const result = await createUseCase().execute({
+      userUuid: validUuid,
+      banned: true,
+      banType: 'temporary',
+      bannedUntil: past,
+    })
 
     expect(result.isFailed()).toBeTruthy()
     expect(userRepository.save).not.toHaveBeenCalled()

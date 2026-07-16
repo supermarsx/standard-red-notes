@@ -34,9 +34,9 @@ describe('EndpointResolver', () => {
     it('leaves extra placeholders untouched when fewer params are supplied', () => {
       const resolver = createResolver(false)
 
-      expect(
-        resolver.resolveEndpointOrMethodIdentifier('GET', 'users/:userUuid/settings/:settingName', 'abc'),
-      ).toEqual('users/abc/settings/:settingName')
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'users/:userUuid/settings/:settingName', 'abc')).toEqual(
+        'users/abc/settings/:settingName',
+      )
     })
 
     it('returns the endpoint unchanged when no params are supplied', () => {
@@ -57,9 +57,9 @@ describe('EndpointResolver', () => {
     it('maps the admin suspension status/set and delete identifiers', () => {
       const resolver = createResolver(true)
 
-      expect(
-        resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/users/:email/suspension-status'),
-      ).toEqual('admin.getUserSuspensionStatus')
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/users/:email/suspension-status')).toEqual(
+        'admin.getUserSuspensionStatus',
+      )
       expect(resolver.resolveEndpointOrMethodIdentifier('PUT', 'admin/users/:userUuid/suspension')).toEqual(
         'admin.setUserSuspension',
       )

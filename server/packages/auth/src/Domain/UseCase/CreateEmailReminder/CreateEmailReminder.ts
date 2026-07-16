@@ -46,7 +46,10 @@ export class CreateEmailReminder implements UseCaseInterface<CreateEmailReminder
     // Defense-in-depth against email header injection: this message is later used
     // verbatim as the email subject, so strip CR/LF (collapsing them to a space)
     // before persisting so no newline can ever reach an email header.
-    const message = dto.message.replace(/[\r\n]+/g, ' ').trim().slice(0, MAX_MESSAGE_LENGTH)
+    const message = dto.message
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, MAX_MESSAGE_LENGTH)
 
     const now = Date.now()
 

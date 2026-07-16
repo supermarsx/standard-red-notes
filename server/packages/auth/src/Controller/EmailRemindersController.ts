@@ -39,11 +39,7 @@ export class EmailRemindersController {
     }
   }
 
-  async create(params: {
-    userUuid: string
-    dueAt: number | string
-    message: string
-  }): Promise<HttpResponse> {
+  async create(params: { userUuid: string; dueAt: number | string; message: string }): Promise<HttpResponse> {
     const result = await this.createEmailReminder.execute({
       userUuid: params.userUuid,
       dueAt: params.dueAt,

@@ -49,7 +49,7 @@ process.on('uncaughtException', (error: Error) => {
 const container = new ContainerConfigLoader()
 void container
   .load()
-  .then((container) => {
+  .then(async (container) => {
   const env: Env = new Env()
   env.load()
 
@@ -107,7 +107,7 @@ void container
     })
   })
 
-  const app = server.build()
+  const app = await server.build()
 
   // Post-build JSON-404 fallback. Mounted AFTER build() so it sits behind the
   // controller router and the setErrorConfig 500 handler, catching only

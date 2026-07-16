@@ -31,7 +31,7 @@ describe('CreateCustomRole', () => {
     const result = await createUseCase().execute({
       name: 'Support Agent',
       description: 'Front-line support',
-      permissionNames: ['SYNC_ITEMS'],
+      permissionNames: ['SYNC_ITEMS', 'MANAGE_USERS'],
     })
 
     expect(result.isFailed()).toBe(false)
@@ -41,7 +41,7 @@ describe('CreateCustomRole', () => {
     expect(view.isBuiltIn).toBe(false)
     expect(view.isCustom).toBe(true)
     expect(view.description).toEqual('Front-line support')
-    expect(view.permissionNames).toEqual(['SYNC_ITEMS'])
+    expect(view.permissionNames).toEqual(['MANAGE_USERS', 'SYNC_ITEMS'])
   })
 
   it('refuses to shadow a built-in role name', async () => {
@@ -56,6 +56,14 @@ describe('CreateCustomRole', () => {
     const result = await createUseCase().execute({ name: '   !!!  ' })
 
     expect(result.isFailed()).toBe(true)
+    expect(roleRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('rejects a normalized name longer than the database column limit', async () => {
+    const result = await createUseCase().execute({ name: 'a'.repeat(256) })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('max 255 characters')
     expect(roleRepository.save).not.toHaveBeenCalled()
   })
 
@@ -79,6 +87,18 @@ describe('CreateCustomRole', () => {
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('MADE_UP')
+    expect(roleRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-array permissionNames payload', async () => {
+    const result = await createUseCase().execute({
+      name: 'Support Agent',
+      permissionNames: 'SYNC_ITEMS' as unknown as string[],
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('permissionNames must be an array')
+    expect(permissionRepository.findByNames).not.toHaveBeenCalled()
     expect(roleRepository.save).not.toHaveBeenCalled()
   })
 })

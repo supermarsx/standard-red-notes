@@ -66,12 +66,7 @@ export const decideCorsOrigin = (
 
   return {
     allow:
-      isDesktopApp ||
-      isFirefoxClipper ||
-      isChromiumClipper ||
-      isSafariClipper ||
-      isLocalhostApp ||
-      isExplicitlyAllowed,
+      isDesktopApp || isFirefoxClipper || isChromiumClipper || isSafariClipper || isLocalhostApp || isExplicitlyAllowed,
   }
 }
 

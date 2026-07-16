@@ -265,11 +265,11 @@ describe('PluginsProxyService', () => {
   })
 
   it('does NOT auto-follow a redirect: a Location to another host is rejected (never fetched)', async () => {
-    const { fn, calls } = makeFetch((url) =>
-      url.endsWith('/packages.json')
+    const { fn, calls } = makeFetch((url) => {
+      return url.endsWith('/packages.json')
         ? { status: 302, ok: false, location: 'https://evil.example.com/steal' }
-        : { status: 200, ok: true, body: Buffer.from('should-never-reach') },
-    )
+        : { status: 200, ok: true, body: Buffer.from('should-never-reach') }
+    })
     const service = new PluginsProxyService(fn, { baseUrlResolver: async () => BASE })
 
     expect(await service.fetchIndex()).toEqual({ error: 'outside-base' })
@@ -279,11 +279,11 @@ describe('PluginsProxyService', () => {
 
   it('follows a redirect that STAYS within the configured base', async () => {
     const target = `${BASE}/mirror/packages.json`
-    const { fn, calls } = makeFetch((url) =>
-      url === `${BASE}/packages.json`
+    const { fn, calls } = makeFetch((url) => {
+      return url === `${BASE}/packages.json`
         ? { status: 301, ok: false, location: target }
-        : { status: 200, ok: true, body: Buffer.from('{"ok":true}') },
-    )
+        : { status: 200, ok: true, body: Buffer.from('{"ok":true}') }
+    })
     const service = new PluginsProxyService(fn, { baseUrlResolver: async () => BASE })
 
     const result = await service.fetchIndex()

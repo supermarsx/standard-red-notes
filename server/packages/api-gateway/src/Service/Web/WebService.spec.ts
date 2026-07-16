@@ -38,7 +38,9 @@ const makeService = (steps: Step[], resolveTo: Record<string, string[]> = {}) =>
 
 describe('WebService.fetch — SSRF guard', () => {
   it('fetches a public URL and returns readable text', async () => {
-    const { service } = makeService([{ status: 200, contentType: 'text/html', body: '<title>Hi</title><p>hello world</p>' }])
+    const { service } = makeService([
+      { status: 200, contentType: 'text/html', body: '<title>Hi</title><p>hello world</p>' },
+    ])
     const result = await service.fetch('https://example.com/page')
     expect(result.status).toBe(200)
     expect(result.title).toBe('Hi')
@@ -52,7 +54,9 @@ describe('WebService.fetch — SSRF guard', () => {
 
   it('rejects a literal private/metadata host up front', async () => {
     const { service } = makeService([{ status: 200 }])
-    await expect(service.fetch('http://169.254.169.254/latest/meta-data/')).rejects.toMatchObject({ tag: 'blocked-host' })
+    await expect(service.fetch('http://169.254.169.254/latest/meta-data/')).rejects.toMatchObject({
+      tag: 'blocked-host',
+    })
     await expect(service.fetch('http://127.0.0.1:6379/')).rejects.toMatchObject({ tag: 'blocked-host' })
     await expect(service.fetch('http://localhost/')).rejects.toMatchObject({ tag: 'blocked-host' })
   })
@@ -96,7 +100,16 @@ describe('WebService.fetch — SSRF guard', () => {
 
 describe('isBlockedIp / isBlockedHostname', () => {
   it('blocks private/loopback/link-local IPv4', () => {
-    for (const ip of ['0.0.0.0', '10.1.2.3', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '224.0.0.1']) {
+    for (const ip of [
+      '0.0.0.0',
+      '10.1.2.3',
+      '127.0.0.1',
+      '169.254.169.254',
+      '172.16.0.1',
+      '192.168.1.1',
+      '100.64.0.1',
+      '224.0.0.1',
+    ]) {
       expect(isBlockedIp(ip)).toBe(true)
     }
   })

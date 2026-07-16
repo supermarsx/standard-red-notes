@@ -45,3 +45,28 @@ describe('SettingName — Nextcloud backup settings (Standard Red Notes)', () =>
     })
   })
 })
+
+describe('SettingName subscription classification', () => {
+  it('classifies upload limits as regular-only subscription settings', () => {
+    const name = SettingName.create(SettingName.NAMES.FileUploadBytesLimit).getValue()
+
+    expect(name.isASubscriptionSetting()).toBe(true)
+    expect(name.isARegularOnlySubscriptionSetting()).toBe(true)
+    expect(name.isASharedAndRegularOnlySubscriptionSetting()).toBe(false)
+  })
+
+  it('classifies muted sign-in emails as shared-and-regular subscription settings', () => {
+    const name = SettingName.create(SettingName.NAMES.MuteSignInEmails).getValue()
+
+    expect(name.isASubscriptionSetting()).toBe(true)
+    expect(name.isARegularOnlySubscriptionSetting()).toBe(false)
+    expect(name.isASharedAndRegularOnlySubscriptionSetting()).toBe(true)
+  })
+
+  it('rejects unknown setting names', () => {
+    const result = SettingName.create('NOT_A_SETTING')
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('Invalid setting name: NOT_A_SETTING')
+  })
+})

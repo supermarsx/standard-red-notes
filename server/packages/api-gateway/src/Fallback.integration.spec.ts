@@ -154,7 +154,7 @@ describe('post-build welcome/404 fallback (boot-mounted)', () => {
       registerWorkflowsUiProxy(app, container)
     })
 
-    const app = inversifyServer.build()
+    const app = await inversifyServer.build()
 
     // The fix: post-build fallback, AFTER the controller router (exactly as the
     // production entrypoint wires it).

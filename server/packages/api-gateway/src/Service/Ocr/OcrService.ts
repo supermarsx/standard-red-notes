@@ -169,7 +169,7 @@ export function createTesseractRecognizer(): OcrRecognizer {
       workerPromise = undefined
     }
     workerLanguage = language
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
+
     workerPromise = (async () => {
       const Tesseract = (await import('tesseract.js')) as unknown as {
         createWorker: (lang: string) => Promise<unknown>

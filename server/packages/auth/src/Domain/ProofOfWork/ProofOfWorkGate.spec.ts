@@ -143,7 +143,11 @@ describe('ProofOfWorkGate', () => {
       config.signIn.mode = 'always'
       verifyProofOfWork.execute = jest.fn().mockResolvedValue(Result.ok())
 
-      const result = await createGate().enforceSignInParams('user@example.com', { pow_seed: 's', pow_nonce: 'n' }, false)
+      const result = await createGate().enforceSignInParams(
+        'user@example.com',
+        { pow_seed: 's', pow_nonce: 'n' },
+        false,
+      )
 
       expect(result.satisfied).toBe(true)
     })
@@ -196,7 +200,9 @@ describe('ProofOfWorkGate', () => {
       // Account is well below the adaptive threshold, so any escalation must come
       // purely from the IP flag.
       lockRepository.getLockCounter = jest.fn().mockResolvedValue(0)
-      escalationChecker = { isEscalated: jest.fn().mockResolvedValue(false) } as jest.Mocked<IpEscalationCheckerInterface>
+      escalationChecker = {
+        isEscalated: jest.fn().mockResolvedValue(false),
+      } as jest.Mocked<IpEscalationCheckerInterface>
     })
 
     it('REQUIRES a challenge when the IP escalate flag is set, even below the account threshold', async () => {
@@ -222,6 +228,22 @@ describe('ProofOfWorkGate', () => {
 
       expect(result.satisfied).toBe(true)
       expect(escalationChecker.isEscalated).not.toHaveBeenCalled()
+    })
+
+    it('does not consult the IP flag when the client IP is an empty string', async () => {
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '')
+
+      expect(result.satisfied).toBe(true)
+      expect(escalationChecker.isEscalated).not.toHaveBeenCalled()
+    })
+
+    it('fails open when the IP escalation store is unavailable', async () => {
+      escalationChecker.isEscalated = jest.fn().mockRejectedValue(new Error('redis unavailable'))
+
+      const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '1.2.3.4')
+
+      expect(result.satisfied).toBe(true)
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('redis unavailable'))
     })
 
     it('still requires a challenge from the account threshold even if the IP flag is unset', async () => {

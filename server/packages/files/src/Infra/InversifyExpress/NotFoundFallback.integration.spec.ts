@@ -98,7 +98,7 @@ describe('files post-build JSON-404 fallback (boot-mounted)', () => {
 
   beforeEach(async () => {
     const inversifyServer = new InversifyExpressServer(buildContainer())
-    const app = inversifyServer.build()
+    const app = await inversifyServer.build()
     registerNotFoundFallback(app)
     server = app.listen(0)
     baseUrl = await urlWhenListening(server)

@@ -26,7 +26,7 @@ export class RevokedSession {
   @Column({
     type: 'tinyint',
     nullable: false,
-    default: 0
+    default: 0,
   })
   declare received: boolean
 

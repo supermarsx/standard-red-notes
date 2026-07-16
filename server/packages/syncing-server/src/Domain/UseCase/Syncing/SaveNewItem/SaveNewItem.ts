@@ -158,7 +158,10 @@ export class SaveNewItem implements UseCaseInterface<Item> {
       )
 
       await this.metricsStore.storeMetric(
-        Metric.create({ name: Metric.NAMES.ItemCreated, timestamp: this.timer.getTimestampInMicroseconds() }).getValue(),
+        Metric.create({
+          name: Metric.NAMES.ItemCreated,
+          timestamp: this.timer.getTimestampInMicroseconds(),
+        }).getValue(),
       )
 
       if (contentType.value !== null && [ContentType.TYPES.Note, ContentType.TYPES.File].includes(contentType.value)) {

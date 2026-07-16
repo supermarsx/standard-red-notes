@@ -89,7 +89,7 @@ describe('PluginsController', () => {
       const { controller } = makeController({ sameOriginRendering: false, fetchFile })
       const { response, status } = makeResponse()
 
-      await controller.component({ params: { splat:'org.foo/dist/index.html' } } as unknown as Request, response)
+      await controller.component({ params: { splat: 'org.foo/dist/index.html' } } as unknown as Request, response)
 
       expect(status).toHaveBeenCalledWith(404)
       expect(fetchFile).not.toHaveBeenCalled()
@@ -104,12 +104,9 @@ describe('PluginsController', () => {
       const { controller, proxy } = makeController({ sameOriginRendering: true, fetchFile })
       const { response, status, send, headers } = makeResponse()
 
-      await controller.component(
-        { params: { splat:'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
-        response,
-      )
+      await controller.component({ params: { splat: 'org.foo/1.2.3/dist/index.html' } } as unknown as Request, response)
 
-      expect((proxy.fetchFile as jest.Mock)).toHaveBeenCalledWith('org.foo/1.2.3/dist/index.html')
+      expect(proxy.fetchFile as jest.Mock).toHaveBeenCalledWith('org.foo/1.2.3/dist/index.html')
       expect(status).toHaveBeenCalledWith(200)
       expect(headers['Content-Type']).toBe('text/html; charset=utf-8')
       expect(headers['X-Content-Type-Options']).toBe('nosniff')
@@ -126,10 +123,7 @@ describe('PluginsController', () => {
       const { controller } = makeController({ sameOriginRendering: true, fetchFile })
       const { response, headers, removedHeaders } = makeResponse()
 
-      await controller.component(
-        { params: { splat:'org.foo/1.2.3/dist/index.html' } } as unknown as Request,
-        response,
-      )
+      await controller.component({ params: { splat: 'org.foo/1.2.3/dist/index.html' } } as unknown as Request, response)
 
       const csp = headers['Content-Security-Policy']
       // OVERRIDES helmet's global CSP for this route (removeHeader → setHeader).
@@ -150,10 +144,7 @@ describe('PluginsController', () => {
       const { controller } = makeController({ sameOriginRendering: true, fetchFile })
       const { response, status } = makeResponse()
 
-      await controller.component(
-        { params: { splat:'https://evil.example.com/x' } } as unknown as Request,
-        response,
-      )
+      await controller.component({ params: { splat: 'https://evil.example.com/x' } } as unknown as Request, response)
 
       expect(status).toHaveBeenCalledWith(400)
     })

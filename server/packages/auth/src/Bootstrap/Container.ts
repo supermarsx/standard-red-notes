@@ -785,19 +785,19 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<TrustedDevice, TrustedDeviceHttpProjection>>(TYPES.Auth_TrustedDeviceHttpMapper)
       .toConstantValue(new TrustedDeviceHttpMapper())
     container
-      .bind<
-        MapperInterface<PendingMfaApproval, TypeORMPendingMfaApproval>
-      >(TYPES.Auth_PendingMfaApprovalPersistenceMapper)
+      .bind<MapperInterface<PendingMfaApproval, TypeORMPendingMfaApproval>>(
+        TYPES.Auth_PendingMfaApprovalPersistenceMapper,
+      )
       .toConstantValue(new PendingMfaApprovalPersistenceMapper())
     container
-      .bind<
-        MapperInterface<PendingMfaApproval, PendingMfaApprovalHttpProjection>
-      >(TYPES.Auth_PendingMfaApprovalHttpMapper)
+      .bind<MapperInterface<PendingMfaApproval, PendingMfaApprovalHttpProjection>>(
+        TYPES.Auth_PendingMfaApprovalHttpMapper,
+      )
       .toConstantValue(new PendingMfaApprovalHttpMapper())
     container
-      .bind<
-        MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>
-      >(TYPES.Auth_AuthenticatorChallengePersistenceMapper)
+      .bind<MapperInterface<AuthenticatorChallenge, TypeORMAuthenticatorChallenge>>(
+        TYPES.Auth_AuthenticatorChallengePersistenceMapper,
+      )
       .toConstantValue(new AuthenticatorChallengePersistenceMapper())
     container
       .bind<MapperInterface<MagicLinkToken, TypeORMMagicLinkToken>>(TYPES.Auth_MagicLinkTokenPersistenceMapper)
@@ -808,9 +808,7 @@ export class ContainerConfigLoader {
       )
       .toConstantValue(new EmailConfirmationTokenPersistenceMapper())
     container
-      .bind<MapperInterface<SignupInviteLink, TypeORMSignupInviteLink>>(
-        TYPES.Auth_SignupInviteLinkPersistenceMapper,
-      )
+      .bind<MapperInterface<SignupInviteLink, TypeORMSignupInviteLink>>(TYPES.Auth_SignupInviteLinkPersistenceMapper)
       .toConstantValue(new SignupInviteLinkPersistenceMapper())
     container
       .bind<MapperInterface<SignupInviteUse, TypeORMSignupInviteUse>>(TYPES.Auth_SignupInviteUsePersistenceMapper)
@@ -825,17 +823,17 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Setting, SettingHttpRepresentation>>(TYPES.Auth_SettingHttpMapper)
       .toConstantValue(new SettingHttpMapper())
     container
-      .bind<
-        MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>
-      >(TYPES.Auth_SubscriptionSettingHttpMapper)
+      .bind<MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>>(
+        TYPES.Auth_SubscriptionSettingHttpMapper,
+      )
       .toConstantValue(new SubscriptionSettingHttpMapper())
     container
       .bind<MapperInterface<Setting, TypeORMSetting>>(TYPES.Auth_SettingPersistenceMapper)
       .toConstantValue(new SettingPersistenceMapper())
     container
-      .bind<
-        MapperInterface<SubscriptionSetting, TypeORMSubscriptionSetting>
-      >(TYPES.Auth_SubscriptionSettingPersistenceMapper)
+      .bind<MapperInterface<SubscriptionSetting, TypeORMSubscriptionSetting>>(
+        TYPES.Auth_SubscriptionSettingPersistenceMapper,
+      )
       .toConstantValue(new SubscriptionSettingPersistenceMapper())
 
     // ORM
@@ -1228,9 +1226,7 @@ export class ContainerConfigLoader {
       .bind(TYPES.Auth_U2F_REQUIRE_USER_VERIFICATION)
       .toConstantValue(env.get('U2F_REQUIRE_USER_VERIFICATION', true) === 'true')
     container.bind(TYPES.Auth_SMTP_HOST).toConstantValue(env.get('SMTP_HOST', true))
-    container
-      .bind(TYPES.Auth_SMTP_PORT)
-      .toConstantValue(env.get('SMTP_PORT', true) ? +env.get('SMTP_PORT', true) : 587)
+    container.bind(TYPES.Auth_SMTP_PORT).toConstantValue(env.get('SMTP_PORT', true) ? +env.get('SMTP_PORT', true) : 587)
     container.bind(TYPES.Auth_SMTP_USER).toConstantValue(env.get('SMTP_USER', true))
     container.bind(TYPES.Auth_SMTP_PASS).toConstantValue(env.get('SMTP_PASS', true))
     container.bind(TYPES.Auth_SMTP_FROM).toConstantValue(env.get('SMTP_FROM', true))
@@ -1454,7 +1450,9 @@ export class ContainerConfigLoader {
     // resolved per registration from the persisted admin overlay layered over the
     // REGISTRATION_* env baseline (persisted -> env -> default). Reads the SAME
     // ServerSettings overlay file the gateway admin surface writes.
-    const registrationOverlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
+    const registrationOverlayReader = new ServerSettingsOverlayReader(
+      env.get('SERVER_SETTINGS_PATH', true) || undefined,
+    )
     const registrationBaseline = registrationBaselineFromEnv({
       defaultRole: env.get('REGISTRATION_DEFAULT_ROLE', true) || undefined,
       domainMode: env.get('REGISTRATION_DOMAIN_MODE', true) || undefined,
@@ -1918,10 +1916,7 @@ export class ContainerConfigLoader {
     container
       .bind<AddUserToGroup>(TYPES.Auth_AddUserToGroup)
       .toConstantValue(
-        new AddUserToGroup(
-          container.get(TYPES.Auth_GroupRepository),
-          container.get(TYPES.Auth_UserRepository),
-        ),
+        new AddUserToGroup(container.get(TYPES.Auth_GroupRepository), container.get(TYPES.Auth_UserRepository)),
       )
     container
       .bind<RemoveUserFromGroup>(TYPES.Auth_RemoveUserFromGroup)
@@ -1934,10 +1929,7 @@ export class ContainerConfigLoader {
     container
       .bind<ListGroupMembers>(TYPES.Auth_ListGroupMembers)
       .toConstantValue(
-        new ListGroupMembers(
-          container.get(TYPES.Auth_GroupRepository),
-          container.get(TYPES.Auth_UserRepository),
-        ),
+        new ListGroupMembers(container.get(TYPES.Auth_GroupRepository), container.get(TYPES.Auth_UserRepository)),
       )
     container
       .bind<GetUserEffectivePermissions>(TYPES.Auth_GetUserEffectivePermissions)
@@ -1967,10 +1959,7 @@ export class ContainerConfigLoader {
     container
       .bind<CreateCustomRole>(TYPES.Auth_CreateCustomRole)
       .toConstantValue(
-        new CreateCustomRole(
-          container.get(TYPES.Auth_RoleRepository),
-          container.get(TYPES.Auth_PermissionRepository),
-        ),
+        new CreateCustomRole(container.get(TYPES.Auth_RoleRepository), container.get(TYPES.Auth_PermissionRepository)),
       )
     container
       .bind<DeleteCustomRole>(TYPES.Auth_DeleteCustomRole)
@@ -2206,28 +2195,26 @@ export class ContainerConfigLoader {
           container.get<CaptchaServerInterface>(TYPES.Auth_CaptchaServer),
         ),
       )
-    container
-      .bind<SignIn>(TYPES.Auth_SignIn)
-      .toConstantValue(
-        new SignIn(
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<AuthResponseFactoryResolverInterface>(TYPES.Auth_AuthResponseFactoryResolver),
-          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
-          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
-          container.get<SessionServiceInterface>(TYPES.Auth_SessionService),
-          container.get<PKCERepositoryInterface>(TYPES.Auth_PKCERepository),
-          container.get<CrypterInterface>(TYPES.Auth_Crypter),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-          container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
-          container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
-          container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
-          container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
-          container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
-          container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
-          // Standard Red Notes: EMAIL CONFIRMATION sign-in gate (block_signin mode).
-          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
-        ),
-      )
+    container.bind<SignIn>(TYPES.Auth_SignIn).toConstantValue(
+      new SignIn(
+        container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+        container.get<AuthResponseFactoryResolverInterface>(TYPES.Auth_AuthResponseFactoryResolver),
+        container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+        container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+        container.get<SessionServiceInterface>(TYPES.Auth_SessionService),
+        container.get<PKCERepositoryInterface>(TYPES.Auth_PKCERepository),
+        container.get<CrypterInterface>(TYPES.Auth_Crypter),
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+        container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
+        container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
+        container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
+        container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
+        container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
+        container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
+        // Standard Red Notes: EMAIL CONFIRMATION sign-in gate (block_signin mode).
+        container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
+      ),
+    )
     container
       .bind<GenerateMagicLinkCode>(TYPES.Auth_GenerateMagicLinkCode)
       .toConstantValue(
@@ -2380,15 +2367,13 @@ export class ContainerConfigLoader {
       ? new RedisSignupRateLimiter(container.get<Redis>(TYPES.Auth_Redis))
       : undefined
     // Standard Red Notes: SIGNUP INVITE LINKS use cases.
-    container
-      .bind<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite)
-      .toConstantValue(
-        new ConsumeSignupInvite(
-          container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
-          // Standard Red Notes: ATTRIBUTION sink (#14) — one use row per consumed slot.
-          container.get<SignupInviteUseRepositoryInterface>(TYPES.Auth_SignupInviteUseRepository),
-        ),
-      )
+    container.bind<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite).toConstantValue(
+      new ConsumeSignupInvite(
+        container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
+        // Standard Red Notes: ATTRIBUTION sink (#14) — one use row per consumed slot.
+        container.get<SignupInviteUseRepositoryInterface>(TYPES.Auth_SignupInviteUseRepository),
+      ),
+    )
     container
       .bind<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink)
       .toConstantValue(
@@ -2410,46 +2395,44 @@ export class ContainerConfigLoader {
           container.get<SignupInviteLinkRepositoryInterface>(TYPES.Auth_SignupInviteLinkRepository),
         ),
       )
-    container
-      .bind<Register>(TYPES.Auth_Register)
-      .toConstantValue(
-        new Register(
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<RoleRepositoryInterface>(TYPES.Auth_RoleRepository),
-          container.get<AuthResponseFactory20200115>(TYPES.Auth_AuthResponseFactory20200115),
-          container.get<CrypterInterface>(TYPES.Auth_Crypter),
-          container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
-          container.get<TimerInterface>(TYPES.Auth_Timer),
-          container.get<ApplyDefaultSettings>(TYPES.Auth_ApplyDefaultSettings),
-          standardRedEntitlementMode,
-          container.get<ActivatePremiumFeatures>(TYPES.Auth_ActivatePremiumFeatures),
-          env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
-            ? +env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
-            : 36500,
-          env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
-            ? +env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
-            : -1,
-          container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
-          // Standard Red Notes: lets Register consult the admin-panel-persisted
-          // REGISTRATION_DISABLED flag at runtime (in addition to the env override).
-          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
-          // Standard Red Notes: resolves the admin-configurable default role +
-          // email-domain policy for each registration.
-          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
-          // Standard Red Notes: EMAIL CONFIRMATION — issues + emails the single-use
-          // verification link when the resolved policy enables it.
-          container.get<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-          // Standard Red Notes: SIGNUP CAPS — the Redis-backed counter (per-IP +
-          // per-device SOFT) and the cap-policy resolver. Both fail open.
-          signupRateLimiter,
-          signupLimitsResolver,
-          // Standard Red Notes: SIGNUP INVITE LINKS — atomically consumes an
-          // invite slot (invite-only mode fails closed; open mode honors a present
-          // token, fails open). Always wired so invite-only is enforceable.
-          container.get<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite),
-        ),
-      )
+    container.bind<Register>(TYPES.Auth_Register).toConstantValue(
+      new Register(
+        container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+        container.get<RoleRepositoryInterface>(TYPES.Auth_RoleRepository),
+        container.get<AuthResponseFactory20200115>(TYPES.Auth_AuthResponseFactory20200115),
+        container.get<CrypterInterface>(TYPES.Auth_Crypter),
+        container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
+        container.get<TimerInterface>(TYPES.Auth_Timer),
+        container.get<ApplyDefaultSettings>(TYPES.Auth_ApplyDefaultSettings),
+        standardRedEntitlementMode,
+        container.get<ActivatePremiumFeatures>(TYPES.Auth_ActivatePremiumFeatures),
+        env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+          ? +env.get('STANDARD_RED_FULL_FEATURE_DURATION_DAYS', true)
+          : 36500,
+        env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
+          ? +env.get('STANDARD_RED_FULL_FEATURE_FILE_LIMIT_BYTES', true)
+          : -1,
+        container.get<boolean>(TYPES.Auth_WORKSPACES_PER_EMAIL_ENABLED),
+        // Standard Red Notes: lets Register consult the admin-panel-persisted
+        // REGISTRATION_DISABLED flag at runtime (in addition to the env override).
+        container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+        // Standard Red Notes: resolves the admin-configurable default role +
+        // email-domain policy for each registration.
+        container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
+        // Standard Red Notes: EMAIL CONFIRMATION — issues + emails the single-use
+        // verification link when the resolved policy enables it.
+        container.get<SendEmailConfirmation>(TYPES.Auth_SendEmailConfirmation),
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+        // Standard Red Notes: SIGNUP CAPS — the Redis-backed counter (per-IP +
+        // per-device SOFT) and the cap-policy resolver. Both fail open.
+        signupRateLimiter,
+        signupLimitsResolver,
+        // Standard Red Notes: SIGNUP INVITE LINKS — atomically consumes an
+        // invite slot (invite-only mode fails closed; open mode honors a present
+        // token, fails open). Always wired so invite-only is enforceable.
+        container.get<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite),
+      ),
+    )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
     container.bind<DeleteOtherSessionsForUser>(TYPES.Auth_DeleteOtherSessionsForUser).to(DeleteOtherSessionsForUser)
     container.bind<DeleteSessionForUser>(TYPES.Auth_DeleteSessionForUser).to(DeleteSessionForUser)
@@ -2643,28 +2626,26 @@ export class ContainerConfigLoader {
           standardRedFeaturesMode,
         ),
       )
-    container
-      .bind<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken)
-      .toConstantValue(
-        new CreateCrossServiceToken(
-          container.get<ProjectorInterface<User>>(TYPES.Auth_UserProjector),
-          container.get<ProjectorInterface<Session>>(TYPES.Auth_SessionProjector),
-          container.get<ProjectorInterface<Role>>(TYPES.Auth_RoleProjector),
-          container.get<TokenEncoderInterface<CrossServiceTokenData>>(TYPES.Auth_CrossServiceTokenEncoder),
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<number>(TYPES.Auth_AUTH_JWT_TTL),
-          container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
-          container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
-          container.get<SharedVaultUserRepositoryInterface>(TYPES.Auth_SharedVaultUserRepository),
-          container.get<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser),
-          env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
-          env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
-          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
-          // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
-          // (direct ∪ group) so e.g. admin granted via a group works.
-          container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
-        ),
-      )
+    container.bind<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken).toConstantValue(
+      new CreateCrossServiceToken(
+        container.get<ProjectorInterface<User>>(TYPES.Auth_UserProjector),
+        container.get<ProjectorInterface<Session>>(TYPES.Auth_SessionProjector),
+        container.get<ProjectorInterface<Role>>(TYPES.Auth_RoleProjector),
+        container.get<TokenEncoderInterface<CrossServiceTokenData>>(TYPES.Auth_CrossServiceTokenEncoder),
+        container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+        container.get<number>(TYPES.Auth_AUTH_JWT_TTL),
+        container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
+        container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
+        container.get<SharedVaultUserRepositoryInterface>(TYPES.Auth_SharedVaultUserRepository),
+        container.get<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser),
+        env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
+        env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
+        container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+        // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
+        // (direct ∪ group) so e.g. admin granted via a group works.
+        container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
+      ),
+    )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
     container
       .bind<UpdateStorageQuotaUsedForUser>(TYPES.Auth_UpdateStorageQuotaUsedForUser)
@@ -2718,22 +2699,20 @@ export class ContainerConfigLoader {
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
         ),
       )
-    container
-      .bind<TriggerEmailBackupForAllUsers>(TYPES.Auth_TriggerEmailBackupForAllUsers)
-      .toConstantValue(
-        new TriggerEmailBackupForAllUsers(
-          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
-          container.get<TriggerEmailBackupForUser>(TYPES.Auth_TriggerEmailBackupForUser),
-          container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
-          container.get<TimerInterface>(TYPES.Auth_Timer),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-          container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
-          // Email delivery is "configured" when the SMTP sender reports itself
-          // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
-          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
-        ),
-      )
+    container.bind<TriggerEmailBackupForAllUsers>(TYPES.Auth_TriggerEmailBackupForAllUsers).toConstantValue(
+      new TriggerEmailBackupForAllUsers(
+        container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+        container.get<TriggerEmailBackupForUser>(TYPES.Auth_TriggerEmailBackupForUser),
+        container.get<GetSetting>(TYPES.Auth_GetSetting),
+        container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+        container.get<TimerInterface>(TYPES.Auth_Timer),
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+        container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
+        // Email delivery is "configured" when the SMTP sender reports itself
+        // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
+        container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
+      ),
+    )
     container
       .bind<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser)
       .toConstantValue(
@@ -2744,29 +2723,27 @@ export class ContainerConfigLoader {
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
         ),
       )
-    container
-      .bind<TriggerNextcloudBackupForAllUsers>(TYPES.Auth_TriggerNextcloudBackupForAllUsers)
-      .toConstantValue(
-        new TriggerNextcloudBackupForAllUsers(
-          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
-          container.get<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser),
-          container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
-          container.get<TimerInterface>(TYPES.Auth_Timer),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-          container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
-          // Standard Red Notes: runtime admin override of the master gate. The
-          // api-gateway persists admin server settings to SERVER_SETTINGS_PATH
-          // (the docker entrypoint points both services at the same file); a
-          // persisted value WINS over the env boolean above. No shared file /
-          // env unset => undefined => the env value applies unchanged.
-          (() => {
-            const overlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
+    container.bind<TriggerNextcloudBackupForAllUsers>(TYPES.Auth_TriggerNextcloudBackupForAllUsers).toConstantValue(
+      new TriggerNextcloudBackupForAllUsers(
+        container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+        container.get<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser),
+        container.get<GetSetting>(TYPES.Auth_GetSetting),
+        container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+        container.get<TimerInterface>(TYPES.Auth_Timer),
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+        container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
+        // Standard Red Notes: runtime admin override of the master gate. The
+        // api-gateway persists admin server settings to SERVER_SETTINGS_PATH
+        // (the docker entrypoint points both services at the same file); a
+        // persisted value WINS over the env boolean above. No shared file /
+        // env unset => undefined => the env value applies unchanged.
+        (() => {
+          const overlayReader = new ServerSettingsOverlayReader(env.get('SERVER_SETTINGS_PATH', true) || undefined)
 
-            return () => overlayReader.nextcloudBackupsEnabled()
-          })(),
-        ),
-      )
+          return () => overlayReader.nextcloudBackupsEnabled()
+        })(),
+      ),
+    )
     container
       .bind<TriggerPostSettingUpdateActions>(TYPES.Auth_TriggerPostSettingUpdateActions)
       .toConstantValue(
@@ -3405,86 +3382,84 @@ export class ContainerConfigLoader {
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
           ),
         )
-      container
-        .bind<BaseAdminController>(TYPES.Auth_BaseAdminController)
-        .toConstantValue(
-          new BaseAdminController(
-            container.get<DeleteSetting>(TYPES.Auth_DeleteSetting),
-            container.get<GetSetting>(TYPES.Auth_GetSetting),
-            container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-            container.get<CreateSubscriptionToken>(TYPES.Auth_CreateSubscriptionToken),
-            container.get<CreateOfflineSubscriptionToken>(TYPES.Auth_CreateOfflineSubscriptionToken),
-            container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
-            container.get<SetUserBanStatus>(TYPES.Auth_SetUserBanStatus),
-            container.get<QueryAuditLog>(TYPES.Auth_QueryAuditLog),
-            container.get(TYPES.Auth_AuditLogEntryHttpMapper),
-            container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
-            container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
-            container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
-            // Standard Red Notes: per-user SERVER storage-limit dependencies (the
-            // upload limit is a subscription setting; see BaseAdminController).
-            container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
-            container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
-            container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
-            // Standard Red Notes: admin-role grant/revoke + reset-mfa/fix-quota
-            // panel ops, and the read-only env master switches (see
-            // BaseAdminController). The trailing RBAC group deps remain omitted
-            // here, mirroring the pre-existing home-server behaviour.
-            container.get<RoleServiceInterface>(TYPES.Auth_RoleService),
-            container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser),
-            container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
-            container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
-            // Standard Red Notes: the RBAC group + role-management deps stay
-            // undefined on the home-server single-process path (pre-existing
-            // behaviour; those endpoints degrade to "not available" here). They
-            // are passed explicitly as `undefined` only so the trailing
-            // lockRepository — the LAST positional constructor arg — can be wired
-            // by position without pulling the group/RBAC surface in.
-            undefined, // doCreateGroup
-            undefined, // doListGroups
-            undefined, // doDeleteGroup
-            undefined, // doAddUserToGroup
-            undefined, // doRemoveUserFromGroup
-            undefined, // doSetGroupRoles
-            undefined, // doListGroupMembers
-            undefined, // doGetUserEffectivePermissions
-            undefined, // groupHttpMapper
-            undefined, // doListRolesWithPermissions
-            undefined, // doSetRolePermissions
-            undefined, // doCreateCustomRole
-            undefined, // doDeleteCustomRole
-            undefined, // doGetPermissionCatalog
-            undefined, // doGetRoleHolders
-            undefined, // doResolveRoleSetPermissions
-            // Standard Red Notes: failed-login lock repository, backing the
-            // anti-abuse "Locked accounts" list + unlock on the single-container
-            // deploy. Auth_LockRepository is always bound (RedisLockRepository
-            // under a Redis cache, TypeORMLockRepository under the in-memory/
-            // TypeORM cache topology). Wiring it here makes UNLOCK (resetLockCounter)
-            // work on the single container; the LIST endpoint additionally requires
-            // the Redis SCAN-based listLockedAccounts, so under the TypeORM cache
-            // topology it correctly reports `available:false` (see
-            // BaseAdminController.getLockedAccounts / LockRepositoryInterface).
-            container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
-            // Standard Red Notes: admin SUSPEND/UNSUSPEND + admin-initiated
-            // DELETE. Wired on the single-container path too so the admin panel's
-            // suspend/delete endpoints work there. Delete reuses the existing
-            // cross-service DeleteAccount pipeline (Auth_DeleteAccount).
-            container.get<SetUserSuspension>(TYPES.Auth_SetUserSuspension),
-            container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
-            // Standard Red Notes: SIGNUP INVITE LINKS admin surface — wired on the
-            // single-container path too so the admin panel's invite-link
-            // create/list/revoke endpoints work there.
-            container.get<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink),
-            container.get<ListSignupInviteLinks>(TYPES.Auth_ListSignupInviteLinks),
-            container.get<RevokeSignupInviteLink>(TYPES.Auth_RevokeSignupInviteLink),
-            // Standard Red Notes: APPROVAL QUEUE — wired on the single-container
-            // path too so the admin panel's pending-users list/approve/reject work.
-            container.get<ListPendingUsers>(TYPES.Auth_ListPendingUsers),
-            container.get<ApproveUser>(TYPES.Auth_ApproveUser),
-            container.get<RejectUser>(TYPES.Auth_RejectUser),
-          ),
-        )
+      container.bind<BaseAdminController>(TYPES.Auth_BaseAdminController).toConstantValue(
+        new BaseAdminController(
+          container.get<DeleteSetting>(TYPES.Auth_DeleteSetting),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<CreateSubscriptionToken>(TYPES.Auth_CreateSubscriptionToken),
+          container.get<CreateOfflineSubscriptionToken>(TYPES.Auth_CreateOfflineSubscriptionToken),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<SetUserBanStatus>(TYPES.Auth_SetUserBanStatus),
+          container.get<QueryAuditLog>(TYPES.Auth_QueryAuditLog),
+          container.get(TYPES.Auth_AuditLogEntryHttpMapper),
+          container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
+          container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
+          container.get<WebhookDispatcherInterface>(TYPES.Auth_WebhookDispatcher),
+          // Standard Red Notes: per-user SERVER storage-limit dependencies (the
+          // upload limit is a subscription setting; see BaseAdminController).
+          container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
+          container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
+          container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
+          // Standard Red Notes: admin-role grant/revoke + reset-mfa/fix-quota
+          // panel ops, and the read-only env master switches (see
+          // BaseAdminController). The trailing RBAC group deps remain omitted
+          // here, mirroring the pre-existing home-server behaviour.
+          container.get<RoleServiceInterface>(TYPES.Auth_RoleService),
+          container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser),
+          container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
+          container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
+          // Standard Red Notes: the RBAC group + role-management deps stay
+          // undefined on the home-server single-process path (pre-existing
+          // behaviour; those endpoints degrade to "not available" here). They
+          // are passed explicitly as `undefined` only so the trailing
+          // lockRepository — the LAST positional constructor arg — can be wired
+          // by position without pulling the group/RBAC surface in.
+          undefined, // doCreateGroup
+          undefined, // doListGroups
+          undefined, // doDeleteGroup
+          undefined, // doAddUserToGroup
+          undefined, // doRemoveUserFromGroup
+          undefined, // doSetGroupRoles
+          undefined, // doListGroupMembers
+          undefined, // doGetUserEffectivePermissions
+          undefined, // groupHttpMapper
+          undefined, // doListRolesWithPermissions
+          undefined, // doSetRolePermissions
+          undefined, // doCreateCustomRole
+          undefined, // doDeleteCustomRole
+          undefined, // doGetPermissionCatalog
+          undefined, // doGetRoleHolders
+          undefined, // doResolveRoleSetPermissions
+          // Standard Red Notes: failed-login lock repository, backing the
+          // anti-abuse "Locked accounts" list + unlock on the single-container
+          // deploy. Auth_LockRepository is always bound (RedisLockRepository
+          // under a Redis cache, TypeORMLockRepository under the in-memory/
+          // TypeORM cache topology). Wiring it here makes UNLOCK (resetLockCounter)
+          // work on the single container; the LIST endpoint additionally requires
+          // the Redis SCAN-based listLockedAccounts, so under the TypeORM cache
+          // topology it correctly reports `available:false` (see
+          // BaseAdminController.getLockedAccounts / LockRepositoryInterface).
+          container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
+          // Standard Red Notes: admin SUSPEND/UNSUSPEND + admin-initiated
+          // DELETE. Wired on the single-container path too so the admin panel's
+          // suspend/delete endpoints work there. Delete reuses the existing
+          // cross-service DeleteAccount pipeline (Auth_DeleteAccount).
+          container.get<SetUserSuspension>(TYPES.Auth_SetUserSuspension),
+          container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
+          // Standard Red Notes: SIGNUP INVITE LINKS admin surface — wired on the
+          // single-container path too so the admin panel's invite-link
+          // create/list/revoke endpoints work there.
+          container.get<CreateSignupInviteLink>(TYPES.Auth_CreateSignupInviteLink),
+          container.get<ListSignupInviteLinks>(TYPES.Auth_ListSignupInviteLinks),
+          container.get<RevokeSignupInviteLink>(TYPES.Auth_RevokeSignupInviteLink),
+          // Standard Red Notes: APPROVAL QUEUE — wired on the single-container
+          // path too so the admin panel's pending-users list/approve/reject work.
+          container.get<ListPendingUsers>(TYPES.Auth_ListPendingUsers),
+          container.get<ApproveUser>(TYPES.Auth_ApproveUser),
+          container.get<RejectUser>(TYPES.Auth_RejectUser),
+        ),
+      )
       container
         .bind<BaseSubscriptionTokensController>(TYPES.Auth_BaseSubscriptionTokensController)
         .toConstantValue(

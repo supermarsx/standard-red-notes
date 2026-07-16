@@ -49,9 +49,7 @@ describe('DeleteCustomRole', () => {
   })
 
   it('refuses to delete a role still conferred by a group', async () => {
-    groupRepository.findAll = jest
-      .fn()
-      .mockResolvedValue([{ props: { name: 'Admins', roleNames: ['SUPPORT_AGENT'] } }])
+    groupRepository.findAll = jest.fn().mockResolvedValue([{ props: { name: 'Admins', roleNames: ['SUPPORT_AGENT'] } }])
 
     const result = await createUseCase().execute({ roleUuid })
 

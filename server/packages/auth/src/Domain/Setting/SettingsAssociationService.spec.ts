@@ -156,9 +156,7 @@ describe('SettingsAssociationService', () => {
 
     it('should be immutable by the client (server-written only)', () => {
       expect(
-        createService().isSettingMutableByClient(
-          SettingName.create(SettingName.NAMES.EmailBackupLastSent).getValue(),
-        ),
+        createService().isSettingMutableByClient(SettingName.create(SettingName.NAMES.EmailBackupLastSent).getValue()),
       ).toBeFalsy()
     })
 
@@ -183,9 +181,7 @@ describe('SettingsAssociationService', () => {
       // client-mutable again, an authenticated non-admin could PUT
       // REGISTRATION_DISABLED='true' on their own record and take down signups.
       expect(
-        createService().isSettingMutableByClient(
-          SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
-        ),
+        createService().isSettingMutableByClient(SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue()),
       ).toBeFalsy()
     })
 
@@ -199,9 +195,7 @@ describe('SettingsAssociationService', () => {
 
     it('should be unsensitive (plain readable value) so the admin panel can display it', () => {
       expect(
-        createService().getSensitivityForSetting(
-          SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue(),
-        ),
+        createService().getSensitivityForSetting(SettingName.create(SettingName.NAMES.RegistrationDisabled).getValue()),
       ).toBeFalsy()
     })
 
@@ -215,10 +209,7 @@ describe('SettingsAssociationService', () => {
   })
 
   describe('client default settings (Standard Red Notes): conflict-resolution & search-index', () => {
-    const clientDefaultSettings = [
-      SettingName.NAMES.ConflictResolutionStrategy,
-      SettingName.NAMES.SearchIndexEnabled,
-    ]
+    const clientDefaultSettings = [SettingName.NAMES.ConflictResolutionStrategy, SettingName.NAMES.SearchIndexEnabled]
 
     it.each(clientDefaultSettings)('should be a valid, recognized setting name (%s)', (name) => {
       const result = SettingName.create(name)

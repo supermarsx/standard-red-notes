@@ -19,7 +19,13 @@ describe('GetPermissionCatalog', () => {
 
   beforeEach(() => {
     roleRepository = {} as jest.Mocked<RoleRepositoryInterface>
-    roleRepository.findAll = jest.fn().mockResolvedValue([role('CORE_USER', 1, ['sync:items', 'server:files'])])
+    roleRepository.findAll = jest
+      .fn()
+      .mockResolvedValue([
+        role('CORE_USER', 1, ['sync:items', 'server:files']),
+        role('PRO_USER', 1, ['server:files']),
+        role('PLUS_USER', 1, ['server:files']),
+      ])
 
     permissionRepository = {} as jest.Mocked<PermissionRepositoryInterface>
     permissionRepository.findAll = jest
@@ -35,7 +41,7 @@ describe('GetPermissionCatalog', () => {
 
     const serverFiles = catalog.permissions.find((p) => p.name === 'server:files')
     expect(serverFiles?.category).toEqual('server')
-    expect(serverFiles?.grantedByRoleNames).toEqual(['CORE_USER'])
+    expect(serverFiles?.grantedByRoleNames).toEqual(['CORE_USER', 'PRO_USER'])
 
     const standalone = catalog.permissions.find((p) => p.name === 'standalone')
     expect(standalone?.category).toEqual('general')

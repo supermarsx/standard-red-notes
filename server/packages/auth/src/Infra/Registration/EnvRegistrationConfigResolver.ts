@@ -74,15 +74,12 @@ export class EnvRegistrationConfigResolver implements RegistrationConfigResolver
           : DEFAULT_REGISTRATION_CONFIG.emailConfirmationBody,
       emailConfirmationBaseUrl:
         typeof emailConfirmationBaseUrlRaw === 'string' ? emailConfirmationBaseUrlRaw.trim() : '',
-      inviteOnly:
-        typeof inviteOnlyRaw === 'boolean' ? inviteOnlyRaw : DEFAULT_REGISTRATION_CONFIG.inviteOnly,
+      inviteOnly: typeof inviteOnlyRaw === 'boolean' ? inviteOnlyRaw : DEFAULT_REGISTRATION_CONFIG.inviteOnly,
       maxTotalAccounts: normalizeMaxTotalAccounts(maxTotalAccountsRaw),
       signupsOpenAt: normalizeSignupWindowValue(signupsOpenAtRaw),
       signupsCloseAt: normalizeSignupWindowValue(signupsCloseAtRaw),
       approvalRequired:
-        typeof approvalRequiredRaw === 'boolean'
-          ? approvalRequiredRaw
-          : DEFAULT_REGISTRATION_CONFIG.approvalRequired,
+        typeof approvalRequiredRaw === 'boolean' ? approvalRequiredRaw : DEFAULT_REGISTRATION_CONFIG.approvalRequired,
       invitesPerUser: normalizeMaxTotalAccounts(invitesPerUserRaw),
     }
   }
@@ -110,7 +107,9 @@ export const registrationBaselineFromEnv = (raw: {
   approvalRequired?: string
   invitesPerUser?: string
 }): RegistrationConfig => ({
-  defaultRole: sanitizeDefaultRole(raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined),
+  defaultRole: sanitizeDefaultRole(
+    raw.defaultRole && raw.defaultRole.trim() !== '' ? raw.defaultRole.trim() : undefined,
+  ),
   domainMode: isRegistrationDomainMode(raw.domainMode) ? raw.domainMode : DEFAULT_REGISTRATION_CONFIG.domainMode,
   domainList: normalizeDomainList((raw.domains ?? '').split(/[\s,]+/)),
   // REGISTRATION_EMAIL_CONFIRMATION is opt-in: only the exact string 'true'

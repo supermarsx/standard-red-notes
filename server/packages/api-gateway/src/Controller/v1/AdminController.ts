@@ -22,7 +22,11 @@ import {
   validateBackendProfilesPatch,
   validateProfilesPatch,
 } from '../../Service/Assistant/profiles'
-import { API_GATEWAY_PROGRAM, ServiceAction, ServiceControlService } from '../../Service/ServiceControl/ServiceControlService'
+import {
+  API_GATEWAY_PROGRAM,
+  ServiceAction,
+  ServiceControlService,
+} from '../../Service/ServiceControl/ServiceControlService'
 import { DockerServiceControlService } from '../../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAclList } from '../IpAccessList'
 import { RateLimitMetricsStore } from '../RateLimitMetrics'
@@ -835,9 +839,7 @@ export class AdminController extends BaseHttpController {
 
         return
       case 'invalid-container':
-        response
-          .status(400)
-          .json({ error: { message: `Unknown or non-restartable container: ${outcome.container}.` } })
+        response.status(400).json({ error: { message: `Unknown or non-restartable container: ${outcome.container}.` } })
 
         return
       case 'unavailable':
@@ -1197,7 +1199,11 @@ export class AdminController extends BaseHttpController {
       if (ai.dailyRequestLimit !== undefined) {
         if (ai.dailyRequestLimit === null) {
           patch.ai.dailyRequestLimit = null
-        } else if (typeof ai.dailyRequestLimit === 'number' && Number.isInteger(ai.dailyRequestLimit) && ai.dailyRequestLimit >= 0) {
+        } else if (
+          typeof ai.dailyRequestLimit === 'number' &&
+          Number.isInteger(ai.dailyRequestLimit) &&
+          ai.dailyRequestLimit >= 0
+        ) {
           patch.ai.dailyRequestLimit = ai.dailyRequestLimit
         } else {
           return { error: 'ai.dailyRequestLimit must be an integer >= 0, or null to clear it.' }
@@ -1330,10 +1336,17 @@ export class AdminController extends BaseHttpController {
           }
           if (pow[key] === null) {
             powPatch[key] = null
-          } else if (typeof pow[key] === 'number' && Number.isInteger(pow[key]) && (pow[key] as number) >= 0 && (pow[key] as number) <= max) {
+          } else if (
+            typeof pow[key] === 'number' &&
+            Number.isInteger(pow[key]) &&
+            (pow[key] as number) >= 0 &&
+            (pow[key] as number) <= max
+          ) {
             powPatch[key] = pow[key] as number
           } else {
-            return { error: `security.proofOfWork.${key} must be an integer between 0 and ${max}, or null to clear it.` }
+            return {
+              error: `security.proofOfWork.${key} must be an integer between 0 and ${max}, or null to clear it.`,
+            }
           }
           changedSettings.push(`security.proofOfWork.${key}`)
 
@@ -1401,7 +1414,9 @@ export class AdminController extends BaseHttpController {
           ) {
             rlPatch[key] = rl[key] as number
           } else {
-            return { error: `security.rateLimit.${key} must be an integer between ${min} and ${max}, or null to clear it.` }
+            return {
+              error: `security.rateLimit.${key} must be an integer between ${min} and ${max}, or null to clear it.`,
+            }
           }
           changedSettings.push(`security.rateLimit.${key}`)
 
@@ -1472,7 +1487,12 @@ export class AdminController extends BaseHttpController {
           registration.domainList.every((entry) => typeof entry === 'string')
         ) {
           const cleaned = (registration.domainList as string[])
-            .map((entry) => entry.trim().toLowerCase().replace(/^[@.]+/, ''))
+            .map((entry) =>
+              entry
+                .trim()
+                .toLowerCase()
+                .replace(/^[@.]+/, ''),
+            )
             .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index)
           patch.registration.domainList = cleaned
         } else {
@@ -1502,12 +1522,12 @@ export class AdminController extends BaseHttpController {
           registration.emailConfirmationGating !== 'block_signin' &&
           registration.emailConfirmationGating !== 'warn'
         ) {
-          return { error: "registration.emailConfirmationGating must be 'block_signin' or 'warn', or null to clear it." }
+          return {
+            error: "registration.emailConfirmationGating must be 'block_signin' or 'warn', or null to clear it.",
+          }
         }
         patch.registration.emailConfirmationGating = registration.emailConfirmationGating as
-          | 'block_signin'
-          | 'warn'
-          | null
+          'block_signin' | 'warn' | null
         changedSettings.push('registration.emailConfirmationGating')
       }
 
@@ -1516,7 +1536,9 @@ export class AdminController extends BaseHttpController {
           const value = registration[key]
           const maxLength = key === 'emailConfirmationSubject' ? 1000 : 20000
           if (value !== null && (typeof value !== 'string' || value.length > maxLength)) {
-            return { error: `registration.${key} must be a string of at most ${maxLength} characters, or null to clear it.` }
+            return {
+              error: `registration.${key} must be a string of at most ${maxLength} characters, or null to clear it.`,
+            }
           }
           patch.registration[key] = value as string | null
           changedSettings.push(`registration.${key}`)
@@ -1685,7 +1707,9 @@ export class AdminController extends BaseHttpController {
           ) {
             ocrPatch[key] = (ocr[key] as string).trim()
           } else {
-            return { error: `ocr.${key} must be a tesseract language code (e.g. "eng" or "eng+deu"), or null to clear it.` }
+            return {
+              error: `ocr.${key} must be a tesseract language code (e.g. "eng" or "eng+deu"), or null to clear it.`,
+            }
           }
           changedSettings.push(`ocr.${key}`)
         }
@@ -1937,7 +1961,9 @@ export class AdminController extends BaseHttpController {
     }
 
     const result =
-      action === 'add' ? await this.ipAccessListStore.add(list, entry) : await this.ipAccessListStore.remove(list, entry)
+      action === 'add'
+        ? await this.ipAccessListStore.add(list, entry)
+        : await this.ipAccessListStore.remove(list, entry)
     if (!result.ok) {
       response.status(400).json({ error: { message: result.error } })
 
@@ -1992,7 +2018,13 @@ export class AdminController extends BaseHttpController {
    */
   private authServiceEntry(auth: AuthReadiness): ServiceStatusEntry {
     if (!auth.reachable) {
-      return { name: 'auth', reachable: false, status: 'down', detail: 'unreachable', responseTimeMs: auth.responseTimeMs }
+      return {
+        name: 'auth',
+        reachable: false,
+        status: 'down',
+        detail: 'unreachable',
+        responseTimeMs: auth.responseTimeMs,
+      }
     }
 
     const checks = auth.checks ?? {}

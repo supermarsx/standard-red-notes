@@ -47,7 +47,11 @@ describe('EnvRegistrationConfigResolver', () => {
         ...confirmationDefaults,
       },
       () =>
-        Promise.resolve({ defaultRole: RoleName.NAMES.ProUser, domainMode: 'allowlist', domainList: ['Persisted.COM'] }),
+        Promise.resolve({
+          defaultRole: RoleName.NAMES.ProUser,
+          domainMode: 'allowlist',
+          domainList: ['Persisted.COM'],
+        }),
     )
 
     expect(await resolver.resolve()).toEqual({
@@ -126,14 +130,14 @@ describe('EnvRegistrationConfigResolver', () => {
     })
 
     it('falls back to safe defaults for invalid/absent env', () => {
-      expect(registrationBaselineFromEnv({ defaultRole: 'ADMIN_USER', domainMode: 'weird', domains: undefined })).toEqual(
-        {
-          defaultRole: RoleName.NAMES.CoreUser,
-          domainMode: 'off',
-          domainList: [],
-          ...confirmationDefaults,
-        },
-      )
+      expect(
+        registrationBaselineFromEnv({ defaultRole: 'ADMIN_USER', domainMode: 'weird', domains: undefined }),
+      ).toEqual({
+        defaultRole: RoleName.NAMES.CoreUser,
+        domainMode: 'off',
+        domainList: [],
+        ...confirmationDefaults,
+      })
     })
 
     it('enables confirmation only for the exact string "true"', () => {

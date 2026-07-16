@@ -129,9 +129,9 @@ describe('openAiCompatibleConfigured', () => {
 
   it('is true in subscription mode when a token or base URL is present', () => {
     expect(openAiCompatibleConfigured({ openaiAuthMode: 'subscription', openaiSubscriptionToken: 't' })).toBe(true)
-    expect(
-      openAiCompatibleConfigured({ openaiAuthMode: 'subscription', openaiSubscriptionBaseURL: 'https://x' }),
-    ).toBe(true)
+    expect(openAiCompatibleConfigured({ openaiAuthMode: 'subscription', openaiSubscriptionBaseURL: 'https://x' })).toBe(
+      true,
+    )
     expect(openAiCompatibleConfigured({ openaiAuthMode: 'subscription' })).toBe(false)
   })
 })

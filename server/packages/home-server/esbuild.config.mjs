@@ -90,4 +90,4 @@ for (const dbType of ['mysql', 'sqlite']) {
     }
   }
 }
-console.log(`Merged ${copied} migration files into dist/bundle/migrations`)
+process.stdout.write(`Merged ${copied} migration files into dist/bundle/migrations\n`)

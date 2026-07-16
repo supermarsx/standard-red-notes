@@ -74,7 +74,10 @@ describe('SendEmailConfirmation', () => {
     await createUseCase().execute({
       userUuid: 'u-1',
       email: 'a@b.co',
-      registrationConfig: config({ emailConfirmationSubject: 'Verify!', emailConfirmationBody: 'Link: {{confirmation_url}}' }),
+      registrationConfig: config({
+        emailConfirmationSubject: 'Verify!',
+        emailConfirmationBody: 'Link: {{confirmation_url}}',
+      }),
     })
 
     const [to, subject, body] = emailSender.sendEmail.mock.calls[0]

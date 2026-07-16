@@ -301,10 +301,7 @@ export class ContainerConfigLoader {
       container
         .bind<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher)
         .toDynamicValue((context: ResolutionContext) => {
-          return new SNSDomainEventPublisher(
-            context.get(TYPES.Sync_SNS),
-            context.get(TYPES.Sync_SNS_TOPIC_ARN),
-          )
+          return new SNSDomainEventPublisher(context.get(TYPES.Sync_SNS), context.get(TYPES.Sync_SNS_TOPIC_ARN))
         })
 
       const sqsConfig: SQSClientConfig = {
@@ -391,9 +388,9 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<SharedVault, SharedVaultHttpRepresentation>>(TYPES.Sync_SharedVaultHttpMapper)
       .toConstantValue(new SharedVaultHttpMapper())
     container
-      .bind<
-        MapperInterface<SharedVaultInvite, SharedVaultInviteHttpRepresentation>
-      >(TYPES.Sync_SharedVaultInviteHttpMapper)
+      .bind<MapperInterface<SharedVaultInvite, SharedVaultInviteHttpRepresentation>>(
+        TYPES.Sync_SharedVaultInviteHttpMapper,
+      )
       .toConstantValue(new SharedVaultInviteHttpMapper())
     container
       .bind<MapperInterface<Message, TypeORMMessage>>(TYPES.Sync_MessagePersistenceMapper)
@@ -751,29 +748,25 @@ export class ContainerConfigLoader {
           container.get<number>(TYPES.Sync_FREE_USER_CONTENT_LIMIT_BYTES),
         ),
       )
-    container
-      .bind<SaveItems>(TYPES.Sync_SaveItems)
-      .toConstantValue(
-        new SaveItems(
-          container.get<ItemSaveValidatorInterface>(TYPES.Sync_ItemSaveValidator),
-          container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
-          container.get<TimerInterface>(TYPES.Sync_Timer),
-          container.get<SaveNewItem>(TYPES.Sync_SaveNewItem),
-          container.get<UpdateExistingItem>(TYPES.Sync_UpdateExistingItem),
-          container.get<SendEventToClient>(TYPES.Sync_SendEventToClient),
-          container.get<SendEventToClients>(TYPES.Sync_SendEventToClients),
-          container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
-          container.get<CheckForContentLimit>(TYPES.Sync_CheckForContentLimit),
-          container.get<MapperInterface<Item, ItemHttpRepresentation>>(TYPES.Sync_ItemHttpMapper),
-          // Standard Red Notes: websocket sync-push optimization. Default ON; the
-          // client always degrades to HTTP cleanly if disabled or inconsistent.
-          env.get('WEBSOCKET_SYNC_PUSH_ENABLED', true) !== 'false',
-          env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)
-            ? +env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)
-            : 50,
-          container.get<Logger>(TYPES.Sync_Logger),
-        ),
-      )
+    container.bind<SaveItems>(TYPES.Sync_SaveItems).toConstantValue(
+      new SaveItems(
+        container.get<ItemSaveValidatorInterface>(TYPES.Sync_ItemSaveValidator),
+        container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
+        container.get<TimerInterface>(TYPES.Sync_Timer),
+        container.get<SaveNewItem>(TYPES.Sync_SaveNewItem),
+        container.get<UpdateExistingItem>(TYPES.Sync_UpdateExistingItem),
+        container.get<SendEventToClient>(TYPES.Sync_SendEventToClient),
+        container.get<SendEventToClients>(TYPES.Sync_SendEventToClients),
+        container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
+        container.get<CheckForContentLimit>(TYPES.Sync_CheckForContentLimit),
+        container.get<MapperInterface<Item, ItemHttpRepresentation>>(TYPES.Sync_ItemHttpMapper),
+        // Standard Red Notes: websocket sync-push optimization. Default ON; the
+        // client always degrades to HTTP cleanly if disabled or inconsistent.
+        env.get('WEBSOCKET_SYNC_PUSH_ENABLED', true) !== 'false',
+        env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true) ? +env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true) : 50,
+        container.get<Logger>(TYPES.Sync_Logger),
+      ),
+    )
     container
       .bind<GetUserNotifications>(TYPES.Sync_GetUserNotifications)
       .toConstantValue(new GetUserNotifications(container.get(TYPES.Sync_NotificationRepository)))
@@ -1200,9 +1193,7 @@ export class ContainerConfigLoader {
     // user's configured Nextcloud destination and needs no S3 bucket. The actual run
     // is still gated upstream by the operator switch (NEXTCLOUD_BACKUPS_ENABLED) and
     // per-user completeness in auth's TriggerNextcloudBackupForUser.
-    container
-      .bind<WebDAVClientInterface>(TYPES.Sync_WebDAVClient)
-      .toConstantValue(new HttpsWebDAVClient())
+    container.bind<WebDAVClientInterface>(TYPES.Sync_WebDAVClient).toConstantValue(new HttpsWebDAVClient())
     container
       .bind<WebDAVItemBackupServiceInterface>(TYPES.Sync_WebDAVItemBackupService)
       .toConstantValue(
@@ -1221,10 +1212,7 @@ export class ContainerConfigLoader {
           container.get<Logger>(TYPES.Sync_Logger),
         ),
       )
-    eventHandlers.set(
-      'NEXTCLOUD_BACKUP_REQUESTED',
-      container.get(TYPES.Sync_NextcloudBackupRequestedEventHandler),
-    )
+    eventHandlers.set('NEXTCLOUD_BACKUP_REQUESTED', container.get(TYPES.Sync_NextcloudBackupRequestedEventHandler))
 
     if (!isConfiguredForHomeServer) {
       container

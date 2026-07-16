@@ -1,0 +1,28 @@
+{
+  "name": "inversify-express-utils",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "description": "Compatibility facade for the maintained Inversify Express 5 adapter",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "clean": "rm -fr dist",
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@inversifyjs/http-core": "^5.4.5",
+    "@inversifyjs/http-express": "^5.4.5",
+    "express": "^5.2.1",
+    "inversify": "^8.1.3",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "typescript": "6.0.3"
+  }
+}

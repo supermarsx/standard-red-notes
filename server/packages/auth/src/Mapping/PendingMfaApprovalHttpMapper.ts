@@ -3,9 +3,10 @@ import { MapperInterface } from '@standardnotes/domain-core'
 import { PendingMfaApproval } from '../Domain/PendingMfaApproval/PendingMfaApproval'
 import { PendingMfaApprovalHttpProjection } from '../Infra/Http/Projection/PendingMfaApprovalHttpProjection'
 
-export class PendingMfaApprovalHttpMapper
-  implements MapperInterface<PendingMfaApproval, PendingMfaApprovalHttpProjection>
-{
+export class PendingMfaApprovalHttpMapper implements MapperInterface<
+  PendingMfaApproval,
+  PendingMfaApprovalHttpProjection
+> {
   toDomain(_projection: PendingMfaApprovalHttpProjection): PendingMfaApproval {
     throw new Error('Not implemented yet.')
   }

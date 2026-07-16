@@ -256,28 +256,23 @@ export class ServiceControlService {
   private defaultRunner(): SupervisorctlRunner {
     return (args: string[]) =>
       new Promise<SupervisorctlRunResult>((resolve) => {
-        execFile(
-          'supervisorctl',
-          args,
-          { timeout: this.timeoutMs, windowsHide: true },
-          (error, stdout, stderr) => {
-            const code =
-              error && typeof (error as NodeJS.ErrnoException & { code?: number }).code === 'number'
-                ? ((error as unknown as { code: number }).code as number)
-                : error
-                  ? 1
-                  : 0
-            resolve({
-              stdout: stdout?.toString() ?? '',
-              stderr: stderr?.toString() ?? '',
-              code,
-              // Only treat a genuine spawn failure (ENOENT etc.) as `error`; a
-              // non-zero EXIT is normal for supervisorctl and is carried via
-              // `code`, not `error`.
-              error: error && (error as NodeJS.ErrnoException).code === 'ENOENT' ? error : undefined,
-            })
-          },
-        )
+        execFile('supervisorctl', args, { timeout: this.timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
+          const code =
+            error && typeof (error as NodeJS.ErrnoException & { code?: number }).code === 'number'
+              ? ((error as unknown as { code: number }).code as number)
+              : error
+                ? 1
+                : 0
+          resolve({
+            stdout: stdout?.toString() ?? '',
+            stderr: stderr?.toString() ?? '',
+            code,
+            // Only treat a genuine spawn failure (ENOENT etc.) as `error`; a
+            // non-zero EXIT is normal for supervisorctl and is carried via
+            // `code`, not `error`.
+            error: error && (error as NodeJS.ErrnoException).code === 'ENOENT' ? error : undefined,
+          })
+        })
       })
   }
 }

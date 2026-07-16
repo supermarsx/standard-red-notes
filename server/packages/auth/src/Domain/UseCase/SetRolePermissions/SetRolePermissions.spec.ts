@@ -38,7 +38,10 @@ describe('SetRolePermissions', () => {
   })
 
   it('replaces the role permissions and returns the built-in role view', async () => {
-    const result = await createUseCase().execute({ roleUuid, permissionNames: ['SYNC_ITEMS', 'SYNC_ITEMS'] })
+    const result = await createUseCase().execute({
+      roleUuid,
+      permissionNames: ['SYNC_ITEMS', 'MANAGE_USERS', 'SYNC_ITEMS'],
+    })
 
     expect(result.isFailed()).toBe(false)
     expect(roleRepository.save).toHaveBeenCalledTimes(1)
@@ -46,7 +49,7 @@ describe('SetRolePermissions', () => {
     expect(view.name).toEqual('CORE_USER')
     expect(view.isBuiltIn).toBe(true)
     // Deduplicated + sorted.
-    expect(view.permissionNames).toEqual(['SYNC_ITEMS'])
+    expect(view.permissionNames).toEqual(['MANAGE_USERS', 'SYNC_ITEMS'])
   })
 
   it('fails with an invalid role uuid', async () => {

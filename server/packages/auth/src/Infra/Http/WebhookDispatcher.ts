@@ -4,10 +4,7 @@ import { Logger } from 'winston'
 
 import { Webhook } from '../../Domain/Webhook/Webhook'
 import { WebhookRepositoryInterface } from '../../Domain/Webhook/WebhookRepositoryInterface'
-import {
-  WebhookDispatcherInterface,
-  WebhookEventContext,
-} from '../../Domain/Webhook/WebhookDispatcherInterface'
+import { WebhookDispatcherInterface, WebhookEventContext } from '../../Domain/Webhook/WebhookDispatcherInterface'
 import { computeWebhookSignature } from '../../Domain/Webhook/WebhookSignature'
 
 /**

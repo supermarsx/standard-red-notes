@@ -67,7 +67,10 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     it('persists values, clears them on null, and prunes empty sections', async () => {
       const store = new ServerSettingsStore(filePath)
 
-      await store.update({ ai: { anthropicApiKey: 'sk-test', dailyRequestLimit: 5 }, updateCheck: { url: 'https://u.example.com' } })
+      await store.update({
+        ai: { anthropicApiKey: 'sk-test', dailyRequestLimit: 5 },
+        updateCheck: { url: 'https://u.example.com' },
+      })
       expect(await store.read()).toEqual({
         ai: { anthropicApiKey: 'sk-test', dailyRequestLimit: 5 },
         updateCheck: { url: 'https://u.example.com' },
@@ -517,7 +520,14 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         ai: {
           profiles: [
             { id: 'a', name: 'Claude', provider: 'anthropic', enabled: true, apiKey: 'sk-a' },
-            { id: 'b', name: 'Router', provider: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1', enabled: true, apiKey: 'sk-b' },
+            {
+              id: 'b',
+              name: 'Router',
+              provider: 'openai-compatible',
+              baseUrl: 'https://openrouter.ai/api/v1',
+              enabled: true,
+              apiKey: 'sk-b',
+            },
           ],
           defaultProfileId: 'b',
         },
@@ -542,7 +552,15 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       const view = await resolver.view()
       expect(JSON.stringify(view)).not.toContain('super-secret-key')
       expect(view.settings.ai.profiles).toEqual([
-        { id: 'a', name: 'Claude', provider: 'anthropic', baseUrl: null, model: null, enabled: true, keyConfigured: true },
+        {
+          id: 'a',
+          name: 'Claude',
+          provider: 'anthropic',
+          baseUrl: null,
+          model: null,
+          enabled: true,
+          keyConfigured: true,
+        },
       ])
       expect(view.settings.ai.defaultProfileId).toBe('a')
       expect(view.sources['ai.profiles']).toBe('persisted')
@@ -574,7 +592,9 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
           backendProfiles: [
             { id: 'be1', name: 'Anthropic', type: 'api-key', provider: 'anthropic', apiKey: 'sk-backend' },
           ],
-          profiles: [{ id: 'p1', name: 'Assistant', provider: 'openai-compatible', enabled: true, backendProfileId: 'be1' }],
+          profiles: [
+            { id: 'p1', name: 'Assistant', provider: 'openai-compatible', enabled: true, backendProfileId: 'be1' },
+          ],
           defaultProfileId: 'p1',
         },
       })
@@ -588,7 +608,9 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       const resolver = makeResolver()
       await resolver.applyPatch({
         ai: {
-          backendProfiles: [{ id: 'be1', name: 'A', type: 'api-key', provider: 'anthropic', apiKey: 'super-backend-secret' }],
+          backendProfiles: [
+            { id: 'be1', name: 'A', type: 'api-key', provider: 'anthropic', apiKey: 'super-backend-secret' },
+          ],
         },
       })
       const view = await resolver.view()
@@ -611,11 +633,19 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         },
       })
 
-      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-1'], roleNames: ['CORE_USER'] }))?.id).toBe('user-p')
-      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['CORE_USER'] }))?.id).toBe('role-p')
-      expect((await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['PRO_USER'] }))?.id).toBe('default-p')
+      expect(
+        (await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-1'], roleNames: ['CORE_USER'] }))?.id,
+      ).toBe('user-p')
+      expect(
+        (await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['CORE_USER'] }))?.id,
+      ).toBe('role-p')
+      expect(
+        (await resolver.resolveActiveProfile(undefined, { userIdentifiers: ['uuid-x'], roleNames: ['PRO_USER'] }))?.id,
+      ).toBe('default-p')
       // An explicit client selection still wins over the assignment default.
-      expect((await resolver.resolveActiveProfile('role-p', { userIdentifiers: ['uuid-1'], roleNames: [] }))?.id).toBe('role-p')
+      expect((await resolver.resolveActiveProfile('role-p', { userIdentifiers: ['uuid-1'], roleNames: [] }))?.id).toBe(
+        'role-p',
+      )
     })
   })
 

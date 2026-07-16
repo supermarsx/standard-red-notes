@@ -37,20 +37,14 @@ describe('CookieFactory', () => {
 
   describe('Domain attribute', () => {
     it('should include the Domain attribute when a domain is configured', () => {
-      const [accessTokenCookie, refreshTokenCookie] = createFactory(
-        'None',
-        'my.host.tld',
-      ).createCookieHeaderValue(dto)
+      const [accessTokenCookie, refreshTokenCookie] = createFactory('None', 'my.host.tld').createCookieHeaderValue(dto)
 
       expect(accessTokenCookie).toContain('Domain=my.host.tld;')
       expect(refreshTokenCookie).toContain('Domain=my.host.tld;')
     })
 
     it('should OMIT the Domain attribute entirely when the domain is empty (host-only cookie)', () => {
-      const [accessTokenCookie, refreshTokenCookie] = createFactory(
-        'None',
-        '',
-      ).createCookieHeaderValue(dto)
+      const [accessTokenCookie, refreshTokenCookie] = createFactory('None', '').createCookieHeaderValue(dto)
 
       expect(accessTokenCookie).not.toContain('Domain=')
       expect(refreshTokenCookie).not.toContain('Domain=')
@@ -160,10 +154,7 @@ describe('CookieFactory', () => {
     })
 
     it('should not emit an empty Domain= attribute when the domain is empty', () => {
-      const [accessTokenCookie, refreshTokenCookie] = createFactory(
-        'None',
-        '',
-      ).createCookieHeaderValue(dto)
+      const [accessTokenCookie, refreshTokenCookie] = createFactory('None', '').createCookieHeaderValue(dto)
 
       expect(accessTokenCookie).not.toMatch(/Domain=;/)
       expect(accessTokenCookie).not.toMatch(/Domain=\s/)

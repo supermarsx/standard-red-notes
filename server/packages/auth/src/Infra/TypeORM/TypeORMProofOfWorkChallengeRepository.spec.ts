@@ -68,7 +68,11 @@ describe('TypeORMProofOfWorkChallengeRepository', () => {
 
     it('returns null when the stored value is not a number (NaN guard)', async () => {
       await cacheEntryRepository.save(
-        CacheEntry.create({ key: 'pow:register:seed-1', value: 'not-a-number', expiresAt: secondsAhead(600) }).getValue(),
+        CacheEntry.create({
+          key: 'pow:register:seed-1',
+          value: 'not-a-number',
+          expiresAt: secondsAhead(600),
+        }).getValue(),
       )
 
       expect(await repository.getChallengeDifficulty('seed-1', 'register')).toBeNull()

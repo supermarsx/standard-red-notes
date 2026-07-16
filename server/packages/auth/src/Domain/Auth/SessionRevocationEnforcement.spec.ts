@@ -178,12 +178,12 @@ describe('Session revocation enforcement (integration)', () => {
     } as unknown as SessionServiceInterface
 
     // No JWT decoding in this flow: SN clients present `1:uuid:token` session tokens.
-    sessionTokenDecoder = { decodeToken: jest.fn().mockReturnValue(undefined) } as unknown as TokenDecoderInterface<
-      SessionTokenData
-    >
-    fallbackTokenDecoder = { decodeToken: jest.fn().mockReturnValue(undefined) } as unknown as TokenDecoderInterface<
-      SessionTokenData
-    >
+    sessionTokenDecoder = {
+      decodeToken: jest.fn().mockReturnValue(undefined),
+    } as unknown as TokenDecoderInterface<SessionTokenData>
+    fallbackTokenDecoder = {
+      decodeToken: jest.fn().mockReturnValue(undefined),
+    } as unknown as TokenDecoderInterface<SessionTokenData>
   })
 
   it('(baseline) authenticates a live session token', async () => {
@@ -205,11 +205,7 @@ describe('Session revocation enforcement (integration)', () => {
     )
 
     // Revoke via the real use-case: adds to revoked_sessions AND deletes the row.
-    const deleteSessionForUser = new DeleteSessionForUser(
-      sessionRepository,
-      ephemeralSessionRepository,
-      sessionService,
-    )
+    const deleteSessionForUser = new DeleteSessionForUser(sessionRepository, ephemeralSessionRepository, sessionService)
     const result = await deleteSessionForUser.execute({ sessionUuid: session.uuid, userUuid: USER_UUID })
     expect(result.success).toBeTruthy()
 

@@ -55,9 +55,7 @@ describe('CheckInDeadManSwitch', () => {
   })
 
   it('should fail if the switch belongs to another user', async () => {
-    deadManSwitchRepository.findById = jest
-      .fn()
-      .mockResolvedValue(buildSwitch('99999999-9999-9999-9999-999999999999'))
+    deadManSwitchRepository.findById = jest.fn().mockResolvedValue(buildSwitch('99999999-9999-9999-9999-999999999999'))
 
     const result = await createUseCase().execute({ userUuid, switchId })
 

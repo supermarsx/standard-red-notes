@@ -2,7 +2,7 @@
   "name": "@standardnotes/websockets-server",
   "version": "1.22.15",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=26.0.0"
   },
   "private": true,
   "repository": {
@@ -26,8 +26,8 @@
     "typeorm": "typeorm-ts-node-commonjs"
   },
   "dependencies": {
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1057.0",
-    "@aws-sdk/client-sqs": "^3.1057.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1088.0",
+    "@aws-sdk/client-sqs": "^3.1088.0",
     "@standardnotes/common": "workspace:^",
     "@standardnotes/domain-core": "workspace:^",
     "@standardnotes/domain-events": "workspace:^",
@@ -38,29 +38,23 @@
     "cors": "2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "inversify": "^8.1.0",
-    "inversify-express-utils": "patch:inversify-express-utils@npm%3A6.5.0#~/.yarn/patches/inversify-express-utils-npm-6.5.0-3c34d82e25.patch",
-    "ioredis": "^5.11.0",
-    "mysql2": "^3.22.4",
+    "inversify": "^8.1.3",
+    "inversify-express-utils": "workspace:*",
+    "ioredis": "^5.11.1",
+    "mysql2": "^3.23.0",
     "reflect-metadata": "^0.2.2",
-    "typeorm": "^1.0.0",
+    "typeorm": "^1.1.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/preset-env": "^7.29.7",
-    "@babel/preset-typescript": "^7.29.7",
-    "@types/babel__core": "^7",
-    "@types/babel__preset-env": "^7",
+    "@swc/core": "^1.15.43",
+    "@swc/jest": "^0.2.39",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/ioredis": "^5.0.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.0.0",
-    "babel-jest": "^30.4.1",
+    "@types/node": "^26.1.1",
     "jest": "^30.4.2",
-    "jest-util": "^30.2.0",
-    "ts-jest": "^29.4.11",
-    "typescript": "^6.0.3"
+    "jest-util": "^30.4.1",
+    "typescript": "6.0.3"
   }
 }

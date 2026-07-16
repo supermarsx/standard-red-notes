@@ -117,7 +117,8 @@ void container
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  const app = await server.build()
+  const serverInstance = app.listen(env.get('PORT'))
 
   const httpKeepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
     ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)

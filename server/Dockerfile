@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.25.0
 
 # =============================================================================
 # BUILD STAGE — carries the C/C++ toolchain (g++/make/python3) needed to compile
@@ -7,7 +7,7 @@
 # surface of the network-facing container (no in-container compiler for an
 # attacker to abuse).
 # =============================================================================
-FROM node:24-alpine AS build
+FROM node:26.5.0-alpine AS build
 
 ENV NODE_ENV=production
 
@@ -18,7 +18,7 @@ RUN apk add --update --no-cache \
   py3-pip \
   python3
 
-RUN npm install -g corepack@latest && corepack enable
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 WORKDIR /opt/server
 
@@ -39,6 +39,7 @@ COPY packages/domain-events-infra/package.json packages/domain-events-infra/
 COPY packages/files/package.json packages/files/
 COPY packages/grpc/package.json packages/grpc/
 COPY packages/home-server/package.json packages/home-server/
+COPY packages/inversify-express-utils/package.json packages/inversify-express-utils/
 COPY packages/predicates/package.json packages/predicates/
 COPY packages/revisions/package.json packages/revisions/
 COPY packages/scheduler/package.json packages/scheduler/
@@ -62,9 +63,9 @@ RUN CI=true yarn build
 # runtime) + the few CLI tools the entrypoint / healthcheck need, plus the fully
 # built, PnP-installed workspace copied from the build stage. The native addons
 # compiled in the build stage (under .yarn/unplugged) are ABI-compatible because
-# both stages share the same node:24-alpine base. Runs as an unprivileged user.
+# both stages share the same node:26.5.0-alpine base. Runs as an unprivileged user.
 # =============================================================================
-FROM node:24-alpine AS runtime
+FROM node:26.5.0-alpine AS runtime
 
 ENV NODE_ENV=production
 
@@ -75,9 +76,9 @@ RUN apk add --update --no-cache \
   openssl \
   py3-pip \
   python3 \
-  && pip install --no-cache-dir --upgrade --break-system-packages supervisor
+  && pip install --no-cache-dir --upgrade --break-system-packages supervisor==4.3.0
 
-RUN npm install -g corepack@latest && corepack enable
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 WORKDIR /opt/server
 

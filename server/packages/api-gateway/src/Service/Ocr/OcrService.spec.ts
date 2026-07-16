@@ -53,9 +53,9 @@ describe('OcrService', () => {
 
   it('rejects more pages than the configured maximum', async () => {
     const recognizer: OcrRecognizer = jest.fn(async () => 'x')
-    await expect(
-      makeService(recognizer).recognizePages([page(1), page(2), page(3), page(4)]),
-    ).rejects.toThrow(/too many pages/i)
+    await expect(makeService(recognizer).recognizePages([page(1), page(2), page(3), page(4)])).rejects.toThrow(
+      /too many pages/i,
+    )
     expect(recognizer).not.toHaveBeenCalled()
   })
 

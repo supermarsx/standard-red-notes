@@ -240,10 +240,7 @@ export class VerifyMFA implements UseCaseInterface {
     }
   }
 
-  private async verifyMagicLink(
-    email: string,
-    requestParams: Record<string, unknown>,
-  ): Promise<VerifyMFAResponse> {
+  private async verifyMagicLink(email: string, requestParams: Record<string, unknown>): Promise<VerifyMFAResponse> {
     const code = (requestParams.magic_link_code ?? requestParams.mfa_code) as string | undefined
 
     if (!code) {

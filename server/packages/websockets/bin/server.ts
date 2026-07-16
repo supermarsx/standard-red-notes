@@ -13,7 +13,7 @@ import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 
 const container = new ContainerConfigLoader('server')
-void container.load().then((container) => {
+void container.load().then(async (container) => {
   const env: Env = new Env()
   env.load()
 
@@ -44,7 +44,8 @@ void container.load().then((container) => {
     })
   })
 
-  const serverInstance = server.build().listen(env.get('PORT'))
+  const app = await server.build()
+  const serverInstance = app.listen(env.get('PORT'))
 
   const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 

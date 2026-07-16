@@ -149,10 +149,7 @@ describe('WebhookDispatcher', () => {
   it('should stop retrying once a delivery succeeds', async () => {
     const webhook = makeWebhook()
     webhookRepository.findAllEnabled = jest.fn().mockResolvedValue([webhook])
-    httpClient.request = jest
-      .fn()
-      .mockRejectedValueOnce(new Error('transient'))
-      .mockResolvedValueOnce({ status: 200 })
+    httpClient.request = jest.fn().mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce({ status: 200 })
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 

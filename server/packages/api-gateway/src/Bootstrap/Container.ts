@@ -39,7 +39,11 @@ import { AssistantProviderConfig } from '../Service/Assistant/providers/factory'
 import { FetchLike, GitHubPublishService } from '../Service/Integrations/GitHubPublishService'
 import { createTesseractRecognizer, OcrService } from '../Service/Ocr/OcrService'
 import { WebFetchLike, WebService } from '../Service/Web/WebService'
-import { resolveOwnPackageVersion, UpdateCheckFetchLike, UpdateCheckService } from '../Service/Updates/UpdateCheckService'
+import {
+  resolveOwnPackageVersion,
+  UpdateCheckFetchLike,
+  UpdateCheckService,
+} from '../Service/Updates/UpdateCheckService'
 import { PluginsFetchLike, PluginsProxyService } from '../Service/Plugins/PluginsProxyService'
 import { AdminLogsService } from '../Service/AdminLogs/AdminLogsService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
@@ -229,8 +233,7 @@ export class ContainerConfigLoader {
       ollamaUrl: env.get('ASSISTANT_OLLAMA_URL', true) || undefined,
       // OpenAI Codex / ChatGPT subscription mode (opt-in). Leave ASSISTANT_OPENAI_AUTH_MODE
       // unset or 'api-key' to keep the default OpenAI API-key behavior unchanged.
-      openaiAuthMode:
-        env.get('ASSISTANT_OPENAI_AUTH_MODE', true) === 'subscription' ? 'subscription' : 'api-key',
+      openaiAuthMode: env.get('ASSISTANT_OPENAI_AUTH_MODE', true) === 'subscription' ? 'subscription' : 'api-key',
       openaiSubscriptionToken: env.get('ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN', true) || undefined,
       openaiSubscriptionBaseURL: env.get('ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL', true) || undefined,
       openaiAccountId: env.get('ASSISTANT_OPENAI_ACCOUNT_ID', true) || undefined,
@@ -499,14 +502,18 @@ export class ContainerConfigLoader {
     // Global daily AI request ceiling enforced per user. 0 = unlimited.
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_DAILY_REQUEST_LIMIT)
-      .toConstantValue(env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0)
+      .toConstantValue(
+        env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) ? +env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true) : 0,
+      )
     // Per-user rolling-window AI TOKEN ceilings (env fallback; 0 = unlimited).
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_5H_TOKEN_LIMIT)
       .toConstantValue(env.get('ASSISTANT_5H_TOKEN_LIMIT', true) ? +env.get('ASSISTANT_5H_TOKEN_LIMIT', true) : 0)
     container
       .bind<number>(TYPES.ApiGateway_ASSISTANT_WEEKLY_TOKEN_LIMIT)
-      .toConstantValue(env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) ? +env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) : 0)
+      .toConstantValue(
+        env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) ? +env.get('ASSISTANT_WEEKLY_TOKEN_LIMIT', true) : 0,
+      )
     // Standard Red Notes: comma-separated STT model ids the audio-recorder model
     // picker offers. Empty by default — clients then fall back to a free-text field.
     container.bind<string[]>(TYPES.ApiGateway_ASSISTANT_TRANSCRIPTION_MODELS).toConstantValue(
@@ -586,7 +593,9 @@ export class ContainerConfigLoader {
         // value and takes effect on the next check (no restart).
         urlResolver: () => serverSettingsResolver.resolveUpdateCheckUrl(),
         currentVersion: env.get('UPDATE_CHECK_CURRENT_VERSION', true) || resolveOwnPackageVersion(),
-        cacheTtlMs: env.get('UPDATE_CHECK_CACHE_TTL_MS', true) ? +env.get('UPDATE_CHECK_CACHE_TTL_MS', true) : undefined,
+        cacheTtlMs: env.get('UPDATE_CHECK_CACHE_TTL_MS', true)
+          ? +env.get('UPDATE_CHECK_CACHE_TTL_MS', true)
+          : undefined,
         timeoutMs: env.get('UPDATE_CHECK_TIMEOUT_MS', true) ? +env.get('UPDATE_CHECK_TIMEOUT_MS', true) : undefined,
       }),
     )
@@ -632,8 +641,7 @@ export class ContainerConfigLoader {
     // topologies) → the service-URL env where it is an internal URL → the
     // supervisord sibling port (from the entrypoint's port envs, with hardcoded
     // fallbacks matching the entrypoint).
-    const probePort = (portEnvVar: string, fallback: number): string =>
-      env.get(portEnvVar, true) || String(fallback)
+    const probePort = (portEnvVar: string, fallback: number): string => env.get(portEnvVar, true) || String(fallback)
     const serviceProbeUrls: Record<string, string> = {
       'syncing-server':
         env.get('SYNCING_SERVER_PROBE_URL', true) ||
@@ -660,13 +668,11 @@ export class ContainerConfigLoader {
     // [supervisorctl] unix-socket sections live). Always bound; when supervisorctl
     // cannot reach supervisord (older image without the socket conf) the service
     // degrades to an "unavailable" outcome rather than throwing.
-    container
-      .bind<ServiceControlService>(TYPES.ApiGateway_ServiceControlService)
-      .toConstantValue(
-        new ServiceControlService({
-          configPath: env.get('SUPERVISORCTL_CONFIG_PATH', true) || '/etc/supervisord.conf',
-        }),
-      )
+    container.bind<ServiceControlService>(TYPES.ApiGateway_ServiceControlService).toConstantValue(
+      new ServiceControlService({
+        configPath: env.get('SUPERVISORCTL_CONFIG_PATH', true) || '/etc/supervisord.conf',
+      }),
+    )
 
     // Standard Red Notes: OPT-IN, OFF-BY-DEFAULT container restart (Redis cache +
     // MariaDB) via the locked-down docker-socket-proxy sidecar. It activates ONLY
@@ -694,16 +700,14 @@ export class ContainerConfigLoader {
 
       return map
     }
-    container
-      .bind<DockerServiceControlService>(TYPES.ApiGateway_DockerServiceControlService)
-      .toConstantValue(
-        new DockerServiceControlService({
-          enabled: env.get('SERVICE_CONTROL_DOCKER_ENABLED', true) === 'true',
-          proxyUrl: env.get('SERVICE_CONTROL_DOCKER_PROXY_URL', true) || '',
-          project: env.get('SERVICE_CONTROL_DOCKER_PROJECT', true) || 'standard-red-notes',
-          containerNames: parseContainerNames(env.get('SERVICE_CONTROL_DOCKER_CONTAINERS', true)),
-        }),
-      )
+    container.bind<DockerServiceControlService>(TYPES.ApiGateway_DockerServiceControlService).toConstantValue(
+      new DockerServiceControlService({
+        enabled: env.get('SERVICE_CONTROL_DOCKER_ENABLED', true) === 'true',
+        proxyUrl: env.get('SERVICE_CONTROL_DOCKER_PROXY_URL', true) || '',
+        project: env.get('SERVICE_CONTROL_DOCKER_PROJECT', true) || 'standard-red-notes',
+        containerNames: parseContainerNames(env.get('SERVICE_CONTROL_DOCKER_CONTAINERS', true)),
+      }),
+    )
 
     // Standard Red Notes: OPT-IN read-only CalDAV feed.
     //
@@ -841,9 +845,7 @@ export class ContainerConfigLoader {
     // endpoints (mounted after RequiredCrossServiceTokenMiddleware on the
     // assistant streaming proxy). Off by default (userMax 0 => pass-through);
     // no-op when Redis is absent. See UserRateLimitMiddleware.
-    container
-      .bind<UserRateLimitMiddleware>(TYPES.ApiGateway_UserRateLimitMiddleware)
-      .to(UserRateLimitMiddleware)
+    container.bind<UserRateLimitMiddleware>(TYPES.ApiGateway_UserRateLimitMiddleware).to(UserRateLimitMiddleware)
     container
       .bind<OptionalCrossServiceTokenMiddleware>(TYPES.ApiGateway_OptionalCrossServiceTokenMiddleware)
       .to(OptionalCrossServiceTokenMiddleware)

@@ -229,7 +229,7 @@ export const ipMatchesEntry = (clientIp: string, entry: string): boolean => {
     if (bits === 0) {
       return true
     }
-    const mask = bits === 32 ? 0xffffffff : (~((1 << (32 - bits)) - 1) >>> 0)
+    const mask = bits === 32 ? 0xffffffff : ~((1 << (32 - bits)) - 1) >>> 0
 
     return (ipInt & mask) === (baseInt & mask)
   }

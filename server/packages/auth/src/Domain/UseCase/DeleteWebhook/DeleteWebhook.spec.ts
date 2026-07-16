@@ -55,7 +55,7 @@ describe('DeleteWebhook', () => {
     expect(webhookRepository.remove).toHaveBeenCalledTimes(1)
   })
 
-  it('should hide another user\'s webhook from a non-admin (reported as not found)', async () => {
+  it("should hide another user's webhook from a non-admin (reported as not found)", async () => {
     webhookRepository.findById = jest.fn().mockResolvedValue(makeWebhook({ userUuid: otherUserUuid }))
 
     const result = await createUseCase().execute({ userUuid, webhookId })

@@ -180,6 +180,73 @@ describe('CreateCrossServiceToken', () => {
     )
   })
 
+  it('projects configured feature gates, request limits, and MCP tag scope into the token', async () => {
+    const settingValues: Record<string, string> = {
+      [SettingName.NAMES.CollaborationEnabled]: 'false',
+      [SettingName.NAMES.LiveSyncEnabled]: 'false',
+      [SettingName.NAMES.AiEnabled]: 'false',
+      [SettingName.NAMES.AiRequestLimit]: '25',
+      [SettingName.NAMES.WorkflowsEnabled]: 'true',
+    }
+    settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+      const value = settingValues[settingName]
+      return Promise.resolve(value === undefined ? null : { props: { value } })
+    })
+    session.readonlyAccess = true
+    session.mcpScopeTagUuids = JSON.stringify(['tag-b', 'tag-a'])
+
+    await createUseCase().execute({ user, session })
+
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload).toEqual(
+      expect.objectContaining({
+        collaboration_enabled: false,
+        live_sync_enabled: false,
+        ai_enabled: false,
+        ai_request_limit: 25,
+        workflows_enabled: true,
+        mcp_scope: { access: 'read', tagUuids: ['tag-b', 'tag-a'] },
+      }),
+    )
+  })
+
+  it.each(['not-a-number', '0'])('omits invalid AI request limit %s and malformed MCP tag scope', async (value) => {
+    settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+      if (settingName === SettingName.NAMES.AiRequestLimit) {
+        return Promise.resolve({ props: { value } })
+      }
+      return Promise.resolve(null)
+    })
+    session.readonlyAccess = false
+    session.mcpScopeTagUuids = '{invalid-json'
+
+    await createUseCase().execute({ user, session })
+
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload.ai_request_limit).toBeUndefined()
+    expect(payload.mcp_scope).toBeUndefined()
+  })
+
+  it('adds the admin role when the projected user email is configured in ADMIN_EMAILS', async () => {
+    const previousAdminEmails = process.env.ADMIN_EMAILS
+    process.env.ADMIN_EMAILS = 'other@example.com, TEST@TEST.TE '
+
+    try {
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.roles.filter((projectedRole) => projectedRole.name === RoleName.NAMES.AdminUser)).toEqual([
+        { uuid: `admin-${RoleName.NAMES.AdminUser}`, name: RoleName.NAMES.AdminUser },
+      ])
+    } finally {
+      if (previousAdminEmails === undefined) {
+        delete process.env.ADMIN_EMAILS
+      } else {
+        process.env.ADMIN_EMAILS = previousAdminEmails
+      }
+    }
+  })
+
   it('should create a cross service token for user with content limitation', async () => {
     role.name = RoleName.NAMES.CoreUser
     role.permissions = Promise.resolve([permission])

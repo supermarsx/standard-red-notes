@@ -6,7 +6,11 @@ import {
   RL_METRICS_TIER_KEY,
 } from './RateLimitMetrics'
 
-const buildRedis = (): { redis: RateLimitMetricsRedis; hashes: Record<string, Record<string, string>>; lists: Record<string, string[]> } => {
+const buildRedis = (): {
+  redis: RateLimitMetricsRedis
+  hashes: Record<string, Record<string, string>>
+  lists: Record<string, string[]>
+} => {
   const hashes: Record<string, Record<string, string>> = {}
   const lists: Record<string, string[]> = {}
   const redis: RateLimitMetricsRedis = {
@@ -26,7 +30,9 @@ const buildRedis = (): { redis: RateLimitMetricsRedis; hashes: Record<string, Re
       lists[key] = (lists[key] ?? []).slice(start, stop + 1)
       return Promise.resolve('OK')
     }),
-    lrange: jest.fn((key: string, start: number, stop: number) => Promise.resolve((lists[key] ?? []).slice(start, stop + 1))),
+    lrange: jest.fn((key: string, start: number, stop: number) =>
+      Promise.resolve((lists[key] ?? []).slice(start, stop + 1)),
+    ),
     expire: jest.fn(() => Promise.resolve(1)),
   }
   return { redis, hashes, lists }

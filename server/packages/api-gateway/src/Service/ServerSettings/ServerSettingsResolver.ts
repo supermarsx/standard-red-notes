@@ -410,8 +410,9 @@ export const normalizePluginsRepoUrl = (value: string | undefined): string | und
  * worker or the browser-OCR download path — the caller falls through to default.
  */
 const OCR_LANGUAGE_PATTERN = /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/
-const validOcrLanguage = (value: string | undefined): string | undefined =>
-  typeof value === 'string' && OCR_LANGUAGE_PATTERN.test(value.trim()) ? value.trim() : undefined
+const validOcrLanguage = (value: string | undefined): string | undefined => {
+  return typeof value === 'string' && OCR_LANGUAGE_PATTERN.test(value.trim()) ? value.trim() : undefined
+}
 
 /**
  * Standard Red Notes: normalize a signup-window datetime candidate to a canonical
@@ -460,7 +461,10 @@ export const normalizeRegistrationDomains = (list: string[]): string[] => {
     if (typeof raw !== 'string') {
       continue
     }
-    const normalized = raw.trim().toLowerCase().replace(/^[@.]+/, '')
+    const normalized = raw
+      .trim()
+      .toLowerCase()
+      .replace(/^[@.]+/, '')
     if (normalized.length === 0 || seen.has(normalized)) {
       continue
     }
@@ -680,7 +684,7 @@ export class ServerSettingsResolver {
 
     return typeof value === 'boolean'
       ? value
-      : this.envBaseline.pluginsSameOriginRendering ?? DEFAULT_PLUGINS_SAME_ORIGIN_RENDERING
+      : (this.envBaseline.pluginsSameOriginRendering ?? DEFAULT_PLUGINS_SAME_ORIGIN_RENDERING)
   }
 
   /** Effective Nextcloud-backups master gate (gateway-side VIEW; default OFF). */
@@ -737,8 +741,7 @@ export class ServerSettingsResolver {
     ): number => boundedInt(persisted, min, max) ?? boundedInt(envValue, min, max) ?? fallback
 
     return {
-      enabled:
-        typeof rl.enabled === 'boolean' ? rl.enabled : env.rateLimitEnabled ?? d.enabled,
+      enabled: typeof rl.enabled === 'boolean' ? rl.enabled : (env.rateLimitEnabled ?? d.enabled),
       windowSeconds: pick(rl.windowSeconds, env.rateLimitWindowSeconds, d.windowSeconds, 1, 3600),
       loginMax: pick(rl.loginMax, env.rateLimitLoginMax, d.loginMax, 0, 100000),
       registrationMax: pick(rl.registrationMax, env.rateLimitRegistrationMax, d.registrationMax, 0, 100000),
@@ -747,7 +750,7 @@ export class ServerSettingsResolver {
       adaptiveEscalation:
         typeof rl.adaptiveEscalation === 'boolean'
           ? rl.adaptiveEscalation
-          : env.rateLimitAdaptiveEscalation ?? d.adaptiveEscalation,
+          : (env.rateLimitAdaptiveEscalation ?? d.adaptiveEscalation),
     }
   }
 
@@ -804,7 +807,8 @@ export class ServerSettingsResolver {
         ? (rawMode as RegistrationDomainMode)
         : REGISTRATION_DEFAULTS.domainMode,
       domainList: normalizeRegistrationDomains(rawList),
-      emailConfirmationEnabled: typeof rawEnabled === 'boolean' ? rawEnabled : REGISTRATION_DEFAULTS.emailConfirmationEnabled,
+      emailConfirmationEnabled:
+        typeof rawEnabled === 'boolean' ? rawEnabled : REGISTRATION_DEFAULTS.emailConfirmationEnabled,
       emailConfirmationGating: EMAIL_CONFIRMATION_GATING_MODES.includes(rawGating as EmailConfirmationGatingMode)
         ? (rawGating as EmailConfirmationGatingMode)
         : REGISTRATION_DEFAULTS.emailConfirmationGating,
@@ -813,7 +817,9 @@ export class ServerSettingsResolver {
           ? rawSubject
           : REGISTRATION_DEFAULTS.emailConfirmationSubject,
       emailConfirmationBody:
-        typeof rawBody === 'string' && rawBody.trim().length > 0 ? rawBody : REGISTRATION_DEFAULTS.emailConfirmationBody,
+        typeof rawBody === 'string' && rawBody.trim().length > 0
+          ? rawBody
+          : REGISTRATION_DEFAULTS.emailConfirmationBody,
       emailConfirmationBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() : '',
       signupsPerIpMax: cap(
         registration.signupsPerIpMax,
@@ -857,11 +863,11 @@ export class ServerSettingsResolver {
       inviteOnly:
         typeof registration.inviteOnly === 'boolean'
           ? registration.inviteOnly
-          : env.registrationInviteOnly ?? REGISTRATION_DEFAULTS.inviteOnly,
+          : (env.registrationInviteOnly ?? REGISTRATION_DEFAULTS.inviteOnly),
       approvalRequired:
         typeof registration.approvalRequired === 'boolean'
           ? registration.approvalRequired
-          : env.registrationApprovalRequired ?? REGISTRATION_DEFAULTS.approvalRequired,
+          : (env.registrationApprovalRequired ?? REGISTRATION_DEFAULTS.approvalRequired),
       maxTotalAccounts: cap(
         registration.maxTotalAccounts,
         env.registrationMaxTotalAccounts,
@@ -917,15 +923,12 @@ export class ServerSettingsResolver {
     const env = this.envBaseline
     const d = OCR_DEFAULTS
 
-    const language = (
-      persisted: string | undefined,
-      envValue: string | undefined,
-      fallback: string,
-    ): string => validOcrLanguage(persisted) ?? validOcrLanguage(envValue) ?? fallback
+    const language = (persisted: string | undefined, envValue: string | undefined, fallback: string): string =>
+      validOcrLanguage(persisted) ?? validOcrLanguage(envValue) ?? fallback
 
     return {
       serverEnabled:
-        typeof ocr.serverEnabled === 'boolean' ? ocr.serverEnabled : env.ocrServerEnabled ?? d.serverEnabled,
+        typeof ocr.serverEnabled === 'boolean' ? ocr.serverEnabled : (env.ocrServerEnabled ?? d.serverEnabled),
       defaultLanguage: language(ocr.defaultLanguage, env.ocrDefaultLanguage, d.defaultLanguage),
       maxPages: boundedInt(ocr.maxPages, 1, 1000) ?? boundedInt(env.ocrMaxPages, 1, 1000) ?? d.maxPages,
       maxImageBytes:
@@ -933,7 +936,7 @@ export class ServerSettingsResolver {
         boundedInt(env.ocrMaxImageBytes, 1024, 200 * 1024 * 1024) ??
         d.maxImageBytes,
       clientEnabled:
-        typeof ocr.clientEnabled === 'boolean' ? ocr.clientEnabled : env.ocrClientEnabled ?? d.clientEnabled,
+        typeof ocr.clientEnabled === 'boolean' ? ocr.clientEnabled : (env.ocrClientEnabled ?? d.clientEnabled),
       clientDefaultLanguage: language(ocr.clientDefaultLanguage, env.ocrClientDefaultLanguage, d.clientDefaultLanguage),
     }
   }
@@ -978,7 +981,7 @@ export class ServerSettingsResolver {
     }
 
     return {
-      enabled: typeof wf.enabled === 'boolean' ? wf.enabled : env.workflowsEnabled ?? d.enabled,
+      enabled: typeof wf.enabled === 'boolean' ? wf.enabled : (env.workflowsEnabled ?? d.enabled),
       n8nUrl: url(wf.n8nUrl, env.workflowsN8nUrl, d.n8nUrl),
       uiBasePath: path(wf.uiBasePath, env.workflowsUiBasePath, d.uiBasePath),
       uiTokenTtlSeconds:

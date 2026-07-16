@@ -91,7 +91,7 @@ export class PublishedRemindersStore {
       const dueChanged = existing !== undefined && existing.dueAtUtc !== reminder.dueAtUtc
       stored = {
         ...reminder,
-        sent: reminder.sent ?? (dueChanged ? false : existing?.sent ?? false),
+        sent: reminder.sent ?? (dueChanged ? false : (existing?.sent ?? false)),
         createdAt: existing?.createdAt ?? reminder.createdAt ?? now,
         updatedAt: now,
       }

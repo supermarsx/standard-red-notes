@@ -39,9 +39,7 @@ describe('DeleteTrustedDevice', () => {
   })
 
   it('should fail (no revoke) if the device belongs to another user', async () => {
-    trustedDeviceRepository.findById = jest
-      .fn()
-      .mockResolvedValue(buildDevice('99999999-9999-9999-9999-999999999999'))
+    trustedDeviceRepository.findById = jest.fn().mockResolvedValue(buildDevice('99999999-9999-9999-9999-999999999999'))
 
     const result = await createUseCase().execute({ userUuid, deviceId })
 

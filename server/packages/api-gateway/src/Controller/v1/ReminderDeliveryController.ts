@@ -124,9 +124,8 @@ export class ReminderDeliveryController extends BaseHttpController {
     }
 
     const channel = isDeliveryChannel(body.channel) ? (body.channel as DeliveryChannel) : undefined
-    const destination = typeof body.destination === 'string' && body.destination.trim().length > 0
-      ? body.destination.trim()
-      : undefined
+    const destination =
+      typeof body.destination === 'string' && body.destination.trim().length > 0 ? body.destination.trim() : undefined
 
     const stored = await this.reminderDeliveryService.publish(userUuid, {
       id,

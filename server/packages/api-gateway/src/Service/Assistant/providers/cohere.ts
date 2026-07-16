@@ -190,8 +190,7 @@ export class CohereProvider implements Provider {
                 kind: 'usage',
                 promptTokens: input,
                 completionTokens: output,
-                totalTokens:
-                  typeof input === 'number' && typeof output === 'number' ? input + output : undefined,
+                totalTokens: typeof input === 'number' && typeof output === 'number' ? input + output : undefined,
               }
             }
             if (usage) {

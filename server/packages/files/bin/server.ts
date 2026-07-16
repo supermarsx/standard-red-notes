@@ -39,7 +39,7 @@ process.on('uncaughtException', (error: Error) => {
 const container = new ContainerConfigLoader('server')
 void container
   .load()
-  .then((container) => {
+  .then(async (container) => {
   const env: Env = new Env()
   env.load()
 
@@ -166,7 +166,7 @@ void container
     })
   })
 
-  const app = server.build()
+  const app = await server.build()
 
   // Standard Red Notes: replaces the inert empty-base AnnotatedFallbackController.
   // Registered AFTER build() so it catches only genuinely-unmatched requests and

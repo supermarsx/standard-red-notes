@@ -4,9 +4,7 @@ import { SignupInviteLink } from '../Domain/SignupInvite/SignupInviteLink'
 import { SignupInviteLinkCreatorKind } from '../Domain/SignupInvite/SignupInviteLinkProps'
 import { TypeORMSignupInviteLink } from '../Infra/TypeORM/TypeORMSignupInviteLink'
 
-export class SignupInviteLinkPersistenceMapper
-  implements MapperInterface<SignupInviteLink, TypeORMSignupInviteLink>
-{
+export class SignupInviteLinkPersistenceMapper implements MapperInterface<SignupInviteLink, TypeORMSignupInviteLink> {
   toDomain(projection: TypeORMSignupInviteLink): SignupInviteLink {
     const linkOrError = SignupInviteLink.create(
       {

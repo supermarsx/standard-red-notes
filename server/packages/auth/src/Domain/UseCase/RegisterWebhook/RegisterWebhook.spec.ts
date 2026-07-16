@@ -65,7 +65,9 @@ describe('RegisterWebhook', () => {
   })
 
   it('should fail with a safe message when the SSRF guard rejects the target', async () => {
-    ;(assertPublicHttpUrl as jest.Mock).mockRejectedValue(new SsrfValidationError('The requested host is not allowed.', 'blocked-host'))
+    ;(assertPublicHttpUrl as jest.Mock).mockRejectedValue(
+      new SsrfValidationError('The requested host is not allowed.', 'blocked-host'),
+    )
 
     const result = await createUseCase().execute(validDto)
 

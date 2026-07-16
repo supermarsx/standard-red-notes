@@ -23,9 +23,7 @@ import {
  */
 @controller('/v1/integrations')
 export class IntegrationsController extends BaseHttpController {
-  constructor(
-    @inject(TYPES.ApiGateway_GitHubPublishService) private gitHubPublishService: GitHubPublishService,
-  ) {
+  constructor(@inject(TYPES.ApiGateway_GitHubPublishService) private gitHubPublishService: GitHubPublishService) {
     super()
   }
 

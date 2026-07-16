@@ -62,9 +62,7 @@ describe('SharedServerAccessKeyMiddleware', () => {
 
   describe('off mode (default)', () => {
     it('passes every request through with no key configured', () => {
-      const middleware = createSharedServerAccessKeyMiddleware(
-        resolveSharedServerAccessKeyConfig(undefined, undefined),
-      )
+      const middleware = createSharedServerAccessKeyMiddleware(resolveSharedServerAccessKeyConfig(undefined, undefined))
       const next: NextFunction = jest.fn()
       const { response, status } = buildResponse()
 
@@ -227,11 +225,7 @@ describe('SharedServerAccessKeyMiddleware', () => {
       const next: NextFunction = jest.fn()
       const { response, status } = buildResponse()
 
-      middleware(
-        buildRequest({ method: 'PUT', path: '/v1/users/some-uuid/attributes/credentials' }),
-        response,
-        next,
-      )
+      middleware(buildRequest({ method: 'PUT', path: '/v1/users/some-uuid/attributes/credentials' }), response, next)
 
       expect(next).toHaveBeenCalledTimes(1)
       expect(status).not.toHaveBeenCalled()

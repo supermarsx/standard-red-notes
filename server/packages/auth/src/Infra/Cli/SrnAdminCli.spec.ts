@@ -260,11 +260,18 @@ describe('SrnAdminCli helpers', () => {
     it('should filter by service (file name) and level, keeping the last N matches', async () => {
       const lines = []
       for (let index = 0; index < 5; index++) {
-        lines.push(`{"level":"error","message":"e${index}","timestamp":"2026-01-01T00:00:0${index}.000Z","service":"files"}`)
-        lines.push(`{"level":"info","message":"i${index}","timestamp":"2026-01-01T00:00:0${index}.500Z","service":"files"}`)
+        lines.push(
+          `{"level":"error","message":"e${index}","timestamp":"2026-01-01T00:00:0${index}.000Z","service":"files"}`,
+        )
+        lines.push(
+          `{"level":"info","message":"i${index}","timestamp":"2026-01-01T00:00:0${index}.500Z","service":"files"}`,
+        )
       }
       const result = await tailLogFiles(
-        fileSystemWith({ 'files.log': lines.join('\n'), 'auth.log': '{"level":"error","message":"other","service":"auth"}' }),
+        fileSystemWith({
+          'files.log': lines.join('\n'),
+          'auth.log': '{"level":"error","message":"other","service":"auth"}',
+        }),
         '/logs',
         { limit: 3, service: 'files', level: 'error' },
       )
@@ -345,7 +352,12 @@ describe('SrnAdminCli helpers', () => {
     })
 
     it('should parse strict booleans strictly and redact secrets', () => {
-      const strict: OperatorEnvSpec = { ...spec, env: 'NEXTCLOUD_BACKUPS_ENABLED', service: 'auth', kind: 'boolean-strict' }
+      const strict: OperatorEnvSpec = {
+        ...spec,
+        env: 'NEXTCLOUD_BACKUPS_ENABLED',
+        service: 'auth',
+        kind: 'boolean-strict',
+      }
       expect(resolveOperatorEnv(strict, {}, { auth: { NEXTCLOUD_BACKUPS_ENABLED: 'yes' } }).effective).toEqual('off')
       expect(resolveOperatorEnv(strict, {}, { auth: { NEXTCLOUD_BACKUPS_ENABLED: 'true' } }).effective).toEqual('on')
 

@@ -202,9 +202,9 @@ export class ContainerConfigLoader {
       .bind<MapperInterface<Revision, RevisionHttpRepresentation>>(TYPES.Revisions_RevisionHttpMapper)
       .toDynamicValue(() => new RevisionHttpMapper())
     container
-      .bind<
-        MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>
-      >(TYPES.Revisions_RevisionMetadataHttpMapper)
+      .bind<MapperInterface<RevisionMetadata, RevisionMetadataHttpRepresentation>>(
+        TYPES.Revisions_RevisionMetadataHttpMapper,
+      )
       .toDynamicValue((context: ResolutionContext) => {
         return new RevisionMetadataHttpMapper(context.get(TYPES.Revisions_GetRequiredRoleToViewRevision))
       })

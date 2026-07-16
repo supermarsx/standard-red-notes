@@ -29,7 +29,7 @@ describe('AnnotatedRevisionsController (boot-mounted route registration)', () =>
   let server: http.Server
   let baseUrl: string
 
-  beforeAll((done) => {
+  beforeAll(async () => {
     const container = new Container()
 
     // The controller's constructor @inject dependencies. Registration only instantiates
@@ -53,12 +53,14 @@ describe('AnnotatedRevisionsController (boot-mounted route registration)', () =>
     // Referenced so the `@controller` decorator metadata is registered before build().
     void AnnotatedRevisionsController
 
-    const app = new InversifyExpressServer(container).build()
-    server = app.listen(0, () => {
-      const { port } = server.address() as AddressInfo
-      baseUrl = `http://127.0.0.1:${port}`
-      done()
+    const app = await new InversifyExpressServer(container).build()
+    server = app.listen(0)
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve)
+      server.once('error', reject)
     })
+    const { port } = server.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${port}`
   })
 
   afterAll((done) => {

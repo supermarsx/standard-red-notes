@@ -66,9 +66,7 @@ describe('controller bootstrap registration', () => {
   })
 
   it('imports only controller modules that exist on disk in bin/server.ts', () => {
-    const missingFiles = binImports.filter(
-      (modulePath) => !fs.existsSync(path.join(controllerDir, `${modulePath}.ts`)),
-    )
+    const missingFiles = binImports.filter((modulePath) => !fs.existsSync(path.join(controllerDir, `${modulePath}.ts`)))
 
     expect(missingFiles).toEqual([])
   })

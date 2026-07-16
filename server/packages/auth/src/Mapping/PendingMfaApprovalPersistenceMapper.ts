@@ -4,9 +4,10 @@ import { PendingMfaApproval } from '../Domain/PendingMfaApproval/PendingMfaAppro
 import { PendingMfaApprovalStatus } from '../Domain/PendingMfaApproval/PendingMfaApprovalProps'
 import { TypeORMPendingMfaApproval } from '../Infra/TypeORM/TypeORMPendingMfaApproval'
 
-export class PendingMfaApprovalPersistenceMapper
-  implements MapperInterface<PendingMfaApproval, TypeORMPendingMfaApproval>
-{
+export class PendingMfaApprovalPersistenceMapper implements MapperInterface<
+  PendingMfaApproval,
+  TypeORMPendingMfaApproval
+> {
   toDomain(projection: TypeORMPendingMfaApproval): PendingMfaApproval {
     const approvalOrError = PendingMfaApproval.create(
       {

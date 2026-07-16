@@ -62,7 +62,11 @@ describe('PublishedRemindersStore', () => {
     expect(same.sent).toBe(true)
 
     // New dueAtUtc (edit / recurring advance): delivery re-arms.
-    const rearmed = await store.publish('u1', { id: 'r1', message: 'edited text', dueAtUtc: '2026-06-26T12:00:00.000Z' })
+    const rearmed = await store.publish('u1', {
+      id: 'r1',
+      message: 'edited text',
+      dueAtUtc: '2026-06-26T12:00:00.000Z',
+    })
     expect(rearmed.sent).toBe(false)
     expect((await store.listAllUnsent()).map((d) => d.reminder.id)).toEqual(['r1'])
   })

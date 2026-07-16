@@ -1,9 +1,7 @@
-import { DataSource, EntityTarget, LoggerOptions, ObjectLiteral, Repository } from 'typeorm'
+import { DataSource, type DataSourceOptions, EntityTarget, LoggerOptions, ObjectLiteral, Repository } from 'typeorm'
 
 import { Env } from './Env'
 import { SQLRevision } from '../Infra/TypeORM/SQL/SQLRevision'
-
-import type { DataSourceOptions } from "typeorm";
 
 export class AppDataSource {
   private _dataSource: DataSource | undefined
@@ -73,7 +71,7 @@ export class AppDataSource {
         restoreNodeTimeout: 5,
       }
 
-      const mySQLDataSourceOptions: Extract<DataSourceOptions, { type: "mysql" | "mariadb" }> = {
+      const mySQLDataSourceOptions: Extract<DataSourceOptions, { type: 'mysql' | 'mariadb' }> = {
         ...commonDataSourceOptions,
         type: 'mysql',
         charset: 'utf8mb4',
@@ -102,9 +100,9 @@ export class AppDataSource {
 
       this._dataSource = new DataSource(mySQLDataSourceOptions)
     } else {
-      const sqliteDataSourceOptions: Extract<DataSourceOptions, { type: "better-sqlite3" }> = {
+      const sqliteDataSourceOptions: Extract<DataSourceOptions, { type: 'better-sqlite3' }> = {
         ...commonDataSourceOptions,
-        type: "better-sqlite3",
+        type: 'better-sqlite3',
         database: this.configuration.env.get('DB_SQLITE_DATABASE_PATH'),
         enableWAL: true,
       }
