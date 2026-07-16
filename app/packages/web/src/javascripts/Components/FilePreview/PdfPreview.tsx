@@ -345,17 +345,12 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
     }
   }, [bytes])
 
-  // Cleanup document on unmount.
-  useEffect(() => {
-    return () => {
-      try {
-        void pdf?.destroy()
-      } catch {
-        /* noop */
-      }
-    }
-  }, [pdf])
-
+  // NOTE: The document is torn down via the loading task's `destroy()` in the
+  // load effect above (fired on unmount and whenever `bytes` change). That is
+  // the canonical teardown in pdfjs-dist 6 — destroying the loading task
+  // destroys the worker/transport that owns this document proxy. Older pdfjs
+  // exposed `PDFDocumentProxy.destroy()`; it was removed, so there is no
+  // separate document-level teardown to call here.
   const numPages = pdf?.numPages ?? 0
 
   const scrollToPage = useCallback((pageNumber: number) => {
