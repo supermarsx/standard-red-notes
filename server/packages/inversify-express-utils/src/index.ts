@@ -1,19 +1,23 @@
 import 'reflect-metadata'
 
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { Readable } from 'node:stream'
+
 import {
   All,
   ApplyMiddleware,
+  buildNormalizedPath,
   Controller,
+  createCustomParameterDecorator,
   Delete,
   Get,
-  Next,
   Patch,
   Post,
   Put,
-  Request as RequestParameter,
   Response as ResponseParameter,
   isHttpResponseSymbol,
   type HttpStatusCode,
+  type RouterParams,
 } from '@inversifyjs/http-core'
 import { InversifyExpressHttpAdapter, type ExpressMiddleware } from '@inversifyjs/http-express'
 import express, { type Application, type NextFunction, type Request, type Response, type Router } from 'express'
@@ -24,6 +28,12 @@ type ConfigFunction = (app: Application) => void
 type RouteDecorator = (path: string, ...middleware: MiddlewareIdentifier[]) => MethodDecorator
 type LegacyExpressMiddleware = (request: Request, response: Response, next: NextFunction) => Promise<void> | void
 type ControllerConstructor = new (...args: never[]) => unknown
+type ExpressRouterParams = RouterParams<Request, Response, NextFunction, void>
+
+interface CompatibilityHandlerContext {
+  delegated: boolean
+  next: NextFunction
+}
 
 export interface ControllerMethodMetadata {
   key: string | symbol
@@ -35,6 +45,20 @@ const controllers = new Set<ControllerConstructor>()
 const methodMetadata = new WeakMap<ControllerConstructor, ControllerMethodMetadata[]>()
 const explicitParameters = new WeakMap<object, Map<string | symbol, Set<number>>>()
 const middlewareAdapterIdentifiers = new Map<MiddlewareIdentifier, ServiceIdentifier<ExpressMiddleware>>()
+const compatibilityHandlerContext = new AsyncLocalStorage<CompatibilityHandlerContext>()
+
+const implicitRequestParameter = createCustomParameterDecorator<Request, Response, Request>((request) => request)
+const implicitResponseParameter = createCustomParameterDecorator<Request, Response, Response>(
+  (_request, response) => response,
+)
+const implicitNextParameter = createCustomParameterDecorator<Request, Response, NextFunction>(() => {
+  const context = compatibilityHandlerContext.getStore()
+  if (context === undefined) {
+    throw new Error('The next function is only available while handling an HTTP request')
+  }
+
+  return context.next
+})
 
 const getMiddlewareAdapterIdentifier = (identifier: MiddlewareIdentifier): ServiceIdentifier<ExpressMiddleware> => {
   let adapterIdentifier = middlewareAdapterIdentifiers.get(identifier)
@@ -91,11 +115,79 @@ const applyImplicitParameters = (
   const declaredCount = typeof descriptor?.value === 'function' ? descriptor.value.length : 0
   const parameterCount = reflectedTypes?.length ?? declaredCount
   const explicitlyDecorated = explicitParameters.get(target)?.get(key) ?? new Set<number>()
-  const decorators = [RequestParameter(), ResponseParameter(), Next()]
+  const decorators = [implicitRequestParameter, implicitResponseParameter, implicitNextParameter]
 
   for (let index = 0; index < Math.min(parameterCount, decorators.length); index += 1) {
     if (!explicitlyDecorated.has(index)) {
       decorators[index](target, key, index)
+    }
+  }
+}
+
+const responseHasBeenHandled = (response: Response): boolean => {
+  return response.headersSent || response.writableEnded || compatibilityHandlerContext.getStore()?.delegated === true
+}
+
+class CompatibilityExpressHttpAdapter extends InversifyExpressHttpAdapter {
+  protected override _buildRouter(routerParams: ExpressRouterParams): void {
+    for (const routeParams of routerParams.routeParamsList) {
+      const orderedPreHandlerMiddlewareList = [...routeParams.preHandlerMiddlewareList, ...routeParams.guardList]
+      const normalizedPath = buildNormalizedPath(`${routerParams.path}${routeParams.path}`)
+
+      const compatibilityHandler = (request: Request, response: Response, next: NextFunction): Promise<void> | void => {
+        const context: CompatibilityHandlerContext = {
+          delegated: false,
+          next: (error?: unknown): void => {
+            context.delegated = true
+            next(error)
+          },
+        }
+
+        return compatibilityHandlerContext.run(context, () => routeParams.handler(request, response, next))
+      }
+
+      this._app[routeParams.requestMethodType](
+        normalizedPath,
+        ...orderedPreHandlerMiddlewareList,
+        compatibilityHandler,
+        ...routeParams.postHandlerMiddlewareList,
+      )
+    }
+  }
+
+  protected override _replyText(request: Request, response: Response, value: string): void {
+    if (!responseHasBeenHandled(response)) {
+      super._replyText(request, response, value)
+    }
+  }
+
+  protected override _replyJson(request: Request, response: Response, value?: object): void {
+    if (!responseHasBeenHandled(response)) {
+      super._replyJson(request, response, value)
+    }
+  }
+
+  protected override _replyStream(request: Request, response: Response, value: Readable): void {
+    if (!responseHasBeenHandled(response)) {
+      super._replyStream(request, response, value)
+    }
+  }
+
+  protected override _sendBodySeparator(request: Request, response: Response): void {
+    if (!responseHasBeenHandled(response)) {
+      super._sendBodySeparator(request, response)
+    }
+  }
+
+  protected override _setStatus(request: Request, response: Response, statusCode: HttpStatusCode): void {
+    if (!responseHasBeenHandled(response)) {
+      super._setStatus(request, response, statusCode)
+    }
+  }
+
+  protected override _setHeader(request: Request, response: Response, key: string, value: string): void {
+    if (!responseHasBeenHandled(response)) {
+      super._setHeader(request, response, key, value)
     }
   }
 }
@@ -286,7 +378,7 @@ export class InversifyExpressServer {
       }
     }
 
-    const adapter = new InversifyExpressHttpAdapter(this.container, { logger: false }, this.app)
+    const adapter = new CompatibilityExpressHttpAdapter(this.container, { logger: false }, this.app)
     await adapter.build()
     this.errorConfigFunction?.(this.app)
     this.built = true

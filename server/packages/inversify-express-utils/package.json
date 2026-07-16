@@ -11,7 +11,8 @@
   "scripts": {
     "clean": "rm -fr dist",
     "build": "tsc --build",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "test": "yarn build && node --test test/index.integration.test.cjs"
   },
   "dependencies": {
     "@inversifyjs/http-core": "^5.4.5",
