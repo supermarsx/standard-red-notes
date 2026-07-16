@@ -108,6 +108,18 @@ Standalone home-server users should follow the
 That release is a backend-only MySQL deployment; the Docker quickstart remains
 the supported path for the complete web app and service stack.
 
+### OpenClaw Node package
+
+Tagged `srn-openclaw-v<semver>` releases publish one platform-neutral,
+dependency-bundled npm tarball rather than relabeling JavaScript as native
+binaries. The same package is installed offline and smoke-tested on Windows,
+Linux, and macOS for both x64 and arm64. It requires Node.js 26 or newer and a
+separately installed or built Standard Red Notes MCP bridge.
+
+See the [OpenClaw install and release guide](openclaw/README.md) for the exact
+artifact names, checksum and provenance verification, configuration, and the
+six-host validation matrix.
+
 ### Source and stack tools
 
 Desktop and MCP are source/stack tools in this guide, not entries in the
