@@ -1,8 +1,6 @@
 FROM node:26.5.0-alpine
 
-RUN apk add --update \
-  curl \
-  && rm -rf /var/cache/apk/*
+RUN apk add --no-cache curl
 
 ENV NODE_ENV production
 

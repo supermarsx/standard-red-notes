@@ -1,0 +1,7 @@
+failure-threshold: warning
+# Alpine and Debian repositories do not expose stable cross-release package
+# versions, so package-manager metadata plus exact base-image tags provide the
+# portable reproducibility boundary for distro packages.
+ignored:
+  - DL3008
+  - DL3018

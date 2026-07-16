@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.25.0
 #
 # =============================================================================
 # Standard Red Notes — ALL-IN-ONE single-container image.
@@ -22,12 +22,12 @@
 # STAGE 1 — build the server workspace (produces the compiled home-server under
 # /opt/server, incl. the PnP .yarn cache + native addons). Mirrors server/Dockerfile.
 # -----------------------------------------------------------------------------
-FROM node:24-alpine AS server-build
+FROM node:26.5.0-alpine3.23 AS server-build
 
 ENV NODE_ENV=production
 
-RUN apk add --update --no-cache bash g++ make py3-pip python3
-RUN npm install -g corepack@latest && corepack enable
+RUN apk add --no-cache bash g++ make py3-pip python3
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 WORKDIR /opt/server
 
@@ -38,26 +38,22 @@ RUN CI=true yarn build
 # -----------------------------------------------------------------------------
 # STAGE 2 — build the web SPA bundle (packages/web/dist). Mirrors app/Dockerfile.
 # -----------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS app-build
+FROM node:26.5.0-bookworm-slim AS app-build
 
 WORKDIR /opt/app
 
 ENV CI=true
 ENV NODE_OPTIONS=--no-deprecation
 
-# Insurance for git-sourced deps that pack via bundled Yarn 1 (see app/Dockerfile).
-RUN printf -- '--ignore-engines true\n' > /root/.yarnrc
-
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g corepack@latest && corepack enable
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 COPY app/ ./
 
-# Focus only the web workspace's dependency closure (skips desktop/mobile git deps
-# whose native builds don't compile on Node 24), then build the static bundle.
+# Focus only the web workspace's dependency closure, then build the static bundle.
 RUN --mount=type=cache,target=/opt/app/.yarn/cache,sharing=locked \
   yarn workspaces focus @standardnotes/web
 RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
@@ -66,22 +62,20 @@ RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
 # -----------------------------------------------------------------------------
 # RUNTIME — node + nginx + supervisord, no compiler toolchain. Runs as `srn`.
 # -----------------------------------------------------------------------------
-FROM node:24-alpine AS runtime
+FROM node:26.5.0-alpine3.23 AS runtime
 
 ENV NODE_ENV=production
 
 # nginx + openssl (secret gen) + the CSP self-heal tools (sha256sum/base64/xxd/awk
 # are already in busybox) + python/supervisor. curl for the healthcheck.
-RUN apk add --update --no-cache \
+RUN apk add --no-cache \
   bash \
   curl \
   nginx \
   openssl \
   py3-pip \
   python3 \
-  && pip install --no-cache-dir --break-system-packages supervisor
-
-RUN npm install -g corepack@latest && corepack enable
+  && pip install --no-cache-dir --break-system-packages supervisor==4.3.0
 
 WORKDIR /opt/server
 
