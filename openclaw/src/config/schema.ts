@@ -42,7 +42,7 @@ export type Scope = z.infer<typeof scopeSchema>;
 
 export const mcpLocalSchema = z.object({
   command: z.string().default("node"),
-  args: z.array(z.string()).default(["mcp/dist/index.js"]),
+  args: z.array(z.string()).default(["mcp/dist/index.cjs"]),
   env: z.record(z.string(), z.string()).optional(),
   scopes: z.array(scopeSchema).default(["read"]),
 });

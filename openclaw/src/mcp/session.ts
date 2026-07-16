@@ -25,10 +25,17 @@ const SCOPE_BY_PREFIX: Array<[string, Scope]> = [
   ["capabilities.", "admin"],
   ["sync.", "admin"],
   ["revisions.", "admin"],
-  ["standard_red_notes_status", "read"],
 ];
 
-function scopeFor(toolName: string): Scope {
+const SCOPE_BY_NAME = new Map<string, Scope>([
+  ["standard_red_notes_status", "read"],
+  ["vaults.create", "write"],
+  ["vaults.list", "read"],
+]);
+
+export function scopeFor(toolName: string): Scope {
+  const exactScope = SCOPE_BY_NAME.get(toolName);
+  if (exactScope) return exactScope;
   for (const [prefix, scope] of SCOPE_BY_PREFIX) {
     if (toolName.startsWith(prefix)) return scope;
   }
@@ -39,6 +46,8 @@ export interface SessionOptions {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** Receives stderr from the spawned MCP process for diagnostics. */
+  onStderr?: (chunk: string) => void;
   /** Scopes the caller is allowed to invoke. */
   allowedScopes: Scope[];
   /** Auditor sink. Called once per tool invocation. */
@@ -58,22 +67,39 @@ export interface AuditEntry {
 
 export class McpSession {
   private client?: Client;
+  private transport?: StdioClientTransport;
   private catalog: CatalogEntry[] = [];
 
   constructor(private readonly opts: SessionOptions) {}
 
   async start(): Promise<void> {
+    if (this.client || this.transport) {
+      throw new Error("session already started");
+    }
     const transport = new StdioClientTransport({
       command: this.opts.command,
       args: this.opts.args,
       env: this.opts.env,
+      stderr: this.opts.onStderr ? "pipe" : "inherit",
     });
-    this.client = new Client(
+    this.transport = transport;
+    if (this.opts.onStderr) {
+      transport.stderr?.on("data", (chunk) => {
+        this.opts.onStderr?.(String(chunk));
+      });
+    }
+    const client = new Client(
       { name: "openclaw", version: "0.1.0" },
       { capabilities: {} },
     );
-    await this.client.connect(transport);
-    await this.refreshCatalog();
+    this.client = client;
+    try {
+      await client.connect(transport);
+      await this.refreshCatalog();
+    } catch (error) {
+      await this.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async refreshCatalog(): Promise<void> {
@@ -92,6 +118,11 @@ export class McpSession {
     return this.catalog.filter((t) =>
       this.opts.allowedScopes.includes(t.scope),
     );
+  }
+
+  /** PID of the spawned MCP process, available while the session is running. */
+  childPid(): number | null {
+    return this.transport?.pid ?? null;
   }
 
   async call(name: string, args: unknown): Promise<unknown> {
@@ -136,6 +167,15 @@ export class McpSession {
   }
 
   async close(): Promise<void> {
-    await this.client?.close();
+    const client = this.client;
+    const transport = this.transport;
+    this.client = undefined;
+    this.transport = undefined;
+    this.catalog = [];
+    try {
+      await client?.close();
+    } finally {
+      await transport?.close();
+    }
   }
 }

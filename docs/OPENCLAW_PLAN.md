@@ -155,7 +155,7 @@ model = "claude-opus-4-7"
 
 [mcp.local]
 command = "node"
-args = ["mcp/dist/index.js"]
+args = ["mcp/dist/index.cjs"]
 scopes = ["read"]             # adds "write" / "files" / "export" / "admin"
 
 [agent]
