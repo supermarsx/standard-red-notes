@@ -26,8 +26,7 @@ const isStringRecord = (value: unknown): value is TabCustomNames => {
 
 export const loadTabCustomNames = (): TabCustomNames => {
   try {
-    const stored =
-      typeof localStorage !== 'undefined' ? localStorage.getItem(TAB_CUSTOM_NAMES_STORAGE_KEY) : null
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(TAB_CUSTOM_NAMES_STORAGE_KEY) : null
     if (!stored) {
       return {}
     }
@@ -71,11 +70,7 @@ export const setTabCustomName = (names: TabCustomNames, uuid: string, name: stri
  * Resolves the label to show for a tab: the custom name if one is set and
  * non-empty, otherwise the provided fallback (the note title / "Untitled").
  */
-export const resolveTabLabel = (
-  names: TabCustomNames,
-  uuid: string | undefined,
-  fallbackTitle: string,
-): string => {
+export const resolveTabLabel = (names: TabCustomNames, uuid: string | undefined, fallbackTitle: string): string => {
   if (uuid) {
     const custom = names[uuid]
     if (custom && custom.trim().length > 0) {

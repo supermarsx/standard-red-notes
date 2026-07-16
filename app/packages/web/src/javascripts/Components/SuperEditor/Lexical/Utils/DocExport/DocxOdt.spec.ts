@@ -33,8 +33,7 @@ import { superStringToDocModel, DocBlock, buildPlainTextDocModel } from './DocMo
 import { buildDocxBlob } from './DocxGenerator'
 import { buildOdtBlob } from './OdtGenerator'
 
-const PNG_1x1 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const PNG_DATA_URI = `data:image/png;base64,${PNG_1x1}`
 const MERMAID_CODE = 'graph TD; A-->B;'
 
@@ -243,7 +242,10 @@ describe('superStringToDocModel (Lexical walk)', () => {
   it('maps all five heading levels with their text', () => {
     for (let level = 1; level <= 5; level++) {
       const heading = blocks.find(
-        (b) => b.kind === 'heading' && b.level === level && b.inlines.some((i) => i.kind === 'text' && i.text === `Heading ${level}`),
+        (b) =>
+          b.kind === 'heading' &&
+          b.level === level &&
+          b.inlines.some((i) => i.kind === 'text' && i.text === `Heading ${level}`),
       )
       expect(heading).toBeDefined()
     }
@@ -296,7 +298,9 @@ describe('superStringToDocModel (Lexical walk)', () => {
   })
 
   it('captures quote, code block and a table', () => {
-    expect(blocks.find((b) => b.kind === 'quote' && b.inlines.some((i) => i.kind === 'text' && i.text === 'A quoted line'))).toBeDefined()
+    expect(
+      blocks.find((b) => b.kind === 'quote' && b.inlines.some((i) => i.kind === 'text' && i.text === 'A quoted line')),
+    ).toBeDefined()
     expect(blocks.find((b) => b.kind === 'code' && b.text.includes('const answer = 42'))).toBeDefined()
     const table = blocks.find((b) => b.kind === 'table')
     expect(table?.kind).toBe('table')
@@ -397,7 +401,14 @@ describe('buildOdtBlob (OpenDocument)', () => {
     expect(contentXml).toContain('<table:table')
     expect(contentXml).toContain('xlink:href="https://example.com/"')
     expect(contentXml).toContain('<draw:image')
-    for (const needle of ['DocHeading', 'BulletItem', 'CheckedItem', 'QuotedText', 'TableCellOne', 'MermaidFallbackMarker']) {
+    for (const needle of [
+      'DocHeading',
+      'BulletItem',
+      'CheckedItem',
+      'QuotedText',
+      'TableCellOne',
+      'MermaidFallbackMarker',
+    ]) {
       expect(contentXml).toContain(needle)
     }
   })

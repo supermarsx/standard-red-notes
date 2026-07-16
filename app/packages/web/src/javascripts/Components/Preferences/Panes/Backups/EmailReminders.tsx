@@ -79,12 +79,11 @@ const EmailReminders = ({ application }: Props) => {
       <PreferencesSegment>
         <Title>Email reminders</Title>
         <Text className="mb-3">
-          When a reminder you have opted in is due, the server can email it to your account email.
-          Unlike in-app reminders &mdash; which stay end-to-end encrypted in your note &mdash; a
-          reminder you opt into emailing has its time and text sent to the server in plaintext (it
-          leaves end-to-end encryption) so it can be delivered. Only reminders you explicitly opt in
-          are shared. Emails are sent only if your server operator has enabled and configured email
-          reminders.
+          When a reminder you have opted in is due, the server can email it to your account email. Unlike in-app
+          reminders &mdash; which stay end-to-end encrypted in your note &mdash; a reminder you opt into emailing has
+          its time and text sent to the server in plaintext (it leaves end-to-end encryption) so it can be delivered.
+          Only reminders you explicitly opt in are shared. Emails are sent only if your server operator has enabled and
+          configured email reminders.
         </Text>
 
         <div className="flex items-center justify-between">
@@ -105,16 +104,12 @@ const EmailReminders = ({ application }: Props) => {
             reminders.map((reminder) => (
               <div
                 key={reminder.uuid}
-                className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+                className="border-border mt-2 flex flex-row items-center justify-between rounded border border-solid p-3"
               >
                 <div className="flex flex-col">
                   <span className="text-base font-medium lg:text-sm">{reminder.message}</span>
-                  <span className="text-sm text-passive-0 lg:text-xs">
-                    Due: {formatDateTime(reminder.dueAt)}
-                  </span>
-                  <span className="text-sm text-passive-0 lg:text-xs">
-                    {reminder.sent ? 'Sent' : 'Pending'}
-                  </span>
+                  <span className="text-passive-0 text-sm lg:text-xs">Due: {formatDateTime(reminder.dueAt)}</span>
+                  <span className="text-passive-0 text-sm lg:text-xs">{reminder.sent ? 'Sent' : 'Pending'}</span>
                 </div>
                 <Button label="Cancel" onClick={() => void handleDelete(reminder.uuid)} />
               </div>

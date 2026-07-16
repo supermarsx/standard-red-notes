@@ -1,12 +1,6 @@
 import { useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import {
-  ContentType,
-  FolderContentType,
-  SNFolder,
-  SNNote,
-  SNTag,
-} from '@standardnotes/snjs'
+import { ContentType, FolderContentType, SNFolder, SNNote, SNTag } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
@@ -68,7 +62,7 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
   )
   const folders = useMemo(
     () => application.items.getItems<SNFolder>(FolderContentType),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [application],
   )
   const notes = useMemo(
@@ -129,9 +123,9 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
   }
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border bg-contrast px-3 py-2">
+    <div className="border-border bg-contrast flex flex-col gap-2 border-b px-3 py-2">
       <div className="flex items-center gap-2">
-        <span className="flex-shrink-0 text-xs font-semibold uppercase tracking-wide text-passive-1">Context</span>
+        <span className="text-passive-1 flex-shrink-0 text-xs font-semibold tracking-wide uppercase">Context</span>
         <Dropdown
           label="Assistant context scope"
           items={scopeItems}
@@ -150,7 +144,7 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
           disabled={disabled}
           placeholder="Search notes by title or preview (e.g. taxes 2025)…"
           aria-label="Topic search query"
-          className="w-full rounded border border-border bg-default px-2 py-1 text-xs text-text focus:border-info focus:outline-none"
+          className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 text-xs focus:outline-none"
         />
       )}
 
@@ -170,8 +164,8 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
           />
 
           {(pickingNotes || selection.collection?.type === 'notes') && (
-            <div className="max-h-48 overflow-y-auto rounded border border-border bg-default p-1">
-              {notes.length === 0 && <div className="px-2 py-1 text-xs text-passive-0">No notes to choose from.</div>}
+            <div className="border-border bg-default max-h-48 overflow-y-auto rounded border p-1">
+              {notes.length === 0 && <div className="text-passive-0 px-2 py-1 text-xs">No notes to choose from.</div>}
               {notes.map((note) => {
                 const checked = selectedNoteUuids.has(note.uuid)
                 return (
@@ -181,7 +175,7 @@ function ContextSelectorImpl({ application, selection, onChange, disabled }: Pro
                     onClick={() => toggleNote(note.uuid)}
                     disabled={disabled}
                     className={classNames(
-                      'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-contrast',
+                      'hover:bg-contrast flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs',
                       checked ? 'text-text' : 'text-passive-0',
                     )}
                   >

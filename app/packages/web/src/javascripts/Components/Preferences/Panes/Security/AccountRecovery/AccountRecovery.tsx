@@ -147,7 +147,7 @@ const AccountRecovery: FunctionComponent<Props> = ({ application }: Props) => {
           access if you forget your password.
         </Text>
 
-        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+        <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
           <Subtitle className="text-warning">Enabling this weakens your end-to-end encryption</Subtitle>
           <Text className="mt-1">
             When enabled, the client encrypts your account key under a one-time recovery code and stores the resulting
@@ -187,14 +187,14 @@ const AccountRecovery: FunctionComponent<Props> = ({ application }: Props) => {
         )}
 
         {recoveryCode && (
-          <div className="mt-1 rounded border border-solid border-border p-3">
+          <div className="border-border mt-1 rounded border border-solid p-3">
             <Subtitle>Save your recovery code now — it is shown only once</Subtitle>
             <Text className="mb-2">
               This code is never sent to the server. Store it offline, separate from your password. You will need it to
               recover your account.
             </Text>
             <div className="flex flex-row items-center gap-2">
-              <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{recoveryCode}</code>
+              <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{recoveryCode}</code>
               <CopyButton copyValue={recoveryCode} successMessage="Recovery code copied to clipboard" />
             </div>
             <div className="mt-3 flex flex-row gap-2">

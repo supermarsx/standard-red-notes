@@ -11,7 +11,7 @@ const makeFile = (uuid: string, name: string, size: number, createdAtMs: number)
     name,
     decryptedSize: size,
     created_at: new Date(createdAtMs),
-  } as unknown as FileItem)
+  }) as unknown as FileItem
 
 const uuids = (files: FileItem[]) => files.map((file) => file.uuid)
 

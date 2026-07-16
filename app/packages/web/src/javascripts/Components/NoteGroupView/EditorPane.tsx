@@ -24,7 +24,7 @@ const EditorPane = forwardRef(({ application, className, id }: Props, ref: Forwa
     <div
       id={id}
       ref={mergeRefs([ref, setElement])}
-      className={`flex h-full flex-grow flex-col bg-default pt-safe-top ${className}`}
+      className={`bg-default pt-safe-top flex h-full flex-grow flex-col ${className}`}
     >
       <EditorPaneExpandControls />
       <NoteGroupView className={className} application={application} />

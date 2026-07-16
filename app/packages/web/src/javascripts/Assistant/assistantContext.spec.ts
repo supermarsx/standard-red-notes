@@ -1,8 +1,4 @@
-import {
-  buildAssistantContext,
-  ContextNote,
-  DEFAULT_ASSISTANT_CONTEXT_BUDGET,
-} from './assistantContext'
+import { buildAssistantContext, ContextNote, DEFAULT_ASSISTANT_CONTEXT_BUDGET } from './assistantContext'
 
 const note = (uuid: string, title: string, text: string): ContextNote => ({ uuid, title, text })
 

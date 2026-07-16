@@ -32,7 +32,9 @@ const makeNote = (values: Record<string, unknown>, title = '', trashed = false):
     getAppDomainValue: (key: string) => values[key],
   }) as unknown as SNNote
 
-const superAnchor = (overrides: Partial<{ bookmarkId: string; nodeKey: string; scrollTop: number }> = {}): BookmarkAnchor => ({
+const superAnchor = (
+  overrides: Partial<{ bookmarkId: string; nodeKey: string; scrollTop: number }> = {},
+): BookmarkAnchor => ({
   kind: 'super',
   bookmarkId: 'anchor-1',
   ...overrides,
@@ -121,10 +123,24 @@ describe('normalizeAnchor', () => {
   })
 
   it('normalizeBookmark keeps optional color/icon only when non-empty', () => {
-    const withBoth = normalizeBookmark({ id: 'i', anchor: superAnchor(), label: 'L', color: '#fff', icon: 'star', createdAt: '2026-06-20T00:00:00.000Z' })
+    const withBoth = normalizeBookmark({
+      id: 'i',
+      anchor: superAnchor(),
+      label: 'L',
+      color: '#fff',
+      icon: 'star',
+      createdAt: '2026-06-20T00:00:00.000Z',
+    })
     expect(withBoth?.color).toBe('#fff')
     expect(withBoth?.icon).toBe('star')
-    const without = normalizeBookmark({ id: 'i', anchor: superAnchor(), label: 'L', color: '', icon: '', createdAt: '2026-06-20T00:00:00.000Z' })
+    const without = normalizeBookmark({
+      id: 'i',
+      anchor: superAnchor(),
+      label: 'L',
+      color: '',
+      icon: '',
+      createdAt: '2026-06-20T00:00:00.000Z',
+    })
     expect(without?.color).toBeUndefined()
     expect(without?.icon).toBeUndefined()
   })
@@ -256,12 +272,24 @@ describe('plaintext capture + relocate-by-snippet (best-effort, honest drift)', 
 })
 
 describe('cross-note aggregation + search', () => {
-  const noteA = makeNote({ [NoteBookmarksKey as unknown as string]: [bookmark({ id: 'a1', label: 'Intro' })] }, 'Project Plan')
+  const noteA = makeNote(
+    { [NoteBookmarksKey as unknown as string]: [bookmark({ id: 'a1', label: 'Intro' })] },
+    'Project Plan',
+  )
   const noteB = makeNote(
-    { [NoteBookmarksKey as unknown as string]: [bookmark({ id: 'b1', label: 'Budget' }), bookmark({ id: 'b2', label: 'Risks' })] },
+    {
+      [NoteBookmarksKey as unknown as string]: [
+        bookmark({ id: 'b1', label: 'Budget' }),
+        bookmark({ id: 'b2', label: 'Risks' }),
+      ],
+    },
     'Finance',
   )
-  const trashed = makeNote({ [NoteBookmarksKey as unknown as string]: [bookmark({ id: 't1', label: 'Gone' })] }, 'Old', true)
+  const trashed = makeNote(
+    { [NoteBookmarksKey as unknown as string]: [bookmark({ id: 't1', label: 'Gone' })] },
+    'Old',
+    true,
+  )
 
   it('flattens every non-trashed note bookmark with its note context', () => {
     const all = collectAllBookmarks([noteA, noteB, trashed])
@@ -279,7 +307,11 @@ describe('cross-note aggregation + search', () => {
   it('filterBookmarks matches label OR note title, case-insensitively', () => {
     const all = collectAllBookmarks([noteA, noteB])
     expect(filterBookmarks(all, 'bud').map((x) => x.bookmark.id)).toEqual(['b1'])
-    expect(filterBookmarks(all, 'finance').map((x) => x.bookmark.id).sort()).toEqual(['b1', 'b2'])
+    expect(
+      filterBookmarks(all, 'finance')
+        .map((x) => x.bookmark.id)
+        .sort(),
+    ).toEqual(['b1', 'b2'])
     expect(filterBookmarks(all, 'INTRO').map((x) => x.bookmark.id)).toEqual(['a1'])
   })
 

@@ -18,8 +18,18 @@ const DEFAULT_CALENDAR: CalendarData = { events: {} }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ]
 
 function dateKey(year: number, month: number, day: number): string {
@@ -48,7 +58,9 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
 
   const addEvent = (key: string, text: string) => {
     const trimmed = text.trim()
-    if (!trimmed) return
+    if (!trimmed) {
+      return
+    }
     mutate((events) => {
       events[key] = [...(events[key] ?? []), trimmed]
     })
@@ -56,7 +68,9 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
   const removeEvent = (key: string, index: number) =>
     mutate((events) => {
       events[key] = (events[key] ?? []).filter((_, i) => i !== index)
-      if (events[key].length === 0) delete events[key]
+      if (events[key].length === 0) {
+        delete events[key]
+      }
     })
 
   const shiftMonth = (delta: number) =>
@@ -72,23 +86,27 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
   const todayKey = dateKey(now.getFullYear(), now.getMonth(), now.getDate())
 
   const cells: (number | null)[] = []
-  for (let i = 0; i < firstDay; i++) cells.push(null)
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+  for (let i = 0; i < firstDay; i++) {
+    cells.push(null)
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(d)
+  }
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-calendar-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-sm">
-        <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={() => shiftMonth(-1)} type="button">
+    <div className="border-border bg-default my-2 rounded border" data-calendar-block="true">
+      <div className="border-border flex items-center justify-between border-b px-2 py-1 text-sm">
+        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(-1)} type="button">
           ‹
         </button>
         <span className="font-semibold">
           {MONTHS[view.month]} {view.year}
         </span>
-        <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={() => shiftMonth(1)} type="button">
+        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(1)} type="button">
           ›
         </button>
       </div>
-      <div className="grid grid-cols-7 gap-px p-1 text-center text-[0.65rem] text-passive-1">
+      <div className="text-passive-1 grid grid-cols-7 gap-px p-1 text-center text-[0.65rem]">
         {WEEKDAYS.map((w) => (
           <div key={w} className="py-0.5 font-semibold">
             {w}
@@ -107,8 +125,8 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
               key={key}
               type="button"
               onClick={() => setSelected(isSelected ? null : key)}
-              className={`flex aspect-square flex-col items-center justify-center rounded text-xs hover:bg-contrast ${
-                isSelected ? 'bg-info text-info-contrast' : isToday ? 'ring-1 ring-info' : ''
+              className={`hover:bg-contrast flex aspect-square flex-col items-center justify-center rounded text-xs ${
+                isSelected ? 'bg-info text-info-contrast' : isToday ? 'ring-info ring-1' : ''
               }`}
             >
               <span>{day}</span>
@@ -120,14 +138,14 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
         })}
       </div>
       {selected && (
-        <div className="border-t border-border p-2 text-sm">
+        <div className="border-border border-t p-2 text-sm">
           <div className="mb-1 font-semibold">{selected}</div>
           <ul className="mb-2 flex flex-col gap-1">
             {(data.events[selected] ?? []).map((event, index) => (
-              <li key={index} className="flex items-center justify-between gap-2 rounded bg-contrast px-2 py-1">
-                <span className="min-w-0 break-words text-foreground">{event}</span>
+              <li key={index} className="bg-contrast flex items-center justify-between gap-2 rounded px-2 py-1">
+                <span className="text-foreground min-w-0 break-words">{event}</span>
                 <button
-                  className="flex-shrink-0 text-passive-1 hover:text-danger"
+                  className="text-passive-1 hover:text-danger flex-shrink-0"
                   onClick={() => removeEvent(selected, index)}
                   type="button"
                 >
@@ -138,7 +156,7 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
           </ul>
           <input
             key={selected}
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Add an event, press Enter…"
             onKeyDown={(e) => {
               if (e.key === 'Enter') {

@@ -45,7 +45,7 @@ const PreferencesSubtabs: FunctionComponent<{ state: TabState; tabs: Preferences
 
   return (
     <>
-      <div className="sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border border-border bg-default shadow-sm">
+      <div className="border-border bg-default sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border shadow-sm">
         <TabList state={state} className="flex min-w-max">
           {visibleTabs.map(({ id, title, icon }) => (
             <Tab key={id} id={id} className="inline-flex items-center gap-1.5 whitespace-nowrap first:rounded-tl-md">

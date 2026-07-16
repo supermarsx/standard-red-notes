@@ -2,8 +2,8 @@
   "name": "SN Mobile container",
   "build": {
     "dockerfile": "Dockerfile",
-    // Update 'VARIANT' to pick a Node version: 10, 12, 14
-    "args": { "VARIANT": "14" }
+    // Keep the development container on the repository's pinned Node release.
+    "args": { "VARIANT": "26.5.0-bookworm" }
   },
 
   // Add the IDs of extensions you want installed when the container is created.
@@ -16,7 +16,7 @@
   // "forwardPorts": [],
 
   // Use 'postCreateCommand' to run commands after the container is created.
-  "postCreateCommand": "yarn install"
+  "postCreateCommand": "corepack enable && corepack install --global yarn@4.17.1 && yarn install --immutable"
 
   // Uncomment to connect as a non-root user. See https://aka.ms/vscode-remote/containers/non-root.
   // "remoteUser": "node"

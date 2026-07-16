@@ -137,7 +137,12 @@ export const allText = (tree: AnyNode): string => {
 /** True if some text node has exactly `text` and the given format bit set. */
 export const textNodeWithFormat = (tree: AnyNode, text: string, formatBit: number): boolean => {
   for (const node of iterNodes(rootOf(tree))) {
-    if (node.type === 'text' && node.text === text && typeof node.format === 'number' && (node.format & formatBit) !== 0) {
+    if (
+      node.type === 'text' &&
+      node.text === text &&
+      typeof node.format === 'number' &&
+      (node.format & formatBit) !== 0
+    ) {
       return true
     }
   }

@@ -74,12 +74,8 @@ function FootnotesComponent({ entries, nodeKey }: { entries: FootnoteEntry[]; no
   }
 
   return (
-    <section
-      className="mt-6 border-t border-border pt-3 text-sm"
-      data-footnotes-section="true"
-      aria-label="Footnotes"
-    >
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-passive-1">Footnotes</div>
+    <section className="border-border mt-6 border-t pt-3 text-sm" data-footnotes-section="true" aria-label="Footnotes">
+      <div className="text-passive-1 mb-2 text-xs font-semibold tracking-wide uppercase">Footnotes</div>
       <ol className="m-0 list-none p-0">
         {ordered.map((entry, index) => (
           <FootnoteEntryRow
@@ -126,7 +122,7 @@ function FootnoteEntryRow({
     >
       <button
         type="button"
-        className="mt-0.5 shrink-0 cursor-pointer rounded px-1 text-xs font-semibold text-info hover:bg-info-backdrop"
+        className="text-info hover:bg-info-backdrop mt-0.5 shrink-0 cursor-pointer rounded px-1 text-xs font-semibold"
         title="Back to reference"
         data-footnote-backlink="true"
         onClick={() => onBackLink(entry.footnoteId)}
@@ -135,7 +131,7 @@ function FootnoteEntryRow({
       </button>
       <textarea
         ref={textareaRef}
-        className="min-h-[1.75rem] w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-foreground outline-none hover:border-border focus:border-info"
+        className="text-foreground hover:border-border focus:border-info min-h-[1.75rem] w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-sm outline-none"
         data-footnote-entry-input="true"
         rows={Math.max(1, draft.split('\n').length)}
         placeholder="Footnote text…"
@@ -186,7 +182,10 @@ export class FootnotesNode extends DecoratorNode<React.JSX.Element> {
     const entries = Array.isArray(serializedNode.entries)
       ? serializedNode.entries
           .filter((entry) => entry && typeof entry.footnoteId === 'string')
-          .map((entry) => ({ footnoteId: entry.footnoteId, content: typeof entry.content === 'string' ? entry.content : '' }))
+          .map((entry) => ({
+            footnoteId: entry.footnoteId,
+            content: typeof entry.content === 'string' ? entry.content : '',
+          }))
       : []
     return $createFootnotesNode(entries)
   }
@@ -233,9 +232,9 @@ export class FootnotesNode extends DecoratorNode<React.JSX.Element> {
     const self = this.getWritable()
     const existing = self.__entries.find((entry) => entry.footnoteId === footnoteId)
     if (existing) {
-      self.__entries = self.__entries.map((entry) =>
-        entry.footnoteId === footnoteId ? { footnoteId, content } : entry,
-      )
+      self.__entries = self.__entries.map((entry) => {
+        return entry.footnoteId === footnoteId ? { footnoteId, content } : entry
+      })
     } else {
       self.__entries = [...self.__entries, { footnoteId, content }]
     }

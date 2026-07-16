@@ -75,7 +75,8 @@ export const exportSpreadsheetNoteToXLSX = async (noteText: string, noteTitle: s
  */
 export const exportSpreadsheetNoteToDOCX = async (noteText: string, noteTitle: string): Promise<void> => {
   const docx = await import('docx')
-  const { Document, Packer, Table, TableRow, TableCell, Paragraph, TextRun, HeadingLevel, WidthType, BorderStyle } = docx
+  const { Document, Packer, Table, TableRow, TableCell, Paragraph, TextRun, HeadingLevel, WidthType, BorderStyle } =
+    docx
 
   const grids = gridsOrEmpty(noteText)
 

@@ -148,12 +148,11 @@ const ReminderDelivery = ({ application }: Props) => {
       <PreferencesSegment>
         <Title>Reminder delivery</Title>
         <Text className="mb-3">
-          When a reminder is due, the server can deliver it over WhatsApp, Telegram, or email. Unlike
-          in-app reminders &mdash; which stay end-to-end encrypted in your note &mdash; a reminder
-          delivered this way has its time and text sent to the server in plaintext (it leaves end-to-end
-          encryption) so it can be delivered. While delivery is enabled below, every reminder you set or
-          update is published to the server for delivery; turn delivery off to stop sharing new
-          reminders. Your notes themselves always stay encrypted. Delivery also requires your server
+          When a reminder is due, the server can deliver it over WhatsApp, Telegram, or email. Unlike in-app reminders
+          &mdash; which stay end-to-end encrypted in your note &mdash; a reminder delivered this way has its time and
+          text sent to the server in plaintext (it leaves end-to-end encryption) so it can be delivered. While delivery
+          is enabled below, every reminder you set or update is published to the server for delivery; turn delivery off
+          to stop sharing new reminders. Your notes themselves always stay encrypted. Delivery also requires your server
           operator to have enabled and configured this feature.
         </Text>
 
@@ -204,8 +203,8 @@ const ReminderDelivery = ({ application }: Props) => {
                     }}
                     disabled={saving}
                   />
-                  <Text className="mt-1 text-passive-0">{destinationHint(channel)}</Text>
-                  {destinationError && <Text className="mt-1 text-danger">{destinationError}</Text>}
+                  <Text className="text-passive-0 mt-1">{destinationHint(channel)}</Text>
+                  {destinationError && <Text className="text-danger mt-1">{destinationError}</Text>}
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -226,7 +225,7 @@ const ReminderDelivery = ({ application }: Props) => {
 
                 <div className="mt-2">
                   <Subtitle>Reminders published for delivery</Subtitle>
-                  <Text className="mb-1 text-passive-0">
+                  <Text className="text-passive-0 mb-1">
                     These are the reminders currently shared with the server for delivery.
                   </Text>
                   {published.length === 0 ? (
@@ -235,14 +234,14 @@ const ReminderDelivery = ({ application }: Props) => {
                     published.map((reminder) => (
                       <div
                         key={reminder.id}
-                        className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+                        className="border-border mt-2 flex flex-row items-center justify-between rounded border border-solid p-3"
                       >
                         <div className="flex min-w-0 flex-col">
-                          <span className="break-words text-base font-medium lg:text-sm">{reminder.message}</span>
-                          <span className="break-words text-sm text-passive-0 lg:text-xs">
+                          <span className="text-base font-medium break-words lg:text-sm">{reminder.message}</span>
+                          <span className="text-passive-0 text-sm break-words lg:text-xs">
                             Due: {formatDateTime(reminder.dueAtUtc)}
                           </span>
-                          <span className="break-words text-sm text-passive-0 lg:text-xs">
+                          <span className="text-passive-0 text-sm break-words lg:text-xs">
                             {reminder.sent ? 'Delivered' : reminder.error ? `Pending — ${reminder.error}` : 'Pending'}
                           </span>
                         </div>

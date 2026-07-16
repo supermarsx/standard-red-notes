@@ -101,16 +101,16 @@ const TemplatesView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="copy" className="flex-shrink-0 text-info" />
+          <Icon type="copy" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Templates</span>
-          <span className="text-xs text-passive-1">({templates.length})</span>
+          <span className="text-passive-1 text-xs">({templates.length})</span>
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => application.paneController.closeViewTab(AppPaneId.Templates)}
           aria-label="Close templates"
           title="Close"
@@ -119,18 +119,18 @@ const TemplatesView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </button>
       </div>
 
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+      <div className="border-border flex items-center gap-2 border-b px-4 py-2">
         <div className="relative flex min-w-[160px] flex-1 items-center">
-          <Icon type="search" size="small" className="pointer-events-none absolute left-2 text-neutral" />
+          <Icon type="search" size="small" className="text-neutral pointer-events-none absolute left-2" />
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 pl-7 text-sm text-text focus:border-info focus:outline-none"
+            className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 pl-7 text-sm focus:outline-none"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search templates"
           />
         </div>
         {query && (
-          <button className="rounded px-2 py-1 text-xs text-neutral hover:bg-contrast" onClick={() => setQuery('')}>
+          <button className="text-neutral hover:bg-contrast rounded px-2 py-1 text-xs" onClick={() => setQuery('')}>
             Clear
           </button>
         )}
@@ -138,29 +138,27 @@ const TemplatesView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
       <div className="min-h-0 flex-grow overflow-y-auto">
         {templates.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-passive-1">
+          <div className="text-passive-1 px-4 py-10 text-center text-sm">
             No templates yet. Open a note, then use its options menu (•••) → “Save as template”.
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-passive-1">No templates match your search.</div>
+          <div className="text-passive-1 px-4 py-10 text-center text-sm">No templates match your search.</div>
         ) : (
           <ul>
             {filtered.map((entry) => (
               <li key={entry.note.uuid}>
-                <div className="flex items-start gap-3 border-b border-border px-4 py-3 hover:bg-contrast">
-                  <Icon type="copy" className="mt-0.5 flex-shrink-0 text-neutral" />
+                <div className="border-border hover:bg-contrast flex items-start gap-3 border-b px-4 py-3">
+                  <Icon type="copy" className="text-neutral mt-0.5 flex-shrink-0" />
                   <button
                     className="flex min-w-0 flex-grow flex-col text-left"
                     onClick={() => openTemplate(entry)}
                     title="Open this template to edit it"
                   >
-                    <span className="truncate text-sm font-semibold text-text">{entry.title}</span>
-                    {entry.preview && (
-                      <span className="truncate text-xs text-passive-1">{entry.preview}</span>
-                    )}
+                    <span className="text-text truncate text-sm font-semibold">{entry.title}</span>
+                    {entry.preview && <span className="text-passive-1 truncate text-xs">{entry.preview}</span>}
                   </button>
                   <button
-                    className="flex flex-shrink-0 items-center gap-1 rounded bg-info px-2.5 py-1 text-xs font-semibold text-info-contrast hover:brightness-110"
+                    className="bg-info text-info-contrast flex flex-shrink-0 items-center gap-1 rounded px-2.5 py-1 text-xs font-semibold hover:brightness-110"
                     onClick={() => newFromTemplate(entry)}
                     title="Create a new note from this template"
                   >

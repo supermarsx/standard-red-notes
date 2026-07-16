@@ -153,9 +153,7 @@ export function removeReminder(reminders: Reminder[], id: string): Reminder[] {
  * Returns the same array reference shape (new array) for predictable writes.
  */
 export function markReminderNotified(reminders: Reminder[], id: string): Reminder[] {
-  return reminders.map((reminder) =>
-    reminder.id === id ? { ...reminder, notified: true } : reminder,
-  )
+  return reminders.map((reminder) => (reminder.id === id ? { ...reminder, notified: true } : reminder))
 }
 
 /** Pure: clear a reminder's `notified` flag (e.g. when its due time is edited). */
@@ -172,10 +170,7 @@ export function sortRemindersByDueAt(reminders: Reminder[]): Reminder[] {
  * Pure: from a list of (note, reminder) pairs, the ones that are due and not yet
  * notified given `now`. Used by the app-wide checker.
  */
-export function selectDueReminders(
-  pairs: ReminderWithNote[],
-  now: number,
-): ReminderWithNote[] {
+export function selectDueReminders(pairs: ReminderWithNote[], now: number): ReminderWithNote[] {
   return pairs.filter(({ reminder }) => isReminderDue(reminder, now))
 }
 
@@ -318,10 +313,7 @@ function addMonths(date: Date, count: number): Date {
  * `dueAt` may be an ISO string or an epoch-ms number. An unparseable value
  * yields `undefined` (we never throw on bad data).
  */
-export function computeNextOccurrence(
-  dueAt: string | number,
-  recurrence: Recurrence | undefined,
-): number | undefined {
+export function computeNextOccurrence(dueAt: string | number, recurrence: Recurrence | undefined): number | undefined {
   const normalized = normalizeRecurrence(recurrence)
   if (normalized.frequency === 'none') {
     return undefined

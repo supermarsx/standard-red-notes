@@ -18,7 +18,6 @@ import {
   MobileUnlockTiming,
   DecryptedItem,
   Environment,
-  ApplicationOptionsDefaults,
   InternalFeatureService,
   InternalFeatureServiceInterface,
   NoteContent,
@@ -1271,7 +1270,11 @@ function extractAccessToken(session: unknown): string | undefined {
   if (typeof accessToken === 'string') {
     return accessToken
   }
-  if (accessToken && typeof accessToken === 'object' && typeof (accessToken as { value?: unknown }).value === 'string') {
+  if (
+    accessToken &&
+    typeof accessToken === 'object' &&
+    typeof (accessToken as { value?: unknown }).value === 'string'
+  ) {
     return (accessToken as { value: string }).value
   }
   return undefined

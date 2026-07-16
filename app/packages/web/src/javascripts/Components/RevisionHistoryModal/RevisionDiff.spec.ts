@@ -1,11 +1,5 @@
 import { NoteContent, NoteType } from '@standardnotes/snjs'
-import {
-  buildSplitRows,
-  computeDiffStats,
-  computeLineDiff,
-  DiffLine,
-  getDiffableTextFromContent,
-} from './RevisionDiff'
+import { buildSplitRows, computeDiffStats, computeLineDiff, DiffLine, getDiffableTextFromContent } from './RevisionDiff'
 
 const noteContent = (overrides: Partial<NoteContent>): NoteContent => {
   return {
@@ -246,11 +240,7 @@ describe('getDiffableTextFromContent', () => {
           },
           {
             type: 'paragraph',
-            children: [
-              { type: 'text', text: 'Line one' },
-              { type: 'linebreak' },
-              { type: 'text', text: 'Line two' },
-            ],
+            children: [{ type: 'text', text: 'Line one' }, { type: 'linebreak' }, { type: 'text', text: 'Line two' }],
           },
         ],
       },
@@ -258,9 +248,7 @@ describe('getDiffableTextFromContent', () => {
 
     const content = noteContent({ noteType: NoteType.Super, title: 'Super Title', text: lexical })
 
-    expect(getDiffableTextFromContent(content)).toBe(
-      'Super Title\nFirst paragraph\nA Heading\nLine one\nLine two',
-    )
+    expect(getDiffableTextFromContent(content)).toBe('Super Title\nFirst paragraph\nA Heading\nLine one\nLine two')
   })
 
   it('falls back to the raw string when a Super note text is not valid JSON', () => {

@@ -121,13 +121,7 @@ export function buildStockChartSrcDoc(data: StockChartData, dark: boolean): stri
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body,#c{margin:0;height:100%;width:100%}</style></head><body><div class="tradingview-widget-container" id="c"><div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>${json}</script></div></body></html>`
 }
 
-function StockChartComponent({
-  data,
-  nodeKey,
-}: {
-  data: StockChartData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function StockChartComponent({ data, nodeKey }: { data: StockChartData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [symbolDraft, setSymbolDraft] = useState(data.symbol)
   const [editing, setEditing] = useState(!data.symbol)
@@ -164,15 +158,12 @@ function StockChartComponent({
   const setRange = (range: StockChartRange) => mutate((d) => (d.range = range))
 
   const dark = prefersDark()
-  const srcDoc = useMemo(
-    () => (data.symbol ? buildStockChartSrcDoc(data, dark) : ''),
-    [data, dark],
-  )
+  const srcDoc = useMemo(() => (data.symbol ? buildStockChartSrcDoc(data, dark) : ''), [data, dark])
   const reloadKey = `${data.symbol}|${data.range}|${dark}`
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-stock-chart-block="true">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-stock-chart-block="true">
+      <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Stock chart</span>
         <div className="flex flex-wrap items-center gap-1">
           {!editing && data.symbol
@@ -180,7 +171,7 @@ function StockChartComponent({
                 <button
                   key={range}
                   type="button"
-                  className="rounded px-2 py-0.5 hover:bg-contrast aria-pressed:bg-contrast aria-pressed:text-text"
+                  className="hover:bg-contrast aria-pressed:bg-contrast aria-pressed:text-text rounded px-2 py-0.5"
                   aria-pressed={data.range === range}
                   onClick={() => setRange(range)}
                 >
@@ -190,7 +181,7 @@ function StockChartComponent({
             : null}
           <button
             type="button"
-            className="rounded px-2 py-0.5 hover:bg-contrast"
+            className="hover:bg-contrast rounded px-2 py-0.5"
             onClick={() => (editing ? commitSymbol(symbolDraft) : setEditing(true))}
           >
             {editing ? 'Load' : 'Edit'}
@@ -201,7 +192,7 @@ function StockChartComponent({
       {editing ? (
         <div className="p-2">
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Enter a symbol, e.g. NASDAQ:AAPL or AAPL"
             value={symbolDraft}
             onChange={(e) => setSymbolDraft(e.target.value)}
@@ -212,9 +203,9 @@ function StockChartComponent({
             }}
             autoFocus
           />
-          <p className="mt-1 text-xs text-passive-1">
-            Charts render via TradingView&apos;s embeddable widget. Yahoo Finance has no free embeddable widget and
-            its API is CORS-blocked from the browser, so this shows TradingView data, not Yahoo data.
+          <p className="text-passive-1 mt-1 text-xs">
+            Charts render via TradingView&apos;s embeddable widget. Yahoo Finance has no free embeddable widget and its
+            API is CORS-blocked from the browser, so this shows TradingView data, not Yahoo data.
           </p>
         </div>
       ) : srcDoc ? (
@@ -233,7 +224,7 @@ function StockChartComponent({
           />
         </div>
       ) : (
-        <div className="p-2 text-sm text-danger">Enter a symbol to load a chart.</div>
+        <div className="text-danger p-2 text-sm">Enter a symbol to load a chart.</div>
       )}
     </div>
   )

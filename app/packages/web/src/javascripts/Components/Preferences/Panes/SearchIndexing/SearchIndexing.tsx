@@ -2,7 +2,7 @@ import { FunctionComponent, useCallback, useMemo } from 'react'
 import { observer } from 'mobx-react-lite'
 
 import { WebApplication } from '@/Application/WebApplication'
-import { PrefDefaults, PrefKey } from '@standardnotes/snjs'
+import { IconType, PrefDefaults, PrefKey } from '@standardnotes/snjs'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesPane from '@/Components/Preferences/PreferencesComponents/PreferencesPane'
@@ -11,7 +11,6 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
 import Icon from '@/Components/Icon/Icon'
 import Switch from '@/Components/Switch/Switch'
-import { IconType } from '@standardnotes/snjs'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import usePreference from '@/Hooks/usePreference'
@@ -70,7 +69,8 @@ const statusIcon = (status: RunnerStatus): { type: IconType; className: string }
 
 const NumberPref: FunctionComponent<{
   application: WebApplication
-  prefKey: PrefKey.MaxIndexedBodyLength | PrefKey.MaxIndexedNotes | PrefKey.SearchMinQueryLength | PrefKey.SearchQueryCacheSize
+  prefKey:
+    PrefKey.MaxIndexedBodyLength | PrefKey.MaxIndexedNotes | PrefKey.SearchMinQueryLength | PrefKey.SearchQueryCacheSize
   label: string
   description: string
   min: number
@@ -92,7 +92,7 @@ const NumberPref: FunctionComponent<{
       <Subtitle>{label}</Subtitle>
       <Text>{description}</Text>
       <input
-        className="mt-2 w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+        className="border-border bg-default mt-2 w-32 rounded border px-2 py-1.5 text-sm"
         type="number"
         min={min}
         max={max}
@@ -214,13 +214,11 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
             <Icon type={statusIcon(status).type} size="small" className={statusIcon(status).className} />
             State: <span className="font-bold">{statusLabel(status)}</span>
             {isRunning ? ' · running' : ' · stopped'}
-            {isWorkerKilled ? (
-              ' · worker killed'
-            ) : indexState.isThreaded ? (
-              ' · worker thread'
-            ) : (
-              ' · main thread (fallback)'
-            )}
+            {isWorkerKilled
+              ? ' · worker killed'
+              : indexState.isThreaded
+                ? ' · worker thread'
+                : ' · main thread (fallback)'}
           </Text>
 
           <Text className="mt-1 flex items-center gap-1.5">
@@ -237,7 +235,7 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
           {/* Live "current job": what the indexer is chewing through right now. */}
           {isIndexing && currentJob && (
             <Text className="mt-1 flex items-center gap-1.5">
-              <Icon type="sync" size="small" className="animate-spin text-info" />
+              <Icon type="sync" size="small" className="text-info animate-spin" />
               Current job:{' '}
               <span className="font-bold">
                 indexing {currentJob.processed.toLocaleString()} / {currentJob.total.toLocaleString()} notes
@@ -247,10 +245,10 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
           )}
 
           {isWorkerKilled && (
-            <Text className="mt-1 flex items-center gap-1.5 text-danger">
+            <Text className="text-danger mt-1 flex items-center gap-1.5">
               <Icon type="warning" size="small" className="text-danger" />
-              The indexer worker thread is stopped. Search uses the existing index / substring fallback until you restart
-              it.
+              The indexer worker thread is stopped. Search uses the existing index / substring fallback until you
+              restart it.
             </Text>
           )}
 
@@ -333,7 +331,7 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
                 Re-index every N minutes ({MIN_INTERVAL_MINUTES}–{MAX_INTERVAL_MINUTES}). Default 15.
               </Text>
               <input
-                className="mt-2 w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                className="border-border bg-default mt-2 w-24 rounded border px-2 py-1.5 text-sm"
                 type="number"
                 min={MIN_INTERVAL_MINUTES}
                 max={MAX_INTERVAL_MINUTES}
@@ -370,7 +368,7 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
               {tagOptions.length === 0 ? (
                 <Text className="mt-1">You have no tags yet.</Text>
               ) : (
-                <div className="mt-1 flex max-h-56 flex-col gap-1 overflow-auto rounded border border-border p-2">
+                <div className="border-border mt-1 flex max-h-56 flex-col gap-1 overflow-auto rounded border p-2">
                   {tagOptions.map((tag) => (
                     <label key={tag.uuid} className="flex cursor-pointer items-center gap-2 text-sm">
                       <input
@@ -383,7 +381,7 @@ const SearchIndexing: FunctionComponent<Props> = ({ application }: Props) => {
                   ))}
                 </div>
               )}
-              <Text className="mt-1 text-passive-1">
+              <Text className="text-passive-1 mt-1">
                 {settings.scope.tagIds.length} tag{settings.scope.tagIds.length === 1 ? '' : 's'} selected
                 {settings.scope.tagIds.length === 0 ? ' — indexing all notes until at least one tag is selected.' : ''}
               </Text>

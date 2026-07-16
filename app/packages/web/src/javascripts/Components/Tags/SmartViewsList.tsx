@@ -31,9 +31,7 @@ const SmartViewsList: FunctionComponent<Props> = ({
   })
 
   if (allViews.length === 0 && navigationController.isSearching) {
-    return (
-      <div className="px-4 py-1 text-base opacity-60 lg:text-sm">{t('noSmartViewsFound')}</div>
-    )
+    return <div className="px-4 py-1 text-base opacity-60 lg:text-sm">{t('noSmartViewsFound')}</div>
   }
 
   return (

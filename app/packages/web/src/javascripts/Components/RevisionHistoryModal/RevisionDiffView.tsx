@@ -1,12 +1,6 @@
 import { NoteContent, classNames } from '@standardnotes/snjs'
 import { CSSProperties, FunctionComponent, useMemo, useState } from 'react'
-import {
-  buildSplitRows,
-  computeDiffStats,
-  computeLineDiff,
-  DiffLine,
-  getDiffableTextFromContent,
-} from './RevisionDiff'
+import { buildSplitRows, computeDiffStats, computeLineDiff, DiffLine, getDiffableTextFromContent } from './RevisionDiff'
 
 type DiffViewMode = 'unified' | 'split'
 
@@ -67,7 +61,7 @@ const lineSign = (type: DiffLine['type']): string => {
 const SplitCell: FunctionComponent<{ line: DiffLine | null; side: 'old' | 'new' }> = ({ line, side }) => {
   if (!line) {
     return (
-      <td className="border-r border-border bg-passive-5 align-top">
+      <td className="border-border bg-passive-5 border-r align-top">
         <div>&nbsp;</div>
       </td>
     )
@@ -76,15 +70,15 @@ const SplitCell: FunctionComponent<{ line: DiffLine | null; side: 'old' | 'new' 
   const number = side === 'old' ? line.oldNumber : line.newNumber
 
   return (
-    <td className="border-r border-border align-top" style={lineBackgroundStyle(line.type)}>
+    <td className="border-border border-r align-top" style={lineBackgroundStyle(line.type)}>
       <div className="flex">
-        <span className="inline-block w-10 flex-shrink-0 select-none border-r border-border px-2 text-right text-passive-1">
+        <span className="border-border text-passive-1 inline-block w-10 flex-shrink-0 border-r px-2 text-right select-none">
           {number ?? ''}
         </span>
-        <span className={classNames('w-4 flex-shrink-0 select-none text-center', lineTextColor(line.type))}>
+        <span className={classNames('w-4 flex-shrink-0 text-center select-none', lineTextColor(line.type))}>
           {lineSign(line.type)}
         </span>
-        <span className={classNames('whitespace-pre-wrap break-words px-1', lineTextColor(line.type))}>
+        <span className={classNames('px-1 break-words whitespace-pre-wrap', lineTextColor(line.type))}>
           {line.text.length ? line.text : ' '}
         </span>
       </div>
@@ -108,12 +102,12 @@ const RevisionDiffView: FunctionComponent<Props> = ({ oldContent, newContent, ol
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-contrast px-4 py-2">
+      <div className="border-border bg-contrast flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          <span className="font-semibold text-danger" title={oldLabel}>
+          <span className="text-danger font-semibold" title={oldLabel}>
             &minus; {oldLabel}
           </span>
-          <span className="font-semibold text-success" title={newLabel}>
+          <span className="text-success font-semibold" title={newLabel}>
             + {newLabel}
           </span>
           <span className="text-passive-1">
@@ -121,7 +115,7 @@ const RevisionDiffView: FunctionComponent<Props> = ({ oldContent, newContent, ol
             <span className="text-danger">&minus;{stats.removed}</span>
           </span>
         </div>
-        <div className="flex items-center overflow-hidden rounded border border-border text-sm">
+        <div className="border-border flex items-center overflow-hidden rounded border text-sm">
           <button
             className={classNames(
               'px-3 py-1 focus:shadow-none focus:outline-none',
@@ -133,7 +127,7 @@ const RevisionDiffView: FunctionComponent<Props> = ({ oldContent, newContent, ol
           </button>
           <button
             className={classNames(
-              'border-l border-border px-3 py-1 focus:shadow-none focus:outline-none',
+              'border-border border-l px-3 py-1 focus:shadow-none focus:outline-none',
               viewMode === 'unified' ? 'bg-info text-info-contrast' : 'bg-default text-text hover:bg-contrast',
             )}
             onClick={() => setViewMode('unified')}
@@ -143,24 +137,24 @@ const RevisionDiffView: FunctionComponent<Props> = ({ oldContent, newContent, ol
         </div>
       </div>
 
-      <div className="min-h-0 flex-grow overflow-auto bg-default font-mono text-editor">
+      <div className="bg-default text-editor min-h-0 flex-grow overflow-auto font-mono">
         {!hasChanges ? (
-          <div className="select-none p-4 text-sm text-passive-0">No differences between these revisions.</div>
+          <div className="text-passive-0 p-4 text-sm select-none">No differences between these revisions.</div>
         ) : viewMode === 'unified' ? (
           <table className="w-full border-collapse">
             <tbody>
               {diffLines.map((line, index) => (
                 <tr key={index} style={lineBackgroundStyle(line.type)}>
-                  <td className="select-none border-r border-border px-2 text-right align-top text-passive-1">
+                  <td className="border-border text-passive-1 border-r px-2 text-right align-top select-none">
                     {line.oldNumber ?? ''}
                   </td>
-                  <td className="select-none border-r border-border px-2 text-right align-top text-passive-1">
+                  <td className="border-border text-passive-1 border-r px-2 text-right align-top select-none">
                     {line.newNumber ?? ''}
                   </td>
-                  <td className={classNames('w-4 select-none px-1 text-center align-top', lineTextColor(line.type))}>
+                  <td className={classNames('w-4 px-1 text-center align-top select-none', lineTextColor(line.type))}>
                     {lineSign(line.type)}
                   </td>
-                  <td className={classNames('whitespace-pre-wrap break-words px-2', lineTextColor(line.type))}>
+                  <td className={classNames('px-2 break-words whitespace-pre-wrap', lineTextColor(line.type))}>
                     {line.text.length ? line.text : ' '}
                   </td>
                 </tr>

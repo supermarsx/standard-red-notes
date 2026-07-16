@@ -94,9 +94,7 @@ export function filterImageFilesByQuery<T extends { name: string }>(files: T[], 
  * Validate a picked source file's type/size BEFORE any DOM work. Returns an error
  * string to surface to the user, or null when the file is acceptable.
  */
-export function validateHeroSourceFile(
-  file: { type?: string; size?: number } | null | undefined,
-): string | null {
+export function validateHeroSourceFile(file: { type?: string; size?: number } | null | undefined): string | null {
   if (!file) {
     return 'No file selected.'
   }

@@ -6,11 +6,7 @@ import Icon from '@/Components/Icon/Icon'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import { DEFAULT_BOOKMARK_ICON, getNoteBookmarks } from '@/Bookmarks/bookmarks'
-import {
-  NavigationSettings,
-  loadNoteLayout,
-  saveNoteLayout,
-} from '../../Layout/layoutSettings'
+import { NavigationSettings, loadNoteLayout, saveNoteLayout } from '../../Layout/layoutSettings'
 import { bookmarkAnchorDomId } from '../../Lexical/Nodes/BookmarkAnchorNode'
 import { $buildDocumentOutline, DocumentOutline } from './outline'
 
@@ -55,9 +51,7 @@ const NavigationSidebar = () => {
 
   // Live outline of the document (headings + bookmark anchors), throttled so
   // large-doc typing doesn't churn.
-  const [outline, setOutline] = useState<DocumentOutline>(() =>
-    editor.getEditorState().read($buildDocumentOutline),
-  )
+  const [outline, setOutline] = useState<DocumentOutline>(() => editor.getEditorState().read($buildDocumentOutline))
   useEffect(() => {
     setOutline(editor.getEditorState().read($buildDocumentOutline))
 
@@ -155,7 +149,9 @@ const NavigationSidebar = () => {
         saveNoteLayout(activeNoteUuid, { ...layout, navigation: next })
         editor
           .getRootElement()
-          ?.dispatchEvent(new CustomEvent<NavigationLayoutChangedDetail>(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: next }))
+          ?.dispatchEvent(
+            new CustomEvent<NavigationLayoutChangedDetail>(NAVIGATION_LAYOUT_CHANGED_EVENT, { detail: next }),
+          )
         return next
       })
     },
@@ -171,15 +167,15 @@ const NavigationSidebar = () => {
   return (
     <aside
       data-navigation-sidebar="true"
-      className="flex w-60 flex-shrink-0 flex-col overflow-y-auto border-r border-border bg-default"
+      className="border-border bg-default flex w-60 flex-shrink-0 flex-col overflow-y-auto border-r"
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="list-bulleted" className="flex-shrink-0 text-info" size="small" />
+          <Icon type="list-bulleted" className="text-info flex-shrink-0" size="small" />
           <span className="truncate text-sm font-bold">Navigation</span>
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => persistNavigation({ visible: false })}
           aria-label="Hide navigation sidebar"
           title="Hide"
@@ -190,14 +186,14 @@ const NavigationSidebar = () => {
 
       <div className="min-h-0 flex-grow overflow-y-auto py-1">
         {outline.headings.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-passive-1">No headings yet.</div>
+          <div className="text-passive-1 px-3 py-4 text-center text-xs">No headings yet.</div>
         ) : (
           <ul>
             {outline.headings.map((heading) => (
               <li key={heading.nodeKey}>
                 <button
                   data-outline-heading="true"
-                  className="flex w-full items-center truncate py-1 pr-2 text-left text-sm text-text hover:bg-contrast"
+                  className="text-text hover:bg-contrast flex w-full items-center truncate py-1 pr-2 text-left text-sm"
                   style={{ paddingLeft: (heading.level - 1) * 12 + 8 }}
                   onClick={() => jumpToHeading(heading.nodeKey)}
                   title={heading.text || 'Untitled heading'}
@@ -210,8 +206,8 @@ const NavigationSidebar = () => {
         )}
 
         {showBookmarks && (
-          <div className="mt-2 border-t border-border pt-1">
-            <div className="px-3 py-1 text-xs font-semibold uppercase tracking-wide text-neutral">Bookmarks</div>
+          <div className="border-border mt-2 border-t pt-1">
+            <div className="text-neutral px-3 py-1 text-xs font-semibold tracking-wide uppercase">Bookmarks</div>
             <ul>
               {outline.bookmarks.map((bookmark) => {
                 const meta = bookmarkMeta.get(bookmark.bookmarkId)
@@ -220,7 +216,7 @@ const NavigationSidebar = () => {
                     <button
                       data-outline-bookmark="true"
                       className={classNames(
-                        'flex w-full items-center gap-2 py-1 pl-2 pr-2 text-left text-sm text-text hover:bg-contrast',
+                        'text-text hover:bg-contrast flex w-full items-center gap-2 py-1 pr-2 pl-2 text-left text-sm',
                       )}
                       onClick={() => jumpToBookmark(bookmark.nodeKey, bookmark.bookmarkId)}
                       title={meta?.label ?? 'Bookmark'}

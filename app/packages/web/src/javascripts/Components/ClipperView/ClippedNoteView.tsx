@@ -88,7 +88,7 @@ const ClippedNoteView = ({
 
   return (
     <div className="">
-      <div className="border-b border-border p-3">
+      <div className="border-border border-b p-3">
         <div className="mb-3 flex w-full items-center gap-3">
           {!isFirefoxPopup && (
             <Button className="flex items-center justify-center" fullWidth onClick={clearClip} disabled={isDiscarding}>

@@ -99,7 +99,6 @@ type DragState =
   | { type: 'connect'; fromNode: string; fromSide: CanvasNodeSide; currentX: number; currentY: number }
 
 export const CanvasEditor: FunctionComponent<Props> = ({
-  application,
   controller,
   readonly,
   customBackgroundColor,
@@ -276,7 +275,10 @@ export const CanvasEditor: FunctionComponent<Props> = ({
     const padding = 60
     const contentWidth = maxX - minX + padding * 2
     const contentHeight = maxY - minY + padding * 2
-    const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(rect.width / contentWidth, rect.height / contentHeight)))
+    const zoom = Math.max(
+      MIN_ZOOM,
+      Math.min(MAX_ZOOM, Math.min(rect.width / contentWidth, rect.height / contentHeight)),
+    )
     const x = rect.width / 2 - ((minX + maxX) / 2) * zoom
     const y = rect.height / 2 - ((minY + maxY) / 2) * zoom
     setViewport({ x, y, zoom })
@@ -421,24 +423,24 @@ export const CanvasEditor: FunctionComponent<Props> = ({
         const dy = (event.clientY - state.startClientY) / viewport.zoom
         setDocument((prev) => ({
           ...prev,
-          nodes: prev.nodes.map((n) =>
-            n.id === state.nodeId ? { ...n, x: state.startX + dx, y: state.startY + dy } : n,
-          ),
+          nodes: prev.nodes.map((n) => {
+            return n.id === state.nodeId ? { ...n, x: state.startX + dx, y: state.startY + dy } : n
+          }),
         }))
       } else if (state.type === 'resize-node') {
         const dx = (event.clientX - state.startClientX) / viewport.zoom
         const dy = (event.clientY - state.startClientY) / viewport.zoom
         setDocument((prev) => ({
           ...prev,
-          nodes: prev.nodes.map((n) =>
-            n.id === state.nodeId
+          nodes: prev.nodes.map((n) => {
+            return n.id === state.nodeId
               ? {
                   ...n,
                   width: Math.max(MIN_NODE_WIDTH, state.startWidth + dx),
                   height: Math.max(MIN_NODE_HEIGHT, state.startHeight + dy),
                 }
-              : n,
-          ),
+              : n
+          }),
         }))
       } else if (state.type === 'connect') {
         const point = clientToCanvas(event.clientX, event.clientY)
@@ -529,9 +531,9 @@ export const CanvasEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="absolute left-2 top-2 z-10 flex flex-wrap items-center gap-1 rounded-md border border-border bg-default p-1 shadow-sm">
+      <div className="border-border bg-default absolute top-2 left-2 z-10 flex flex-wrap items-center gap-1 rounded-md border p-1 shadow-sm">
         <button
-          className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-contrast disabled:opacity-50"
+          className="hover:bg-contrast flex items-center gap-1 rounded px-2 py-1 text-sm disabled:opacity-50"
           onClick={addNodeAtCenter}
           disabled={isReadonly}
           title="Add card"
@@ -540,27 +542,27 @@ export const CanvasEditor: FunctionComponent<Props> = ({
           <span className="hidden sm:inline">Card</span>
         </button>
         <button
-          className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-contrast disabled:opacity-50"
+          className="hover:bg-contrast flex items-center gap-1 rounded px-2 py-1 text-sm disabled:opacity-50"
           onClick={deleteSelection}
           disabled={isReadonly || !selection}
           title="Delete selected"
         >
           <Icon type="trash" size="small" />
         </button>
-        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="bg-border mx-1 h-5 w-px" />
         <button
-          className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-contrast"
+          className="hover:bg-contrast flex items-center gap-1 rounded px-2 py-1 text-sm"
           onClick={fitToContent}
           title="Fit to content"
         >
           <Icon type="menu-arrow-down-alt" size="small" />
           <span className="hidden sm:inline">Fit</span>
         </button>
-        <span className="px-1 text-xs text-passive-1">{Math.round(viewport.zoom * 100)}%</span>
+        <span className="text-passive-1 px-1 text-xs">{Math.round(viewport.zoom * 100)}%</span>
       </div>
 
       {recoveryNotice && (
-        <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-md border border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-md border px-3 py-1.5 text-xs">
           This note's content wasn't recognized as a canvas and a new board was started. Your original text is preserved
           until you make a change.
           <button className="ml-2 underline" onClick={() => setRecoveryNotice(false)}>
@@ -580,9 +582,9 @@ export const CanvasEditor: FunctionComponent<Props> = ({
         onDoubleClick={onBackgroundDoubleClick}
       >
         {/* Transformed world layer */}
-        <div className="absolute left-0 top-0 origin-top-left" style={{ transform }}>
+        <div className="absolute top-0 left-0 origin-top-left" style={{ transform }}>
           {/* Edge SVG layer. Overflow visible so lines render outside the 0-size box. */}
-          <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1}>
+          <svg className="pointer-events-none absolute top-0 left-0 overflow-visible" width={1} height={1}>
             <defs>
               <marker
                 id="canvas-arrow"
@@ -650,7 +652,7 @@ export const CanvasEditor: FunctionComponent<Props> = ({
               <div
                 key={node.id}
                 className={classNames(
-                  'canvas-card absolute flex flex-col rounded-md border bg-default shadow-sm',
+                  'canvas-card bg-default absolute flex flex-col rounded-md border shadow-sm',
                   selected ? 'border-info' : 'border-border',
                 )}
                 style={{
@@ -679,7 +681,7 @@ export const CanvasEditor: FunctionComponent<Props> = ({
                     placeholder="Type..."
                   />
                 ) : (
-                  <div className="h-full w-full flex-grow overflow-auto whitespace-pre-wrap break-words p-2 text-sm">
+                  <div className="h-full w-full flex-grow overflow-auto p-2 text-sm break-words whitespace-pre-wrap">
                     {node.text || <span className="text-passive-2">Empty card</span>}
                   </div>
                 )}
@@ -687,11 +689,11 @@ export const CanvasEditor: FunctionComponent<Props> = ({
                 {selected && !isReadonly && (
                   <>
                     {/* Color swatches */}
-                    <div className="absolute -top-7 left-0 flex gap-1 rounded bg-default p-0.5 shadow-sm">
+                    <div className="bg-default absolute -top-7 left-0 flex gap-1 rounded p-0.5 shadow-sm">
                       {NODE_COLORS.map((color) => (
                         <button
                           key={color}
-                          className="h-4 w-4 rounded-full border border-border"
+                          className="border-border h-4 w-4 rounded-full border"
                           style={{ backgroundColor: color }}
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={() => setNodeColor(node.id, node.color === color ? undefined : color)}
@@ -706,7 +708,7 @@ export const CanvasEditor: FunctionComponent<Props> = ({
                       return (
                         <div
                           key={side}
-                          className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-info bg-default"
+                          className="border-info bg-default absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2"
                           style={{ left: anchor.x - node.x, top: anchor.y - node.y }}
                           onPointerDown={(e) => onConnectorPointerDown(e, node, side)}
                         />
@@ -715,7 +717,7 @@ export const CanvasEditor: FunctionComponent<Props> = ({
 
                     {/* Resize handle */}
                     <div
-                      className="absolute -bottom-1 -right-1 h-3 w-3 cursor-nwse-resize rounded-sm border border-info bg-default"
+                      className="border-info bg-default absolute -right-1 -bottom-1 h-3 w-3 cursor-nwse-resize rounded-sm border"
                       onPointerDown={(e) => onResizePointerDown(e, node)}
                     />
                   </>
@@ -727,7 +729,7 @@ export const CanvasEditor: FunctionComponent<Props> = ({
 
         {document.nodes.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="text-center text-sm text-passive-1">
+            <div className="text-passive-1 text-center text-sm">
               <p className="font-semibold">Empty canvas</p>
               <p>Double-click anywhere or use the toolbar to add a card.</p>
             </div>

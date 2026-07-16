@@ -56,7 +56,7 @@ const Dropdown = ({
       </SelectLabel>
       <Select
         className={classNames(
-          'flex w-full min-w-55 max-w-full items-center justify-between rounded border border-passive-3 bg-default px-3.5 py-1.5 text-sm text-foreground md:translucent-ui:bg-transparent',
+          'border-passive-3 bg-default text-foreground md:translucent-ui:bg-transparent flex w-full max-w-full min-w-55 items-center justify-between rounded border px-3.5 py-1.5 text-sm',
           disabled && 'opacity-50',
           classNameOverride.button,
           !fullWidth && 'md:w-fit',
@@ -77,14 +77,14 @@ const Dropdown = ({
       <SelectPopover
         store={select}
         className={classNames(
-          'z-dropdown-menu max-h-[var(--popover-available-height)] w-[var(--popover-anchor-width)] overflow-y-auto rounded border border-passive-3 bg-default py-1 [backdrop-filter:var(--popover-backdrop-filter)]',
+          'z-dropdown-menu border-passive-3 bg-default max-h-[var(--popover-available-height)] w-[var(--popover-anchor-width)] overflow-y-auto rounded border py-1 [backdrop-filter:var(--popover-backdrop-filter)]',
           classNameOverride.popover,
         )}
         portal={false}
       >
         {items.map((item) => (
           <SelectItem
-            className="group flex min-w-0 cursor-pointer items-center overflow-hidden bg-transparent px-3 py-1.5 text-sm text-text hover:bg-contrast hover:text-foreground [&[data-active-item]]:bg-info [&[data-active-item]]:text-info-contrast"
+            className="group text-text hover:bg-contrast hover:text-foreground [&[data-active-item]]:bg-info [&[data-active-item]]:text-info-contrast flex min-w-0 cursor-pointer items-center overflow-hidden bg-transparent px-3 py-1.5 text-sm"
             key={item.value}
             value={item.value}
             disabled={item.disabled}

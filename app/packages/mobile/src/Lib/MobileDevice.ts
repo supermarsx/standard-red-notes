@@ -188,7 +188,7 @@ export class MobileDevice implements MobileDeviceInterface {
     }
     try {
       return JSON.parse(value)
-    } catch (e) {
+    } catch {
       return value
     }
   }
@@ -250,7 +250,7 @@ export class MobileDevice implements MobileDeviceInterface {
     try {
       await FingerprintScanner.isSensorAvailable()
       return true
-    } catch (e) {
+    } catch {
       return false
     }
   }
@@ -369,7 +369,11 @@ export class MobileDevice implements MobileDeviceInterface {
 
   setAndroidScreenshotPrivacy(enable: boolean): void {
     if (Platform.OS === 'android') {
-      enable ? FlagSecure.activate() : FlagSecure.deactivate()
+      if (enable) {
+        FlagSecure.activate()
+      } else {
+        FlagSecure.deactivate()
+      }
     }
   }
 
@@ -448,7 +452,6 @@ export class MobileDevice implements MobileDeviceInterface {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
   performHardReset() {}
 
   isDeviceDestroyed() {
@@ -554,7 +557,6 @@ export class MobileDevice implements MobileDeviceInterface {
         {
           text: 'Cancel',
           style: 'cancel',
-          // eslint-disable-next-line @typescript-eslint/no-empty-function
           onPress: async () => {},
         },
         {

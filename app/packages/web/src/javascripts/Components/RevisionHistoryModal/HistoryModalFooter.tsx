@@ -42,7 +42,7 @@ const HistoryModalFooter = ({ dismissModal, noteHistoryController, readonly = fa
   }, [deleteRemoteRevision, selectedEntry])
 
   return (
-    <div className="flex min-h-6 flex-shrink-0 flex-wrap items-center gap-2.5 border-t border-solid border-border px-2.5 py-2 md:justify-between">
+    <div className="border-border flex min-h-6 flex-shrink-0 flex-wrap items-center gap-2.5 border-t border-solid px-2.5 py-2 md:justify-between">
       <Button className="py-1.35" label="Close" onClick={dismissModal} />
       {selectedRevision && selectedEntry && !readonly && (
         <>

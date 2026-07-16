@@ -24,8 +24,8 @@ const HistoryListContainer: FunctionComponent<Props> = ({ features, noteHistoryC
 
     return (
       <button
-        className={`relative cursor-pointer border-0 bg-default px-3 py-2.5 text-sm focus:shadow-inner ${
-          isSelected ? 'font-medium text-info shadow-bottom' : 'text-text'
+        className={`bg-default relative cursor-pointer border-0 px-3 py-2.5 text-sm focus:shadow-inner ${
+          isSelected ? 'text-info shadow-bottom font-medium' : 'text-text'
         }`}
         onClick={() => {
           selectTab(type)
@@ -64,8 +64,8 @@ const HistoryListContainer: FunctionComponent<Props> = ({ features, noteHistoryC
   }
 
   return (
-    <div className={'flex h-full flex-grow flex-col overflow-auto border-r border-solid border-border'}>
-      <div className="flex border-b border-solid border-border">
+    <div className={'border-border flex h-full flex-grow flex-col overflow-auto border-r border-solid'}>
+      <div className="border-border flex border-b border-solid">
         <TabButton type={RevisionType.Remote} />
         <TabButton type={RevisionType.Session} />
         {legacyHistory && legacyHistory.length > 0 && <TabButton type={RevisionType.Legacy} />}

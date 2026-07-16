@@ -108,13 +108,7 @@ describe('multiKeySort — two keys (primary tie broken by secondary)', () => {
 
 describe('multiKeySort — three keys', () => {
   it('applies all three in order', () => {
-    const input = [
-      'A\tred\t2',
-      'A\tred\t1',
-      'A\tblue\t9',
-      'B\tred\t1',
-      'A\tred\t3',
-    ]
+    const input = ['A\tred\t2', 'A\tred\t1', 'A\tblue\t9', 'B\tred\t1', 'A\tred\t3']
     const result = multiKeySort(
       input,
       opts('tab', [key(0, 'text', 'asc'), key(1, 'text', 'asc'), key(2, 'number', 'asc')]),

@@ -154,7 +154,9 @@ describe('note view controller', () => {
     controller.deinit()
     expect(controller.dealloced).toEqual(true)
 
-    await expect(controller.saveAndAwaitLocalPropagation({ text: 'late edit', isUserModified: true })).resolves.toBeUndefined()
+    await expect(
+      controller.saveAndAwaitLocalPropagation({ text: 'late edit', isUserModified: true }),
+    ).resolves.toBeUndefined()
     expect(application.mutator.changeItem).not.toHaveBeenCalled()
   })
 

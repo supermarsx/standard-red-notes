@@ -1,7 +1,15 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { isPayloadSourceRetrieved } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
-import { FunctionComponent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  FunctionComponent,
+  PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
 import Icon from '@/Components/Icon/Icon'
 import {
@@ -156,8 +164,13 @@ export const MapEditor: FunctionComponent<Props> = ({
     }
     // Drop a new node near the centre of the current viewport.
     const rect = canvasRef.current?.getBoundingClientRect()
-    const center = screenToMap((rect?.left ?? 0) + (rect?.width ?? 600) / 2, (rect?.top ?? 0) + (rect?.height ?? 400) / 2)
-    updateDocument((doc) => addNode(doc, Math.round(center.x - NODE_WIDTH / 2), Math.round(center.y - NODE_HEIGHT / 2), ''))
+    const center = screenToMap(
+      (rect?.left ?? 0) + (rect?.width ?? 600) / 2,
+      (rect?.top ?? 0) + (rect?.height ?? 400) / 2,
+    )
+    updateDocument((doc) =>
+      addNode(doc, Math.round(center.x - NODE_WIDTH / 2), Math.round(center.y - NODE_HEIGHT / 2), ''),
+    )
   }, [isReadonly, screenToMap, updateDocument])
 
   const handleAddChild = useCallback(
@@ -345,32 +358,30 @@ export const MapEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="share" className="flex-shrink-0 text-info" />
+          <Icon type="share" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">Map</span>
-          <span className="truncate text-xs text-neutral">
+          <span className="text-neutral truncate text-xs">
             {document.nodes.length} {document.nodes.length === 1 ? 'node' : 'nodes'} · {document.edges.length}{' '}
             {document.edges.length === 1 ? 'link' : 'links'}
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
           {connectFrom && (
-            <span className="mr-1 rounded bg-info-faded px-2 py-0.5 text-xs text-info">
-              Pick a node to connect…
-            </span>
+            <span className="bg-info-faded text-info mr-1 rounded px-2 py-0.5 text-xs">Pick a node to connect…</span>
           )}
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => setZoom((z) => Math.max(0.3, +(z - 0.1).toFixed(2)))}
             title="Zoom out"
             aria-label="Zoom out"
           >
             <Icon type="subtract" size="small" />
           </button>
-          <span className="w-10 text-center text-xs text-passive-1">{Math.round(zoom * 100)}%</span>
+          <span className="text-passive-1 w-10 text-center text-xs">{Math.round(zoom * 100)}%</span>
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => setZoom((z) => Math.min(2.5, +(z + 0.1).toFixed(2)))}
             title="Zoom in"
             aria-label="Zoom in"
@@ -378,7 +389,7 @@ export const MapEditor: FunctionComponent<Props> = ({
             <Icon type="add" size="small" />
           </button>
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => {
               setZoom(1)
               setPan({ x: 0, y: 0 })
@@ -391,7 +402,7 @@ export const MapEditor: FunctionComponent<Props> = ({
           {!isReadonly && (
             <>
               <button
-                className="rounded p-1 hover:bg-default disabled:opacity-50"
+                className="hover:bg-default rounded p-1 disabled:opacity-50"
                 onClick={handleAutoArrange}
                 disabled={isEmpty}
                 title="Auto-arrange as tree"
@@ -400,7 +411,7 @@ export const MapEditor: FunctionComponent<Props> = ({
                 <Icon type="menu-arrow-down-alt" size="small" />
               </button>
               <button
-                className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-default"
+                className="hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-sm"
                 onClick={handleAddNode}
                 title="Add node"
               >
@@ -413,7 +424,7 @@ export const MapEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a map and a new one was started. Your original text is preserved
             until you make a change.
@@ -431,7 +442,7 @@ export const MapEditor: FunctionComponent<Props> = ({
         ) : (
           <div
             ref={canvasRef}
-            className="absolute inset-0 touch-none select-none overflow-hidden"
+            className="absolute inset-0 touch-none overflow-hidden select-none"
             style={{ cursor: 'grab' }}
             onPointerDown={onCanvasPointerDown}
             onPointerMove={onPointerMove}
@@ -439,7 +450,7 @@ export const MapEditor: FunctionComponent<Props> = ({
             onPointerCancel={endDrag}
           >
             <div
-              className="absolute left-0 top-0 origin-top-left"
+              className="absolute top-0 left-0 origin-top-left"
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
             >
               {/* Edges / parent links beneath the nodes. */}
@@ -500,25 +511,25 @@ type EmptyStateProps = {
 }
 
 const EmptyState: FunctionComponent<EmptyStateProps> = ({ isReadonly, onTemplate, onAddNode }) => (
-  <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-neutral">
+  <div className="text-neutral flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm">
     <p className="font-semibold">Empty map</p>
     <p>Start from a template, or add a node and build it yourself.</p>
     {!isReadonly && (
       <div className="flex flex-wrap items-center justify-center gap-2">
         <button
-          className="rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+          className="bg-info text-info-contrast rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
           onClick={() => onTemplate('mindmap')}
         >
           Mind map
         </button>
         <button
-          className="rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+          className="bg-info text-info-contrast rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
           onClick={() => onTemplate('family')}
         >
           Family tree
         </button>
         <button
-          className="rounded border border-border bg-contrast px-3 py-1.5 text-sm font-semibold hover:border-info"
+          className="border-border bg-contrast hover:border-info rounded border px-3 py-1.5 text-sm font-semibold"
           onClick={onAddNode}
         >
           Blank node
@@ -563,14 +574,10 @@ const MapNodeBox: FunctionComponent<MapNodeBoxProps> = ({
 }) => {
   const accent = node.color
   return (
-    <div
-      className="absolute"
-      style={{ left: node.x, top: node.y, width: NODE_WIDTH }}
-      onPointerDown={onPointerDown}
-    >
+    <div className="absolute" style={{ left: node.x, top: node.y, width: NODE_WIDTH }} onPointerDown={onPointerDown}>
       <div
         className={classNames(
-          'flex min-h-[3.5rem] flex-col rounded-md border bg-default shadow-sm',
+          'bg-default flex min-h-[3.5rem] flex-col rounded-md border shadow-sm',
           selected || connectSource ? 'border-info' : 'border-border',
         )}
         style={{
@@ -582,7 +589,7 @@ const MapNodeBox: FunctionComponent<MapNodeBoxProps> = ({
           {editing ? (
             <textarea
               autoFocus
-              className="w-full resize-none rounded bg-contrast p-1 text-xs text-text outline-none"
+              className="bg-contrast text-text w-full resize-none rounded p-1 text-xs outline-none"
               rows={2}
               value={node.text}
               placeholder="Label"
@@ -597,23 +604,33 @@ const MapNodeBox: FunctionComponent<MapNodeBoxProps> = ({
               }}
             />
           ) : (
-            <span className="block break-words text-xs text-text">
-              {node.text || <span className="italic text-passive-2">Label</span>}
+            <span className="text-text block text-xs break-words">
+              {node.text || <span className="text-passive-2 italic">Label</span>}
             </span>
           )}
         </div>
       </div>
 
       {selected && !isReadonly && !editing && (
-        <div className="absolute left-0 right-0 top-full z-10 mt-1 flex flex-wrap items-center gap-1 rounded-md border border-border bg-contrast p-1 shadow-md">
-          <button className="rounded p-1 hover:bg-default" onClick={onStartEditing} title="Edit label" aria-label="Edit label">
+        <div className="border-border bg-contrast absolute top-full right-0 left-0 z-10 mt-1 flex flex-wrap items-center gap-1 rounded-md border p-1 shadow-md">
+          <button
+            className="hover:bg-default rounded p-1"
+            onClick={onStartEditing}
+            title="Edit label"
+            aria-label="Edit label"
+          >
             <Icon type="pencil" size="small" />
           </button>
-          <button className="rounded p-1 hover:bg-default" onClick={onAddChild} title="Add child" aria-label="Add child">
+          <button
+            className="hover:bg-default rounded p-1"
+            onClick={onAddChild}
+            title="Add child"
+            aria-label="Add child"
+          >
             <Icon type="add" size="small" />
           </button>
           <button
-            className={classNames('rounded p-1 hover:bg-default', connectSource && 'bg-info text-info-contrast')}
+            className={classNames('hover:bg-default rounded p-1', connectSource && 'bg-info text-info-contrast')}
             onClick={onConnect}
             title="Connect to another node"
             aria-label="Connect to another node"
@@ -636,7 +653,7 @@ const MapNodeBox: FunctionComponent<MapNodeBoxProps> = ({
             ))}
           </div>
           <button
-            className="rounded p-1 text-danger hover:bg-default"
+            className="text-danger hover:bg-default rounded p-1"
             onClick={onDelete}
             title="Delete node"
             aria-label="Delete node"

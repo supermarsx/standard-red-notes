@@ -28,8 +28,8 @@ const RoundIconButton = forwardRef(
         <button
           className={classNames(
             'bg-text-padding m-0 flex h-10 min-w-10 cursor-pointer items-center justify-center rounded-full border',
-            'border-solid border-border bg-clip-padding text-neutral hover:bg-contrast hover:text-text focus:bg-contrast',
-            'focus:text-text focus:outline-none focus:ring-info md:h-8 md:min-w-8',
+            'border-border text-neutral hover:bg-contrast hover:text-text focus:bg-contrast border-solid bg-clip-padding',
+            'focus:text-text focus:ring-info focus:outline-none md:h-8 md:min-w-8',
             className,
           )}
           onClick={click}

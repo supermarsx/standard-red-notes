@@ -95,9 +95,10 @@ const AiProfilesSection: FunctionComponent<Props> = ({
       }
       setSavingModelsFor(row.id)
       try {
-        const { ok, data } = await application.serverGetJsonRequest<{ models?: string[]; error?: { message?: string } }>(
-          `/v1/assistant/models?profileId=${encodeURIComponent(row.id)}`,
-        )
+        const { ok, data } = await application.serverGetJsonRequest<{
+          models?: string[]
+          error?: { message?: string }
+        }>(`/v1/assistant/models?profileId=${encodeURIComponent(row.id)}`)
         if (!ok || !data?.models || data.models.length === 0) {
           addToast({
             type: ToastType.Regular,
@@ -151,7 +152,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
       </Text>
 
       {rows.length === 0 && (
-        <Text className="mt-3 text-passive-1">
+        <Text className="text-passive-1 mt-3">
           No named profiles yet. The single-provider cards below still work; add a profile to manage several providers.
         </Text>
       )}
@@ -160,7 +161,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
         const option = providerOption(row.provider)
         const isSaved = savedIds.has(row.id)
         return (
-          <div key={row.id} className="mt-3 rounded border border-border p-4">
+          <div key={row.id} className="border-border mt-3 rounded border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <input
@@ -175,10 +176,10 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 />
                 <Subtitle>{row.name.trim() === '' ? 'Untitled profile' : row.name}</Subtitle>
                 {defaultId === row.id && (
-                  <span className="rounded bg-info px-2 py-0.5 text-xs font-bold text-info-contrast">Default</span>
+                  <span className="bg-info text-info-contrast rounded px-2 py-0.5 text-xs font-bold">Default</span>
                 )}
                 {row.keyConfigured && (
-                  <span className="rounded bg-success px-2 py-0.5 text-xs font-bold text-success-contrast">
+                  <span className="bg-success text-success-contrast rounded px-2 py-0.5 text-xs font-bold">
                     Key set
                   </span>
                 )}
@@ -196,7 +197,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
               </div>
             </div>
 
-            <Text className="mt-1 text-xs text-passive-1">{profileSummary(row)}</Text>
+            <Text className="text-passive-1 mt-1 text-xs">{profileSummary(row)}</Text>
 
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
@@ -212,7 +213,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
               <div>
                 <label className="text-sm font-semibold">Provider</label>
                 <select
-                  className="mt-1 w-full rounded border border-border bg-default px-2 py-1.5 text-foreground"
+                  className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5"
                   value={row.provider}
                   onChange={(event) =>
                     mutateRow(row.id, { provider: event.target.value as ProfileRow['provider'], models: [] })
@@ -230,7 +231,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
               <div>
                 <label className="text-sm font-semibold">Backend profile</label>
                 <select
-                  className="mt-1 w-full rounded border border-border bg-default px-2 py-1.5 text-foreground"
+                  className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5"
                   value={row.backendProfileId}
                   onChange={(event) => mutateRow(row.id, { backendProfileId: event.target.value })}
                   disabled={busy}
@@ -243,7 +244,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                   ))}
                 </select>
                 {row.backendProfileId !== '' && (
-                  <Text className="mt-1 text-xs text-passive-1">
+                  <Text className="text-passive-1 mt-1 text-xs">
                     Credentials/connection come from the selected backend profile; the fields below are ignored.
                   </Text>
                 )}
@@ -266,7 +267,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 <label className="text-sm font-semibold">Model</label>
                 <div className="mt-1 flex items-center gap-2">
                   <input
-                    className="flex-1 rounded border border-border bg-default px-2 py-1.5 text-sm text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                    className="border-border bg-default text-text focus-visible:ring-info flex-1 rounded border px-2 py-1.5 text-sm focus:outline-none focus-visible:ring-2"
                     placeholder="Model id"
                     value={row.model}
                     onChange={(event) => mutateRow(row.id, { model: event.target.value })}
@@ -289,7 +290,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                   </datalist>
                 )}
                 {option.supportsModelDiscovery && !isSaved && (
-                  <Text className="mt-1 text-xs text-passive-1">Save the profile to enable model discovery.</Text>
+                  <Text className="text-passive-1 mt-1 text-xs">Save the profile to enable model discovery.</Text>
                 )}
               </div>
 
@@ -316,7 +317,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
               </div>
             </div>
 
-            {option.notes && <Text className="mt-2 text-xs text-passive-1">{option.notes}</Text>}
+            {option.notes && <Text className="text-passive-1 mt-2 text-xs">{option.notes}</Text>}
           </div>
         )
       })}

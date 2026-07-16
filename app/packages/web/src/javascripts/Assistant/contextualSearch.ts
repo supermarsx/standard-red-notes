@@ -13,11 +13,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
 import { isContextualSearchEnabled } from './contextualSearchSettings'
-import {
-  RerankCandidate,
-  rerankCandidates,
-  SelectCandidatesOptions,
-} from './contextualSearchRanking'
+import { RerankCandidate, rerankCandidates, SelectCandidatesOptions } from './contextualSearchRanking'
 
 export interface ContextualSearchAvailability {
   /** Whether a "Search with AI" re-rank can run right now. */

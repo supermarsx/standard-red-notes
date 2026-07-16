@@ -4,7 +4,7 @@ import { c } from 'ttag'
 const ChangeEmailSuccess: FunctionComponent = () => {
   return (
     <div>
-      <div className={'mb-2 font-bold text-info'}>{c('Info').t`Your email has been successfully changed.`}</div>
+      <div className={'text-info mb-2 font-bold'}>{c('Info').t`Your email has been successfully changed.`}</div>
       <p>
         {c('Info')
           .t`Please ensure you are running the latest version of Standard Red Notes on all platforms to ensure maximum compatibility.`}

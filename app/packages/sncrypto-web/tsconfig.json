@@ -13,7 +13,6 @@
     "outDir": "./dist",
     "inlineSourceMap": true,
     "types": ["node"],
-    "typeRoots": ["node_modules/@types", "typings"],
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],

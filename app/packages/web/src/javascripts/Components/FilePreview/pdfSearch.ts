@@ -87,6 +87,8 @@ export function wrapMatchIndex(current: number, delta: number, total: number): n
  */
 export function joinTextItems(items: Array<{ str?: string } | unknown>): string {
   return items
-    .map((item) => (item && typeof item === 'object' && 'str' in item ? String((item as { str?: string }).str ?? '') : ''))
+    .map((item) => {
+      return item && typeof item === 'object' && 'str' in item ? String((item as { str?: string }).str ?? '') : ''
+    })
     .join(' ')
 }

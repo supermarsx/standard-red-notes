@@ -7,11 +7,7 @@ import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { formatDateForContextMenu } from '@/Utils/DateUtils'
-import {
-  AccountStatistics,
-  computeAccountStatistics,
-  deriveLastLoginFromSessions,
-} from './Statistics'
+import { AccountStatistics, computeAccountStatistics, deriveLastLoginFromSessions } from './Statistics'
 
 type Props = {
   application: WebApplication
@@ -58,13 +54,13 @@ type StatCardProps = {
 }
 
 const StatCard = ({ icon, label, value, hint }: StatCardProps) => (
-  <div className="flex flex-col rounded-md border border-border bg-default p-2.5 shadow-sm">
-    <div className="flex items-center gap-1.5 text-neutral">
-      <Icon type={icon} className="flex-shrink-0 text-info" size="small" />
-      <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+  <div className="border-border bg-default flex flex-col rounded-md border p-2.5 shadow-sm">
+    <div className="text-neutral flex items-center gap-1.5">
+      <Icon type={icon} className="text-info flex-shrink-0" size="small" />
+      <span className="text-xs font-semibold tracking-wide uppercase">{label}</span>
     </div>
-    <div className="mt-1 break-words text-lg font-bold text-text">{value}</div>
-    {hint && <div className="mt-0.5 text-xs text-passive-1">{hint}</div>}
+    <div className="text-text mt-1 text-lg font-bold break-words">{value}</div>
+    {hint && <div className="text-passive-1 mt-0.5 text-xs">{hint}</div>}
   </div>
 )
 
@@ -212,15 +208,15 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="dashboard" className="flex-shrink-0 text-info" />
+          <Icon type="dashboard" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Dashboard</span>
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => application.paneController.closeViewTab(AppPaneId.Dashboard)}
           aria-label="Close dashboard"
           title="Close"
@@ -231,7 +227,7 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
       <div className="flex-grow overflow-y-auto p-4">
         <section aria-label="Account counts">
-          <h2 className="mb-2 text-sm font-bold text-text">Library</h2>
+          <h2 className="text-text mb-2 text-sm font-bold">Library</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {countCards.map((card) => (
               <StatCard key={card.label} {...card} />
@@ -240,7 +236,7 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </section>
 
         <section aria-label="Account activity" className="mt-6">
-          <h2 className="mb-2 text-sm font-bold text-text">Activity</h2>
+          <h2 className="text-text mb-2 text-sm font-bold">Activity</h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {activityCards.map((card) => (
               <StatCard key={card.label} {...card} />
@@ -249,26 +245,26 @@ const DashboardView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </section>
 
         <section aria-label="Recently edited notes" className="mt-6">
-          <h2 className="mb-2 flex items-center gap-2 text-sm font-bold text-text">
+          <h2 className="text-text mb-2 flex items-center gap-2 text-sm font-bold">
             <Icon type="history" className="text-neutral" size="small" />
             Recent activity
           </h2>
-          <div className="overflow-hidden rounded-md border border-border bg-default">
+          <div className="border-border bg-default overflow-hidden rounded-md border">
             {stats.recentNotes.length === 0 ? (
-              <div className="px-4 py-6 text-center text-sm text-passive-1">No recently edited notes yet.</div>
+              <div className="text-passive-1 px-4 py-6 text-center text-sm">No recently edited notes yet.</div>
             ) : (
               <ul>
                 {stats.recentNotes.map((note) => (
-                  <li key={note.uuid} className="border-b border-border last:border-b-0">
+                  <li key={note.uuid} className="border-border border-b last:border-b-0">
                     <button
-                      className="flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left hover:bg-contrast"
+                      className="hover:bg-contrast flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left"
                       onClick={() => openNote(note.uuid)}
                     >
                       <div className="flex w-full items-center justify-between gap-2">
-                        <span className="truncate text-sm font-semibold text-text">{note.title}</span>
-                        <span className="flex-shrink-0 text-xs text-passive-1">{formatDate(note.modified)}</span>
+                        <span className="text-text truncate text-sm font-semibold">{note.title}</span>
+                        <span className="text-passive-1 flex-shrink-0 text-xs">{formatDate(note.modified)}</span>
                       </div>
-                      {note.preview && <span className="line-clamp-1 text-xs text-neutral">{note.preview}</span>}
+                      {note.preview && <span className="text-neutral line-clamp-1 text-xs">{note.preview}</span>}
                     </button>
                   </li>
                 ))}

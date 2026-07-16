@@ -61,7 +61,7 @@ function TableOfContentsList({
   const headings = entries.filter(([, , tag]) => levelOf(tag) <= MAX_TOC_LEVEL)
 
   if (headings.length === 0) {
-    return <div className="px-3 py-2 text-sm text-passive-1">No headings found</div>
+    return <div className="text-passive-1 px-3 py-2 text-sm">No headings found</div>
   }
 
   // Smallest heading level present becomes the baseline (0 indent), so an index
@@ -76,7 +76,7 @@ function TableOfContentsList({
           <li key={key} style={{ paddingLeft: `${indent * 1}rem` }}>
             <button
               type="button"
-              className="block w-full truncate rounded px-2 py-0.5 text-left text-sm text-foreground outline-none hover:bg-contrast hover:text-info"
+              className="text-foreground hover:bg-contrast hover:text-info block w-full truncate rounded px-2 py-0.5 text-left text-sm outline-none"
               title={text || 'Untitled heading'}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => scrollToHeading(editor, key)}
@@ -93,8 +93,8 @@ function TableOfContentsList({
 function TableOfContentsComponent(): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   return (
-    <div className="my-2 rounded border border-border bg-default" data-table-of-contents-block="true">
-      <div className="border-b border-border px-3 py-1 text-xs font-semibold uppercase text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-table-of-contents-block="true">
+      <div className="border-border text-passive-1 border-b px-3 py-1 text-xs font-semibold uppercase">
         Table of Contents
       </div>
       <div className="py-1">

@@ -103,13 +103,7 @@ import {
   SessionListEntry,
   MetaEndpointResponse,
 } from '@standardnotes/responses'
-import {
-  SyncService,
-  SettingsService,
-  ActionsService,
-  ChallengeResponse,
-  DiskStorageService,
-} from '../Services'
+import { SyncService, SettingsService, ActionsService, ChallengeResponse, DiskStorageService } from '../Services'
 import {
   nonSecureRandomIdentifier,
   assertUnreachable,
@@ -438,7 +432,7 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
     if (this.storage.isStorageWrapped()) {
       try {
         await this.storage.decryptStorage()
-      } catch (_error) {
+      } catch {
         void this.alerts.alert(ErrorAlertStrings.StorageDecryptErrorBody, ErrorAlertStrings.StorageDecryptErrorTitle)
       }
     }
@@ -1068,7 +1062,6 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
   public get componentManager(): ComponentManagerInterface {
     return this.dependencies.get<ComponentManagerInterface>(TYPES.ComponentManager)
   }
-
 
   public get alerts(): AlertService {
     return this.dependencies.get<AlertService>(TYPES.AlertService)

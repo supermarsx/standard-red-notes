@@ -1,12 +1,5 @@
 import { getMaxRunTimeMs, getMaxSteps } from './samplingSettings'
-import {
-  AssistantToolCall,
-  ChatMessage,
-  Provider,
-  ProviderStopReason,
-  ToolDescriptor,
-  ToolSession,
-} from './types'
+import { AssistantToolCall, ChatMessage, Provider, ProviderStopReason, ToolDescriptor, ToolSession } from './types'
 
 /**
  * Live control channel for an in-flight run. Lets the UI steer the agent
@@ -110,7 +103,10 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
   }
 
   let lastStep = 0
-  for (let step = 1; unlimitedSteps || step <= maxSteps; step++) {
+  for (let step = 1; ; step++) {
+    if (!unlimitedSteps && step > maxSteps) {
+      break
+    }
     lastStep = step
     if (opts.signal?.aborted) {
       return { finalText, steps: step, stopReason: 'aborted' }

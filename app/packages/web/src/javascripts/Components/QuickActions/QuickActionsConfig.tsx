@@ -3,12 +3,7 @@ import Icon from '@/Components/Icon/Icon'
 import { isTag, SmartView, SNTag, VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { naturalSort } from '@standardnotes/utils'
 import { useMemo, useState } from 'react'
-import {
-  createQuickActionId,
-  QuickAction,
-  QuickActionType,
-  QUICK_ACTION_TYPES,
-} from './quickActionsStorage'
+import { createQuickActionId, QuickAction, QuickActionType, QUICK_ACTION_TYPES } from './quickActionsStorage'
 
 type Props = {
   application: WebApplication
@@ -102,23 +97,20 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
   return (
     <div className="flex max-h-[28rem] w-80 flex-col gap-3 px-3 py-2">
       <div>
-        <div className="mb-2 text-sm font-semibold text-text">Your quick actions</div>
+        <div className="text-text mb-2 text-sm font-semibold">Your quick actions</div>
         {actions.length === 0 ? (
-          <div className="text-xs text-passive-0">No quick actions yet. Add one below.</div>
+          <div className="text-passive-0 text-xs">No quick actions yet. Add one below.</div>
         ) : (
           <ul className="flex flex-col gap-1">
             {actions.map((action, index) => (
-              <li
-                key={action.id}
-                className="flex items-center gap-2 rounded border border-border px-2 py-1.5"
-              >
+              <li key={action.id} className="border-border flex items-center gap-2 rounded border px-2 py-1.5">
                 <Icon type={(action.icon as VectorIconNameOrEmoji) || 'star'} size="small" className="flex-shrink-0" />
                 <div className="min-w-0 flex-grow">
-                  <div className="truncate text-sm text-text">{action.label || titleForTarget(action.targetUuid)}</div>
-                  <div className="truncate text-xs text-passive-0">{TYPE_LABELS[action.type]}</div>
+                  <div className="text-text truncate text-sm">{action.label || titleForTarget(action.targetUuid)}</div>
+                  <div className="text-passive-0 truncate text-xs">{TYPE_LABELS[action.type]}</div>
                 </div>
                 <button
-                  className="rounded p-1 hover:bg-contrast disabled:opacity-40"
+                  className="hover:bg-contrast rounded p-1 disabled:opacity-40"
                   onClick={() => moveAction(index, -1)}
                   disabled={index === 0}
                   aria-label="Move quick action up"
@@ -126,7 +118,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
                   <Icon type="chevron-up" size="small" />
                 </button>
                 <button
-                  className="rounded p-1 hover:bg-contrast disabled:opacity-40"
+                  className="hover:bg-contrast rounded p-1 disabled:opacity-40"
                   onClick={() => moveAction(index, 1)}
                   disabled={index === actions.length - 1}
                   aria-label="Move quick action down"
@@ -134,7 +126,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
                   <Icon type="chevron-down" size="small" />
                 </button>
                 <button
-                  className="rounded p-1 hover:bg-contrast"
+                  className="hover:bg-contrast rounded p-1"
                   onClick={() => removeAction(action.id)}
                   aria-label="Remove quick action"
                 >
@@ -146,10 +138,10 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
         )}
       </div>
 
-      <div className="flex flex-col gap-2 border-t border-border pt-3">
-        <div className="text-sm font-semibold text-text">Add a quick action</div>
+      <div className="border-border flex flex-col gap-2 border-t pt-3">
+        <div className="text-text text-sm font-semibold">Add a quick action</div>
 
-        <label className="flex flex-col gap-1 text-xs text-passive-0">
+        <label className="text-passive-0 flex flex-col gap-1 text-xs">
           Action
           <select
             className={selectClassName}
@@ -167,7 +159,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-xs text-passive-0">
+        <label className="text-passive-0 flex flex-col gap-1 text-xs">
           {targetsNote(draftType) ? 'Note' : 'Topic / folder / view'}
           <select
             className={selectClassName}
@@ -183,7 +175,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-xs text-passive-0">
+        <label className="text-passive-0 flex flex-col gap-1 text-xs">
           Label (optional)
           <input
             className={selectClassName}
@@ -194,14 +186,14 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
           />
         </label>
 
-        <div className="flex flex-col gap-1 text-xs text-passive-0">
+        <div className="text-passive-0 flex flex-col gap-1 text-xs">
           Icon
           <div className="flex flex-wrap gap-1">
             {ICON_CHOICES.map((icon) => (
               <button
                 key={icon as string}
                 className={
-                  'rounded border p-1.5 hover:bg-contrast ' +
+                  'hover:bg-contrast rounded border p-1.5 ' +
                   (draftIcon === icon ? 'border-info bg-info-backdrop' : 'border-border')
                 }
                 onClick={() => setDraftIcon(icon)}
@@ -215,7 +207,7 @@ const QuickActionsConfig = ({ application, actions, onChange }: Props) => {
         </div>
 
         <button
-          className="mt-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:brightness-125 disabled:opacity-40"
+          className="bg-info text-info-contrast mt-1 rounded px-3 py-1.5 text-sm font-semibold hover:brightness-125 disabled:opacity-40"
           onClick={addAction}
           disabled={!draftTarget}
         >

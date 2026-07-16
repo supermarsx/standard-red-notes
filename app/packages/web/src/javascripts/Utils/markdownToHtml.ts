@@ -29,10 +29,7 @@ function renderInline(text: string): string {
   out = out.replace(/`([^`]+)`/g, (_m, code) => stash(`<code>${code}</code>`))
   // Inline math ($...$, \(...\)). Stash the resulting placeholders so the
   // emphasis regexes below can't mangle a fallback span that contains * or _.
-  out = replaceInlineMath(out).replace(
-    /<span class="md-katex"[^>]*>[\s\S]*?<\/span>/g,
-    (m) => stash(m),
-  )
+  out = replaceInlineMath(out).replace(/<span class="md-katex"[^>]*>[\s\S]*?<\/span>/g, (m) => stash(m))
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, url) => stash(`<img alt="${alt}" src="${url}" />`))
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) =>
     stash(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`),

@@ -92,12 +92,12 @@ const WorkspaceSwitcherMenu: FunctionComponent<Props> = ({
 
       <MenuSection>
         <MenuItem onClick={addAnotherWorkspace}>
-          <Icon type="user-add" className="mr-2 text-neutral" />
+          <Icon type="user-add" className="text-neutral mr-2" />
           {t('addAnotherWorkspace')}
         </MenuItem>
         {!hideWorkspaceOptions && (
           <MenuItem onClick={signoutAll}>
-            <Icon type="signOut" className="mr-2 text-neutral" />
+            <Icon type="signOut" className="text-neutral mr-2" />
             {t('signOutAllWorkspaces')}
           </MenuItem>
         )}

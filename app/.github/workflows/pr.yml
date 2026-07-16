@@ -12,13 +12,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Build

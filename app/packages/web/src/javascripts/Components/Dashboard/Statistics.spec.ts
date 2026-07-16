@@ -153,9 +153,7 @@ describe('deriveLastLoginFromSessions', () => {
   })
 
   it('falls back to the current session when it is the only one', () => {
-    const result = deriveLastLoginFromSessions([
-      session({ current: true, created_at: new Date(7000).toISOString() }),
-    ])
+    const result = deriveLastLoginFromSessions([session({ current: true, created_at: new Date(7000).toISOString() })])
     expect(result).toBe(7000)
   })
 })

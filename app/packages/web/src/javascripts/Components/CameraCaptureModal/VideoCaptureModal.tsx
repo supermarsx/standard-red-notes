@@ -127,7 +127,7 @@ const VideoCaptureModal = ({ filesController, close }: Props) => {
     >
       <div className="px-4 py-4">
         <div className="mb-4 flex flex-col">
-          <label className="text-sm font-medium text-neutral">
+          <label className="text-neutral text-sm font-medium">
             File name:
             <DecoratedInput
               className={{
@@ -140,10 +140,10 @@ const VideoCaptureModal = ({ filesController, close }: Props) => {
           </label>
         </div>
         <div className="mt-2">
-          <div className="text-sm font-medium text-neutral">Preview:</div>
+          <div className="text-neutral text-sm font-medium">Preview:</div>
           {!isRecorderReady && (
             <div className="mt-1 w-full">
-              <div className="flex h-64 w-full items-center justify-center gap-2 rounded-md bg-contrast text-base">
+              <div className="bg-contrast flex h-64 w-full items-center justify-center gap-2 rounded-md text-base">
                 <Icon type="camera" className="text-neutral-300" />
                 Initializing...
               </div>

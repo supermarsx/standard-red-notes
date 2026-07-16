@@ -161,8 +161,9 @@ export const formatAdminUserSubscription = (subscription: { plan: string | null;
 }
 
 /** Comma-joined role list, or a dash when the user has no roles. */
-export const formatAdminUserRoles = (roles: string[] | null | undefined): string =>
-  roles && roles.length > 0 ? roles.join(', ') : '—'
+export const formatAdminUserRoles = (roles: string[] | null | undefined): string => {
+  return roles && roles.length > 0 ? roles.join(', ') : '—'
+}
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
 
@@ -296,8 +297,9 @@ export const WS_GATEWAY_SERVICE = 'websocket-gateway'
  * always identity, except the in-process WebSocket gateway, which is controlled by
  * restarting the api-gateway process it runs inside.
  */
-export const serviceControlProgramFor = (name: string): string =>
-  name === WS_GATEWAY_SERVICE ? SERVICE_CONTROL_SELF_PROGRAM : name
+export const serviceControlProgramFor = (name: string): string => {
+  return name === WS_GATEWAY_SERVICE ? SERVICE_CONTROL_SELF_PROGRAM : name
+}
 
 /**
  * True when this action on this service will drop the admin's own connection.
@@ -833,7 +835,10 @@ export const buildCreateInviteLinkBody = (form: CreateInviteLinkForm): SettingUp
 
   const label = form.label.trim() === '' ? null : form.label.trim()
   const defaultRole = form.defaultRole.trim() === '' ? null : form.defaultRole.trim()
-  const domainTrimmed = form.allowedDomain.trim().toLowerCase().replace(/^[@.]+/, '')
+  const domainTrimmed = form.allowedDomain
+    .trim()
+    .toLowerCase()
+    .replace(/^[@.]+/, '')
   const allowedDomain = domainTrimmed === '' ? null : domainTrimmed
 
   return { ok: true, value: { maxUses, expiresInHours, label, defaultRole, allowedDomain } }

@@ -20,8 +20,7 @@ import { isViewActive } from './noteViewLifecycle'
  * never throws.
  */
 
-const controllerWith = (dealloced: boolean): NoteViewController =>
-  ({ dealloced }) as unknown as NoteViewController
+const controllerWith = (dealloced: boolean): NoteViewController => ({ dealloced }) as unknown as NoteViewController
 
 describe('isViewActive — NoteView dealloc guard', () => {
   it('is active for a live (non-dealloced) controller', () => {

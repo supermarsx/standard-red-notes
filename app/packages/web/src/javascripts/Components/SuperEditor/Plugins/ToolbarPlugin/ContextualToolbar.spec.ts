@@ -69,12 +69,8 @@ describe('resolveContextualWidget', () => {
     ).toBe(ContextualWidgetKind.Table)
 
     // Without table, image wins, then link, then code, then block.
-    expect(resolveContextualWidget({ ...base, isImage: true, isLink: true })?.kind).toBe(
-      ContextualWidgetKind.Image,
-    )
-    expect(resolveContextualWidget({ ...base, isLink: true, isCode: true })?.kind).toBe(
-      ContextualWidgetKind.Link,
-    )
+    expect(resolveContextualWidget({ ...base, isImage: true, isLink: true })?.kind).toBe(ContextualWidgetKind.Image)
+    expect(resolveContextualWidget({ ...base, isLink: true, isCode: true })?.kind).toBe(ContextualWidgetKind.Link)
     expect(resolveContextualWidget({ ...base, isCode: true, activeBlockType: 'math' })?.kind).toBe(
       ContextualWidgetKind.Code,
     )

@@ -85,7 +85,7 @@ const PluginEntrySubInfo: FunctionComponent<Props> = ({ plugin }) => {
         ref={inputRef}
         disabled={!isRenaming || !renameable}
         autoComplete="off"
-        className="no-border mr-2 flex-grow rounded-sm bg-default px-0 py-1 text-sm font-bold text-text"
+        className="no-border bg-default text-text mr-2 flex-grow rounded-sm px-0 py-1 text-sm font-bold"
         type="text"
         value={newPluginName}
         onChange={({ target: input }) => setNewPluginName((input as HTMLInputElement)?.value)}

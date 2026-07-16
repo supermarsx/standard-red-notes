@@ -42,7 +42,7 @@ export class FilesManager implements FilesManagerInterface {
     try {
       const data = await fs.promises.readFile(filepath, 'utf8')
       return JSON.parse(data)
-    } catch (error) {
+    } catch {
       return undefined
     }
   }
@@ -297,7 +297,7 @@ export class FilesManager implements FilesManagerInterface {
   async moveFile(source: PathLike, destination: PathLike): Promise<void> {
     try {
       await fs.promises.rename(source, destination)
-    } catch (_error) {
+    } catch {
       /** Fall back to copying and then deleting. */
       await fs.promises.copyFile(source, destination, fs.constants.COPYFILE_FICLONE_FORCE)
       await fs.promises.unlink(source)

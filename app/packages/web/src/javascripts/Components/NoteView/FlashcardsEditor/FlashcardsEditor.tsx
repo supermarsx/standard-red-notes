@@ -161,15 +161,15 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
     (cardId: string, gotIt: boolean) => {
       updateDocument((doc) => ({
         ...doc,
-        cards: doc.cards.map((c) =>
-          c.id === cardId
+        cards: doc.cards.map((c) => {
+          return c.id === cardId
             ? {
                 ...c,
                 knownCount: gotIt ? (c.knownCount ?? 0) + 1 : 0,
                 lastReviewed: Date.now(),
               }
-            : c,
-        ),
+            : c
+        }),
       }))
     },
     [updateDocument],
@@ -183,16 +183,16 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="copy" className="flex-shrink-0 text-info" />
+          <Icon type="copy" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">Flashcards</span>
-          <span className="truncate text-xs text-neutral">
+          <span className="text-neutral truncate text-xs">
             {document.cards.length} {document.cards.length === 1 ? 'card' : 'cards'} · {knownCount} known
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
-          <div className="mr-1 flex items-center overflow-hidden rounded border border-border">
+          <div className="border-border mr-1 flex items-center overflow-hidden rounded border">
             <button
               className={classNames(
                 'px-2 py-1 text-sm',
@@ -214,7 +214,7 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
           </div>
           {mode === 'edit' && (
             <button
-              className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-default disabled:opacity-50"
+              className="hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-sm disabled:opacity-50"
               onClick={addCard}
               disabled={isReadonly}
               title="Add card"
@@ -227,7 +227,7 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a flashcards deck and a new one was started. Your original text is
             preserved until you make a change.
@@ -277,12 +277,12 @@ const EditMode: FunctionComponent<EditModeProps> = ({
 }) => {
   if (document.cards.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+      <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
         <p className="font-semibold">No cards yet</p>
         <p>Add a card to start building your deck.</p>
         {!isReadonly && (
           <button
-            className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+            className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
             onClick={onAddCard}
           >
             Add card
@@ -295,17 +295,17 @@ const EditMode: FunctionComponent<EditModeProps> = ({
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-3">
       {document.cards.map((card, index) => (
-        <div key={card.id} className="rounded-md border border-border bg-default p-3">
+        <div key={card.id} className="border-border bg-default rounded-md border p-3">
           <div className="mb-2 flex items-center gap-2">
-            <span className="text-xs font-bold text-passive-1">Card {index + 1}</span>
+            <span className="text-passive-1 text-xs font-bold">Card {index + 1}</span>
             {(card.knownCount ?? 0) > 0 && (
-              <span className="rounded bg-success-faded px-1.5 py-0.5 text-xs text-success">
+              <span className="bg-success-faded text-success rounded px-1.5 py-0.5 text-xs">
                 known x{card.knownCount}
               </span>
             )}
             <div className="ml-auto flex items-center gap-1">
               <button
-                className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly || index === 0}
                 onClick={() => onMoveCard(card.id, -1)}
                 title="Move card up"
@@ -314,7 +314,7 @@ const EditMode: FunctionComponent<EditModeProps> = ({
                 <Icon type="arrow-up" size="small" />
               </button>
               <button
-                className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly || index === document.cards.length - 1}
                 onClick={() => onMoveCard(card.id, 1)}
                 title="Move card down"
@@ -323,7 +323,7 @@ const EditMode: FunctionComponent<EditModeProps> = ({
                 <Icon type="arrow-down" size="small" />
               </button>
               <button
-                className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly}
                 onClick={() => onDeleteCard(card.id)}
                 title="Delete card"
@@ -335,9 +335,9 @@ const EditMode: FunctionComponent<EditModeProps> = ({
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <label className="flex flex-1 flex-col gap-1">
-              <span className="text-xs text-passive-1">Front</span>
+              <span className="text-passive-1 text-xs">Front</span>
               <textarea
-                className="w-full resize-none rounded border border-border bg-contrast p-2 text-sm text-text outline-none focus:border-info disabled:opacity-50"
+                className="border-border bg-contrast text-text focus:border-info w-full resize-none rounded border p-2 text-sm outline-none disabled:opacity-50"
                 rows={3}
                 value={card.front}
                 placeholder="Front (question)"
@@ -346,9 +346,9 @@ const EditMode: FunctionComponent<EditModeProps> = ({
               />
             </label>
             <label className="flex flex-1 flex-col gap-1">
-              <span className="text-xs text-passive-1">Back</span>
+              <span className="text-passive-1 text-xs">Back</span>
               <textarea
-                className="w-full resize-none rounded border border-border bg-contrast p-2 text-sm text-text outline-none focus:border-info disabled:opacity-50"
+                className="border-border bg-contrast text-text focus:border-info w-full resize-none rounded border p-2 text-sm outline-none disabled:opacity-50"
                 rows={3}
                 value={card.back}
                 placeholder="Back (answer)"
@@ -361,7 +361,7 @@ const EditMode: FunctionComponent<EditModeProps> = ({
       ))}
       {!isReadonly && (
         <button
-          className="flex items-center justify-center gap-1 rounded border border-dashed border-border px-2 py-2 text-sm text-passive-1 hover:border-info hover:text-info"
+          className="border-border text-passive-1 hover:border-info hover:text-info flex items-center justify-center gap-1 rounded border border-dashed px-2 py-2 text-sm"
           onClick={onAddCard}
         >
           <Icon type="add" size="small" />
@@ -422,11 +422,11 @@ const StudyMode: FunctionComponent<StudyModeProps> = ({ document, onReview, onGo
 
   if (document.cards.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+      <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
         <p className="font-semibold">Nothing to study</p>
         <p>Add some cards first.</p>
         <button
-          className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+          className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
           onClick={onGoToEdit}
         >
           Add cards
@@ -439,14 +439,14 @@ const StudyMode: FunctionComponent<StudyModeProps> = ({ document, onReview, onGo
   if (position >= queue.length || !current) {
     const known = countKnownCards(document)
     return (
-      <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
-        <Icon type="check-circle" className="mb-2 text-success" size="large" />
+      <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
+        <Icon type="check-circle" className="text-success mb-2" size="large" />
         <p className="font-semibold">Session complete</p>
         <p>
           Reviewed {reviewedCount} of {queue.length} · {known} known
         </p>
         <button
-          className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+          className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
           onClick={restart}
         >
           Study again
@@ -458,46 +458,43 @@ const StudyMode: FunctionComponent<StudyModeProps> = ({ document, onReview, onGo
   return (
     <div className="mx-auto flex h-full max-w-xl flex-col">
       {/* Progress */}
-      <div className="mb-3 flex items-center justify-between text-xs text-passive-1">
+      <div className="text-passive-1 mb-3 flex items-center justify-between text-xs">
         <span>
           Card {position + 1} / {queue.length}
         </span>
         <span>{countKnownCards(document)} known</span>
       </div>
-      <div className="h-1 w-full overflow-hidden rounded bg-contrast">
-        <div
-          className="h-full bg-info transition-all"
-          style={{ width: `${(position / queue.length) * 100}%` }}
-        />
+      <div className="bg-contrast h-1 w-full overflow-hidden rounded">
+        <div className="bg-info h-full transition-all" style={{ width: `${(position / queue.length) * 100}%` }} />
       </div>
 
       {/* Card */}
       <button
-        className="my-4 flex min-h-[12rem] flex-grow flex-col items-center justify-center rounded-lg border border-border bg-default p-6 text-center hover:border-info"
+        className="border-border bg-default hover:border-info my-4 flex min-h-[12rem] flex-grow flex-col items-center justify-center rounded-lg border p-6 text-center"
         onClick={() => setFlipped((prev) => !prev)}
         aria-label={flipped ? 'Show front' : 'Reveal answer'}
       >
-        <span className="mb-2 text-xs uppercase tracking-wide text-passive-1">{flipped ? 'Back' : 'Front'}</span>
-        <span className="whitespace-pre-wrap break-words text-lg text-text">
+        <span className="text-passive-1 mb-2 text-xs tracking-wide uppercase">{flipped ? 'Back' : 'Front'}</span>
+        <span className="text-text text-lg break-words whitespace-pre-wrap">
           {(flipped ? current.back : current.front) || (
-            <span className="italic text-passive-2">{flipped ? '(no answer)' : '(no question)'}</span>
+            <span className="text-passive-2 italic">{flipped ? '(no answer)' : '(no question)'}</span>
           )}
         </span>
-        {!flipped && <span className="mt-3 text-xs text-passive-1">Click to reveal</span>}
+        {!flipped && <span className="text-passive-1 mt-3 text-xs">Click to reveal</span>}
       </button>
 
       {/* Controls */}
       {flipped ? (
         <div className="flex items-center gap-2">
           <button
-            className="flex flex-1 items-center justify-center gap-1 rounded bg-danger px-3 py-2 text-sm font-semibold text-danger-contrast hover:opacity-90"
+            className="bg-danger text-danger-contrast flex flex-1 items-center justify-center gap-1 rounded px-3 py-2 text-sm font-semibold hover:opacity-90"
             onClick={() => handleMark(false)}
           >
             <Icon type="close" size="small" />
             Again
           </button>
           <button
-            className="flex flex-1 items-center justify-center gap-1 rounded bg-success px-3 py-2 text-sm font-semibold text-success-contrast hover:opacity-90"
+            className="bg-success text-success-contrast flex flex-1 items-center justify-center gap-1 rounded px-3 py-2 text-sm font-semibold hover:opacity-90"
             onClick={() => handleMark(true)}
           >
             <Icon type="check" size="small" />
@@ -506,7 +503,7 @@ const StudyMode: FunctionComponent<StudyModeProps> = ({ document, onReview, onGo
         </div>
       ) : (
         <button
-          className="rounded border border-border bg-contrast px-3 py-2 text-sm font-semibold hover:border-info"
+          className="border-border bg-contrast hover:border-info rounded border px-3 py-2 text-sm font-semibold"
           onClick={() => setFlipped(true)}
         >
           Reveal answer

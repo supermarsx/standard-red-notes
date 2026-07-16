@@ -20,13 +20,12 @@ const NotesFolderCounter: FunctionComponent<Props> = ({ application }) => {
   const tags = nav.tags.length
 
   const notesLabel = `${notes.toLocaleString()} ${notes === 1 ? 'note' : 'notes'}`
-  const foldersLabel =
-    folders > 0 ? ` · ${folders.toLocaleString()} ${folders === 1 ? 'folder' : 'folders'}` : ''
+  const foldersLabel = folders > 0 ? ` · ${folders.toLocaleString()} ${folders === 1 ? 'folder' : 'folders'}` : ''
   const tagsLabel = tags > 0 ? ` · ${tags.toLocaleString()} ${tags === 1 ? 'tag' : 'tags'}` : ''
   const label = `${notesLabel}${foldersLabel}${tagsLabel}`
 
   return (
-    <div className="select-none whitespace-nowrap text-xs font-bold text-neutral" title={label}>
+    <div className="text-neutral text-xs font-bold whitespace-nowrap select-none" title={label}>
       {label}
     </div>
   )

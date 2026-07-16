@@ -152,8 +152,7 @@ const renderModal = (app = makeApp()) => {
 // the "Add N topics" primary action.
 const findButton = (label: string): HTMLButtonElement | undefined =>
   Array.from(document.body.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === label) as
-    | HTMLButtonElement
-    | undefined
+    HTMLButtonElement | undefined
 
 /** Set a controlled input's value the way React's onChange listener will observe. */
 const setInputValue = (input: HTMLInputElement, value: string) => {

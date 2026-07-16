@@ -72,18 +72,14 @@ type AbcjsModule = {
 let abcjsPromise: Promise<AbcjsModule> | undefined
 function loadAbcjs(): Promise<AbcjsModule> {
   if (!abcjsPromise) {
-    abcjsPromise = import('abcjs').then((m) => (m as { default?: AbcjsModule }).default ?? (m as unknown as AbcjsModule))
+    abcjsPromise = import('abcjs').then(
+      (m) => (m as { default?: AbcjsModule }).default ?? (m as unknown as AbcjsModule),
+    )
   }
   return abcjsPromise
 }
 
-function MusicStaffComponent({
-  data,
-  nodeKey,
-}: {
-  data: MusicStaffData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function MusicStaffComponent({ data, nodeKey }: { data: MusicStaffData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(data.source)
@@ -131,11 +127,11 @@ function MusicStaffComponent({
   }, [draft, editor, nodeKey, render])
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-music-staff-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-music-staff-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Music staff</span>
         <button
-          className="rounded px-2 py-0.5 hover:bg-contrast"
+          className="hover:bg-contrast rounded px-2 py-0.5"
           onClick={() => (editing ? commit() : setEditing(true))}
           type="button"
         >
@@ -145,7 +141,7 @@ function MusicStaffComponent({
 
       {editing ? (
         <textarea
-          className="w-full resize-y bg-default p-2 font-mono text-sm text-foreground outline-none"
+          className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
           rows={Math.max(6, draft.split('\n').length + 1)}
           value={draft}
           spellCheck={false}
@@ -157,7 +153,7 @@ function MusicStaffComponent({
 
       <div className="overflow-auto bg-white p-2">
         <div ref={outputRef} />
-        {error ? <div className="mt-1 text-xs text-danger">{error}</div> : null}
+        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
       </div>
     </div>
   )

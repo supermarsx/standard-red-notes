@@ -80,7 +80,7 @@ const DictationButton = () => {
     <StyledTooltip label={listening ? 'Stop dictation' : 'Dictate (type by speaking)'}>
       <button
         className={classNames(
-          'flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-solid border-transparent hover:bg-contrast',
+          'hover:bg-contrast flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-solid border-transparent',
           listening ? 'bg-danger text-danger-contrast' : 'text-neutral',
         )}
         aria-label={listening ? 'Stop dictation' : 'Start dictation'}

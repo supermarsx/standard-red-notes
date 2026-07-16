@@ -80,17 +80,17 @@ const WhatsNew = ({ application }: { application: WebApplication }) => {
                 <div className="flex items-start">
                   <Title className="mb-3 flex">{version.version}</Title>
                   {version.version === appVersion && (
-                    <div className="ml-2 select-none rounded bg-info px-2 py-1 text-[0.625rem] font-bold text-info-contrast">
+                    <div className="bg-info text-info-contrast ml-2 rounded px-2 py-1 text-[0.625rem] font-bold select-none">
                       Your Version
                     </div>
                   )}
                   {isLatest && (
-                    <div className="ml-2 select-none rounded bg-success px-2 py-1 text-[0.625rem] font-bold text-success-contrast">
+                    <div className="bg-success text-success-contrast ml-2 rounded px-2 py-1 text-[0.625rem] font-bold select-none">
                       Latest Version
                     </div>
                   )}
                   {isUnreadVersion && (
-                    <div className="ml-2 select-none rounded bg-success px-2 py-1 text-[0.625rem] font-bold text-success-contrast">
+                    <div className="bg-success text-success-contrast ml-2 rounded px-2 py-1 text-[0.625rem] font-bold select-none">
                       New
                     </div>
                   )}

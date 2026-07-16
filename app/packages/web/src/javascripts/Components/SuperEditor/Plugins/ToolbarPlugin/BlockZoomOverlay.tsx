@@ -105,18 +105,18 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
 
   return createPortal(
     <div
-      className="absolute inset-0 z-modal flex flex-col bg-default"
+      className="z-modal bg-default absolute inset-0 flex flex-col"
       role="dialog"
       aria-modal="true"
       aria-label={`Zoomed ${label}`}
     >
-      <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <div className="border-border flex flex-shrink-0 items-center gap-2 border-b px-3 py-2">
         <Icon type="fullscreen" className="text-info" />
         <span className="text-sm font-semibold">Focused: {label}</span>
         <div className="ml-auto flex items-center gap-1">
           <StyledTooltip label="Zoom out (-)">
             <button
-              className="flex h-7 w-7 items-center justify-center rounded text-lg font-semibold leading-none hover:bg-contrast disabled:opacity-50"
+              className="hover:bg-contrast flex h-7 w-7 items-center justify-center rounded text-lg leading-none font-semibold disabled:opacity-50"
               onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
               disabled={zoomIndex === 0}
               aria-label="Decrease zoom"
@@ -127,7 +127,7 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
           <span className="w-12 text-center text-sm tabular-nums">{Math.round(zoom * 100)}%</span>
           <StyledTooltip label="Zoom in (+)">
             <button
-              className="flex h-7 w-7 items-center justify-center rounded hover:bg-contrast disabled:opacity-50"
+              className="hover:bg-contrast flex h-7 w-7 items-center justify-center rounded disabled:opacity-50"
               onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
               disabled={zoomIndex === ZOOM_STEPS.length - 1}
               aria-label="Increase zoom"
@@ -135,10 +135,10 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
               <Icon type="add" />
             </button>
           </StyledTooltip>
-          <div className="mx-1 h-6 w-px bg-border" />
+          <div className="bg-border mx-1 h-6 w-px" />
           <StyledTooltip label="Exit focus (Esc)">
             <button
-              className="flex items-center gap-1.5 rounded px-2 py-1.5 text-sm hover:bg-contrast"
+              className="hover:bg-contrast flex items-center gap-1.5 rounded px-2 py-1.5 text-sm"
               onClick={onClose}
               aria-label="Zoom out of block"
             >
@@ -150,7 +150,7 @@ export default function BlockZoomOverlay({ blockKey, label, onClose, portalEleme
       </div>
       <div className="flex-grow overflow-auto p-8">
         {missing ? (
-          <div className="flex h-full items-center justify-center text-passive-0">
+          <div className="text-passive-0 flex h-full items-center justify-center">
             This block is no longer available.
           </div>
         ) : (

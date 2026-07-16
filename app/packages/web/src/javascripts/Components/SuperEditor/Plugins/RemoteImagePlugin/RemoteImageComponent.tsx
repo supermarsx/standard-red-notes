@@ -131,10 +131,7 @@ const RemoteImageComponent = ({
     (newCaption: string | undefined) => editor.update(() => setCaption(newCaption)),
     [editor, setCaption],
   )
-  const changeFloat = useCallback(
-    (newFloat: ImageFloat) => editor.update(() => setFloat(newFloat)),
-    [editor, setFloat],
-  )
+  const changeFloat = useCallback((newFloat: ImageFloat) => editor.update(() => setFloat(newFloat)), [editor, setFloat])
 
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
@@ -163,7 +160,7 @@ const RemoteImageComponent = ({
         {didImageLoad && canShowSaveButton && (
           <button
             className={classNames(
-              'flex items-center gap-2.5 rounded border border-border bg-default px-2.5 py-1.5',
+              'border-border bg-default flex items-center gap-2.5 rounded border px-2.5 py-1.5',
               !isSaving && 'hover:bg-info hover:text-info-contrast',
             )}
             onClick={() => {

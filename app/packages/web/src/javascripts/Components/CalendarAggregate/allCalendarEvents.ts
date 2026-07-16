@@ -45,9 +45,7 @@ export function collectAllCalendarEvents(notes: SNNote[]): AggregatedCalendarEve
  * Index aggregated events by their ISO YYYY-MM-DD date for O(1) per-cell lookup
  * when rendering a month grid. Events on the same day preserve insertion order.
  */
-export function indexCalendarEventsByDate(
-  events: AggregatedCalendarEvent[],
-): Map<string, AggregatedCalendarEvent[]> {
+export function indexCalendarEventsByDate(events: AggregatedCalendarEvent[]): Map<string, AggregatedCalendarEvent[]> {
   const map = new Map<string, AggregatedCalendarEvent[]>()
   for (const aggregated of events) {
     const key = aggregated.event.date

@@ -27,7 +27,9 @@ function render(c: AutoPairContext): string {
   if (selection.start === selection.end) {
     return text.slice(0, selection.start) + '|' + text.slice(selection.start)
   }
-  return text.slice(0, selection.start) + '[' + text.slice(selection.start, selection.end) + ']' + text.slice(selection.end)
+  return (
+    text.slice(0, selection.start) + '[' + text.slice(selection.start, selection.end) + ']' + text.slice(selection.end)
+  )
 }
 
 describe('autoPair – insert pair (collapsed caret)', () => {

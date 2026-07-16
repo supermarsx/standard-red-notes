@@ -46,9 +46,9 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
 
   return (
     <>
-      <MobileModalHeader className="items-center border-b border-border px-2 py-1 md:hidden">
+      <MobileModalHeader className="border-border items-center border-b px-2 py-1 md:hidden">
         <MobileModalAction type="secondary" action={toggleTabMenu} slot="left" ref={tabOptionRef}>
-          <div className="rounded-full border border-border p-0.5">
+          <div className="border-border rounded-full border p-0.5">
             <Icon type="more" />
           </div>
         </MobileModalAction>
@@ -60,14 +60,14 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
           togglePopover={toggleTabMenu}
           align="start"
           portal={false}
-          className="w-1/2 !min-w-0 divide-y divide-border border border-border"
+          className="divide-border border-border w-1/2 !min-w-0 divide-y border"
         >
           <button
             onClick={() => {
               setSelectedMobileTab('List')
               toggleTabMenu()
             }}
-            className="p-1.5 text-base font-semibold hover:bg-contrast focus:bg-info-backdrop focus:shadow-none focus:outline-none"
+            className="hover:bg-contrast focus:bg-info-backdrop p-1.5 text-base font-semibold focus:shadow-none focus:outline-none"
           >
             List
           </button>
@@ -76,7 +76,7 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
               setSelectedMobileTab('Content')
               toggleTabMenu()
             }}
-            className="p-1.5 text-base font-semibold hover:bg-contrast focus:bg-info-backdrop focus:shadow-none focus:outline-none"
+            className="hover:bg-contrast focus:bg-info-backdrop p-1.5 text-base font-semibold focus:shadow-none focus:outline-none"
           >
             Content
           </button>

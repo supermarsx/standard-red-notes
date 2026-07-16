@@ -9,7 +9,10 @@ import { getFullNoteText, isLiteNote } from './Items/rehydrateLazyDecryptedNote'
 
 const headlessSuperConverter = new HeadlessSuperConverter()
 
-async function noteToMarkdown(application: WebApplication, note: { noteType?: string; text: string; uuid: string }): Promise<string> {
+async function noteToMarkdown(
+  application: WebApplication,
+  note: { noteType?: string; text: string; uuid: string },
+): Promise<string> {
   if (note.noteType === NoteType.Super) {
     return headlessSuperConverter.convertSuperStringToOtherFormat(note.text, 'md', {
       embedBehavior: application.getPreference(
@@ -81,7 +84,8 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
   if (unavailableCount > 0) {
     addToast({
       type: ToastType.Error,
-      message: c('Warning').t`${unavailableCount} note(s) may not have been fully exported because their content isn't available locally.`,
+      message: c('Warning')
+        .t`${unavailableCount} note(s) may not have been fully exported because their content isn't available locally.`,
     })
   }
 

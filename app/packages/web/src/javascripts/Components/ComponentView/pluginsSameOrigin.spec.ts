@@ -54,8 +54,8 @@ describe('rewriteComponentUrlForSameOrigin', () => {
   })
 
   it('tolerates a base with a trailing slash', () => {
-    expect(rewriteComponentUrlForSameOrigin(`${BASE}/a/index.html`, { repoUrl: `${BASE}/`, sameOriginRendering: true })).toBe(
-      '/v1/plugins/component/a/index.html',
-    )
+    expect(
+      rewriteComponentUrlForSameOrigin(`${BASE}/a/index.html`, { repoUrl: `${BASE}/`, sameOriginRendering: true }),
+    ).toBe('/v1/plugins/component/a/index.html')
   })
 })

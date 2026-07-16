@@ -12,9 +12,8 @@
  * STACK-GATED: skips when the gateway is not reachable, so it never breaks
  * offline CI. Run with the docker stack up.
  */
-import { createElement, useEffect } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
@@ -71,16 +70,15 @@ function nodeHttp(
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url)
-    const req = httpRequest(
-      { method, hostname: u.hostname, port: u.port, path: u.pathname, headers },
-      (res) => {
-        let data = ''
-        res.on('data', (c) => (data += c))
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }))
-      },
-    )
+    const req = httpRequest({ method, hostname: u.hostname, port: u.port, path: u.pathname, headers }, (res) => {
+      let data = ''
+      res.on('data', (c) => (data += c))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }))
+    })
     req.on('error', reject)
-    if (body) req.write(body)
+    if (body) {
+      req.write(body)
+    }
     req.end()
   })
 }
@@ -95,11 +93,16 @@ async function gatewayReachable(): Promise<boolean> {
 
 async function mint(userUuid: string, sessionUuid: string): Promise<string> {
   const body = JSON.stringify({ userUuid, sessionUuid })
-  const res = await nodeHttp('POST', `${GATEWAY_HTTP}/sockets/tokens`, {
-    'content-type': 'application/json',
-    'x-internal-secret': INTERNAL_SECRET,
-    'content-length': String(Buffer.byteLength(body)),
-  }, body)
+  const res = await nodeHttp(
+    'POST',
+    `${GATEWAY_HTTP}/sockets/tokens`,
+    {
+      'content-type': 'application/json',
+      'x-internal-secret': INTERNAL_SECRET,
+      'content-length': String(Buffer.byteLength(body)),
+    },
+    body,
+  )
   return JSON.parse(res.text).token
 }
 
@@ -109,7 +112,9 @@ function liveChannel(token: string, userUuid: string): Promise<CollabChannel & {
     const handlers = new Set<(f: CollabFrame) => void>()
     ws.on('message', (data) => {
       const raw = data.toString()
-      if (raw === 'pong') return
+      if (raw === 'pong') {
+        return
+      }
       let frame: CollabFrame
       try {
         frame = JSON.parse(raw)
@@ -154,7 +159,13 @@ function CapturePlugin({ onReady }: { onReady: (editor: LexicalEditor) => void }
   return null
 }
 
-function makeEditorTree(room: string, channel: CollabChannel, cipher: ReturnType<typeof createRoomCipher>, bootstrap: boolean, capture: (c: Captured) => void) {
+function makeEditorTree(
+  room: string,
+  channel: CollabChannel,
+  cipher: ReturnType<typeof createRoomCipher>,
+  bootstrap: boolean,
+  capture: (c: Captured) => void,
+) {
   let provider: EncryptedYjsProvider
   const providerFactory = (id: string, docMap: Map<string, Doc>) => {
     let doc = docMap.get(id)
@@ -170,7 +181,15 @@ function makeEditorTree(room: string, channel: CollabChannel, cipher: ReturnType
     null,
     createElement(
       LexicalComposer,
-      { initialConfig: { namespace: 'Live', editorState: null, onError: (e: Error) => { throw e } } },
+      {
+        initialConfig: {
+          namespace: 'Live',
+          editorState: null,
+          onError: (e: Error) => {
+            throw e
+          },
+        },
+      },
       createElement(PlainTextPlugin, {
         contentEditable: createElement(ContentEditable, {}),
         placeholder: null,
@@ -200,11 +219,15 @@ describe('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
   let up = false
   beforeAll(async () => {
     up = await gatewayReachable()
-    if (!up) console.warn('SKIP: gateway not reachable on', GATEWAY_HTTP)
+    if (!up) {
+      console.warn('SKIP: gateway not reachable on', GATEWAY_HTTP)
+    }
   })
 
   it('typing in editor A appears in editor B through the real encrypted gateway', async () => {
-    if (!up) return
+    if (!up) {
+      return
+    }
 
     const room = 'note-live-' + Date.now()
     const secret = 'shared-vault-secret'

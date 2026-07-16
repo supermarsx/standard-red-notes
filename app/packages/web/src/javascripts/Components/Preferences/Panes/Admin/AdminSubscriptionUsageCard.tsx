@@ -38,18 +38,18 @@ const WindowRow: FunctionComponent<WindowRowProps> = ({ label, window }) => {
   if (!window || window.unavailable) {
     return (
       <div className="flex items-center justify-between gap-2 py-1">
-        <span className="text-sm font-medium text-foreground">{label}</span>
-        <span className="text-sm text-passive-1">Usage unavailable</span>
+        <span className="text-foreground text-sm font-medium">{label}</span>
+        <span className="text-passive-1 text-sm">Usage unavailable</span>
       </div>
     )
   }
   const resetIn = formatResetDuration(window.resetsAt)
   return (
     <div className="flex items-center justify-between gap-2 py-1">
-      <span className="text-sm font-medium text-foreground">{label}</span>
-      <span className="text-sm tabular-nums text-foreground">
+      <span className="text-foreground text-sm font-medium">{label}</span>
+      <span className="text-foreground text-sm tabular-nums">
         {formatTokens(window.usedTokens)} tokens
-        {resetIn && resetIn !== 'now' && <span className="ml-2 text-passive-1">· resets in {resetIn}</span>}
+        {resetIn && resetIn !== 'now' && <span className="text-passive-1 ml-2">· resets in {resetIn}</span>}
       </span>
     </div>
   )
@@ -95,7 +95,7 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
       const list = await application.serverGetJsonRequest<{ subscriptions?: SubscriptionEntry[] }>(
         '/v1/assistant/subscription/list',
       )
-      const entries = list.ok ? list.data?.subscriptions ?? [] : []
+      const entries = list.ok ? (list.data?.subscriptions ?? []) : []
       setSubscriptions(entries)
       const usageByIdEntries = await Promise.all(
         entries.map(async (entry) => {
@@ -150,22 +150,22 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
 
   return (
     <PreferencesSegment>
-      <div className="rounded border border-border p-4">
+      <div className="border-border rounded border p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Subtitle>Subscription usage</Subtitle>
           <Button label={loading ? 'Refreshing…' : 'Refresh'} onClick={() => void load()} disabled={loading} />
         </div>
-        <Text className="mt-1 text-passive-1">
+        <Text className="text-passive-1 mt-1">
           Tokens Standard Red Notes has metered locally for subscription-backed (Codex / ChatGPT) proxy calls, over
           rolling windows. This is <strong>SRN-side metering, not OpenAI's official quota</strong>.
         </Text>
         {error ? (
-          <Text className="mt-3 text-danger">{error}</Text>
+          <Text className="text-danger mt-3">{error}</Text>
         ) : (
           <>
             <div className="mt-3">
-              <div className="text-sm font-semibold text-foreground">All subscriptions (aggregate)</div>
-              <div className="divide-y divide-border">
+              <div className="text-foreground text-sm font-semibold">All subscriptions (aggregate)</div>
+              <div className="divide-border divide-y">
                 <WindowRow label="Last 5 hours" window={aggregate?.tokens?.fiveHour} />
                 <WindowRow label="Last 7 days" window={aggregate?.tokens?.weekly} />
               </div>
@@ -173,14 +173,14 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
 
             {subscriptions.length > 0 && (
               <div className="mt-4 space-y-3">
-                <div className="text-sm font-semibold text-foreground">Per paired subscription</div>
+                <div className="text-foreground text-sm font-semibold">Per paired subscription</div>
                 {subscriptions.map((entry) => (
-                  <div key={entry.id} className="rounded border border-border p-3">
+                  <div key={entry.id} className="border-border rounded border p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-foreground">
+                      <span className="text-foreground text-sm font-medium">
                         {entry.id}
                         {entry.accountLabel ? ` · ${entry.accountLabel}` : ''}
-                        {entry.needsRepair && <span className="ml-2 text-warning">needs re-pair</span>}
+                        {entry.needsRepair && <span className="text-warning ml-2">needs re-pair</span>}
                       </span>
                       <Button
                         label="Unpair"
@@ -189,7 +189,7 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
                         disabled={loading}
                       />
                     </div>
-                    <div className="mt-1 divide-y divide-border">
+                    <div className="divide-border mt-1 divide-y">
                       <WindowRow label="Last 5 hours" window={perId[entry.id]?.tokens?.fiveHour} />
                       <WindowRow label="Last 7 days" window={perId[entry.id]?.tokens?.weekly} />
                     </div>

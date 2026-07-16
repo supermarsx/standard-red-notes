@@ -248,10 +248,7 @@ export default function MultiCursorPlugin(): null {
             }
             event.preventDefault()
 
-            const replacement = window.prompt(
-              `Replace all ${occurrenceCount} occurrence(s) of "${term}" with:`,
-              term,
-            )
+            const replacement = window.prompt(`Replace all ${occurrenceCount} occurrence(s) of "${term}" with:`, term)
             if (replacement === null) {
               return true
             }

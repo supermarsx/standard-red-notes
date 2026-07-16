@@ -102,7 +102,7 @@ describe('isDiaryPromptDue', () => {
     expect(isDiaryPromptDue({ ...base, now, entryExistsForToday: true })).toBe(false)
   })
 
-  it('re-arms after date rollover (yesterday\'s prompt does not suppress today)', () => {
+  it("re-arms after date rollover (yesterday's prompt does not suppress today)", () => {
     const now = at(21, 0)
     const yesterday = dateKeyForDate(new Date(2026, 5, 19, 20, 0))
     expect(dayKey(now)).not.toBe(yesterday)

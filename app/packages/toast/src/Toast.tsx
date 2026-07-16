@@ -98,8 +98,9 @@ export const Toast = forwardRef(({ toast, index }: Props, ref: ForwardedRef<HTML
    */
   const [hasDragged, setHasDragged] = useState(false)
 
-  const getElement = (): HTMLDivElement | null =>
-    ref && typeof ref !== 'function' ? (ref as RefObject<HTMLDivElement>).current : null
+  const getElement = (): HTMLDivElement | null => {
+    return ref && typeof ref !== 'function' ? (ref as RefObject<HTMLDivElement>).current : null
+  }
 
   useEffect(() => {
     return () => {

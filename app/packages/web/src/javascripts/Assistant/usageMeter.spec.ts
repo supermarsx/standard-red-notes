@@ -1,10 +1,4 @@
-import {
-  buildMeterModel,
-  formatResetDuration,
-  TokenWindowUsage,
-  WARN_FRACTION,
-  windowFraction,
-} from './usageMeter'
+import { buildMeterModel, formatResetDuration, TokenWindowUsage, WARN_FRACTION, windowFraction } from './usageMeter'
 
 const window = (over: Partial<TokenWindowUsage>): TokenWindowUsage => ({
   usedTokens: 0,

@@ -92,7 +92,7 @@ const RemindersButton = ({ application }: Props) => {
           onClick={togglePopover}
           aria-label="Reminders"
           className={classNames(
-            'relative flex items-center gap-1.5 rounded border border-border bg-default px-2.5 py-1.5 text-sm shadow',
+            'border-border bg-default relative flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-sm shadow',
             'hover:bg-contrast',
           )}
         >
@@ -101,7 +101,7 @@ const RemindersButton = ({ application }: Props) => {
           {overdueCount > 0 && (
             <span
               aria-label={`${overdueCount} overdue`}
-              className="ml-0.5 rounded-full bg-danger px-1.5 text-xs font-bold text-danger-contrast"
+              className="bg-danger text-danger-contrast ml-0.5 rounded-full px-1.5 text-xs font-bold"
             >
               {overdueCount}
             </span>
@@ -118,41 +118,41 @@ const RemindersButton = ({ application }: Props) => {
         title="Reminders"
         className="py-1"
       >
-        <div className="min-w-[18rem] max-w-[24rem] py-1">
-          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">Reminders</div>
+        <div className="max-w-[24rem] min-w-[18rem] py-1">
+          <div className="text-passive-0 px-3 py-1 text-xs font-semibold uppercase">Reminders</div>
           <ul className="max-h-80 overflow-y-auto">
             {sortRemindersByDueAt(pairs.map((pair) => pair.reminder)).length === 0 && (
-              <li className="px-3 py-2 text-sm text-passive-0">No reminders.</li>
+              <li className="text-passive-0 px-3 py-2 text-sm">No reminders.</li>
             )}
             {pairs.map(({ note, reminder }) => {
               const due = isReminderDue(reminder, now)
               return (
                 <li
                   key={reminder.id}
-                  className="flex flex-col gap-0.5 border-b border-border px-3 py-2 last:border-b-0"
+                  className="border-border flex flex-col gap-0.5 border-b px-3 py-2 last:border-b-0"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <button
-                      className="truncate text-left text-sm font-semibold text-text hover:underline"
+                      className="text-text truncate text-left text-sm font-semibold hover:underline"
                       onClick={() => openNote(note)}
                       title={note.title || 'Untitled'}
                     >
                       {note.title?.trim() || 'Untitled'}
                     </button>
                     <button
-                      className="flex-shrink-0 rounded p-1 text-passive-0 hover:bg-contrast hover:text-danger"
+                      className="text-passive-0 hover:bg-contrast hover:text-danger flex-shrink-0 rounded p-1"
                       aria-label="Dismiss reminder"
                       onClick={() => dismissReminder(note, reminder)}
                     >
                       <Icon type="close" size="small" />
                     </button>
                   </div>
-                  <span className={classNames('text-xs', due ? 'font-semibold text-danger' : 'text-passive-0')}>
+                  <span className={classNames('text-xs', due ? 'text-danger font-semibold' : 'text-passive-0')}>
                     {formatReminderRelative(reminder, now)}
                     {' · '}
                     {new Date(reminder.dueAt).toLocaleString()}
                   </span>
-                  {reminder.message && <span className="text-xs text-passive-0">{reminder.message}</span>}
+                  {reminder.message && <span className="text-passive-0 text-xs">{reminder.message}</span>}
                 </li>
               )
             })}

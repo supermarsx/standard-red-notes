@@ -222,9 +222,7 @@ export function sortCommentsByCreatedAt(comments: NoteComment[]): NoteComment[] 
  * with its direct replies, both ordered oldest-first. Orphaned replies (whose
  * parent was deleted) are surfaced as top-level so they are never lost.
  */
-export function buildCommentThreads(
-  comments: NoteComment[],
-): Array<{ comment: NoteComment; replies: NoteComment[] }> {
+export function buildCommentThreads(comments: NoteComment[]): Array<{ comment: NoteComment; replies: NoteComment[] }> {
   const sorted = sortCommentsByCreatedAt(comments)
   const byId = new Set(sorted.map((c) => c.id))
   const repliesByParent = new Map<string, NoteComment[]>()

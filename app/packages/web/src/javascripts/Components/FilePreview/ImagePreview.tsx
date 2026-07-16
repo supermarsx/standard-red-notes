@@ -26,7 +26,6 @@ const ImagePreview: FunctionComponent<Props> = ({
   objectUrl,
   isEmbeddedInSuper,
   imageZoomLevel,
-  setImageZoomLevel,
   alignment,
   changeAlignment,
   imageWidth: persistedWidth,
@@ -121,11 +120,7 @@ const ImagePreview: FunctionComponent<Props> = ({
   // When the image is floated, alignment is expressed via the CSS float (left/right
   // within the node's own block); otherwise we use flex justify for left/center/right.
   const isFloating = float !== 'none'
-  const justifyContent = isFloating
-    ? float === 'left'
-      ? 'start'
-      : 'end'
-    : getCSSValueFromAlignment(finalAlignment)
+  const justifyContent = isFloating ? (float === 'left' ? 'start' : 'end') : getCSSValueFromAlignment(finalAlignment)
 
   // The new Word-style toolbar is shown when the embedding decorator node is
   // selected; it also stays available on hover/focus for discoverability.
@@ -161,7 +156,7 @@ const ImagePreview: FunctionComponent<Props> = ({
             className={
               isImageSelected
                 ? 'visible'
-                : 'invisible focus-within:visible group-hover:visible [.embedBlockFocused_&]:visible'
+                : 'invisible group-hover:visible focus-within:visible [.embedBlockFocused_&]:visible'
             }
           >
             <ImageToolbar
@@ -177,7 +172,7 @@ const ImagePreview: FunctionComponent<Props> = ({
             />
           </div>
         )}
-        <div className="absolute left-0 top-full w-full">
+        <div className="absolute top-full left-0 w-full">
           <ImageCaption caption={caption ?? ''} enabled={captionEnabled} onChange={(c) => setCaption?.(c)} />
         </div>
       </div>

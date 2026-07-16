@@ -43,10 +43,7 @@ export interface SelectCandidatesOptions {
  * snippet. Preserves the incoming (algorithmic) order. This is the single point
  * that bounds what leaves the device.
  */
-export function selectCandidates(
-  items: RerankCandidate[],
-  options: SelectCandidatesOptions = {},
-): RerankCandidate[] {
+export function selectCandidates(items: RerankCandidate[], options: SelectCandidatesOptions = {}): RerankCandidate[] {
   const limit = options.limit && options.limit > 0 ? Math.floor(options.limit) : DEFAULT_AI_RERANK_CANDIDATE_LIMIT
   const snippetChars =
     options.snippetChars && options.snippetChars > 0 ? Math.floor(options.snippetChars) : AI_RERANK_SNIPPET_CHARS

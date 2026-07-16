@@ -3,10 +3,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { NotificationsController } from './NotificationsController'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { ACHIEVEMENTS } from '@/Achievements/achievementDefinitions'
-import {
-  listAchievementNotifications,
-  recordAchievementNotification,
-} from '@/Notifications/achievementNotifications'
+import { listAchievementNotifications, recordAchievementNotification } from '@/Notifications/achievementNotifications'
 
 jest.mock('@standardnotes/toast', () => ({
   ToastType: {
@@ -228,9 +225,7 @@ describe('NotificationsController', () => {
       const toastId = toastMock.addToast.mock.results[0].value
       view.handler(toastId)
       expect(toastMock.dismissToast).toHaveBeenCalledWith(toastId)
-      expect(
-        (application.paneController.openPaneTab as jest.Mock).mock.calls[0][0],
-      ).toBe(AppPaneId.Notifications)
+      expect((application.paneController.openPaneTab as jest.Mock).mock.calls[0][0]).toBe(AppPaneId.Notifications)
     })
   })
 })

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { compareVersions } from 'compare-versions'
 import log from 'electron-log'
@@ -105,9 +104,7 @@ export async function initializePackageManager(webContents: Electron.WebContents
         'received sync event for:',
         components
           .map(
-            ({ content, deleted }) =>
-              // eslint-disable-next-line camelcase
-              `${content?.name} (${content?.package_info?.version}) ` + `(deleted: ${deleted})`,
+            ({ content, deleted }) => `${content?.name} (${content?.package_info?.version}) ` + `(deleted: ${deleted})`,
           )
           .join(', '),
       )
@@ -208,7 +205,6 @@ async function syncComponents(webContents: Electron.WebContents, mapping: Mappin
         return
       }
 
-      // eslint-disable-next-line camelcase
       if (!component.content?.package_info) {
         logMessage('Package info is null, skipping')
         return

@@ -21,10 +21,7 @@ import {
  * Minimal SNNote stub: reference metadata lives in appData, read via
  * getAppDomainValue. Mirrors the Reminders spec approach.
  */
-const makeNote = (
-  raw: unknown,
-  overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {},
-): SNNote =>
+const makeNote = (raw: unknown, overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {}): SNNote =>
   ({
     uuid: overrides.uuid ?? 'note-1',
     title: overrides.title ?? 'A note',
@@ -32,8 +29,10 @@ const makeNote = (
     getAppDomainValue: (key: string) => (key === (NoteReferenceKey as unknown as string) ? raw : undefined),
   }) as unknown as SNNote
 
-const ref = (metadata: Partial<ReferenceMetadata>, overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {}) =>
-  makeNote({ isReference: true, ...metadata }, overrides)
+const ref = (
+  metadata: Partial<ReferenceMetadata>,
+  overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {},
+) => makeNote({ isReference: true, ...metadata }, overrides)
 
 const makeItem = (title: string, metadata: Partial<ReferenceMetadata>, uuid = 'u'): ReferenceItem => ({
   note: ref(metadata, { title, uuid }),

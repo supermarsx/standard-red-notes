@@ -1,4 +1,8 @@
-export { default as FormattingMarksPlugin, TOGGLE_FORMATTING_MARKS_COMMAND, useFormattingMarks } from './FormattingMarksPlugin'
+export {
+  default as FormattingMarksPlugin,
+  TOGGLE_FORMATTING_MARKS_COMMAND,
+  useFormattingMarks,
+} from './FormattingMarksPlugin'
 export {
   getFormattingMarksEnabled,
   setFormattingMarksEnabled,

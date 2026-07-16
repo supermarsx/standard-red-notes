@@ -107,12 +107,12 @@ const AdvancedOptions: FunctionComponent<Props> = ({
   return (
     <>
       <button
-        className="flex w-full cursor-pointer items-center border-0 bg-transparent px-3 py-1.5 text-left text-sm font-bold text-text hover:bg-contrast hover:text-foreground focus:bg-info-backdrop focus:shadow-none"
+        className="text-text hover:bg-contrast hover:text-foreground focus:bg-info-backdrop flex w-full cursor-pointer items-center border-0 bg-transparent px-3 py-1.5 text-left text-sm font-bold focus:shadow-none"
         onClick={toggleShowAdvanced}
       >
         <div className="flex items-center">
           {t('advancedOptions')}
-          <Icon type="chevron-down" className="ml-1 text-passive-1" />
+          <Icon type="chevron-down" className="text-passive-1 ml-1" />
         </div>
       </button>
       {showAdvanced ? (

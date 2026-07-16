@@ -19,7 +19,7 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
     <>
       <button
         onClick={() => selectFiles()}
-        className="flex min-h-[30vh] w-full flex-col items-center justify-center gap-2 rounded border-2 border-dashed border-info p-2 hover:border-4"
+        className="border-info flex min-h-[30vh] w-full flex-col items-center justify-center gap-2 rounded border-2 border-dashed p-2 hover:border-4"
         onDragStart={(e) => e.preventDefault()}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -34,7 +34,7 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
       <div className="my-4 w-full text-center">{c('Info').t`or import from:`}</div>
       <div className="flex flex-wrap items-center justify-center gap-4">
         <Button className="flex items-center !py-2" onClick={() => selectFiles('standard-notes-backup')}>
-          <Icon type="archive" className="mr-2 text-info" />
+          <Icon type="archive" className="text-info mr-2" />
           {c('ImportSource').t`Standard Red Notes Backup`}
         </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('evernote')}>
@@ -72,11 +72,11 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
           Aegis
         </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('plaintext')}>
-          <Icon type="plain-text" className="mr-2 text-info" />
+          <Icon type="plain-text" className="text-info mr-2" />
           {c('ImportSource').t`Plaintext / Markdown`}
         </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('html')}>
-          <Icon type="rich-text" className="mr-2 text-accessory-tint-2" />
+          <Icon type="rich-text" className="text-accessory-tint-2 mr-2" />
           HTML
         </Button>
         <Button
@@ -93,7 +93,7 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
             selectFiles('super').catch(console.error)
           }}
         >
-          <Icon type="file-doc" className="mr-2 text-accessory-tint-1" />
+          <Icon type="file-doc" className="text-accessory-tint-1 mr-2" />
           Super (JSON)
         </Button>
         <Button
@@ -131,7 +131,7 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
           OpenDocument (.odt)
         </Button>
         <Button className="flex items-center !py-2" onClick={() => selectFiles('csv-markdown')}>
-          <Icon type="toc" className="mr-2 text-info" />
+          <Icon type="toc" className="text-info mr-2" />
           {c('ImportSource').t`CSV (Markdown table)`}
         </Button>
         <Button
@@ -148,7 +148,7 @@ const ImportModalInitialPage = ({ setFiles, selectFiles }: Props) => {
             selectFiles('csv-spreadsheet').catch(console.error)
           }}
         >
-          <Icon type="spreadsheets" className="mr-2 text-accessory-tint-3" />
+          <Icon type="spreadsheets" className="text-accessory-tint-3 mr-2" />
           {c('ImportSource').t`CSV (Spreadsheet)`}
         </Button>
       </div>

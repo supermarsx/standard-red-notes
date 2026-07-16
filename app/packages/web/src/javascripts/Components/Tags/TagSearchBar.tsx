@@ -51,7 +51,7 @@ const TagSearchBar = ({ navigationController }: Props) => {
       className={classNames(
         'sticky top-0 bg-[inherit] px-4 pt-4',
         isParentScrolling &&
-          'after:absolute after:left-0 after:top-full after:-z-[1] after:block after:h-4 after:w-full after:border-b after:border-border after:bg-[inherit]',
+          'after:border-border after:absolute after:top-full after:left-0 after:-z-[1] after:block after:h-4 after:w-full after:border-b after:bg-[inherit]',
       )}
       role="search"
       ref={searchBarRef}
@@ -61,12 +61,12 @@ const TagSearchBar = ({ navigationController }: Props) => {
         autocomplete={false}
         className={{
           container: '!bg-default px-1',
-          input: 'text-base placeholder:text-passive-0 lg:text-sm',
+          input: 'placeholder:text-passive-0 text-base lg:text-sm',
         }}
         placeholder={'Search topics...'}
         value={searchQuery}
         onChange={setSearchQuery}
-        left={[<Icon type="search" className="mr-1 h-4.5 w-4.5 flex-shrink-0 text-passive-1" />]}
+        left={[<Icon type="search" className="text-passive-1 mr-1 h-4.5 w-4.5 flex-shrink-0" />]}
         right={[searchQuery && <ClearInputButton onClick={onClearSearch} />]}
         roundedFull
       />

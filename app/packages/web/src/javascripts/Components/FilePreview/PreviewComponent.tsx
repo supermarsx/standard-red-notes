@@ -144,7 +144,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
           fallback={
             <div className="flex flex-grow flex-col items-center justify-center">
               <Spinner className="h-6 w-6" />
-              <span className="mt-3 text-sm text-passive-0">{t('loadingPdfViewer')}</span>
+              <span className="text-passive-0 mt-3 text-sm">{t('loadingPdfViewer')}</span>
             </div>
           }
         >

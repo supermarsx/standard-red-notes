@@ -50,11 +50,7 @@ class FormatPainterStore {
   }
 
   private setState(next: FormatPainterState): void {
-    if (
-      next.armed === this.state.armed &&
-      next.locked === this.state.locked &&
-      next.captured === this.state.captured
-    ) {
+    if (next.armed === this.state.armed && next.locked === this.state.locked && next.captured === this.state.captured) {
       return
     }
     this.state = next

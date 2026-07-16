@@ -6,9 +6,8 @@
  * keeps looping, the sane default size, and the `border-r-transparent` gap that
  * makes the rotation visible) rather than visual motion.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

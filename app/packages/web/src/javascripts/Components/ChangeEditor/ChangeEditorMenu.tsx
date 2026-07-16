@@ -28,13 +28,14 @@ import ModalOverlay from '../Modal/ModalOverlay'
 import SuperNoteConverter from '../SuperEditor/SuperNoteConverter'
 import MenuSection from '../Menu/MenuSection'
 import { CanvasEditorIdentifier } from '../NoteView/CanvasEditor/CanvasEditor'
-import { parseCanvasDocument, serializeCanvasDocument, createEmptyCanvasDocument } from '../NoteView/CanvasEditor/CanvasDocument'
+import {
+  parseCanvasDocument,
+  serializeCanvasDocument,
+  createEmptyCanvasDocument,
+} from '../NoteView/CanvasEditor/CanvasDocument'
 import { BaseEditorIdentifier } from '../NoteView/BaseEditor/BaseEditor'
 import { parseBaseDocument, serializeBaseDocument, createEmptyBaseDocument } from '../NoteView/BaseEditor/BaseDocument'
-import {
-  JsSandboxEditorIdentifier,
-  WebSandboxEditorIdentifier,
-} from '../NoteView/SandboxEditor/SandboxEditor'
+import { JsSandboxEditorIdentifier, WebSandboxEditorIdentifier } from '../NoteView/SandboxEditor/SandboxEditor'
 import {
   parseSandboxDocument,
   serializeSandboxDocument,
@@ -66,11 +67,7 @@ import {
   createFlashcardsStarter,
 } from '../NoteView/FlashcardsEditor/FlashcardsDocument'
 import { MapEditorIdentifier } from '../NoteView/MapEditor/MapEditor'
-import {
-  parseMapDocument,
-  serializeMapDocument,
-  createMindMapStarter,
-} from '../NoteView/MapEditor/MapDocument'
+import { parseMapDocument, serializeMapDocument, createMindMapStarter } from '../NoteView/MapEditor/MapDocument'
 
 type ChangeEditorMenuProps = {
   application: WebApplication
@@ -659,18 +656,18 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
 
   return (
     <>
-      <Menu className="pb-1 pt-0.5" a11yLabel="Change note type menu">
+      <Menu className="pt-0.5 pb-1" a11yLabel="Change note type menu">
         <MenuSection>
-          <div className="flex items-center justify-between py-3 pr-4 md:pb-1 md:pt-0">
+          <div className="flex items-center justify-between py-3 pr-4 md:pt-0 md:pb-1">
             <div className="px-3">
               <h2 className="text-base font-bold">Choose a note type</h2>
               {unableToFindEditor && (
-                <p className="mr-2 pt-1 text-xs text-warning">
+                <p className="text-warning mr-2 pt-1 text-xs">
                   Unable to find system editor for this note. Select Manage Plugins to reinstall this editor.
                 </p>
               )}
             </div>
-            <button className="cursor-pointer whitespace-nowrap text-right text-xs text-info" onClick={managePlugins}>
+            <button className="text-info cursor-pointer text-right text-xs whitespace-nowrap" onClick={managePlugins}>
               Manage Plugins
             </button>
           </div>
@@ -732,7 +729,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="editor" className="mr-2 text-neutral" />
+                <Icon type="editor" className="text-neutral mr-2" />
                 Canvas
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -750,7 +747,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="hashtag" className="mr-2 text-neutral" />
+                <Icon type="hashtag" className="text-neutral mr-2" />
                 Base
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -768,7 +765,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="code" className="mr-2 text-neutral" />
+                <Icon type="code" className="text-neutral mr-2" />
                 JS Sandbox
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -786,7 +783,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="code" className="mr-2 text-neutral" />
+                <Icon type="code" className="text-neutral mr-2" />
                 Web App Sandbox
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -804,7 +801,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="clock" className="mr-2 text-neutral" />
+                <Icon type="clock" className="text-neutral mr-2" />
                 Calendar
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -822,7 +819,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="dashboard" className="mr-2 text-neutral" />
+                <Icon type="dashboard" className="text-neutral mr-2" />
                 Kanban Board
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -840,7 +837,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="history" className="mr-2 text-neutral" />
+                <Icon type="history" className="text-neutral mr-2" />
                 Timeline
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -858,7 +855,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="copy" className="mr-2 text-neutral" />
+                <Icon type="copy" className="text-neutral mr-2" />
                 Flashcards
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs
@@ -876,7 +873,7 @@ const ChangeEditorMenu: FunctionComponent<ChangeEditorMenuProps> = ({
           >
             <div className="flex flex-grow items-center justify-between">
               <div className="flex items-center">
-                <Icon type="share" className="mr-2 text-neutral" />
+                <Icon type="share" className="text-neutral mr-2" />
                 Map
                 <Pill className="px-1.5 py-0.5" style="success">
                   Labs

@@ -29,7 +29,7 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
       <div className="flex flex-grow flex-col items-center justify-center">
         <NoPreviewIllustration className="mb-4 h-30 w-30" />
         <div className="mb-2 text-base font-bold">{t('videoCannotBePreviewed')}</div>
-        <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('downloadToView')}</div>
+        <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToView')}</div>
         <Button
           primary
           onClick={() => {

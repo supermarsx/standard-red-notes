@@ -29,16 +29,16 @@ function formatTime(iso: string): string {
 const CommentBody: FunctionComponent<{ text: string }> = ({ text }) => {
   const segments = useMemo(() => segmentCommentText(text), [text])
   return (
-    <span className="whitespace-pre-wrap break-words text-sm text-text">
-      {segments.map((segment, index) =>
-        segment.type === 'mention' ? (
-          <span key={index} className="rounded bg-info-backdrop px-1 font-medium text-info">
+    <span className="text-text text-sm break-words whitespace-pre-wrap">
+      {segments.map((segment, index) => {
+        return segment.type === 'mention' ? (
+          <span key={index} className="bg-info-backdrop text-info rounded px-1 font-medium">
             @{segment.name}
           </span>
         ) : (
           <span key={index}>{segment.value}</span>
-        ),
-      )}
+        )
+      })}
     </span>
   )
 }
@@ -55,7 +55,7 @@ const CommentRow: FunctionComponent<{
   return (
     <div className={`flex gap-2 ${isReply ? 'ml-6' : ''} ${comment.resolved ? 'opacity-60' : ''}`}>
       <div
-        className="mt-0.5 flex h-6 w-6 flex-shrink-0 select-none items-center justify-center rounded-full text-[0.6rem] font-bold text-white"
+        className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[0.6rem] font-bold text-white select-none"
         style={{ backgroundColor: color }}
         aria-hidden
       >
@@ -63,24 +63,24 @@ const CommentRow: FunctionComponent<{
       </div>
       <div className="min-w-0 flex-grow">
         <div className="flex items-center gap-2">
-          <span className="truncate text-xs font-semibold text-text">{isSelf ? 'You' : comment.authorName}</span>
-          <span className="text-xs text-passive-2">{formatTime(comment.createdAt)}</span>
+          <span className="text-text truncate text-xs font-semibold">{isSelf ? 'You' : comment.authorName}</span>
+          <span className="text-passive-2 text-xs">{formatTime(comment.createdAt)}</span>
           {comment.anchor?.kind === 'super' && (
-            <span className="rounded bg-contrast px-1 text-[0.6rem] text-passive-1" title="Inline comment">
+            <span className="bg-contrast text-passive-1 rounded px-1 text-[0.6rem]" title="Inline comment">
               inline
             </span>
           )}
-          {comment.resolved && <span className="text-[0.6rem] uppercase text-success">resolved</span>}
+          {comment.resolved && <span className="text-success text-[0.6rem] uppercase">resolved</span>}
         </div>
         {comment.anchor?.snippet && (
-          <div className="mt-0.5 border-l-2 border-border pl-2 text-xs italic text-passive-1">
+          <div className="border-border text-passive-1 mt-0.5 border-l-2 pl-2 text-xs italic">
             “{comment.anchor.snippet}”
           </div>
         )}
         <div className="mt-0.5">
           <CommentBody text={comment.text} />
         </div>
-        <div className="mt-1 flex items-center gap-3 text-xs text-passive-1">
+        <div className="text-passive-1 mt-1 flex items-center gap-3 text-xs">
           {onReply && (
             <button type="button" onClick={onReply} className="hover:text-info">
               Reply
@@ -131,9 +131,9 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
   const isSelf = (comment: NoteComment): boolean => comment.authorUuid === selfUuid
 
   return (
-    <div className="rounded border border-border bg-default p-2.5">
+    <div className="border-border bg-default rounded border p-2.5">
       <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-passive-0">
+        <div className="text-passive-0 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
           <Icon type="chat-bubble" size="small" />
           Comments
           {comments.length > 0 && <span className="text-passive-1">({comments.length})</span>}
@@ -142,7 +142,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
           <button
             type="button"
             onClick={() => setShowResolved((s) => !s)}
-            className="text-xs text-passive-1 hover:text-info"
+            className="text-passive-1 hover:text-info text-xs"
           >
             {showResolved ? 'Hide resolved' : `Show resolved (${resolvedCount})`}
           </button>
@@ -151,7 +151,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
 
       <div className="mb-2.5 max-h-80 space-y-3 overflow-y-auto overscroll-contain">
         {visibleThreads.length === 0 ? (
-          <div className="py-2 text-center text-xs text-passive-2">No comments yet. Start the conversation.</div>
+          <div className="text-passive-2 py-2 text-center text-xs">No comments yet. Start the conversation.</div>
         ) : (
           visibleThreads.map(({ comment, replies }) => (
             <div key={comment.id} className="space-y-2">

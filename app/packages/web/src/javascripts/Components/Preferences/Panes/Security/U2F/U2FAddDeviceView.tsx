@@ -91,7 +91,7 @@ const U2FAddDeviceView: FunctionComponent<Props> = ({ addAuthenticator, onDevice
             onChange={handleDeviceNameChange}
             onEnter={handleAddDeviceClick}
           />
-          {errorMessage && <div className="mt-1.5 text-danger">{errorMessage}</div>}
+          {errorMessage && <div className="text-danger mt-1.5">{errorMessage}</div>}
         </div>
       </div>
     </Modal>

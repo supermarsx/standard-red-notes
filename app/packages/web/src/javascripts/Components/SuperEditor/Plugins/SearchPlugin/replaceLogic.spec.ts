@@ -106,25 +106,13 @@ describe('computeReplacement', () => {
   })
 
   test('case-sensitive only replaces exact case', () => {
-    const { output, count } = computeReplacement(
-      'Cat cat CAT',
-      'cat',
-      'dog',
-      options({ isCaseSensitive: true }),
-      true,
-    )
+    const { output, count } = computeReplacement('Cat cat CAT', 'cat', 'dog', options({ isCaseSensitive: true }), true)
     expect(output).toBe('Cat dog CAT')
     expect(count).toBe(1)
   })
 
   test('whole word boundaries are respected', () => {
-    const { output, count } = computeReplacement(
-      'cat category cats',
-      'cat',
-      'X',
-      options({ isWholeWord: true }),
-      true,
-    )
+    const { output, count } = computeReplacement('cat category cats', 'cat', 'X', options({ isWholeWord: true }), true)
     expect(output).toBe('X category cats')
     expect(count).toBe(1)
   })
@@ -142,13 +130,7 @@ describe('computeReplacement', () => {
   })
 
   test('regex whole-match $&', () => {
-    const { output, count } = computeReplacement(
-      'abc',
-      'b',
-      '[$&]',
-      options({ isRegex: true }),
-      true,
-    )
+    const { output, count } = computeReplacement('abc', 'b', '[$&]', options({ isRegex: true }), true)
     expect(output).toBe('a[b]c')
     expect(count).toBe(1)
   })

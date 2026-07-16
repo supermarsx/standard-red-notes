@@ -1,0 +1,3 @@
+# Yarn release bundles are vendored generated distributions whose template
+# literals can intentionally contain trailing spaces.
+.yarn/releases/*.cjs -whitespace

@@ -79,7 +79,10 @@ const PanesSystemComponent = () => {
           // (clientX decreases) should widen it.
           const delta = startX - moveEvent.clientX
           const maxWidth = Math.min(900, window.innerWidth - 400)
-          latest = Math.max(ASSISTANT_PANEL_MIN_WIDTH, Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)))
+          latest = Math.max(
+            ASSISTANT_PANEL_MIN_WIDTH,
+            Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)),
+          )
           setAssistantPanelWidth(latest)
         } catch (error) {
           // If the move handler throws, the mouseup that removes these listeners
@@ -384,7 +387,7 @@ const PanesSystemComponent = () => {
               key="navigation-pane"
               regionName="Navigation"
               fallback={() => (
-                <div className={classNames(className, 'flex items-center justify-center text-passive-0')}>
+                <div className={classNames(className, 'text-passive-0 flex items-center justify-center')}>
                   Navigation unavailable
                 </div>
               )}
@@ -395,22 +398,22 @@ const PanesSystemComponent = () => {
                 className={classNames(className, isTabletOrMobile ? 'w-full' : '')}
                 application={application}
               >
-              {showPanelResizers && navigationRef && (
-                <PanelResizer
-                  collapsable={true}
-                  defaultWidth={navigationPanelWidth}
-                  hoverable={true}
-                  left={0}
-                  minWidth={NAVIGATION_PANEL_MIN_WIDTH}
-                  modifyElementWidth={false}
-                  panel={navigationRef}
-                  resizeFinishCallback={navigationPanelResizeFinishCallback}
-                  side={PanelSide.Right}
-                  type={PanelResizeType.WidthOnly}
-                  width={navigationPanelWidth}
-                  widthEventCallback={navigationPanelResizeWidthChangeCallback}
-                />
-              )}
+                {showPanelResizers && navigationRef && (
+                  <PanelResizer
+                    collapsable={true}
+                    defaultWidth={navigationPanelWidth}
+                    hoverable={true}
+                    left={0}
+                    minWidth={NAVIGATION_PANEL_MIN_WIDTH}
+                    modifyElementWidth={false}
+                    panel={navigationRef}
+                    resizeFinishCallback={navigationPanelResizeFinishCallback}
+                    side={PanelSide.Right}
+                    type={PanelResizeType.WidthOnly}
+                    width={navigationPanelWidth}
+                    widthEventCallback={navigationPanelResizeWidthChangeCallback}
+                  />
+                )}
               </Navigation>
             </ComponentErrorBoundary>
           )
@@ -420,7 +423,7 @@ const PanesSystemComponent = () => {
               key="content-list-view"
               regionName="Note list"
               fallback={() => (
-                <div className={classNames(className, 'flex items-center justify-center text-passive-0')}>
+                <div className={classNames(className, 'text-passive-0 flex items-center justify-center')}>
                   List unavailable
                 </div>
               )}
@@ -432,22 +435,22 @@ const PanesSystemComponent = () => {
                 application={application}
                 onPanelWidthLoad={handleInitialItemsListPanelWidthLoad}
               >
-              {showPanelResizers && listRef && (
-                <PanelResizer
-                  collapsable={true}
-                  defaultWidth={ITEMS_PANEL_DEFAULT_WIDTH}
-                  hoverable={true}
-                  left={0}
-                  minWidth={ITEMS_PANEL_MIN_WIDTH}
-                  modifyElementWidth={false}
-                  panel={listRef}
-                  resizeFinishCallback={itemsPanelResizeFinishCallback}
-                  side={PanelSide.Right}
-                  type={PanelResizeType.WidthOnly}
-                  width={itemsPanelWidth}
-                  widthEventCallback={itemsPanelResizeWidthChangeCallback}
-                />
-              )}
+                {showPanelResizers && listRef && (
+                  <PanelResizer
+                    collapsable={true}
+                    defaultWidth={ITEMS_PANEL_DEFAULT_WIDTH}
+                    hoverable={true}
+                    left={0}
+                    minWidth={ITEMS_PANEL_MIN_WIDTH}
+                    modifyElementWidth={false}
+                    panel={listRef}
+                    resizeFinishCallback={itemsPanelResizeFinishCallback}
+                    side={PanelSide.Right}
+                    type={PanelResizeType.WidthOnly}
+                    width={itemsPanelWidth}
+                    widthEventCallback={itemsPanelResizeWidthChangeCallback}
+                  />
+                )}
               </ContentListView>
             </ComponentErrorBoundary>
           )
@@ -472,7 +475,7 @@ const PanesSystemComponent = () => {
                     aria-orientation="vertical"
                     aria-label="Resize assistant panel"
                     onMouseDown={startAssistantResize}
-                    className="absolute left-0 top-0 z-panel-resizer hidden h-full w-[5px] cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-0 transition-opacity hover:opacity-100 md:block"
+                    className="z-panel-resizer absolute top-0 left-0 hidden h-full w-[5px] cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-0 transition-opacity hover:opacity-100 md:block"
                   />
                 )}
               </AssistantView>
@@ -481,11 +484,7 @@ const PanesSystemComponent = () => {
         } else if (pane === AppPaneId.Constellation) {
           return (
             <ErrorBoundary key="constellation-pane">
-              <ConstellationView
-                id={ElementIds.ConstellationColumn}
-                className={className}
-                application={application}
-              />
+              <ConstellationView id={ElementIds.ConstellationColumn} className={className} application={application} />
             </ErrorBoundary>
           )
         } else if (pane === AppPaneId.Dashboard) {

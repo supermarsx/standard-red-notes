@@ -463,8 +463,7 @@ function scanItemsStore(
         if (cursor) {
           const value = cursor.value as Record<string, unknown>
           const bytes = sizeOfEntry(value)
-          const contentType =
-            typeof value['content_type'] === 'string' ? (value['content_type'] as string) : 'Unknown'
+          const contentType = typeof value['content_type'] === 'string' ? (value['content_type'] as string) : 'Unknown'
           const uuid = typeof value['uuid'] === 'string' ? (value['uuid'] as string) : String(cursor.primaryKey)
 
           state.totalBytes += bytes

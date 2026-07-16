@@ -1,9 +1,5 @@
 import { NoteType } from '@standardnotes/snjs'
-import {
-  computePlaintextStats,
-  extractPlaintextFromNoteText,
-  NOTE_STATS_MAX_SCAN_LENGTH,
-} from './NoteStats'
+import { computePlaintextStats, extractPlaintextFromNoteText, NOTE_STATS_MAX_SCAN_LENGTH } from './NoteStats'
 
 describe('computePlaintextStats', () => {
   it('returns all zeros for an empty string', () => {

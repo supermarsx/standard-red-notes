@@ -43,7 +43,7 @@ const InsertSectionsBar = ({ sections }: InsertSectionsBarProps): ReactElement =
         key={section.key}
         role="group"
         aria-label={section.caption}
-        className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
+        className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
       >
         <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
           {section.rows.map((rowButtons, rowIndex) => (
@@ -56,7 +56,7 @@ const InsertSectionsBar = ({ sections }: InsertSectionsBarProps): ReactElement =
         </div>
         <span
           aria-hidden
-          className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+          className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
         >
           {section.caption}
         </span>

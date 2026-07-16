@@ -1,8 +1,4 @@
-import {
-  getChecklistAutoMoveEnabled,
-  setChecklistAutoMoveEnabled,
-  subscribeChecklistAutoMove,
-} from './autoMoveSetting'
+import { getChecklistAutoMoveEnabled, setChecklistAutoMoveEnabled, subscribeChecklistAutoMove } from './autoMoveSetting'
 
 /**
  * Standard Red Notes: tests for the "move completed checklist tasks" local toggle.

@@ -15,9 +15,8 @@
  * React itself logs caught render errors to console.error; we spy/mock it for
  * the throwing cases so the suite output stays clean, then restore + assert.
  */
-import { createElement, ReactNode } from 'react'
+import { act, createElement, ReactNode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 
 // The repo maps `@standardnotes/toast` to identity-obj-proxy, which turns
 // `addToast` into a string rather than a callable — the boundary's one-time

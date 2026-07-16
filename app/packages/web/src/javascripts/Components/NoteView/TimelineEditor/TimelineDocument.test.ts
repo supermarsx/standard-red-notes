@@ -88,7 +88,12 @@ describe('TimelineDocument', () => {
 
     it('drops items with an unparseable start', () => {
       const { document } = parseTimelineDocument(
-        JSON.stringify({ items: [{ id: 'bad', start: 'nope' }, { id: 'good', start: '2026-01-01' }] }),
+        JSON.stringify({
+          items: [
+            { id: 'bad', start: 'nope' },
+            { id: 'good', start: '2026-01-01' },
+          ],
+        }),
       )
       expect(document.items).toHaveLength(1)
       expect(document.items[0].id).toBe('good')

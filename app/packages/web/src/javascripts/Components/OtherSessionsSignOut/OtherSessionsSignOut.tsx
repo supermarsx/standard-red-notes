@@ -28,12 +28,12 @@ const ConfirmOtherSessionsSignOut = observer(({ application }: Props) => {
     <AlertDialog closeDialog={closeDialog}>
       <div className="flex items-center justify-between text-lg font-bold capitalize">
         End all other sessions?
-        <button className="rounded p-1 font-bold hover:bg-contrast" onClick={closeDialog}>
+        <button className="hover:bg-contrast rounded p-1 font-bold" onClick={closeDialog}>
           <Icon type="close" />
         </button>
       </div>
       <div className="sk-panel-row">
-        <p className="text-base text-foreground lg:text-sm">
+        <p className="text-foreground text-base lg:text-sm">
           This action will sign out all other devices signed into your account, and remove your data from those devices
           when they next regain connection to the internet. You may sign back in on those devices at any time.
         </p>

@@ -426,7 +426,8 @@ const ptPT: LocaleResource = {
     // FilePreview
     fileProtected: 'Este ficheiro está protegido.',
     authenticateToView: 'Autentique-se para ver este ficheiro.',
-    addPasscodeToView: 'Adicione um código de acesso ou crie uma conta para exigir autenticação para ver este ficheiro.',
+    addPasscodeToView:
+      'Adicione um código de acesso ou crie uma conta para exigir autenticação para ver este ficheiro.',
     openAccountMenu: 'Abrir menu da conta',
     authenticate: 'Autenticar',
     viewFile: 'Ver ficheiro',
@@ -434,7 +435,8 @@ const ptPT: LocaleResource = {
 
     // FilePreviewError
     fileCannotBePreviewed: 'Não é possível pré-visualizar este ficheiro.',
-    errorLoadingFile: 'Ocorreu um erro ao carregar o ficheiro. Tente novamente ou transfira o ficheiro e abra-o com outra aplicação.',
+    errorLoadingFile:
+      'Ocorreu um erro ao carregar o ficheiro. Tente novamente ou transfira o ficheiro e abra-o com outra aplicação.',
     tryAgain: 'Tentar novamente',
     downloadToView: 'Para ver este ficheiro, transfira-o e abra-o com outra aplicação.',
 
@@ -499,15 +501,19 @@ const ptPT: LocaleResource = {
     cancelOcr: 'Cancelar OCR',
     preparingOcr: 'A preparar o OCR...',
     ocrProgress: 'OCR página {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Texto já extraído (em cache). Voltar a executar o OCR no seu navegador (permanece no seu dispositivo).',
-    ocrExtractedReRunTooltip: 'Texto extraído. Voltar a executar o OCR no seu navegador (permanece no seu dispositivo).',
-    ocrExtractTooltip: 'Extrair texto de páginas digitalizadas com OCR. É executado no seu navegador; nada sai do seu dispositivo (lento; transfere dados de idioma).',
+    ocrCachedReRunTooltip:
+      'Texto já extraído (em cache). Voltar a executar o OCR no seu navegador (permanece no seu dispositivo).',
+    ocrExtractedReRunTooltip:
+      'Texto extraído. Voltar a executar o OCR no seu navegador (permanece no seu dispositivo).',
+    ocrExtractTooltip:
+      'Extrair texto de páginas digitalizadas com OCR. É executado no seu navegador; nada sai do seu dispositivo (lento; transfere dados de idioma).',
     extractTextWithOcrBrowser: 'Extrair texto com OCR no seu navegador',
     reRunOcrBrowser: 'Voltar a executar o OCR (navegador)',
     extractTextOcr: 'Extrair texto (OCR)',
     serverOcrTooltip:
       'Executar o OCR no SERVIDOR. Isto envia as imagens das páginas deste PDF para o servidor e ABANDONA a encriptação ponta a ponta — o servidor pode ler esse conteúdo. O OCR no navegador mantém tudo no seu dispositivo.',
-    runOcrOnServerAria: 'Executar o OCR no servidor (envia as imagens das páginas para o servidor; abandona a encriptação ponta a ponta)',
+    runOcrOnServerAria:
+      'Executar o OCR no servidor (envia as imagens das páginas para o servidor; abandona a encriptação ponta a ponta)',
     runOcrOnServer: 'Executar OCR no servidor',
     copyAllExtractedText: 'Copiar todo o texto extraído',
     copyExtractedTextAria: 'Copiar texto extraído',
@@ -518,7 +524,8 @@ const ptPT: LocaleResource = {
     previousMatch: 'Correspondência anterior',
     nextMatch: 'Correspondência seguinte',
     closeSearch: 'Fechar pesquisa',
-    serverOcrDisclosurePrefix: 'O OCR no servidor está disponível para a sua conta. Envia as imagens das páginas deste PDF para o servidor e',
+    serverOcrDisclosurePrefix:
+      'O OCR no servidor está disponível para a sua conta. Envia as imagens das páginas deste PDF para o servidor e',
     serverOcrDisclosureBold: 'abandona a encriptação ponta a ponta',
     serverOcrDisclosureSuffix:
       ' — o servidor (e quem o controla) pode ler esse conteúdo. O OCR no navegador mantém tudo no seu dispositivo. A predefinição é o OCR no navegador.',
@@ -721,7 +728,8 @@ const ptPT: LocaleResource = {
 
     // WorkspaceSwitcherMenu
     workspaceSwitcherMenuLabel: 'Menu de mudança de espaço de trabalho',
-    signOutAllWorkspacesConfirm: 'Tem a certeza de que pretende terminar a sessão de todos os espaços de trabalho neste dispositivo?',
+    signOutAllWorkspacesConfirm:
+      'Tem a certeza de que pretende terminar a sessão de todos os espaços de trabalho neste dispositivo?',
     signOutAll: 'Terminar sessão de todos',
     addAnotherWorkspace: 'Adicionar outro espaço de trabalho',
     signOutAllWorkspaces: 'Terminar sessão de todos os espaços de trabalho',
@@ -740,7 +748,8 @@ const ptPT: LocaleResource = {
     // U2FAuthIframe
     waitingForSecurityKey: 'A aguardar pela chave de segurança...',
     authenticationSuccessful: 'Autenticação bem-sucedida!',
-    insertSecurityKeyPrompt: 'Insira a sua chave de segurança de hardware e, em seguida, prima o botão abaixo para autenticar.',
+    insertSecurityKeyPrompt:
+      'Insira a sua chave de segurança de hardware e, em seguida, prima o botão abaixo para autenticar.',
     authenticate: 'Autenticar',
   },
   search: {
@@ -835,7 +844,8 @@ const ptPT: LocaleResource = {
     linkExpires_other: 'Esta ligação expira {{count}} minutos após ter sido aberta pela primeira vez.',
     untitled: 'Sem título',
     tagHasNoNotes: 'Este tópico não tem notas.',
-    publicReadOnlyFooter: 'Esta é uma ligação partilhada pública e só de leitura. O conteúdo foi desencriptado no seu navegador.',
+    publicReadOnlyFooter:
+      'Esta é uma ligação partilhada pública e só de leitura. O conteúdo foi desencriptado no seu navegador.',
     confidentialWatermark: 'Confidencial · {{datetime}}',
     contentHiddenTitle: 'Conteúdo oculto',
     contentHiddenMessage: 'Devolva o foco a esta janela para ver o conteúdo partilhado.',

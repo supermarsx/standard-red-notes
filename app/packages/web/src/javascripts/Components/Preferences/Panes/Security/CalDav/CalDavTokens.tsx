@@ -173,11 +173,10 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
       <PreferencesSegment>
         <Title>CalDAV Access</Title>
         <Text>
-          CalDAV tokens let a calendar app (Apple Calendar, Thunderbird, DAVx5, &hellip;) subscribe to the
-          reminders you have published for delivery, as a read-only to-do calendar. Each token is a
-          high-entropy secret shown once at creation and stored only as a hash. It is not your account
-          password and grants read-only calendar access. Revoke a token to immediately cut off the app
-          using it.
+          CalDAV tokens let a calendar app (Apple Calendar, Thunderbird, DAVx5, &hellip;) subscribe to the reminders you
+          have published for delivery, as a read-only to-do calendar. Each token is a high-entropy secret shown once at
+          creation and stored only as a hash. It is not your account password and grants read-only calendar access.
+          Revoke a token to immediately cut off the app using it.
         </Text>
 
         {isLoading ? (
@@ -215,11 +214,11 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
             </div>
 
             {createdToken && (
-              <div className="mt-3 rounded border border-solid border-border p-3">
+              <div className="border-border mt-3 rounded border border-solid p-3">
                 <Subtitle>Copy your new CalDAV token now</Subtitle>
                 <Text className="mb-2">This secret will not be shown again.</Text>
                 <div className="flex flex-row items-center gap-2">
-                  <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdToken}</code>
+                  <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{createdToken}</code>
                   <CopyButton copyValue={createdToken} successMessage="CalDAV token copied to clipboard" />
                 </div>
                 {subscriptionUrl && (
@@ -230,7 +229,7 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
                       <code className="select-text">caldav</code>) and paste the token above as the password.
                     </Text>
                     <div className="flex flex-row items-center gap-2">
-                      <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">
+                      <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">
                         {subscriptionUrl}
                       </code>
                       <CopyButton copyValue={subscriptionUrl} successMessage="Subscription URL copied to clipboard" />
@@ -249,13 +248,11 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
               <PreferencesSegment>
                 <Subtitle>Calendar subscription URL</Subtitle>
                 <Text className="mb-2">
-                  Add a CalDAV account in your calendar app with this URL &mdash; use any username and a
-                  CalDAV token as the password.
+                  Add a CalDAV account in your calendar app with this URL &mdash; use any username and a CalDAV token as
+                  the password.
                 </Text>
                 <div className="flex flex-row items-center gap-2">
-                  <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">
-                    {subscriptionUrl}
-                  </code>
+                  <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{subscriptionUrl}</code>
                   <CopyButton copyValue={subscriptionUrl} successMessage="Subscription URL copied to clipboard" />
                 </div>
               </PreferencesSegment>
@@ -270,11 +267,11 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
             {tokens.map((token) => (
               <div
                 key={token.uuid}
-                className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+                className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex min-w-0 flex-col">
-                  <span className="break-words text-base font-medium lg:text-sm">{token.label}</span>
-                  <span className="break-words text-sm text-passive-0 lg:text-xs">
+                  <span className="text-base font-medium break-words lg:text-sm">{token.label}</span>
+                  <span className="text-passive-0 text-sm break-words lg:text-xs">
                     Created {formatDate(token.createdAt)} · Last used {formatDate(token.lastUsedAt)}
                   </span>
                 </div>

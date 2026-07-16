@@ -105,10 +105,7 @@ function isSureValue(value: unknown): value is SureValue {
 
 function predicateDSLArrayToJsonPredicate(predicateArray: RawPredicateInArrayForm): PredicateJsonForm {
   const predicateValue = predicateArray[2] as
-    | SureValue
-    | SureValue[]
-    | RawPredicateInArrayForm
-    | RawPredicateInArrayForm[]
+    SureValue | SureValue[] | RawPredicateInArrayForm | RawPredicateInArrayForm[]
 
   let resolvedPredicateValue: PredicateJsonForm | SureValue | PredicateJsonForm[]
 

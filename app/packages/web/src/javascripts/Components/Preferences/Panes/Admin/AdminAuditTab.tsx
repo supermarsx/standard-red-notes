@@ -196,7 +196,7 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
           </Text>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <Text className="text-xs text-passive-1">Show friendly names{namesLoading ? ' (loading…)' : ''}</Text>
+          <Text className="text-passive-1 text-xs">Show friendly names{namesLoading ? ' (loading…)' : ''}</Text>
           <Switch checked={showFriendlyNames} onChange={setShowFriendlyNames} />
         </div>
       </div>
@@ -210,9 +210,9 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
           disabled={loading}
         />
         <Button label="Download" onClick={downloadAudit} disabled={loading || entries.length === 0} />
-        <Text className="text-xs text-passive-1">
-          Exports the current page ({entries.length} {entries.length === 1 ? 'entry' : 'entries'}). Use the pager to move
-          through pages and download each.
+        <Text className="text-passive-1 text-xs">
+          Exports the current page ({entries.length} {entries.length === 1 ? 'entry' : 'entries'}). Use the pager to
+          move through pages and download each.
         </Text>
       </div>
 
@@ -234,7 +234,7 @@ const AdminAuditTab: FunctionComponent<Props> = ({ application, noteIfForbidden 
             const targetLabel =
               entry.targetUuid && entry.targetType === 'user' ? friendlyFor(entry.targetUuid) : entry.targetUuid
             return (
-              <div key={entry.uuid} className="rounded border border-border p-2">
+              <div key={entry.uuid} className="border-border rounded border p-2">
                 <div className="flex items-center justify-between gap-2">
                   <Subtitle>{entry.action}</Subtitle>
                   <Text className="text-xs">{formatTimestamp(entry.createdAt)}</Text>

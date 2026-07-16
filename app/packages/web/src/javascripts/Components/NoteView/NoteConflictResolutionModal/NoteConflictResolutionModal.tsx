@@ -25,12 +25,7 @@ const NoteConflictResolutionModal = ({
   )
 
   return (
-    <Modal
-      title="Resolve conflicts"
-      className="flex flex-col overflow-hidden"
-      actions={actions}
-      close={close}
-    >
+    <Modal title="Resolve conflicts" className="flex flex-col overflow-hidden" actions={actions} close={close}>
       <NoteConflictResolutionView
         currentNote={currentNote}
         conflictedNotes={conflictedNotes}

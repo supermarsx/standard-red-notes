@@ -63,7 +63,7 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
   // On mobile the modal header's left action doubles as a "back" control: from a
   // pane it returns to the menu list; from the menu it closes preferences.
   const mobileBackAction = mobileShowContent ? showMenu : closePreferences
-  const mobileTitle = mobileShowContent ? menu.selectedMenuItem?.label ?? 'Preferences' : 'Preferences'
+  const mobileTitle = mobileShowContent ? (menu.selectedMenuItem?.label ?? 'Preferences') : 'Preferences'
 
   const modalActions = useMemo(
     (): ModalAction[] => [
@@ -90,7 +90,7 @@ const PreferencesView: FunctionComponent<PreferencesProps> = ({ application, clo
       customHeader={
         <div
           className={classNames(
-            'flex w-full flex-row items-center justify-between border-b border-solid border-border bg-default px-3 pb-2 md:p-3',
+            'border-border bg-default flex w-full flex-row items-center justify-between border-b border-solid px-3 pb-2 md:p-3',
             hasTopInset ? 'pt-safe-top' : 'pt-2',
           )}
           data-preferences-header

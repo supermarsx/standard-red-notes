@@ -86,7 +86,9 @@ describe('sampling settings clamping', () => {
     expect(getMaxRunTimeMs(settings({ maxRunTime: 2, maxRunTimeUnit: 'hours' }))).toBe(2 * 60 * 60 * 1000)
     expect(getMaxRunTimeMs(settings({ maxRunTime: 90, maxRunTimeUnit: 'minutes' }))).toBe(90 * 60 * 1000)
     // Caps at 200 hours.
-    expect(getMaxRunTimeMs(settings({ maxRunTime: 999, maxRunTimeUnit: 'hours' }))).toBe(MAX_RUN_TIME_MAX_MINUTES * 60 * 1000)
+    expect(getMaxRunTimeMs(settings({ maxRunTime: 999, maxRunTimeUnit: 'hours' }))).toBe(
+      MAX_RUN_TIME_MAX_MINUTES * 60 * 1000,
+    )
   })
 })
 
@@ -97,7 +99,9 @@ describe('normalizeSamplingSettings', () => {
   })
 
   it('clamps every field of a partial/out-of-range object', () => {
-    expect(normalizeSamplingSettings({ temperature: 9, topP: 9, maxTokens: -5, maxSteps: MAX_STEPS_MAX + 999 })).toEqual(
+    expect(
+      normalizeSamplingSettings({ temperature: 9, topP: 9, maxTokens: -5, maxSteps: MAX_STEPS_MAX + 999 }),
+    ).toEqual(
       settings({
         temperature: 2,
         topP: 1,
@@ -133,9 +137,7 @@ describe('load/save round-trip', () => {
 
   it('clamps out-of-range values on save', () => {
     saveSamplingSettings(settings({ temperature: 100, topP: 100, maxTokens: -1, maxSteps: MAX_STEPS_MAX + 100 }))
-    expect(loadSamplingSettings()).toEqual(
-      settings({ temperature: 2, topP: 1, maxTokens: 0, maxSteps: MAX_STEPS_MAX }),
-    )
+    expect(loadSamplingSettings()).toEqual(settings({ temperature: 2, topP: 1, maxTokens: 0, maxSteps: MAX_STEPS_MAX }))
   })
 
   it('returns (and re-clamps) on malformed storage', () => {
@@ -185,9 +187,9 @@ describe('samplingRequestFields', () => {
   })
 
   it('omits both when both server-default flags are on', () => {
-    expect(
-      samplingRequestFields(settings({ useServerTemperature: true, useServerTopP: true, maxTokens: 0 })),
-    ).toEqual({})
+    expect(samplingRequestFields(settings({ useServerTemperature: true, useServerTopP: true, maxTokens: 0 }))).toEqual(
+      {},
+    )
   })
 
   it('reads from saved settings when no argument is given', () => {

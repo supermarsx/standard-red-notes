@@ -13,7 +13,7 @@ export const LinkedItemSearchResultsAddTagOption = forwardRef(
     return (
       <button
         className={classNames(
-          'group flex w-full items-center gap-2 overflow-hidden px-3 py-2 hover:bg-contrast hover:text-foreground',
+          'group hover:bg-contrast hover:text-foreground flex w-full items-center gap-2 overflow-hidden px-3 py-2',
           'focus:bg-info-backdrop [&[data-active-item]]:bg-info-backdrop',
         )}
         onClick={() => {
@@ -27,7 +27,7 @@ export const LinkedItemSearchResultsAddTagOption = forwardRef(
         <span className="flex-shrink-0 align-middle text-sm lg:text-xs">Create &amp; add topic</span>{' '}
         <span
           className={classNames(
-            'inline-flex min-w-0 items-center gap-1 rounded py-1 pl-1 pr-2 align-middle text-xs',
+            'inline-flex min-w-0 items-center gap-1 rounded py-1 pr-2 pl-1 align-middle text-xs',
             'group-hover:bg-info group-hover:text-info-contrast',
             isFocused ? 'bg-info text-info-contrast' : 'bg-contrast text-text',
           )}
@@ -35,7 +35,7 @@ export const LinkedItemSearchResultsAddTagOption = forwardRef(
           <Icon
             type="hashtag"
             className={classNames(
-              'flex-shrink-0 group-hover:text-info-contrast',
+              'group-hover:text-info-contrast flex-shrink-0',
               isFocused ? 'text-info-contrast' : 'text-info',
             )}
             size="small"

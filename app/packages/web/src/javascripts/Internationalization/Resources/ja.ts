@@ -110,8 +110,7 @@ const ja: LocaleResource = {
     helpAndFeedback: 'ヘルプとフィードバック',
     language: '言語',
     languageTitle: '言語',
-    languageDescription:
-      'アプリのインターフェース全体で使用する言語を選択します。未翻訳の項目は英語で表示されます。',
+    languageDescription: 'アプリのインターフェース全体で使用する言語を選択します。未翻訳の項目は英語で表示されます。',
     languageChanged: '言語を更新しました',
     defaults: '既定値',
     tools: 'ツール',
@@ -397,7 +396,8 @@ const ja: LocaleResource = {
     loading: '読み込み中...',
 
     fileCannotBePreviewed: 'このファイルはプレビューできません。',
-    errorLoadingFile: 'ファイルの読み込み中にエラーが発生しました。もう一度お試しいただくか、ファイルをダウンロードして別のアプリケーションで開いてください。',
+    errorLoadingFile:
+      'ファイルの読み込み中にエラーが発生しました。もう一度お試しいただくか、ファイルをダウンロードして別のアプリケーションで開いてください。',
     tryAgain: 'もう一度試す',
     downloadToView: 'このファイルを表示するには、ダウンロードして別のアプリケーションで開いてください。',
 
@@ -454,9 +454,11 @@ const ja: LocaleResource = {
     cancelOcr: 'OCRをキャンセル',
     preparingOcr: 'OCRを準備中...',
     ocrProgress: 'OCR {{current}} / {{total}}ページ（{{percent}}%）',
-    ocrCachedReRunTooltip: 'テキストは抽出済みです（キャッシュ）。ブラウザでOCRを再実行します（デバイス上に留まります）。',
+    ocrCachedReRunTooltip:
+      'テキストは抽出済みです（キャッシュ）。ブラウザでOCRを再実行します（デバイス上に留まります）。',
     ocrExtractedReRunTooltip: 'テキストを抽出しました。ブラウザでOCRを再実行します（デバイス上に留まります）。',
-    ocrExtractTooltip: 'OCRでスキャンページからテキストを抽出します。ブラウザで実行され、デバイスから何も送信されません（低速、言語データをダウンロードします）。',
+    ocrExtractTooltip:
+      'OCRでスキャンページからテキストを抽出します。ブラウザで実行され、デバイスから何も送信されません（低速、言語データをダウンロードします）。',
     extractTextWithOcrBrowser: 'ブラウザでOCRを使ってテキストを抽出',
     reRunOcrBrowser: 'OCRを再実行（ブラウザ）',
     extractTextOcr: 'テキストを抽出（OCR）',
@@ -534,8 +536,7 @@ const ja: LocaleResource = {
     upgradeForPerTopicPreferences: 'トピックごとの環境設定にアップグレード',
     perTopicPreferencesMessageWithDaily:
       'トピックごとの表示設定と、全く新しいデイリーノートのカレンダーレイアウトで、強力なワークフローと整理レイアウトを作成できます。',
-    perTopicPreferencesMessage:
-      'トピックごとの表示設定で、強力なワークフローと整理レイアウトを作成できます。',
+    perTopicPreferencesMessage: 'トピックごとの表示設定で、強力なワークフローと整理レイアウトを作成できます。',
     sortBy: '並べ替え',
     relevanceBestMatch: '関連度（最適な一致）',
     dateModified: '更新日',

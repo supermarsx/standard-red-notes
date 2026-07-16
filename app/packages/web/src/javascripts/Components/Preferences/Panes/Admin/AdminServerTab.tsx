@@ -136,10 +136,10 @@ const StateChip: FunctionComponent<{
     state === true
       ? 'bg-success text-success-contrast'
       : state === false
-      ? 'bg-danger text-danger-contrast'
-      : 'bg-passive-4 text-foreground'
+        ? 'bg-danger text-danger-contrast'
+        : 'bg-passive-4 text-foreground'
   return (
-    <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${className}`}>
+    <span className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${className}`}>
       {state === true ? on : state === false ? off : unknown}
     </span>
   )
@@ -159,7 +159,7 @@ const StatusRow: FunctionComponent<{ name: ReactNode; detail?: ReactNode; chip: 
   <div className={`flex items-center justify-between gap-4 py-2 ${indent ? 'pl-4' : ''}`}>
     <div className="flex min-w-0 flex-col">
       <Text>{name}</Text>
-      {detail ? <Text className="text-xs text-passive-1">{detail}</Text> : null}
+      {detail ? <Text className="text-passive-1 text-xs">{detail}</Text> : null}
     </div>
     <div className="shrink-0">{chip}</div>
   </div>
@@ -174,7 +174,7 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
   return (
     <span
       title="A saved override wins over the server environment; 'Default' means neither is set."
-      className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${settingSourceChipClass(
+      className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${settingSourceChipClass(
         source,
       )}`}
     >
@@ -607,9 +607,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         // keys, though the gateway validator already accepts them. Widen locally
         // (ServerSettingsPatch) and cast at the boundary rather than reach across
         // into another executor's package.
-        const response = await application.legacyApi.adminSetServerSettings(
-          partial as AdminSetServerSettingsPartial,
-        )
+        const response = await application.legacyApi.adminSetServerSettings(partial as AdminSetServerSettingsPartial)
         if (isErrorResponse(response)) {
           noteIfForbidden(response)
           addToast({ type: ToastType.Error, message: 'Failed to save the server setting.' })
@@ -1161,7 +1159,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           Instance configuration, health and integrations, grouped into subtabs. Editable settings are persisted and
           override the matching environment variable until cleared.
         </Text>
-        <div className="mt-3 border-b border-border">
+        <div className="border-border mt-3 border-b">
           <TabList state={subTab} className="flex flex-wrap">
             <Tab id="general" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="tune" size="medium" />
@@ -1201,11 +1199,11 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           {statusLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
           ) : statusError ? (
-            <Text className="mt-3 text-danger">{statusError}</Text>
+            <Text className="text-danger mt-3">{statusError}</Text>
           ) : serverStatus ? (
             <div className="mt-3 flex flex-col">
               {/* Dependency states: one per line, chip aligned right. */}
-              <div className="divide-y divide-border rounded border border-border px-3">
+              <div className="divide-border border-border divide-y rounded border px-3">
                 <StatusRow
                   name="Auth server"
                   detail="Accounts, sessions, settings"
@@ -1230,15 +1228,15 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 When off (the default) nothing renders. */}
               {dockerControl?.available && dockerControl.containers.length > 0 ? (
                 <>
-                  <Subtitle className="mb-2 mt-4">Infrastructure containers</Subtitle>
-                  <div className="divide-y divide-border rounded border border-border px-3">
+                  <Subtitle className="mt-4 mb-2">Infrastructure containers</Subtitle>
+                  <div className="divide-border border-border divide-y rounded border px-3">
                     {dockerControl.containers.map((container) => {
                       const rowBusy = containerActionInFlight === `container:${container}`
                       return (
                         <div key={container} className="flex items-center justify-between gap-4 py-2">
                           <div className="flex min-w-0 flex-col">
                             <Text>{dockerContainerLabel(container)}</Text>
-                            <Text className="text-xs text-passive-1">
+                            <Text className="text-passive-1 text-xs">
                               Restarts the whole container via the docker-socket-proxy
                             </Text>
                           </div>
@@ -1256,12 +1254,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       )
                     })}
                   </div>
-                  <Text className="mt-2 text-xs text-passive-1">
+                  <Text className="text-passive-1 mt-2 text-xs">
                     Restarting the database or cache briefly interrupts every service that depends on it.
                   </Text>
                 </>
               ) : dockerControl?.enabled && !dockerControl.available ? (
-                <Text className="mt-3 text-xs text-passive-1">
+                <Text className="text-passive-1 mt-3 text-xs">
                   Container restart is enabled but the docker-socket-proxy is not reachable, so restarting Redis/MariaDB
                   is not available right now.
                 </Text>
@@ -1269,12 +1267,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
               {services.length > 0 && (
                 <>
-                  <Subtitle className="mb-2 mt-4">All services</Subtitle>
-                  <div className="divide-y divide-border rounded border border-border px-3">
+                  <Subtitle className="mt-4 mb-2">All services</Subtitle>
+                  <div className="divide-border border-border divide-y rounded border px-3">
                     {services.map((service) => {
                       const chip = (
                         <span
-                          className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${serviceStatusChipClass(
+                          className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${serviceStatusChipClass(
                             service.status,
                           )}`}
                         >
@@ -1305,7 +1303,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                         <div key={service.name} className="flex items-center justify-between gap-4 py-2">
                           <div className="flex min-w-0 flex-col">
                             <Text>{displayName}</Text>
-                            {wsDetail ? <Text className="text-xs text-passive-1">{wsDetail}</Text> : null}
+                            {wsDetail ? <Text className="text-passive-1 text-xs">{wsDetail}</Text> : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
                             {latency ? (
@@ -1358,17 +1356,17 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     })}
                   </div>
                   {!serviceControlSupported ? (
-                    <Text className="mt-2 text-xs text-passive-1">
+                    <Text className="text-passive-1 mt-2 text-xs">
                       Service lifecycle controls are not available on this server (the /v1/admin/services endpoint is
                       missing). Update the server image to restart/stop/start services from here.
                     </Text>
                   ) : !serviceControlAvailable ? (
-                    <Text className="mt-2 text-xs text-passive-1">
+                    <Text className="text-passive-1 mt-2 text-xs">
                       Service lifecycle controls require a newer server image: supervisorctl cannot reach supervisord on
                       this deployment, so restart/stop/start are disabled.
                     </Text>
                   ) : (
-                    <Text className="mt-2 text-xs text-passive-1">
+                    <Text className="text-passive-1 mt-2 text-xs">
                       Restarting a service briefly interrupts what it powers. Restarting the API gateway will drop your
                       admin connection for a few seconds.
                     </Text>
@@ -1450,12 +1448,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           {statusLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
           ) : (
-            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+            <div className="divide-border border-border mt-3 divide-y rounded border px-3">
               <StatusRow
                 name="Trusted proxy (TRUST_PROXY)"
                 detail="Which upstream hops Express trusts for X-Forwarded-* headers"
                 chip={
-                  <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                  <span className="bg-passive-4 text-foreground inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap">
                     {network?.trustProxy ?? 'Default (loopback/private)'}
                   </span>
                 }
@@ -1464,7 +1462,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 name="Trusted client-IP header (CLIENT_IP_HEADER)"
                 detail="Named header read for the client IP, when set by a trusted proxy"
                 chip={
-                  <span className="inline-block whitespace-nowrap rounded bg-passive-4 px-2 py-0.5 text-xs font-bold text-foreground">
+                  <span className="bg-passive-4 text-foreground inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap">
                     {network?.clientIpHeader ?? 'Off (request.ip only)'}
                   </span>
                 }
@@ -1490,7 +1488,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </Text>
           ) : settingsError ? (
             <>
-              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <Text className="text-danger mt-3">{settingsError}</Text>
               <div className="mt-2">
                 <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
@@ -1655,7 +1653,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </Text>
           ) : settingsError ? (
             <>
-              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <Text className="text-danger mt-3">{settingsError}</Text>
               <div className="mt-2">
                 <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
@@ -1707,17 +1705,17 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     />
                   </div>
                   <div className="mt-3 flex items-center gap-2">
-                    <Text className="text-xs font-medium text-passive-1">Domains</Text>
+                    <Text className="text-passive-1 text-xs font-medium">Domains</Text>
                     <SourceChip sources={settingsSources} keys={['registration.domainList']} />
                   </div>
                   <textarea
-                    className="mt-1 h-24 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                    className="border-border bg-default text-foreground mt-1 h-24 w-96 max-w-full rounded border p-2 text-sm"
                     placeholder={'example.com\npartner.org'}
                     value={domainListText}
                     onChange={(event) => setDomainListText(event.target.value)}
                     disabled={settingsSaving}
                   />
-                  <Text className="mt-1 text-xs text-passive-1">
+                  <Text className="text-passive-1 mt-1 text-xs">
                     One domain per line (or comma-separated). The list applies to both allowlist and blocklist modes and
                     is ignored while the mode is Off.
                   </Text>
@@ -1732,7 +1730,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
                 {/* Standard Red Notes: SIGNUP CAPS (t50). Admin-owned overlay keys
                   enforced auth-side; a max of 0/blank = unlimited. */}
-                <div className="border-t border-border pt-4">
+                <div className="border-border border-t pt-4">
                   <Subtitle>Signup rate caps</Subtitle>
                   <Text className="mt-1 text-xs">
                     Limit how many new accounts can be created. Enforced server-side on top of the anti-abuse rate
@@ -1744,10 +1742,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     {/* Per-IP cap + window */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Per-IP signups</Text>
+                        <Text className="text-passive-1 text-xs font-medium">Per-IP signups</Text>
                         <SourceChip sources={settingsSources} keys={['registration.signupsPerIpMax']} />
                       </div>
-                      <Text className="mt-1 text-xs text-passive-1">
+                      <Text className="text-passive-1 mt-1 text-xs">
                         Maximum new accounts allowed from one client IP within the rolling window.
                       </Text>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1764,7 +1762,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           onClick={() => void saveSignupsPerIpMax()}
                           disabled={settingsSaving}
                         />
-                        <Text className="text-xs text-passive-1">within</Text>
+                        <Text className="text-passive-1 text-xs">within</Text>
                         <DecoratedInput
                           className={{ container: 'w-24 max-w-full' }}
                           placeholder="24"
@@ -1773,7 +1771,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           onEnter={() => void saveSignupsPerIpWindow()}
                           disabled={settingsSaving}
                         />
-                        <Text className="text-xs text-passive-1">hours</Text>
+                        <Text className="text-passive-1 text-xs">hours</Text>
                         <Button
                           label={settingsSaving ? 'Saving…' : 'Save window'}
                           onClick={() => void saveSignupsPerIpWindow()}
@@ -1786,10 +1784,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     {/* Per-week global cap */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Per-week (whole instance)</Text>
+                        <Text className="text-passive-1 text-xs font-medium">Per-week (whole instance)</Text>
                         <SourceChip sources={settingsSources} keys={['registration.signupsPerWeekMax']} />
                       </div>
-                      <Text className="mt-1 text-xs text-passive-1">
+                      <Text className="text-passive-1 mt-1 text-xs">
                         Global cap on new accounts created across the whole instance in any rolling 7-day period.
                       </Text>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1812,10 +1810,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     {/* Per-device SOFT cap + window */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <Text className="text-xs font-medium text-passive-1">Per-device (soft)</Text>
+                        <Text className="text-passive-1 text-xs font-medium">Per-device (soft)</Text>
                         <SourceChip sources={settingsSources} keys={['registration.signupsPerDeviceMax']} />
                       </div>
-                      <Text className="mt-1 text-xs text-passive-1">
+                      <Text className="text-passive-1 mt-1 text-xs">
                         Maximum new accounts per browser within the window.{' '}
                         <strong>Best-effort, per-browser and bypassable:</strong> it relies on a device id the client
                         sends, which the client fully controls (incognito, another browser or a script defeats it), so
@@ -1836,7 +1834,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           onClick={() => void saveSignupsPerDeviceMax()}
                           disabled={settingsSaving}
                         />
-                        <Text className="text-xs text-passive-1">within</Text>
+                        <Text className="text-passive-1 text-xs">within</Text>
                         <DecoratedInput
                           className={{ container: 'w-24 max-w-full' }}
                           placeholder="24"
@@ -1845,7 +1843,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           onEnter={() => void saveSignupsPerDeviceWindow()}
                           disabled={settingsSaving}
                         />
-                        <Text className="text-xs text-passive-1">hours</Text>
+                        <Text className="text-passive-1 text-xs">hours</Text>
                         <Button
                           label={settingsSaving ? 'Saving…' : 'Save window'}
                           onClick={() => void saveSignupsPerDeviceWindow()}
@@ -1858,7 +1856,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 </div>
 
                 {/* Standard Red Notes: EMAIL CONFIRMATION (part 2). OFF by default. */}
-                <div className="border-t border-border pt-4">
+                <div className="border-border border-t pt-4">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Subtitle>Require email confirmation</Subtitle>
@@ -1879,7 +1877,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     <div className="mt-4 flex flex-col gap-4">
                       <div>
                         <div className="flex items-center gap-2">
-                          <Text className="text-xs font-medium text-passive-1">Gating mode</Text>
+                          <Text className="text-passive-1 text-xs font-medium">Gating mode</Text>
                           <SourceChip sources={settingsSources} keys={['registration.emailConfirmationGating']} />
                         </div>
                         <div className="mt-1 w-96 max-w-full">
@@ -1903,12 +1901,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
                       <div>
                         <div className="flex items-center gap-2">
-                          <Text className="text-xs font-medium text-passive-1">Web app base URL</Text>
+                          <Text className="text-passive-1 text-xs font-medium">Web app base URL</Text>
                           <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBaseUrl']} />
                         </div>
                         <input
                           type="url"
-                          className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          className="border-border bg-default text-foreground mt-1 w-96 max-w-full rounded border p-2 text-sm"
                           placeholder="https://notes.example.com"
                           value={confirmationBaseUrl}
                           onChange={(event) => setConfirmationBaseUrl(event.target.value)}
@@ -1918,12 +1916,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
                       <div>
                         <div className="flex items-center gap-2">
-                          <Text className="text-xs font-medium text-passive-1">Email subject</Text>
+                          <Text className="text-passive-1 text-xs font-medium">Email subject</Text>
                           <SourceChip sources={settingsSources} keys={['registration.emailConfirmationSubject']} />
                         </div>
                         <input
                           type="text"
-                          className="mt-1 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          className="border-border bg-default text-foreground mt-1 w-96 max-w-full rounded border p-2 text-sm"
                           value={confirmationSubject}
                           onChange={(event) => setConfirmationSubject(event.target.value)}
                           disabled={settingsSaving}
@@ -1932,16 +1930,16 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
                       <div>
                         <div className="flex items-center gap-2">
-                          <Text className="text-xs font-medium text-passive-1">Email body</Text>
+                          <Text className="text-passive-1 text-xs font-medium">Email body</Text>
                           <SourceChip sources={settingsSources} keys={['registration.emailConfirmationBody']} />
                         </div>
                         <textarea
-                          className="mt-1 h-32 w-96 max-w-full rounded border border-border bg-default p-2 text-sm text-foreground"
+                          className="border-border bg-default text-foreground mt-1 h-32 w-96 max-w-full rounded border p-2 text-sm"
                           value={confirmationBody}
                           onChange={(event) => setConfirmationBody(event.target.value)}
                           disabled={settingsSaving}
                         />
-                        <Text className="mt-1 text-xs text-passive-1">
+                        <Text className="text-passive-1 mt-1 text-xs">
                           Use <code>{'{{confirmation_url}}'}</code> where the verification link should appear. If
                           omitted, the link is appended automatically.
                         </Text>
@@ -1988,9 +1986,9 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
           <Subtitle className="mt-4">Create an invite link</Subtitle>
           {inviteLinksNotAvailable ? (
-            <Text className="mt-2 text-xs text-passive-1">
-              Invite-link management is not available on this server. Update the server image to create and manage invite
-              links from here.
+            <Text className="text-passive-1 mt-2 text-xs">
+              Invite-link management is not available on this server. Update the server image to create and manage
+              invite links from here.
             </Text>
           ) : (
             <>
@@ -2001,7 +1999,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               </Text>
               <div className="mt-3 flex flex-col gap-3">
                 <div className="flex flex-wrap items-end gap-3">
-                  <label className="flex flex-col text-xs text-passive-1">
+                  <label className="text-passive-1 flex flex-col text-xs">
                     Max uses
                     <DecoratedInput
                       className={{ container: 'mt-1 w-28' }}
@@ -2011,7 +2009,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       disabled={creatingInviteLink}
                     />
                   </label>
-                  <label className="flex flex-col text-xs text-passive-1">
+                  <label className="text-passive-1 flex flex-col text-xs">
                     Expiry (hours, blank = never)
                     <DecoratedInput
                       className={{ container: 'mt-1 w-44' }}
@@ -2022,7 +2020,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     />
                   </label>
                 </div>
-                <label className="flex flex-col text-xs text-passive-1">
+                <label className="text-passive-1 flex flex-col text-xs">
                   Label (optional note)
                   <DecoratedInput
                     className={{ container: 'mt-1 w-96 max-w-full' }}
@@ -2033,7 +2031,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   />
                 </label>
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="flex flex-col text-xs text-passive-1">
+                  <div className="text-passive-1 flex flex-col text-xs">
                     Role for accounts from this link
                     <div className="mt-1 w-64 max-w-full">
                       <Dropdown
@@ -2050,7 +2048,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       />
                     </div>
                   </div>
-                  <label className="flex flex-col text-xs text-passive-1">
+                  <label className="text-passive-1 flex flex-col text-xs">
                     Email-domain lock (optional)
                     <DecoratedInput
                       className={{ container: 'mt-1 w-64 max-w-full' }}
@@ -2073,7 +2071,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
               {/* The ONE-TIME URL panel: the raw token is only ever available here. */}
               {createdInviteLink && (
-                <div className="mt-4 rounded border border-info bg-info-backdrop p-3">
+                <div className="border-info bg-info-backdrop mt-4 rounded border p-3">
                   <div className="flex items-center gap-2">
                     <Icon type="info" size="medium" className="text-info" />
                     <Subtitle>Copy this invite URL now — it is shown only once</Subtitle>
@@ -2083,7 +2081,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     it, revoke this link and create a new one.
                   </Text>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <code className="max-w-full overflow-x-auto whitespace-nowrap rounded border border-border bg-default px-2 py-1 text-xs text-foreground">
+                    <code className="border-border bg-default text-foreground max-w-full overflow-x-auto rounded border px-2 py-1 text-xs whitespace-nowrap">
                       {inviteLinkAbsoluteUrl(window.location.origin, createdInviteLink.path)}
                     </code>
                     <Button label="Copy URL" onClick={() => void copyCreatedInviteUrl()} />
@@ -2096,12 +2094,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               {inviteLinksLoading ? (
                 <Spinner className="mt-2 h-5 w-5" />
               ) : inviteLinks.length === 0 ? (
-                <Text className="mt-2 text-xs text-passive-1">No invite links yet.</Text>
+                <Text className="text-passive-1 mt-2 text-xs">No invite links yet.</Text>
               ) : (
                 <div className="mt-2 overflow-x-auto">
                   <table className="w-full min-w-[40rem] text-left text-sm">
                     <thead>
-                      <tr className="border-b border-border text-xs text-passive-1">
+                      <tr className="border-border text-passive-1 border-b text-xs">
                         <th className="py-2 pr-3 font-medium">Label</th>
                         <th className="py-2 pr-3 font-medium">Uses</th>
                         <th className="py-2 pr-3 font-medium">Status</th>
@@ -2111,7 +2109,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                         <th className="py-2 pr-3 font-medium"></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border">
+                    <tbody className="divide-border divide-y">
                       {inviteLinks.map((link) => {
                         const rowBusy = revokingInviteUuid === link.uuid
                         return (
@@ -2122,7 +2120,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                             </td>
                             <td className="py-2 pr-3">
                               <span
-                                className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${inviteLinkStatusChipClass(
+                                className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${inviteLinkStatusChipClass(
                                   link.status,
                                 )}`}
                               >
@@ -2179,31 +2177,31 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           </div>
           <Text className="mt-1 text-xs">
             When on, a new signup is created but cannot sign in until an admin approves it below. Existing accounts are
-            unaffected. Signups made through an admin invite link above are auto-approved (issuing the link is itself the
-            vetting step).
+            unaffected. Signups made through an admin invite link above are auto-approved (issuing the link is itself
+            the vetting step).
           </Text>
 
           <Subtitle className="mt-4">Pending approvals</Subtitle>
           {pendingUsersNotAvailable ? (
-            <Text className="mt-2 text-xs text-passive-1">
+            <Text className="text-passive-1 mt-2 text-xs">
               The approval queue is not available on this server. Update the server image to review pending signups from
               here.
             </Text>
           ) : pendingUsersLoading ? (
             <Spinner className="mt-2 h-5 w-5" />
           ) : pendingUsers.length === 0 ? (
-            <Text className="mt-2 text-xs text-passive-1">No signups are awaiting approval.</Text>
+            <Text className="text-passive-1 mt-2 text-xs">No signups are awaiting approval.</Text>
           ) : (
             <div className="mt-2 overflow-x-auto">
               <table className="w-full min-w-[32rem] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-border text-xs text-passive-1">
+                  <tr className="border-border text-passive-1 border-b text-xs">
                     <th className="py-2 pr-3 font-medium">Email</th>
                     <th className="py-2 pr-3 font-medium">Requested</th>
                     <th className="py-2 pr-3 font-medium"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className="divide-border divide-y">
                   {pendingUsers.map((row) => {
                     const approveBusy = pendingActionInFlight === `approve:${row.uuid}`
                     const rejectBusy = pendingActionInFlight === `reject:${row.uuid}`
@@ -2258,7 +2256,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </Text>
           ) : settingsError ? (
             <>
-              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <Text className="text-danger mt-3">{settingsError}</Text>
               <div className="mt-2">
                 <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
@@ -2268,10 +2266,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               {/* Global max-total-accounts cap */}
               <div>
                 <div className="flex items-center gap-2">
-                  <Text className="text-xs font-medium text-passive-1">Maximum total accounts</Text>
+                  <Text className="text-passive-1 text-xs font-medium">Maximum total accounts</Text>
                   <SourceChip sources={settingsSources} keys={['registration.maxTotalAccounts']} />
                 </div>
-                <Text className="mt-1 text-xs text-passive-1">
+                <Text className="text-passive-1 mt-1 text-xs">
                   Hard cap on the total number of accounts on this instance. 0 or blank means unlimited. Enforcement
                   fails open — a counting error never blocks a signup.
                 </Text>
@@ -2293,20 +2291,20 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               </div>
 
               {/* Signup window (UTC) */}
-              <div className="border-t border-border pt-4">
+              <div className="border-border border-t pt-4">
                 <Subtitle>Signup window</Subtitle>
-                <Text className="mt-1 text-xs text-passive-1">
+                <Text className="text-passive-1 mt-1 text-xs">
                   Allow signups only between an open and a close time. Leave a side blank to leave it open-ended; leave
                   both blank for always-open. <strong>Times are in UTC</strong> and evaluated against the server clock —
                   set them relative to the UTC time shown below. (If the server clock is wrong, the window shifts with
                   it.)
                 </Text>
-                <Text className="mt-1 text-xs font-medium text-info">
+                <Text className="text-info mt-1 text-xs font-medium">
                   Current UTC time (this browser): {formatUtcClock(utcNowMs)}
                 </Text>
 
                 <div className="mt-3 flex flex-wrap items-end gap-4">
-                  <div className="flex flex-col text-xs text-passive-1">
+                  <div className="text-passive-1 flex flex-col text-xs">
                     <div className="flex items-center gap-2">
                       Opens at (UTC)
                       <SourceChip sources={settingsSources} keys={['registration.signupsOpenAt']} />
@@ -2314,7 +2312,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     <input
                       type="datetime-local"
                       aria-label="Signup window opens at (UTC)"
-                      className="mt-1 rounded border border-border bg-default p-2 text-sm text-foreground"
+                      className="border-border bg-default text-foreground mt-1 rounded border p-2 text-sm"
                       value={signupsOpenAt}
                       onChange={(event) => setSignupsOpenAt(event.target.value)}
                       disabled={settingsSaving}
@@ -2326,7 +2324,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       disabled={settingsSaving}
                     />
                   </div>
-                  <div className="flex flex-col text-xs text-passive-1">
+                  <div className="text-passive-1 flex flex-col text-xs">
                     <div className="flex items-center gap-2">
                       Closes at (UTC)
                       <SourceChip sources={settingsSources} keys={['registration.signupsCloseAt']} />
@@ -2334,7 +2332,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                     <input
                       type="datetime-local"
                       aria-label="Signup window closes at (UTC)"
-                      className="mt-1 rounded border border-border bg-default p-2 text-sm text-foreground"
+                      className="border-border bg-default text-foreground mt-1 rounded border p-2 text-sm"
                       value={signupsCloseAt}
                       onChange={(event) => setSignupsCloseAt(event.target.value)}
                       disabled={settingsSaving}
@@ -2350,12 +2348,12 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               </div>
 
               {/* Per-user self-serve invite quota */}
-              <div className="border-t border-border pt-4">
+              <div className="border-border border-t pt-4">
                 <div className="flex items-center gap-2">
-                  <Text className="text-xs font-medium text-passive-1">Invites per user</Text>
+                  <Text className="text-passive-1 text-xs font-medium">Invites per user</Text>
                   <SourceChip sources={settingsSources} keys={['registration.invitesPerUser']} />
                 </div>
-                <Text className="mt-1 text-xs text-passive-1">
+                <Text className="text-passive-1 mt-1 text-xs">
                   How many active invite links each normal user may hold, letting them invite others without an admin. 0
                   or blank disables self-serve referral invites (only admins can create links).
                 </Text>
@@ -2385,7 +2383,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         {settingsLoading || settingsNotAvailable || settingsError || !serverSettings ? (
           <PreferencesSegment>
             <Title>Integrations</Title>
-            <Text className="mt-3 text-passive-1">
+            <Text className="text-passive-1 mt-3">
               {settingsLoading
                 ? 'Loading integration settings…'
                 : 'Integration settings (OCR, Workflows) are unavailable until this server reports editable settings.'}
@@ -2664,7 +2662,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </Text>
           ) : settingsError ? (
             <>
-              <Text className="mt-3 text-danger">{settingsError}</Text>
+              <Text className="text-danger mt-3">{settingsError}</Text>
               <div className="mt-2">
                 <Button label="Retry" onClick={() => void loadServerSettings()} />
               </div>
@@ -2689,7 +2687,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   />
                 </div>
               </div>
-              <Text className="text-xs text-passive-1">
+              <Text className="text-passive-1 text-xs">
                 Scope: this control changes the <strong>api-gateway</strong> and <strong>auth</strong> service loggers
                 (the highest-value surfaces). Other services keep honoring their <code>LOG_LEVEL</code> environment
                 variable until a later release adds them. In deployments where services do not share the settings

@@ -122,11 +122,7 @@ export function writeAutoEmptyTrashInterval(intervalMs: number): void {
  *   - Only items with `trashed === true` are ever considered.
  *   - An item is due when (now - userModifiedDate) >= intervalMs.
  */
-export function selectTrashedItemsDueForDeletion(
-  items: SNNote[],
-  intervalMs: number,
-  now: number,
-): SNNote[] {
+export function selectTrashedItemsDueForDeletion(items: SNNote[], intervalMs: number, now: number): SNNote[] {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     return []
   }

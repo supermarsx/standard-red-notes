@@ -28,7 +28,7 @@ export const MAX_TAG_LENGTH = 60
 
 const SYSTEM_PROMPT =
   'You are a tagging assistant for a note-taking app. Given a note, propose a small set of short, relevant ' +
-  'topic tags that would help the user find and group this note later. Prefer reusing the user\'s existing tags ' +
+  "topic tags that would help the user find and group this note later. Prefer reusing the user's existing tags " +
   'when one fits, instead of inventing a near-duplicate. ' +
   `Reply with ONLY a JSON array of at most ${MAX_SUGGESTED_TAGS} tag strings, e.g. ["work","budget"]. ` +
   'Each tag should be 1-3 words, lowercase unless a proper noun, with no leading "#". ' +
@@ -63,16 +63,17 @@ export function prepareTagInputText(plaintext: string, budget = DEFAULT_TAG_INPU
  * function of its inputs so it can be unit-tested. The existing tag list is included
  * verbatim so the model is nudged to reuse those names over inventing duplicates.
  */
-export function buildTagSuggestionPrompt(input: TagPromptInput, budget = DEFAULT_TAG_INPUT_BUDGET): {
+export function buildTagSuggestionPrompt(
+  input: TagPromptInput,
+  budget = DEFAULT_TAG_INPUT_BUDGET,
+): {
   system: string
   user: string
 } {
   const title = (input.title ?? '').trim()
   const body = prepareTagInputText(input.plaintext ?? '', budget)
 
-  const existing = (input.existingTags ?? [])
-    .map((t) => (t ?? '').trim())
-    .filter((t) => t.length > 0)
+  const existing = (input.existingTags ?? []).map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
 
   const existingBlock =
     existing.length > 0
@@ -109,7 +110,10 @@ export function sanitizeTag(raw: string): string {
   // Strip wrapping quotes a model might leave on a comma list element.
   tag = tag.replace(/^["'`]+|["'`]+$/g, '')
   // Strip a leading hashtag and any leading list markers ("- ", "* ", "1. ").
-  tag = tag.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').replace(/^#+/, '')
+  tag = tag
+    .replace(/^[-*]\s+/, '')
+    .replace(/^\d+[.)]\s+/, '')
+    .replace(/^#+/, '')
   // Collapse internal whitespace/newlines.
   tag = tag.replace(/\s+/g, ' ').trim()
   if (tag.length === 0 || tag.length > MAX_TAG_LENGTH) {

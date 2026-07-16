@@ -124,9 +124,7 @@ describe('collectAllTodos', () => {
     })
     const open = makeNote(
       NoteType.Task,
-      advancedChecklistJson([
-        { name: 'G', tasks: [{ id: 't', description: 'Open item', completed: false }] },
-      ]),
+      advancedChecklistJson([{ name: 'G', tasks: [{ id: 't', description: 'Open item', completed: false }] }]),
       { uuid: 'open', title: 'Has work' },
     )
     const groups = collectAllTodos([done, open])

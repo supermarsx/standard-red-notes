@@ -6,11 +6,7 @@ import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
-import {
-  DeepResearchProgress,
-  DeepResearchReport,
-  DEFAULT_DEEP_RESEARCH_LIMITS,
-} from '@/Assistant/deepResearch'
+import { DeepResearchProgress, DeepResearchReport, DEFAULT_DEEP_RESEARCH_LIMITS } from '@/Assistant/deepResearch'
 import { getDeepResearchAvailability, runDeepResearchForApplication } from '@/Assistant/deepResearchRunner'
 
 type Props = {
@@ -87,13 +83,13 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-2">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Icon type="search" className="text-info" />
           Deep research
         </div>
         <button
-          className="rounded p-1 hover:bg-contrast"
+          className="hover:bg-contrast rounded p-1"
           onClick={onClose}
           aria-label="Back to chat"
           title="Back to chat"
@@ -103,7 +99,7 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
       </div>
 
       <div className="flex-grow overflow-y-auto px-4 py-3">
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm text-warning">
+        <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
           Deep research reads several of your notes and sends those excerpts to your AI provider across multiple steps —
           more exposure than a single question. It is a bounded loop (≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxRounds} rounds,
           ≤ {DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes} notes, truncated snippets) over your OWN notes only — there is no
@@ -111,16 +107,16 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
         </div>
 
         {!availability.available && (
-          <div className="mt-3 rounded border border-border bg-contrast p-3 text-sm text-neutral">
+          <div className="border-border bg-contrast text-neutral mt-3 rounded border p-3 text-sm">
             {availability.reason || 'Deep research is unavailable.'}
           </div>
         )}
 
-        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-passive-1">
+        <label className="text-passive-1 mt-3 block text-xs font-semibold tracking-wide uppercase">
           Research question
         </label>
         <textarea
-          className="mt-1 w-full resize-none rounded border border-border bg-default px-3 py-2 text-sm focus:border-info focus:outline-none"
+          className="border-border bg-default focus:border-info mt-1 w-full resize-none rounded border px-3 py-2 text-sm focus:outline-none"
           rows={3}
           placeholder="e.g. What have I noted about our pricing strategy?"
           value={question}
@@ -139,32 +135,32 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
               disabled={!question.trim() || !availability.available}
             />
           )}
-          {progress && <span className="text-xs text-passive-0">{progressLabel(progress)}</span>}
+          {progress && <span className="text-passive-0 text-xs">{progressLabel(progress)}</span>}
         </div>
 
         {error && (
-          <div className="mt-3 rounded border border-danger bg-default px-3 py-2 text-sm text-danger">{error}</div>
+          <div className="border-danger bg-default text-danger mt-3 rounded border px-3 py-2 text-sm">{error}</div>
         )}
 
         {report && (
           <div className="mt-4">
             {report.report && (
-              <div className="whitespace-pre-wrap rounded-lg bg-contrast px-3 py-2 text-sm text-text">
+              <div className="bg-contrast text-text rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
                 {report.report}
               </div>
             )}
 
             {report.sources.length > 0 && (
               <div className="mt-3">
-                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-passive-1">
+                <div className="text-passive-1 mb-1 text-xs font-semibold tracking-wide uppercase">
                   Cited sources ({report.sources.length})
                 </div>
                 <ol className="flex flex-col gap-1">
                   {report.sources.map((source, index) => (
                     <li key={source.uuid} className="flex items-start gap-2 text-sm">
-                      <span className="mt-0.5 flex-shrink-0 text-passive-1">[{index + 1}]</span>
+                      <span className="text-passive-1 mt-0.5 flex-shrink-0">[{index + 1}]</span>
                       <button
-                        className="text-left text-info hover:underline"
+                        className="text-info text-left hover:underline"
                         onClick={() => openNote(source.uuid)}
                         title="Open this note"
                       >
@@ -178,7 +174,7 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
 
             <div
               className={classNames(
-                'mt-3 text-xs text-passive-1',
+                'text-passive-1 mt-3 text-xs',
                 report.stopReason === 'no-candidates' && 'text-warning',
               )}
             >

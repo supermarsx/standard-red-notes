@@ -81,7 +81,7 @@ describe('typographyProfiles', () => {
       expect(decls).toContain('border-left-style: solid')
     })
 
-    it("resolves a google: fontFamily through the vetted grammar", () => {
+    it('resolves a google: fontFamily through the vetted grammar', () => {
       const decls = blockStyleToDeclarations({ fontFamily: 'google:Inter' })
       expect(decls).toContain("font-family: 'Inter'")
     })
@@ -165,7 +165,9 @@ describe('typographyProfiles', () => {
     })
 
     it('emits a ::marker rule when markerColor is set', () => {
-      const css = blockStyleToCss(makeProfile({ blocks: { bulletList: { markerColor: 'red', listMarkerStyle: 'square' } } }))
+      const css = blockStyleToCss(
+        makeProfile({ blocks: { bulletList: { markerColor: 'red', listMarkerStyle: 'square' } } }),
+      )
       expect(css).toContain('list-style-type: square')
       expect(css).toContain(`${TYPOGRAPHY_SCOPE_SELECTOR} .Lexical__ul ::marker {`)
       expect(css).toContain('color: red')

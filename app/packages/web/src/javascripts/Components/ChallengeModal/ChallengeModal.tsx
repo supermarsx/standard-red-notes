@@ -127,10 +127,7 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
       // prompt, remember that so the app stops force-reopening it on every
       // failed sync. The footer surfaces a clickable "Login needed" status
       // instead; clicking it (or a successful sign-in) clears this flag.
-      if (
-        challenge.reason === ChallengeReason.Custom &&
-        challenge.heading === SessionStrings.EnterEmailAndPassword
-      ) {
+      if (challenge.reason === ChallengeReason.Custom && challenge.heading === SessionStrings.EnterEmailAndPassword) {
         application.accountMenuController.setReloginPromptDismissed(true)
       }
       application.cancelChallenge(challenge)
@@ -251,7 +248,7 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
       hideOnInteractOutside={false}
       backdropClassName={isFullScreenBlocker ? 'bg-passive-5' : ''}
       className={classNames(
-        'sn-component challenge-modal relative m-0 flex h-full w-full flex-col items-center rounded border-solid border-border bg-default p-0 md:h-auto md:!w-max',
+        'sn-component challenge-modal border-border bg-default relative m-0 flex h-full w-full flex-col items-center rounded border-solid p-0 md:h-auto md:!w-max',
         !isMobileScreen && 'shadow-overlay-light',
       )}
     >
@@ -275,7 +272,7 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
           <button
             onClick={cancelChallenge}
             aria-label="Close modal"
-            className="absolute right-4 top-4 hidden cursor-pointer border-0 bg-transparent p-1 md:flex"
+            className="absolute top-4 right-4 hidden cursor-pointer border-0 bg-transparent p-1 md:flex"
           >
             <Icon type="close" className="text-neutral" />
           </button>
@@ -313,7 +310,7 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
             ))}
           </form>
           {shouldShowSubmitButton && (
-            <Button primary disabled={isProcessing} className="mb-3.5 mt-1 min-w-76" onClick={submit}>
+            <Button primary disabled={isProcessing} className="mt-1 mb-3.5 min-w-76" onClick={submit}>
               {isProcessing ? 'Generating Keys...' : 'Submit'}
             </Button>
           )}
@@ -336,7 +333,7 @@ const ChallengeModal: FunctionComponent<Props> = ({ application, mainApplication
                   .catch(console.error)
               }}
             >
-              <Icon type="help" className="mr-2 text-neutral" />
+              <Icon type="help" className="text-neutral mr-2" />
               Forgot passcode?
             </Button>
           )}

@@ -21,11 +21,11 @@ const VaultSelectMenuItemWithOptions = ({
   }
 
   return (
-    <div className="group flex items-center gap-3 px-3 focus-within:bg-info-backdrop">
+    <div className="group focus-within:bg-info-backdrop flex items-center gap-3 px-3">
       {children}
       <button
         className={classNames(
-          'flex-shrink-0 rounded-full border border-border p-1 hover:bg-default focus:bg-default group-focus-within:bg-default',
+          'border-border hover:bg-default focus:bg-default group-focus-within:bg-default flex-shrink-0 rounded-full border p-1',
           isOptionsMenuOpen && 'bg-default',
         )}
         onClick={toggleOptionsMenu}

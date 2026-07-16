@@ -1,18 +1,11 @@
 import { SNNote } from '@standardnotes/snjs'
-import {
-  buildCombinedReminderDocument,
-  collectAllReminders,
-  groupReminders,
-} from './allReminders'
+import { buildCombinedReminderDocument, collectAllReminders, groupReminders } from './allReminders'
 import { NoteRemindersKey, Reminder } from './reminders'
 
 /**
  * Minimal SNNote stub: reminders live in appData, read via getAppDomainValue.
  */
-const makeNote = (
-  reminders: Reminder[],
-  overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {},
-): SNNote =>
+const makeNote = (reminders: Reminder[], overrides: Partial<Pick<SNNote, 'uuid' | 'title' | 'trashed'>> = {}): SNNote =>
   ({
     uuid: overrides.uuid ?? 'note-1',
     title: overrides.title ?? 'A note',

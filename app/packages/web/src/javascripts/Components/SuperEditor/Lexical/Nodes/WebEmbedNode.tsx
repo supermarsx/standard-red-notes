@@ -158,17 +158,17 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
 
   if (editing) {
     return (
-      <div className="my-2 w-full max-w-full rounded border border-border bg-default" data-web-embed-block="true">
-        <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+      <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-web-embed-block="true">
+        <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
           <span className="font-semibold">Embed website</span>
         </div>
         <div className="p-2">
-          <div className="mb-2 flex items-start gap-2 rounded border border-warning bg-warning-faded p-2 text-xs text-warning">
+          <div className="border-warning bg-warning-faded text-warning mb-2 flex items-start gap-2 rounded border p-2 text-xs">
             <Icon type="warning" className="mt-0.5 flex-shrink-0" />
             <p className="break-words">{INSERT_WARNING}</p>
           </div>
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Paste a website URL (https://…) to embed"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -180,11 +180,11 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
             autoFocus
           />
           {draft.trim() && !sanitizeWebEmbedUrl(draft) ? (
-            <div className="mt-1 text-xs text-danger">Enter a valid http(s) website URL.</div>
+            <div className="text-danger mt-1 text-xs">Enter a valid http(s) website URL.</div>
           ) : null}
           <button
             type="button"
-            className="mt-2 rounded bg-info px-3 py-1 text-sm text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast mt-2 rounded px-3 py-1 text-sm disabled:opacity-50"
             disabled={!sanitizeWebEmbedUrl(draft)}
             onClick={() => commit(draft)}
           >
@@ -196,8 +196,8 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
   }
 
   return (
-    <div className="my-2 w-full max-w-full rounded border border-border bg-default" data-web-embed-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-web-embed-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="flex min-w-0 items-center font-semibold">
           <Icon type="window" className="mr-1.5 flex-shrink-0" />
           <span className="truncate">{safeUrl || 'Embed website'}</span>
@@ -208,34 +208,34 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
               href={safeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center rounded px-2 py-0.5 hover:bg-contrast"
+              className="hover:bg-contrast flex items-center rounded px-2 py-0.5"
               title="Open in a new tab"
             >
               <Icon type="open-in" className="mr-1" />
               Open
             </a>
           ) : null}
-          <button type="button" className="rounded px-2 py-0.5 hover:bg-contrast" onClick={() => setEditing(true)}>
+          <button type="button" className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => setEditing(true)}>
             Edit
           </button>
         </span>
       </div>
 
       {!safeUrl ? (
-        <div className="p-2 text-sm text-danger">Enter a valid http(s) website URL to embed.</div>
+        <div className="text-danger p-2 text-sm">Enter a valid http(s) website URL to embed.</div>
       ) : !loaded ? (
         /* Risk-alert placeholder card: shown FIRST instead of an auto-loaded
            iframe. The user must explicitly opt in to loading external content. */
         <div className="p-3">
-          <div className="flex items-start gap-2 rounded border border-warning bg-warning-faded p-2 text-sm text-foreground">
-            <Icon type="warning" className="mt-0.5 flex-shrink-0 text-warning" />
+          <div className="border-warning bg-warning-faded text-foreground flex items-start gap-2 rounded border p-2 text-sm">
+            <Icon type="warning" className="text-warning mt-0.5 flex-shrink-0" />
             <div>
-              <div className="font-semibold text-warning">Embedding a website can be dangerous</div>
-              <p className="mt-1 break-words text-passive-0">{RISK_WARNING}</p>
-              <p className="mt-1 break-all text-xs text-passive-1">{safeUrl}</p>
+              <div className="text-warning font-semibold">Embedding a website can be dangerous</div>
+              <p className="text-passive-0 mt-1 break-words">{RISK_WARNING}</p>
+              <p className="text-passive-1 mt-1 text-xs break-all">{safeUrl}</p>
             </div>
           </div>
-          <label className="mt-2 flex items-start gap-2 text-xs text-passive-0">
+          <label className="text-passive-0 mt-2 flex items-start gap-2 text-xs">
             <input
               type="checkbox"
               className="mt-0.5"
@@ -250,7 +250,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded bg-info px-3 py-1 text-sm text-info-contrast"
+              className="bg-info text-info-contrast rounded px-3 py-1 text-sm"
               onClick={() => setLoaded(true)}
             >
               Load page
@@ -259,7 +259,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
               href={safeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded border border-border px-3 py-1 text-sm hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
             >
               Open in a new tab instead
             </a>
@@ -268,7 +268,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
       ) : (
         <div className="p-2">
           {/* Bounded, responsive container: full width, capped height, no overflow. */}
-          <div className="w-full max-w-full overflow-hidden rounded border border-border" style={{ height }}>
+          <div className="border-border w-full max-w-full overflow-hidden rounded border" style={{ height }}>
             {/* Modern-app-capable iframe. The sandbox enables what framework SPAs
                 need (scripts/modules, same-origin storage+fetch, forms, popups,
                 modals, downloads, presentation) while still WITHOUT
@@ -289,7 +289,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           </div>
           {/* We cannot reliably detect X-Frame-Options / CSP frame-ancestors
               denial from script, so we always surface this fallback hint. */}
-          <p className="mt-1 text-xs text-passive-1">
+          <p className="text-passive-1 mt-1 text-xs">
             If the page is blank, the site blocks embedding —{' '}
             <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
               open it in a new tab

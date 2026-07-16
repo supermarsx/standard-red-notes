@@ -242,7 +242,7 @@ const Webhooks: FunctionComponent<Props> = ({ application }: Props) => {
         </div>
 
         {createdSecret && (
-          <div className="mt-3 rounded border border-solid border-warning bg-warning-faded p-3">
+          <div className="border-warning bg-warning-faded mt-3 rounded border border-solid p-3">
             <Subtitle className="text-warning">Copy your webhook signing secret now</Subtitle>
             <Text className="mb-2">
               This is the only time this secret is shown. Store it now — use it to verify the{' '}
@@ -250,7 +250,7 @@ const Webhooks: FunctionComponent<Props> = ({ application }: Props) => {
               recreate the webhook if you lose it.
             </Text>
             <div className="flex flex-row items-center gap-2">
-              <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdSecret}</code>
+              <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{createdSecret}</code>
               <CopyButton copyValue={createdSecret} successMessage="Webhook secret copied to clipboard" />
             </div>
             <Button className="mt-3" label="Done" onClick={() => setCreatedSecret(null)} />
@@ -268,14 +268,14 @@ const Webhooks: FunctionComponent<Props> = ({ application }: Props) => {
           webhooks.map((webhook) => (
             <div
               key={webhook.uuid}
-              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="break-all text-base font-medium lg:text-sm">{webhook.targetUrl}</span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-base font-medium break-all lg:text-sm">{webhook.targetUrl}</span>
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   {webhook.events.length > 0 ? webhook.events.join(', ') : 'no events'}
                 </span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   {webhook.userUuid === null ? 'Global · ' : ''}
                   {webhook.enabled ? 'Enabled' : 'Disabled'} · Created {formatDate(webhook.createdAt)}
                 </span>

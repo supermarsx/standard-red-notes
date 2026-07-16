@@ -149,13 +149,13 @@ const PendingMfaApprovals: FunctionComponent<Props> = ({ application }: Props) =
         return (
           <div
             key={approval.challengeId}
-            className="mt-3 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+            className="border-border mt-3 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="flex min-w-0 flex-col">
-              <span className="break-words text-base font-medium lg:text-sm">
+              <span className="text-base font-medium break-words lg:text-sm">
                 {describeRequestingDevice(approval.requestingUserAgent)}
               </span>
-              <span className="break-words text-sm text-passive-0 lg:text-xs">
+              <span className="text-passive-0 text-sm break-words lg:text-xs">
                 {describeRequestingIpAddress(approval.requestingIpAddress)} · Requested{' '}
                 {formatApprovalTimestamp(approval.createdAt)}
               </span>

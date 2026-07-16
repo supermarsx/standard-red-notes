@@ -32,7 +32,7 @@ const SessionHistoryList: FunctionComponent<Props> = ({ noteHistoryController, o
         if (group.entries && group.entries.length) {
           return (
             <Fragment key={group.title}>
-              <div className="mb-1 mt-2.5 select-none px-3 text-sm font-semibold uppercase text-passive-0">
+              <div className="text-passive-0 mt-2.5 mb-1 px-3 text-sm font-semibold uppercase select-none">
                 {group.title}
               </div>
               {group.entries.map((entry, index) => (
@@ -53,7 +53,7 @@ const SessionHistoryList: FunctionComponent<Props> = ({ noteHistoryController, o
           return null
         }
       })}
-      {!sessionHistoryLength && <div className="select-none text-sm text-passive-0">No session history found</div>}
+      {!sessionHistoryLength && <div className="text-passive-0 text-sm select-none">No session history found</div>}
     </div>
   )
 }

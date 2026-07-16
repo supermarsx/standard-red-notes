@@ -21,9 +21,7 @@ const Spinner = ({ className = '', contrast = false }: Props) => {
   const colorClasses = contrast ? 'border-info-contrast border-r-transparent' : 'border-info border-r-transparent'
 
   return (
-    <div
-      className={`animate-spin rounded-full border border-solid ${sizeClass} ${className} ${colorClasses}`.trim()}
-    />
+    <div className={`animate-spin rounded-full border border-solid ${sizeClass} ${className} ${colorClasses}`.trim()} />
   )
 }
 

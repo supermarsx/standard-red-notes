@@ -110,7 +110,8 @@ const ko: LocaleResource = {
     helpAndFeedback: '도움말 및 피드백',
     language: '언어',
     languageTitle: '언어',
-    languageDescription: '앱 인터페이스 전체에서 사용할 언어를 선택하세요. 아직 번역되지 않은 항목은 영어로 표시됩니다.',
+    languageDescription:
+      '앱 인터페이스 전체에서 사용할 언어를 선택하세요. 아직 번역되지 않은 항목은 영어로 표시됩니다.',
     languageChanged: '언어가 업데이트되었습니다',
     defaults: '기본값',
     tools: '도구',

@@ -47,7 +47,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     try {
       this.importEditor.parseEditorState(superString)
       return true
-    } catch (error) {
+    } catch {
       return false
     }
   }

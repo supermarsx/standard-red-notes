@@ -1,7 +1,15 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { isPayloadSourceRetrieved } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
-import { DragEvent as ReactDragEvent, FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  DragEvent as ReactDragEvent,
+  FunctionComponent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
 import Icon from '@/Components/Icon/Icon'
 import {
@@ -175,9 +183,9 @@ export const KanbanEditor: FunctionComponent<Props> = ({
     (columnId: string) => {
       updateDocument((doc) => ({
         ...doc,
-        columns: doc.columns.map((c) =>
-          c.id === columnId ? { ...c, cards: [...c.cards, { id: createKanbanId('card'), text: '' }] } : c,
-        ),
+        columns: doc.columns.map((c) => {
+          return c.id === columnId ? { ...c, cards: [...c.cards, { id: createKanbanId('card'), text: '' }] } : c
+        }),
       }))
     },
     [updateDocument],
@@ -187,9 +195,11 @@ export const KanbanEditor: FunctionComponent<Props> = ({
     (columnId: string, cardId: string, text: string) => {
       updateDocument((doc) => ({
         ...doc,
-        columns: doc.columns.map((c) =>
-          c.id === columnId ? { ...c, cards: c.cards.map((card) => (card.id === cardId ? { ...card, text } : card)) } : c,
-        ),
+        columns: doc.columns.map((c) => {
+          return c.id === columnId
+            ? { ...c, cards: c.cards.map((card) => (card.id === cardId ? { ...card, text } : card)) }
+            : c
+        }),
       }))
     },
     [updateDocument],
@@ -199,9 +209,9 @@ export const KanbanEditor: FunctionComponent<Props> = ({
     (columnId: string, cardId: string) => {
       updateDocument((doc) => ({
         ...doc,
-        columns: doc.columns.map((c) =>
-          c.id === columnId ? { ...c, cards: c.cards.filter((card) => card.id !== cardId) } : c,
-        ),
+        columns: doc.columns.map((c) => {
+          return c.id === columnId ? { ...c, cards: c.cards.filter((card) => card.id !== cardId) } : c
+        }),
       }))
     },
     [updateDocument],
@@ -283,17 +293,17 @@ export const KanbanEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="dashboard" className="flex-shrink-0 text-info" />
+          <Icon type="dashboard" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">Kanban</span>
-          <span className="truncate text-xs text-neutral">
+          <span className="text-neutral truncate text-xs">
             {document.columns.length} columns · {countCards(document)} cards
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
           <button
-            className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-default disabled:opacity-50"
+            className="hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-sm disabled:opacity-50"
             onClick={addColumn}
             disabled={isReadonly}
             title="Add column"
@@ -305,7 +315,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a kanban board and a new one was started. Your original text is
             preserved until you make a change.
@@ -319,12 +329,12 @@ export const KanbanEditor: FunctionComponent<Props> = ({
       {/* Board: columns scroll horizontally; stack readably on small screens. */}
       <div className="min-h-0 flex-grow overflow-auto p-3">
         {document.columns.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+          <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
             <p className="font-semibold">No columns yet</p>
             <p>Add a column to start organizing cards.</p>
             {!isReadonly && (
               <button
-                className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+                className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
                 onClick={addColumn}
               >
                 Add column
@@ -337,7 +347,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
               <div
                 key={column.id}
                 className={classNames(
-                  'flex w-full flex-shrink-0 flex-col rounded-md border bg-default md:w-72',
+                  'bg-default flex w-full flex-shrink-0 flex-col rounded-md border md:w-72',
                   dragOverColumnId === column.id ? 'border-info' : 'border-border',
                 )}
                 style={{ borderTop: column.color ? `3px solid ${column.color}` : undefined }}
@@ -354,17 +364,17 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                 }}
               >
                 {/* Column header */}
-                <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+                <div className="border-border flex items-center gap-1 border-b px-2 py-2">
                   <input
-                    className="min-w-0 flex-grow rounded bg-transparent px-1 py-0.5 text-sm font-bold text-text outline-none focus:bg-contrast disabled:opacity-50"
+                    className="text-text focus:bg-contrast min-w-0 flex-grow rounded bg-transparent px-1 py-0.5 text-sm font-bold outline-none disabled:opacity-50"
                     value={column.title}
                     placeholder="Column title"
                     disabled={isReadonly}
                     onChange={(e) => renameColumn(column.id, e.target.value)}
                   />
-                  <span className="text-xs text-passive-1">{column.cards.length}</span>
+                  <span className="text-passive-1 text-xs">{column.cards.length}</span>
                   <button
-                    className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                    className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                     disabled={isReadonly || columnIndex === 0}
                     onClick={() => moveColumn(column.id, -1)}
                     title="Move column left"
@@ -373,7 +383,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                     <Icon type="chevron-left" size="small" />
                   </button>
                   <button
-                    className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                    className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                     disabled={isReadonly || columnIndex === document.columns.length - 1}
                     onClick={() => moveColumn(column.id, 1)}
                     title="Move column right"
@@ -382,7 +392,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                     <Icon type="chevron-right" size="small" />
                   </button>
                   <button
-                    className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                    className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                     disabled={isReadonly}
                     onClick={() => deleteColumn(column.id)}
                     title="Delete column"
@@ -394,7 +404,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
 
                 {/* Column color swatches */}
                 {!isReadonly && (
-                  <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+                  <div className="border-border flex items-center gap-1 border-b px-2 py-1">
                     {COLUMN_COLORS.map((color) => (
                       <button
                         key={color}
@@ -422,10 +432,10 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                         dragInfo.current = null
                         setDragOverColumnId(null)
                       }}
-                      className="group rounded border border-border bg-contrast p-2"
+                      className="group border-border bg-contrast rounded border p-2"
                     >
                       <textarea
-                        className="w-full resize-none bg-transparent text-sm text-text outline-none disabled:opacity-50"
+                        className="text-text w-full resize-none bg-transparent text-sm outline-none disabled:opacity-50"
                         rows={2}
                         value={card.text}
                         placeholder="Card text"
@@ -435,7 +445,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                       {!isReadonly && (
                         <div className="mt-1 flex items-center justify-end gap-1">
                           <button
-                            className="rounded p-1 hover:bg-default disabled:opacity-30"
+                            className="hover:bg-default rounded p-1 disabled:opacity-30"
                             disabled={columnIndex === 0}
                             onClick={() => moveCardToColumn(card.id, column.id, -1)}
                             title="Move card to previous column"
@@ -444,7 +454,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                             <Icon type="arrow-left" size="small" />
                           </button>
                           <button
-                            className="rounded p-1 hover:bg-default disabled:opacity-30"
+                            className="hover:bg-default rounded p-1 disabled:opacity-30"
                             disabled={columnIndex === document.columns.length - 1}
                             onClick={() => moveCardToColumn(card.id, column.id, 1)}
                             title="Move card to next column"
@@ -453,7 +463,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                             <Icon type="arrow-right" size="small" />
                           </button>
                           <button
-                            className="rounded p-1 text-danger hover:bg-default"
+                            className="text-danger hover:bg-default rounded p-1"
                             onClick={() => deleteCard(column.id, card.id)}
                             title="Delete card"
                             aria-label="Delete card"
@@ -466,7 +476,7 @@ export const KanbanEditor: FunctionComponent<Props> = ({
                   ))}
                   {!isReadonly && (
                     <button
-                      className="flex items-center justify-center gap-1 rounded border border-dashed border-border px-2 py-1.5 text-xs text-passive-1 hover:border-info hover:text-info"
+                      className="border-border text-passive-1 hover:border-info hover:text-info flex items-center justify-center gap-1 rounded border border-dashed px-2 py-1.5 text-xs"
                       onClick={() => addCard(column.id)}
                     >
                       <Icon type="add" size="small" />

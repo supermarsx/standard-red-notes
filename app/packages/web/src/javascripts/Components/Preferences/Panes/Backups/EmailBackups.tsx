@@ -60,7 +60,7 @@ const EmailBackups = ({ application }: Props) => {
     try {
       await application.settings.updateSetting(settingName, payload, false)
       return true
-    } catch (e) {
+    } catch {
       application.alerts.alert(STRING_FAILED_TO_UPDATE_USER_SETTING()).catch(console.error)
       return false
     }
@@ -89,8 +89,8 @@ const EmailBackups = ({ application }: Props) => {
         <Title>Email backups</Title>
         {!isDesktopApplication() && (
           <Text className="mb-3">
-            Receive encrypted email backups of all your notes directly in your email inbox, on the schedule you
-            choose below.
+            Receive encrypted email backups of all your notes directly in your email inbox, on the schedule you choose
+            below.
           </Text>
         )}
 

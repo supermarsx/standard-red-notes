@@ -137,15 +137,15 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
 
   return (
     <div className="max-h-[min(70vh,32rem)] w-[min(85vw,28rem)] overflow-y-auto">
-      <p className="mb-3 text-sm text-passive-0">
+      <p className="text-passive-0 mb-3 text-sm">
         Choose which toolbar buttons are shown, reorder groups and the buttons within them, and pick how many rows each
         group wraps onto. Changes apply immediately.
       </p>
 
-      <label className="mb-3 flex cursor-pointer items-center justify-between gap-3 rounded border border-border px-3 py-2 text-sm">
+      <label className="border-border mb-3 flex cursor-pointer items-center justify-between gap-3 rounded border px-3 py-2 text-sm">
         <span>
           <span className="font-semibold">Single-line toolbar (horizontal scroll)</span>
-          <span className="block text-xs text-passive-1">
+          <span className="text-passive-1 block text-xs">
             When off, groups wrap onto multiple lines instead of scrolling sideways.
           </span>
         </span>
@@ -167,15 +167,15 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
           const buttonById = new Map(group.buttons.map((b) => [b.id, b]))
           const currentRows = config.groupRows?.[groupId] ?? DEFAULT_GROUP_ROWS
           return (
-            <div key={groupId} className="rounded border border-border">
-              <div className="flex items-center justify-between gap-2 border-b border-border bg-contrast px-3 py-2">
+            <div key={groupId} className="border-border rounded border">
+              <div className="border-border bg-contrast flex items-center justify-between gap-2 border-b px-3 py-2">
                 <span className="text-sm font-semibold">{group.label}</span>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
                     aria-label={`Move ${group.label} up`}
                     title="Move up"
-                    className="rounded p-1 enabled:hover:bg-passive-3 disabled:opacity-40"
+                    className="enabled:hover:bg-passive-3 rounded p-1 disabled:opacity-40"
                     disabled={index === 0}
                     onClick={() => moveGroup(index, -1)}
                   >
@@ -185,7 +185,7 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
                     type="button"
                     aria-label={`Move ${group.label} down`}
                     title="Move down"
-                    className="rounded p-1 enabled:hover:bg-passive-3 disabled:opacity-40"
+                    className="enabled:hover:bg-passive-3 rounded p-1 disabled:opacity-40"
                     disabled={index === groupOrder.length - 1}
                     onClick={() => moveGroup(index, 1)}
                   >
@@ -194,8 +194,8 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
-                <span className="text-xs text-passive-1">Rows</span>
+              <div className="border-border flex items-center justify-between gap-2 border-b px-3 py-1.5">
+                <span className="text-passive-1 text-xs">Rows</span>
                 <div className="flex items-center gap-1">
                   {rowOptions.map((r) => (
                     <button
@@ -229,7 +229,7 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
                           type="button"
                           aria-label={`Move ${button.label} up`}
                           title="Move up"
-                          className="rounded p-0.5 enabled:hover:bg-passive-3 disabled:opacity-40"
+                          className="enabled:hover:bg-passive-3 rounded p-0.5 disabled:opacity-40"
                           disabled={buttonIndex === 0}
                           onClick={() => moveButton(groupId, buttonIndex, -1)}
                         >
@@ -239,7 +239,7 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
                           type="button"
                           aria-label={`Move ${button.label} down`}
                           title="Move down"
-                          className="rounded p-0.5 enabled:hover:bg-passive-3 disabled:opacity-40"
+                          className="enabled:hover:bg-passive-3 rounded p-0.5 disabled:opacity-40"
                           disabled={buttonIndex === buttonOrder.length - 1}
                           onClick={() => moveButton(groupId, buttonIndex, 1)}
                         >
@@ -265,14 +265,14 @@ const CustomizeToolbarDialog = ({ config: rawConfig, onChange, onClose }: Props)
       <div className="mt-4 flex items-center justify-between">
         <button
           type="button"
-          className="rounded border border-border px-3 py-1.5 text-sm hover:bg-contrast"
+          className="border-border hover:bg-contrast rounded border px-3 py-1.5 text-sm"
           onClick={reset}
         >
           Reset to default
         </button>
         <button
           type="button"
-          className="rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:brightness-110"
+          className="bg-info text-info-contrast rounded px-3 py-1.5 text-sm font-semibold hover:brightness-110"
           onClick={onClose}
         >
           Done

@@ -53,15 +53,15 @@ const FileCard: FunctionComponent<{
         }}
       >
         {getFileIconComponent(getIconForFileType(file.mimeType), 'w-8 h-8 flex-shrink-0')}
-        <span className="line-clamp-2 w-full break-words text-xs font-semibold text-text">{file.name}</span>
-        <span className="text-[0.625rem] text-passive-1">{formatSizeToReadableString(file.decryptedSize)}</span>
+        <span className="text-text line-clamp-2 w-full text-xs font-semibold break-words">{file.name}</span>
+        <span className="text-passive-1 text-[0.625rem]">{formatSizeToReadableString(file.decryptedSize)}</span>
       </button>
 
       <div className="flex items-center gap-1">
         <ItemLinksCell item={file} />
         <button
           ref={menuAnchorRef}
-          className="rounded-full border border-border bg-default p-1"
+          className="border-border bg-default rounded-full border p-1"
           title="File options"
           onClick={(event) => {
             event.preventDefault()
@@ -94,7 +94,7 @@ const FileCard: FunctionComponent<{
       {selectionActive && (
         <button
           type="button"
-          className="absolute left-2 top-2 rounded border border-border bg-default p-0.5"
+          className="border-border bg-default absolute top-2 left-2 rounded border p-0.5"
           title={isSelected ? 'Deselect' : 'Select'}
           onClick={(event) => {
             event.preventDefault()
@@ -201,21 +201,17 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   const toggleSortDirection = () => itemListController.toggleFilesViewSortDirection()
 
   return (
-    <div
-      ref={containerRef}
-      id={id}
-      className={classNames('flex flex-col overflow-hidden bg-default', className)}
-    >
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+    <div ref={containerRef} id={id} className={classNames('bg-default flex flex-col overflow-hidden', className)}>
+      <div className="border-border flex flex-wrap items-center gap-2 border-b px-4 py-3">
         <Icon type="attachment-file" className="text-info" />
-        <span className="text-base font-bold text-text">Files</span>
-        {sorted.length > 0 && <span className="text-sm text-passive-1">{sorted.length}</span>}
+        <span className="text-text text-base font-bold">Files</span>
+        {sorted.length > 0 && <span className="text-passive-1 text-sm">{sorted.length}</span>}
 
         <div className="ml-auto flex items-center gap-2">
-          <label className="flex items-center gap-1 text-xs text-passive-1">
+          <label className="text-passive-1 flex items-center gap-1 text-xs">
             Sort
             <select
-              className="rounded border border-border bg-default px-2 py-1 text-xs text-text"
+              className="border-border bg-default text-text rounded border px-2 py-1 text-xs"
               value={sortBy}
               onChange={(event) => itemListController.setFilesViewSortBy(event.target.value as FilesSortBy)}
             >
@@ -225,14 +221,14 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
             </select>
           </label>
           <button
-            className="rounded border border-border p-1 hover:bg-contrast"
+            className="border-border hover:bg-contrast rounded border p-1"
             title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
             onClick={toggleSortDirection}
           >
             <Icon type={sortDirection === 'asc' ? 'arrows-sort-up' : 'arrows-sort-down'} size="medium" />
           </button>
           <button
-            className="flex items-center gap-1 rounded border border-border px-2 py-1 text-sm hover:bg-contrast"
+            className="border-border hover:bg-contrast flex items-center gap-1 rounded border px-2 py-1 text-sm"
             onClick={uploadNewFiles}
             title="Upload files"
           >
@@ -243,17 +239,17 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
       </div>
 
       {selectionActive && (
-        <div className="flex items-center gap-3 border-b border-border px-4 py-2">
+        <div className="border-border flex items-center gap-3 border-b px-4 py-2">
           <span className="text-sm font-semibold">{selectedUuids.size} selected</span>
-          <button className="rounded border border-border px-2 py-1 text-sm hover:bg-contrast" onClick={selectAll}>
+          <button className="border-border hover:bg-contrast rounded border px-2 py-1 text-sm" onClick={selectAll}>
             Select all
           </button>
-          <button className="rounded border border-border px-2 py-1 text-sm hover:bg-contrast" onClick={clearSelection}>
+          <button className="border-border hover:bg-contrast rounded border px-2 py-1 text-sm" onClick={clearSelection}>
             Clear
           </button>
           <button
             ref={bulkMenuAnchorRef}
-            className="ml-auto flex items-center gap-1 rounded border border-border px-2 py-1 text-sm hover:bg-contrast"
+            className="border-border hover:bg-contrast ml-auto flex items-center gap-1 rounded border px-2 py-1 text-sm"
             onClick={() => setBulkMenuVisible((visible) => !visible)}
           >
             <Icon type="more" size="medium" />
@@ -282,11 +278,11 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
 
       <div className="min-h-0 flex-grow overflow-y-auto p-4">
         {sorted.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center text-passive-1">
+          <div className="text-passive-1 flex flex-col items-center justify-center py-16 text-center">
             <Icon type="attachment-file" size="large" className="text-passive-2" />
             <div className="mt-2 text-sm">No files yet — upload a file or attach one to a note.</div>
             <button
-              className="mt-4 flex items-center gap-1 rounded border border-border px-3 py-1.5 text-sm hover:bg-contrast"
+              className="border-border hover:bg-contrast mt-4 flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
               onClick={uploadNewFiles}
             >
               <Icon type="upload" size="medium" />

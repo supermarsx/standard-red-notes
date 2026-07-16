@@ -362,7 +362,12 @@ describe('toICS field-handling edge cases', () => {
   it('emits required calendar headers in order and a single trailing CRLF', () => {
     const ics = toICS([], FIXED_NOW)
     const l = lines(ics)
-    expect(l.slice(0, 4)).toEqual(['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Standard Red Notes//Calendar Export//EN', 'CALSCALE:GREGORIAN'])
+    expect(l.slice(0, 4)).toEqual([
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Standard Red Notes//Calendar Export//EN',
+      'CALSCALE:GREGORIAN',
+    ])
     expect(ics.endsWith('\r\n')).toBe(true)
     expect(ics.endsWith('\r\n\r\n')).toBe(false)
   })

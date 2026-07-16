@@ -38,8 +38,7 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
 
   const query = itemListController.aiRerankQuery
   const hasQuery = query.trim().length > 0
-  const isActive =
-    itemListController.aiContextualOrder !== null && itemListController.aiContextualQuery === query
+  const isActive = itemListController.aiContextualOrder !== null && itemListController.aiContextualQuery === query
 
   const runAiSearch = useCallback(async () => {
     setError(null)
@@ -101,9 +100,7 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
             disabled={disabled}
             className={
               'flex items-center gap-1 rounded-full border px-2 py-1 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ' +
-              (isActive
-                ? 'border-info bg-info text-info-contrast'
-                : 'border-border text-neutral hover:bg-contrast')
+              (isActive ? 'border-info bg-info text-info-contrast' : 'border-border text-neutral hover:bg-contrast')
             }
             onClick={() => void runAiSearch()}
           >
@@ -111,12 +108,10 @@ const AiContextualSearch = ({ application, itemListController }: Props) => {
             <span>{itemListController.aiContextualLoading ? t('aiRanking') : t('aiSearchWithAi')}</span>
           </button>
         </StyledTooltip>
-        {isActive && <span className="text-xs text-passive-1">{t('aiRankedByRelevance')}</span>}
+        {isActive && <span className="text-passive-1 text-xs">{t('aiRankedByRelevance')}</span>}
       </div>
-      {availability.available && hasQuery && (
-        <span className="text-xs text-passive-1">{t('aiPrivacyNotice')}</span>
-      )}
-      {error && <span className="text-xs text-danger">{error}</span>}
+      {availability.available && hasQuery && <span className="text-passive-1 text-xs">{t('aiPrivacyNotice')}</span>}
+      {error && <span className="text-danger text-xs">{error}</span>}
     </div>
   )
 }

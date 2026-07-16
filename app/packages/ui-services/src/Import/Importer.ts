@@ -50,7 +50,9 @@ export function isStandardNotesBackupContent(content: string): boolean {
       parsed !== null &&
       Array.isArray(parsed.items) &&
       (parsed.items.length === 0 ||
-        (typeof parsed.items[0] === 'object' && parsed.items[0] !== null && 'content_type' in (parsed.items[0] as object)))
+        (typeof parsed.items[0] === 'object' &&
+          parsed.items[0] !== null &&
+          'content_type' in (parsed.items[0] as object)))
     )
   } catch {
     return false

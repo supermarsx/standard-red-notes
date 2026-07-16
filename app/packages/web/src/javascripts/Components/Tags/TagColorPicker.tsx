@@ -19,8 +19,8 @@ const TagColorPicker: FunctionComponent<Props> = ({ selectedColor, onChange, cla
           title="None"
           onClick={() => onChange(undefined)}
           className={classNames(
-            'flex h-5 w-5 items-center justify-center rounded-full border border-border',
-            !selectedColor && 'ring-2 ring-info ring-offset-1 ring-offset-default',
+            'border-border flex h-5 w-5 items-center justify-center rounded-full border',
+            !selectedColor && 'ring-info ring-offset-default ring-2 ring-offset-1',
           )}
         >
           <Icon type="close" size="small" className="text-neutral" />
@@ -35,7 +35,7 @@ const TagColorPicker: FunctionComponent<Props> = ({ selectedColor, onChange, cla
               onClick={() => onChange(option.value)}
               className={classNames(
                 'h-5 w-5 rounded-full border border-[rgba(0,0,0,0.1)]',
-                isSelected && 'ring-2 ring-info ring-offset-1 ring-offset-default',
+                isSelected && 'ring-info ring-offset-default ring-2 ring-offset-1',
               )}
               style={{ backgroundColor: option.value }}
             />

@@ -30,15 +30,15 @@ const EmptyTabView: FunctionComponent<Props> = ({ application, tabId, className 
   return (
     <div className={classNames('flex min-h-0 flex-grow flex-col items-center justify-center p-6', className)}>
       <div className="flex max-w-sm flex-col items-center text-center">
-        <Icon type="add" size="large" className="mb-3 text-passive-1" />
-        <h2 className="mb-1 text-lg font-semibold text-text">Empty tab</h2>
-        <p className="mb-5 text-sm text-passive-1">
+        <Icon type="add" size="large" className="text-passive-1 mb-3" />
+        <h2 className="text-text mb-1 text-lg font-semibold">Empty tab</h2>
+        <p className="text-passive-1 mb-5 text-sm">
           This tab is empty. Create a new note here, or open an existing note from the list.
         </p>
         <Button primary onClick={createNoteInPlace}>
           New note
         </Button>
-        <p className="mt-4 text-xs text-passive-2">Or select a note from the list to open it here.</p>
+        <p className="text-passive-2 mt-4 text-xs">Or select a note from the list to open it here.</p>
       </div>
     </div>
   )

@@ -98,10 +98,7 @@ export const SuperCollaborationPlugin: FunctionComponent<Props> = ({ application
     }
   }, [channel, config.room, config.sharedSecret])
 
-  const awarenessData = useMemo(
-    () => (config.userUuid ? { userUuid: config.userUuid } : undefined),
-    [config.userUuid],
-  )
+  const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
 
   // Mirror live awareness (who else has this note open) into the registry so the
   // presence sidebar can show genuinely-online collaborators. Excludes the local

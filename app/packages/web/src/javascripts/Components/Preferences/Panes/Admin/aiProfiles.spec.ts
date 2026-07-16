@@ -38,7 +38,13 @@ describe('aiProfiles helpers', () => {
         keyConfigured: true,
       }
       const row = maskedProfileToRow(masked)
-      expect(row).toMatchObject({ id: 'p2', baseUrl: 'https://openrouter.ai/api/v1', keyConfigured: true, newKey: '', clearKey: false })
+      expect(row).toMatchObject({
+        id: 'p2',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        keyConfigured: true,
+        newKey: '',
+        clearKey: false,
+      })
     })
   })
 

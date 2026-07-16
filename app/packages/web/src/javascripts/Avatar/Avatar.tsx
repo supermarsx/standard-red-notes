@@ -48,7 +48,7 @@ const Avatar: FunctionComponent<Props> = ({ email, size = 24, className }) => {
   if (initials !== '?') {
     return (
       <span
-        className={classNames(wrapperClasses, 'bg-passive-2 font-semibold uppercase text-foreground')}
+        className={classNames(wrapperClasses, 'bg-passive-2 text-foreground font-semibold uppercase')}
         style={{ ...dimension, fontSize: Math.max(10, Math.round(size * 0.42)) }}
         aria-label="Profile initials"
       >

@@ -128,7 +128,7 @@ const SignIn: FunctionComponent<Props> = ({ application }) => {
           isInvalid={isEmailInvalid}
         />
         {isEmailInvalid && !otherErrorMessage ? (
-          <div className="mb-4 text-danger">{c('Error').t`Please provide a valid email.`}</div>
+          <div className="text-danger mb-4">{c('Error').t`Please provide a valid email.`}</div>
         ) : null}
         <FloatingLabelInput
           className={`min-w-auto sm:min-w-90 ${otherErrorMessage ? 'mb-2' : 'mb-4'}`}
@@ -141,7 +141,7 @@ const SignIn: FunctionComponent<Props> = ({ application }) => {
           disabled={isSigningIn}
           isInvalid={isPasswordInvalid}
         />
-        {otherErrorMessage ? <div className="mb-4 text-danger">{otherErrorMessage}</div> : null}
+        {otherErrorMessage ? <div className="text-danger mb-4">{otherErrorMessage}</div> : null}
       </div>
       <Button
         className={`${isSigningIn ? 'min-w-30' : 'min-w-24'} mb-5 py-2.5`}
@@ -155,19 +155,19 @@ const SignIn: FunctionComponent<Props> = ({ application }) => {
 
   return (
     <div className="flex items-center">
-      <CircleIcon className="absolute -left-56 top-[35%] h-8 w-8" />
-      <BlueDotIcon className="absolute -left-40 top-[30%] h-4 w-4" />
+      <CircleIcon className="absolute top-[35%] -left-56 h-8 w-8" />
+      <BlueDotIcon className="absolute top-[30%] -left-40 h-4 w-4" />
       <DiamondIcon className="absolute -bottom-5 left-0 -z-[1] h-26 w-26 -translate-x-1/2" />
 
       <CircleIcon className="absolute -right-56 bottom-[30%] h-8 w-8" />
       <BlueDotIcon className="absolute -right-44 bottom-[20%] h-4 w-4" />
-      <DiamondIcon className="absolute -right-2 top-0 -z-[1] h-18 w-18 translate-x-1/2" />
+      <DiamondIcon className="absolute top-0 -right-2 -z-[1] h-18 w-18 translate-x-1/2" />
 
       <div>
-        <h1 className="mb-2 mt-0 text-2xl font-bold">{c('Title').t`Sign in`}</h1>
+        <h1 className="mt-0 mb-2 text-2xl font-bold">{c('Title').t`Sign in`}</h1>
         <div className="mb-4 text-sm font-medium">{c('Info').t`to continue to Standard Red Notes.`}</div>
         {showCaptcha ? captchaIframe : signInForm}
-        <div className="text-sm font-medium text-passive-1">
+        <div className="text-passive-1 text-sm font-medium">
           {c('Info').t`Don’t have an account yet?`}{' '}
           <a
             className={`text-info ${isSigningIn ? 'cursor-not-allowed' : 'cursor-pointer'}`}

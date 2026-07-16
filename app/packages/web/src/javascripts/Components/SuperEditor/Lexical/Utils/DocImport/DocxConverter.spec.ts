@@ -36,8 +36,7 @@ import {
   SUPER_TYPE,
 } from './roundTripTestUtils'
 
-const PNG_1x1 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
 const fixtureModel = (): DocBlock[] => [
   { kind: 'heading', level: 1, inlines: [{ kind: 'text', text: 'ImportedHeading' }] },
@@ -54,7 +53,10 @@ const fixtureModel = (): DocBlock[] => [
     list: {
       ordered: false,
       check: false,
-      items: [{ inlines: [{ kind: 'text', text: 'BulletAlpha' }] }, { inlines: [{ kind: 'text', text: 'BulletBeta' }] }],
+      items: [
+        { inlines: [{ kind: 'text', text: 'BulletAlpha' }] },
+        { inlines: [{ kind: 'text', text: 'BulletBeta' }] },
+      ],
     },
   },
   {

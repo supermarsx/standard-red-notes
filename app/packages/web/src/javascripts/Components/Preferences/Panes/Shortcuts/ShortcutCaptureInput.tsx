@@ -102,14 +102,14 @@ const ShortcutCaptureInput = ({ platform, onCapture, onCancel }: Props) => {
       onBlur={onCancel}
       className={classNames(
         'flex min-h-9 min-w-40 cursor-pointer items-center justify-center gap-1 rounded border border-dashed',
-        'border-info bg-default px-3 py-1.5 text-sm outline-none ring-info focus:ring-2',
+        'border-info bg-default ring-info px-3 py-1.5 text-sm outline-none focus:ring-2',
       )}
     >
       {preview.length > 0 ? (
         preview.map((part, index) => (
           <kbd
             key={index}
-            className="rounded border-[0.5px] border-passive-3 bg-default p-1 text-center font-sans capitalize leading-none text-text"
+            className="border-passive-3 bg-default text-text rounded border-[0.5px] p-1 text-center font-sans leading-none capitalize"
           >
             {part}
           </kbd>

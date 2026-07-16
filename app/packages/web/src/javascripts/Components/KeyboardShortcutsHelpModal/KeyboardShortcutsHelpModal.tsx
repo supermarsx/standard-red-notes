@@ -76,7 +76,7 @@ const KeyboardShortcutsModal = ({ keyboardService }: { keyboardService: Keyboard
           ([category, items]) =>
             items.length > 0 && (
               <div key={category}>
-                <div className="p-4 pb-0.5 pt-4 text-base font-semibold capitalize">{category}</div>
+                <div className="p-4 pt-4 pb-0.5 text-base font-semibold capitalize">{category}</div>
                 {items.map((item, index) => (
                   <Item item={item} key={index} />
                 ))}

@@ -8,12 +8,11 @@ import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
-import { ChatMessage as AgentChatMessage } from '@/Assistant/types'
+import { ChatMessage as AgentChatMessage, Provider } from '@/Assistant/types'
 import { run } from '@/Assistant/agent'
 import { achievements, METRICS } from '@/Achievements'
 import { ProxyProvider } from '@/Assistant/ProxyProvider'
 import { DirectProvider } from '@/Assistant/DirectProvider'
-import { Provider } from '@/Assistant/types'
 import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
 import { composeSystemPromptWithPersona } from '@/Assistant/personaSettings'
@@ -423,8 +422,10 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
     if (connectionMode === 'proxy') {
       return Boolean(application.getPreference(PrefKey.AssistantProvider, ''))
     }
-    return Boolean(application.getPreference(PrefKey.AssistantBaseUrl, '')) &&
+    return (
+      Boolean(application.getPreference(PrefKey.AssistantBaseUrl, '')) &&
       Boolean(application.getPreference(PrefKey.AssistantModel, ''))
+    )
   }, [application])
 
   // A short, human-readable summary of what the active scope would send, shared
@@ -451,8 +452,8 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         disabled={isRunning}
       />
       {todos.length > 0 && (
-        <div className="border-b border-border bg-default px-4 py-2">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-passive-1">Plan</div>
+        <div className="border-border bg-default border-b px-4 py-2">
+          <div className="text-passive-1 mb-1 text-xs font-semibold tracking-wide uppercase">Plan</div>
           <ul className="flex flex-col gap-1">
             {todos.map((todo, index) => (
               <li key={index} className="flex items-start gap-2 text-sm">
@@ -470,7 +471,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
                 <span
                   className={classNames(
                     todo.status === 'completed' && 'text-passive-1 line-through',
-                    todo.status === 'in_progress' && 'font-medium text-text',
+                    todo.status === 'in_progress' && 'text-text font-medium',
                     todo.status === 'pending' && 'text-neutral',
                   )}
                 >
@@ -484,11 +485,13 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 
       <div ref={scrollRef} className="flex-grow overflow-y-auto px-4 py-4">
         {!noticeDismissed && (
-          <div className="mb-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3">
             <div className="flex items-start justify-between gap-2">
-              <div className="text-sm font-semibold text-warning">Your messages and note content are sent to an AI provider</div>
+              <div className="text-warning text-sm font-semibold">
+                Your messages and note content are sent to an AI provider
+              </div>
               <button
-                className="-mr-1 -mt-1 flex-shrink-0 rounded p-1 text-warning hover:bg-warning-faded"
+                className="text-warning hover:bg-warning-faded -mt-1 -mr-1 flex-shrink-0 rounded p-1"
                 onClick={dismissNotice}
                 aria-label="Dismiss notice"
                 title="Dismiss"
@@ -496,22 +499,22 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
                 <Icon type="close" size="small" />
               </button>
             </div>
-            <div className="mt-1 text-sm text-warning">
+            <div className="text-warning mt-1 text-sm">
               Tools run locally in your browser, but model calls do not. Whatever you type and any note content the
               assistant reads is sent to your configured AI provider, which may expose information you did not intend to
               share — especially with cloud providers.
             </div>
-            <div className="mt-2 text-sm font-semibold text-warning">{contextSummary}</div>
+            <div className="text-warning mt-2 text-sm font-semibold">{contextSummary}</div>
           </div>
         )}
         {!isConfigured && (
-          <div className="mb-4 rounded border border-border bg-contrast p-3 text-sm text-neutral">
-            The assistant is not configured yet. Open Preferences → Assistant to set the connection mode, endpoint
-            (e.g. LM Studio at http://localhost:1234/v1), and model.
+          <div className="border-border bg-contrast text-neutral mb-4 rounded border p-3 text-sm">
+            The assistant is not configured yet. Open Preferences → Assistant to set the connection mode, endpoint (e.g.
+            LM Studio at http://localhost:1234/v1), and model.
           </div>
         )}
         {messages.length === 0 && isConfigured && (
-          <div className="text-sm text-passive-0">
+          <div className="text-passive-0 text-sm">
             Ask the assistant to find, summarize, create, or organize your notes.
           </div>
         )}
@@ -522,15 +525,15 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         </div>
       </div>
 
-      <div className="border-t border-border bg-contrast p-3">
+      <div className="border-border bg-contrast border-t p-3">
         {tokenWindows && (
           <AssistantUsageMeter
             fiveHour={tokenWindows.fiveHour}
             weekly={tokenWindows.weekly}
-            className="mb-2 border-b border-border pb-2"
+            className="border-border mb-2 border-b pb-2"
           />
         )}
-        <div className="mb-2 text-xs text-warning">
+        <div className="text-warning mb-2 text-xs">
           Messages and note content the assistant reads are sent to your configured AI provider. {contextSummary}
         </div>
         {queue.length > 0 && (
@@ -538,14 +541,14 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
             {queue.map((item, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between gap-2 rounded border border-border bg-default px-2 py-1 text-xs text-passive-0"
+                className="border-border bg-default text-passive-0 flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs"
               >
                 <span className="truncate">
-                  <span className="mr-1 font-semibold text-neutral">Queued:</span>
+                  <span className="text-neutral mr-1 font-semibold">Queued:</span>
                   {item}
                 </span>
                 <button
-                  className="rounded p-0.5 hover:bg-contrast"
+                  className="hover:bg-contrast rounded p-0.5"
                   onClick={() => removeQueued(index)}
                   aria-label="Remove from queue"
                   title="Remove from queue"
@@ -558,7 +561,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         )}
         <div className="flex items-end gap-2">
           <textarea
-            className="min-h-[2.5rem] flex-grow resize-none rounded border border-border bg-default px-3 py-2 text-sm focus:border-info focus:outline-none"
+            className="border-border bg-default focus:border-info min-h-[2.5rem] flex-grow resize-none rounded border px-3 py-2 text-sm focus:outline-none"
             placeholder={isRunning ? 'Steer the task, or queue a follow-up…' : 'Message the assistant…'}
             value={input}
             rows={1}
@@ -592,7 +595,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 const MessageBubble = ({ message }: { message: UIMessage }) => {
   if (message.kind === 'user') {
     return (
-      <div className="self-end max-w-[85%] rounded-lg bg-info px-3 py-2 text-sm text-info-contrast">
+      <div className="bg-info text-info-contrast max-w-[85%] self-end rounded-lg px-3 py-2 text-sm">
         {message.steered && <div className="mb-0.5 text-xs font-semibold opacity-80">↳ Steer</div>}
         {message.text}
       </div>
@@ -601,7 +604,7 @@ const MessageBubble = ({ message }: { message: UIMessage }) => {
 
   if (message.kind === 'error') {
     return (
-      <div className="max-w-[85%] rounded-lg border border-danger bg-default px-3 py-2 text-sm text-danger">
+      <div className="border-danger bg-default text-danger max-w-[85%] rounded-lg border px-3 py-2 text-sm">
         {message.text}
       </div>
     )
@@ -612,7 +615,7 @@ const MessageBubble = ({ message }: { message: UIMessage }) => {
       {message.tools.length > 0 && (
         <div className="mb-1 flex flex-col gap-1">
           {message.tools.map((tool) => (
-            <div key={tool.id} className="rounded border border-border bg-contrast px-2 py-1 text-xs text-neutral">
+            <div key={tool.id} className="border-border bg-contrast text-neutral rounded border px-2 py-1 text-xs">
               <div className="flex items-center gap-1 font-semibold">
                 <Icon type="dashboard" size="small" />
                 {tool.name}
@@ -627,7 +630,7 @@ const MessageBubble = ({ message }: { message: UIMessage }) => {
         </div>
       )}
       {(message.text || message.streaming) && (
-        <div className="whitespace-pre-wrap rounded-lg bg-contrast px-3 py-2 text-sm text-text">
+        <div className="bg-contrast text-text rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
           {message.text}
           {message.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
         </div>

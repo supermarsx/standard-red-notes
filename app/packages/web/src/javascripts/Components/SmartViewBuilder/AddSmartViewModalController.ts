@@ -173,7 +173,7 @@ export class AddSmartViewModalController {
       } else {
         this.setIsCustomJsonValidPredicate(false)
       }
-    } catch (error) {
+    } catch {
       this.setIsCustomJsonValidPredicate(false)
       return
     }

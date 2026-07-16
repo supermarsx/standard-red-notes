@@ -129,7 +129,7 @@ const Updates: FunctionComponent = () => {
 
         <div className="mt-3">{renderResult()}</div>
         {snapshot && (
-          <Text className="mt-1 text-passive-1">
+          <Text className="text-passive-1 mt-1">
             Last checked on this device: {new Date(snapshot.checkedAt).toLocaleString()}
           </Text>
         )}
@@ -174,8 +174,8 @@ const Updates: FunctionComponent = () => {
           <div className="flex flex-col">
             <Subtitle>Show What&apos;s New in preferences</Subtitle>
             <Text>
-              Show the What&apos;s New section (release notes) in the preferences menu. When hidden, its unread badge
-              is hidden too.
+              Show the What&apos;s New section (release notes) in the preferences menu. When hidden, its unread badge is
+              hidden too.
             </Text>
           </div>
           <Switch onChange={toggleShowWhatsNew} checked={showWhatsNew} />

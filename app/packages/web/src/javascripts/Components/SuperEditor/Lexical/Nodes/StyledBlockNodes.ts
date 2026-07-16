@@ -40,13 +40,7 @@ import {
   SerializedParagraphNode,
   Spread,
 } from 'lexical'
-import {
-  HeadingNode,
-  HeadingTagType,
-  QuoteNode,
-  SerializedHeadingNode,
-  SerializedQuoteNode,
-} from '@lexical/rich-text'
+import { HeadingNode, HeadingTagType, QuoteNode, SerializedHeadingNode, SerializedQuoteNode } from '@lexical/rich-text'
 
 /** Serialized shapes: the base shape plus the persisted block `style` string. */
 export type SerializedStyledParagraphNode = Spread<{ style?: string }, SerializedParagraphNode>
@@ -162,7 +156,12 @@ const withBlockStyleImport = (base: DOMConversionMap | null): DOMConversionMap |
         ...result,
         conversion: (element: HTMLElement): DOMConversionOutput | null => {
           const output = originalConversion(element)
-          if (output !== null && output.node !== null && !Array.isArray(output.node) && output.node instanceof ElementNode) {
+          if (
+            output !== null &&
+            output.node !== null &&
+            !Array.isArray(output.node) &&
+            output.node instanceof ElementNode
+          ) {
             const style = captureBlockStyleFromElement(element)
             if (style !== '') {
               output.node.setStyle(style)

@@ -127,7 +127,14 @@ describe('resolveConnectionStatus', () => {
       { ...baseSignals, socketOpen: false },
       { ...baseSignals, socketOpen: undefined, recentSuccessfulSync: false },
       { ...baseSignals, signedOut: true },
-      { browserOnline: false, socketOpen: false, outOfSync: true, syncFailing: true, signedOut: false, recentSuccessfulSync: false },
+      {
+        browserOnline: false,
+        socketOpen: false,
+        outOfSync: true,
+        syncFailing: true,
+        signedOut: false,
+        recentSuccessfulSync: false,
+      },
     ]
     for (const signals of permutations) {
       expect(resolveConnectionStatus(signals)).not.toBe('login-needed')

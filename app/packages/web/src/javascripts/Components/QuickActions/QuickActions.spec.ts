@@ -8,12 +8,7 @@
  * The resolver mirrors how the bar opens the newest note in a tag: it sorts the notes
  * referencing the tag by `userModifiedDate` descending and returns the newest.
  */
-import {
-  DEFAULT_QUICK_ACTIONS,
-  loadQuickActions,
-  QuickAction,
-  saveQuickActions,
-} from './quickActionsStorage'
+import { DEFAULT_QUICK_ACTIONS, loadQuickActions, QuickAction, saveQuickActions } from './quickActionsStorage'
 import { resolveMostRecentNote } from './resolveMostRecentNote'
 
 const STORAGE_KEY = 'standardnotes.quickActions.v1'

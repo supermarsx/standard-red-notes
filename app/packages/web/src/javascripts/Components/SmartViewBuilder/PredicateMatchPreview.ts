@@ -113,11 +113,7 @@ export const evaluatePredicateMatches = (
     let matched = false
     try {
       if (referencesTags) {
-        const itemWithTags = ItemWithTags.Create(
-          item.payload,
-          item as never,
-          resolveTags(item),
-        )
+        const itemWithTags = ItemWithTags.Create(item.payload, item as never, resolveTags(item))
         matched = predicate.matchesItem(itemWithTags as never)
       } else {
         matched = predicate.matchesItem(item)

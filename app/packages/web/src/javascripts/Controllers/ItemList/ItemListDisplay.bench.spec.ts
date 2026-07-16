@@ -55,9 +55,36 @@ function mulberry32(seed: number): () => number {
 }
 
 const TITLE_WORDS = [
-  'note', 'meeting', 'project', 'idea', 'task', 'plan', 'review', 'budget', 'design', 'client',
-  'recipe', 'travel', 'invoice', 'payment', 'summary', 'report', 'analysis', 'research', 'draft', 'final',
-  'team', 'sprint', 'feature', 'bug', 'release', 'roadmap', 'metric', 'growth', 'revenue', 'garden',
+  'note',
+  'meeting',
+  'project',
+  'idea',
+  'task',
+  'plan',
+  'review',
+  'budget',
+  'design',
+  'client',
+  'recipe',
+  'travel',
+  'invoice',
+  'payment',
+  'summary',
+  'report',
+  'analysis',
+  'research',
+  'draft',
+  'final',
+  'team',
+  'sprint',
+  'feature',
+  'bug',
+  'release',
+  'roadmap',
+  'metric',
+  'growth',
+  'revenue',
+  'garden',
 ]
 
 /**
@@ -190,11 +217,7 @@ function sortTwoItems(a: BenchItem, b: BenchItem, sortBy: CollectionSortValue, s
   }
 
   const key =
-    sortBy === CollectionSort.Title
-      ? 'title'
-      : sortBy === CollectionSort.UpdatedAt
-        ? 'updated_at'
-        : 'created_at'
+    sortBy === CollectionSort.Title ? 'title' : sortBy === CollectionSort.UpdatedAt ? 'updated_at' : 'created_at'
 
   const aValue = (a as unknown as Record<string, unknown>)[key] ?? ''
   const bValue = (b as unknown as Record<string, unknown>)[key] ?? ''

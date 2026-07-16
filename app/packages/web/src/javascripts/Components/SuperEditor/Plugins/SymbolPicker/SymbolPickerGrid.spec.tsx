@@ -9,12 +9,9 @@
  * symbol button MUST appear, clicking one fires onInsert, and typing in search
  * fires onQueryChange.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
-import SymbolPickerGrid, {
-  SymbolPickerGridProps,
-} from '@/Components/SuperEditor/Plugins/SymbolPicker/SymbolPickerGrid'
+import SymbolPickerGrid, { SymbolPickerGridProps } from '@/Components/SuperEditor/Plugins/SymbolPicker/SymbolPickerGrid'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -35,7 +32,13 @@ afterEach(() => {
 const LABELS = { search: 'Search symbols', recents: 'Recently used', noResults: 'No symbols found' }
 
 const CATEGORIES = [
-  { name: 'Common', symbols: [{ char: '©', name: 'Copyright' }, { char: '™', name: 'Trademark' }] },
+  {
+    name: 'Common',
+    symbols: [
+      { char: '©', name: 'Copyright' },
+      { char: '™', name: 'Trademark' },
+    ],
+  },
   { name: 'Arrows', symbols: [{ char: '→', name: 'Rightwards arrow' }] },
 ]
 

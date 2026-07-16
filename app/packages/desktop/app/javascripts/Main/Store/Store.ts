@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { app as electronApp } from 'electron'
 import { MessageType } from '../../../../test/TestIpcMessage'
 import { handleTestMessage } from '../Utils/Testing'
 import { isTesting } from '../Utils/Utils'
@@ -13,7 +14,7 @@ import { StoreData } from './StoreKeys'
  * `@electron/remote` fallback that was only relevant when Store was loaded in a
  * renderer context.
  */
-export const app = require('electron').app
+export const app = electronApp
 
 export function logError(...message: unknown[]) {
   console.error('store:', ...message)

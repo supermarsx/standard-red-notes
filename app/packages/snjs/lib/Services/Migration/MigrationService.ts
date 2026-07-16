@@ -150,7 +150,7 @@ export class MigrationService extends AbstractService implements InternalEventHa
       if (comparison === 1) {
         throw SNLog.error(
           Error(
-            `Migration registration error: migrations are not sorted ascending by version ` +
+            'Migration registration error: migrations are not sorted ascending by version ' +
               `(${previous} is registered before ${current}). Check Migrations/Versions/index.ts.`,
           ),
         )

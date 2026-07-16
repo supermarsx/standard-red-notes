@@ -373,15 +373,9 @@ describe('describeRecurrence', () => {
   })
 
   it('summarizes custom intervals with pluralization', () => {
-    expect(describeRecurrence({ frequency: 'custom', interval: 1, unit: 'week' })).toBe(
-      'Repeats every week',
-    )
-    expect(describeRecurrence({ frequency: 'custom', interval: 2, unit: 'week' })).toBe(
-      'Repeats every 2 weeks',
-    )
-    expect(describeRecurrence({ frequency: 'custom', interval: 3, unit: 'month' })).toBe(
-      'Repeats every 3 months',
-    )
+    expect(describeRecurrence({ frequency: 'custom', interval: 1, unit: 'week' })).toBe('Repeats every week')
+    expect(describeRecurrence({ frequency: 'custom', interval: 2, unit: 'week' })).toBe('Repeats every 2 weeks')
+    expect(describeRecurrence({ frequency: 'custom', interval: 3, unit: 'month' })).toBe('Repeats every 3 months')
   })
 })
 

@@ -414,9 +414,11 @@ const ar: LocaleResource = {
     cancelOcr: 'إلغاء التعرّف الضوئي على الحروف',
     preparingOcr: 'جارٍ تحضير التعرّف الضوئي...',
     ocrProgress: 'التعرّف الضوئي على الصفحة {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'تم استخراج النص بالفعل (مخزّن مؤقتًا). أعِد تشغيل التعرّف الضوئي في متصفحك (يبقى على جهازك).',
+    ocrCachedReRunTooltip:
+      'تم استخراج النص بالفعل (مخزّن مؤقتًا). أعِد تشغيل التعرّف الضوئي في متصفحك (يبقى على جهازك).',
     ocrExtractedReRunTooltip: 'تم استخراج النص. أعِد تشغيل التعرّف الضوئي في متصفحك (يبقى على جهازك).',
-    ocrExtractTooltip: 'استخرج النص من الصفحات الممسوحة ضوئيًا باستخدام التعرّف الضوئي. يعمل في متصفحك؛ لا شيء يغادر جهازك (بطيء؛ يُنزّل بيانات اللغة).',
+    ocrExtractTooltip:
+      'استخرج النص من الصفحات الممسوحة ضوئيًا باستخدام التعرّف الضوئي. يعمل في متصفحك؛ لا شيء يغادر جهازك (بطيء؛ يُنزّل بيانات اللغة).',
     extractTextWithOcrBrowser: 'استخراج النص بالتعرّف الضوئي في متصفحك',
     reRunOcrBrowser: 'إعادة تشغيل التعرّف الضوئي (المتصفح)',
     extractTextOcr: 'استخراج النص (التعرّف الضوئي)',
@@ -464,8 +466,7 @@ const ar: LocaleResource = {
     createNoteInTopicWithShortcut: 'إنشاء ملاحظة جديدة في الموضوع المحدد {{shortcut}}',
     dropFilesToUpload: 'أفلِت ملفاتك لرفعها وربطها بالموضوع "{{title}}"',
     noFilesYet: 'ليس لديك أي ملفات بعد',
-    filesAttachedAppearHere:
-      'تظهر الملفات المرفقة بملاحظاتك هنا. يمكنك أيضًا رفع الملفات مباشرةً من هذه الصفحة.',
+    filesAttachedAppearHere: 'تظهر الملفات المرفقة بملاحظاتك هنا. يمكنك أيضًا رفع الملفات مباشرةً من هذه الصفحة.',
     uploadFiles: 'رفع الملفات',
     syncing: 'جارٍ المزامنة...',
     loadingItemsProgress: 'جارٍ تحميل {{current}}/{{total}} عنصر...',
@@ -487,8 +488,7 @@ const ar: LocaleResource = {
     upgradeForPerTopicPreferences: 'قم بالترقية للحصول على تفضيلات لكل موضوع',
     perTopicPreferencesMessageWithDaily:
       'أنشئ سير عمل قوية وتخطيطات تنظيمية بفضل تفضيلات العرض لكل موضوع وتخطيط تقويم دفتر الملاحظات اليومي الجديد كليًا.',
-    perTopicPreferencesMessage:
-      'أنشئ سير عمل قوية وتخطيطات تنظيمية بفضل تفضيلات العرض لكل موضوع.',
+    perTopicPreferencesMessage: 'أنشئ سير عمل قوية وتخطيطات تنظيمية بفضل تفضيلات العرض لكل موضوع.',
     sortBy: 'الفرز حسب',
     relevanceBestMatch: 'الصلة (أفضل تطابق)',
     dateModified: 'تاريخ التعديل',
@@ -583,8 +583,7 @@ const ar: LocaleResource = {
     mergeLocalData: 'دمج البيانات المحلية ({{count}} ملاحظة وموضوع)',
     mergeLocalDataTooltip:
       'إذا لم يتم تحديده، فسيتم حذف ملاحظاتك ومواضيعك المحلية نهائيًا واستبدالها ببيانات من حسابك.',
-    homeServerNotRunning:
-      'الخادم المنزلي غير مُشغّل. يُرجى فتح التفضيلات وعلامة تبويب الخادم المنزلي لتشغيله.',
+    homeServerNotRunning: 'الخادم المنزلي غير مُشغّل. يُرجى فتح التفضيلات وعلامة تبويب الخادم المنزلي لتشغيله.',
     serverDefault: 'افتراضي',
     serverCustom: 'مخصّص',
     serverHomeServer: 'الخادم المنزلي',
@@ -600,8 +599,7 @@ const ar: LocaleResource = {
     deleteAccountTitle: 'حذف الحساب؟',
     deleteMyAccountForGood: 'حذف حسابي نهائيًا',
     dataNotBackedUp: 'البيانات غير منسوخة احتياطيًا',
-    signInOrRegisterToSync:
-      'سجّل الدخول أو أنشئ حسابًا لمزامنة ملاحظاتك إلى أجهزتك الأخرى بالتشفير من طرف إلى طرف.',
+    signInOrRegisterToSync: 'سجّل الدخول أو أنشئ حسابًا لمزامنة ملاحظاتك إلى أجهزتك الأخرى بالتشفير من طرف إلى طرف.',
     openAccountMenu: 'فتح قائمة الحساب',
     ignoreWarning: 'تجاهل التحذير',
     waitingForSecurityKey: 'في انتظار مفتاح الأمان...',

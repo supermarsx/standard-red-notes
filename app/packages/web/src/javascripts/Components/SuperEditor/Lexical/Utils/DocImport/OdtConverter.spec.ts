@@ -26,8 +26,7 @@ import {
   SUPER_TYPE,
 } from './roundTripTestUtils'
 
-const PNG_1x1 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
 const fixtureModel = (): DocBlock[] => [
   { kind: 'heading', level: 2, inlines: [{ kind: 'text', text: 'OdtHeading' }] },

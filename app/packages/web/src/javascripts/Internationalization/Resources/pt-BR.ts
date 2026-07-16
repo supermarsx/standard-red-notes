@@ -360,13 +360,15 @@ const ptBR: LocaleResource = {
     noFolder: 'Sem pasta',
     fileProtected: 'Este arquivo está protegido.',
     authenticateToView: 'Autentique-se para visualizar este arquivo.',
-    addPasscodeToView: 'Adicione uma senha de acesso ou crie uma conta para exigir autenticação para visualizar este arquivo.',
+    addPasscodeToView:
+      'Adicione uma senha de acesso ou crie uma conta para exigir autenticação para visualizar este arquivo.',
     openAccountMenu: 'Abrir menu da conta',
     authenticate: 'Autenticar',
     viewFile: 'Visualizar arquivo',
     loading: 'Carregando...',
     fileCannotBePreviewed: 'Não é possível pré-visualizar este arquivo.',
-    errorLoadingFile: 'Ocorreu um erro ao carregar o arquivo. Tente novamente ou baixe o arquivo e abra-o usando outro aplicativo.',
+    errorLoadingFile:
+      'Ocorreu um erro ao carregar o arquivo. Tente novamente ou baixe o arquivo e abra-o usando outro aplicativo.',
     tryAgain: 'Tentar novamente',
     downloadToView: 'Para visualizar este arquivo, baixe-o e abra-o usando outro aplicativo.',
     fileInformation: 'Informações do arquivo',
@@ -415,15 +417,19 @@ const ptBR: LocaleResource = {
     cancelOcr: 'Cancelar OCR',
     preparingOcr: 'Preparando OCR...',
     ocrProgress: 'OCR página {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Texto já extraído (em cache). Execute o OCR novamente no seu navegador (permanece no seu dispositivo).',
-    ocrExtractedReRunTooltip: 'Texto extraído. Execute o OCR novamente no seu navegador (permanece no seu dispositivo).',
-    ocrExtractTooltip: 'Extraia texto de páginas digitalizadas com OCR. É executado no seu navegador; nada sai do seu dispositivo (lento; baixa dados de idioma).',
+    ocrCachedReRunTooltip:
+      'Texto já extraído (em cache). Execute o OCR novamente no seu navegador (permanece no seu dispositivo).',
+    ocrExtractedReRunTooltip:
+      'Texto extraído. Execute o OCR novamente no seu navegador (permanece no seu dispositivo).',
+    ocrExtractTooltip:
+      'Extraia texto de páginas digitalizadas com OCR. É executado no seu navegador; nada sai do seu dispositivo (lento; baixa dados de idioma).',
     extractTextWithOcrBrowser: 'Extrair texto com OCR no seu navegador',
     reRunOcrBrowser: 'Executar OCR novamente (navegador)',
     extractTextOcr: 'Extrair texto (OCR)',
     serverOcrTooltip:
       'Execute o OCR no SERVIDOR. Isso envia as imagens das páginas deste PDF para o servidor e ABANDONA a criptografia de ponta a ponta — o servidor pode ler esse conteúdo. O OCR no navegador mantém tudo no seu dispositivo.',
-    runOcrOnServerAria: 'Executar OCR no servidor (envia imagens das páginas para o servidor; abandona a criptografia de ponta a ponta)',
+    runOcrOnServerAria:
+      'Executar OCR no servidor (envia imagens das páginas para o servidor; abandona a criptografia de ponta a ponta)',
     runOcrOnServer: 'Executar OCR no servidor',
     copyAllExtractedText: 'Copiar todo o texto extraído',
     copyExtractedTextAria: 'Copiar texto extraído',
@@ -434,7 +440,8 @@ const ptBR: LocaleResource = {
     previousMatch: 'Ocorrência anterior',
     nextMatch: 'Próxima ocorrência',
     closeSearch: 'Fechar pesquisa',
-    serverOcrDisclosurePrefix: 'O OCR no servidor está disponível para sua conta. Ele envia as imagens das páginas deste PDF para o servidor e',
+    serverOcrDisclosurePrefix:
+      'O OCR no servidor está disponível para sua conta. Ele envia as imagens das páginas deste PDF para o servidor e',
     serverOcrDisclosureBold: 'abandona a criptografia de ponta a ponta',
     serverOcrDisclosureSuffix:
       ' — o servidor (e qualquer pessoa que o controle) pode ler esse conteúdo. O OCR no navegador mantém tudo no seu dispositivo. O padrão é o OCR no navegador.',
@@ -692,7 +699,8 @@ const ptBR: LocaleResource = {
     linkExpires_other: 'Este link expira {{count}} minutos após ser aberto pela primeira vez.',
     untitled: 'Sem título',
     tagHasNoNotes: 'Este tópico não tem notas.',
-    publicReadOnlyFooter: 'Este é um link compartilhado público e somente leitura. O conteúdo foi descriptografado no seu navegador.',
+    publicReadOnlyFooter:
+      'Este é um link compartilhado público e somente leitura. O conteúdo foi descriptografado no seu navegador.',
     confidentialWatermark: 'Confidencial · {{datetime}}',
     contentHiddenTitle: 'Conteúdo oculto',
     contentHiddenMessage: 'Retorne o foco para esta janela para visualizar o conteúdo compartilhado.',

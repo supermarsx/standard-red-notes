@@ -98,7 +98,12 @@ describe('runBulkWithConcurrency', () => {
 
   it('runs every item and reports order-stable success results', async () => {
     const items = uuidsOf(6)
-    const summary = await runBulkWithConcurrency(items, (u) => u, async () => undefined, { concurrency: 2 })
+    const summary = await runBulkWithConcurrency(
+      items,
+      (u) => u,
+      async () => undefined,
+      { concurrency: 2 },
+    )
     expect(summary.total).toBe(6)
     expect(summary.failed).toEqual([])
     expect(summary.succeeded.map((r) => r.uuid)).toEqual(items)
@@ -148,23 +153,37 @@ describe('runBulkWithConcurrency', () => {
   it('reports progress once per item, ending at total', async () => {
     const items = uuidsOf(4)
     const progress: Array<[number, number]> = []
-    await runBulkWithConcurrency(items, (u) => u, async () => undefined, {
-      concurrency: 2,
-      onProgress: (completed, total) => progress.push([completed, total]),
-    })
+    await runBulkWithConcurrency(
+      items,
+      (u) => u,
+      async () => undefined,
+      {
+        concurrency: 2,
+        onProgress: (completed, total) => progress.push([completed, total]),
+      },
+    )
     expect(progress.length).toBe(4)
     expect(progress.map(([c]) => c)).toEqual([1, 2, 3, 4])
     expect(progress.every(([, total]) => total === 4)).toBe(true)
   })
 
   it('handles an empty batch', async () => {
-    const summary = await runBulkWithConcurrency<string>([], (u) => u, async () => undefined)
+    const summary = await runBulkWithConcurrency<string>(
+      [],
+      (u) => u,
+      async () => undefined,
+    )
     expect(summary).toEqual({ total: 0, succeeded: [], failed: [] })
   })
 
   it('clamps a huge or invalid concurrency to the item count', async () => {
     const items = uuidsOf(3)
-    const summary = await runBulkWithConcurrency(items, (u) => u, async () => undefined, { concurrency: 999 })
+    const summary = await runBulkWithConcurrency(
+      items,
+      (u) => u,
+      async () => undefined,
+      { concurrency: 999 },
+    )
     expect(summary.succeeded.length).toBe(3)
   })
 })

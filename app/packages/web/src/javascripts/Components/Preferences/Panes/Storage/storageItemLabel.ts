@@ -166,13 +166,16 @@ export function resolveStorageItemLabel(
 
     if (isFile(item)) {
       const name = (item.name ?? '').trim()
-      return { primary: name.length > 0 ? name : friendlyContentTypeLabel(item.content_type) ?? uuid, secondary: uuid }
+      return {
+        primary: name.length > 0 ? name : (friendlyContentTypeLabel(item.content_type) ?? uuid),
+        secondary: uuid,
+      }
     }
 
     if (isTag(item)) {
       const title = item.title.trim()
       return {
-        primary: title.length > 0 ? `# ${title}` : friendlyContentTypeLabel(item.content_type) ?? uuid,
+        primary: title.length > 0 ? `# ${title}` : (friendlyContentTypeLabel(item.content_type) ?? uuid),
         secondary: uuid,
       }
     }

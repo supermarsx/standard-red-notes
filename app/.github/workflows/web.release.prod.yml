@@ -17,13 +17,30 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
+      - name: Set up Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          registry-url: 'https://registry.npmjs.org'
+          node-version-file: '.nvmrc'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Build
         run: yarn build:web
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v6.2.2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -31,7 +48,7 @@ jobs:
       - name: Deploy static site to S3 bucket
         run: aws s3 sync packages/web/dist/ s3://app.standardnotes.com --delete
       - name: Invalidate CloudFront Cache
-        uses: chetan/invalidate-cloudfront-action@master
+        uses: chetan/invalidate-cloudfront-action@v2.4.2
         env:
           DISTRIBUTION: ${{ secrets.WEBAPP_CLOUDFRONT_COM_DISTRIBUTION_ID }}
           PATHS: '/*'
@@ -46,6 +63,6 @@ jobs:
 
     steps:
     - name: Run Discord Webhook
-      uses: johnnyhuy/actions-discord-git-webhook@main
+      uses: johnnyhuy/actions-discord-git-webhook@v1.0.4
       with:
         webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}

@@ -34,11 +34,9 @@ type Props = {
   application: WebApplication
 }
 
-const sortBucketsBySize = (snapshot: StorageUsageSnapshot) =>
-  [...snapshot.buckets].sort((a, b) => b.bytes - a.bytes)
+const sortBucketsBySize = (snapshot: StorageUsageSnapshot) => [...snapshot.buckets].sort((a, b) => b.bytes - a.bytes)
 
-const sortSourcesBySize = (snapshot: StorageUsageSnapshot) =>
-  [...snapshot.sources].sort((a, b) => b.bytes - a.bytes)
+const sortSourcesBySize = (snapshot: StorageUsageSnapshot) => [...snapshot.sources].sort((a, b) => b.bytes - a.bytes)
 
 // --- "Maximum usage" (soft cap) select options. The value is the cap in bytes
 // (stringified), plus the 'unlimited' and 'custom' sentinels. ---
@@ -98,9 +96,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
   const databaseName = application.identifier
 
   const [estimate, setEstimate] = useState<StorageEstimateResult | undefined>(undefined)
-  const [snapshot, setSnapshot] = useState<StorageUsageSnapshot | undefined>(() =>
-    loadCachedSnapshot(databaseName),
-  )
+  const [snapshot, setSnapshot] = useState<StorageUsageSnapshot | undefined>(() => loadCachedSnapshot(databaseName))
   const [scanning, setScanning] = useState(false)
   const [scanUnavailable, setScanUnavailable] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -349,7 +345,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
 
           <Subtitle>Total usage</Subtitle>
           {capState.status === 'over' && (
-            <div className="mt-2 rounded border border-solid border-danger bg-danger-faded p-3 text-sm text-danger">
+            <div className="border-danger bg-danger-faded text-danger mt-2 rounded border border-solid p-3 text-sm">
               <span className="font-semibold">You’ve exceeded your configured storage limit</span> — free up space or
               raise the limit below. The limit is advisory: syncing and saving are never blocked.
             </div>
@@ -372,12 +368,12 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                 ) : null}
               </Text>
               {(hasCap || quota > 0) && (
-                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-passive-3">
+                <div className="bg-passive-3 mt-2 h-2 w-full overflow-hidden rounded-full">
                   <div className={barColorClass} style={{ width: `${barPercent}%` }} />
                 </div>
               )}
               {capState.status === 'warning' && (
-                <Text className="mt-1 text-warning">
+                <Text className="text-warning mt-1">
                   Approaching your configured storage limit — {(capState.ratio * 100).toFixed(1)}% used. Free up space
                   or raise the limit below.
                 </Text>
@@ -391,9 +387,9 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
         <PreferencesSegment>
           <Subtitle>Maximum usage</Subtitle>
           <Text className="mt-1">
-            Set a storage budget for this device. Advisory limit for this device; syncing and saving are never blocked
-            — you’ll simply be warned when usage approaches or exceeds it. With Unlimited, usage is measured against
-            the browser’s quota instead.
+            Set a storage budget for this device. Advisory limit for this device; syncing and saving are never blocked —
+            you’ll simply be warned when usage approaches or exceeds it. With Unlimited, usage is measured against the
+            browser’s quota instead.
           </Text>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Dropdown
@@ -406,7 +402,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
               <>
                 <input
                   type="number"
-                  className="w-24 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  className="border-border bg-default w-24 rounded border px-2 py-1.5 text-sm"
                   min={1}
                   step="any"
                   value={customCapAmount}
@@ -417,7 +413,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                   }}
                 />
                 <select
-                  className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  className="border-border bg-default rounded border px-2 py-1.5 text-sm"
                   value={customCapUnit}
                   aria-label="Custom maximum storage unit"
                   onChange={(event) => {
@@ -432,7 +428,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
               </>
             )}
           </div>
-          {hasCap && <Text className="mt-2 text-passive-1">Current limit: {formatBytes(capBytes)}.</Text>}
+          {hasCap && <Text className="text-passive-1 mt-2">Current limit: {formatBytes(capBytes)}.</Text>}
         </PreferencesSegment>
       </PreferencesGroup>
 
@@ -466,11 +462,11 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                         {pct.toFixed(1)}%
                       </span>
                     </div>
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-passive-3">
-                      <div className="h-full bg-info" style={{ width: `${pct}%` }} />
+                    <div className="bg-passive-3 mt-1 h-1.5 w-full overflow-hidden rounded-full">
+                      <div className="bg-info h-full" style={{ width: `${pct}%` }} />
                     </div>
                     {source.description ? (
-                      <div className="mt-1 text-xs text-passive-1">{source.description}</div>
+                      <div className="text-passive-1 mt-1 text-xs">{source.description}</div>
                     ) : null}
                   </div>
                 )
@@ -504,8 +500,8 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                         {pct.toFixed(1)}%
                       </span>
                     </div>
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-passive-3">
-                      <div className="h-full bg-info" style={{ width: `${pct}%` }} />
+                    <div className="bg-passive-3 mt-1 h-1.5 w-full overflow-hidden rounded-full">
+                      <div className="bg-info h-full" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                 )
@@ -558,7 +554,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
               </Button>
             </div>
 
-            <div className="mt-2 flex flex-col divide-y divide-border">
+            <div className="divide-border mt-2 flex flex-col divide-y">
               {largest.map((item) => {
                 // Name resolution happens HERE on the main thread: the worker only
                 // knows the uuid/content_type (payloads are encrypted), so look up the
@@ -602,7 +598,7 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                         >
                           {label.primary}
                         </span>
-                        <span className="truncate text-xs text-passive-1" title={label.secondary ?? item.uuid}>
+                        <span className="text-passive-1 truncate text-xs" title={label.secondary ?? item.uuid}>
                           {formatBytes(item.bytes)}
                           {label.secondary ? (
                             <>

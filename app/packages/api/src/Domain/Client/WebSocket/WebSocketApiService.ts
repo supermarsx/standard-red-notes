@@ -27,7 +27,7 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
       this.operationsInProgress.set(WebSocketApiOperations.CreatingConnectionToken, false)
 
       return response
-    } catch (error) {
+    } catch {
       throw new ApiCallError(ErrorMessage.GenericFail)
     }
   }
@@ -45,7 +45,7 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
       this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
 
       return response
-    } catch (error) {
+    } catch {
       this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
       throw new ApiCallError(ErrorMessage.GenericFail)
     }

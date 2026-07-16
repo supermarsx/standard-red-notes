@@ -313,8 +313,7 @@ class Footer extends AbstractComponent<Props, State> {
     }
 
     const elapsedMs = Date.now() - this.localDataLoadStartedAt
-    const shouldShow =
-      total >= Footer.LOADING_TOAST_MIN_ITEMS && elapsedMs >= Footer.LOADING_TOAST_MIN_DURATION_MS
+    const shouldShow = total >= Footer.LOADING_TOAST_MIN_ITEMS && elapsedMs >= Footer.LOADING_TOAST_MIN_DURATION_MS
 
     if (!shouldShow && this.loadingToastId === undefined) {
       return
@@ -444,10 +443,10 @@ class Footer extends AbstractComponent<Props, State> {
       <div className="sn-component">
         <footer
           id="footer-bar"
-          className="z-footer-bar hidden h-8 w-full select-none items-center justify-between border-t border-border bg-contrast px-3 text-text md:flex"
+          className="z-footer-bar border-border bg-contrast text-text hidden h-8 w-full items-center justify-between border-t px-3 select-none md:flex"
         >
           <div className="left flex h-full flex-shrink-0">
-            <div className="sk-app-bar-item relative z-footer-bar-item ml-0 select-none">
+            <div className="sk-app-bar-item z-footer-bar-item relative ml-0 select-none">
               <AccountMenuButton
                 hasError={this.state.hasError}
                 controller={this.application.accountMenuController}
@@ -458,28 +457,28 @@ class Footer extends AbstractComponent<Props, State> {
               />
             </div>
 
-            <div className="relative z-footer-bar-item select-none">
+            <div className="z-footer-bar-item relative select-none">
               <PreferencesButton openPreferences={this.openPreferences} />
             </div>
 
-            <div className="relative z-footer-bar-item select-none">
+            <div className="z-footer-bar-item relative select-none">
               <QuickSettingsButton application={this.application} />
             </div>
 
-            <div className="relative z-footer-bar-item select-none">
+            <div className="z-footer-bar-item relative select-none">
               <AssistantButton application={this.application} />
             </div>
 
-            <div className="relative z-footer-bar-item select-none">
+            <div className="z-footer-bar-item relative select-none">
               <ConstellationButton application={this.application} />
             </div>
 
-            <div className="relative z-footer-bar-item ml-1.5 select-none">
+            <div className="z-footer-bar-item relative ml-1.5 select-none">
               <VaultSelectionButton />
             </div>
             {this.state.showBetaWarning && (
               <Fragment>
-                <div className="relative z-footer-bar-item ml-3 flex select-none items-center border-l border-solid border-border pl-3">
+                <div className="z-footer-bar-item border-border relative ml-3 flex items-center border-l border-solid pl-3 select-none">
                   <a onClick={this.betaMessageClickHandler} className="no-decoration title text-xs font-bold">
                     You are using a beta version of the app
                   </a>
@@ -487,9 +486,9 @@ class Footer extends AbstractComponent<Props, State> {
               </Fragment>
             )}
           </div>
-          <div className="center min-w-0 max-h-full flex-1 overflow-hidden px-4">
+          <div className="center max-h-full min-w-0 flex-1 overflow-hidden px-4">
             {this.state.arbitraryStatusMessage && (
-              <div className="relative z-footer-bar-item max-h-full select-none items-center overflow-hidden text-ellipsis whitespace-nowrap text-xs font-bold text-neutral">
+              <div className="z-footer-bar-item text-neutral relative max-h-full items-center overflow-hidden text-xs font-bold text-ellipsis whitespace-nowrap select-none">
                 {this.state.arbitraryStatusMessage}
               </div>
             )}
@@ -500,7 +499,7 @@ class Footer extends AbstractComponent<Props, State> {
               (whenever the footer is visible); it's compact enough not to crowd
               tablet widths the way the verbose note-stats chip would.
             */}
-            <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+            <div className="z-footer-bar-item relative mr-3 flex flex-shrink-0 items-center select-none">
               <NotesFolderCounter application={this.application} />
             </div>
             {/*
@@ -509,7 +508,7 @@ class Footer extends AbstractComponent<Props, State> {
               only shown on lg+ where there is room; the connection-status dot stays
               visible at all footer widths.
             */}
-            <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
+            <div className="z-footer-bar-item relative mr-3 hidden flex-shrink-0 items-center select-none lg:flex">
               <NoteStats application={this.application} />
             </div>
             {/*
@@ -518,16 +517,16 @@ class Footer extends AbstractComponent<Props, State> {
               color. Self-hides when AI hasn't been used and no cap is configured.
               Like NoteStats it is lg+ only to avoid crowding tablet footer widths.
             */}
-            <div className="relative z-footer-bar-item mr-3 hidden flex-shrink-0 select-none items-center lg:flex">
+            <div className="z-footer-bar-item relative mr-3 hidden flex-shrink-0 items-center select-none lg:flex">
               <AssistantUsage application={this.application} />
             </div>
             {this.state.manualSyncMode && (
-              <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+              <div className="z-footer-bar-item relative mr-3 flex flex-shrink-0 items-center select-none">
                 <StyledTooltip label="Manual sync is on — your changes only reach your account when you sync">
                   <button
                     onClick={this.syncNowClickHandler}
                     disabled={this.state.syncingNow}
-                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-bold text-warning hover:bg-contrast disabled:opacity-60"
+                    className="text-warning hover:bg-contrast flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-bold disabled:opacity-60"
                     aria-label="Sync now (manual sync mode is on)"
                   >
                     <Icon type="sync" size="small" className={this.state.syncingNow ? 'animate-spin' : ''} />
@@ -536,13 +535,13 @@ class Footer extends AbstractComponent<Props, State> {
                 </StyledTooltip>
               </div>
             )}
-            <div className="relative z-footer-bar-item mr-3 flex flex-shrink-0 select-none items-center">
+            <div className="z-footer-bar-item relative mr-3 flex flex-shrink-0 items-center select-none">
               <ConnectionStatusIndicator application={this.application} />
             </div>
             {this.state.failedSyncError && (
               <div
                 title={`Sync error: ${this.state.failedSyncError}`}
-                className="relative z-footer-bar-item flex max-w-[40vw] select-none items-center overflow-hidden text-ellipsis whitespace-nowrap text-xs font-bold text-neutral"
+                className="z-footer-bar-item text-neutral relative flex max-w-[40vw] items-center overflow-hidden text-xs font-bold text-ellipsis whitespace-nowrap select-none"
               >
                 Sync error: {this.state.failedSyncError}
               </div>
@@ -550,7 +549,7 @@ class Footer extends AbstractComponent<Props, State> {
             {this.state.dataUpgradeAvailable && (
               <div
                 onClick={this.securityUpdateClickHandler}
-                className="relative z-footer-bar-item flex select-none items-center text-xs font-bold text-success"
+                className="z-footer-bar-item text-success relative flex items-center text-xs font-bold select-none"
               >
                 Encryption upgrade available.
               </div>
@@ -558,15 +557,15 @@ class Footer extends AbstractComponent<Props, State> {
             {this.state.newUpdateAvailable && (
               <div
                 onClick={this.newUpdateClickHandler}
-                className="relative z-footer-bar-item ml-3 flex select-none items-center text-xs font-bold text-info"
+                className="z-footer-bar-item text-info relative ml-3 flex items-center text-xs font-bold select-none"
               >
                 New update available.
               </div>
             )}
             {(this.state.outOfSync || this.state.showSyncResolution) && (
-              <div className="relative z-footer-bar-item ml-3 flex flex-shrink-0 select-none items-center">
+              <div className="z-footer-bar-item relative ml-3 flex flex-shrink-0 items-center select-none">
                 {this.state.outOfSync && (
-                  <div onClick={this.syncResolutionClickHandler} className="text-xs font-bold text-warning">
+                  <div onClick={this.syncResolutionClickHandler} className="text-warning text-xs font-bold">
                     Potentially Out of Sync
                   </div>
                 )}
@@ -576,7 +575,7 @@ class Footer extends AbstractComponent<Props, State> {
               </div>
             )}
             {this.state.offline && (
-              <div className="relative z-footer-bar-item ml-3 flex flex-shrink-0 select-none items-center text-xs font-bold">
+              <div className="z-footer-bar-item relative ml-3 flex flex-shrink-0 items-center text-xs font-bold select-none">
                 Offline
               </div>
             )}
@@ -586,7 +585,7 @@ class Footer extends AbstractComponent<Props, State> {
                   id="lock-item"
                   onClick={this.lockClickHandler}
                   title="Locks application and wipes unencrypted data from memory."
-                  className="relative z-footer-bar-item ml-3 flex cursor-pointer select-none items-center border-l border-solid border-border pl-2 hover:text-info"
+                  className="z-footer-bar-item border-border hover:text-info relative ml-3 flex cursor-pointer items-center border-l border-solid pl-2 select-none"
                 >
                   <Icon type="lock-filled" size="custom" className="h-4.5 w-4.5" />
                 </div>

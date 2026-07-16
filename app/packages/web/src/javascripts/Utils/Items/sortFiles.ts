@@ -14,11 +14,7 @@ export type FilesSortDirection = 'asc' | 'dsc'
  * keys: ties fall through to a 0 comparison, and Array.prototype.sort is stable in
  * all supported engines, so equal-key items keep their original relative order.
  */
-export const sortFiles = (
-  files: FileItem[],
-  sortBy: FilesSortBy,
-  direction: FilesSortDirection,
-): FileItem[] => {
+export const sortFiles = (files: FileItem[], sortBy: FilesSortBy, direction: FilesSortDirection): FileItem[] => {
   const factor = direction === 'asc' ? 1 : -1
   return [...files].sort((a, b) => {
     let comparison = 0

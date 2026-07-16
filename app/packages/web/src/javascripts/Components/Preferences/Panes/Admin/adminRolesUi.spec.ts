@@ -130,11 +130,7 @@ describe('adminRolesUi', () => {
         { uuid: '1', name: 'SUPPORT_AGENT', version: 1, isBuiltIn: false, permissionNames: [] },
         { uuid: '2', name: 'CORE_USER', version: 1, isBuiltIn: true, permissionNames: [] },
       ] as AdminRole[]
-      expect(conferrableRoleNames(['CORE_USER', 'PRO_USER'], roles)).toEqual([
-        'CORE_USER',
-        'PRO_USER',
-        'SUPPORT_AGENT',
-      ])
+      expect(conferrableRoleNames(['CORE_USER', 'PRO_USER'], roles)).toEqual(['CORE_USER', 'PRO_USER', 'SUPPORT_AGENT'])
     })
   })
 })

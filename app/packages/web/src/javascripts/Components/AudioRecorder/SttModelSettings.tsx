@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text } from '../Preferences/PreferencesComponents/Content'
-import {
-  DictationSettings,
-  loadDictationSettings,
-  saveDictationSettings,
-} from '@/Assistant/dictationSettings'
+import { DictationSettings, loadDictationSettings, saveDictationSettings } from '@/Assistant/dictationSettings'
 import { fetchAvailableSttModels, KNOWN_STT_MODELS } from '@/Assistant/transcription'
 
 // Sentinel option value for the free-text "Custom…" choice in the model dropdown.
@@ -116,15 +112,15 @@ const SttModelSettings = ({ application }: { application: WebApplication }) => {
     <>
       <Subtitle>Speech-to-text model</Subtitle>
       <Text>
-        Model id sent to the transcription endpoint (e.g. whisper-1, gpt-4o-transcribe). Choose “Server default” to
-        send no model id and let the server pick. Direct mode only.
+        Model id sent to the transcription endpoint (e.g. whisper-1, gpt-4o-transcribe). Choose “Server default” to send
+        no model id and let the server pick. Direct mode only.
         {detected.length > 0 && ' Models below were detected from your server.'}
       </Text>
 
       {hasDropdown ? (
         <>
           <select
-            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+            className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
             value={selectValue}
             onChange={(event) => onSelectChange(event.target.value)}
           >
@@ -139,7 +135,7 @@ const SttModelSettings = ({ application }: { application: WebApplication }) => {
 
           {selectValue === CUSTOM_OPTION && (
             <input
-              className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+              className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
               type="text"
               value={currentModel === '' ? '' : currentModel}
               placeholder="custom model id"
@@ -149,7 +145,7 @@ const SttModelSettings = ({ application }: { application: WebApplication }) => {
         </>
       ) : (
         <input
-          className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
           type="text"
           value={dictation.sttModel}
           placeholder="(leave empty for server default)"
@@ -157,7 +153,7 @@ const SttModelSettings = ({ application }: { application: WebApplication }) => {
         />
       )}
 
-      {detecting && <Text className="mt-1 text-passive-1">Detecting available models…</Text>}
+      {detecting && <Text className="text-passive-1 mt-1">Detecting available models…</Text>}
     </>
   )
 }

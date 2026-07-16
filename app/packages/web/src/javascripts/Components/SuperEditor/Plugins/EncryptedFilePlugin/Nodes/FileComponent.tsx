@@ -223,9 +223,9 @@ function FileComponent({
             <Spinner className="h-4 w-4" />
             Uploading file "{uploadProgress.file.name}"... ({progress}%)
           </div>
-          <div className="w-full max-w-[50%] overflow-hidden rounded bg-contrast">
+          <div className="bg-contrast w-full max-w-[50%] overflow-hidden rounded">
             <div
-              className="h-2 rounded rounded-tl-none bg-info transition-[width] duration-100"
+              className="bg-info h-2 rounded rounded-tl-none transition-[width] duration-100"
               role="progressbar"
               style={{
                 width: `${progress}%`,
@@ -256,9 +256,9 @@ function FileComponent({
     return (
       <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
         <div ref={blockWrapperRef}>
-          <div className="flex items-center gap-2 rounded border border-border bg-default px-3 py-2">
+          <div className="border-border bg-default flex items-center gap-2 rounded border px-3 py-2">
             <button
-              className="flex flex-shrink-0 items-center justify-center rounded p-1 text-neutral hover:bg-contrast"
+              className="text-neutral hover:bg-contrast flex flex-shrink-0 items-center justify-center rounded p-1"
               aria-label="Expand file preview"
               title="Expand file preview"
               onClick={() => changeCollapsed(false)}
@@ -270,9 +270,9 @@ function FileComponent({
               title={`Expand "${file.name}"`}
               onClick={() => changeCollapsed(false)}
             >
-              <Icon type={fileIcon} className="flex-shrink-0 text-neutral" size="medium" />
+              <Icon type={fileIcon} className="text-neutral flex-shrink-0" size="medium" />
               <span className="min-w-0 truncate font-medium">{file.name}</span>
-              {readableSize && <span className="flex-shrink-0 text-sm text-passive-1">{readableSize}</span>}
+              {readableSize && <span className="text-passive-1 flex-shrink-0 text-sm">{readableSize}</span>}
             </button>
           </div>
         </div>
@@ -289,15 +289,15 @@ function FileComponent({
       >
         <div className="mb-1 flex items-center gap-2">
           <button
-            className="flex items-center justify-center rounded p-1 text-neutral hover:bg-contrast"
+            className="text-neutral hover:bg-contrast flex items-center justify-center rounded p-1"
             aria-label="Collapse file"
             title="Collapse file"
             onClick={() => changeCollapsed(true)}
           >
             <Icon type="chevron-down" size="medium" />
           </button>
-          <Icon type={fileIcon} className="flex-shrink-0 text-neutral" size="medium" />
-          <span className="min-w-0 truncate text-sm text-passive-0">{file.name}</span>
+          <Icon type={fileIcon} className="text-neutral flex-shrink-0" size="medium" />
+          <span className="text-passive-0 min-w-0 truncate text-sm">{file.name}</span>
         </div>
         {canLoad && (
           <FilePreview

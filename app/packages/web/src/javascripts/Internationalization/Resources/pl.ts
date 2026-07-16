@@ -364,7 +364,8 @@ const pl: LocaleResource = {
     viewFile: 'Wyświetl plik',
     loading: 'Ładowanie...',
     fileCannotBePreviewed: 'Nie można wyświetlić podglądu tego pliku.',
-    errorLoadingFile: 'Wystąpił błąd podczas ładowania pliku. Spróbuj ponownie lub pobierz plik i otwórz go w innej aplikacji.',
+    errorLoadingFile:
+      'Wystąpił błąd podczas ładowania pliku. Spróbuj ponownie lub pobierz plik i otwórz go w innej aplikacji.',
     tryAgain: 'Spróbuj ponownie',
     downloadToView: 'Aby wyświetlić ten plik, pobierz go i otwórz w innej aplikacji.',
     fileInformation: 'Informacje o pliku',
@@ -413,9 +414,11 @@ const pl: LocaleResource = {
     cancelOcr: 'Anuluj OCR',
     preparingOcr: 'Przygotowywanie OCR...',
     ocrProgress: 'OCR strona {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Tekst już wyodrębniony (z pamięci podręcznej). Uruchom OCR ponownie w przeglądarce (pozostaje na urządzeniu).',
+    ocrCachedReRunTooltip:
+      'Tekst już wyodrębniony (z pamięci podręcznej). Uruchom OCR ponownie w przeglądarce (pozostaje na urządzeniu).',
     ocrExtractedReRunTooltip: 'Tekst wyodrębniony. Uruchom OCR ponownie w przeglądarce (pozostaje na urządzeniu).',
-    ocrExtractTooltip: 'Wyodrębnij tekst ze skanowanych stron za pomocą OCR. Działa w przeglądarce; nic nie opuszcza Twojego urządzenia (wolne; pobiera dane językowe).',
+    ocrExtractTooltip:
+      'Wyodrębnij tekst ze skanowanych stron za pomocą OCR. Działa w przeglądarce; nic nie opuszcza Twojego urządzenia (wolne; pobiera dane językowe).',
     extractTextWithOcrBrowser: 'Wyodrębnij tekst za pomocą OCR w przeglądarce',
     reRunOcrBrowser: 'Uruchom OCR ponownie (przeglądarka)',
     extractTextOcr: 'Wyodrębnij tekst (OCR)',
@@ -432,7 +435,8 @@ const pl: LocaleResource = {
     previousMatch: 'Poprzednie dopasowanie',
     nextMatch: 'Następne dopasowanie',
     closeSearch: 'Zamknij wyszukiwanie',
-    serverOcrDisclosurePrefix: 'OCR na serwerze jest dostępny dla Twojego konta. Wysyła obrazy stron tego pliku PDF na serwer i',
+    serverOcrDisclosurePrefix:
+      'OCR na serwerze jest dostępny dla Twojego konta. Wysyła obrazy stron tego pliku PDF na serwer i',
     serverOcrDisclosureBold: 'opuszcza szyfrowanie end-to-end',
     serverOcrDisclosureSuffix:
       ' — serwer (i każdy, kto go kontroluje) może odczytać tę treść. OCR w przeglądarce zachowuje wszystko na Twoim urządzeniu. Domyślnie używany jest OCR w przeglądarce.',
@@ -590,7 +594,8 @@ const pl: LocaleResource = {
     syncUnreachable: 'Synchronizacja nieosiągalna',
     syncUnreachableMessage: 'Hmm... nie możemy zsynchronizować Twojego konta. Powód: {{reason}}',
     workspaceSwitcherMenuLabel: 'Menu przełączania obszarów roboczych',
-    signOutAllWorkspacesConfirm: 'Czy na pewno chcesz wylogować się ze wszystkich obszarów roboczych na tym urządzeniu?',
+    signOutAllWorkspacesConfirm:
+      'Czy na pewno chcesz wylogować się ze wszystkich obszarów roboczych na tym urządzeniu?',
     signOutAll: 'Wyloguj ze wszystkich',
     addAnotherWorkspace: 'Dodaj kolejny obszar roboczy',
     signOutAllWorkspaces: 'Wyloguj ze wszystkich obszarów roboczych',
@@ -603,7 +608,8 @@ const pl: LocaleResource = {
     ignoreWarning: 'Zignoruj ostrzeżenie',
     waitingForSecurityKey: 'Oczekiwanie na klucz bezpieczeństwa...',
     authenticationSuccessful: 'Uwierzytelnianie powiodło się!',
-    insertSecurityKeyPrompt: 'Włóż sprzętowy klucz bezpieczeństwa, a następnie naciśnij poniższy przycisk, aby się uwierzytelnić.',
+    insertSecurityKeyPrompt:
+      'Włóż sprzętowy klucz bezpieczeństwa, a następnie naciśnij poniższy przycisk, aby się uwierzytelnić.',
     authenticate: 'Uwierzytelnij',
   },
   search: {
@@ -682,7 +688,8 @@ const pl: LocaleResource = {
     invalidLinkTitle: 'Nieprawidłowy link',
     invalidLinkMessage: 'Ten link udostępniania jest nieprawidłowy lub brakuje klucza.',
     selfDestructTitle: 'Ta notatka samoczynnie usuwa się po wyświetleniu',
-    oneTimeViewConsumed: 'Czytasz link jednorazowego wyświetlenia. Został on teraz wykorzystany i nie można go ponownie otworzyć',
+    oneTimeViewConsumed:
+      'Czytasz link jednorazowego wyświetlenia. Został on teraz wykorzystany i nie można go ponownie otworzyć',
     oneTimeViewExpiresClause_one: ', i całkowicie wygasa {{count}} minutę po pierwszym otwarciu',
     oneTimeViewExpiresClause_few: ', i całkowicie wygasa {{count}} minuty po pierwszym otwarciu',
     oneTimeViewExpiresClause_many: ', i całkowicie wygasa {{count}} minut po pierwszym otwarciu',
@@ -693,7 +700,8 @@ const pl: LocaleResource = {
     linkExpires_other: 'Ten link wygasa {{count}} minuty po pierwszym otwarciu.',
     untitled: 'Bez tytułu',
     tagHasNoNotes: 'Ten temat nie ma notatek.',
-    publicReadOnlyFooter: 'To jest publiczny link udostępniania tylko do odczytu. Treść została odszyfrowana w Twojej przeglądarce.',
+    publicReadOnlyFooter:
+      'To jest publiczny link udostępniania tylko do odczytu. Treść została odszyfrowana w Twojej przeglądarce.',
     confidentialWatermark: 'Poufne · {{datetime}}',
     contentHiddenTitle: 'Treść ukryta',
     contentHiddenMessage: 'Przywróć fokus do tego okna, aby wyświetlić udostępnioną treść.',

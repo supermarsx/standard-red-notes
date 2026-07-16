@@ -55,7 +55,7 @@ const TimezonePreference: FunctionComponent<Props> = ({ application }: Props) =>
           </label>
           <select
             id="timezone-preference-select"
-            className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground"
+            className="border-border bg-default text-foreground rounded border px-2 py-1 text-sm"
             value={settings.timeZone}
             onChange={(event) => onChange(event.target.value)}
           >

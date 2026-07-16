@@ -209,15 +209,16 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
             recipient.
           </Text>
 
-          <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+          <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
             <Subtitle className="text-warning">Important: this stores your link and key on the server</Subtitle>
             <Text className="mt-1">
               Unlike a normal share link — where the decryption key never leaves your browser — a survivor switch stores
               the full link, including its decryption key, on the server. This is necessary so the content can be
               delivered to your recipient when you are gone. As a result, both your recipient (once the switch triggers)
-              and the server itself can access the shared content: anyone who can read the server's stored switches could
-              decrypt it without waiting for the switch to fire. Only use this for content you are comfortable entrusting
-              to the server and your recipient. Delete the switch to remove the stored link and key from the server.
+              and the server itself can access the shared content: anyone who can read the server's stored switches
+              could decrypt it without waiting for the switch to fire. Only use this for content you are comfortable
+              entrusting to the server and your recipient. Delete the switch to remove the stored link and key from the
+              server.
             </Text>
           </div>
         </PreferencesSegment>
@@ -230,7 +231,7 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
           <label className="mt-3 block">
             <span className="text-sm font-medium lg:text-xs">What to share</span>
             <select
-              className="mt-1 block w-full rounded border border-solid border-border bg-default px-2 py-1.5 text-base text-text lg:text-sm"
+              className="border-border bg-default text-text mt-1 block w-full rounded border border-solid px-2 py-1.5 text-base lg:text-sm"
               value={scope}
               onChange={(event) => setScope(event.target.value)}
               disabled={submitting}
@@ -248,7 +249,7 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
             <span className="text-sm font-medium lg:text-xs">Recipient email</span>
             <input
               type="email"
-              className="mt-1 block w-full rounded border border-solid border-border bg-default px-2 py-1.5 text-base text-text lg:text-sm"
+              className="border-border bg-default text-text mt-1 block w-full rounded border border-solid px-2 py-1.5 text-base lg:text-sm"
               value={recipientEmail}
               onChange={(event) => setRecipientEmail(event.target.value)}
               placeholder="someone@example.com"
@@ -261,7 +262,7 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
             <input
               type="number"
               min={1}
-              className="mt-1 block w-full rounded border border-solid border-border bg-default px-2 py-1.5 text-base text-text lg:text-sm"
+              className="border-border bg-default text-text mt-1 block w-full rounded border border-solid px-2 py-1.5 text-base lg:text-sm"
               value={intervalDays}
               onChange={(event) => setIntervalDays(Number(event.target.value))}
               disabled={submitting}
@@ -271,7 +272,7 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
           <label className="mt-3 block">
             <span className="text-sm font-medium lg:text-xs">Message to recipient (optional)</span>
             <textarea
-              className="mt-1 block w-full rounded border border-solid border-border bg-default px-2 py-1.5 text-base text-text lg:text-sm"
+              className="border-border bg-default text-text mt-1 block w-full rounded border border-solid px-2 py-1.5 text-base lg:text-sm"
               rows={3}
               value={message}
               onChange={(event) => setMessage(event.target.value)}
@@ -299,15 +300,15 @@ const SurvivorSwitch: FunctionComponent<Props> = ({ application }: Props) => {
             switches.map((item) => (
               <div
                 key={item.uuid}
-                className="mt-2 flex flex-row items-center justify-between rounded border border-solid border-border p-3"
+                className="border-border mt-2 flex flex-row items-center justify-between rounded border border-solid p-3"
               >
                 <div className="flex flex-col">
                   <span className="text-base font-medium lg:text-sm">{item.recipientEmail}</span>
-                  <span className="text-sm text-passive-0 lg:text-xs">Checks in every {item.intervalDays} days</span>
-                  <span className="text-sm text-passive-0 lg:text-xs">
+                  <span className="text-passive-0 text-sm lg:text-xs">Checks in every {item.intervalDays} days</span>
+                  <span className="text-passive-0 text-sm lg:text-xs">
                     {item.triggered ? 'Sent' : `Next deadline: ${formatDateTime(item.deadline)}`}
                   </span>
-                  <span className="text-sm text-passive-0 lg:text-xs">
+                  <span className="text-passive-0 text-sm lg:text-xs">
                     Last check-in: {formatDateTime(item.lastCheckInAt)}
                   </span>
                 </div>

@@ -116,10 +116,10 @@ const PostureChip: FunctionComponent<{
   const className = good
     ? 'bg-success text-success-contrast'
     : bad
-    ? 'bg-warning text-warning-contrast'
-    : 'bg-passive-4 text-foreground'
+      ? 'bg-warning text-warning-contrast'
+      : 'bg-passive-4 text-foreground'
   return (
-    <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${className}`}>
+    <span className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${className}`}>
       {state === true ? on : state === false ? off : unknown}
     </span>
   )
@@ -134,7 +134,7 @@ const PostureRow: FunctionComponent<{ name: ReactNode; detail?: ReactNode; chip:
   <div className="flex items-start justify-between gap-4 py-2">
     <div className="flex min-w-0 flex-col">
       <Text>{name}</Text>
-      {detail ? <Text className="text-xs text-passive-1">{detail}</Text> : null}
+      {detail ? <Text className="text-passive-1 text-xs">{detail}</Text> : null}
     </div>
     <div className="shrink-0">{chip}</div>
   </div>
@@ -443,7 +443,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           This instance&apos;s security posture and the runtime anti-abuse controls, grouped into subtabs. The Overview
           is a read-only summary; each item links to where its control actually lives.
         </Text>
-        <div className="mt-3 border-b border-border">
+        <div className="border-border mt-3 border-b">
           <TabList state={subTab} className="flex flex-wrap">
             <Tab id="overview" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="security" size="medium" />
@@ -495,12 +495,12 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             {signupsOpen === null
               ? 'Whether new accounts can be created on this instance.'
               : signupsOpen
-              ? 'New accounts can currently be created on this instance.'
-              : blockSource === 'both'
-              ? 'New signups are blocked by both the in-app switch and the server environment (DISABLE_USER_REGISTRATION).'
-              : blockSource === 'persisted'
-              ? 'New signups are blocked by the in-app registration switch.'
-              : 'New signups are blocked by the server environment (DISABLE_USER_REGISTRATION).'}
+                ? 'New accounts can currently be created on this instance.'
+                : blockSource === 'both'
+                  ? 'New signups are blocked by both the in-app switch and the server environment (DISABLE_USER_REGISTRATION).'
+                  : blockSource === 'persisted'
+                    ? 'New signups are blocked by the in-app registration switch.'
+                    : 'New signups are blocked by the server environment (DISABLE_USER_REGISTRATION).'}
             {registration && registration.envDisabled === null && (
               <> This server did not report its environment flag, so only the in-app switch is reflected above.</>
             )}
@@ -550,13 +550,13 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           {auditLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
           ) : auditError ? (
-            <Text className="mt-3 text-danger">{auditError}</Text>
+            <Text className="text-danger mt-3">{auditError}</Text>
           ) : securityEvents.length === 0 ? (
             <Text className="mt-3">No recent security-relevant events in the latest audit entries.</Text>
           ) : (
             <div className="mt-3 flex flex-col gap-2">
               {securityEvents.map((entry) => (
-                <div key={entry.uuid} className="rounded border border-border p-2">
+                <div key={entry.uuid} className="border-border rounded border p-2">
                   <div className="flex items-center justify-between gap-2">
                     <Subtitle>{entry.action}</Subtitle>
                     <Text className="text-xs">{formatTimestamp(entry.createdAt)}</Text>
@@ -606,9 +606,9 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           {statusLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
           ) : statusError ? (
-            <Text className="mt-3 text-danger">{statusError}</Text>
+            <Text className="text-danger mt-3">{statusError}</Text>
           ) : (
-            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+            <div className="divide-border border-border mt-3 divide-y rounded border px-3">
               <PostureRow
                 name="Server-side OCR"
                 detail="When on, images are decrypted on the server to extract text — they leave the E2E boundary. Off is the privacy-safe state. (Server tab)"
@@ -668,7 +668,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           {statusLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
           ) : (
-            <div className="mt-3 divide-y divide-border rounded border border-border px-3">
+            <div className="divide-border border-border mt-3 divide-y rounded border px-3">
               <PostureRow
                 name="Auth session cache (Redis)"
                 detail="Backs sessions and revocation."
@@ -720,7 +720,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             fails <em>open</em> (limits and the block list are best-effort, so a cache blip never locks users out).
           </Text>
 
-          {antiAbuseError ? <Text className="mt-3 text-danger">{antiAbuseError}</Text> : null}
+          {antiAbuseError ? <Text className="text-danger mt-3">{antiAbuseError}</Text> : null}
 
           {antiAbuse && !antiAbuse.available ? (
             <Text className="mt-3">
@@ -762,7 +762,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
                   <label key={key} className="flex items-center justify-between gap-2">
                     <Text>{label}</Text>
                     <input
-                      className="w-24 rounded border border-border bg-default px-2 py-1 text-right text-sm"
+                      className="border-border bg-default w-24 rounded border px-2 py-1 text-right text-sm"
                       type="number"
                       min={0}
                       value={String(configDraft[key] as number)}
@@ -789,13 +789,13 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           {antiAbuse?.available ? (
             <div className="mt-5">
               <Subtitle>IP block list</Subtitle>
-              <Text className="text-xs text-passive-1">
+              <Text className="text-passive-1 text-xs">
                 A blocklisted client IP is rejected (403) before any rate-limit tier. Accepts an IP, an IPv4 CIDR
                 (a.b.c.d/24) or an IPv6 literal.
               </Text>
               <div className="mt-2 flex gap-2">
                 <input
-                  className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                  className="border-border bg-default min-w-0 flex-1 rounded border px-2 py-1 text-sm"
                   type="text"
                   placeholder="e.g. 203.0.113.7 or 203.0.113.0/24"
                   value={blockEntry}
@@ -810,12 +810,12 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {antiAbuse.ipLists.block.length === 0 ? (
-                  <Text className="text-xs text-passive-1">No blocked IPs.</Text>
+                  <Text className="text-passive-1 text-xs">No blocked IPs.</Text>
                 ) : (
                   antiAbuse.ipLists.block.map((entry) => (
                     <span
                       key={entry}
-                      className="inline-flex items-center gap-1 rounded bg-warning px-2 py-0.5 text-xs text-warning-contrast"
+                      className="bg-warning text-warning-contrast inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs"
                     >
                       {entry}
                       <button
@@ -832,12 +832,12 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               </div>
 
               <Subtitle className="mt-4">IP allow list</Subtitle>
-              <Text className="text-xs text-passive-1">
+              <Text className="text-passive-1 text-xs">
                 An allowlisted IP bypasses the rate-limit tiers. Allow wins over block, so you cannot lock yourself out.
               </Text>
               <div className="mt-2 flex gap-2">
                 <input
-                  className="min-w-0 flex-1 rounded border border-border bg-default px-2 py-1 text-sm"
+                  className="border-border bg-default min-w-0 flex-1 rounded border px-2 py-1 text-sm"
                   type="text"
                   placeholder="e.g. 198.51.100.0/24"
                   value={allowEntry}
@@ -852,12 +852,12 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {antiAbuse.ipLists.allow.length === 0 ? (
-                  <Text className="text-xs text-passive-1">No allowlisted IPs.</Text>
+                  <Text className="text-passive-1 text-xs">No allowlisted IPs.</Text>
                 ) : (
                   antiAbuse.ipLists.allow.map((entry) => (
                     <span
                       key={entry}
-                      className="inline-flex items-center gap-1 rounded bg-success px-2 py-0.5 text-xs text-success-contrast"
+                      className="bg-success text-success-contrast inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs"
                     >
                       {entry}
                       <button
@@ -880,14 +880,14 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             <div className="mt-5">
               <Subtitle>Throttle activity (last 24h)</Subtitle>
               <div className="mt-2 flex flex-wrap gap-2">
-                <span className="rounded border border-border px-2 py-0.5 text-xs">
+                <span className="border-border rounded border px-2 py-0.5 text-xs">
                   IP blocks: <strong>{antiAbuse.metrics.blockHits}</strong>
                 </span>
                 {Object.keys(antiAbuse.metrics.tierHits).length === 0 ? (
-                  <span className="rounded border border-border px-2 py-0.5 text-xs">No throttle hits recorded.</span>
+                  <span className="border-border rounded border px-2 py-0.5 text-xs">No throttle hits recorded.</span>
                 ) : (
                   Object.entries(antiAbuse.metrics.tierHits).map(([bucket, count]) => (
-                    <span key={bucket} className="rounded border border-border px-2 py-0.5 text-xs">
+                    <span key={bucket} className="border-border rounded border px-2 py-0.5 text-xs">
                       {bucket}: <strong>{count}</strong>
                     </span>
                   ))
@@ -896,7 +896,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               {antiAbuse.metrics.recent.length > 0 ? (
                 <div className="mt-3 flex flex-col gap-1">
                   {antiAbuse.metrics.recent.slice(0, SECURITY_EVENTS_PREVIEW).map((event, index) => (
-                    <Text key={`${event.at}-${index}`} className="text-xs text-passive-1">
+                    <Text key={`${event.at}-${index}`} className="text-passive-1 text-xs">
                       {formatTimestamp(new Date(event.at).toISOString())} &middot; {event.bucket} &middot; {event.ip}{' '}
                       &middot; {event.method} {event.path}
                     </Text>
@@ -921,40 +921,40 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               <Subtitle>Locked accounts</Subtitle>
               <Button label="Refresh" onClick={() => void loadLockedAccounts()} disabled={lockedLoading} small />
             </div>
-            <Text className="text-xs text-passive-1">
+            <Text className="text-passive-1 text-xs">
               Accounts currently rate-limited by the failed-login lockout. Unlocking clears the attempt counters so the
               user can sign in again. The identifier is whatever the failed attempts were keyed on (a user id or email).
             </Text>
-            {lockedError ? <Text className="mt-2 text-danger">{lockedError}</Text> : null}
+            {lockedError ? <Text className="text-danger mt-2">{lockedError}</Text> : null}
             {lockedLoading && !lockedAccounts ? (
               <div className="mt-2">
                 <Spinner className="h-4 w-4" />
               </div>
             ) : lockedAccounts && !lockedAccounts.available ? (
-              <Text className="mt-2 text-xs text-passive-1">
+              <Text className="text-passive-1 mt-2 text-xs">
                 Locked-account listing is not available on this deployment (requires a Redis-backed cache).
               </Text>
             ) : lockedAccounts && lockedAccounts.accounts.length === 0 ? (
-              <Text className="mt-2 text-xs text-passive-1">No accounts are currently locked.</Text>
+              <Text className="text-passive-1 mt-2 text-xs">No accounts are currently locked.</Text>
             ) : lockedAccounts ? (
               <div className="mt-2 flex flex-col gap-1">
                 {lockedAccounts.accounts.map((account) => (
                   <div
                     key={account.identifier}
-                    className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1"
+                    className="border-border flex items-center justify-between gap-2 rounded border px-2 py-1"
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-semibold">{account.identifier}</span>
                         {account.locked ? (
-                          <span className="rounded bg-danger px-1.5 py-0.5 text-xs text-danger-contrast">locked</span>
+                          <span className="bg-danger text-danger-contrast rounded px-1.5 py-0.5 text-xs">locked</span>
                         ) : (
-                          <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">
+                          <span className="bg-warning text-warning-contrast rounded px-1.5 py-0.5 text-xs">
                             tracking
                           </span>
                         )}
                       </div>
-                      <Text className="text-xs text-passive-1">
+                      <Text className="text-passive-1 text-xs">
                         attempts: {account.counter} &middot; captcha: {account.captchaCounter}
                         {account.ttlSeconds >= 0 ? <> &middot; expires in {account.ttlSeconds}s</> : null}
                       </Text>
@@ -972,7 +972,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           </div>
 
           <div className="mt-3">
-            <Text className="text-xs text-passive-1">
+            <Text className="text-passive-1 text-xs">
               The same tiers, IP lists and lockout config are viewable/manageable from the container CLI:{' '}
               <code>srn-admin limits</code>, <code>srn-admin ip list</code>, <code>srn-admin ip block &lt;ip&gt;</code>.
             </Text>

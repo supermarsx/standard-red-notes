@@ -141,7 +141,9 @@ export const backendRowToPayload = (row: BackendProfileRow): BackendProfilePaylo
   return payload
 }
 
-export const buildBackendProfilesUpdate = (rows: BackendProfileRow[]): { backendProfiles: BackendProfilePayload[] } => ({
+export const buildBackendProfilesUpdate = (
+  rows: BackendProfileRow[],
+): { backendProfiles: BackendProfilePayload[] } => ({
   backendProfiles: rows.map(backendRowToPayload),
 })
 

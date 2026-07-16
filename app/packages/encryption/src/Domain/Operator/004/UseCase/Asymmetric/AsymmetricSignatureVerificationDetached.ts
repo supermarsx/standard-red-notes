@@ -29,7 +29,7 @@ export class AsymmetricSignatureVerificationDetached004 {
         signaturePublicKey: additionalData.signingData.publicKey,
         senderPublicKey: additionalData.senderPublicKey,
       }
-    } catch (error) {
+    } catch {
       return {
         signatureVerified: false,
       }

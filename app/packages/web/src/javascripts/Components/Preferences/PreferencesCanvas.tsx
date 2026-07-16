@@ -21,7 +21,9 @@ type Props = PreferencesProps & {
 
 const PreferencesCanvas: FunctionComponent<Props> = (props) => (
   <div className="flex min-h-0 flex-grow flex-col md:flex-row md:justify-between">
-    <div className={classNames('min-h-0 flex-grow md:flex md:flex-grow-0', props.mobileShowContent ? 'hidden' : 'flex')}>
+    <div
+      className={classNames('min-h-0 flex-grow md:flex md:flex-grow-0', props.mobileShowContent ? 'hidden' : 'flex')}
+    >
       <PreferencesMenuView menu={props.menu} onSelectPane={props.onSelectPane} />
     </div>
     <div

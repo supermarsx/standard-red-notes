@@ -28,11 +28,11 @@ export const ConflictListItem = ({
     <button
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
       className={classNames(
-        'flex w-full select-none flex-col overflow-hidden border-l-2 bg-transparent px-3 py-2.5 pl-4 text-left text-sm text-text',
+        'text-text flex w-full flex-col overflow-hidden border-l-2 bg-transparent px-3 py-2.5 pl-4 text-left text-sm select-none',
         isSelected ? 'border-info bg-info-backdrop' : 'border-transparent',
         disabled
           ? 'cursor-not-allowed opacity-75'
-          : 'cursor-pointer hover:bg-contrast hover:text-foreground focus:bg-info-backdrop focus:shadow-none',
+          : 'hover:bg-contrast hover:text-foreground focus:bg-info-backdrop cursor-pointer focus:shadow-none',
       )}
       onClick={onClick}
       data-selected={isSelected}
@@ -42,7 +42,7 @@ export const ConflictListItem = ({
         <CheckIndicator checked={isSelected} />
         <div className="font-semibold">{title}</div>
       </div>
-      <div className="w-full text-sm text-neutral lg:text-xs">
+      <div className="text-neutral w-full text-sm lg:text-xs">
         <div className="mb-1.5 flex items-center gap-2">
           <StyledTooltip gutter={8} label="Last modified" className="!z-modal">
             <div className="flex-shrink-0">

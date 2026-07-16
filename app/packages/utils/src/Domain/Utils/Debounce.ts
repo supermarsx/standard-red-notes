@@ -65,7 +65,7 @@ export function debounce<Args extends any[], F extends (...args: Args) => any>(
   }
 
   const debouncedFunction = function (this: ThisParameterType<F>, ...args: Parameters<F>) {
-    // eslint-disable-next-line no-invalid-this, @typescript-eslint/no-this-alias
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const context = this
     return new Promise<ReturnType<F>>((resolve, reject) => {
       const invokeFunction = function () {
@@ -73,7 +73,9 @@ export function debounce<Args extends any[], F extends (...args: Args) => any>(
         lastInvokeTime = Date.now()
         if (!isImmediate) {
           const result = func.apply(context, args)
-          callback && callback(result)
+          if (callback) {
+            callback(result)
+          }
           promises.forEach(({ resolve }) => resolve(result))
           promises = []
         }
@@ -89,7 +91,9 @@ export function debounce<Args extends any[], F extends (...args: Args) => any>(
 
       if (shouldCallNow) {
         const result = func.apply(context, args)
-        callback && callback(result)
+        if (callback) {
+          callback(result)
+        }
         return resolve(result)
       }
       promises.push({ resolve, reject })

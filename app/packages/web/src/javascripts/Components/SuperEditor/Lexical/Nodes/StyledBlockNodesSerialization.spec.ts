@@ -71,8 +71,7 @@ function inEditor<T>(editor: ReturnType<typeof makeEditor>, fn: () => T): T {
 }
 
 /** Serialize the whole editor state to a JSON string, exactly like a note save. */
-const saveToJSON = (editor: ReturnType<typeof makeEditor>): string =>
-  JSON.stringify(editor.getEditorState().toJSON())
+const saveToJSON = (editor: ReturnType<typeof makeEditor>): string => JSON.stringify(editor.getEditorState().toJSON())
 
 describe('Styled block node overrides', () => {
   it('replaces base paragraph creation with the styled variant', () => {

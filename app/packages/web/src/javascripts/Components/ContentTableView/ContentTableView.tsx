@@ -55,7 +55,7 @@ export const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) 
   return (
     <>
       <button
-        className="rounded-full border border-border bg-default p-1"
+        className="border-border bg-default rounded-full border p-1"
         ref={anchorElementRef}
         onClick={(event) => {
           event.preventDefault()
@@ -108,7 +108,7 @@ export const ItemLinksCell = ({ item }: { item: DecryptedItemInterface }) => {
   return (
     <>
       <button
-        className="rounded-full border border-border bg-default p-1"
+        className="border-border bg-default rounded-full border p-1"
         ref={anchorElementRef}
         onClick={(event) => {
           event.preventDefault()
@@ -163,18 +163,18 @@ const ItemNameCell = ({ item, hideIcon }: { item: DecryptedItemInterface; hideIc
         ) : null}
         {backupInfo && (
           <div
-            className="absolute bottom-1 right-1 translate-x-1/2 translate-y-1/2 rounded-full bg-default text-success"
+            className="bg-default text-success absolute right-1 bottom-1 translate-x-1/2 translate-y-1/2 rounded-full"
             title="File is backed up locally"
           >
             <Icon size="small" type="check-circle-filled" />
           </div>
         )}
       </span>
-      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium">{item.title}</span>
+      <span className="overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap">{item.title}</span>
       <ListItemVaultInfo item={item} />
       {item.protected && (
         <span className="flex items-center" title="File is protected">
-          <Icon ariaLabel="File is protected" type="lock-filled" className="h-3.5 w-3.5 text-passive-1" size="custom" />
+          <Icon ariaLabel="File is protected" type="lock-filled" className="text-passive-1 h-3.5 w-3.5" size="custom" />
         </span>
       )}
     </div>
@@ -200,7 +200,7 @@ const AttachedToCell = ({ item }: { item: DecryptedItemInterface }) => {
   return (
     <div className="flex items-center gap-2 overflow-hidden">
       <LinkedItemBubble
-        className="overflow-hidden border border-transparent hover:border-border focus:border-info focus:shadow-none"
+        className="hover:border-border focus:border-info overflow-hidden border border-transparent focus:shadow-none"
         link={allLinks[0]}
         key={allLinks[0].id}
         unlinkItem={async (itemToUnlink) => {

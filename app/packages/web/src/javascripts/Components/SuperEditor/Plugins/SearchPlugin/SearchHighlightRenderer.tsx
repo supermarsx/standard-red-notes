@@ -194,7 +194,7 @@ export const SearchHighlightRenderer = forwardRef(
     }
 
     return (
-      <div className="pointer-events-none absolute left-0 top-0 h-full w-full">
+      <div className="pointer-events-none absolute top-0 left-0 h-full w-full">
         {activeHighlightRect && (
           <div
             className="active-search-highlight fixed z-[1000]"

@@ -125,7 +125,7 @@ const ProfileAssignmentsSection: FunctionComponent<Props> = ({ profiles, assignm
       </Text>
 
       <Subtitle className="mt-4">By user</Subtitle>
-      {userRows.length === 0 && <Text className="mt-1 text-passive-1">No per-user assignments.</Text>}
+      {userRows.length === 0 && <Text className="text-passive-1 mt-1">No per-user assignments.</Text>}
       {userRows.map((row, index) => (
         <div key={index} className="mt-2 flex flex-wrap items-center gap-2">
           <DecoratedInput
@@ -136,7 +136,7 @@ const ProfileAssignmentsSection: FunctionComponent<Props> = ({ profiles, assignm
             disabled={busy}
           />
           <select
-            className="rounded border border-border bg-default px-2 py-1.5 text-foreground"
+            className="border-border bg-default text-foreground rounded border px-2 py-1.5"
             value={row.profileId}
             onChange={(event) => mutateUserRow(index, { profileId: event.target.value })}
             disabled={busy}
@@ -150,10 +150,10 @@ const ProfileAssignmentsSection: FunctionComponent<Props> = ({ profiles, assignm
       <Subtitle className="mt-4">By role</Subtitle>
       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
         {ASSIGNABLE_ROLES.map((role) => (
-          <div key={role.name} className="flex items-center justify-between gap-2 rounded border border-border p-2">
-            <span className="text-sm font-medium text-foreground">{role.label}</span>
+          <div key={role.name} className="border-border flex items-center justify-between gap-2 rounded border p-2">
+            <span className="text-foreground text-sm font-medium">{role.label}</span>
             <select
-              className="rounded border border-border bg-default px-2 py-1.5 text-foreground"
+              className="border-border bg-default text-foreground rounded border px-2 py-1.5"
               value={roleMap[role.name] ?? ''}
               onChange={(event) => setRole(role.name, event.target.value)}
               disabled={busy}

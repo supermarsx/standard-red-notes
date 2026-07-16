@@ -94,7 +94,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
 
   return (
     <>
-      <div className="mb-1 mt-1 hidden items-center justify-between px-4 md:flex md:px-3">
+      <div className="mt-1 mb-1 hidden items-center justify-between px-4 md:flex md:px-3">
         <div className="text-lg font-bold lg:text-base">{t('account:account')}</div>
         <div className="flex cursor-pointer" onClick={closeMenu}>
           <Icon type="close" className="text-neutral" />
@@ -102,7 +102,7 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
       </div>
       {user ? (
         <>
-          <div className="mb-3 flex items-center gap-3 px-4 text-lg text-foreground md:px-3 lg:text-sm">
+          <div className="text-foreground mb-3 flex items-center gap-3 px-4 text-lg md:px-3 lg:text-sm">
             <Avatar email={user.email} size={40} />
             <div className="min-w-0">
               <div>{t('signedInAs')}</div>
@@ -110,22 +110,22 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
               <span className="text-neutral">{application.getHost.execute().getValue()}</span>
             </div>
           </div>
-          <div className="mb-2 flex items-start justify-between px-4 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
+          <div className="text-mobile-menu-item md:text-tablet-menu-item lg:text-menu-item mb-2 flex items-start justify-between px-4 md:px-3">
             {isSyncingInProgress ? (
-              <div className="flex items-center font-semibold text-info">
+              <div className="text-info flex items-center font-semibold">
                 <Spinner className="mr-2 h-5 w-5" />
                 {t('syncing')}
               </div>
             ) : (
               <div className="flex items-start">
-                <Icon type="check-circle" className={`mr-2 text-success ${MenuItemIconSize}`} />
+                <Icon type="check-circle" className={`text-success mr-2 ${MenuItemIconSize}`} />
                 <div>
-                  <div className="font-semibold text-success">{t('lastSynced')}</div>
+                  <div className="text-success font-semibold">{t('lastSynced')}</div>
                   <div className="text-text">{lastSyncDate}</div>
                 </div>
               </div>
             )}
-            <div className="flex cursor-pointer text-passive-1" onClick={doSynchronization}>
+            <div className="text-passive-1 flex cursor-pointer" onClick={doSynchronization}>
               <Icon type="sync" className={`${MenuItemIconSize}`} />
             </div>
           </div>
@@ -133,10 +133,8 @@ const GeneralAccountMenu: FunctionComponent<Props> = ({ setMenuPane, closeMenu, 
       ) : (
         <>
           <div className="mb-1 px-4 md:px-3">
-            <div className="mb-3 text-base text-foreground lg:text-sm">
-              {t('offlineSignInPrompt')}
-            </div>
-            <div className="flex items-center text-passive-1">
+            <div className="text-foreground mb-3 text-base lg:text-sm">{t('offlineSignInPrompt')}</div>
+            <div className="text-passive-1 flex items-center">
               <Icon type="cloud-off" className={`mr-2 ${MenuItemIconSize}`} />
               <span className="text-lg font-semibold lg:text-sm">{t('offline')}</span>
             </div>

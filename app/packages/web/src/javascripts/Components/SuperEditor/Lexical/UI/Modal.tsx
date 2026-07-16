@@ -65,17 +65,17 @@ function PortalImpl({
 
   return (
     <div
-      className="fixed inset-0 z-modal flex flex-col items-center justify-center bg-[rgba(0,0,0,0.65)]"
+      className="z-modal fixed inset-0 flex flex-col items-center justify-center bg-[rgba(0,0,0,0.65)]"
       role="dialog"
     >
       <div
-        className="relative flex min-w-[min(80vw,_20rem)] flex-col rounded border border-border bg-default"
+        className="border-border bg-default relative flex min-w-[min(80vw,_20rem)] flex-col rounded border"
         tabIndex={-1}
         ref={modalRef}
       >
-        <div className="flex items-center justify-between border-b border-border px-3.5 py-2">
+        <div className="border-border flex items-center justify-between border-b px-3.5 py-2">
           <div className="text-sm font-semibold">{title}</div>
-          <button tabIndex={0} className="ml-2 rounded p-1 font-bold hover:bg-contrast" onClick={onClose}>
+          <button tabIndex={0} className="hover:bg-contrast ml-2 rounded p-1 font-bold" onClick={onClose}>
             <Icon type="close" />
           </button>
         </div>

@@ -84,7 +84,8 @@ export function normalize(data: Partial<ClockData> | undefined | null): ClockDat
   if (data == null || typeof data !== 'object') {
     return { ...DEFAULT_CLOCK_DATA, worldZones: [...DEFAULT_WORLD_ZONES] }
   }
-  const timeZone = data.timeZone === '' || data.timeZone == null ? '' : isValidTimeZone(data.timeZone) ? data.timeZone : ''
+  const timeZone =
+    data.timeZone === '' || data.timeZone == null ? '' : isValidTimeZone(data.timeZone) ? data.timeZone : ''
   return {
     version: CLOCK_VERSION,
     timeZone,
@@ -140,8 +141,8 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
   const zones = getSupportedTimeZones()
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-clock-block="true">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-clock-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Clock</span>
         <label className="flex items-center gap-1">
           <input
@@ -159,19 +160,23 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
           <ul className="flex flex-col gap-2">
             {data.worldZones.map((zone, index) => (
               <li key={`${zone}-${index}`} className="flex items-baseline justify-between gap-3">
-                <span className="text-sm text-foreground">
+                <span className="text-foreground text-sm">
                   {timeZoneDisplayLabel(zone)}
-                  <span className="ml-1 text-xs text-passive-1">{formatZoneOffsetLabel(now, zone)}</span>
+                  <span className="text-passive-1 ml-1 text-xs">{formatZoneOffsetLabel(now, zone)}</span>
                 </span>
-                <span className="font-mono text-base text-foreground">{formatTimeInZone(now, zone, formatOptions)}</span>
+                <span className="text-foreground font-mono text-base">
+                  {formatTimeInZone(now, zone, formatOptions)}
+                </span>
               </li>
             ))}
           </ul>
         ) : (
           <div className="flex flex-col items-center">
-            <div className="font-mono text-3xl text-foreground">{formatTimeInZone(now, effectiveZone, formatOptions)}</div>
-            {data.showDate && <div className="mt-1 text-sm text-passive-1">{formatDateInZone(now, effectiveZone)}</div>}
-            <div className="mt-1 text-xs text-passive-1">
+            <div className="text-foreground font-mono text-3xl">
+              {formatTimeInZone(now, effectiveZone, formatOptions)}
+            </div>
+            {data.showDate && <div className="text-passive-1 mt-1 text-sm">{formatDateInZone(now, effectiveZone)}</div>}
+            <div className="text-passive-1 mt-1 text-xs">
               {timeZoneDisplayLabel(effectiveZone)}
               {data.timeZone === '' ? ' (configured)' : ''}
             </div>
@@ -179,7 +184,7 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 border-t border-border px-2 py-2 text-xs text-passive-1">
+      <div className="border-border text-passive-1 flex flex-wrap items-center gap-3 border-t px-2 py-2 text-xs">
         <label className="flex items-center gap-1">
           <input
             type="checkbox"
@@ -212,7 +217,7 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
             <label className="flex items-center gap-1">
               Timezone
               <select
-                className="rounded border border-border bg-default px-1 py-0.5 text-foreground"
+                className="border-border bg-default text-foreground rounded border px-1 py-0.5"
                 value={data.timeZone}
                 aria-label="Clock timezone"
                 onChange={(e) => mutate((d) => (d.timeZone = e.target.value))}

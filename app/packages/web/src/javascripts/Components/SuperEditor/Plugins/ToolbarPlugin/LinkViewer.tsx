@@ -116,10 +116,10 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
   return createPortal(
     <div
       className={classNames(
-        'absolute z-dropdown-menu rounded-lg border border-border bg-contrast px-2 py-1 shadow-sm shadow-contrast',
+        'z-dropdown-menu border-border bg-contrast shadow-contrast absolute rounded-lg border px-2 py-1 shadow-sm',
         isMobile
           ? 'bottom-12 left-1/2 w-[calc(100%_-_1rem)] -translate-x-1/2'
-          : 'left-0 top-0 w-auto translate-x-0 opacity-0 translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)]',
+          : 'translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] top-0 left-0 w-auto translate-x-0 opacity-0',
       )}
       ref={linkViewerRef}
     >
@@ -138,7 +138,7 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
         </a>
         <StyledTooltip showOnMobile showOnHover label="Copy link">
           <button
-            className="flex select-none items-center justify-center rounded p-2 enabled:hover:bg-default disabled:opacity-50 md:border md:border-transparent enabled:hover:md:translucent-ui:border-[--popover-border-color]"
+            className="enabled:hover:bg-default enabled:hover:md:translucent-ui:border-[--popover-border-color] flex items-center justify-center rounded p-2 select-none disabled:opacity-50 md:border md:border-transparent"
             onClick={() => {
               navigator.clipboard.writeText(linkUrl).then(
                 () => {
@@ -159,7 +159,7 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
           <>
             <StyledTooltip showOnMobile showOnHover label="Edit link">
               <button
-                className="flex select-none items-center justify-center rounded p-2 enabled:hover:bg-default disabled:opacity-50 md:border md:border-transparent enabled:hover:md:translucent-ui:border-[--popover-border-color]"
+                className="enabled:hover:bg-default enabled:hover:md:translucent-ui:border-[--popover-border-color] flex items-center justify-center rounded p-2 select-none disabled:opacity-50 md:border md:border-transparent"
                 onClick={() => {
                   setIsEditingLink(true)
                 }}
@@ -170,7 +170,7 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
             </StyledTooltip>
             <StyledTooltip showOnMobile showOnHover label="Remove link">
               <button
-                className="flex select-none items-center justify-center rounded p-2 enabled:hover:bg-default disabled:opacity-50 md:border md:border-transparent enabled:hover:md:translucent-ui:border-[--popover-border-color]"
+                className="enabled:hover:bg-default enabled:hover:md:translucent-ui:border-[--popover-border-color] flex items-center justify-center rounded p-2 select-none disabled:opacity-50 md:border md:border-transparent"
                 onClick={() => {
                   editor.dispatchCommand(TOGGLE_LINK_COMMAND, null)
                 }}

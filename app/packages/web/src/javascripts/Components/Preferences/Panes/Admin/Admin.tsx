@@ -120,7 +120,7 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
           the PreferencesPane's `overflow-y-auto` column, with no overflow-hidden
           box in between. It stays pinned to the top of that scroll container as
           the tab content scrolls under it. */}
-      <div className="sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border border-border bg-default shadow-sm">
+      <div className="border-border bg-default sticky top-0 z-20 mb-4 overflow-x-auto rounded-md border shadow-sm">
         <TabList state={tabState} className="flex min-w-max">
           {ADMIN_TABS.map(({ id, title, icon }) => (
             <Tab key={id} id={id} className="inline-flex items-center gap-1.5 whitespace-nowrap first:rounded-tl-md">

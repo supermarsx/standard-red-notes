@@ -17,9 +17,8 @@
  * @standardnotes/toast is mocked; the real snjs (isErrorResponse, classNames) is
  * used so the response gating matches production.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 
 jest.mock('@standardnotes/toast', () => ({
   addToast: jest.fn(),
@@ -129,7 +128,7 @@ const clickButton = async (text: string) => {
 }
 
 describe('Invite pane renders + wires the self-serve flow', () => {
-  it('(e) fetches the caller\'s links on mount', async () => {
+  it("(e) fetches the caller's links on mount", async () => {
     const application = makeApplication()
     await renderWith(application)
     expect(application.legacyApi.listMyInviteLinks).toHaveBeenCalledTimes(1)
@@ -150,7 +149,7 @@ describe('Invite pane renders + wires the self-serve flow', () => {
     expect(haystack).not.toContain('domain')
   })
 
-  it('(b) renders the quota and the user\'s own links table', async () => {
+  it("(b) renders the quota and the user's own links table", async () => {
     await renderWith(makeApplication())
     const text = container.textContent ?? ''
     expect(text).toContain('Using')

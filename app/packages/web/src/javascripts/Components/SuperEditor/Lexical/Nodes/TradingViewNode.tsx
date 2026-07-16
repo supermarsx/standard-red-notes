@@ -86,7 +86,9 @@ function isTheme(value: unknown): value is TradingViewTheme {
  * exotic out of the config we inject into the widget. Returns '' for empty.
  */
 export function sanitizeSymbol(raw: string | null | undefined): string {
-  if (typeof raw !== 'string') return ''
+  if (typeof raw !== 'string') {
+    return ''
+  }
   return raw
     .trim()
     .toUpperCase()
@@ -150,13 +152,7 @@ function noteDismissed(): boolean {
   }
 }
 
-function TradingViewComponent({
-  data,
-  nodeKey,
-}: {
-  data: TradingViewData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function TradingViewComponent({ data, nodeKey }: { data: TradingViewData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [symbolDraft, setSymbolDraft] = useState(data.symbol)
   const [editing, setEditing] = useState(!data.symbol)
@@ -209,14 +205,14 @@ function TradingViewComponent({
   const reloadKey = `${data.symbol}|${data.interval}|${data.theme}`
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-tradingview-block="true">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-tradingview-block="true">
+      <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">TradingView chart</span>
         <div className="flex items-center gap-1">
           {!editing && data.symbol ? (
             <>
               <select
-                className="rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+                className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
                 value={data.interval}
                 aria-label="Interval"
                 onChange={(e) => setInterval(e.target.value as TradingViewInterval)}
@@ -228,7 +224,7 @@ function TradingViewComponent({
                 ))}
               </select>
               <select
-                className="rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+                className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
                 value={data.theme}
                 aria-label="Theme"
                 onChange={(e) => setTheme(e.target.value as TradingViewTheme)}
@@ -240,7 +236,7 @@ function TradingViewComponent({
           ) : null}
           <button
             type="button"
-            className="rounded px-2 py-0.5 hover:bg-contrast"
+            className="hover:bg-contrast rounded px-2 py-0.5"
             onClick={() => (editing ? commitSymbol(symbolDraft) : setEditing(true))}
           >
             {editing ? 'Load' : 'Edit'}
@@ -249,12 +245,12 @@ function TradingViewComponent({
       </div>
 
       {showNote ? (
-        <div className="flex items-start justify-between gap-2 border-b border-border bg-contrast px-2 py-1 text-xs text-passive-0">
+        <div className="border-border bg-contrast text-passive-0 flex items-start justify-between gap-2 border-b px-2 py-1 text-xs">
           <span>
-            This block loads a live chart directly from tradingview.com. The request is sent to TradingView and
-            is not end-to-end encrypted.
+            This block loads a live chart directly from tradingview.com. The request is sent to TradingView and is not
+            end-to-end encrypted.
           </span>
-          <button type="button" className="flex-shrink-0 rounded px-2 py-0.5 hover:bg-default" onClick={dismissNote}>
+          <button type="button" className="hover:bg-default flex-shrink-0 rounded px-2 py-0.5" onClick={dismissNote}>
             Got it
           </button>
         </div>
@@ -263,7 +259,7 @@ function TradingViewComponent({
       {editing ? (
         <div className="p-2">
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Enter a symbol, e.g. NASDAQ:AAPL or BITSTAMP:BTCUSD"
             value={symbolDraft}
             onChange={(e) => setSymbolDraft(e.target.value)}
@@ -274,7 +270,7 @@ function TradingViewComponent({
             }}
             autoFocus
           />
-          <p className="mt-1 text-xs text-passive-1">
+          <p className="text-passive-1 mt-1 text-xs">
             Use TradingView&apos;s EXCHANGE:TICKER format for best results (a bare ticker may resolve ambiguously).
           </p>
         </div>
@@ -296,7 +292,7 @@ function TradingViewComponent({
           />
         </div>
       ) : (
-        <div className="p-2 text-sm text-danger">Enter a symbol to load a chart.</div>
+        <div className="text-danger p-2 text-sm">Enter a symbol to load a chart.</div>
       )}
     </div>
   )

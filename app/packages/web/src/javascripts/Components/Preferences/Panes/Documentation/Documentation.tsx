@@ -3,16 +3,12 @@ import { VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { achievements, METRICS } from '@/Achievements'
 import { classNames } from '@standardnotes/utils'
 import Icon from '@/Components/Icon/Icon'
-import {
-  DocBlock,
-  DocCategory,
-  DocPage,
-  DOC_CATEGORIES,
-  getPage,
-  searchDocs,
-} from './content'
+import { DocBlock, DocCategory, DocPage, DOC_CATEGORIES, getPage, searchDocs } from './content'
 
-const CALLOUT_STYLES: Record<'info' | 'tip' | 'warning', { border: string; icon: VectorIconNameOrEmoji; iconColor: string }> = {
+const CALLOUT_STYLES: Record<
+  'info' | 'tip' | 'warning',
+  { border: string; icon: VectorIconNameOrEmoji; iconColor: string }
+> = {
   info: { border: 'border-info', icon: 'details-block', iconColor: 'text-info' },
   tip: { border: 'border-info', icon: 'star-filled', iconColor: 'text-success' },
   warning: { border: 'border-danger', icon: 'clear-circle-filled', iconColor: 'text-warning' },
@@ -21,12 +17,12 @@ const CALLOUT_STYLES: Record<'info' | 'tip' | 'warning', { border: string; icon:
 const BlockView: FunctionComponent<{ block: DocBlock; onNavigate: (id: string) => void }> = ({ block }) => {
   switch (block.type) {
     case 'heading':
-      return <h3 className="mb-1 mt-5 text-base font-bold text-text lg:text-sm">{block.text}</h3>
+      return <h3 className="text-text mt-5 mb-1 text-base font-bold lg:text-sm">{block.text}</h3>
     case 'paragraph':
-      return <p className="my-2 text-base leading-relaxed text-foreground lg:text-sm">{block.text}</p>
+      return <p className="text-foreground my-2 text-base leading-relaxed lg:text-sm">{block.text}</p>
     case 'list':
       return (
-        <ul className="my-2 list-disc space-y-1 pl-5 text-base text-foreground lg:text-sm">
+        <ul className="text-foreground my-2 list-disc space-y-1 pl-5 text-base lg:text-sm">
           {block.items.map((item, index) => (
             <li key={index} className="leading-relaxed">
               {item}
@@ -36,7 +32,7 @@ const BlockView: FunctionComponent<{ block: DocBlock; onNavigate: (id: string) =
       )
     case 'steps':
       return (
-        <ol className="my-2 list-decimal space-y-1 pl-5 text-base text-foreground lg:text-sm">
+        <ol className="text-foreground my-2 list-decimal space-y-1 pl-5 text-base lg:text-sm">
           {block.items.map((item, index) => (
             <li key={index} className="leading-relaxed">
               {item}
@@ -46,19 +42,19 @@ const BlockView: FunctionComponent<{ block: DocBlock; onNavigate: (id: string) =
       )
     case 'code':
       return (
-        <pre className="my-3 overflow-x-auto rounded bg-contrast p-3 text-xs text-text">
+        <pre className="bg-contrast text-text my-3 overflow-x-auto rounded p-3 text-xs">
           <code>{block.code}</code>
         </pre>
       )
     case 'table':
       return (
-        <div className="my-3 overflow-hidden rounded border border-border">
+        <div className="border-border my-3 overflow-hidden rounded border">
           <table className="w-full border-collapse text-left text-sm">
             <tbody>
               {block.rows.map((row, index) => (
-                <tr key={index} className="border-b border-border last:border-b-0">
-                  <th className="w-1/3 bg-contrast px-3 py-2 align-top font-semibold text-text">{row[0]}</th>
-                  <td className="px-3 py-2 align-top text-foreground">{row[1]}</td>
+                <tr key={index} className="border-border border-b last:border-b-0">
+                  <th className="bg-contrast text-text w-1/3 px-3 py-2 align-top font-semibold">{row[0]}</th>
+                  <td className="text-foreground px-3 py-2 align-top">{row[1]}</td>
                 </tr>
               ))}
             </tbody>
@@ -68,9 +64,9 @@ const BlockView: FunctionComponent<{ block: DocBlock; onNavigate: (id: string) =
     case 'callout': {
       const style = CALLOUT_STYLES[block.variant]
       return (
-        <div className={classNames('my-3 flex gap-2 rounded border-l-2 bg-contrast px-3 py-2', style.border)}>
+        <div className={classNames('bg-contrast my-3 flex gap-2 rounded border-l-2 px-3 py-2', style.border)}>
           <Icon type={style.icon} className={classNames('mt-0.5 flex-shrink-0', style.iconColor)} size="small" />
-          <p className="text-sm leading-relaxed text-foreground">{block.text}</p>
+          <p className="text-foreground text-sm leading-relaxed">{block.text}</p>
         </div>
       )
     }
@@ -78,19 +74,21 @@ const BlockView: FunctionComponent<{ block: DocBlock; onNavigate: (id: string) =
 }
 
 const RelatedLinks: FunctionComponent<{ ids: string[]; onNavigate: (id: string) => void }> = ({ ids, onNavigate }) => {
-  const pages = ids.map((id) => getPage(id)).filter((entry): entry is { page: DocPage; category: DocCategory } => !!entry)
+  const pages = ids
+    .map((id) => getPage(id))
+    .filter((entry): entry is { page: DocPage; category: DocCategory } => !!entry)
   if (pages.length === 0) {
     return null
   }
   return (
-    <div className="mt-6 border-t border-border pt-4">
-      <div className="mb-2 text-sm font-semibold text-neutral">Related</div>
+    <div className="border-border mt-6 border-t pt-4">
+      <div className="text-neutral mb-2 text-sm font-semibold">Related</div>
       <div className="flex flex-wrap gap-2">
         {pages.map(({ page }) => (
           <button
             key={page.id}
             onClick={() => onNavigate(page.id)}
-            className="flex items-center gap-1 rounded border border-border bg-default px-2.5 py-1 text-sm text-text hover:bg-contrast focus:bg-contrast"
+            className="border-border bg-default text-text hover:bg-contrast focus:bg-contrast flex items-center gap-1 rounded border px-2.5 py-1 text-sm"
           >
             <Icon type="open-in" size="small" className="text-neutral" />
             {page.title}
@@ -112,7 +110,7 @@ const PageView: FunctionComponent<{ pageId: string; onNavigate: (id: string | nu
   const { page, category } = entry
   return (
     <article className="mx-auto max-w-3xl">
-      <nav className="mb-3 flex flex-wrap items-center gap-1 text-sm text-neutral">
+      <nav className="text-neutral mb-3 flex flex-wrap items-center gap-1 text-sm">
         <button onClick={() => onNavigate(null)} className="hover:text-info hover:underline">
           Documentation
         </button>
@@ -121,8 +119,8 @@ const PageView: FunctionComponent<{ pageId: string; onNavigate: (id: string | nu
         <Icon type="chevron-right" size="small" />
         <span className="text-text">{page.title}</span>
       </nav>
-      <h2 className="m-0 mb-1 text-2xl font-bold text-text">{page.title}</h2>
-      <p className="mb-4 text-base text-neutral lg:text-sm">{page.summary}</p>
+      <h2 className="text-text m-0 mb-1 text-2xl font-bold">{page.title}</h2>
+      <p className="text-neutral mb-4 text-base lg:text-sm">{page.summary}</p>
       {page.blocks.map((block, index) => (
         <BlockView key={index} block={block} onNavigate={(id) => onNavigate(id)} />
       ))}
@@ -135,25 +133,25 @@ const PageView: FunctionComponent<{ pageId: string; onNavigate: (id: string | nu
 
 const HomeView: FunctionComponent<{ onNavigate: (id: string) => void }> = ({ onNavigate }) => (
   <div className="mx-auto max-w-3xl">
-    <h2 className="m-0 mb-1 text-2xl font-bold text-text">Documentation</h2>
-    <p className="mb-5 text-base text-neutral lg:text-sm">
+    <h2 className="text-text m-0 mb-1 text-2xl font-bold">Documentation</h2>
+    <p className="text-neutral mb-5 text-base lg:text-sm">
       Everything you need to use Standard Red Notes — privacy, editors, sync, backups, self-hosting, and more. Pick a
       topic below or search.
     </p>
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {DOC_CATEGORIES.map((category) => (
-        <div key={category.id} className="rounded-md border border-border bg-default p-3">
+        <div key={category.id} className="border-border bg-default rounded-md border p-3">
           <div className="mb-1.5 flex items-center gap-2">
             <Icon type={category.icon as VectorIconNameOrEmoji} className="text-info" />
-            <h3 className="m-0 text-base font-bold text-text">{category.title}</h3>
+            <h3 className="text-text m-0 text-base font-bold">{category.title}</h3>
           </div>
-          <p className="mb-2 text-sm text-neutral">{category.description}</p>
-          <ul className="list-disc space-y-0.5 pl-5 marker:text-neutral">
+          <p className="text-neutral mb-2 text-sm">{category.description}</p>
+          <ul className="marker:text-neutral list-disc space-y-0.5 pl-5">
             {category.pages.map((page) => (
               <li key={page.id}>
                 <button
                   onClick={() => onNavigate(page.id)}
-                  className="w-full rounded px-1 py-0.5 text-left text-sm text-info hover:bg-contrast hover:underline"
+                  className="text-info hover:bg-contrast w-full rounded px-1 py-0.5 text-left text-sm hover:underline"
                 >
                   {page.title}
                 </button>
@@ -173,7 +171,7 @@ const SearchResultsView: FunctionComponent<{ query: string; onNavigate: (id: str
   const results = useMemo(() => searchDocs(query), [query])
   return (
     <div className="mx-auto max-w-3xl">
-      <h2 className="m-0 mb-3 text-lg font-bold text-text">
+      <h2 className="text-text m-0 mb-3 text-lg font-bold">
         {results.length} {results.length === 1 ? 'result' : 'results'} for “{query}”
       </h2>
       {results.length === 0 ? (
@@ -184,14 +182,14 @@ const SearchResultsView: FunctionComponent<{ query: string; onNavigate: (id: str
             <li key={page.id}>
               <button
                 onClick={() => onNavigate(page.id)}
-                className="w-full rounded-md border border-border bg-default p-3 text-left hover:bg-contrast"
+                className="border-border bg-default hover:bg-contrast w-full rounded-md border p-3 text-left"
               >
-                <div className="mb-0.5 flex items-center gap-2 text-xs text-neutral">
+                <div className="text-neutral mb-0.5 flex items-center gap-2 text-xs">
                   <Icon type={category.icon as VectorIconNameOrEmoji} size="small" />
                   {category.title}
                 </div>
-                <div className="font-semibold text-text">{page.title}</div>
-                <div className="text-sm text-neutral">{page.summary}</div>
+                <div className="text-text font-semibold">{page.title}</div>
+                <div className="text-neutral text-sm">{page.summary}</div>
               </button>
             </li>
           ))}
@@ -226,9 +224,9 @@ const Documentation: FunctionComponent = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-grow flex-col overflow-hidden md:flex-row">
-      <nav className="flex max-h-48 flex-shrink-0 flex-col overflow-y-auto border-b border-border p-3 md:h-full md:max-h-none md:min-h-0 md:w-60 md:border-b-0 md:border-r">
+      <nav className="border-border flex max-h-48 flex-shrink-0 flex-col overflow-y-auto border-b p-3 md:h-full md:max-h-none md:min-h-0 md:w-60 md:border-r md:border-b-0">
         <div className="relative mb-3">
-          <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-neutral">
+          <span className="text-neutral pointer-events-none absolute top-1/2 left-2 -translate-y-1/2">
             <Icon type="select-all" size="small" />
           </span>
           <input
@@ -237,13 +235,13 @@ const Documentation: FunctionComponent = () => {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search documentation"
             aria-label="Search documentation"
-            className="w-full rounded border border-border bg-default py-1.5 pl-8 pr-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-info"
+            className="border-border bg-default text-text focus:ring-info w-full rounded border py-1.5 pr-2 pl-8 text-sm focus:ring-2 focus:outline-none"
           />
         </div>
         <button
           onClick={() => navigate(null)}
           className={classNames(
-            'mb-2 flex items-center gap-2 rounded px-2 py-1 text-left text-sm font-semibold hover:bg-contrast',
+            'hover:bg-contrast mb-2 flex items-center gap-2 rounded px-2 py-1 text-left text-sm font-semibold',
             activeId === null && !trimmedQuery ? 'bg-contrast text-info' : 'text-text',
           )}
         >
@@ -252,7 +250,7 @@ const Documentation: FunctionComponent = () => {
         </button>
         {DOC_CATEGORIES.map((category) => (
           <div key={category.id} className="mb-2">
-            <div className="flex items-center gap-2 px-2 py-1 text-xs font-bold uppercase tracking-wide text-neutral">
+            <div className="text-neutral flex items-center gap-2 px-2 py-1 text-xs font-bold tracking-wide uppercase">
               <Icon type={category.icon as VectorIconNameOrEmoji} size="small" />
               {category.title}
             </div>
@@ -262,8 +260,8 @@ const Documentation: FunctionComponent = () => {
                   <button
                     onClick={() => navigate(page.id)}
                     className={classNames(
-                      'block w-full truncate rounded px-2 py-1 pl-7 text-left text-sm hover:bg-contrast',
-                      activeId === page.id && !trimmedQuery ? 'bg-contrast font-medium text-info' : 'text-foreground',
+                      'hover:bg-contrast block w-full truncate rounded px-2 py-1 pl-7 text-left text-sm',
+                      activeId === page.id && !trimmedQuery ? 'bg-contrast text-info font-medium' : 'text-foreground',
                     )}
                     title={page.title}
                   >
@@ -276,7 +274,7 @@ const Documentation: FunctionComponent = () => {
         ))}
       </nav>
 
-      <div className="min-h-0 flex-grow overflow-y-auto px-4 py-5 text-foreground md:h-full md:px-8">
+      <div className="text-foreground min-h-0 flex-grow overflow-y-auto px-4 py-5 md:h-full md:px-8">
         {trimmedQuery ? (
           <SearchResultsView query={trimmedQuery} onNavigate={navigate} />
         ) : activeId ? (

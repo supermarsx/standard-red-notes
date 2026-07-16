@@ -15,13 +15,7 @@
 
 import { createHeadlessEditor } from '@lexical/headless'
 
-import {
-  $createSqlQueryNode,
-  normalize,
-  SqlQueryData,
-  SqlQueryNode,
-  SerializedSqlQueryNode,
-} from './SqlQueryNode'
+import { $createSqlQueryNode, normalize, SqlQueryData, SqlQueryNode, SerializedSqlQueryNode } from './SqlQueryNode'
 import { formatCell, shapeSqlResult } from './sqlQueryResult'
 
 const editor = createHeadlessEditor({
@@ -143,7 +137,13 @@ describe('shapeSqlResult', () => {
 
   it('shapes a single result set into columns + stringified rows', () => {
     const shaped = shapeSqlResult([
-      { columns: ['name', 'age'], values: [['Ada', 36], ['Grace', null]] },
+      {
+        columns: ['name', 'age'],
+        values: [
+          ['Ada', 36],
+          ['Grace', null],
+        ],
+      },
     ])
     expect(shaped.columns).toEqual(['name', 'age'])
     expect(shaped.rows).toEqual([

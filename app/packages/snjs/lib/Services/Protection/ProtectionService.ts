@@ -274,7 +274,6 @@ export class ProtectionService
     })
   }
 
-
   async authorizeAccountDeletion(): Promise<{ success: boolean; challengeResponse?: ChallengeResponse }> {
     return this.authorizeActionWithChallengeResponse(ChallengeReason.DeleteAccount, {
       fallBackToAccountPassword: true,

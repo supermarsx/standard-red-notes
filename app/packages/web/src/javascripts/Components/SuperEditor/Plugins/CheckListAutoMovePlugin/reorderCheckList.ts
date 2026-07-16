@@ -43,9 +43,7 @@ function isReorderableTaskItem(node: LexicalNode): node is ListItemNode {
  * unchecked items first (stable), then checked items (stable). Exported for
  * unit testing the ordering decision independently of Lexical mutation.
  */
-export function computeReorderedKeys(
-  items: ReadonlyArray<{ key: string; checked: boolean }>,
-): string[] {
+export function computeReorderedKeys(items: ReadonlyArray<{ key: string; checked: boolean }>): string[] {
   const unchecked: string[] = []
   const checked: string[] = []
   for (const item of items) {

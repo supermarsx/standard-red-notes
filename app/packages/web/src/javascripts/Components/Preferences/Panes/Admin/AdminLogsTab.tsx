@@ -10,12 +10,7 @@ import Dropdown from '@/Components/Dropdown/Dropdown'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Spinner from '@/Components/Spinner/Spinner'
 import { SkeletonList } from '@/Components/Skeleton/Skeleton'
-import {
-  LogEntry,
-  formatLogTimestamp,
-  logLevelColorClass,
-  logMatchesText,
-} from './adminHelpers'
+import { LogEntry, formatLogTimestamp, logLevelColorClass, logMatchesText } from './adminHelpers'
 import {
   LogExportFormat,
   logEntriesToJSON,
@@ -208,10 +203,10 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
           level / limit) group on the left, the client-side message search grows
           to fill, and Refresh anchors the right — wrapping gracefully on narrow
           widths. The export controls sit on a lighter second row. */}
-      <div className="mt-3 rounded-md border border-border p-3">
+      <div className="border-border mt-3 rounded-md border p-3">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Service</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Service</Text>
             <Dropdown
               label="Log service filter"
               items={serviceOptions}
@@ -221,7 +216,7 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Level</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Level</Text>
             <Dropdown
               label="Log level filter"
               items={LEVEL_OPTIONS}
@@ -231,11 +226,11 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Limit</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Limit</Text>
             <Dropdown label="Log limit" items={LIMIT_OPTIONS} value={limit} onChange={setLimit} disabled={loading} />
           </div>
           <div className="flex min-w-[220px] flex-grow flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Filter messages</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Filter messages</Text>
             <DecoratedInput
               className={{ container: 'w-full' }}
               placeholder="Type to filter fetched lines…"
@@ -246,9 +241,9 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
           <Button label="Refresh" onClick={() => void load({ limit, service, level })} disabled={loading} />
         </div>
 
-        <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-border pt-3">
+        <div className="border-border mt-3 flex flex-wrap items-end gap-3 border-t pt-3">
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Export format</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Export format</Text>
             <Dropdown
               label="Log export format"
               items={FORMAT_OPTIONS}
@@ -258,7 +253,7 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
             />
           </div>
           <Button label="Download" onClick={downloadLogs} disabled={loading || visibleEntries.length === 0} />
-          <Text className="ml-auto max-w-xs pb-1.5 text-xs text-passive-1">
+          <Text className="text-passive-1 ml-auto max-w-xs pb-1.5 text-xs">
             Exports the lines currently shown (service, level and text filters applied).
           </Text>
         </div>
@@ -280,11 +275,11 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
       )}
 
       {showSkeleton ? (
-        <div className="rounded border border-border bg-contrast p-2">
-          <Text className="mb-2 text-xs text-passive-1">Loading server logs…</Text>
+        <div className="border-border bg-contrast rounded border p-2">
+          <Text className="text-passive-1 mb-2 text-xs">Loading server logs…</Text>
           <SkeletonList count={10} label="Loading server logs" rowClassName="max-w-full" />
           {slowHint && (
-            <Text className="mt-2 text-xs text-passive-1">Still loading… large log files can take a moment.</Text>
+            <Text className="text-passive-1 mt-2 text-xs">Still loading… large log files can take a moment.</Text>
           )}
         </div>
       ) : loadError ? (
@@ -294,11 +289,11 @@ const AdminLogsTab: FunctionComponent<Props> = ({ application, noteIfForbidden }
       ) : visibleEntries.length === 0 ? (
         <Text>No log entries match “{textFilter}”.</Text>
       ) : (
-        <div className="max-h-[28rem] overflow-auto rounded border border-border bg-contrast p-2 font-mono text-xs">
+        <div className="border-border bg-contrast max-h-[28rem] overflow-auto rounded border p-2 font-mono text-xs">
           {visibleEntries.map((entry, index) => (
             <div
               key={`${entry.timestamp ?? ''}-${index}`}
-              className={`whitespace-pre-wrap break-words py-0.5 ${logLevelColorClass(entry.level)}`}
+              className={`py-0.5 break-words whitespace-pre-wrap ${logLevelColorClass(entry.level)}`}
             >
               {formatLogTimestamp(entry.timestamp) && (
                 <span className="text-passive-1">{formatLogTimestamp(entry.timestamp)} </span>

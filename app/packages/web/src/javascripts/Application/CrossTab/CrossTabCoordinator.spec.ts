@@ -1,9 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import {
-  BroadcastChannelLike,
-  CrossTabCoordinator,
-  CrossTabMessageType,
-} from './CrossTabCoordinator'
+import { BroadcastChannelLike, CrossTabCoordinator, CrossTabMessageType } from './CrossTabCoordinator'
 
 /**
  * Standard Red Notes: cross-tab coordination tests.

@@ -78,9 +78,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   },
 ]
 
-const CATALOG_BY_ID: Map<string, ProviderCatalogEntry> = new Map(
-  PROVIDER_CATALOG.map((entry) => [entry.id, entry]),
-)
+const CATALOG_BY_ID: Map<string, ProviderCatalogEntry> = new Map(PROVIDER_CATALOG.map((entry) => [entry.id, entry]))
 
 /**
  * Returns the human-readable label for a provider id, falling back to the raw

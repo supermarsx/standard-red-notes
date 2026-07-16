@@ -7,5 +7,7 @@ import { createCommand, LexicalCommand } from 'lexical'
  * again keeps it open rather than dismissing it.
  */
 export const OPEN_SUPER_SEARCH_COMMAND: LexicalCommand<void> = createCommand('OPEN_SUPER_SEARCH_COMMAND')
-export const OPEN_SUPER_SEARCH_REPLACE_COMMAND: LexicalCommand<void> = createCommand('OPEN_SUPER_SEARCH_REPLACE_COMMAND')
+export const OPEN_SUPER_SEARCH_REPLACE_COMMAND: LexicalCommand<void> = createCommand(
+  'OPEN_SUPER_SEARCH_REPLACE_COMMAND',
+)
 export const SUPER_SEARCH_GO_TO_NEXT_COMMAND: LexicalCommand<void> = createCommand('SUPER_SEARCH_GO_TO_NEXT_COMMAND')

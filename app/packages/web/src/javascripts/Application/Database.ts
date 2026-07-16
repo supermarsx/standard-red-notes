@@ -142,7 +142,7 @@ export class Database {
         objectStore.transaction.oncomplete = () => {
           /* Ready to store values in the newly created objectStore. */
           if (db.version === 1 && onNewDatabase) {
-            onNewDatabase && onNewDatabase()
+            onNewDatabase()
           }
         }
       }
@@ -347,8 +347,6 @@ export class Database {
         settled = true
         reject(error)
       }
-
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
       transaction.oncomplete = () => {}
       transaction.onerror = (event) => {
         const target = event.target as any

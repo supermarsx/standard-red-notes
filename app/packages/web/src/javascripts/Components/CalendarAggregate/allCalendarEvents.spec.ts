@@ -1,11 +1,7 @@
 import { SNNote } from '@standardnotes/snjs'
 import { CalendarEditorIdentifier } from '../NoteView/CalendarEditor/CalendarEditor'
 import { serializeCalendarDocument } from '../NoteView/CalendarEditor/CalendarDocument'
-import {
-  collectAllCalendarEvents,
-  indexCalendarEventsByDate,
-  isCalendarNote,
-} from './allCalendarEvents'
+import { collectAllCalendarEvents, indexCalendarEventsByDate, isCalendarNote } from './allCalendarEvents'
 
 const makeCalendarNote = (
   events: { id: string; date: string; title: string; color?: string }[],

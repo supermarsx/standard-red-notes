@@ -83,7 +83,7 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
           <Icon type="folder" className={iconClassName} />
           <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">
             {t('moveToFolder')}
-            {currentFolder && <span className="ml-1 text-neutral">({currentFolder.title})</span>}
+            {currentFolder && <span className="text-neutral ml-1">({currentFolder.title})</span>}
           </span>
         </div>
         <Icon type="chevron-right" className="text-neutral" />
@@ -102,7 +102,10 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
           <MenuItem onClick={() => moveToFolder(undefined)}>
             <Icon type="close" className={iconClassName} />
             <span
-              className={classNames('overflow-hidden overflow-ellipsis whitespace-nowrap', !currentFolder && 'font-bold')}
+              className={classNames(
+                'overflow-hidden overflow-ellipsis whitespace-nowrap',
+                !currentFolder && 'font-bold',
+              )}
             >
               {t('noFolder')}
             </span>
@@ -121,7 +124,7 @@ const MoveFileToFolderOption: FunctionComponent<Props> = ({ navigationController
                 >
                   {folder.title}
                 </span>
-                {isCurrent && <Icon type="check" className="ml-auto text-info" />}
+                {isCurrent && <Icon type="check" className="text-info ml-auto" />}
               </MenuItem>
             )
           })}

@@ -219,9 +219,7 @@ class AchievementsServiceImpl {
       if ((this.state.metrics[metric] ?? 0) >= 1) {
         continue
       }
-      const targets = ACHIEVEMENTS.filter(
-        (a) => a.category === category && !a.hidden && a.metric !== metric,
-      )
+      const targets = ACHIEVEMENTS.filter((a) => a.category === category && !a.hidden && a.metric !== metric)
       if (targets.length === 0) {
         continue
       }

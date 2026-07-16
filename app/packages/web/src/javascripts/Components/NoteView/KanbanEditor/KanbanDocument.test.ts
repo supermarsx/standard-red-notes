@@ -79,7 +79,12 @@ describe('KanbanDocument', () => {
   describe('column/card sanitization', () => {
     it('drops columns without a valid id', () => {
       const { document } = parseKanbanDocument(
-        JSON.stringify({ columns: [{ title: 'x', cards: [] }, { id: 'ok', title: 'y', cards: [] }] }),
+        JSON.stringify({
+          columns: [
+            { title: 'x', cards: [] },
+            { id: 'ok', title: 'y', cards: [] },
+          ],
+        }),
       )
       expect(document.columns).toHaveLength(1)
       expect(document.columns[0].id).toBe('ok')
@@ -97,7 +102,14 @@ describe('KanbanDocument', () => {
       const { document } = parseKanbanDocument(
         JSON.stringify({
           columns: [
-            { id: 'dup', title: 'first', cards: [{ id: 'card', text: 'a' }, { id: 'card', text: 'b' }] },
+            {
+              id: 'dup',
+              title: 'first',
+              cards: [
+                { id: 'card', text: 'a' },
+                { id: 'card', text: 'b' },
+              ],
+            },
             { id: 'dup', title: 'second', cards: [] },
           ],
         }),
@@ -109,9 +121,7 @@ describe('KanbanDocument', () => {
     })
 
     it('coerces missing card text and column title to empty strings', () => {
-      const { document } = parseKanbanDocument(
-        JSON.stringify({ columns: [{ id: 'c1', cards: [{ id: 'k1' }] }] }),
-      )
+      const { document } = parseKanbanDocument(JSON.stringify({ columns: [{ id: 'c1', cards: [{ id: 'k1' }] }] }))
       expect(document.columns[0].title).toBe('')
       expect(document.columns[0].cards[0].text).toBe('')
     })
@@ -128,7 +138,14 @@ describe('KanbanDocument', () => {
         version: KANBAN_DOCUMENT_VERSION,
         title: '',
         columns: [
-          { id: 'a', title: '', cards: [{ id: '1', text: '' }, { id: '2', text: '' }] },
+          {
+            id: 'a',
+            title: '',
+            cards: [
+              { id: '1', text: '' },
+              { id: '2', text: '' },
+            ],
+          },
           { id: 'b', title: '', cards: [{ id: '3', text: '' }] },
         ],
       }

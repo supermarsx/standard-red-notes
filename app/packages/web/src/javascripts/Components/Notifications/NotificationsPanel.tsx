@@ -34,19 +34,22 @@ const CompactRow: FunctionComponent<{
   isRead: boolean
   onDismiss: (id: string) => void
 }> = ({ notification, isRead, onDismiss }) => (
-  <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5 last:border-b-0">
+  <div className="border-border flex items-center gap-2.5 border-b px-3.5 py-2.5 last:border-b-0">
     {notification.icon ? (
       <div className="flex flex-shrink-0 items-center">{notification.icon}</div>
     ) : (
-      <Icon type={LEVEL_ICON[notification.level]} className={classNames('flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+      <Icon
+        type={LEVEL_ICON[notification.level]}
+        className={classNames('flex-shrink-0', LEVEL_ACCENT[notification.level])}
+      />
     )}
-    <span className="min-w-0 flex-grow truncate text-sm font-semibold text-text" title={notification.title}>
+    <span className="text-text min-w-0 flex-grow truncate text-sm font-semibold" title={notification.title}>
       {notification.title}
     </span>
-    {!isRead && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-info" aria-label="Unread" />}
+    {!isRead && <span className="bg-info h-2 w-2 flex-shrink-0 rounded-full" aria-label="Unread" />}
     {notification.dismissable && (
       <button
-        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-neutral hover:bg-contrast"
+        className="text-neutral hover:bg-contrast flex h-6 w-6 flex-shrink-0 items-center justify-center rounded"
         onClick={() => onDismiss(notification.id)}
         aria-label="Dismiss notification"
         title="Dismiss"
@@ -88,10 +91,10 @@ const NotificationsPanel: FunctionComponent<Props> = ({ controller, open, anchor
       align="start"
       className="w-[18rem] max-w-[90vw]"
     >
-      <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-        <span className="text-sm font-bold text-text">Notifications</span>
+      <div className="border-border flex items-center justify-between border-b px-3.5 py-2.5">
+        <span className="text-text text-sm font-bold">Notifications</span>
         <button
-          className="flex h-6 w-6 items-center justify-center rounded text-neutral hover:bg-contrast"
+          className="text-neutral hover:bg-contrast flex h-6 w-6 items-center justify-center rounded"
           onClick={togglePopover}
           aria-label="Close notifications"
           title="Close"
@@ -101,7 +104,7 @@ const NotificationsPanel: FunctionComponent<Props> = ({ controller, open, anchor
       </div>
       <div className="max-h-[50vh] overflow-y-auto">
         {notifications.length === 0 ? (
-          <div className="px-3.5 py-8 text-center text-sm text-passive-1">You're all caught up — no notifications.</div>
+          <div className="text-passive-1 px-3.5 py-8 text-center text-sm">You're all caught up — no notifications.</div>
         ) : (
           notifications.map((notification) => (
             <CompactRow
@@ -114,7 +117,7 @@ const NotificationsPanel: FunctionComponent<Props> = ({ controller, open, anchor
         )}
       </div>
       <button
-        className="flex w-full items-center justify-center gap-1.5 border-t border-border px-3.5 py-2.5 text-sm font-semibold text-info hover:bg-contrast"
+        className="border-border text-info hover:bg-contrast flex w-full items-center justify-center gap-1.5 border-t px-3.5 py-2.5 text-sm font-semibold"
         onClick={openTab}
       >
         View all notifications

@@ -189,19 +189,6 @@ function blobToDataURL(blob: Blob): Promise<string> {
   })
 }
 
-/** Wraps a `DataTransfer`-like object for `@lexical/clipboard` consumers. */
-function makeDataTransferShim(html: string, plain: string): DataTransfer {
-  const types: string[] = []
-  if (html) {
-    types.push('text/html')
-  }
-  types.push('text/plain')
-  return {
-    getData: (type: string) => (type === 'text/html' ? html : plain),
-    types,
-  } as unknown as DataTransfer
-}
-
 // ---------------------------------------------------------------------------
 // Paste variants
 // ---------------------------------------------------------------------------

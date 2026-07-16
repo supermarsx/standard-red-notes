@@ -51,8 +51,7 @@ import {
   SUPER_TYPE,
 } from './roundTripTestUtils'
 
-const PNG_1x1 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const PNG_DATA_URI = `data:image/png;base64,${PNG_1x1}`
 
 /** Build a representative Super note string (the export source of truth). */
@@ -161,7 +160,9 @@ describe('DOCX round-trip (Lexical → export → import → Lexical)', () => {
   })
 
   it('preserves the hyperlink href', () => {
-    expect(collectByType(tree, 'link').some((l) => (l as { url?: string }).url === 'https://roundtrip.test/')).toBe(true)
+    expect(collectByType(tree, 'link').some((l) => (l as { url?: string }).url === 'https://roundtrip.test/')).toBe(
+      true,
+    )
   })
 
   it('preserves the bullet list items', () => {
@@ -207,7 +208,9 @@ describe('ODT round-trip (Lexical → export → import → Lexical)', () => {
   })
 
   it('preserves the hyperlink href', () => {
-    expect(collectByType(tree, 'link').some((l) => (l as { url?: string }).url === 'https://roundtrip.test/')).toBe(true)
+    expect(collectByType(tree, 'link').some((l) => (l as { url?: string }).url === 'https://roundtrip.test/')).toBe(
+      true,
+    )
   })
 
   it('preserves the bullet list items', () => {

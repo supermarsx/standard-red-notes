@@ -136,10 +136,7 @@ export async function saveNarrationToNote(
 }
 
 /** Fetch a previously-attached narration's audio Blob for replay (by file uuid). */
-export async function getNarrationAudioBlob(
-  application: WebApplication,
-  fileUuid: string,
-): Promise<Blob | undefined> {
+export async function getNarrationAudioBlob(application: WebApplication, fileUuid: string): Promise<Blob | undefined> {
   const file = application.items.findItem<FileItem>(fileUuid)
   if (!file) {
     return undefined

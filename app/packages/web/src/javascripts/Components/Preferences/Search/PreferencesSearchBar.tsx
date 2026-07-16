@@ -54,7 +54,7 @@ const PreferencesSearchBar: FunctionComponent<Props> = ({ query, onQueryChange, 
                   key="clear-search"
                   type="button"
                   aria-label="Clear search"
-                  className="flex cursor-pointer items-center border-0 bg-transparent p-0 text-neutral hover:text-info"
+                  className="text-neutral hover:text-info flex cursor-pointer items-center border-0 bg-transparent p-0"
                   onClick={() => {
                     onClear()
                     inputRef.current?.focus()

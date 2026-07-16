@@ -7,8 +7,6 @@ export class PhotoRecorder {
   private width!: number
   private height!: number
   private stream?: MediaStream
-
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
   constructor() {}
 
   public static async isSupported(): Promise<boolean> {

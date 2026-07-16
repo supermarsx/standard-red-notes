@@ -5,12 +5,12 @@
  * (schemaVersion validation, per-block sanitisation of untrusted CSS, fresh id,
  * isDefault forced off).
  */
-import { DEFAULT_TYPOGRAPHY_PROFILE, TYPOGRAPHY_PROFILE_SCHEMA_VERSION, type TypographyProfile } from '@standardnotes/models'
 import {
-  exportFileNameForProfile,
-  parseImportedProfile,
-  profileToExportJson,
-} from './typographyProfileImportExport'
+  DEFAULT_TYPOGRAPHY_PROFILE,
+  TYPOGRAPHY_PROFILE_SCHEMA_VERSION,
+  type TypographyProfile,
+} from '@standardnotes/models'
+import { exportFileNameForProfile, parseImportedProfile, profileToExportJson } from './typographyProfileImportExport'
 
 const makeProfile = (overrides: Partial<TypographyProfile> = {}): TypographyProfile => ({
   id: 'custom',

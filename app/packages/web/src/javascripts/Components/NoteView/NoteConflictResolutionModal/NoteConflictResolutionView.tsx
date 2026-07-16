@@ -163,11 +163,11 @@ const NoteConflictResolutionView = ({
   return (
     <div className={classNames('flex h-full w-full flex-col overflow-hidden', className)}>
       <div className="flex min-h-0 flex-grow flex-col overflow-x-hidden md:flex-row">
-        <div className="flex border-b border-border md:hidden">
+        <div className="border-border flex border-b md:hidden">
           <button
             className={classNames(
-              'relative cursor-pointer border-0 bg-default px-3 py-2.5 text-sm focus:shadow-inner',
-              selectedMobileTab === 'list' ? 'font-medium text-info shadow-bottom' : 'text-text',
+              'bg-default relative cursor-pointer border-0 px-3 py-2.5 text-sm focus:shadow-inner',
+              selectedMobileTab === 'list' ? 'text-info shadow-bottom font-medium' : 'text-text',
             )}
             onClick={() => {
               setSelectedMobileTab('list')
@@ -177,8 +177,8 @@ const NoteConflictResolutionView = ({
           </button>
           <button
             className={classNames(
-              'relative cursor-pointer border-0 bg-default px-3 py-2.5 text-sm focus:shadow-inner',
-              selectedMobileTab === 'preview' ? 'font-medium text-info shadow-bottom' : 'text-text',
+              'bg-default relative cursor-pointer border-0 px-3 py-2.5 text-sm focus:shadow-inner',
+              selectedMobileTab === 'preview' ? 'text-info shadow-bottom font-medium' : 'text-text',
             )}
             onClick={() => {
               setSelectedMobileTab('preview')
@@ -189,7 +189,7 @@ const NoteConflictResolutionView = ({
         </div>
         <div
           className={classNames(
-            'w-full overflow-y-auto border-r border-border py-1.5 md:flex md:w-auto md:min-w-60 md:flex-col',
+            'border-border w-full overflow-y-auto border-r py-1.5 md:flex md:w-auto md:min-w-60 md:flex-col',
             selectedMobileTab !== 'list' && 'hidden md:flex',
           )}
           ref={setListElement}
@@ -223,7 +223,7 @@ const NoteConflictResolutionView = ({
           {isPreviewMode && (
             <div
               className={classNames(
-                'min-h-0 w-full flex-grow divide-x divide-border pb-0.5',
+                'divide-border min-h-0 w-full flex-grow divide-x pb-0.5',
                 isMobileScreen ? 'flex' : 'grid grid-rows-1',
               )}
               style={!isMobileScreen ? { gridTemplateColumns: `repeat(${selectedNotes.length}, 1fr)` } : undefined}
@@ -244,17 +244,17 @@ const NoteConflictResolutionView = ({
             <DiffView selectedNotes={selectedNotes} convertSuperToMarkdown={compareSuperMarkdown} />
           )}
           {selectedNotes.length === 2 && (
-            <div className="flex min-h-11 items-center justify-center gap-2 border-t border-border px-4 py-1.5">
+            <div className="border-border flex min-h-11 items-center justify-center gap-2 border-t px-4 py-1.5">
               {isPreviewMode && (
                 <StyledTooltip
                   className="!z-modal !max-w-[50ch]"
                   label={shouldSyncComparisonScroll ? 'Scrolling is synced' : 'Scrolling is not synced. Click to sync.'}
                   showOnMobile
                 >
-                  <div className="relative rounded-full p-1 hover:bg-contrast">
+                  <div className="hover:bg-contrast relative rounded-full p-1">
                     <Icon type={shouldSyncComparisonScroll ? 'link' : 'link-off'} className="text-neutral" />
                     <Checkbox
-                      className="absolute bottom-0 left-0 right-0 top-0 cursor-pointer opacity-0"
+                      className="absolute top-0 right-0 bottom-0 left-0 cursor-pointer opacity-0"
                       checked={shouldSyncComparisonScroll}
                       onChange={() => setShouldSyncComparisonScroll((shouldSync) => !shouldSync)}
                     />
@@ -284,7 +284,7 @@ const NoteConflictResolutionView = ({
                         organized, it's not ideal to read or compare manually. Instead, this diff compares a Markdown
                         rendition of the notes.
                       </div>
-                      <label className="mb-1 flex select-none items-center gap-2">
+                      <label className="mb-1 flex items-center gap-2 select-none">
                         <Switch
                           checked={!compareSuperMarkdown}
                           onChange={(checked) => setCompareSuperMarkdown(!checked)}
@@ -296,7 +296,7 @@ const NoteConflictResolutionView = ({
                   showOnMobile
                   showOnHover={false}
                 >
-                  <button className="rounded-full p-1 hover:bg-contrast">
+                  <button className="hover:bg-contrast rounded-full p-1">
                     <Icon type="info" className="text-neutral" />
                   </button>
                 </StyledTooltip>
@@ -307,17 +307,17 @@ const NoteConflictResolutionView = ({
       </div>
       <div
         className={classNames(
-          'flex items-center gap-2 border-t border-border px-4 py-2',
+          'border-border flex items-center gap-2 border-t px-4 py-2',
           selectedNotes.length > 1 ? 'hidden md:flex' : '',
         )}
       >
         <Button className="mr-auto" onClick={onClose} disabled={isPerformingAction}>
           Cancel
         </Button>
-        <Toolbar className="flex items-stretch text-info-contrast" store={toolbarStore}>
+        <Toolbar className="text-info-contrast flex items-stretch" store={toolbarStore}>
           <ToolbarItem
             onClick={keepOnlySelected}
-            className="flex-grow rounded rounded-r-none bg-info px-3 py-1.5 text-base font-bold ring-info ring-offset-2 ring-offset-default hover:brightness-110 focus:ring-0 focus-visible:ring-2 focus-visible:brightness-110 lg:text-sm"
+            className="bg-info ring-info ring-offset-default flex-grow rounded rounded-r-none px-3 py-1.5 text-base font-bold ring-offset-2 hover:brightness-110 focus:ring-0 focus-visible:ring-2 focus-visible:brightness-110 lg:text-sm"
             disabled={isPerformingAction}
           >
             {isPerformingAction ? (
@@ -332,11 +332,11 @@ const NoteConflictResolutionView = ({
             ref={setSelectAnchor}
             render={
               <ToolbarItem
-                className="relative rounded rounded-l-none bg-info px-3 py-1.5 ring-info hover:brightness-110 focus:ring-0 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-default focus-visible:brightness-110"
+                className="bg-info ring-info focus-visible:ring-offset-default relative rounded rounded-l-none px-3 py-1.5 hover:brightness-110 focus:ring-0 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:brightness-110"
                 disabled={isPerformingAction}
               >
                 <SelectArrow className="block rotate-180" />
-                <div className="absolute left-0 top-0 h-full w-[2px] bg-info brightness-[.85]" />
+                <div className="bg-info absolute top-0 left-0 h-full w-[2px] brightness-[.85]" />
               </ToolbarItem>
             }
             store={selectStore}
@@ -353,11 +353,11 @@ const NoteConflictResolutionView = ({
             hideOnClickInModal
           >
             <SelectList
-              className="cursor-pointer divide-y divide-border [&>[data-active-item]]:bg-passive-5"
+              className="divide-border [&>[data-active-item]]:bg-passive-5 cursor-pointer divide-y"
               store={selectStore}
             >
-              <SelectItem className="px-2.5 py-2 hover:bg-passive-5" value="move-to-trash">
-                <div className="flex items-center gap-1 text-sm font-bold text-text">
+              <SelectItem className="hover:bg-passive-5 px-2.5 py-2" value="move-to-trash">
+                <div className="text-text flex items-center gap-1 text-sm font-bold">
                   {selectedAction === 'move-to-trash' ? (
                     <Icon type="check-bold" size="small" />
                   ) : (
@@ -365,12 +365,12 @@ const NoteConflictResolutionView = ({
                   )}
                   Move others to trash
                 </div>
-                <div className="ml-4.5 text-neutral">
+                <div className="text-neutral ml-4.5">
                   Only the selected version will be kept; others will be moved to trash.
                 </div>
               </SelectItem>
-              <SelectItem className="px-2.5 py-2 hover:bg-passive-5" value="delete-permanently">
-                <div className="flex items-center gap-1 text-sm font-bold text-text">
+              <SelectItem className="hover:bg-passive-5 px-2.5 py-2" value="delete-permanently">
+                <div className="text-text flex items-center gap-1 text-sm font-bold">
                   {selectedAction === 'delete-permanently' ? (
                     <Icon type="check-bold" size="small" />
                   ) : (
@@ -378,7 +378,7 @@ const NoteConflictResolutionView = ({
                   )}
                   Delete others permanently
                 </div>
-                <div className="ml-4.5 text-neutral">
+                <div className="text-neutral ml-4.5">
                   Only the selected version will be kept; others will be deleted permanently.
                 </div>
               </SelectItem>

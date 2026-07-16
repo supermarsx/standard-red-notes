@@ -162,7 +162,6 @@ const DailyContentList: FunctionComponent<Props> = ({
 
   useEffect(() => {
     setNeedsSelectionReload(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTag.uuid])
 
   const onCalendarSelect = useCallback(
@@ -191,7 +190,7 @@ const DailyContentList: FunctionComponent<Props> = ({
         className={'flex-column flex'}
       >
         {currentStreak > 0 && (
-          <div className="flex w-full items-center justify-center border-t border-solid border-border bg-secondary-background p-2">
+          <div className="border-border bg-secondary-background flex w-full items-center justify-center border-t border-solid p-2">
             <span className="opacity-50">{t('currentStreak')}</span>
             <span className="ml-1.5 font-bold">
               {currentStreak} {t('dayWithCount', { count: currentStreak })}

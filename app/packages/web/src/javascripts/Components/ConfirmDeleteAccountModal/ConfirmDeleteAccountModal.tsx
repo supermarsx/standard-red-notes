@@ -29,13 +29,13 @@ const ConfirmDeleteAccountModal = ({ application }: Props) => {
     <AlertDialog closeDialog={closeDialog}>
       <div className="flex items-center justify-between text-lg font-bold">
         {t('deleteAccountTitle')}
-        <button className="rounded p-1 font-bold hover:bg-contrast" onClick={closeDialog}>
+        <button className="hover:bg-contrast rounded p-1 font-bold" onClick={closeDialog}>
           <Icon type="close" />
         </button>
       </div>
       <div className="sk-panel-row">
         <div>
-          <p className="text-base text-foreground lg:text-sm">{STRING_DELETE_ACCOUNT_CONFIRMATION()}</p>
+          <p className="text-foreground text-base lg:text-sm">{STRING_DELETE_ACCOUNT_CONFIRMATION()}</p>
         </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">

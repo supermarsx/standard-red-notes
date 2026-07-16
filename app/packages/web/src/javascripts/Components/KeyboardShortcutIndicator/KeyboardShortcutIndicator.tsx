@@ -46,7 +46,7 @@ export const KeyboardShortcutIndicator = ({ shortcut, small = true, dimmed = tru
         return (
           <kbd
             className={classNames(
-              'rounded border-[0.5px] border-passive-3 bg-default p-1 text-center font-sans capitalize leading-none text-text shadow-[var(--tw-shadow-color)_0px_2px_0px_0px] shadow-passive-3',
+              'border-passive-3 bg-default text-text shadow-passive-3 rounded border-[0.5px] p-1 text-center font-sans leading-none capitalize shadow-[var(--tw-shadow-color)_0px_2px_0px_0px]',
               small ? 'text-[length:0.65rem]' : 'text-xs',
             )}
             key={index}

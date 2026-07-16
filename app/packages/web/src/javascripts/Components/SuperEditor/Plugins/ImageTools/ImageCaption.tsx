@@ -37,7 +37,7 @@ export default function ImageCaption({ caption, enabled, onChange }: Props) {
       contentEditable
       suppressContentEditableWarning
       data-image-caption="true"
-      className="mt-1 min-h-[1.5rem] w-full max-w-full px-1 text-center text-sm italic text-passive-1 outline-none focus:bg-contrast"
+      className="text-passive-1 focus:bg-contrast mt-1 min-h-[1.5rem] w-full max-w-full px-1 text-center text-sm italic outline-none"
       data-placeholder="Add a caption…"
       onClick={(e) => {
         e.stopPropagation()

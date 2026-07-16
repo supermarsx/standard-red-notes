@@ -180,7 +180,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
               setCaptchaURL(parsed.captchaURL)
               return
             }
-          } catch (e) {
+          } catch {
             setCaptchaURL('')
           }
           throw new Error(error)
@@ -318,9 +318,9 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           disabled={isSigningIn}
           spellcheck={false}
         />
-        {error ? <div className="my-2 text-danger">{error}</div> : null}
+        {error ? <div className="text-danger my-2">{error}</div> : null}
         <Button
-          className="mb-3 mt-1"
+          className="mt-1 mb-3"
           label={isSigningIn ? t('signingIn') : t('account:signIn')}
           primary
           onClick={handleSignInFormSubmit}
@@ -368,18 +368,16 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
 
   return (
     <>
-      <div className="mb-3 mt-1 flex items-center px-3">
+      <div className="mt-1 mb-3 flex items-center px-3">
         <IconButton
           icon="arrow-left"
           title={t('goBack')}
-          className="mr-2 flex p-0 text-neutral"
+          className="text-neutral mr-2 flex p-0"
           onClick={() => setMenuPane(AccountMenuPane.GeneralMenu)}
           focusable={true}
           disabled={isSigningIn}
         />
-        <div className="text-base font-bold">
-          {showCaptcha ? t('humanVerification') : t('account:signIn')}
-        </div>
+        <div className="text-base font-bold">{showCaptcha ? t('humanVerification') : t('account:signIn')}</div>
       </div>
       {showCaptcha ? <div className="p-[10px]">{captchaIframe}</div> : signInForm}
       {showNoMergeConfirmation && (

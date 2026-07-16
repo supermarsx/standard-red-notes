@@ -137,11 +137,6 @@ export const wheelDeltaToFactor = (deltaY: number, sensitivity = 0.0015): number
 }
 
 /** Euclidean distance between two touch points, for pinch-zoom. */
-export const touchDistance = (
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): number => {
+export const touchDistance = (ax: number, ay: number, bx: number, by: number): number => {
   return Math.hypot(ax - bx, ay - by)
 }

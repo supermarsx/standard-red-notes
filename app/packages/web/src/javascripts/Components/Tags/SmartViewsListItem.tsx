@@ -148,7 +148,7 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
           />
         ) : (
           <div
-            className={'title overflow-hidden text-left text-mobile-navigation-list-item lg:text-navigation-list-item'}
+            className={'title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left'}
             id={`react-tag-${view.uuid}`}
           >
             {title}
@@ -163,7 +163,7 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
 
       {!isSystemView(view) && (
         <div className="meta">
-          {view.conflictOf && <div className="-mt-1 text-[0.625rem] font-bold text-danger">Conflicted Copy</div>}
+          {view.conflictOf && <div className="text-danger -mt-1 text-[0.625rem] font-bold">Conflicted Copy</div>}
 
           {isSelected && (
             <div className="menu">

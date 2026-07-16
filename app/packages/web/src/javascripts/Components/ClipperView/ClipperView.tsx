@@ -26,8 +26,6 @@ import {
 import { addToast, ToastType } from '@standardnotes/toast'
 import { getSuperJSONFromClipPayload } from './getSuperJSONFromClipHTML'
 import ClippedNoteView from './ClippedNoteView'
-import Button from '../Button/Button'
-
 import { useStateRef } from '@/Hooks/useStateRef'
 import usePreference from '@/Hooks/usePreference'
 import { createLinkFromItem } from '@/Utils/Items/Search/createLinkFromItem'
@@ -295,11 +293,11 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
     ) : (
       <Menu a11yLabel="User account menu">
         <MenuItem onClick={activateRegisterPane}>
-          <Icon type="user" className="mr-2 h-6 w-6 text-neutral md:h-5 md:w-5" />
+          <Icon type="user" className="text-neutral mr-2 h-6 w-6 md:h-5 md:w-5" />
           Create free account
         </MenuItem>
         <MenuItem onClick={activateSignInPane}>
-          <Icon type="signIn" className="mr-2 h-6 w-6 text-neutral md:h-5 md:w-5" />
+          <Icon type="signIn" className="text-neutral mr-2 h-6 w-6 md:h-5 md:w-5" />
           Sign in
         </MenuItem>
       </Menu>
@@ -308,10 +306,10 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
 
   return (
     <div className="bg-contrast p-3">
-      <Menu a11yLabel="Extension menu" className="rounded border border-border bg-default">
+      <Menu a11yLabel="Extension menu" className="border-border bg-default rounded border">
         {hasSelection && (
           <MenuItem
-            className="border-b border-border"
+            className="border-border border-b"
             disabled={isScreenshotMode}
             onClick={async () => {
               const payload = await sendMessageToActiveTab({ type: RuntimeMessageTypes.GetSelection })
@@ -321,7 +319,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
               setClipPayload(payload)
             }}
           >
-            <Icon type="paragraph" className="mr-2 text-info" />
+            <Icon type="paragraph" className="text-info mr-2" />
             Clip text selection
           </MenuItem>
         )}
@@ -334,7 +332,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
             setClipPayload(payload)
           }}
         >
-          <Icon type="notes-filled" className="mr-2 text-info" />
+          <Icon type="notes-filled" className="text-info mr-2" />
           {isScreenshotMode ? 'Capture visible' : 'Clip full page'}
         </MenuItem>
         <MenuItem
@@ -347,7 +345,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
             setClipPayload(payload)
           }}
         >
-          <Icon type="rich-text" className="mr-2 text-info" />
+          <Icon type="rich-text" className="text-info mr-2" />
           Clip article
         </MenuItem>
         <MenuItem
@@ -356,7 +354,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
             window.close()
           }}
         >
-          <Icon type="dashboard" className="mr-2 text-info" />
+          <Icon type="dashboard" className="text-info mr-2" />
           Select elements to {isScreenshotMode ? 'capture' : 'clip'}
         </MenuItem>
         <MenuSwitchButtonItem
@@ -369,7 +367,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
         >
           Clip as screenshot
         </MenuSwitchButtonItem>
-        <div className="border-t border-border px-3 py-3 text-foreground">
+        <div className="border-border text-foreground border-t px-3 py-3">
           {defaultTag && (
             <div className="flex items-center justify-between text-base">
               <LinkedItemBubble
@@ -380,7 +378,7 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
               />
               <StyledTooltip label="Remove default tag" gutter={2}>
                 <button
-                  className="rounded-full p-1 text-neutral hover:bg-contrast hover:text-info"
+                  className="text-neutral hover:bg-contrast hover:text-info rounded-full p-1"
                   onClick={unselectTag}
                 >
                   <Icon type="clear-circle-filled" />
@@ -400,22 +398,22 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
             }}
           />
         </div>
-        <div className="flex items-center border-t border-border text-foreground">
+        <div className="border-border text-foreground flex items-center border-t">
           <Icon type="user" className="mx-2" />
           <div className="flex-grow py-2 text-sm font-semibold">{user.email}</div>
           <button
-            className="flex-shrink-0 border-l border-border px-2 py-2 hover:bg-info-backdrop focus:bg-info-backdrop focus:shadow-none focus:outline-none"
+            className="border-border hover:bg-info-backdrop focus:bg-info-backdrop flex-shrink-0 border-l px-2 py-2 focus:shadow-none focus:outline-none"
             onClick={showSignOutConfirmation}
           >
             <Icon type="signOut" className="text-neutral" />
           </button>
         </div>
         {isSyncing || hasSyncError ? (
-          <div className={classNames('flex items-center border-t border-border', hasSyncError && 'text-danger')}>
+          <div className={classNames('border-border flex items-center border-t', hasSyncError && 'text-danger')}>
             {isSyncing && (
               <>
                 <Spinner className="mx-2.5 h-4 w-4" />
-                <div className="flex-grow py-2 text-sm font-semibold text-info">Syncing...</div>
+                <div className="text-info flex-grow py-2 text-sm font-semibold">Syncing...</div>
               </>
             )}
             {hasSyncError && (

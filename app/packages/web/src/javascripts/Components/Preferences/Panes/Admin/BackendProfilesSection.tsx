@@ -84,27 +84,27 @@ const BackendProfilesSection: FunctionComponent<Props> = ({ backendProfiles, bus
         </div>
       </div>
       <Text className="mt-1">
-        Reusable provider/connection configs that assistant profiles reference. An <strong>API-key backend</strong> holds
-        a provider + base URL + model + write-only key; a <strong>subscription backend</strong> names a paired
+        Reusable provider/connection configs that assistant profiles reference. An <strong>API-key backend</strong>{' '}
+        holds a provider + base URL + model + write-only key; a <strong>subscription backend</strong> names a paired
         ChatGPT/Codex subscription (pair it with the wizard below). Save as a set.
       </Text>
 
       {rows.length === 0 && (
-        <Text className="mt-3 text-passive-1">
+        <Text className="text-passive-1 mt-3">
           No backend profiles defined yet — existing single-provider/assistant configs still work unchanged.
         </Text>
       )}
 
       {rows.map((row) => (
-        <div key={row.id} className="mt-3 rounded border border-border p-4">
+        <div key={row.id} className="border-border mt-3 rounded border p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Subtitle>{row.name.trim() === '' ? 'Untitled backend' : row.name}</Subtitle>
-              <span className="rounded bg-passive-3 px-2 py-0.5 text-xs font-bold text-foreground">
+              <span className="bg-passive-3 text-foreground rounded px-2 py-0.5 text-xs font-bold">
                 {row.type === 'subscription' ? 'Subscription' : 'API key'}
               </span>
               {row.keyConfigured && (
-                <span className="rounded bg-success px-2 py-0.5 text-xs font-bold text-success-contrast">Key set</span>
+                <span className="bg-success text-success-contrast rounded px-2 py-0.5 text-xs font-bold">Key set</span>
               )}
             </div>
             <Button label="Delete" colorStyle="danger" onClick={() => deleteBackend(row.id)} disabled={busy} />
@@ -127,7 +127,7 @@ const BackendProfilesSection: FunctionComponent<Props> = ({ backendProfiles, bus
                 <div>
                   <label className="text-sm font-semibold">Provider</label>
                   <select
-                    className="mt-1 w-full rounded border border-border bg-default px-2 py-1.5 text-foreground"
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5"
                     value={row.provider}
                     onChange={(event) =>
                       mutateRow(row.id, { provider: event.target.value as BackendProfileRow['provider'] })
@@ -208,9 +208,9 @@ const BackendProfilesSection: FunctionComponent<Props> = ({ backendProfiles, bus
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <Text className="text-xs text-passive-1">
-                    Uses the paired subscription credential whose id matches above. Pair it with the wizard below (the id
-                    you enter when adding a pairing must match this subscription id).
+                  <Text className="text-passive-1 text-xs">
+                    Uses the paired subscription credential whose id matches above. Pair it with the wizard below (the
+                    id you enter when adding a pairing must match this subscription id).
                   </Text>
                 </div>
               </>

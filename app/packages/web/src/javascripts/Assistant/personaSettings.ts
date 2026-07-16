@@ -98,12 +98,7 @@ export function savePersonaSettings(settings: PersonaSettings): void {
 // load and save so a hand-edited value can't reach a request body out of range.
 // ---------------------------------------------------------------------------
 
-import {
-  clampMaxTokens,
-  clampTemperature,
-  clampTopP,
-  DEFAULT_SAMPLING_SETTINGS,
-} from './samplingSettings'
+import { clampMaxTokens, clampTemperature, clampTopP, DEFAULT_SAMPLING_SETTINGS } from './samplingSettings'
 
 const PROFILES_STORAGE_KEY = 'standardnotes.assistantPersonaProfiles.settings.v1'
 

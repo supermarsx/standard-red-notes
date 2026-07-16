@@ -98,8 +98,8 @@ const Modal = ({
       ) : (
         <div
           className={classNames(
-            'flex w-full flex-shrink-0 select-none items-center justify-between rounded-t border-b border-solid border-border bg-default px-2 text-text md:px-4.5 md:py-3 md:translucent-ui:bg-transparent',
-            hasTopInset ? 'pb-1.5 pt-safe-top' : 'py-1.5',
+            'border-border bg-default text-text md:translucent-ui:bg-transparent flex w-full flex-shrink-0 items-center justify-between rounded-t border-b border-solid px-2 select-none md:px-4.5 md:py-3',
+            hasTopInset ? 'pt-safe-top pb-1.5' : 'py-1.5',
           )}
         >
           <MobileModalHeader className="flex-row items-center justify-between md:flex md:gap-0">
@@ -115,7 +115,7 @@ const Modal = ({
             ) : (
               <div className="md:hidden" />
             )}
-            <div className="flex items-center justify-center gap-2 overflow-hidden text-center font-semibold text-text md:flex-grow md:text-left md:text-lg">
+            <div className="text-text flex items-center justify-center gap-2 overflow-hidden text-center font-semibold md:flex-grow md:text-left md:text-lg">
               {extraActions.length > 0 && (
                 <>
                   <MobileModalAction
@@ -124,7 +124,7 @@ const Modal = ({
                     slot="left"
                     ref={advancedOptionRef}
                   >
-                    <div className="rounded-full border border-border p-0.5">
+                    <div className="border-border rounded-full border p-0.5">
                       <Icon type="more" />
                     </div>
                   </MobileModalAction>
@@ -136,14 +136,14 @@ const Modal = ({
                     togglePopover={() => setShowAdvanced((show) => !show)}
                     align="start"
                     portal={false}
-                    className="!fixed divide-y divide-border border border-border"
+                    className="divide-border border-border !fixed divide-y border"
                   >
                     {extraActions
                       .filter((action) => action.type !== 'cancel')
                       .map((action, index) => (
                         <button
                           className={classNames(
-                            'p-2 text-base font-semibold hover:bg-contrast focus:bg-info-backdrop focus:shadow-none focus:outline-none',
+                            'hover:bg-contrast focus:bg-info-backdrop p-2 text-base font-semibold focus:shadow-none focus:outline-none',
                             action.type === 'destructive' && 'text-danger',
                           )}
                           key={index}
@@ -162,7 +162,7 @@ const Modal = ({
               <span className="overflow-hidden text-ellipsis whitespace-nowrap">{title}</span>
             </div>
             <div className="hidden items-center gap-2 md:flex">
-              <button tabIndex={0} className="ml-2 rounded p-1 font-bold hover:bg-contrast" onClick={close}>
+              <button tabIndex={0} className="hover:bg-contrast ml-2 rounded p-1 font-bold" onClick={close}>
                 <Icon type="close" />
               </button>
             </div>
@@ -185,7 +185,7 @@ const Modal = ({
         : sortedActions.length > 0 && (
             <div
               className={classNames(
-                'hidden items-center justify-start gap-3 border-t border-border px-2.5 py-2 md:flex md:px-4 md:py-4',
+                'border-border hidden items-center justify-start gap-3 border-t px-2.5 py-2 md:flex md:px-4 md:py-4',
                 hasBottomInset && 'pb-safe-bottom',
               )}
             >

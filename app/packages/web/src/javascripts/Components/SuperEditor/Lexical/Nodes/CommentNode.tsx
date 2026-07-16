@@ -94,10 +94,10 @@ export function CommentView({
   onChangeAuthor: (value: string) => void
 }): React.JSX.Element {
   return (
-    <div className="my-3 flex flex-col gap-1 rounded border-l-4 border-info bg-contrast p-2" data-comment-block="true">
-      <div className="flex items-center justify-between gap-2 text-xs text-passive-1">
+    <div className="border-info bg-contrast my-3 flex flex-col gap-1 rounded border-l-4 p-2" data-comment-block="true">
+      <div className="text-passive-1 flex items-center justify-between gap-2 text-xs">
         <input
-          className="min-w-0 flex-1 bg-transparent font-semibold text-foreground outline-none"
+          className="text-foreground min-w-0 flex-1 bg-transparent font-semibold outline-none"
           defaultValue={author}
           placeholder="Author"
           aria-label="Comment author"
@@ -108,7 +108,7 @@ export function CommentView({
         </time>
       </div>
       <textarea
-        className="min-h-[2rem] w-full resize-none bg-transparent text-sm text-foreground outline-none"
+        className="text-foreground min-h-[2rem] w-full resize-none bg-transparent text-sm outline-none"
         rows={Math.max(2, text.split('\n').length)}
         defaultValue={text}
         placeholder="Comment…"

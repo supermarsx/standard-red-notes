@@ -25,7 +25,7 @@ const VaultSelectionButton = ({ isMobileNavigation = false }: { isMobileNavigati
       <StyledTooltip label="Open vault selection menu">
         {isMobileNavigation ? (
           <RoundIconButton
-            className="ml-2.5 bg-default"
+            className="bg-default ml-2.5"
             onClick={toggleMenu}
             label="Go to vaults menu"
             icon="safe-square"
@@ -41,7 +41,7 @@ const VaultSelectionButton = ({ isMobileNavigation = false }: { isMobileNavigati
                 type="safe-square"
                 className={classNames(
                   isOpen ? 'text-info' : exclusivelyShownVault ? 'text-success' : '',
-                  'rounded hover:text-info',
+                  'hover:text-info rounded',
                 )}
               />
               {exclusivelyShownVault && (

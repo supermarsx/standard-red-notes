@@ -139,8 +139,8 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
     >
       <div className="flex flex-col gap-4">
         {/* Data-exposure notice — same pattern as Narrate and the Assistant preferences pane. */}
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">Suggesting topics sends note content to an AI</div>
+        <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+          <div className="text-warning font-semibold">Suggesting topics sends note content to an AI</div>
           <p className="mt-1">
             Generating topic suggestions sends this note&rsquo;s title and text to the AI provider you configured. No
             topics are added until you confirm below.
@@ -149,7 +149,7 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            className="flex items-center gap-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             onClick={() => void generate()}
             disabled={!aiAvailability.available || generating || applying}
           >
@@ -158,10 +158,10 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
           </button>
         </div>
 
-        {!aiAvailability.available && <p className="text-xs text-passive-0">{aiAvailability.reason}</p>}
-        {error && <p className="text-sm text-danger">Could not suggest topics: {error}</p>}
+        {!aiAvailability.available && <p className="text-passive-0 text-xs">{aiAvailability.reason}</p>}
+        {error && <p className="text-danger text-sm">Could not suggest topics: {error}</p>}
         {noSuggestions && (
-          <p className="text-sm text-passive-0">
+          <p className="text-passive-0 text-sm">
             No good tag suggestions for this note. Try editing the note and suggesting again.
           </p>
         )}
@@ -176,9 +176,9 @@ const SuggestTagsModalContent = observer(({ application, note, close }: Omit<Pro
                   <Icon type="hashtag" size="small" className="text-neutral" />
                   {suggestion.name}
                   {suggestion.existing ? (
-                    <span className="text-xs text-passive-0">(existing tag)</span>
+                    <span className="text-passive-0 text-xs">(existing tag)</span>
                   ) : (
-                    <span className="text-xs text-info">(new tag)</span>
+                    <span className="text-info text-xs">(new tag)</span>
                   )}
                 </span>
               </label>

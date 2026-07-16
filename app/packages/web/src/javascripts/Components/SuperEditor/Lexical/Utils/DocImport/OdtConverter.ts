@@ -283,11 +283,7 @@ class OdtHtmlWalker {
 }
 
 /** Walk an ODF `content.xml` document into an HTML string. */
-const odfContentToHtml = (
-  contentDoc: Document,
-  stylesDoc: Document | null,
-  pictures: Map<string, string>,
-): string => {
+const odfContentToHtml = (contentDoc: Document, stylesDoc: Document | null, pictures: Map<string, string>): string => {
   const docs = stylesDoc ? [contentDoc, stylesDoc] : [contentDoc]
   const textStyles = buildTextStyleMap(docs)
   const listStyles = buildListStyleMap(docs)

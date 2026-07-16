@@ -60,7 +60,7 @@ const PreferencesButton = ({ openPreferences }: Props) => {
   if (isMobileScreen) {
     return (
       <div className="relative">
-        <RoundIconButton className="ml-2.5 bg-default" onClick={onClick} label="Go to preferences" icon="tune" />
+        <RoundIconButton className="bg-default ml-2.5" onClick={onClick} label="Go to preferences" icon="tune" />
         <CountBubble position="right" count={bubbleCount} />
       </div>
     )
@@ -70,10 +70,10 @@ const PreferencesButton = ({ openPreferences }: Props) => {
     <StyledTooltip label={`Open preferences (${shortcut})`}>
       <button onClick={onClick} className="group relative flex h-full w-8 cursor-pointer items-center justify-center">
         <div className="relative h-5">
-          <Icon type="tune" className="rounded group-hover:text-info" />
+          <Icon type="tune" className="group-hover:text-info rounded" />
           <CountBubble position="right" count={bubbleCount} />
         </div>
-        {isChangelogUnread && <div className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-info" />}
+        {isChangelogUnread && <div className="bg-info absolute top-0.5 right-0.5 h-2 w-2 rounded-full" />}
       </button>
     </StyledTooltip>
   )

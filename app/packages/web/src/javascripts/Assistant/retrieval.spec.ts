@@ -1,7 +1,11 @@
 import { retrieve, RetrievalDoc } from './retrieval'
 
 const docs: RetrievalDoc[] = [
-  { uuid: 'n1', title: 'Sourdough starter', text: 'Feed the starter with flour and water every day. Discard half before feeding.' },
+  {
+    uuid: 'n1',
+    title: 'Sourdough starter',
+    text: 'Feed the starter with flour and water every day. Discard half before feeding.',
+  },
   { uuid: 'n2', title: 'Tax notes', text: 'Quarterly estimated tax is due in April. Keep receipts for deductions.' },
   { uuid: 'n3', title: 'Bread recipe', text: 'Mix flour, water, salt and the active sourdough starter. Bake at 230C.' },
   { uuid: 'n4', title: 'Empty', text: '' },

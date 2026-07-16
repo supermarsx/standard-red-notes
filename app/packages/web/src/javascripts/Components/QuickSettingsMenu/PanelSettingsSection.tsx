@@ -22,7 +22,7 @@ const PanelSettingsSection = () => {
   )
 
   return (
-    <div className="hidden md:block pointer-coarse:md-only:hidden pointer-coarse:lg-only:hidden">
+    <div className="pointer-coarse:md-only:hidden pointer-coarse:lg-only:hidden hidden md:block">
       <MenuSwitchButtonItem
         className="items-center"
         checked={!isNavigationPaneCollapsed}

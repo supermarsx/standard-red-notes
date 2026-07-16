@@ -82,13 +82,13 @@ const AchievementTile: FunctionComponent<{
           className={`flex-shrink-0 ${unlocked ? 'text-info' : 'text-passive-1'}`}
         />
         <span
-          className={`min-w-0 flex-grow truncate group-hover:overflow-visible group-hover:whitespace-normal text-sm font-bold ${
+          className={`min-w-0 flex-grow truncate text-sm font-bold group-hover:overflow-visible group-hover:whitespace-normal ${
             unlocked ? 'text-text' : 'text-passive-1'
           }`}
         >
           {name}
         </span>
-        {unlocked && <Icon type="check-circle-filled" size="small" className="flex-shrink-0 text-success" />}
+        {unlocked && <Icon type="check-circle-filled" size="small" className="text-success flex-shrink-0" />}
         <Switch
           className="flex-shrink-0"
           checked={individuallyEnabled}
@@ -96,18 +96,20 @@ const AchievementTile: FunctionComponent<{
         />
       </div>
 
-      <p className={`m-0 line-clamp-2 group-hover:line-clamp-none text-xs ${unlocked ? 'text-neutral' : 'text-passive-1'}`}>
+      <p
+        className={`m-0 line-clamp-2 text-xs group-hover:line-clamp-none ${unlocked ? 'text-neutral' : 'text-passive-1'}`}
+      >
         {description}
       </p>
 
       {unlocked
-        ? unlockedDate && <div className="text-[0.625rem] font-semibold text-passive-1">Unlocked {unlockedDate}</div>
+        ? unlockedDate && <div className="text-passive-1 text-[0.625rem] font-semibold">Unlocked {unlockedDate}</div>
         : !isMystery && (
             <div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-passive-3">
-                <div className="h-full rounded-full bg-info" style={{ width: `${percent}%` }} />
+              <div className="bg-passive-3 h-1.5 w-full overflow-hidden rounded-full">
+                <div className="bg-info h-full rounded-full" style={{ width: `${percent}%` }} />
               </div>
-              <div className="mt-0.5 text-[0.625rem] font-semibold text-passive-1">
+              <div className="text-passive-1 mt-0.5 text-[0.625rem] font-semibold">
                 {clampedCurrent.toLocaleString()} / {def.threshold.toLocaleString()}
               </div>
             </div>
@@ -157,7 +159,11 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
   const toggleCategory = (category: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev)
-      next.has(category) ? next.delete(category) : next.add(category)
+      if (next.has(category)) {
+        next.delete(category)
+      } else {
+        next.add(category)
+      }
       return next
     })
 
@@ -167,21 +173,21 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
         <PreferencesSegment>
           <Title>Achievements</Title>
           <Text>
-            Earn badges as you use Standard Red Notes — for writing, linking, customizing, syncing, and more. Progress is
-            tracked locally on this device only; nothing is synced or sent to a server.
+            Earn badges as you use Standard Red Notes — for writing, linking, customizing, syncing, and more. Progress
+            is tracked locally on this device only; nothing is synced or sent to a server.
           </Text>
 
-          <div className="mt-4 flex items-center gap-3 rounded-md border border-solid border-border bg-contrast p-4">
-            <Icon type="star-filled" size="large" className="flex-shrink-0 text-info" />
+          <div className="border-border bg-contrast mt-4 flex items-center gap-3 rounded-md border border-solid p-4">
+            <Icon type="star-filled" size="large" className="text-info flex-shrink-0" />
             <div className="min-w-0 flex-grow">
-              <div className="text-lg font-bold text-text">
+              <div className="text-text text-lg font-bold">
                 {unlockedCount} / {total} unlocked
               </div>
-              <div className="mt-1 h-2 w-full max-w-xs overflow-hidden rounded-full bg-passive-3">
-                <div className="h-full rounded-full bg-info" style={{ width: `${overallPercent}%` }} />
+              <div className="bg-passive-3 mt-1 h-2 w-full max-w-xs overflow-hidden rounded-full">
+                <div className="bg-info h-full rounded-full" style={{ width: `${overallPercent}%` }} />
               </div>
             </div>
-            <div className="flex-shrink-0 text-2xl font-bold text-info">{overallPercent}%</div>
+            <div className="text-info flex-shrink-0 text-2xl font-bold">{overallPercent}%</div>
           </div>
 
           <div className="mt-4 flex items-center justify-between">
@@ -199,7 +205,10 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
               <Subtitle>Record unlock date &amp; time</Subtitle>
               <Text className="text-passive-0">When on, each achievement records when it was unlocked.</Text>
             </div>
-            <Switch checked={config.recordTimestamps} onChange={(checked) => achievements.setRecordTimestamps(checked)} />
+            <Switch
+              checked={config.recordTimestamps}
+              onChange={(checked) => achievements.setRecordTimestamps(checked)}
+            />
           </div>
 
           <div className="mt-4 flex items-center justify-between">
@@ -207,7 +216,10 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
               <Subtitle>Unlock notifications</Subtitle>
               <Text className="text-passive-0">Show a notification when you unlock an achievement.</Text>
             </div>
-            <Switch checked={config.showUnlockToasts} onChange={(checked) => achievements.setShowUnlockToasts(checked)} />
+            <Switch
+              checked={config.showUnlockToasts}
+              onChange={(checked) => achievements.setShowUnlockToasts(checked)}
+            />
           </div>
 
           {/* Filter — scope the (otherwise long) list to what you care about. */}
@@ -231,7 +243,7 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
 
         {byCategory.length === 0 ? (
           <PreferencesSegment>
-            <div className="py-6 text-center text-sm text-passive-1">No achievements match this filter.</div>
+            <div className="text-passive-1 py-6 text-center text-sm">No achievements match this filter.</div>
           </PreferencesSegment>
         ) : (
           byCategory.map(([category, entries]) => {
@@ -242,16 +254,16 @@ const Achievements: FunctionComponent<Props> = (_props: Props) => {
                 <button
                   type="button"
                   onClick={() => toggleCategory(category)}
-                  className="mt-3 flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-contrast"
+                  className="hover:bg-contrast mt-3 flex w-full items-center gap-2 rounded px-1 py-1 text-left"
                   aria-expanded={!isCollapsed}
                 >
                   <Icon
                     type={isCollapsed ? 'chevron-right' : 'chevron-down'}
                     size="small"
-                    className="flex-shrink-0 text-passive-1"
+                    className="text-passive-1 flex-shrink-0"
                   />
-                  <span className="flex-grow font-semibold text-text">{category}</span>
-                  <span className="flex-shrink-0 text-xs font-semibold text-passive-1">
+                  <span className="text-text flex-grow font-semibold">{category}</span>
+                  <span className="text-passive-1 flex-shrink-0 text-xs font-semibold">
                     {unlockedInCategory}/{entries.length}
                   </span>
                 </button>

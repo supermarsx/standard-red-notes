@@ -114,9 +114,9 @@ const LinkedItemBubble = ({
         tabIndex={0}
         className={classNames(
           'group cursor-pointer rounded',
-          'bg-passive-4-opacity-variant outline-1 outline-info hover:bg-contrast focus:bg-contrast focus:outline',
-          'whitespace-pre-wrap text-left text-sm text-text hover:no-underline focus:no-underline lg:text-xs',
-          'py-1 pl-1 pr-2',
+          'bg-passive-4-opacity-variant outline-info hover:bg-contrast focus:bg-contrast outline-1 focus:outline',
+          'text-text text-left text-sm whitespace-pre-wrap hover:no-underline focus:no-underline lg:text-xs',
+          'py-1 pr-2 pl-1',
           className,
         )}
         onFocus={handleFocus}
@@ -153,7 +153,7 @@ const LinkedItemBubble = ({
         ref.current = el as HTMLElement
       }}
       className={classNames(
-        'group h-6 cursor-pointer items-center rounded bg-passive-4-opacity-variant py-2 pl-1 pr-2 align-middle text-sm',
+        'group bg-passive-4-opacity-variant h-6 cursor-pointer items-center rounded py-2 pr-2 pl-1 align-middle text-sm',
         'text-text hover:bg-contrast focus:bg-contrast lg:text-xs',
         inlineFlex ? 'inline-flex' : 'flex',
         className,

@@ -364,7 +364,8 @@ const es: LocaleResource = {
     viewFile: 'Ver archivo',
     loading: 'Cargando...',
     fileCannotBePreviewed: 'Este archivo no se puede previsualizar.',
-    errorLoadingFile: 'Se produjo un error al cargar el archivo. Inténtalo de nuevo o descarga el archivo y ábrelo con otra aplicación.',
+    errorLoadingFile:
+      'Se produjo un error al cargar el archivo. Inténtalo de nuevo o descarga el archivo y ábrelo con otra aplicación.',
     tryAgain: 'Intentar de nuevo',
     downloadToView: 'Para ver este archivo, descárgalo y ábrelo con otra aplicación.',
     fileInformation: 'Información del archivo',
@@ -413,15 +414,18 @@ const es: LocaleResource = {
     cancelOcr: 'Cancelar OCR',
     preparingOcr: 'Preparando OCR...',
     ocrProgress: 'OCR página {{current}} / {{total}} ({{percent}} %)',
-    ocrCachedReRunTooltip: 'Texto ya extraído (en caché). Vuelve a ejecutar el OCR en tu navegador (permanece en tu dispositivo).',
+    ocrCachedReRunTooltip:
+      'Texto ya extraído (en caché). Vuelve a ejecutar el OCR en tu navegador (permanece en tu dispositivo).',
     ocrExtractedReRunTooltip: 'Texto extraído. Vuelve a ejecutar el OCR en tu navegador (permanece en tu dispositivo).',
-    ocrExtractTooltip: 'Extrae texto de páginas escaneadas con OCR. Se ejecuta en tu navegador; nada sale de tu dispositivo (lento; descarga datos de idioma).',
+    ocrExtractTooltip:
+      'Extrae texto de páginas escaneadas con OCR. Se ejecuta en tu navegador; nada sale de tu dispositivo (lento; descarga datos de idioma).',
     extractTextWithOcrBrowser: 'Extraer texto con OCR en tu navegador',
     reRunOcrBrowser: 'Volver a ejecutar el OCR (navegador)',
     extractTextOcr: 'Extraer texto (OCR)',
     serverOcrTooltip:
       'Ejecuta el OCR en el SERVIDOR. Esto envía las imágenes de las páginas de este PDF al servidor y ABANDONA el cifrado de extremo a extremo — el servidor puede leer ese contenido. El OCR en el navegador mantiene todo en tu dispositivo.',
-    runOcrOnServerAria: 'Ejecutar el OCR en el servidor (envía las imágenes de las páginas al servidor; abandona el cifrado de extremo a extremo)',
+    runOcrOnServerAria:
+      'Ejecutar el OCR en el servidor (envía las imágenes de las páginas al servidor; abandona el cifrado de extremo a extremo)',
     runOcrOnServer: 'Ejecutar el OCR en el servidor',
     copyAllExtractedText: 'Copiar todo el texto extraído',
     copyExtractedTextAria: 'Copiar el texto extraído',
@@ -432,7 +436,8 @@ const es: LocaleResource = {
     previousMatch: 'Coincidencia anterior',
     nextMatch: 'Coincidencia siguiente',
     closeSearch: 'Cerrar la búsqueda',
-    serverOcrDisclosurePrefix: 'El OCR en el servidor está disponible para tu cuenta. Envía las imágenes de las páginas de este PDF al servidor y',
+    serverOcrDisclosurePrefix:
+      'El OCR en el servidor está disponible para tu cuenta. Envía las imágenes de las páginas de este PDF al servidor y',
     serverOcrDisclosureBold: 'abandona el cifrado de extremo a extremo',
     serverOcrDisclosureSuffix:
       ' — el servidor (y quien lo controle) puede leer ese contenido. El OCR en el navegador mantiene todo en tu dispositivo. La opción predeterminada es el OCR en el navegador.',
@@ -589,7 +594,8 @@ const es: LocaleResource = {
     syncUnreachable: 'Sincronización inaccesible',
     syncUnreachableMessage: 'Mmm... parece que no podemos sincronizar tu cuenta. El motivo: {{reason}}',
     workspaceSwitcherMenuLabel: 'Menú de cambio de espacio de trabajo',
-    signOutAllWorkspacesConfirm: '¿Seguro que quieres cerrar la sesión de todos los espacios de trabajo en este dispositivo?',
+    signOutAllWorkspacesConfirm:
+      '¿Seguro que quieres cerrar la sesión de todos los espacios de trabajo en este dispositivo?',
     signOutAll: 'Cerrar todas las sesiones',
     addAnotherWorkspace: 'Añadir otro espacio de trabajo',
     signOutAllWorkspaces: 'Cerrar la sesión de todos los espacios de trabajo',
@@ -602,7 +608,8 @@ const es: LocaleResource = {
     ignoreWarning: 'Ignorar la advertencia',
     waitingForSecurityKey: 'Esperando la llave de seguridad...',
     authenticationSuccessful: '¡Autenticación correcta!',
-    insertSecurityKeyPrompt: 'Inserta tu llave de seguridad de hardware y luego pulsa el botón de abajo para autenticarte.',
+    insertSecurityKeyPrompt:
+      'Inserta tu llave de seguridad de hardware y luego pulsa el botón de abajo para autenticarte.',
     authenticate: 'Autenticar',
   },
   search: {
@@ -681,7 +688,8 @@ const es: LocaleResource = {
     invalidLinkTitle: 'Enlace no válido',
     invalidLinkMessage: 'Este enlace compartido no es válido o falta la clave.',
     selfDestructTitle: 'Esta nota se autodestruye después de verla',
-    oneTimeViewConsumed: 'Estás leyendo un enlace de visualización única. Ya se ha consumido y no se puede volver a abrir',
+    oneTimeViewConsumed:
+      'Estás leyendo un enlace de visualización única. Ya se ha consumido y no se puede volver a abrir',
     oneTimeViewExpiresClause_one: ', y caduca por completo {{count}} minuto después de la primera apertura',
     oneTimeViewExpiresClause_many: ', y caduca por completo {{count}} minutos después de la primera apertura',
     oneTimeViewExpiresClause_other: ', y caduca por completo {{count}} minutos después de la primera apertura',
@@ -690,7 +698,8 @@ const es: LocaleResource = {
     linkExpires_other: 'Este enlace caduca {{count}} minutos después de abrirse por primera vez.',
     untitled: 'Sin título',
     tagHasNoNotes: 'Este tema no tiene notas.',
-    publicReadOnlyFooter: 'Este es un enlace compartido público y de solo lectura. El contenido se descifró en tu navegador.',
+    publicReadOnlyFooter:
+      'Este es un enlace compartido público y de solo lectura. El contenido se descifró en tu navegador.',
     confidentialWatermark: 'Confidencial · {{datetime}}',
     contentHiddenTitle: 'Contenido oculto',
     contentHiddenMessage: 'Vuelve a poner el foco en esta ventana para ver el contenido compartido.',

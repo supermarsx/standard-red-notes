@@ -29,11 +29,11 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
 }) => (
   <div
     className={classNames(
-      'preferences-menu-item box-border flex h-auto w-auto min-w-42 cursor-pointer select-none flex-row items-center justify-start rounded border border-solid text-sm hover:border-border hover:bg-default',
+      'preferences-menu-item hover:border-border hover:bg-default box-border flex h-auto w-auto min-w-42 cursor-pointer flex-row items-center justify-start rounded border border-solid text-sm select-none',
       // Larger, comfortably tappable rows on mobile; revert to the compact
       // desktop padding from md up so the sidebar appearance is unchanged.
       'px-3 py-3 md:px-4 md:py-2',
-      selected ? 'selected border-info font-bold text-info' : 'border-transparent',
+      selected ? 'selected border-info text-info font-bold' : 'border-transparent',
     )}
     onClick={(e) => {
       e.preventDefault()
@@ -47,7 +47,7 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
     <div className="min-w-1" />
     <span className="flex flex-grow flex-col">
       <span>{label}</span>
-      {secondaryLabel && <span className="text-xs font-normal capitalize text-passive-1">{secondaryLabel}</span>}
+      {secondaryLabel && <span className="text-passive-1 text-xs font-normal capitalize">{secondaryLabel}</span>}
     </span>
     {hasErrorIndicator && (
       <span className="ml-2">
@@ -55,7 +55,7 @@ const PreferencesMenuItem: FunctionComponent<Props> = ({
       </span>
     )}
     {/* Chevron hints the tap-to-drill-in interaction on mobile only. */}
-    <Icon type="chevron-right" className="ml-1 flex-shrink-0 text-neutral md:hidden" />
+    <Icon type="chevron-right" className="text-neutral ml-1 flex-shrink-0 md:hidden" />
   </div>
 )
 

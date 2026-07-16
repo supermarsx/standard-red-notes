@@ -7,11 +7,7 @@ import Icon from '@/Components/Icon/Icon'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { buildMonthGrid, todayIso } from '../NoteView/CalendarEditor/CalendarDocument'
-import {
-  AggregatedCalendarEvent,
-  collectAllCalendarEvents,
-  indexCalendarEventsByDate,
-} from './allCalendarEvents'
+import { AggregatedCalendarEvent, collectAllCalendarEvents, indexCalendarEventsByDate } from './allCalendarEvents'
 import { downloadICS } from '@/Utils/ICS/downloadICS'
 import { calendarEventToICS } from '@/Utils/ICS/icsAdapters'
 
@@ -127,7 +123,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
     [application],
   )
 
-  const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) ?? [] : []
+  const selectedEvents = selectedDate ? (eventsByDate.get(selectedDate) ?? []) : []
 
   const exportICS = useCallback(() => {
     if (events.length === 0) {
@@ -140,29 +136,32 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="history" className="flex-shrink-0 text-info" />
+          <Icon type="history" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">
-            Calendar <span className="text-passive-1">· {MONTH_LABELS[view.month]} {view.year}</span>
+            Calendar{' '}
+            <span className="text-passive-1">
+              · {MONTH_LABELS[view.month]} {view.year}
+            </span>
           </span>
         </div>
         <div className="flex items-center gap-1">
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => goToMonth(-1)}
             title="Previous month"
             aria-label="Previous month"
           >
             <Icon type="chevron-left" size="small" />
           </button>
-          <button className="rounded px-2 py-1 text-sm hover:bg-default" onClick={goToToday} title="Go to today">
+          <button className="hover:bg-default rounded px-2 py-1 text-sm" onClick={goToToday} title="Go to today">
             Today
           </button>
           <button
-            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            className="hover:bg-default rounded p-1 disabled:opacity-40"
             onClick={exportICS}
             disabled={events.length === 0}
             title="Export all calendar events to .ics"
@@ -171,7 +170,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
             <Icon type="download" size="small" />
           </button>
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => goToMonth(1)}
             title="Next month"
             aria-label="Next month"
@@ -179,7 +178,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
             <Icon type="chevron-right" size="small" />
           </button>
           <button
-            className="ml-1 rounded p-1 hover:bg-default"
+            className="hover:bg-default ml-1 rounded p-1"
             onClick={() => removePane(AppPaneId.Calendar)}
             aria-label="Close calendar"
             title="Close"
@@ -190,7 +189,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
       </div>
 
       {events.length === 0 && (
-        <div className="border-b border-border bg-default px-4 py-2 text-xs text-passive-1">
+        <div className="border-border bg-default text-passive-1 border-b px-4 py-2 text-xs">
           No calendar entries yet. Create a Calendar note and its events will appear here.
         </div>
       )}
@@ -198,10 +197,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
       <div className="min-h-0 flex-grow overflow-auto p-2">
         <div className="grid grid-cols-7 gap-px">
           {WEEKDAY_LABELS.map((label) => (
-            <div
-              key={label}
-              className="px-1 py-1 text-center text-xs font-bold uppercase tracking-wide text-passive-1"
-            >
+            <div key={label} className="text-passive-1 px-1 py-1 text-center text-xs font-bold tracking-wide uppercase">
               <span className="hidden sm:inline">{label}</span>
               <span className="sm:hidden">{label.charAt(0)}</span>
             </div>
@@ -224,7 +220,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
                 <span
                   className={classNames(
                     'mb-0.5 inline-flex h-5 w-5 items-center justify-center self-start rounded-full text-xs',
-                    isToday ? 'bg-info font-bold text-info-contrast' : 'text-passive-1',
+                    isToday ? 'bg-info text-info-contrast font-bold' : 'text-passive-1',
                   )}
                 >
                   {cell.day}
@@ -243,7 +239,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
                     </span>
                   ))}
                   {dayEvents.length > 3 && (
-                    <span className="px-1 text-[0.625rem] text-passive-1">+{dayEvents.length - 3} more</span>
+                    <span className="text-passive-1 px-1 text-[0.625rem]">+{dayEvents.length - 3} more</span>
                   )}
                 </span>
               </button>
@@ -253,11 +249,11 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
       </div>
 
       {selectedDate && (
-        <div className="max-h-[40%] overflow-auto border-t border-border bg-default px-3 py-3">
+        <div className="border-border bg-default max-h-[40%] overflow-auto border-t px-3 py-3">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-bold">{selectedDate}</h3>
             <button
-              className="rounded p-1 hover:bg-contrast"
+              className="hover:bg-contrast rounded p-1"
               onClick={() => setSelectedDate(null)}
               aria-label="Close day"
               title="Close"
@@ -266,13 +262,13 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
             </button>
           </div>
           {selectedEvents.length === 0 ? (
-            <p className="text-xs text-passive-1">No entries on this day.</p>
+            <p className="text-passive-1 text-xs">No entries on this day.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {selectedEvents.map((aggregated) => (
                 <li key={aggregated.note.uuid + aggregated.event.id}>
                   <button
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-contrast"
+                    className="hover:bg-contrast flex w-full items-center gap-2 rounded px-2 py-1.5 text-left"
                     onClick={() => openNote(aggregated.note.uuid)}
                     title="Open source calendar note"
                   >
@@ -280,10 +276,10 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
                       className="h-3 w-3 flex-shrink-0 rounded-full"
                       style={{ backgroundColor: aggregated.event.color ?? 'var(--sn-stylekit-info-color)' }}
                     />
-                    <span className="min-w-0 flex-grow truncate text-sm text-text">
+                    <span className="text-text min-w-0 flex-grow truncate text-sm">
                       {aggregated.event.title || 'Untitled'}
                     </span>
-                    <span className="flex-shrink-0 truncate text-xs text-passive-1">
+                    <span className="text-passive-1 flex-shrink-0 truncate text-xs">
                       {aggregated.note.title?.trim() || 'Untitled note'}
                     </span>
                   </button>

@@ -38,7 +38,7 @@ export const VaultModalMembers = ({
     <div>
       <div className="mb-3 text-lg">Vault Members</div>
       {vaultHasNoDesignatedSurvivor && members.length > 1 && isCurrentUserAdmin && (
-        <div className="bg-danger-faded mb-3 grid grid-cols-[auto_1fr] gap-x-[0.65rem] gap-y-0.5 overflow-hidden rounded p-2.5 text-danger">
+        <div className="bg-danger-faded text-danger mb-3 grid grid-cols-[auto_1fr] gap-x-[0.65rem] gap-y-0.5 overflow-hidden rounded p-2.5">
           <Icon type="warning" className="place-self-center" />
           <div className="text-base font-semibold">No designated survivor</div>
           <div className="col-start-2">
@@ -65,21 +65,21 @@ export const VaultModalMembers = ({
               className="grid grid-cols-[auto_1fr] gap-x-[0.65rem] gap-y-0.5 text-base font-medium md:text-sm"
             >
               <Icon type="user" className="col-start-1 col-end-2 place-self-center" />
-              <div className="flex items-center gap-2 overflow-hidden text-ellipsis text-base font-bold">
+              <div className="flex items-center gap-2 overflow-hidden text-base font-bold text-ellipsis">
                 <span>{contact?.name || member.user_uuid}</span>
                 {contact ? (
-                  <div className="flex items-center gap-1 rounded bg-success px-1 py-0.5 text-xs text-success-contrast">
+                  <div className="bg-success text-success-contrast flex items-center gap-1 rounded px-1 py-0.5 text-xs">
                     <Icon type="check-circle" size="small" />
                     Trusted
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1 rounded bg-danger px-1 py-0.5 pr-1.5 text-xs text-danger-contrast">
+                  <div className="bg-danger text-danger-contrast flex items-center gap-1 rounded px-1 py-0.5 pr-1.5 text-xs">
                     <Icon type="clear-circle-filled" size="small" />
                     Untrusted
                   </div>
                 )}
                 {member.is_designated_survivor && (
-                  <div className="flex items-center gap-1 rounded bg-info px-1 py-0.5 text-xs text-success-contrast">
+                  <div className="bg-info text-success-contrast flex items-center gap-1 rounded px-1 py-0.5 text-xs">
                     <Icon type="security" size="small" />
                     Designated survivor
                   </div>

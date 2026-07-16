@@ -69,13 +69,13 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-2">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Icon type="notes" className="text-info" />
           Research mode
         </div>
         <button
-          className="rounded p-1 hover:bg-contrast"
+          className="hover:bg-contrast rounded p-1"
           onClick={onClose}
           aria-label="Back to chat"
           title="Back to chat"
@@ -85,7 +85,7 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
       </div>
 
       <div className="flex-grow overflow-y-auto px-4 py-3">
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm text-warning">
+        <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3 text-sm">
           Research mode writes a structured note on your topic using the AI model&rsquo;s own knowledge.{' '}
           <strong>There is no live web access here</strong>, so the result can be outdated or wrong and any sources are
           the model&rsquo;s recollections — they must be independently verified. The note it creates includes this
@@ -93,16 +93,16 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
         </div>
 
         {!availability.available && (
-          <div className="mt-3 rounded border border-border bg-contrast p-3 text-sm text-neutral">
+          <div className="border-border bg-contrast text-neutral mt-3 rounded border p-3 text-sm">
             {availability.reason || 'Research mode is unavailable.'}
           </div>
         )}
 
-        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-passive-1">
+        <label className="text-passive-1 mt-3 block text-xs font-semibold tracking-wide uppercase">
           Topic or question
         </label>
         <textarea
-          className="mt-1 w-full resize-none rounded border border-border bg-default px-3 py-2 text-sm focus:border-info focus:outline-none"
+          className="border-border bg-default focus:border-info mt-1 w-full resize-none rounded border px-3 py-2 text-sm focus:outline-none"
           rows={3}
           placeholder="e.g. An overview of the CRISPR-Cas9 mechanism"
           value={topic}
@@ -121,22 +121,20 @@ function ResearchModePanelImpl({ application, onClose }: Props) {
               disabled={!topic.trim() || !availability.available}
             />
           )}
-          {isRunning && <span className="text-xs text-passive-0">Researching…</span>}
+          {isRunning && <span className="text-passive-0 text-xs">Researching…</span>}
         </div>
 
         {error && (
-          <div className="mt-3 rounded border border-danger bg-default px-3 py-2 text-sm text-danger">{error}</div>
+          <div className="border-danger bg-default text-danger mt-3 rounded border px-3 py-2 text-sm">{error}</div>
         )}
 
         {result && (
           <div className="mt-4">
-            <div className="mb-2 text-sm text-text">
+            <div className="text-text mb-2 text-sm">
               Created a note: <span className="font-semibold">{result.title}</span>
             </div>
-            {createdNoteUuid && (
-              <Button label="Open note" onClick={() => openNote(createdNoteUuid)} />
-            )}
-            <div className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg bg-contrast px-3 py-2 text-sm text-text">
+            {createdNoteUuid && <Button label="Open note" onClick={() => openNote(createdNoteUuid)} />}
+            <div className="bg-contrast text-text mt-3 max-h-72 overflow-y-auto rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
               {result.body}
             </div>
           </div>

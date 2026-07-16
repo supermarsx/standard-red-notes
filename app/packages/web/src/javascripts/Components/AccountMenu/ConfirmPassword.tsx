@@ -211,11 +211,11 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
             value={confirmPassword}
           />
         )}
-        {error ? <div className="my-2 text-danger">{error}</div> : null}
+        {error ? <div className="text-danger my-2">{error}</div> : null}
         <Button
           primary
           fullWidth
-          className="mb-3 mt-1"
+          className="mt-1 mb-3"
           label={isRegistering ? t('creatingAccount') : t('createAccountAndSignIn')}
           onClick={handleConfirmFormSubmit}
           disabled={isRegistering}
@@ -245,7 +245,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
   if (awaitingApproval) {
     return (
       <>
-        <div className="mb-3 mt-1 flex items-center px-3">
+        <div className="mt-1 mb-3 flex items-center px-3">
           <div className="text-base font-bold">{t('awaitingApprovalTitle')}</div>
         </div>
         <div className="mb-3 px-3 text-sm">{t('awaitingApprovalMessage')}</div>
@@ -264,11 +264,11 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
 
   return (
     <>
-      <div className="mb-3 mt-1 flex items-center px-3">
+      <div className="mt-1 mb-3 flex items-center px-3">
         <IconButton
           icon="arrow-left"
           title={t('goBack')}
-          className="mr-2 flex p-0 text-neutral"
+          className="text-neutral mr-2 flex p-0"
           onClick={handleGoBack}
           focusable={true}
           disabled={isRegistering}

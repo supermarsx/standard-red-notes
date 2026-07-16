@@ -26,7 +26,7 @@ const WorkspaceSwitcherOption: FunctionComponent<Props> = ({ mainApplicationGrou
     <>
       <MenuItem tabIndex={FOCUSABLE_BUT_NOT_TABBABLE} ref={buttonRef} onClick={toggleMenu} className="justify-between">
         <div className="flex items-center">
-          <Icon type="user-switch" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
+          <Icon type="user-switch" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
           {t('switchWorkspace')}
         </div>
         <Icon type="chevron-right" className={`text-neutral ${MenuItemIconSize}`} />

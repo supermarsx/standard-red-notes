@@ -78,9 +78,9 @@ describe('applyToolbarConfig', () => {
     expect(applyToolbarConfig('garbage')).toEqual(DEFAULT_TOOLBAR_GROUPS)
     expect(applyToolbarConfig(42)).toEqual(DEFAULT_TOOLBAR_GROUPS)
     expect(applyToolbarConfig({ groupOrder: 'nope', hiddenButtonIds: {} })).toEqual(DEFAULT_TOOLBAR_GROUPS)
-    expect(
-      applyToolbarConfig({ groupOrder: ['__unknown__'], hiddenButtonIds: ['__unknown__', 123, null] }),
-    ).toEqual(DEFAULT_TOOLBAR_GROUPS)
+    expect(applyToolbarConfig({ groupOrder: ['__unknown__'], hiddenButtonIds: ['__unknown__', 123, null] })).toEqual(
+      DEFAULT_TOOLBAR_GROUPS,
+    )
   })
 
   it('does not mutate DEFAULT_TOOLBAR_GROUPS', () => {
@@ -223,7 +223,9 @@ describe('Navigation subsection (t61, static source assertion)', () => {
   })
 
   it('routes the toggle through applyNavigationPatch (persist + bridge dispatch)', () => {
-    expect(source).toContain('applyNavigationPatch(noteLayout.navigation, patch, updateNoteLayout, editor.getRootElement())')
+    expect(source).toContain(
+      'applyNavigationPatch(noteLayout.navigation, patch, updateNoteLayout, editor.getRootElement())',
+    )
   })
 })
 
@@ -307,12 +309,12 @@ describe('normalizeToolbarConfig', () => {
   })
 
   it('retains horizontalScroll only when explicitly true', () => {
-    expect(normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: true }).horizontalScroll).toBe(
-      true,
-    )
-    expect('horizontalScroll' in normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: false })).toBe(
-      false,
-    )
+    expect(
+      normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: true }).horizontalScroll,
+    ).toBe(true)
+    expect(
+      'horizontalScroll' in normalizeToolbarConfig({ groupOrder: [], hiddenButtonIds: [], horizontalScroll: false }),
+    ).toBe(false)
   })
 })
 

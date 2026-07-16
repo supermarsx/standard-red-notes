@@ -133,7 +133,12 @@ describe('resolveLink', () => {
 })
 
 describe('linkConfigAt / hasLinks / linkedTargetIds', () => {
-  const links: (LinkColumnConfig | null)[] = [null, ownerLink, { targetTableId: 'projects', targetKeyColumn: 0 }, ownerLink]
+  const links: (LinkColumnConfig | null)[] = [
+    null,
+    ownerLink,
+    { targetTableId: 'projects', targetKeyColumn: 0 },
+    ownerLink,
+  ]
 
   it('returns the config at a column or null', () => {
     expect(linkConfigAt(links, 0)).toBeNull()
@@ -164,7 +169,15 @@ describe('linkOptionsFor', () => {
   })
 
   it('dedupes by normalized key keeping the first occurrence', () => {
-    const t: RelationTable = { id: 't', columns: ['K', 'L'], rows: [['x', 'one'], ['X', 'two'], ['', 'skip']] }
+    const t: RelationTable = {
+      id: 't',
+      columns: ['K', 'L'],
+      rows: [
+        ['x', 'one'],
+        ['X', 'two'],
+        ['', 'skip'],
+      ],
+    }
     const opts = linkOptionsFor(t, { targetTableId: 't', targetKeyColumn: 0, displayColumn: 1 })
     expect(opts).toEqual([{ value: 'x', label: 'one' }])
   })

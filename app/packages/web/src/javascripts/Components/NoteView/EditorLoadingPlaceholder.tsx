@@ -19,7 +19,7 @@ type Props = {
  * keeps it feeling alive rather than appearing frozen/broken.
  */
 const SkeletonLine: FunctionComponent<{ className?: string }> = ({ className }) => (
-  <div className={`h-3.5 rounded bg-passive-3 ${className ?? ''}`} />
+  <div className={`bg-passive-3 h-3.5 rounded ${className ?? ''}`} />
 )
 
 const EditorLoadingPlaceholder: FunctionComponent<Props> = ({ label = 'editor' }) => (
@@ -39,7 +39,7 @@ const EditorLoadingPlaceholder: FunctionComponent<Props> = ({ label = 'editor' }
       </div>
     </div>
 
-    <div className="mt-auto flex items-center gap-2 pt-6 text-sm text-passive-1">
+    <div className="text-passive-1 mt-auto flex items-center gap-2 pt-6 text-sm">
       <Spinner className="h-4 w-4" />
       <span>Loading {label}…</span>
     </div>

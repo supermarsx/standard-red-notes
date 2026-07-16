@@ -16,21 +16,21 @@ const MobileMultiSelectionToolbar = ({ notesController, navigationController }: 
   const archived = selectedNotes.some((note) => note.archived)
 
   return (
-    <div className="flex w-full bg-contrast pb-safe-bottom">
+    <div className="bg-contrast pb-safe-bottom flex w-full">
       <button
-        className="flex-grow px-2 py-3 active:bg-passive-3"
+        className="active:bg-passive-3 flex-grow px-2 py-3"
         onClick={() => notesController.togglePinSelectedNotes()}
       >
-        <Icon type="pin" className="mx-auto text-info" size="large" />
+        <Icon type="pin" className="text-info mx-auto" size="large" />
       </button>
       <button
-        className="flex-grow px-2 py-3 active:bg-passive-3"
+        className="active:bg-passive-3 flex-grow px-2 py-3"
         onClick={() => notesController.toggleArchiveSelectedNotes().catch(console.error)}
       >
-        <Icon type={archived ? 'unarchive' : 'archive'} className="mx-auto text-info" size="large" />
+        <Icon type={archived ? 'unarchive' : 'archive'} className="text-info mx-auto" size="large" />
       </button>
       <button
-        className="flex-grow px-2 py-3 active:bg-passive-3"
+        className="active:bg-passive-3 flex-grow px-2 py-3"
         onClick={() => {
           const isInTrashView = selected && isSmartView(selected) && selected.uuid === SystemViewId.TrashedNotes
           const allSelectedNotesAreTrashed = selectedNotes.every((note) => note.trashed)
@@ -42,13 +42,13 @@ const MobileMultiSelectionToolbar = ({ notesController, navigationController }: 
           }
         }}
       >
-        <Icon type="trash" className="mx-auto text-info" size="large" />
+        <Icon type="trash" className="text-info mx-auto" size="large" />
       </button>
       <button
-        className="flex-grow px-2 py-3 active:bg-passive-3"
+        className="active:bg-passive-3 flex-grow px-2 py-3"
         onClick={() => notesController.setContextMenuOpen(true)}
       >
-        <Icon type="more" className="mx-auto text-info" size="large" />
+        <Icon type="more" className="text-info mx-auto" size="large" />
       </button>
     </div>
   )

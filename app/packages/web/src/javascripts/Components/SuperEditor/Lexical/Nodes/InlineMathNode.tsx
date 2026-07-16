@@ -64,7 +64,7 @@ function InlineMathComponent({ equation, nodeKey }: { equation: string; nodeKey:
     return (
       <input
         ref={inputRef}
-        className="mx-0.5 inline rounded border border-border bg-default px-1 font-mono text-sm text-foreground outline-none"
+        className="border-border bg-default text-foreground mx-0.5 inline rounded border px-1 font-mono text-sm outline-none"
         value={draft}
         spellCheck={false}
         size={Math.max(draft.length, 4)}

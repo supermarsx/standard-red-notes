@@ -166,9 +166,7 @@ export function normalizeBookmark(value: unknown): Bookmark | null {
     return null
   }
   const label =
-    typeof candidate.label === 'string' && candidate.label.trim().length > 0
-      ? candidate.label
-      : DEFAULT_BOOKMARK_LABEL
+    typeof candidate.label === 'string' && candidate.label.trim().length > 0 ? candidate.label : DEFAULT_BOOKMARK_LABEL
   const bookmark: Bookmark = {
     id: candidate.id,
     label,

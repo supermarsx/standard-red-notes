@@ -8,8 +8,20 @@ describe('parseSpreadsheetGrids', () => {
       {
         name: 'Budget',
         rows: [
-          { index: 0, cells: [{ index: 0, value: 'Item' }, { index: 1, value: 'Cost' }] },
-          { index: 2, cells: [{ index: 0, value: 'Rent' }, { index: 1, value: 1200 }] },
+          {
+            index: 0,
+            cells: [
+              { index: 0, value: 'Item' },
+              { index: 1, value: 'Cost' },
+            ],
+          },
+          {
+            index: 2,
+            cells: [
+              { index: 0, value: 'Rent' },
+              { index: 1, value: 1200 },
+            ],
+          },
         ],
       },
     ])

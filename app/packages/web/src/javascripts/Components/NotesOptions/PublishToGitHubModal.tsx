@@ -129,8 +129,8 @@ const PublishToGitHubModalContent = observer(({ application, note, close }: Omit
     >
       <div className="flex flex-col gap-4">
         {/* Prominent privacy/security disclosure — same callout style as Shares / AppPasswords. */}
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">This removes end-to-end encryption for the published copy</div>
+        <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+          <div className="text-warning font-semibold">This removes end-to-end encryption for the published copy</div>
           <p className="mt-1">
             Publishing sends this note&rsquo;s decrypted contents to your server and to GitHub, where it is stored
             unencrypted. This removes end-to-end encryption for the published copy. Only publish notes you&rsquo;re
@@ -148,7 +148,7 @@ const PublishToGitHubModalContent = observer(({ application, note, close }: Omit
             autoComplete="off"
           />
           {repo.trim().length > 0 && !parsedRepo && (
-            <span className="text-xs text-danger">Enter the repository as owner/repo.</span>
+            <span className="text-danger text-xs">Enter the repository as owner/repo.</span>
           )}
         </div>
 
@@ -184,7 +184,7 @@ const PublishToGitHubModalContent = observer(({ application, note, close }: Omit
             placeholder="note.md"
             autoComplete="off"
           />
-          <span className="text-xs text-passive-0">
+          <span className="text-passive-0 text-xs">
             Will be saved as <strong>{effectivePath || '(invalid path)'}</strong>
           </span>
         </div>
@@ -218,14 +218,14 @@ const PublishToGitHubModalContent = observer(({ application, note, close }: Omit
             />
             Remember this token on this device
           </label>
-          <span className="text-xs text-passive-0">
+          <span className="text-passive-0 text-xs">
             The token needs write (Contents) access to the repository. If remembered, it is stored unencrypted in this
             browser&rsquo;s local storage on this device only — not synced.
           </span>
         </div>
 
         {result && result.ok && (
-          <div className="rounded border border-border bg-contrast p-3 text-sm">
+          <div className="border-border bg-contrast rounded border p-3 text-sm">
             <span>Note {result.created ? 'published' : 'updated'} at </span>
             {result.contentUrl ? (
               <a className="text-info hover:underline" href={result.contentUrl} target="_blank" rel="noreferrer">
@@ -244,7 +244,7 @@ const PublishToGitHubModalContent = observer(({ application, note, close }: Omit
             )}
           </div>
         )}
-        {result && !result.ok && <p className="text-sm text-danger">{result.message}</p>}
+        {result && !result.ok && <p className="text-danger text-sm">{result.message}</p>}
       </div>
     </Modal>
   )

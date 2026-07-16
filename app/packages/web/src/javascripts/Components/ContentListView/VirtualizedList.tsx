@@ -203,7 +203,6 @@ function VirtualizedListInner<T extends { uuid: string }>(
     // measureVersion is intentionally NOT a dependency: measure corrections are
     // applied as in-place point updates, so the tree must NOT be rebuilt on a
     // bump (that would re-introduce the O(N) cost we are eliminating).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, heightFor])
 
   // `measureVersion` is the render-invalidation token: when a measured height
@@ -261,10 +260,7 @@ function VirtualizedListInner<T extends { uuid: string }>(
 
     const onScroll = () => {
       setScrollTop(container.scrollTop)
-      if (
-        onNearEnd &&
-        container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_END_THRESHOLD_PX
-      ) {
+      if (onNearEnd && container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_END_THRESHOLD_PX) {
         onNearEnd()
       }
     }

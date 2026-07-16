@@ -1,6 +1,6 @@
 import { forwardRef, ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { ApplicationEvent, ContentType, NoteType, SNNote, VectorIconNameOrEmoji } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, SNNote, VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
@@ -90,10 +90,7 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
   const filtered = useMemo(() => filterBookmarks(bookmarks, query), [bookmarks, query])
 
-  const selected = useMemo(
-    () => bookmarks.find((entry) => entry.bookmark.id === selectedId),
-    [bookmarks, selectedId],
-  )
+  const selected = useMemo(() => bookmarks.find((entry) => entry.bookmark.id === selectedId), [bookmarks, selectedId])
 
   useEffect(() => {
     setRenameValue(selected?.bookmark.label ?? '')
@@ -209,16 +206,16 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="pin" className="flex-shrink-0 text-info" />
+          <Icon type="pin" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Bookmarks</span>
-          <span className="text-xs text-passive-1">({bookmarks.length})</span>
+          <span className="text-passive-1 text-xs">({bookmarks.length})</span>
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => application.paneController.closeViewTab(AppPaneId.Bookmarks)}
           aria-label="Close bookmarks"
           title="Close"
@@ -230,18 +227,18 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       <div className="flex min-h-0 flex-grow overflow-hidden">
         {/* List column */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+          <div className="border-border flex items-center gap-2 border-b px-4 py-2">
             <div className="relative flex min-w-[160px] flex-1 items-center">
-              <Icon type="search" size="small" className="pointer-events-none absolute left-2 text-neutral" />
+              <Icon type="search" size="small" className="text-neutral pointer-events-none absolute left-2" />
               <input
-                className="w-full rounded border border-border bg-default px-2 py-1 pl-7 text-sm text-text focus:border-info focus:outline-none"
+                className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 pl-7 text-sm focus:outline-none"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search bookmarks"
               />
             </div>
             {query && (
-              <button className="rounded px-2 py-1 text-xs text-neutral hover:bg-contrast" onClick={() => setQuery('')}>
+              <button className="text-neutral hover:bg-contrast rounded px-2 py-1 text-xs" onClick={() => setQuery('')}>
                 Clear
               </button>
             )}
@@ -249,19 +246,19 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
           <div className="min-h-0 flex-grow overflow-y-auto">
             {bookmarks.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-passive-1">
-                No bookmarks yet. In a note, press Ctrl/Cmd+M (or use the note options menu / the Super “/” Insert
-                menu) to bookmark a spot.
+              <div className="text-passive-1 px-4 py-10 text-center text-sm">
+                No bookmarks yet. In a note, press Ctrl/Cmd+M (or use the note options menu / the Super “/” Insert menu)
+                to bookmark a spot.
               </div>
             ) : filtered.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-passive-1">No bookmarks match your search.</div>
+              <div className="text-passive-1 px-4 py-10 text-center text-sm">No bookmarks match your search.</div>
             ) : (
               <ul>
                 {filtered.map((entry) => (
                   <li key={entry.bookmark.id}>
                     <button
                       className={classNames(
-                        'flex w-full items-center gap-3 border-b border-border px-4 py-2 text-left hover:bg-contrast',
+                        'border-border hover:bg-contrast flex w-full items-center gap-3 border-b px-4 py-2 text-left',
                         entry.bookmark.id === selectedId && 'bg-contrast',
                       )}
                       onClick={() => setSelectedId(entry.bookmark.id)}
@@ -278,8 +275,8 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
                         />
                       </span>
                       <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-sm font-semibold text-text">{entry.bookmark.label}</span>
-                        <span className="truncate text-xs text-passive-1">{entry.noteTitle}</span>
+                        <span className="text-text truncate text-sm font-semibold">{entry.bookmark.label}</span>
+                        <span className="text-passive-1 truncate text-xs">{entry.noteTitle}</span>
                       </span>
                     </button>
                   </li>
@@ -290,7 +287,7 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
 
         {/* Detail / edit column */}
-        <div className="hidden w-[320px] flex-shrink-0 flex-col overflow-y-auto border-l border-border p-4 md:flex">
+        <div className="border-border hidden w-[320px] flex-shrink-0 flex-col overflow-y-auto border-l p-4 md:flex">
           {selected ? (
             <BookmarkDetail
               key={selected.bookmark.id}
@@ -305,7 +302,7 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
               onDelete={() => deleteBookmark(selected)}
             />
           ) : (
-            <div className="flex h-full items-center justify-center text-center text-sm text-passive-1">
+            <div className="text-passive-1 flex h-full items-center justify-center text-center text-sm">
               Select a bookmark to manage it, or double-click one to jump to its spot.
             </div>
           )}
@@ -352,15 +349,15 @@ const BookmarkDetail = ({
             className={bookmark.color ? 'fill-current' : undefined}
           />
         </span>
-        <h3 className="truncate text-base font-bold text-text">{bookmark.label}</h3>
+        <h3 className="text-text truncate text-base font-bold">{bookmark.label}</h3>
       </div>
-      <p className="mb-3 truncate text-xs text-passive-1" title={noteTitle}>
+      <p className="text-passive-1 mb-3 truncate text-xs" title={noteTitle}>
         in {noteTitle}
       </p>
 
-      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-neutral">Nickname</label>
+      <label className="text-neutral mb-1 block text-xs font-semibold tracking-wide uppercase">Nickname</label>
       <input
-        className="mb-3 w-full rounded border border-border bg-default px-2 py-1 text-sm text-text focus:border-info focus:outline-none"
+        className="border-border bg-default text-text focus:border-info mb-3 w-full rounded border px-2 py-1 text-sm focus:outline-none"
         value={renameValue}
         onChange={(e) => setRenameValue(e.target.value)}
         onBlur={commitRename}
@@ -385,18 +382,18 @@ const BookmarkDetail = ({
         />
       </div>
 
-      <p className="mb-3 text-xs text-passive-1">{driftCaveat}</p>
+      <p className="text-passive-1 mb-3 text-xs">{driftCaveat}</p>
 
       <div className="flex flex-wrap items-center gap-2">
         <button
-          className="flex items-center gap-1 rounded bg-info px-3 py-1 text-sm font-semibold text-info-contrast hover:brightness-110"
+          className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1 text-sm font-semibold hover:brightness-110"
           onClick={onOpen}
         >
           <Icon type="open-in" size="small" />
           Open & jump
         </button>
         <button
-          className="flex items-center gap-1 rounded px-3 py-1 text-sm text-danger hover:bg-contrast"
+          className="text-danger hover:bg-contrast flex items-center gap-1 rounded px-3 py-1 text-sm"
           onClick={onDelete}
         >
           <Icon type="trash" size="small" />

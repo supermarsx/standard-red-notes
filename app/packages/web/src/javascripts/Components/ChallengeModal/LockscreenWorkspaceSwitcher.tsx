@@ -21,7 +21,7 @@ const LockscreenWorkspaceSwitcher: FunctionComponent<Props> = ({ mainApplication
   return (
     <div ref={containerRef}>
       <Button ref={buttonRef} onClick={toggleMenu} className="mt-2 flex min-w-76 items-center justify-center">
-        <Icon type="user-switch" className="mr-2 text-neutral" />
+        <Icon type="user-switch" className="text-neutral mr-2" />
         Switch workspace
       </Button>
       <Popover

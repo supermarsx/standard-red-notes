@@ -32,7 +32,7 @@ const LinkedFileMenuOptions = ({ file, closeMenu, handleFileAction, setIsRenamin
           closeMenu()
         }}
       >
-        <Icon type="file" className="mr-2 text-neutral" />
+        <Icon type="file" className="text-neutral mr-2" />
         Preview file
       </MenuItem>
       <HorizontalSeparator classes="my-1" />
@@ -49,7 +49,7 @@ const LinkedFileMenuOptions = ({ file, closeMenu, handleFileAction, setIsRenamin
           }).catch(console.error)
         }}
       >
-        <Icon type="lock" className="mr-2 text-neutral" />
+        <Icon type="lock" className="text-neutral mr-2" />
         Password protect
       </MenuSwitchButtonItem>
       <HorizontalSeparator classes="my-1" />
@@ -62,7 +62,7 @@ const LinkedFileMenuOptions = ({ file, closeMenu, handleFileAction, setIsRenamin
           closeMenu()
         }}
       >
-        <Icon type="download" className="mr-2 text-neutral" />
+        <Icon type="download" className="text-neutral mr-2" />
         Download
       </MenuItem>
       <MenuItem
@@ -71,7 +71,7 @@ const LinkedFileMenuOptions = ({ file, closeMenu, handleFileAction, setIsRenamin
           closeMenu()
         }}
       >
-        <Icon type="pencil" className="mr-2 text-neutral" />
+        <Icon type="pencil" className="text-neutral mr-2" />
         Rename
       </MenuItem>
       <MenuItem
@@ -83,7 +83,7 @@ const LinkedFileMenuOptions = ({ file, closeMenu, handleFileAction, setIsRenamin
           closeMenu()
         }}
       >
-        <Icon type="trash" className="mr-2 text-danger" />
+        <Icon type="trash" className="text-danger mr-2" />
         <span className="text-danger">Delete permanently</span>
       </MenuItem>
 

@@ -185,10 +185,10 @@ const LinkEditor = ({
   return createPortal(
     <div
       className={classNames(
-        'absolute z-dropdown-menu rounded-lg border border-border bg-contrast px-2 py-1 shadow-sm shadow-contrast',
+        'z-dropdown-menu border-border bg-contrast shadow-contrast absolute rounded-lg border px-2 py-1 shadow-sm',
         isMobile
           ? 'bottom-12 left-1/2 w-[calc(100%_-_1rem)] -translate-x-1/2'
-          : 'left-0 top-0 hidden w-auto translate-x-0 translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)]',
+          : 'translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] top-0 left-0 hidden w-auto translate-x-0',
       )}
       ref={linkEditorRef}
     >
@@ -210,7 +210,7 @@ const LinkEditor = ({
                   setIsEditingLink(false)
                 }
               }}
-              className="flex-grow rounded-sm border border-border bg-contrast p-1 text-text sm:min-w-[20ch] translucent-ui:md:border-0"
+              className="border-border bg-contrast text-text translucent-ui:md:border-0 flex-grow rounded-sm border p-1 sm:min-w-[20ch]"
             />
           </div>
         )}
@@ -231,7 +231,7 @@ const LinkEditor = ({
                 setIsEditingLink(false)
               }
             }}
-            className="flex-grow rounded-sm border border-border bg-contrast p-1 text-text sm:min-w-[40ch] translucent-ui:md:border-0"
+            className="border-border bg-contrast text-text translucent-ui:md:border-0 flex-grow rounded-sm border p-1 sm:min-w-[40ch]"
           />
         </div>
         <div className="flex items-center justify-end gap-1.5">

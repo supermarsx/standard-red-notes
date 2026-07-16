@@ -81,7 +81,7 @@ const ActionButton: FunctionComponent<{
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => (opensPopover ? setOpen((value) => !value) : void run(action))}
     >
-      <Icon type={action.icon} size="custom" className="h-5 w-5 text-info md:h-4 md:w-4" />
+      <Icon type={action.icon} size="custom" className="text-info h-5 w-5 md:h-4 md:w-4" />
     </button>
   )
 
@@ -104,7 +104,7 @@ const ActionButton: FunctionComponent<{
         {action.freeform ? (
           <div className="flex flex-col gap-1">
             <textarea
-              className="w-full resize-none rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info w-full resize-none rounded border px-2 py-1 text-sm outline-none"
               rows={2}
               autoFocus
               placeholder="Ask the AI about the selection…"
@@ -120,7 +120,7 @@ const ActionButton: FunctionComponent<{
               }}
             />
             <button
-              className="w-full rounded bg-info px-2 py-1 text-sm font-semibold text-info-contrast hover:opacity-90 disabled:opacity-50"
+              className="bg-info text-info-contrast w-full rounded px-2 py-1 text-sm font-semibold hover:opacity-90 disabled:opacity-50"
               onClick={() =>
                 void run(action, { customInstruction: askText }).then(() => {
                   setOpen(false)
@@ -135,7 +135,7 @@ const ActionButton: FunctionComponent<{
         ) : (
           <div className="flex flex-col gap-1">
             <input
-              className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
               type="text"
               autoFocus
               placeholder="Language (type any, or pick below)…"
@@ -154,7 +154,7 @@ const ActionButton: FunctionComponent<{
               {filterLanguages(languageQuery).map((language) => (
                 <button
                   key={language}
-                  className="flex w-full items-center rounded px-2 py-1 text-left text-sm text-text hover:bg-contrast disabled:opacity-50"
+                  className="text-text hover:bg-contrast flex w-full items-center rounded px-2 py-1 text-left text-sm disabled:opacity-50"
                   onClick={() =>
                     void run(action, { language }).then(() => {
                       setOpen(false)
@@ -167,7 +167,7 @@ const ActionButton: FunctionComponent<{
                 </button>
               ))}
               {filterLanguages(languageQuery).length === 0 && (
-                <div className="px-2 py-1 text-xs text-passive-1">
+                <div className="text-passive-1 px-2 py-1 text-xs">
                   Press Enter to translate into “{languageQuery.trim()}”.
                 </div>
               )}

@@ -23,7 +23,7 @@ type Props = {
 function isValidJson(string: string) {
   try {
     JSON.parse(string)
-  } catch (e) {
+  } catch {
     return false
   }
   return true
@@ -135,7 +135,7 @@ export const SuperNoteImporter: FunctionComponent<Props> = ({ note, application,
 
   return (
     <Modal title="Convert to Super note" close={closeDialog} actions={modalActions}>
-      <div className="border-b border-border px-4 py-4 text-sm font-normal text-neutral md:py-3">
+      <div className="border-border text-neutral border-b px-4 py-4 text-sm font-normal md:py-3">
         The following is a preview of how your note will look when converted to Super. Super notes use a custom format
         under the hood. Converting your note will transition it from plaintext to the custom Super format.
       </div>

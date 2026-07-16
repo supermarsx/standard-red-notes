@@ -109,7 +109,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
           role="button"
           aria-label={t('advancedFilters')}
           aria-pressed={open}
-          className="flex items-center gap-1 rounded-full border border-border px-2 py-1 text-sm text-neutral transition hover:bg-contrast"
+          className="border-border text-neutral hover:bg-contrast flex items-center gap-1 rounded-full border px-2 py-1 text-sm transition"
           onClick={togglePopover}
         >
           <Icon type="tune" size="small" />
@@ -267,7 +267,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                   onChange={(checked) => update({ flags: { ...options.flags, [flag]: checked } })}
                   className="flex cursor-pointer items-center"
                 >
-                  <span className="ml-2 text-sm text-text">{t(labelKey)}</span>
+                  <span className="text-text ml-2 text-sm">{t(labelKey)}</span>
                 </Switch>
               ))}
               <Switch
@@ -275,7 +275,7 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
                 onChange={(checked) => update({ hasFiles: checked })}
                 className="flex cursor-pointer items-center"
               >
-                <span className="ml-2 text-sm text-text">{t('hasAttachments')}</span>
+                <span className="text-text ml-2 text-sm">{t('hasAttachments')}</span>
               </Switch>
             </div>
           </div>
@@ -285,11 +285,11 @@ const AdvancedSearchOptions = ({ itemListController }: Props) => {
             onChange={(checked) => itemListController.setSearchCaseSensitive(checked)}
             className="flex cursor-pointer items-center"
           >
-            <span className="ml-2 text-sm text-text">{t('caseSensitive')}</span>
+            <span className="text-text ml-2 text-sm">{t('caseSensitive')}</span>
           </Switch>
 
           <button
-            className="mt-1 rounded border border-border px-2 py-1.5 text-sm text-neutral transition hover:bg-contrast"
+            className="border-border text-neutral hover:bg-contrast mt-1 rounded border px-2 py-1.5 text-sm transition"
             onClick={() => {
               itemListController.clearFilterText()
               itemListController.setSearchCaseSensitive(false)

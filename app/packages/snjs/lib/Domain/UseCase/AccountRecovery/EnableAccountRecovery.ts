@@ -27,7 +27,8 @@ export class EnableAccountRecovery implements UseCaseInterface<string> {
   // as the account password derivation itself.
   private readonly ARGON_ITERATIONS = 5
   private readonly ARGON_MEM_LIMIT = 67108864
-  private readonly ARGON_OUTPUT_KEY_BYTES = 32 // 256-bit XChaCha20 key
+  // 256-bit XChaCha20 key.
+  private readonly ARGON_OUTPUT_KEY_BYTES = 32
   private readonly SALT_BITS = 128
   private readonly NONCE_BITS = 192
 

@@ -160,7 +160,7 @@ const Vaults = observer(() => {
             A vault is a private, encrypted collection that groups notes and files under their own separate key — like a
             safe inside your account.
           </Subtitle>
-          <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
+          <div className="border-border bg-contrast mt-2.5 rounded border p-3 text-sm">
             <div className="mb-1.5 flex items-center gap-2 font-semibold">
               <Icon type="info" size="small" />
               How vaults help

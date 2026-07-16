@@ -26,7 +26,7 @@ const AccordionItem: FunctionComponent<Props> = ({ title, className = '', childr
         }}
       >
         <Title>{title}</Title>
-        <ArrowDownCheckmarkIcon className={classNames('h-5 w-5 text-info', isExpanded && 'rotate-180')} />
+        <ArrowDownCheckmarkIcon className={classNames('text-info h-5 w-5', isExpanded && 'rotate-180')} />
       </div>
       <div className={'accordion-contents-container cursor-auto'} data-is-expanded={isExpanded} ref={elementRef}>
         {children}

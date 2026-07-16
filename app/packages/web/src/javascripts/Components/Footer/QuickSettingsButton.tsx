@@ -44,7 +44,7 @@ const QuickSettingsButton = ({ application, isMobileNavigation = false }: Props)
       <StyledTooltip label="Open quick settings menu">
         {isMobileNavigation ? (
           <RoundIconButton
-            className="ml-2.5 bg-default"
+            className="bg-default ml-2.5"
             onClick={toggleMenu}
             label="Go to quick settings menu"
             icon="themes"
@@ -56,7 +56,7 @@ const QuickSettingsButton = ({ application, isMobileNavigation = false }: Props)
             ref={buttonRef}
           >
             <div className="h-5">
-              <Icon type="themes" className={classNames(isOpen && 'text-info', 'rounded hover:text-info')} />
+              <Icon type="themes" className={classNames(isOpen && 'text-info', 'hover:text-info rounded')} />
             </div>
           </button>
         )}

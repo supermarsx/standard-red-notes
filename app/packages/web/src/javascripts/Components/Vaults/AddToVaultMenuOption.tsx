@@ -66,13 +66,11 @@ const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
             void removeItemsFromVault()
           }}
         >
-          <Icon type="close" className="mr-2 text-neutral" />
+          <Icon type="close" className="text-neutral mr-2" />
           {t('moveOutOfVault', { name: singleItemVault ? singleItemVault.name : t('vaultsFallbackName') })}
         </MenuItem>
       )}
-      {!vaults.length && (
-        <div className="flex flex-col items-center justify-center py-1">{t('noVaultsFound')}</div>
-      )}
+      {!vaults.length && <div className="flex flex-col items-center justify-center py-1">{t('noVaultsFound')}</div>}
       {vaults.map((vault) => {
         if (singleItemVault) {
           return null
@@ -82,7 +80,11 @@ const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
           <MenuItem
             key={vault.uuid}
             onClick={() => {
-              doesVaultContainItems(vault) ? void removeItemsFromVault() : void addItemsToVault(vault)
+              if (doesVaultContainItems(vault)) {
+                void removeItemsFromVault()
+              } else {
+                void addItemsToVault(vault)
+              }
             }}
             className={doesVaultContainItems(vault) ? 'font-bold' : ''}
             disabled={vault.isSharedVaultListing() && application.vaultUsers.isCurrentUserReadonlyVaultMember(vault)}
@@ -91,7 +93,7 @@ const VaultMenu = observer(({ items }: { items: DecryptedItemInterface[] }) => {
               type={vault.iconString}
               size="custom"
               className={classNames(
-                'mr-2 h-6 w-6 text-neutral md:h-5 md:w-5',
+                'text-neutral mr-2 h-6 w-6 md:h-5 md:w-5',
                 doesVaultContainItems(vault) ? 'text-info' : '',
               )}
             />

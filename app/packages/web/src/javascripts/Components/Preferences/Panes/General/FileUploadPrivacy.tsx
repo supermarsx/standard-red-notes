@@ -39,8 +39,8 @@ const FileUploadPrivacy: FunctionComponent = () => {
             <Subtitle>Strip image metadata on upload</Subtitle>
             <Text>
               Removes EXIF/GPS and other embedded metadata (camera details, location, timestamps) from images before
-              they are encrypted and uploaded. JPEG and PNG are stripped losslessly; other formats are re-encoded,
-              which may reduce quality or change the file format. Turn off to upload original images unchanged.
+              they are encrypted and uploaded. JPEG and PNG are stripped losslessly; other formats are re-encoded, which
+              may reduce quality or change the file format. Turn off to upload original images unchanged.
             </Text>
           </div>
           <Switch onChange={toggle} checked={enabled} />

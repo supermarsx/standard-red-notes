@@ -141,8 +141,7 @@ export function clampRunTimeUnit(value: unknown): RunTimeUnit {
 
 /** The configured run-time limit expressed in MILLISECONDS (clamped). */
 export function getMaxRunTimeMs(settings: SamplingSettings = loadSamplingSettings()): number {
-  const minutes =
-    settings.maxRunTimeUnit === 'hours' ? settings.maxRunTime * 60 : settings.maxRunTime
+  const minutes = settings.maxRunTimeUnit === 'hours' ? settings.maxRunTime * 60 : settings.maxRunTime
   const clampedMinutes = Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(MAX_RUN_TIME_MIN_MINUTES, minutes))
   return clampedMinutes * 60 * 1000
 }

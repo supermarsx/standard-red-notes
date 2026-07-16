@@ -141,7 +141,7 @@ export class Database implements DatabaseInterface {
           if (item) {
             try {
               results.push(JSON.parse(item) as T)
-            } catch (e) {
+            } catch {
               results.push(item as T)
             }
           }
@@ -160,7 +160,7 @@ export class Database implements DatabaseInterface {
           if (value) {
             try {
               results.push(JSON.parse(value))
-            } catch (e) {
+            } catch {
               results.push(value as T)
             }
           }

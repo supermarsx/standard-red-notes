@@ -16,9 +16,8 @@
  *       via updateNoteLayout AND dispatches NAVIGATION_LAYOUT_CHANGED_EVENT so the
  *       live sidebar re-syncs (this is the popover↔sidebar bridge contract).
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { NavigationSettings, NoteLayout } from '../../Layout/layoutSettings'
 import { NAVIGATION_LAYOUT_CHANGED_EVENT } from '../NavigationSidebarPlugin/NavigationSidebarPlugin'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'

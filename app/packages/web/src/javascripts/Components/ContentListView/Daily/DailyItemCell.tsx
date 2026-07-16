@@ -51,12 +51,12 @@ export const DailyItemCell = forwardRef(
       <div
         ref={ref}
         onClick={onClick}
-        className={`content-list-item flex w-full cursor-pointer items-stretch text-text ${
-          selected && 'selected border-l-2 border-solid border-danger'
+        className={`content-list-item text-text flex w-full cursor-pointer items-stretch ${
+          selected && 'selected border-danger border-l-2 border-solid'
         }`}
         id={section.id}
       >
-        <div className="min-w-0 flex-grow border-b border-solid border-border px-4 py-4">
+        <div className="border-border min-w-0 flex-grow border-b border-solid px-4 py-4">
           <div className="flex items-start overflow-hidden text-base">
             <DaySquare weekday={section.weekday} hasActivity={item != undefined} day={section.day} />
 

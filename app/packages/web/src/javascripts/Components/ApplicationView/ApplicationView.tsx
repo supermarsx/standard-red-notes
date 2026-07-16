@@ -265,7 +265,6 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
         void application.launch()
       })
       .catch(console.error)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application])
 
   const removeChallenge = useCallback((challenge: Challenge) => {
@@ -342,50 +341,50 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
 
     const removeAppObserver = application.addEventObserver(async (eventName) => {
       try {
-      if (eventName === ApplicationEvent.Started) {
-        onAppStart()
-      } else if (eventName === ApplicationEvent.Launched) {
-        onAppLaunch()
-      } else if (eventName === ApplicationEvent.LocalDatabaseReadError) {
-        if (!currentLoadErrorDialog.current) {
-          alertDialog({
-            text: 'Unable to load local database. Please restart the app and try again.',
-          })
-            .then(() => {
-              currentLoadErrorDialog.current = null
+        if (eventName === ApplicationEvent.Started) {
+          onAppStart()
+        } else if (eventName === ApplicationEvent.Launched) {
+          onAppLaunch()
+        } else if (eventName === ApplicationEvent.LocalDatabaseReadError) {
+          if (!currentLoadErrorDialog.current) {
+            alertDialog({
+              text: 'Unable to load local database. Please restart the app and try again.',
             })
-            .catch(console.error)
-        }
-      } else if (eventName === ApplicationEvent.LocalDatabaseWriteError) {
-        if (!currentWriteErrorDialog.current) {
-          currentWriteErrorDialog.current = alertDialog({
-            text: 'Unable to write to local database. Please restart the app and try again.',
-          })
-            .then(() => {
-              currentWriteErrorDialog.current = null
+              .then(() => {
+                currentLoadErrorDialog.current = null
+              })
+              .catch(console.error)
+          }
+        } else if (eventName === ApplicationEvent.LocalDatabaseWriteError) {
+          if (!currentWriteErrorDialog.current) {
+            currentWriteErrorDialog.current = alertDialog({
+              text: 'Unable to write to local database. Please restart the app and try again.',
             })
-            .catch(console.error)
+              .then(() => {
+                currentWriteErrorDialog.current = null
+              })
+              .catch(console.error)
+          }
+        } else if (eventName === ApplicationEvent.SyncTooManyRequests) {
+          addToast({
+            type: ToastType.Error,
+            message: 'Too many requests. Please try again later.',
+          })
+        } else if (eventName === ApplicationEvent.SignedIn || eventName === ApplicationEvent.CompletedFullSync) {
+          // The session is valid again (the user signed in, or a full sync
+          // succeeded after re-auth). Settle the re-auth challenge we left pending
+          // so snjs's internal guard resets for the future (safe now — there is no
+          // active 401 loop to restart), and clear the "login needed" state so the
+          // footer returns to its normal connection status.
+          const pendingChallenge = application.accountMenuController.pendingReauthChallenge
+          if (pendingChallenge) {
+            application.accountMenuController.pendingReauthChallenge = undefined
+            application.cancelChallenge(pendingChallenge)
+          }
+          if (application.accountMenuController.reloginPromptDismissed) {
+            application.accountMenuController.setReloginPromptDismissed(false)
+          }
         }
-      } else if (eventName === ApplicationEvent.SyncTooManyRequests) {
-        addToast({
-          type: ToastType.Error,
-          message: 'Too many requests. Please try again later.',
-        })
-      } else if (eventName === ApplicationEvent.SignedIn || eventName === ApplicationEvent.CompletedFullSync) {
-        // The session is valid again (the user signed in, or a full sync
-        // succeeded after re-auth). Settle the re-auth challenge we left pending
-        // so snjs's internal guard resets for the future (safe now — there is no
-        // active 401 loop to restart), and clear the "login needed" state so the
-        // footer returns to its normal connection status.
-        const pendingChallenge = application.accountMenuController.pendingReauthChallenge
-        if (pendingChallenge) {
-          application.accountMenuController.pendingReauthChallenge = undefined
-          application.cancelChallenge(pendingChallenge)
-        }
-        if (application.accountMenuController.reloginPromptDismissed) {
-          application.accountMenuController.setReloginPromptDismissed(false)
-        }
-      }
       } catch (error) {
         // Never let a throw inside an event handler kill the observer (which
         // would silently stop all subsequent app-lifecycle handling). Log with
@@ -652,47 +651,47 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
                 <FileDragNDropProvider application={application}>
                   <PanesSystemComponent />
                 </FileDragNDropProvider>
-                  <>
-                    <Footer application={application} applicationGroup={mainApplicationGroup} />
-                    <SessionsModal application={application} />
-                    <PreferencesViewWrapper application={application} />
-                    <RevisionHistoryModal application={application} />
-                  </>
-                  {renderChallenges()}
-                  <>
-                    <NotesContextMenu />
-                    <TagContextMenuWrapper
-                      navigationController={application.navigationController}
-                      featuresController={application.featuresController}
-                    />
-                    <FolderContextMenuWrapper
-                      navigationController={application.navigationController}
-                      featuresController={application.featuresController}
-                    />
-                    <FileContextMenuWrapper
-                      filesController={application.filesController}
-                      itemListController={application.itemListController}
-                    />
-                    <PurchaseFlowWrapper application={application} />
-                    <ConfirmSignoutContainer applicationGroup={mainApplicationGroup} application={application} />
-                    <ToastContainer />
-                    <FilePreviewModalWrapper application={application} />
-                    <PermissionsModalWrapper application={application} />
-                    <EditorWidthSelectionModalWrapper />
-                    <ConfirmDeleteAccountContainer application={application} />
-                    <ImportModal importModalController={application.importModalController} />
-                    <ExportModal exportModalController={application.exportModalController} />
-                    <KeyboardShortcutsModal keyboardService={application.keyboardService} />
-                    <SuperExportModal />
-                    <CommandPalette />
-                    <div className="pointer-events-none fixed bottom-14 right-4 z-footer-bar-item">
-                      <RemindersButton application={application} />
-                    </div>
-                    <FloatingNarrationPlayer />
-                  </>
-                  {isIOS() && <IosKeyboardClose />}
-                </div>
-              </LinkingControllerProvider>
+                <>
+                  <Footer application={application} applicationGroup={mainApplicationGroup} />
+                  <SessionsModal application={application} />
+                  <PreferencesViewWrapper application={application} />
+                  <RevisionHistoryModal application={application} />
+                </>
+                {renderChallenges()}
+                <>
+                  <NotesContextMenu />
+                  <TagContextMenuWrapper
+                    navigationController={application.navigationController}
+                    featuresController={application.featuresController}
+                  />
+                  <FolderContextMenuWrapper
+                    navigationController={application.navigationController}
+                    featuresController={application.featuresController}
+                  />
+                  <FileContextMenuWrapper
+                    filesController={application.filesController}
+                    itemListController={application.itemListController}
+                  />
+                  <PurchaseFlowWrapper application={application} />
+                  <ConfirmSignoutContainer applicationGroup={mainApplicationGroup} application={application} />
+                  <ToastContainer />
+                  <FilePreviewModalWrapper application={application} />
+                  <PermissionsModalWrapper application={application} />
+                  <EditorWidthSelectionModalWrapper />
+                  <ConfirmDeleteAccountContainer application={application} />
+                  <ImportModal importModalController={application.importModalController} />
+                  <ExportModal exportModalController={application.exportModalController} />
+                  <KeyboardShortcutsModal keyboardService={application.keyboardService} />
+                  <SuperExportModal />
+                  <CommandPalette />
+                  <div className="z-footer-bar-item pointer-events-none fixed right-4 bottom-14">
+                    <RemindersButton application={application} />
+                  </div>
+                  <FloatingNarrationPlayer />
+                </>
+                {isIOS() && <IosKeyboardClose />}
+              </div>
+            </LinkingControllerProvider>
           </ResponsivePaneProvider>
         </AndroidBackHandlerProvider>
       </KeyboardServiceProvider>

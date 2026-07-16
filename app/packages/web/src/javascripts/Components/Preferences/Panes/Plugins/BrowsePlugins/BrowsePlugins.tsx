@@ -36,7 +36,7 @@ const BrowsePlugins: FunctionComponent = () => {
         </Text>
 
         {!plugins && (
-          <div className="mb-3 mt-5 flex h-full w-full items-center">
+          <div className="mt-5 mb-3 flex h-full w-full items-center">
             <span className="w-full font-bold">Loading...</span>
           </div>
         )}
@@ -53,9 +53,9 @@ const BrowsePlugins: FunctionComponent = () => {
         </div>
       </PreferencesSegment>
       <HorizontalSeparator />
-      <Text className="mt-4 text-danger">
-        Plugins may not be actively maintained. Standard Red Notes cannot attest to the quality or user experience of these
-        plugins, and is not responsible for any data loss that may arise from their use.
+      <Text className="text-danger mt-4">
+        Plugins may not be actively maintained. Standard Red Notes cannot attest to the quality or user experience of
+        these plugins, and is not responsible for any data loss that may arise from their use.
       </Text>
     </div>
   )

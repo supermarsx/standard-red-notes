@@ -470,8 +470,7 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
 
   public async getRootKeyFromKeychain(): Promise<RootKeyInterface | undefined> {
     const rawKey = (await this.device.getNamespacedKeychainValue(this.identifier)) as
-      | NamespacedRootKeyInKeychain
-      | undefined
+      NamespacedRootKeyInKeychain | undefined
 
     if (rawKey == undefined) {
       return undefined

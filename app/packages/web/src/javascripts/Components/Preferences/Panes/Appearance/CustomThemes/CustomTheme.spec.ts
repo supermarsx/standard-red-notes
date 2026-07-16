@@ -111,7 +111,12 @@ describe('generateCustomThemeVariables', () => {
   })
 
   it('normalizes invalid colors before generating', () => {
-    const vars = generateCustomThemeVariables({ accent: 'garbage', background: '#000', foreground: '#fff', contrast: '#abc' } as never)
+    const vars = generateCustomThemeVariables({
+      accent: 'garbage',
+      background: '#000',
+      foreground: '#fff',
+      contrast: '#abc',
+    } as never)
     expect(vars['--sn-stylekit-info-color']).toBe('#086dd6') // default accent
     expect(vars['--sn-stylekit-background-color']).toBe('#000000')
   })
@@ -119,7 +124,12 @@ describe('generateCustomThemeVariables', () => {
 
 describe('buildCustomThemeCss', () => {
   it('produces a :root block with stylekit variables', () => {
-    const css = buildCustomThemeCss({ accent: '#ff0000', background: '#ffffff', foreground: '#000000', contrast: '#eeeeee' })
+    const css = buildCustomThemeCss({
+      accent: '#ff0000',
+      background: '#ffffff',
+      foreground: '#000000',
+      contrast: '#eeeeee',
+    })
     expect(css.startsWith(':root {')).toBe(true)
     expect(css).toContain('--sn-stylekit-info-color: #ff0000;')
     expect(css.trimEnd().endsWith('}')).toBe(true)
@@ -157,7 +167,12 @@ describe('customThemesReducer', () => {
   it('updates name and colors of an existing theme', () => {
     const added = customThemesReducer(empty, { type: 'add', name: 'A', colors: baseColors })
     const id = added.themes[0].id
-    const updated = customThemesReducer(added, { type: 'update', id, name: 'B', colors: { ...baseColors, accent: '#ff0000' } })
+    const updated = customThemesReducer(added, {
+      type: 'update',
+      id,
+      name: 'B',
+      colors: { ...baseColors, accent: '#ff0000' },
+    })
     expect(updated.themes[0].name).toBe('B')
     expect(updated.themes[0].colors.accent).toBe('#ff0000')
   })

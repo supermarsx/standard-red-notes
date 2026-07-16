@@ -56,7 +56,7 @@ type EffectivePermissions = {
 const Chip: FunctionComponent<{ name: string; title?: string }> = ({ name, title }) => (
   <span
     title={title}
-    className="whitespace-nowrap rounded-full bg-info-backdrop px-2.5 py-0.5 text-xs font-medium text-foreground"
+    className="bg-info-backdrop text-foreground rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap"
   >
     {name}
   </span>
@@ -74,8 +74,8 @@ const ToggleChip: FunctionComponent<{ name: string; selected: boolean; title?: s
     aria-pressed={selected}
     title={title}
     onClick={onToggle}
-    className={`cursor-pointer whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-      selected ? 'border-info bg-info text-info-contrast' : 'border-border bg-transparent text-text hover:bg-contrast'
+    className={`cursor-pointer rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${
+      selected ? 'border-info bg-info text-info-contrast' : 'border-border text-text hover:bg-contrast bg-transparent'
     }`}
   >
     {name}
@@ -537,7 +537,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           members. A user&apos;s effective permissions are the union of their own roles and the roles their groups
           confer.
         </Text>
-        <div className="mt-3 border-b border-border">
+        <div className="border-border mt-3 border-b">
           <TabList state={subTab} className="flex">
             <Tab id="roles" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="accessibility" size="medium" />
@@ -579,17 +579,17 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           ) : roles.length === 0 ? (
             <Text className="mt-3">No roles reported by this server.</Text>
           ) : (
-            <div className="mt-3 overflow-auto rounded-md border border-border">
+            <div className="border-border mt-3 overflow-auto rounded-md border">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Role</th>
-                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Permissions</th>
-                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Who has it</th>
-                    <th className="border-b border-border bg-contrast px-3 py-2 text-right font-semibold">Actions</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 font-semibold">Role</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 font-semibold">Permissions</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 font-semibold">Who has it</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className="divide-border divide-y">
                   {roles.map((role) => {
                     const isEditing = editingRoleUuid === role.uuid
                     const holderInfo = holders[role.uuid]
@@ -601,14 +601,14 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                         <td className="px-3 py-2.5">
                           <div className="flex min-w-0 flex-col">
                             <Subtitle>{role.label ?? canonicalRoleLabel(role.name)}</Subtitle>
-                            <Text className="text-xs text-passive-1">{role.name}</Text>
-                            {description && <Text className="mt-0.5 text-xs text-passive-1">{description}</Text>}
+                            <Text className="text-passive-1 text-xs">{role.name}</Text>
+                            {description && <Text className="text-passive-1 mt-0.5 text-xs">{description}</Text>}
                           </div>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 tabular-nums">
+                        <td className="px-3 py-2.5 whitespace-nowrap tabular-nums">
                           {role.permissionNames.length} permission{role.permissionNames.length === 1 ? '' : 's'}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5">
+                        <td className="px-3 py-2.5 whitespace-nowrap">
                           {holderInfo ? (
                             <span className="tabular-nums">
                               {holderInfo.directUserCount} direct · {holderInfo.groups.length} group
@@ -618,7 +618,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                             <span className="text-passive-1">…</span>
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           <Button
                             small
                             label={isEditing ? 'Close' : 'Edit permissions'}
@@ -642,11 +642,11 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               const unchanged = permissionSetsEqual(draftPermissions, editingRole.permissionNames)
               const holderInfo = holders[editingRole.uuid]
               return (
-                <div className="mt-3 rounded-md border border-info p-3">
+                <div className="border-info mt-3 rounded-md border p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <Subtitle>
                       Editing: {editingRole.label ?? canonicalRoleLabel(editingRole.name)}{' '}
-                      <span className="text-xs font-normal text-passive-1">{editingRole.name}</span>
+                      <span className="text-passive-1 text-xs font-normal">{editingRole.name}</span>
                     </Subtitle>
                     <Button small label="Close" onClick={() => setEditingRoleUuid(null)} />
                   </div>
@@ -654,16 +654,16 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                   {/* Role inspector: who has it (group chips) */}
                   {holderInfo && holderInfo.groups.length > 0 && (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <Text className="text-xs text-passive-1">Conferred by groups:</Text>
+                      <Text className="text-passive-1 text-xs">Conferred by groups:</Text>
                       {holderInfo.groups.map((group) => (
                         <Chip key={group.uuid} name={group.name} />
                       ))}
                     </div>
                   )}
 
-                  <div className="mt-3 rounded border border-border p-3">
+                  <div className="border-border mt-3 rounded border p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Text className="text-xs text-passive-1">
+                      <Text className="text-passive-1 text-xs">
                         Toggle permissions, then Save. {draftPermissions.length} selected
                         {unchanged ? '' : ' — unsaved changes'}.
                       </Text>
@@ -683,10 +683,10 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           return (
                             <div key={category}>
                               <div className="flex items-center gap-2">
-                                <Text className="text-xs font-semibold uppercase text-passive-1">{category}</Text>
+                                <Text className="text-passive-1 text-xs font-semibold uppercase">{category}</Text>
                                 <button
                                   type="button"
-                                  className="cursor-pointer text-xs text-info hover:underline"
+                                  className="text-info cursor-pointer text-xs hover:underline"
                                   onClick={() =>
                                     setDraftPermissions((current) => {
                                       let next = current
@@ -754,7 +754,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               onChange={setCatalogSearch}
             />
             <select
-              className="rounded border border-border bg-default px-2 py-1.5 text-sm text-text"
+              className="border-border bg-default text-text rounded border px-2 py-1.5 text-sm"
               value={catalogCategory}
               onChange={(event) => setCatalogCategory(event.target.value)}
             >
@@ -776,18 +776,18 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           ) : (
             <div className="mt-3 flex flex-col gap-3">
               {groupedCatalog.map(({ category, permissions }) => (
-                <div key={category} className="rounded-md border border-border p-3">
+                <div key={category} className="border-border rounded-md border p-3">
                   <Subtitle>
                     {category} ({permissions.length})
                   </Subtitle>
-                  <div className="mt-2 divide-y divide-border">
+                  <div className="divide-border mt-2 divide-y">
                     {permissions.map((permission) => {
                       const grantedBy = grantedByLookup.get(permission) ?? []
                       return (
                         <div key={permission} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
                           <div className="flex min-w-0 flex-col">
                             <Text>{permissionLabel(permission)}</Text>
-                            <Text className="text-xs text-passive-1">{permission}</Text>
+                            <Text className="text-passive-1 text-xs">{permission}</Text>
                           </div>
                           <div className="flex flex-wrap items-center gap-1.5">
                             {grantedBy.length > 0 ? (
@@ -795,7 +795,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                                 <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
                               ))
                             ) : (
-                              <Text className="text-xs italic text-passive-1">Granted by no role</Text>
+                              <Text className="text-passive-1 text-xs italic">Granted by no role</Text>
                             )}
                           </div>
                         </div>
@@ -818,7 +818,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             see their direct + group roles and resolved permissions.
           </Text>
 
-          <div className="mt-3 rounded-md border border-border p-3">
+          <div className="border-border mt-3 rounded-md border p-3">
             <Subtitle>Resolve a role set</Subtitle>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {groupRolePickerBase.map((roleName) => (
@@ -835,7 +835,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               <Spinner className="mt-3 h-5 w-5" />
             ) : simResult ? (
               <div className="mt-3">
-                <Text className="text-xs text-passive-1">
+                <Text className="text-passive-1 text-xs">
                   {simResult.effectivePermissionNames.length} effective permission
                   {simResult.effectivePermissionNames.length === 1 ? '' : 's'} across {simResult.roleNames.length} role
                   {simResult.roleNames.length === 1 ? '' : 's'}
@@ -849,11 +849,11 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 </div>
               </div>
             ) : (
-              <Text className="mt-2 text-xs italic text-passive-1">Select one or more roles above.</Text>
+              <Text className="text-passive-1 mt-2 text-xs italic">Select one or more roles above.</Text>
             )}
           </div>
 
-          <div className="mt-3 rounded-md border border-border p-3">
+          <div className="border-border mt-3 rounded-md border p-3">
             <Subtitle>Test a user</Subtitle>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <DecoratedInput
@@ -872,31 +872,31 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             {testResult && (
               <div className="mt-3 flex flex-col gap-2">
                 <div>
-                  <Text className="text-xs font-semibold uppercase text-passive-1">Direct roles</Text>
+                  <Text className="text-passive-1 text-xs font-semibold uppercase">Direct roles</Text>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {testResult.directRoleNames.length > 0 ? (
                       testResult.directRoleNames.map((roleName) => (
                         <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
                       ))
                     ) : (
-                      <Text className="text-xs italic text-passive-1">None</Text>
+                      <Text className="text-passive-1 text-xs italic">None</Text>
                     )}
                   </div>
                 </div>
                 <div>
-                  <Text className="text-xs font-semibold uppercase text-passive-1">Group-conferred roles</Text>
+                  <Text className="text-passive-1 text-xs font-semibold uppercase">Group-conferred roles</Text>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {testResult.groupRoleNames.length > 0 ? (
                       testResult.groupRoleNames.map((roleName) => (
                         <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
                       ))
                     ) : (
-                      <Text className="text-xs italic text-passive-1">None</Text>
+                      <Text className="text-passive-1 text-xs italic">None</Text>
                     )}
                   </div>
                 </div>
                 <div>
-                  <Text className="text-xs font-semibold uppercase text-passive-1">
+                  <Text className="text-passive-1 text-xs font-semibold uppercase">
                     Effective permissions ({testResult.effectivePermissionNames.length})
                   </Text>
                   <div className="mt-1 flex flex-wrap gap-1.5">
@@ -920,7 +920,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             roles and the roles granted by their groups. Groups may confer built-in <em>and</em> custom roles.
           </Text>
 
-          <div className="mt-3 rounded-md border border-border p-3">
+          <div className="border-border mt-3 rounded-md border p-3">
             <Subtitle>Create a group</Subtitle>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <DecoratedInput
@@ -945,7 +945,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </div>
             {groupRolePickerBase.length > 0 && (
               <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                <Text className="mr-1 text-xs text-passive-1">Confer roles:</Text>
+                <Text className="text-passive-1 mr-1 text-xs">Confer roles:</Text>
                 {groupRolePickerBase.map((roleName) => (
                   <ToggleChip
                     key={roleName}
@@ -968,16 +968,16 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           ) : groups.length === 0 ? (
             <Text>No groups yet.</Text>
           ) : (
-            <div className="overflow-auto rounded-md border border-border">
+            <div className="border-border overflow-auto rounded-md border">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Group</th>
-                    <th className="border-b border-border bg-contrast px-3 py-2 font-semibold">Conferred roles</th>
-                    <th className="border-b border-border bg-contrast px-3 py-2 text-right font-semibold">Actions</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 font-semibold">Group</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 font-semibold">Conferred roles</th>
+                    <th className="border-border bg-contrast border-b px-3 py-2 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className="divide-border divide-y">
                   {groups.map((group) => {
                     const isEditingRoles = editingRolesUuid === group.uuid
                     const isShowingMembers = selectedGroupUuid === group.uuid
@@ -987,7 +987,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                           <div className="flex min-w-0 flex-col">
                             <Subtitle>{group.name}</Subtitle>
                             {group.description && <Text className="text-passive-1">{group.description}</Text>}
-                            <Text className="mt-0.5 text-xs text-passive-1">{group.uuid}</Text>
+                            <Text className="text-passive-1 mt-0.5 text-xs">{group.uuid}</Text>
                           </div>
                         </td>
                         <td className="px-3 py-2.5">
@@ -997,11 +997,11 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                                 <Chip key={roleName} name={canonicalRoleLabel(roleName)} title={roleName} />
                               ))
                             ) : (
-                              <Text className="text-xs italic text-passive-1">No roles conferred</Text>
+                              <Text className="text-passive-1 text-xs italic">No roles conferred</Text>
                             )}
                           </div>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           <div className="inline-flex items-center gap-2">
                             <Button
                               small
@@ -1035,12 +1035,12 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             (() => {
               const pickerOptions = rolePickerOptions(groupRolePickerBase, editingRolesGroup.roleNames)
               return (
-                <div className="mt-3 rounded-md border border-info p-3">
+                <div className="border-info mt-3 rounded-md border p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <Subtitle>Roles conferred by: {editingRolesGroup.name}</Subtitle>
                     <Button small label="Done" onClick={() => setEditingRolesUuid(null)} />
                   </div>
-                  <Text className="mt-1 text-xs text-passive-1">
+                  <Text className="text-passive-1 mt-1 text-xs">
                     Toggle the roles this group confers on every member. Changes are saved immediately.
                   </Text>
                   {pickerOptions.length === 0 ? (
@@ -1067,7 +1067,7 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
           {/* Members panel for the group whose members are shown. */}
           {membersGroup && (
-            <div className="mt-3 rounded-md border border-info p-3">
+            <div className="border-info mt-3 rounded-md border p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Subtitle>
                   Members of {membersGroup.name}
@@ -1080,9 +1080,9 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
               ) : (
                 <>
                   {groupMembers.length === 0 ? (
-                    <Text className="mt-2 italic text-passive-1">No members yet.</Text>
+                    <Text className="text-passive-1 mt-2 italic">No members yet.</Text>
                   ) : (
-                    <div className="mt-2 divide-y divide-border">
+                    <div className="divide-border mt-2 divide-y">
                       {groupMembers.map((member) => (
                         <div key={member.uuid} className="flex items-center justify-between gap-2 py-1.5">
                           <Text>{member.email ?? member.uuid}</Text>

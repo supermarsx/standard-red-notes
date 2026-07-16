@@ -23,7 +23,7 @@ export const NavigationLayoutSubsection: FunctionComponent<NavigationLayoutSubse
   onChange,
 }) => {
   return (
-    <div className="mt-3 rounded-md border border-border p-3">
+    <div className="border-border mt-3 rounded-md border p-3">
       <label className="flex items-center gap-2 text-sm font-medium">
         <input
           type="checkbox"
@@ -32,11 +32,11 @@ export const NavigationLayoutSubsection: FunctionComponent<NavigationLayoutSubse
         />
         Navigation sidebar
       </label>
-      <p className="mt-1 text-xs text-passive-1">
+      <p className="text-passive-1 mt-1 text-xs">
         Shows a live outline of headings and bookmarks beside the editor (on-screen only).
       </p>
       {navigation.visible && (
-        <label className="mt-2 flex items-center gap-2 text-xs text-passive-1">
+        <label className="text-passive-1 mt-2 flex items-center gap-2 text-xs">
           <input
             type="checkbox"
             checked={navigation.showBookmarks}

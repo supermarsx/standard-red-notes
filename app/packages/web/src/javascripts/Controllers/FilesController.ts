@@ -964,8 +964,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
 
       // Surface the specific reason when we have one (e.g. a chunk upload failure
       // carried by a ClientDisplayableError) so the failure is never silent.
-      const reason =
-        error instanceof ClientDisplayableError && error.text ? error.text : undefined
+      const reason = error instanceof ClientDisplayableError && error.text ? error.text : undefined
       const message = reason
         ? `Attachment "${uploadFileName}" failed to upload and was not saved: ${reason}`
         : `Attachment "${uploadFileName}" failed to upload and was not saved.`

@@ -43,11 +43,56 @@ function mulberry32(seed: number): () => number {
 // lists have realistic, varied lengths. A few "rare" words are appended so we
 // can benchmark a genuinely rare-term query.
 const COMMON_WORDS = [
-  'note', 'meeting', 'project', 'idea', 'task', 'plan', 'review', 'budget', 'design', 'client',
-  'recipe', 'flour', 'water', 'sugar', 'travel', 'flight', 'hotel', 'invoice', 'payment', 'deadline',
-  'summary', 'report', 'analysis', 'research', 'draft', 'final', 'agenda', 'follow', 'action', 'item',
-  'team', 'sprint', 'backlog', 'feature', 'bug', 'release', 'roadmap', 'metric', 'growth', 'revenue',
-  'garden', 'plant', 'season', 'harvest', 'weather', 'morning', 'evening', 'weekend', 'family', 'friend',
+  'note',
+  'meeting',
+  'project',
+  'idea',
+  'task',
+  'plan',
+  'review',
+  'budget',
+  'design',
+  'client',
+  'recipe',
+  'flour',
+  'water',
+  'sugar',
+  'travel',
+  'flight',
+  'hotel',
+  'invoice',
+  'payment',
+  'deadline',
+  'summary',
+  'report',
+  'analysis',
+  'research',
+  'draft',
+  'final',
+  'agenda',
+  'follow',
+  'action',
+  'item',
+  'team',
+  'sprint',
+  'backlog',
+  'feature',
+  'bug',
+  'release',
+  'roadmap',
+  'metric',
+  'growth',
+  'revenue',
+  'garden',
+  'plant',
+  'season',
+  'harvest',
+  'weather',
+  'morning',
+  'evening',
+  'weekend',
+  'family',
+  'friend',
 ]
 const RARE_WORDS = ['quetzalcoatl', 'borborygmus', 'sesquipedalian', 'rhinoceros', 'xylophone']
 
@@ -199,7 +244,7 @@ describe('Search stress benchmark', () => {
     // eslint-disable-next-line no-console
     console.log(`\n[Index build] ${NOTE_COUNT} notes, ${(totalChars / 1024 / 1024).toFixed(1)} MB total text`)
     // eslint-disable-next-line no-console
-    console.log(`  build time = ${ms(elapsed)}  (${(elapsed / NOTE_COUNT * 1000).toFixed(1)} us/note)`)
+    console.log(`  build time = ${ms(elapsed)}  (${((elapsed / NOTE_COUNT) * 1000).toFixed(1)} us/note)`)
     // eslint-disable-next-line no-console
     console.log(`  index size = ${index.size} notes indexed`)
 
@@ -274,9 +319,12 @@ describe('Search stress benchmark', () => {
     console.log('\n[rankNotesByRelevance scorer]')
     for (const size of candidateSizes) {
       const subset = notes.slice(0, size)
-      const stats = measure(() => {
-        rankNotesByRelevance(subset, 'meeting project budget')
-      }, size >= 10000 ? 20 : 100)
+      const stats = measure(
+        () => {
+          rankNotesByRelevance(subset, 'meeting project budget')
+        },
+        size >= 10000 ? 20 : 100,
+      )
       logStats(`score ${size} notes`, stats)
     }
   })
@@ -287,9 +335,12 @@ describe('Search stress benchmark', () => {
     console.log('\n[Super-note plaintext extraction] (JSON.parse + tree walk)')
     for (const mb of sizesMb) {
       const superJson = generateLargeSuperNote(mb)
-      const stats = measure(() => {
-        extractPlaintextFromNoteText(superJson, NoteType.Super)
-      }, mb >= 5 ? 10 : 30)
+      const stats = measure(
+        () => {
+          extractPlaintextFromNoteText(superJson, NoteType.Super)
+        },
+        mb >= 5 ? 10 : 30,
+      )
       logStats(`${mb} MB Super note (${(superJson.length / 1024 / 1024).toFixed(1)} MB JSON)`, stats)
       expect(stats.max).toBeLessThan(CEILING_SUPER_EXTRACT_MS)
     }

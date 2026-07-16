@@ -2,12 +2,7 @@ import { BlockPickerOption } from '../BlockPickerPlugin/BlockPickerOption'
 import { LexicalEditor } from 'lexical'
 import { INSERT_TABLE_COMMAND } from '@lexical/table'
 import { LexicalIconName } from '@/Components/Icon/LexicalIcons'
-import {
-  MAX_TABLE_COLUMNS,
-  MAX_TABLE_ROWS,
-  MIN_TABLE_COLUMNS,
-  MIN_TABLE_ROWS,
-} from '../TablePlugin'
+import { MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, MIN_TABLE_COLUMNS, MIN_TABLE_ROWS } from '../TablePlugin'
 import { achievements, METRICS } from '@/Achievements'
 
 export function GetTableBlockOption(onSelect: () => void) {

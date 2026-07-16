@@ -97,7 +97,7 @@ const NextcloudBackups = ({ application }: Props) => {
     try {
       await application.settings.updateSetting(settingName, payload, sensitive)
       return true
-    } catch (e) {
+    } catch {
       application.alerts.alert(STRING_FAILED_TO_UPDATE_USER_SETTING()).catch(console.error)
       return false
     }
@@ -145,15 +145,15 @@ const NextcloudBackups = ({ application }: Props) => {
           Nextcloud backups.
         </Text>
 
-        <div className="my-3 rounded border border-warning bg-warning-faded p-3">
+        <div className="border-warning bg-warning-faded my-3 rounded border p-3">
           <Subtitle className="text-warning">Privacy: read before enabling</Subtitle>
           <Text className="mt-1">
             The Nextcloud app password you enter is stored on the Standard Red Notes server and grants access to your
             Nextcloud files. Your note content stays end-to-end encrypted (Nextcloud cannot read it), but the app
             password, the timing of each upload, and the size of each backup file are exposed to whoever controls the
-            server or your Nextcloud instance. Use a dedicated, low-privilege Nextcloud{' '}
-            <strong>app password</strong> &mdash; never your main Nextcloud login password &mdash; and revoke it from
-            Nextcloud at any time to stop uploads.
+            server or your Nextcloud instance. Use a dedicated, low-privilege Nextcloud <strong>app password</strong>{' '}
+            &mdash; never your main Nextcloud login password &mdash; and revoke it from Nextcloud at any time to stop
+            uploads.
           </Text>
         </div>
 
@@ -178,7 +178,8 @@ const NextcloudBackups = ({ application }: Props) => {
               <Subtitle>App password</Subtitle>
               <Text>
                 A dedicated Nextcloud app password (Settings &rarr; Security &rarr; Devices &amp; sessions). Not your
-                login password. {appPasswordIsSet ? 'An app password is currently stored.' : 'No app password stored yet.'}
+                login password.{' '}
+                {appPasswordIsSet ? 'An app password is currently stored.' : 'No app password stored yet.'}
               </Text>
               <div className="mt-2">
                 <DecoratedPasswordInput

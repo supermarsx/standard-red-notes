@@ -55,7 +55,7 @@ function FootnoteReferenceComponent({ footnoteId }: { footnoteId: string }): Rea
   return (
     <sup
       id={footnoteReferenceDomId(footnoteId)}
-      className="cursor-pointer select-none px-0.5 align-super text-[0.7em] font-semibold text-info"
+      className="text-info cursor-pointer px-0.5 align-super text-[0.7em] font-semibold select-none"
       role="button"
       tabIndex={0}
       data-footnote-reference="true"

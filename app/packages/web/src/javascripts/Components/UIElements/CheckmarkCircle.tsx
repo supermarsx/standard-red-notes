@@ -6,7 +6,7 @@ export const CheckmarkCircle = ({ className }: { className?: string }) => {
     <div
       role="presentation"
       className={classNames(
-        'peer flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-success text-success-contrast',
+        'peer bg-success text-success-contrast flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full',
         className,
       )}
     >

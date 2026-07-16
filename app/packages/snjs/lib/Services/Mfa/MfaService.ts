@@ -38,7 +38,7 @@ export class MfaService extends AbstractService implements MfaServiceInterface {
       }
 
       return response.data?.enabled === true
-    } catch (error) {
+    } catch {
       return false
     }
   }

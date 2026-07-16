@@ -58,12 +58,18 @@ const DEFAULT_TIMELINE: TimelineData = {
  * yields NaN (callers filter those out). Never throws.
  */
 export function toAxisValue(value: string | number | undefined | null): number {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : NaN
+  }
   if (typeof value === 'string') {
     const trimmed = value.trim()
-    if (trimmed === '') return NaN
+    if (trimmed === '') {
+      return NaN
+    }
     // Prefer a pure number (ordinal) when the string is fully numeric.
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed)
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      return Number(trimmed)
+    }
     const time = Date.parse(trimmed)
     return Number.isNaN(time) ? NaN : time
   }
@@ -117,30 +123,50 @@ export function computeAxisRange(items: TimelineItem[]): { min: number; max: num
   for (const item of items) {
     const start = toAxisValue(item.start)
     const end = toAxisValue(item.end)
-    if (!Number.isNaN(start)) values.push(start)
-    if (!Number.isNaN(end)) values.push(end)
+    if (!Number.isNaN(start)) {
+      values.push(start)
+    }
+    if (!Number.isNaN(end)) {
+      values.push(end)
+    }
   }
-  if (values.length === 0) return null
+  if (values.length === 0) {
+    return null
+  }
   return { min: Math.min(...values), max: Math.max(...values) }
 }
 
 /** Human-readable rendering of a start/end value (date or ordinal). */
 function formatAxisLabel(value: string | number): string {
-  if (typeof value === 'number') return String(value)
+  if (typeof value === 'number') {
+    return String(value)
+  }
   const trimmed = value.trim()
-  if (trimmed === '') return ''
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return trimmed
+  if (trimmed === '') {
+    return ''
+  }
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return trimmed
+  }
   const time = Date.parse(trimmed)
-  if (Number.isNaN(time)) return trimmed
+  if (Number.isNaN(time)) {
+    return trimmed
+  }
   // Render bare ISO dates (YYYY-MM-DD) without a spurious timezone shift.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed
+  }
   return new Date(time).toLocaleDateString()
 }
 
 /** Coerce a start/end coming from JSON into a string|number, defaulting to ''. */
 function coerceBound(value: unknown): string | number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string') {
+    return value
+  }
   return ''
 }
 
@@ -160,7 +186,9 @@ function normalize(data: Partial<TimelineData> | undefined | null): TimelineData
         start: coerceBound(item.start),
         end: coerceBound(item.end),
       }
-      if (isValidHexColor(item.color)) next.color = item.color
+      if (isValidHexColor(item.color)) {
+        next.color = item.color
+      }
       return next
     })
   return {
@@ -196,51 +224,57 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
   )
 
   const renameTimeline = (title: string) => mutate((d) => (d.title = title))
-  const addItem = () =>
-    mutate((d) => d.items.push({ id: uid(), label: 'New item', start: '', end: '' }))
+  const addItem = () => mutate((d) => d.items.push({ id: uid(), label: 'New item', start: '', end: '' }))
   const removeItem = (id: string) => mutate((d) => (d.items = d.items.filter((i) => i.id !== id)))
   const setLabel = (id: string, label: string) =>
     mutate((d) => {
       const item = d.items.find((i) => i.id === id)
-      if (item) item.label = label
+      if (item) {
+        item.label = label
+      }
     })
   const setStart = (id: string, start: string) =>
     mutate((d) => {
       const item = d.items.find((i) => i.id === id)
-      if (item) item.start = start
+      if (item) {
+        item.start = start
+      }
     })
   const setEnd = (id: string, end: string) =>
     mutate((d) => {
       const item = d.items.find((i) => i.id === id)
-      if (item) item.end = end
+      if (item) {
+        item.end = end
+      }
     })
   const setColor = (id: string, color: string | undefined) =>
     mutate((d) => {
       const item = d.items.find((i) => i.id === id)
-      if (!item) return
-      if (isValidHexColor(color)) item.color = color
-      else delete item.color
+      if (!item) {
+        return
+      }
+      if (isValidHexColor(color)) {
+        item.color = color
+      } else {
+        delete item.color
+      }
     })
 
   const range = computeAxisRange(data.items)
   const layouts = range ? computeBarLayouts(data.items, range.min, range.max) : new Map()
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-timeline-block="true">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-timeline-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <input
           key={`timeline-title-${nodeKey}`}
-          className="min-w-0 flex-grow bg-transparent font-semibold text-text outline-none"
+          className="text-text min-w-0 flex-grow bg-transparent font-semibold outline-none"
           defaultValue={data.title}
           placeholder="Timeline title…"
           aria-label="Timeline title"
           onBlur={(e) => renameTimeline(e.target.value)}
         />
-        <button
-          className="flex-shrink-0 rounded px-2 py-0.5 hover:bg-contrast"
-          onClick={addItem}
-          type="button"
-        >
+        <button className="hover:bg-contrast flex-shrink-0 rounded px-2 py-0.5" onClick={addItem} type="button">
           + Item
         </button>
       </div>
@@ -250,7 +284,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
           screens so bars stay readable rather than squashing. */}
       <div className="overflow-x-auto p-2">
         {data.items.length === 0 ? (
-          <div className="px-1 py-2 text-sm text-passive-1">No items yet. Use “+ Item” to add one.</div>
+          <div className="text-passive-1 px-1 py-2 text-sm">No items yet. Use “+ Item” to add one.</div>
         ) : (
           <div className="flex min-w-[20rem] flex-col gap-1.5">
             {data.items.map((item) => {
@@ -258,17 +292,16 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
               const accent = item.color
               const startLabel = formatAxisLabel(item.start)
               const endLabel = formatAxisLabel(item.end)
-              const rangeLabel =
-                startLabel && endLabel ? `${startLabel} → ${endLabel}` : startLabel || endLabel || ''
+              const rangeLabel = startLabel && endLabel ? `${startLabel} → ${endLabel}` : startLabel || endLabel || ''
               return (
                 <div key={item.id} className="flex flex-col gap-0.5">
                   <div className="flex items-baseline justify-between gap-2 text-xs">
-                    <span className="min-w-0 truncate font-medium text-text">{item.label || 'Untitled'}</span>
-                    {rangeLabel && <span className="flex-shrink-0 text-passive-1">{rangeLabel}</span>}
+                    <span className="text-text min-w-0 truncate font-medium">{item.label || 'Untitled'}</span>
+                    {rangeLabel && <span className="text-passive-1 flex-shrink-0">{rangeLabel}</span>}
                   </div>
-                  <div className="relative h-5 w-full overflow-hidden rounded bg-contrast">
+                  <div className="bg-contrast relative h-5 w-full overflow-hidden rounded">
                     <div
-                      className="absolute top-0 flex h-full items-center rounded px-1.5 text-[0.65rem] text-info-contrast"
+                      className="text-info-contrast absolute top-0 flex h-full items-center rounded px-1.5 text-[0.65rem]"
                       style={{
                         left: `${layout.left}%`,
                         width: `${layout.width}%`,
@@ -287,15 +320,15 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
       </div>
 
       {/* Editing list: add/remove items, set label + start + end + optional color. */}
-      <div className="flex flex-col gap-2 border-t border-border p-2">
+      <div className="border-border flex flex-col gap-2 border-t p-2">
         {data.items.map((item) => (
           <div
             key={item.id}
-            className="flex flex-col gap-1 rounded border border-border bg-contrast p-2 sm:flex-row sm:items-center"
+            className="border-border bg-contrast flex flex-col gap-1 rounded border p-2 sm:flex-row sm:items-center"
           >
             <input
               key={`label-${item.id}`}
-              className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info min-w-0 flex-grow rounded border px-2 py-1 text-sm outline-none"
               defaultValue={item.label}
               placeholder="Label…"
               aria-label="Item label"
@@ -303,7 +336,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
             />
             <input
               key={`start-${item.id}`}
-              className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
               defaultValue={typeof item.start === 'number' ? String(item.start) : item.start}
               placeholder="Start (date or #)…"
               aria-label="Item start"
@@ -311,7 +344,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
             />
             <input
               key={`end-${item.id}`}
-              className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
               defaultValue={typeof item.end === 'number' ? String(item.end) : item.end}
               placeholder="End (date or #)…"
               aria-label="Item end"
@@ -319,7 +352,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
             />
             <div className="flex items-center gap-1">
               <label
-                className="relative h-5 w-5 flex-shrink-0 cursor-pointer rounded-full border border-border"
+                className="border-border relative h-5 w-5 flex-shrink-0 cursor-pointer rounded-full border"
                 style={{ backgroundColor: item.color ?? 'transparent' }}
                 title="Pick a custom bar color"
               >
@@ -336,7 +369,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
                 <button
                   key={preset}
                   type="button"
-                  className="h-4 w-4 flex-shrink-0 rounded-full border border-border"
+                  className="border-border h-4 w-4 flex-shrink-0 rounded-full border"
                   style={{ backgroundColor: preset }}
                   title={`Set bar color ${preset}`}
                   aria-label={`Set bar color ${preset}`}
@@ -346,7 +379,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
               ))}
               <button
                 type="button"
-                className="rounded px-1 text-xs text-passive-1 hover:bg-default disabled:opacity-40"
+                className="text-passive-1 hover:bg-default rounded px-1 text-xs disabled:opacity-40"
                 disabled={!item.color}
                 onClick={() => setColor(item.id, undefined)}
                 title="Clear bar color"
@@ -354,7 +387,7 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
                 Clear
               </button>
               <button
-                className="rounded px-1 text-passive-1 hover:bg-default hover:text-danger"
+                className="text-passive-1 hover:bg-default hover:text-danger rounded px-1"
                 onClick={() => removeItem(item.id)}
                 title="Delete item"
                 type="button"

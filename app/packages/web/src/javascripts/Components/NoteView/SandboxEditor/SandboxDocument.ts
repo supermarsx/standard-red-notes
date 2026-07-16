@@ -57,8 +57,7 @@ const isFiniteNumber = (value: unknown): value is number => typeof value === 'nu
 
 const isString = (value: unknown): value is string => typeof value === 'string'
 
-const isValidPane = (value: unknown): value is SandboxPane =>
-  value === 'html' || value === 'css' || value === 'js'
+const isValidPane = (value: unknown): value is SandboxPane => value === 'html' || value === 'css' || value === 'js'
 
 /**
  * Parse note text into a SandboxDocument. Never throws: empty, legacy plain
@@ -89,8 +88,7 @@ export const parseSandboxDocument = (
   // A sandbox document exposes at least one of the code panes; otherwise it is
   // probably some other note format being switched into a sandbox, so treat it
   // as a fresh blank sandbox but flag it as not-recovered.
-  const looksLikeSandbox =
-    isString(candidate.html) || isString(candidate.css) || isString(candidate.js)
+  const looksLikeSandbox = isString(candidate.html) || isString(candidate.css) || isString(candidate.js)
 
   if (!looksLikeSandbox) {
     return { document: createEmptySandboxDocument(), recovered: false }

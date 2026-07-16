@@ -1,8 +1,5 @@
 import { SNNote } from '@standardnotes/snjs'
-import {
-  AutoEmptyTrashInterval,
-  selectTrashedItemsDueForDeletion,
-} from './AutoEmptyTrashService'
+import { AutoEmptyTrashInterval, selectTrashedItemsDueForDeletion } from './AutoEmptyTrashService'
 
 /**
  * Builds a minimal SNNote-shaped stub with just the fields the selector reads.

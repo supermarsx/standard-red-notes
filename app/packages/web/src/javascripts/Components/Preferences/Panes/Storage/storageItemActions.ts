@@ -15,7 +15,15 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { createNoteExport } from '@/Utils/NoteExportUtils'
 import { confirmDialog } from '@standardnotes/ui-services'
-import { DecryptedItemInterface, FileItem, isDecryptedItem, isFile, isItemExportable, isNote, SNNote } from '@standardnotes/snjs'
+import {
+  DecryptedItemInterface,
+  FileItem,
+  isDecryptedItem,
+  isFile,
+  isItemExportable,
+  isNote,
+  SNNote,
+} from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'

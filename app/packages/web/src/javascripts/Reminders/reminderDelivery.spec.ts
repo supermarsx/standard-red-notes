@@ -142,9 +142,7 @@ describe('automatic publish/unpublish gate', () => {
       },
     })
     await maybePublishReminderForDelivery(app, { id: 'r1', dueAt: '2026-07-02T12:00:00.000Z' })
-    expect(app.legacyApi.publishReminderDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'Reminder' }),
-    )
+    expect(app.legacyApi.publishReminderDelivery).toHaveBeenCalledWith(expect.objectContaining({ message: 'Reminder' }))
   })
 
   it('does not publish when the delivery config is disabled', async () => {

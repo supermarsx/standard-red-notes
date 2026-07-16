@@ -27,14 +27,14 @@ const AlertDialog = ({
     <Dialog
       store={dialog}
       role="alertdialog"
-      className="pointer-events-auto fixed left-0 top-0 z-modal flex h-full w-full items-center justify-center"
+      className="z-modal pointer-events-auto fixed top-0 left-0 flex h-full w-full items-center justify-center"
       modal={false}
       portal={true}
       preventBodyScroll={true}
       ref={addCloseMethod}
     >
       <div
-        className="absolute z-0 h-full w-full bg-passive-5 opacity-25 md:opacity-75"
+        className="bg-passive-5 absolute z-0 h-full w-full opacity-25 md:opacity-75"
         role="presentation"
         onClick={closeDialog}
       />

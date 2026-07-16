@@ -78,18 +78,14 @@ const ShortcutRow: FunctionComponent<{
       <div className="flex items-center gap-2">
         <div className="flex flex-col">
           <span className="text-base lg:text-sm">{row.label}</span>
-          {row.isOverridden && <span className="text-xs text-passive-1">Customized</span>}
+          {row.isOverridden && <span className="text-passive-1 text-xs">Customized</span>}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {isCapturing ? (
-            <ShortcutCaptureInput
-              platform={application.platform}
-              onCapture={handleCapture}
-              onCancel={handleCancel}
-            />
+            <ShortcutCaptureInput platform={application.platform} onCapture={handleCapture} onCancel={handleCancel} />
           ) : (
             <button
-              className="flex min-h-9 items-center gap-1 rounded border border-border bg-default px-3 py-1.5 hover:bg-contrast"
+              className="border-border bg-default hover:bg-contrast flex min-h-9 items-center gap-1 rounded border px-3 py-1.5"
               onClick={onStartCapture}
               aria-label={`Change shortcut for ${row.label}`}
             >
@@ -98,7 +94,7 @@ const ShortcutRow: FunctionComponent<{
           )}
           {row.isOverridden && (
             <button
-              className="rounded p-1 text-passive-1 hover:bg-contrast hover:text-text"
+              className="text-passive-1 hover:bg-contrast hover:text-text rounded p-1"
               onClick={handleReset}
               aria-label={`Reset ${row.label} to default`}
               title="Reset to default"
@@ -109,7 +105,7 @@ const ShortcutRow: FunctionComponent<{
         </div>
       </div>
       {conflictLabel && (
-        <div className="text-xs text-danger">
+        <div className="text-danger text-xs">
           That shortcut is already used by &ldquo;{conflictLabel}&rdquo;. Choose a different combination.
         </div>
       )}
@@ -198,8 +194,8 @@ const Shortcuts: FunctionComponent<Props> = ({ application }) => {
             />
           </div>
           <Text className="mt-2">
-            Click a shortcut to record a new key combination. Combinations already used by another command are
-            rejected. Overrides are saved on this device only.
+            Click a shortcut to record a new key combination. Combinations already used by another command are rejected.
+            Overrides are saved on this device only.
           </Text>
         </PreferencesSegment>
       </PreferencesGroup>

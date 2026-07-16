@@ -2,12 +2,7 @@
  * @jest-environment node
  */
 
-import {
-  clampResultIndex,
-  getMatchCounter,
-  nextResultIndex,
-  previousResultIndex,
-} from './matchCounter'
+import { clampResultIndex, getMatchCounter, nextResultIndex, previousResultIndex } from './matchCounter'
 
 describe('clampResultIndex', () => {
   test('returns -1 when there are no results', () => {

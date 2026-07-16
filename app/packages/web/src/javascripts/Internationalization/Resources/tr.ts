@@ -358,13 +358,15 @@ const tr: LocaleResource = {
     noFolder: 'Klasör yok',
     fileProtected: 'Bu dosya korumalıdır.',
     authenticateToView: 'Bu dosyayı görüntülemek için kimlik doğrulayın.',
-    addPasscodeToView: 'Bu dosyayı görüntülemek için kimlik doğrulama gerektirmek üzere bir parola kodu ekleyin veya bir hesap oluşturun.',
+    addPasscodeToView:
+      'Bu dosyayı görüntülemek için kimlik doğrulama gerektirmek üzere bir parola kodu ekleyin veya bir hesap oluşturun.',
     openAccountMenu: 'Hesap menüsünü aç',
     authenticate: 'Kimlik doğrula',
     viewFile: 'Dosyayı görüntüle',
     loading: 'Yükleniyor...',
     fileCannotBePreviewed: 'Bu dosya önizlenemiyor.',
-    errorLoadingFile: 'Dosya yüklenirken bir hata oluştu. Tekrar deneyin veya dosyayı indirip başka bir uygulamayla açın.',
+    errorLoadingFile:
+      'Dosya yüklenirken bir hata oluştu. Tekrar deneyin veya dosyayı indirip başka bir uygulamayla açın.',
     tryAgain: 'Tekrar dene',
     downloadToView: 'Bu dosyayı görüntülemek için indirin ve başka bir uygulamayla açın.',
     fileInformation: 'Dosya bilgileri',
@@ -413,15 +415,18 @@ const tr: LocaleResource = {
     cancelOcr: 'OCR’yi iptal et',
     preparingOcr: 'OCR hazırlanıyor...',
     ocrProgress: 'OCR sayfa {{current}} / {{total}} (%{{percent}})',
-    ocrCachedReRunTooltip: 'Metin zaten çıkarıldı (önbelleğe alındı). OCR’yi tarayıcınızda yeniden çalıştırın (cihazınızda kalır).',
+    ocrCachedReRunTooltip:
+      'Metin zaten çıkarıldı (önbelleğe alındı). OCR’yi tarayıcınızda yeniden çalıştırın (cihazınızda kalır).',
     ocrExtractedReRunTooltip: 'Metin çıkarıldı. OCR’yi tarayıcınızda yeniden çalıştırın (cihazınızda kalır).',
-    ocrExtractTooltip: 'Taranan sayfalardan OCR ile metin çıkarın. Tarayıcınızda çalışır; hiçbir şey cihazınızdan ayrılmaz (yavaş; dil verilerini indirir).',
+    ocrExtractTooltip:
+      'Taranan sayfalardan OCR ile metin çıkarın. Tarayıcınızda çalışır; hiçbir şey cihazınızdan ayrılmaz (yavaş; dil verilerini indirir).',
     extractTextWithOcrBrowser: 'Tarayıcınızda OCR ile metin çıkar',
     reRunOcrBrowser: 'OCR’yi yeniden çalıştır (tarayıcı)',
     extractTextOcr: 'Metin çıkar (OCR)',
     serverOcrTooltip:
       'OCR’yi SUNUCUDA çalıştırın. Bu, bu PDF’nin sayfa görüntülerini sunucuya gönderir ve uçtan uca şifrelemeden ÇIKAR — sunucu bu içeriği okuyabilir. Tarayıcı OCR’si her şeyi cihazınızda tutar.',
-    runOcrOnServerAria: 'OCR’yi sunucuda çalıştır (sayfa görüntülerini sunucuya gönderir; uçtan uca şifrelemeden çıkar)',
+    runOcrOnServerAria:
+      'OCR’yi sunucuda çalıştır (sayfa görüntülerini sunucuya gönderir; uçtan uca şifrelemeden çıkar)',
     runOcrOnServer: 'OCR’yi sunucuda çalıştır',
     copyAllExtractedText: 'Çıkarılan tüm metni kopyala',
     copyExtractedTextAria: 'Çıkarılan metni kopyala',
@@ -432,7 +437,8 @@ const tr: LocaleResource = {
     previousMatch: 'Önceki eşleşme',
     nextMatch: 'Sonraki eşleşme',
     closeSearch: 'Aramayı kapat',
-    serverOcrDisclosurePrefix: 'Hesabınız için Sunucu OCR’si kullanılabilir. Bu PDF’nin sayfa görüntülerini sunucuya gönderir ve',
+    serverOcrDisclosurePrefix:
+      'Hesabınız için Sunucu OCR’si kullanılabilir. Bu PDF’nin sayfa görüntülerini sunucuya gönderir ve',
     serverOcrDisclosureBold: 'uçtan uca şifrelemeden çıkar',
     serverOcrDisclosureSuffix:
       ' — sunucu (ve onu kontrol eden herkes) bu içeriği okuyabilir. Tarayıcı OCR’si her şeyi cihazınızda tutar. Varsayılan tarayıcı OCR’sidir.',
@@ -578,8 +584,7 @@ const tr: LocaleResource = {
     mergeLocalData: 'Yerel verileri birleştir ({{count}} not ve konu)',
     mergeLocalDataTooltip:
       'İşaretlenmezse, yerel notlarınız ve konularınız kalıcı olarak silinecek ve hesabınızdaki verilerle değiştirilecektir.',
-    homeServerNotRunning:
-      'Ana sunucu çalışmıyor. Başlatmak için lütfen tercihleri ve ana sunucu sekmesini açın.',
+    homeServerNotRunning: 'Ana sunucu çalışmıyor. Başlatmak için lütfen tercihleri ve ana sunucu sekmesini açın.',
     serverDefault: 'Varsayılan',
     serverCustom: 'Özel',
     serverHomeServer: 'Ana Sunucu',
@@ -601,7 +606,8 @@ const tr: LocaleResource = {
     ignoreWarning: 'Uyarıyı yoksay',
     waitingForSecurityKey: 'Güvenlik anahtarı bekleniyor...',
     authenticationSuccessful: 'Kimlik doğrulama başarılı!',
-    insertSecurityKeyPrompt: 'Donanım güvenlik anahtarınızı takın, ardından kimlik doğrulamak için aşağıdaki düğmeye basın.',
+    insertSecurityKeyPrompt:
+      'Donanım güvenlik anahtarınızı takın, ardından kimlik doğrulamak için aşağıdaki düğmeye basın.',
     authenticate: 'Kimlik doğrula',
   },
   search: {
@@ -687,7 +693,8 @@ const tr: LocaleResource = {
     linkExpires_other: 'Bu bağlantı ilk açıldıktan {{count}} dakika sonra sona erer.',
     untitled: 'Başlıksız',
     tagHasNoNotes: 'Bu konunun notu yok.',
-    publicReadOnlyFooter: 'Bu, herkese açık, salt okunur bir paylaşım bağlantısıdır. İçerik tarayıcınızda şifresi çözülmüştür.',
+    publicReadOnlyFooter:
+      'Bu, herkese açık, salt okunur bir paylaşım bağlantısıdır. İçerik tarayıcınızda şifresi çözülmüştür.',
     confidentialWatermark: 'Gizli · {{datetime}}',
     contentHiddenTitle: 'İçerik gizli',
     contentHiddenMessage: 'Paylaşılan içeriği görüntülemek için bu pencereye geri dönün.',

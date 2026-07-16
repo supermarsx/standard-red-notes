@@ -27,12 +27,7 @@
 export type SearchIndexSchedulerMode = 'off' | 'manual' | 'interval' | 'on-change' | 'idle'
 
 /** All scheduler modes, in the order the settings UI presents them. */
-export const SEARCH_INDEX_SCHEDULER_MODES: SearchIndexSchedulerMode[] = [
-  'on-change',
-  'idle',
-  'interval',
-  'manual',
-]
+export const SEARCH_INDEX_SCHEDULER_MODES: SearchIndexSchedulerMode[] = ['on-change', 'idle', 'interval', 'manual']
 
 /** Which notes the index covers. */
 export type SearchIndexScopeMode = 'all' | 'include' | 'exclude'
@@ -79,11 +74,7 @@ export const DEFAULT_SEARCH_INDEX_SETTINGS: SearchIndexSettings = {
 }
 
 const isSchedulerMode = (value: unknown): value is SearchIndexSchedulerMode =>
-  value === 'off' ||
-  value === 'manual' ||
-  value === 'interval' ||
-  value === 'on-change' ||
-  value === 'idle'
+  value === 'off' || value === 'manual' || value === 'interval' || value === 'on-change' || value === 'idle'
 
 const isScopeMode = (value: unknown): value is SearchIndexScopeMode =>
   value === 'all' || value === 'include' || value === 'exclude'
@@ -102,7 +93,9 @@ export function normalizeSearchIndexScope(raw: Partial<SearchIndexScope> | undef
  * clamping the interval and falling back to defaults for any missing/invalid
  * field. Never throws.
  */
-export function normalizeSearchIndexSettings(raw: Partial<SearchIndexSettings> | undefined | null): SearchIndexSettings {
+export function normalizeSearchIndexSettings(
+  raw: Partial<SearchIndexSettings> | undefined | null,
+): SearchIndexSettings {
   const enabled = typeof raw?.enabled === 'boolean' ? raw.enabled : DEFAULT_SEARCH_INDEX_SETTINGS.enabled
 
   const schedulerMode: SearchIndexSchedulerMode = isSchedulerMode(raw?.schedulerMode)

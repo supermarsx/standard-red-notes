@@ -75,8 +75,9 @@ const HARD_MAX_NOTES = 20
 
 function clampLimits(partial?: Partial<DeepResearchLimits>): DeepResearchLimits {
   const merged = { ...DEFAULT_DEEP_RESEARCH_LIMITS, ...(partial ?? {}) }
-  const clamp = (value: number, min: number, max: number, fallback: number) =>
-    Number.isFinite(value) && value > 0 ? Math.min(max, Math.max(min, Math.floor(value))) : fallback
+  const clamp = (value: number, min: number, max: number, fallback: number) => {
+    return Number.isFinite(value) && value > 0 ? Math.min(max, Math.max(min, Math.floor(value))) : fallback
+  }
   return {
     maxRounds: clamp(merged.maxRounds, 1, HARD_MAX_ROUNDS, DEFAULT_DEEP_RESEARCH_LIMITS.maxRounds),
     maxNotes: clamp(merged.maxNotes, 1, HARD_MAX_NOTES, DEFAULT_DEEP_RESEARCH_LIMITS.maxNotes),
@@ -114,14 +115,14 @@ export interface DeepResearchOptions {
 }
 
 export const DEEP_RESEARCH_REFINE_SYSTEM_PROMPT =
-  'You are a research assistant working ONLY over the user\'s own notes (a local, private corpus — you have NO web ' +
+  "You are a research assistant working ONLY over the user's own notes (a local, private corpus — you have NO web " +
   'access). You are given a research question and a numbered set of note excerpts already read. Decide whether you ' +
   'have enough to answer. Reply with ONLY a compact JSON object: ' +
   '{"done": true} when you have enough, or {"done": false, "more": [n, ...]} listing the numbers of UNREAD candidate ' +
   'notes (from the "Other candidate notes" list, if shown) you want to read next. No prose, no code fences.'
 
 export const DEEP_RESEARCH_SYNTHESIS_SYSTEM_PROMPT =
-  'You are a research assistant writing a final report over the user\'s OWN NOTES only (a local corpus; you have no ' +
+  "You are a research assistant writing a final report over the user's OWN NOTES only (a local corpus; you have no " +
   'web access — do not invent outside facts). Using ONLY the provided note excerpts, write a structured report with ' +
   'these sections in Markdown:\n' +
   '## Summary — 2-4 sentences answering the question.\n' +
@@ -197,7 +198,8 @@ export async function runDeepResearch(
   options: DeepResearchOptions = {},
 ): Promise<DeepResearchReport> {
   const limits = clampLimits(options.limits)
-  const retrieveFn = options.retrieve ?? ((docs, query, limit) => defaultRetrieve(docs, query, { limit, perNote: true }))
+  const retrieveFn =
+    options.retrieve ?? ((docs, query, limit) => defaultRetrieve(docs, query, { limit, perNote: true }))
   const onProgress = options.onProgress
   const aborted = () => options.signal?.aborted === true
 
@@ -329,12 +331,14 @@ export async function runDeepResearch(
   onProgress?.({ kind: 'synthesizing' })
 
   const numbered = read
-    .map((note, index) => `[${index + 1}] ${note.title || 'Untitled note'}\n${snippetOf(note.text, limits.snippetChars)}`)
+    .map(
+      (note, index) => `[${index + 1}] ${note.title || 'Untitled note'}\n${snippetOf(note.text, limits.snippetChars)}`,
+    )
     .join('\n\n')
   const synthUser =
     `Research question: ${trimmedQuestion}\n\n` +
     `Note excerpts (cite by [n]):\n${numbered}\n\n` +
-    `Write the report now using only these notes.`
+    'Write the report now using only these notes.'
   const report = await complete(DEEP_RESEARCH_SYNTHESIS_SYSTEM_PROMPT, synthUser)
 
   return baseReport(report.trim(), toSources(read, limits.snippetChars), rounds, stopReason)

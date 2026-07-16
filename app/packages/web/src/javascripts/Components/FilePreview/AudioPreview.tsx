@@ -33,7 +33,7 @@ const AudioPreview = ({ file, filesController, objectUrl }: Props) => {
       <div className="flex flex-grow flex-col items-center justify-center">
         <NoPreviewIllustration className="mb-4 h-30 w-30" />
         <div className="mb-2 text-base font-bold">{t('audioCannotBePlayed')}</div>
-        <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('downloadToListen')}</div>
+        <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToListen')}</div>
         <Button
           primary
           onClick={() => {

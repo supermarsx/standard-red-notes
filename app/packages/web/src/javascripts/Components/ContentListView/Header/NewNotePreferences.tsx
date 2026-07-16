@@ -190,7 +190,7 @@ const NewNotePreferences: FunctionComponent<Props> = ({
         </div>
       </div>
       <div>
-        <div className="mt-3 text-mobile-menu-item md:text-menu-item">{t('titleFormat')}</div>
+        <div className="text-mobile-menu-item md:text-menu-item mt-3">{t('titleFormat')}</div>
         <div className="mt-2">
           <Dropdown
             disabled={disabled}
@@ -208,8 +208,8 @@ const NewNotePreferences: FunctionComponent<Props> = ({
             <input
               disabled={disabled}
               className={classNames(
-                'w-full min-w-55 rounded border border-solid border-passive-3 bg-default px-2 py-1.5 text-sm md:translucent-ui:bg-transparent',
-                'focus-within:ring-2 focus-within:ring-info',
+                'border-passive-3 bg-default md:translucent-ui:bg-transparent w-full min-w-55 rounded border border-solid px-2 py-1.5 text-sm',
+                'focus-within:ring-info focus-within:ring-2',
               )}
               placeholder={t('customFormatPlaceholder')}
               value={customNoteTitleFormat}
@@ -217,13 +217,13 @@ const NewNotePreferences: FunctionComponent<Props> = ({
               spellCheck={false}
             />
           </div>
-          <div className="mt-3 text-neutral">
+          <div className="text-neutral mt-3">
             <span className="font-bold">{t('preview')}</span>
             <ErrorBoundary>
               <CustomNoteTitleFormatPreview format={customNoteTitleFormat} />
             </ErrorBoundary>
           </div>
-          <div className="mt-2 text-neutral">
+          <div className="text-neutral mt-2">
             <a
               className="underline"
               href={HelpPageUrl}

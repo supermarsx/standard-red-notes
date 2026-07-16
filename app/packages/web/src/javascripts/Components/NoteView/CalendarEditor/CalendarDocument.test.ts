@@ -82,7 +82,12 @@ describe('CalendarDocument', () => {
 
     it('drops events with an unparseable date', () => {
       const { document } = parseCalendarDocument(
-        JSON.stringify({ events: [{ id: 'bad', date: 'not-a-date' }, { id: 'good', date: '2026-06-20' }] }),
+        JSON.stringify({
+          events: [
+            { id: 'bad', date: 'not-a-date' },
+            { id: 'good', date: '2026-06-20' },
+          ],
+        }),
       )
       expect(document.events).toHaveLength(1)
       expect(document.events[0].id).toBe('good')
@@ -102,7 +107,9 @@ describe('CalendarDocument', () => {
     })
 
     it('coerces non-string title to empty string', () => {
-      const { document } = parseCalendarDocument(JSON.stringify({ events: [{ id: 'a', date: '2026-06-20', title: 5 }] }))
+      const { document } = parseCalendarDocument(
+        JSON.stringify({ events: [{ id: 'a', date: '2026-06-20', title: 5 }] }),
+      )
       expect(document.events[0].title).toBe('')
     })
   })

@@ -20,17 +20,17 @@ function RadioButtonGroup<Value extends string>({ value, items, onChange, classN
   return (
     <RadioGroup
       store={radio}
-      className={`flex divide-x divide-border rounded border border-border md:translucent-ui:border-[--popover-border-color] ${
+      className={`divide-border border-border md:translucent-ui:border-[--popover-border-color] flex divide-x rounded border ${
         className ?? ''
       }`}
     >
       {items.map(({ label, value: itemValue }) => (
         <label
           className={classNames(
-            'flex-grow select-none px-3.5 py-1.5 text-center',
-            'first:rounded-bl first:rounded-tl last:rounded-br last:rounded-tr',
+            'flex-grow px-3.5 py-1.5 text-center select-none',
+            'first:rounded-tl first:rounded-bl last:rounded-tr last:rounded-br',
             itemValue === value &&
-              'bg-info-backdrop font-medium text-info ring-1 ring-inset ring-info focus-within:ring-2',
+              'bg-info-backdrop text-info ring-info font-medium ring-1 ring-inset focus-within:ring-2',
           )}
           key={itemValue}
         >

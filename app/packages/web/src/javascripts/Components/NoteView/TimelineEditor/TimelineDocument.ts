@@ -246,7 +246,7 @@ export const computeTimelineLayout = (items: TimelineItem[]): TimelineLayout => 
     // Ensure a minimum visible width of one day's fraction.
     const durationMs = Math.max(endMs - startMs, MS_PER_DAY)
     let width = durationMs / spanMs
-    let offset = Math.min(Math.max(rawOffset, 0), 1)
+    const offset = Math.min(Math.max(rawOffset, 0), 1)
     if (offset + width > 1) {
       width = 1 - offset
     }

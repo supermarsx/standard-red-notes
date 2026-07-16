@@ -416,8 +416,9 @@ export function computeGalleryFit({
   if (total <= 0) {
     return { inlineCount: 0, overflowCount: 0 }
   }
-  const fitIn = (width: number): number =>
-    width < squareWidth ? 0 : Math.max(0, Math.floor((width + gap) / (squareWidth + gap)))
+  const fitIn = (width: number): number => {
+    return width < squareWidth ? 0 : Math.max(0, Math.floor((width + gap) / (squareWidth + gap)))
+  }
 
   // Everything fits with room to spare → no overflow toggle needed.
   if (fitIn(containerWidth) >= total) {

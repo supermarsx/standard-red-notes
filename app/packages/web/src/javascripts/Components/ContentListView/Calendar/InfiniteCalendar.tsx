@@ -180,12 +180,12 @@ const InfiniteCalendar = forwardRef<InfiniteCalendarInterface, Props>(
     )
 
     return (
-      <div className={'border-b border-solid border-border'}>
+      <div className={'border-border border-b border-solid'}>
         <div
           onClick={toggleVisibility}
           className={classNames(
             'text-md flex cursor-pointer items-center justify-center px-4 py-2',
-            'text-center font-bold hover:bg-contrast',
+            'hover:bg-contrast text-center font-bold',
           )}
         >
           {CalendarMonths[activeDate.getMonth()]} {activeDate.getFullYear()}

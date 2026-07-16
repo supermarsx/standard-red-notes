@@ -112,9 +112,7 @@ export function resolveTranscriptionModel(application: WebApplication): string {
  */
 export async function fetchAvailableSttModels(application: WebApplication): Promise<string[]> {
   try {
-    const result = await application.assistantConfigRequest<{ models?: unknown }>(
-      '/v1/assistant/transcription/models',
-    )
+    const result = await application.assistantConfigRequest<{ models?: unknown }>('/v1/assistant/transcription/models')
     const raw = (result as { models?: unknown })?.models
     if (!Array.isArray(raw)) {
       return []

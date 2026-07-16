@@ -100,7 +100,10 @@ const DELEGATE_TOOL: ToolDefinition = {
     type: 'object',
     properties: {
       task: { type: 'string', description: 'The subtask for the sub-agent to carry out, stated self-containedly.' },
-      context: { type: 'string', description: 'Optional extra context (e.g. relevant note uuids) the sub-agent needs.' },
+      context: {
+        type: 'string',
+        description: 'Optional extra context (e.g. relevant note uuids) the sub-agent needs.',
+      },
     },
     required: ['task'],
   },
@@ -293,9 +296,7 @@ export class AssistantTools implements ToolSession {
       throw new Error('A search "query" string is required')
     }
     const matches = this.allNotes()
-      .filter((note) =>
-        doesItemMatchSearchQuery(note as DecryptedItemInterface<ItemContent>, query, this.application),
-      )
+      .filter((note) => doesItemMatchSearchQuery(note as DecryptedItemInterface<ItemContent>, query, this.application))
       .slice(0, limit)
     return { count: matches.length, notes: matches.map(noteSummary) }
   }
@@ -420,7 +421,9 @@ export class AssistantTools implements ToolSession {
     try {
       superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
     } catch (error) {
-      throw new Error(`Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(
+        `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
 
     const template = this.application.items.createTemplateItem<NoteContent, SNNote>(ContentType.TYPES.Note, {
@@ -452,7 +455,9 @@ export class AssistantTools implements ToolSession {
     try {
       superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
     } catch (error) {
-      throw new Error(`Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(
+        `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
 
     const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
@@ -479,7 +484,9 @@ export class AssistantTools implements ToolSession {
       const markdown = await this.superConverter.convertSuperStringToOtherFormat(note.text, 'md')
       return { ...noteSummary(note), super: true, markdown }
     } catch (error) {
-      throw new Error(`Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(
+        `Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 
@@ -685,7 +692,11 @@ export class AssistantTools implements ToolSession {
 
     if (setting === 'reset') {
       achievements.resetAll()
-      return { ok: true, message: 'All achievement progress and unlock dates were reset.', config: achievements.getConfig() }
+      return {
+        ok: true,
+        message: 'All achievement progress and unlock dates were reset.',
+        config: achievements.getConfig(),
+      }
     }
 
     if (typeof args.enabled !== 'boolean') {
@@ -696,7 +707,11 @@ export class AssistantTools implements ToolSession {
     switch (setting) {
       case 'system':
         achievements.setMasterEnabled(enabled)
-        return { ok: true, message: `Achievements ${enabled ? 'enabled' : 'disabled'}.`, config: achievements.getConfig() }
+        return {
+          ok: true,
+          message: `Achievements ${enabled ? 'enabled' : 'disabled'}.`,
+          config: achievements.getConfig(),
+        }
       case 'toasts':
         achievements.setShowUnlockToasts(enabled)
         return {
@@ -717,7 +732,8 @@ export class AssistantTools implements ToolSession {
           return { ok: false, message: "Provide the 'achievement' id or name to enable/disable." }
         }
         const lower = query.toLowerCase()
-        const match = ACHIEVEMENTS.find((a) => a.id === query) ?? ACHIEVEMENTS.find((a) => a.name.toLowerCase() === lower)
+        const match =
+          ACHIEVEMENTS.find((a) => a.id === query) ?? ACHIEVEMENTS.find((a) => a.name.toLowerCase() === lower)
         if (!match) {
           // Suggest only non-hidden names so still-secret achievements stay a surprise.
           const suggestions = ACHIEVEMENTS.filter((a) => !a.hidden)
@@ -800,7 +816,9 @@ export class AssistantTools implements ToolSession {
         theme.displayName.toLowerCase() === identifierOrName.toLowerCase(),
     )
     if (!match) {
-      throw new Error(`Theme not found: ${identifierOrName}. Available: ${allThemes.map((t) => t.displayName).join(', ')}`)
+      throw new Error(
+        `Theme not found: ${identifierOrName}. Available: ${allThemes.map((t) => t.displayName).join(', ')}`,
+      )
     }
     await this.application.componentManager.toggleTheme(match)
     return { ok: true, theme: match.displayName }
@@ -847,7 +865,9 @@ export class AssistantTools implements ToolSession {
     const target = typeof args.target === 'string' ? args.target.toLowerCase() : ''
     const paneId = PANE_NAVIGATION_TARGETS[target]
     if (!paneId) {
-      throw new Error(`Unknown navigation target: ${target}. Allowed: ${Object.keys(PANE_NAVIGATION_TARGETS).join(', ')}`)
+      throw new Error(
+        `Unknown navigation target: ${target}. Allowed: ${Object.keys(PANE_NAVIGATION_TARGETS).join(', ')}`,
+      )
     }
     this.context.presentPane(paneId)
     return { ok: true, navigatedTo: target }
@@ -865,20 +885,6 @@ export class AssistantTools implements ToolSession {
     const result = await this.context.runSubAgent(task, contextText)
     return { ok: true, result }
   }
-}
-
-// Minimal structural mutator types so we don't depend on the concrete mutator class.
-interface NoteMutatorLike {
-  title: string
-  text: string
-  pinned: boolean
-  archived: boolean
-  starred: boolean
-  trashed: boolean
-}
-
-interface TagMutatorLike {
-  removeItemAsRelationship(item: DecryptedItemInterface): void
 }
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -943,11 +949,16 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         title: { type: 'string' },
         text: { type: 'string', description: 'Plain-text body (for the default plain note).' },
-        format: { type: 'string', enum: ['plain', 'super'], description: 'Use "super" to convert `markdown` into a rich Super note.' },
+        format: {
+          type: 'string',
+          enum: ['plain', 'super'],
+          description: 'Use "super" to convert `markdown` into a rich Super note.',
+        },
         markdown: { type: 'string', description: 'Markdown body when format is "super" (supports ```mermaid blocks).' },
         editorIdentifier: {
           type: 'string',
-          description: 'Optional note-type editor identifier, e.g. "org.standardnotes.calendar". Ignored if the feature is unavailable.',
+          description:
+            'Optional note-type editor identifier, e.g. "org.standardnotes.calendar". Ignored if the feature is unavailable.',
         },
       },
     },
@@ -1166,18 +1177,31 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         uuid: { type: 'string', description: 'The note uuid (preferred).' },
         title: { type: 'string', description: 'The exact note title (used only if uuid is omitted).' },
-        datetime: { type: 'string', description: 'When the reminder is due, as an ISO 8601 string (e.g. 2026-07-01T09:00:00).' },
+        datetime: {
+          type: 'string',
+          description: 'When the reminder is due, as an ISO 8601 string (e.g. 2026-07-01T09:00:00).',
+        },
         message: { type: 'string', description: 'Optional reminder message.' },
         recurrence: {
           type: 'object',
           description: 'Optional repeat schedule. Omit (or frequency:"none") for a one-shot reminder.',
           properties: {
             frequency: { type: 'string', enum: [...RECURRENCE_FREQUENCIES] },
-            interval: { type: 'number', description: 'For frequency "custom": how many units between occurrences (>= 1).' },
-            unit: { type: 'string', enum: [...RECURRENCE_UNITS], description: 'For frequency "custom": the interval unit.' },
+            interval: {
+              type: 'number',
+              description: 'For frequency "custom": how many units between occurrences (>= 1).',
+            },
+            unit: {
+              type: 'string',
+              enum: [...RECURRENCE_UNITS],
+              description: 'For frequency "custom": the interval unit.',
+            },
           },
         },
-        email: { type: 'boolean', description: 'Also deliver this reminder by email (requires an account; sends time + message in plaintext).' },
+        email: {
+          type: 'boolean',
+          description: 'Also deliver this reminder by email (requires an account; sends time + message in plaintext).',
+        },
       },
       required: ['datetime'],
     },
@@ -1185,7 +1209,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'reminders.list',
     description:
-      'List reminders. With a note uuid/title, lists that note\'s reminders; with no note, lists all reminders across notes, soonest first.',
+      "List reminders. With a note uuid/title, lists that note's reminders; with no note, lists all reminders across notes, soonest first.",
     mutating: false,
     inputSchema: {
       type: 'object',
@@ -1197,7 +1221,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'reminders.clear',
-    description: 'Remove all reminders from a note (identified by uuid or exact title). Also cancels any email-delivery records.',
+    description:
+      'Remove all reminders from a note (identified by uuid or exact title). Also cancels any email-delivery records.',
     mutating: true,
     inputSchema: {
       type: 'object',

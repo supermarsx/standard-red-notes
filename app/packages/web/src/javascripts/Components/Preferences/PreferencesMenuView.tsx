@@ -71,15 +71,10 @@ const PreferencesMenuView: FunctionComponent<Props> = ({ menu, onSelectPane }) =
         parent to switch to the content view (single-column flow).
       */}
       <div className="flex min-w-55 flex-col overflow-y-auto px-3 py-3 md:py-6">
-        <PreferencesSearchBar
-          query={query}
-          onQueryChange={setQuery}
-          onSubmit={openTopMatch}
-          onClear={clearSearch}
-        />
+        <PreferencesSearchBar query={query} onQueryChange={setQuery} onSubmit={openTopMatch} onClear={clearSearch} />
 
         {visibleItems.length === 0 ? (
-          <div className="px-3 py-6 text-center text-sm text-passive-1" role="status">
+          <div className="text-passive-1 px-3 py-6 text-center text-sm" role="status">
             No settings found
           </div>
         ) : (

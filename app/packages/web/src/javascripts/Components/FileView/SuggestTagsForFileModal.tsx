@@ -172,8 +172,8 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
     >
       <div className="flex flex-col gap-4">
         {/* Data-exposure notice tailored to files — honest about what leaves the device. */}
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">Suggesting topics sends file details to an AI</div>
+        <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+          <div className="text-warning font-semibold">Suggesting topics sends file details to an AI</div>
           <p className="mt-1">
             Suggesting topics sends this file&rsquo;s name, type, and any readable text (extracted on your device) to
             the AI provider you configured. Encrypted file contents that can&rsquo;t be read as text are never sent. No
@@ -192,7 +192,7 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            className="flex items-center gap-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             onClick={() => void generate()}
             disabled={!aiAvailability.available || busy || applying}
           >
@@ -201,10 +201,10 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
           </button>
         </div>
 
-        {!aiAvailability.available && <p className="text-xs text-passive-0">{aiAvailability.reason}</p>}
-        {error && <p className="text-sm text-danger">Could not suggest topics: {error}</p>}
+        {!aiAvailability.available && <p className="text-passive-0 text-xs">{aiAvailability.reason}</p>}
+        {error && <p className="text-danger text-sm">Could not suggest topics: {error}</p>}
         {noSuggestions && (
-          <p className="text-sm text-passive-0">
+          <p className="text-passive-0 text-sm">
             No good topic suggestions for this file. You can still add your own below.
           </p>
         )}
@@ -219,9 +219,9 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
                   <Icon type="hashtag" size="small" className="text-neutral" />
                   {suggestion.name}
                   {suggestion.existing ? (
-                    <span className="text-xs text-passive-0">(existing tag)</span>
+                    <span className="text-passive-0 text-xs">(existing tag)</span>
                   ) : (
-                    <span className="text-xs text-info">(new tag)</span>
+                    <span className="text-info text-xs">(new tag)</span>
                   )}
                 </span>
               </label>
@@ -247,7 +247,7 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
               }}
             />
             <button
-              className="rounded border border-solid border-border px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
+              className="border-border rounded border border-solid px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
               onClick={addCustomTag}
               disabled={!customTag.trim() || applying}
             >

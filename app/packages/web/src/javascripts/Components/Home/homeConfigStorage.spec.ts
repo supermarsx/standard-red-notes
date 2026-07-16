@@ -135,7 +135,10 @@ describe('load/save round-trip', () => {
     const config: HomeConfig = {
       mode: 'cards',
       noteUuid: undefined,
-      cards: [card({ id: 'a', kind: 'note', targetUuid: 'n1', label: 'Welcome' }), card({ id: 'b', kind: 'tag', targetUuid: 't1' })],
+      cards: [
+        card({ id: 'a', kind: 'note', targetUuid: 'n1', label: 'Welcome' }),
+        card({ id: 'b', kind: 'tag', targetUuid: 't1' }),
+      ],
     }
     saveHomeConfig(config)
     expect(loadHomeConfig()).toEqual(config)

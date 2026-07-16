@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types */
+
 export class SNLog {
   static log(...message: any): void {
     this.onLog(...message)

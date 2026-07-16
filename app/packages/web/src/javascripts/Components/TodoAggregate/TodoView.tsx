@@ -25,10 +25,10 @@ const ProgressBar = ({ completed, total }: { completed: number; total: number })
   const pct = total === 0 ? 0 : Math.round((completed / total) * 100)
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-contrast">
-        <div className="h-full rounded-full bg-info transition-all" style={{ width: `${pct}%` }} />
+      <div className="bg-contrast h-1.5 w-24 overflow-hidden rounded-full">
+        <div className="bg-info h-full rounded-full transition-all" style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-passive-1">
+      <span className="text-passive-1 text-xs">
         {completed}/{total}
       </span>
     </div>
@@ -97,11 +97,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="tasks" className="flex-shrink-0 text-info" />
+          <Icon type="tasks" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Todos</span>
           {total.total > 0 && (
             <span className="ml-2 hidden sm:block">
@@ -110,7 +110,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           )}
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => application.paneController.closeViewTab(AppPaneId.Todos)}
           aria-label="Close todos"
           title="Close"
@@ -121,7 +121,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
 
       <div className="flex-grow overflow-y-auto p-4">
         {groups.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-passive-1">
+          <div className="text-passive-1 px-4 py-10 text-center text-sm">
             No todos yet. Add a checklist in a Super note or an Advanced Checklist note.
           </div>
         ) : (
@@ -129,19 +129,19 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
             {groups.map((group) => (
               <section
                 key={group.note.uuid}
-                className="overflow-hidden rounded-md border border-border bg-default"
+                className="border-border bg-default overflow-hidden rounded-md border"
                 aria-label={group.note.title?.trim() || 'Untitled'}
               >
                 <button
-                  className="flex w-full items-center justify-between gap-2 border-b border-border bg-contrast px-4 py-2 text-left hover:bg-default"
+                  className="border-border bg-contrast hover:bg-default flex w-full items-center justify-between gap-2 border-b px-4 py-2 text-left"
                   onClick={() => openNote(group.note.uuid)}
                   title="Open source note"
                 >
                   <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-sm font-bold text-text">
+                    <span className="text-text truncate text-sm font-bold">
                       {group.note.title?.trim() || 'Untitled'}
                     </span>
-                    <span className="text-[0.625rem] uppercase tracking-wide text-passive-1">
+                    <span className="text-passive-1 text-[0.625rem] tracking-wide uppercase">
                       {SOURCE_LABEL[group.source]}
                     </span>
                   </div>
@@ -156,10 +156,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                         className={classNames('mt-0.5 flex-shrink-0', item.checked ? 'text-success' : 'text-neutral')}
                       />
                       <span
-                        className={classNames(
-                          'text-sm',
-                          item.checked ? 'text-passive-1 line-through' : 'text-text',
-                        )}
+                        className={classNames('text-sm', item.checked ? 'text-passive-1 line-through' : 'text-text')}
                       >
                         {item.text}
                       </span>

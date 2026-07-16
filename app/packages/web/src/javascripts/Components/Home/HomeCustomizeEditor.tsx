@@ -102,16 +102,16 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-text">Customize home</h2>
+        <h2 className="text-text text-sm font-bold">Customize home</h2>
         <button
-          className="rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:brightness-125"
+          className="bg-info text-info-contrast rounded px-3 py-1.5 text-sm font-semibold hover:brightness-125"
           onClick={onDone}
         >
           Done
         </button>
       </div>
 
-      <label className="flex flex-col gap-1 text-xs text-passive-0">
+      <label className="text-passive-0 flex flex-col gap-1 text-xs">
         What should home show?
         <select
           className={selectClassName}
@@ -127,7 +127,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
       </label>
 
       {config.mode === 'note' && (
-        <label className="flex flex-col gap-1 text-xs text-passive-0">
+        <label className="text-passive-0 flex flex-col gap-1 text-xs">
           Home note
           <select
             className={selectClassName}
@@ -147,24 +147,24 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
       {config.mode === 'cards' && (
         <div className="flex flex-col gap-3">
           <div>
-            <div className="mb-2 text-sm font-semibold text-text">Your cards</div>
+            <div className="text-text mb-2 text-sm font-semibold">Your cards</div>
             {config.cards.length === 0 ? (
-              <div className="text-xs text-passive-0">No cards yet. Add one below.</div>
+              <div className="text-passive-0 text-xs">No cards yet. Add one below.</div>
             ) : (
               <ul className="flex flex-col gap-1">
                 {config.cards.map((card, index) => (
-                  <li key={card.id} className="flex items-center gap-2 rounded border border-border px-2 py-1.5">
+                  <li key={card.id} className="border-border flex items-center gap-2 rounded border px-2 py-1.5">
                     <Icon
                       type={(card.icon as VectorIconNameOrEmoji) || (card.kind === 'note' ? 'notes' : 'hashtag')}
                       size="small"
                       className="flex-shrink-0"
                     />
                     <div className="min-w-0 flex-grow">
-                      <div className="truncate text-sm text-text">{card.label || titleForTarget(card.targetUuid)}</div>
-                      <div className="truncate text-xs text-passive-0">{KIND_LABELS[card.kind]}</div>
+                      <div className="text-text truncate text-sm">{card.label || titleForTarget(card.targetUuid)}</div>
+                      <div className="text-passive-0 truncate text-xs">{KIND_LABELS[card.kind]}</div>
                     </div>
                     <button
-                      className="rounded p-1 hover:bg-contrast disabled:opacity-40"
+                      className="hover:bg-contrast rounded p-1 disabled:opacity-40"
                       onClick={() => moveCard(index, -1)}
                       disabled={index === 0}
                       aria-label="Move card up"
@@ -172,7 +172,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
                       <Icon type="chevron-up" size="small" />
                     </button>
                     <button
-                      className="rounded p-1 hover:bg-contrast disabled:opacity-40"
+                      className="hover:bg-contrast rounded p-1 disabled:opacity-40"
                       onClick={() => moveCard(index, 1)}
                       disabled={index === config.cards.length - 1}
                       aria-label="Move card down"
@@ -180,7 +180,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
                       <Icon type="chevron-down" size="small" />
                     </button>
                     <button
-                      className="rounded p-1 hover:bg-contrast"
+                      className="hover:bg-contrast rounded p-1"
                       onClick={() => removeCard(card.id)}
                       aria-label="Remove card"
                     >
@@ -192,10 +192,10 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
             )}
           </div>
 
-          <div className="flex flex-col gap-2 border-t border-border pt-3">
-            <div className="text-sm font-semibold text-text">Add a card</div>
+          <div className="border-border flex flex-col gap-2 border-t pt-3">
+            <div className="text-text text-sm font-semibold">Add a card</div>
 
-            <label className="flex flex-col gap-1 text-xs text-passive-0">
+            <label className="text-passive-0 flex flex-col gap-1 text-xs">
               Card type
               <select
                 className={selectClassName}
@@ -214,7 +214,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
               </select>
             </label>
 
-            <label className="flex flex-col gap-1 text-xs text-passive-0">
+            <label className="text-passive-0 flex flex-col gap-1 text-xs">
               {draftKind === 'note' ? 'Note' : 'Topic / folder / view'}
               <select
                 className={selectClassName}
@@ -230,7 +230,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
               </select>
             </label>
 
-            <label className="flex flex-col gap-1 text-xs text-passive-0">
+            <label className="text-passive-0 flex flex-col gap-1 text-xs">
               Label (optional)
               <input
                 className={selectClassName}
@@ -241,14 +241,14 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
               />
             </label>
 
-            <div className="flex flex-col gap-1 text-xs text-passive-0">
+            <div className="text-passive-0 flex flex-col gap-1 text-xs">
               Icon
               <div className="flex flex-wrap gap-1">
                 {ICON_CHOICES.map((icon) => (
                   <button
                     key={icon as string}
                     className={
-                      'rounded border p-1.5 hover:bg-contrast ' +
+                      'hover:bg-contrast rounded border p-1.5 ' +
                       (draftIcon === icon ? 'border-info bg-info-backdrop' : 'border-border')
                     }
                     onClick={() => setDraftIcon(icon)}
@@ -262,7 +262,7 @@ const HomeCustomizeEditor = ({ application, config, onChange, onDone }: Props) =
             </div>
 
             <button
-              className="mt-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:brightness-125 disabled:opacity-40"
+              className="bg-info text-info-contrast mt-1 rounded px-3 py-1.5 text-sm font-semibold hover:brightness-125 disabled:opacity-40"
               onClick={addCard}
               disabled={!draftTarget}
             >

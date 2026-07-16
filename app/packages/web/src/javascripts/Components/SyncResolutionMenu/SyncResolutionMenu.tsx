@@ -20,11 +20,11 @@ class SyncResolutionMenu extends AbstractComponent<Props> {
       <div className="sn-component">
         <div
           id="sync-resolution-menu"
-          className="absolute bottom-[40px] left-[inherit] right-0 z-footer-bar-item-panel mt-4 flex max-h-[85vh] min-w-[300px] flex-col border border-solid border-border bg-default shadow-main"
+          className="z-footer-bar-item-panel border-border bg-default shadow-main absolute right-0 bottom-[40px] left-[inherit] mt-4 flex max-h-[85vh] min-w-[300px] flex-col border border-solid"
         >
-          <div className="flex flex-shrink-0 items-center justify-between border-b border-solid border-border bg-contrast px-6 py-3 text-text">
+          <div className="border-border bg-contrast text-text flex flex-shrink-0 items-center justify-between border-b border-solid px-6 py-3">
             <div className="text-base font-medium">Out of Sync</div>
-            <a onClick={this.close} className="text-sm font-bold text-info">
+            <a onClick={this.close} className="text-info text-sm font-bold">
               Close
             </a>
           </div>

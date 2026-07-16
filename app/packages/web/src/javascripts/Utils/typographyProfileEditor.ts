@@ -339,9 +339,7 @@ export const deleteProfile = (
 
   // Reassign the active id only when the profile we removed was the active one.
   const removedWasActive = resolveActiveTypographyProfile(list, activeId)?.id === profileId
-  const nextActiveId = removedWasActive
-    ? (normalized.find((p) => p.isDefault) ?? normalized[0]).id
-    : activeId
+  const nextActiveId = removedWasActive ? (normalized.find((p) => p.isDefault) ?? normalized[0]).id : activeId
 
   return { profiles: normalized, activeId: nextActiveId }
 }

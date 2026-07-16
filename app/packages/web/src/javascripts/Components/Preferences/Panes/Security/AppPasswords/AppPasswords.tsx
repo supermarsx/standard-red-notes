@@ -174,11 +174,11 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
           again. Revoke a password to immediately cut off any client using it.
         </Text>
         <Text className="mt-2">
-          Note: an app password only satisfies the server's two-factor challenge. It does not unlock your encrypted
-          data — that still requires your real account password.
+          Note: an app password only satisfies the server's two-factor challenge. It does not unlock your encrypted data
+          — that still requires your real account password.
         </Text>
 
-        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+        <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
           <Subtitle className="text-warning">An app password can sign in and reach your decrypted notes</Subtitle>
           <Text className="mt-1">
             A headless or automation client holding this secret can sign in to your account without an interactive
@@ -201,10 +201,10 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
             onChange={(value) => setLabel(value)}
             disabled={creating}
           />
-          <label className="flex flex-shrink-0 items-center gap-2 text-sm text-passive-0">
+          <label className="text-passive-0 flex flex-shrink-0 items-center gap-2 text-sm">
             Expires
             <select
-              className="rounded border border-solid border-border bg-default px-2 py-1.5 text-sm text-foreground"
+              className="border-border bg-default text-foreground rounded border border-solid px-2 py-1.5 text-sm"
               value={expiresInDays === null ? '' : String(expiresInDays)}
               onChange={(event) => setExpiresInDays(event.target.value === '' ? null : Number(event.target.value))}
               disabled={creating}
@@ -220,11 +220,11 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
         </div>
 
         {createdSecret && (
-          <div className="mt-3 rounded border border-solid border-border p-3">
+          <div className="border-border mt-3 rounded border border-solid p-3">
             <Subtitle>Copy your new app password now</Subtitle>
             <Text className="mb-2">This secret will not be shown again.</Text>
             <div className="flex flex-row items-center gap-2">
-              <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdSecret}</code>
+              <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{createdSecret}</code>
               <CopyButton copyValue={createdSecret} successMessage="App password copied to clipboard" />
             </div>
             <Button className="mt-3" label="Done" onClick={() => setCreatedSecret(null)} />
@@ -242,18 +242,18 @@ const AppPasswords: FunctionComponent<Props> = ({ application }: Props) => {
           appPasswords.map((appPassword) => (
             <div
               key={appPassword.uuid}
-              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="break-words text-base font-medium lg:text-sm">
+                <span className="text-base font-medium break-words lg:text-sm">
                   {appPassword.label}
                   {(appPassword.revoked || appPassword.expired) && (
-                    <span className="ml-2 rounded bg-contrast px-1.5 py-0.5 align-middle text-xs text-passive-0">
+                    <span className="bg-contrast text-passive-0 ml-2 rounded px-1.5 py-0.5 align-middle text-xs">
                       {appPassword.revoked ? 'Revoked' : 'Expired'}
                     </span>
                   )}
                 </span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   {statusLabel(appPassword)} · Created {formatDate(appPassword.createdAt)} · Last used{' '}
                   {formatDate(appPassword.lastUsedAt)}
                 </span>

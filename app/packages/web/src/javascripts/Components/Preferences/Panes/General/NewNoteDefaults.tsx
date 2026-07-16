@@ -150,8 +150,8 @@ const NewNoteDefaults = () => {
                 <div className="mt-2">
                   <input
                     className={classNames(
-                      'w-full min-w-55 rounded border border-solid border-passive-3 bg-default px-2 py-1.5 text-base md:w-auto md:translucent-ui:bg-transparent lg:text-sm',
-                      'focus-within:ring-2 focus-within:ring-info',
+                      'border-passive-3 bg-default md:translucent-ui:bg-transparent w-full min-w-55 rounded border border-solid px-2 py-1.5 text-base md:w-auto lg:text-sm',
+                      'focus-within:ring-info focus-within:ring-2',
                     )}
                     placeholder="e.g. YYYY-MM-DD"
                     value={customNoteTitleFormat}
@@ -159,13 +159,13 @@ const NewNoteDefaults = () => {
                     spellCheck={false}
                   />
                 </div>
-                <div className="mt-3 text-neutral">
+                <div className="text-neutral mt-3">
                   <span className="font-bold">Preview: </span>
                   <ErrorBoundary>
                     <em>{getDayjsFormattedString(undefined, customNoteTitleFormat)}</em>
                   </ErrorBoundary>
                 </div>
-                <div className="mt-2 text-neutral">
+                <div className="text-neutral mt-2">
                   <a
                     className="underline"
                     href={HelpPageUrl}

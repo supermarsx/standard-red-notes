@@ -191,9 +191,7 @@ function writeLastStatusSnapshot(snapshot: UpdateCheckSnapshot): void {
 }
 
 /** The pane-facing result of a check attempt. */
-export type UpdateCheckResult =
-  | { ok: true; snapshot: UpdateCheckSnapshot }
-  | { ok: false; reason: 'network' }
+export type UpdateCheckResult = { ok: true; snapshot: UpdateCheckSnapshot } | { ok: false; reason: 'network' }
 
 export class UpdateCheckService {
   private disposer?: () => void

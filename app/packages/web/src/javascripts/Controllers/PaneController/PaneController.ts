@@ -306,10 +306,7 @@ export class PaneController extends AbstractViewController implements InternalEv
     }
 
     if (!this.viewTabs.some((tab) => tab.id === paneId)) {
-      this.viewTabs = [
-        ...this.viewTabs,
-        { id: paneId, kind: 'pane', paneId, title: meta.title, icon: meta.icon },
-      ]
+      this.viewTabs = [...this.viewTabs, { id: paneId, kind: 'pane', paneId, title: meta.title, icon: meta.icon }]
     }
 
     this.activeViewTabId = paneId

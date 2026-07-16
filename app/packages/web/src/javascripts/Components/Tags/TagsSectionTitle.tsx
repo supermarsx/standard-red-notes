@@ -34,7 +34,7 @@ const TagsSectionTitle: FunctionComponent<Props> = ({ features }) => {
       <div className="title text-base md:text-sm">
         <span className="font-bold">{t('tags')}</span>
         <StyledTooltip label={TAG_FOLDERS_FEATURE_TOOLTIP}>
-          <label className="ml-1 cursor-pointer font-bold text-passive-2" onClick={showPremiumAlert}>
+          <label className="text-passive-2 ml-1 cursor-pointer font-bold" onClick={showPremiumAlert}>
             {t('folders')}
           </label>
         </StyledTooltip>

@@ -107,9 +107,9 @@ const ExistingImageRow: FunctionComponent<{
       disabled={busy}
       onClick={() => onChoose(file)}
       title={`Use "${file.name}" as cover`}
-      className="group flex flex-col overflow-hidden rounded border border-border bg-default text-left transition-colors hover:border-info disabled:opacity-50"
+      className="group border-border bg-default hover:border-info flex flex-col overflow-hidden rounded border text-left transition-colors disabled:opacity-50"
     >
-      <div className="flex h-24 w-full items-center justify-center overflow-hidden bg-passive-4">
+      <div className="bg-passive-4 flex h-24 w-full items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={file.name} className="h-full w-full object-cover" draggable={false} />
         ) : (
@@ -117,8 +117,8 @@ const ExistingImageRow: FunctionComponent<{
         )}
       </div>
       <div className="flex items-center gap-1 px-2 py-1.5">
-        <span className="min-w-0 flex-grow truncate text-xs text-text">{file.name}</span>
-        <span className="flex-shrink-0 text-xs text-passive-1">{formatSizeToReadableString(file.decryptedSize)}</span>
+        <span className="text-text min-w-0 flex-grow truncate text-xs">{file.name}</span>
+        <span className="text-passive-1 flex-shrink-0 text-xs">{formatSizeToReadableString(file.decryptedSize)}</span>
       </div>
     </button>
   )
@@ -223,13 +223,7 @@ const CoverImageSelectorContent = observer(
         actions={[{ label: 'Cancel', type: 'cancel', onClick: close, mobileSlot: 'left' }]}
       >
         <div className="flex flex-col gap-5">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={acceptAttribute}
-            className="hidden"
-            onChange={onFileChosen}
-          />
+          <input ref={fileInputRef} type="file" accept={acceptAttribute} className="hidden" onChange={onFileChosen} />
 
           {/* Route 1 + 2: drop zone / device picker. */}
           <div
@@ -256,20 +250,18 @@ const CoverImageSelectorContent = observer(
             }
           >
             <Icon type="file-image" size="large" className="text-passive-1" />
-            <div className="text-sm font-semibold text-text">
-              {busy ? 'Working…' : 'Drag an image here'}
-            </div>
-            <div className="text-xs text-passive-0">PNG, JPEG, WebP, or GIF — up to 15 MB</div>
-            <span className="mt-1 rounded border border-border px-3 py-1.5 text-sm text-info">
+            <div className="text-text text-sm font-semibold">{busy ? 'Working…' : 'Drag an image here'}</div>
+            <div className="text-passive-0 text-xs">PNG, JPEG, WebP, or GIF — up to 15 MB</div>
+            <span className="border-border text-info mt-1 rounded border px-3 py-1.5 text-sm">
               Choose from your device
             </span>
           </div>
 
           {/* Route 3: existing image files. */}
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold text-text">Your images</div>
+            <div className="text-text text-sm font-semibold">Your images</div>
             {imageFiles.length === 0 ? (
-              <p className="rounded border border-border px-3 py-6 text-center text-xs text-passive-0">
+              <p className="border-border text-passive-0 rounded border px-3 py-6 text-center text-xs">
                 You don&rsquo;t have any image files yet. Upload or drop one above to use it as a cover.
               </p>
             ) : (
@@ -285,13 +277,13 @@ const CoverImageSelectorContent = observer(
                   onChange={setQuery}
                   placeholder="Search your images…"
                   title="Search your images"
-                  left={[<Icon type="search" className="mr-1 h-4.5 w-4.5 flex-shrink-0 text-passive-1" />]}
+                  left={[<Icon type="search" className="text-passive-1 mr-1 h-4.5 w-4.5 flex-shrink-0" />]}
                   right={[
                     query && <ClearInputButton onClick={clearQuery} aria-label="Clear search" title="Clear search" />,
                   ]}
                 />
                 {visibleImageFiles.length === 0 ? (
-                  <p className="rounded border border-border px-3 py-6 text-center text-xs text-passive-0">
+                  <p className="border-border text-passive-0 rounded border px-3 py-6 text-center text-xs">
                     No images match your search.
                   </p>
                 ) : (

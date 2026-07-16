@@ -1,6 +1,6 @@
-import { MediaManagerInterface } from './MediaManagerInterface'
+import { systemPreferences } from 'electron'
 
-const { systemPreferences } = require('electron')
+import { MediaManagerInterface } from './MediaManagerInterface'
 
 export class MediaManager implements MediaManagerInterface {
   async askForMediaAccess(type: 'camera' | 'microphone'): Promise<boolean> {

@@ -9,9 +9,7 @@ let katexPromise: Promise<typeof import('katex').default> | undefined
 
 export function loadKatex(): Promise<typeof import('katex').default> {
   if (!katexPromise) {
-    katexPromise = Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(
-      ([m]) => m.default,
-    )
+    katexPromise = Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(([m]) => m.default)
   }
   return katexPromise
 }

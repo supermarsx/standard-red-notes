@@ -102,10 +102,7 @@ const CommonNodes = [
 // Standard Red Notes: register the styled paragraph/heading/quote overrides so
 // block-level styles (line spacing, paragraph spacing, indent) render and
 // serialize. Kept last so the base nodes they replace are already listed.
-export const BlockEditorNodes: NonNullable<CreateEditorArgs['nodes']> = [
-  ...CommonNodes,
-  ...STYLED_BLOCK_NODE_OVERRIDES,
-]
+export const BlockEditorNodes: NonNullable<CreateEditorArgs['nodes']> = [...CommonNodes, ...STYLED_BLOCK_NODE_OVERRIDES]
 
 export const SuperExportNodes: NonNullable<CreateEditorArgs['nodes']> = [
   ...CommonNodes,

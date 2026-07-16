@@ -33,13 +33,13 @@ const QuickActionsBar = ({ application }: Props) => {
 
   return (
     <div
-      className="flex w-full items-center gap-1 overflow-x-auto border-b border-border bg-default px-3 py-1.5"
+      className="border-border bg-default flex w-full items-center gap-1 overflow-x-auto border-b px-3 py-1.5"
       role="toolbar"
       aria-label="Quick actions"
     >
       {actions.length === 0 ? (
         <button
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-sm text-passive-0 hover:bg-contrast hover:text-text"
+          className="text-passive-0 hover:bg-contrast hover:text-text flex items-center gap-1.5 rounded px-1.5 py-1 text-sm"
           onClick={toggleConfig}
           ref={configButtonRef}
           aria-label="Add a quick action"
@@ -51,13 +51,14 @@ const QuickActionsBar = ({ application }: Props) => {
         <>
           {actions.map((action) => {
             const label = action.label || defaultLabelForAction(application, action)
-            const icon = (action.icon as VectorIconNameOrEmoji) || (defaultIconForAction(action) as VectorIconNameOrEmoji)
+            const icon =
+              (action.icon as VectorIconNameOrEmoji) || (defaultIconForAction(action) as VectorIconNameOrEmoji)
             return (
               <StyledTooltip key={action.id} label={label} showOnHover showOnMobile>
                 <button
                   className={classNames(
-                    'flex flex-shrink-0 items-center gap-1.5 rounded border border-border px-2 py-1',
-                    'text-sm text-text hover:bg-contrast',
+                    'border-border flex flex-shrink-0 items-center gap-1.5 rounded border px-2 py-1',
+                    'text-text hover:bg-contrast text-sm',
                   )}
                   onClick={() => handleRun(action)}
                   aria-label={label}
@@ -70,7 +71,7 @@ const QuickActionsBar = ({ application }: Props) => {
           })}
           <StyledTooltip label="Configure quick actions" showOnHover side="bottom">
             <button
-              className="ml-auto flex flex-shrink-0 items-center rounded p-1 text-passive-0 hover:bg-contrast hover:text-text"
+              className="text-passive-0 hover:bg-contrast hover:text-text ml-auto flex flex-shrink-0 items-center rounded p-1"
               onClick={toggleConfig}
               ref={configButtonRef}
               aria-label="Configure quick actions"

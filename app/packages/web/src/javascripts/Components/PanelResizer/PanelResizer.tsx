@@ -389,11 +389,11 @@ class PanelResizer extends Component<Props, State> {
         <div
           className={classNames(
             'panel-resizer',
-            'absolute right-0 top-0 z-panel-resizer',
+            'z-panel-resizer absolute top-0 right-0',
             'hidden h-full w-[4px] cursor-col-resize border-y-0 bg-[color:var(--panel-resizer-background-color)] md:block',
             this.props.alwaysVisible || this.state.collapsed || this.state.pressed ? 'opacity-100' : 'opacity-0',
             this.props.hoverable && 'hover:opacity-100',
-            isLeftSide && 'left-0 right-auto',
+            isLeftSide && 'right-auto left-0',
           )}
           onMouseDown={this.onMouseDown}
           ref={this.resizerElementRef}
@@ -404,9 +404,9 @@ class PanelResizer extends Component<Props, State> {
             aria-label="Expand panel"
             title="Expand panel"
             className={classNames(
-              'absolute top-1/2 z-panel-resizer -translate-y-1/2',
+              'z-panel-resizer absolute top-1/2 -translate-y-1/2',
               'hidden h-12 w-4 cursor-pointer items-center justify-center md:flex',
-              'rounded-md border border-border bg-default text-text shadow-sm',
+              'border-border bg-default text-text rounded-md border shadow-sm',
               'hover:bg-contrast focus:outline-none',
               // Straddle the panel edge (half outside) so the handle stays
               // visible and clickable even when the panel is collapsed to a

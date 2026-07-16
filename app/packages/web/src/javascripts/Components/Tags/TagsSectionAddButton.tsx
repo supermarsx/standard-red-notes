@@ -33,7 +33,7 @@ function TagsSectionAddButton({ isFolder = false }: Props) {
       focusable={true}
       icon="add"
       title={`${isFolder ? t('createNewFolder') : t('createNewTag')} (${shortcut})`}
-      className="p-0 text-neutral"
+      className="text-neutral p-0"
       onClick={addNewTag}
     />
   )

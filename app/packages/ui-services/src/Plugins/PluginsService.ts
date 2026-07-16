@@ -161,7 +161,7 @@ export class PluginsService implements PluginsServiceInterface {
       try {
         rawFeature = JSON.parse(rawFeature)
         // eslint-disable-next-line no-empty
-      } catch (error) {}
+      } catch {}
     }
 
     if (!rawFeature.content_type) {

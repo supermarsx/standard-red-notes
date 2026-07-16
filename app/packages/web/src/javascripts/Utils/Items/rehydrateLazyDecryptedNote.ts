@@ -1,9 +1,4 @@
-import {
-  DecryptedPayloadInterface,
-  isLitePayload,
-  PayloadEmitSource,
-  SNNote,
-} from '@standardnotes/snjs'
+import { DecryptedPayloadInterface, isLitePayload, PayloadEmitSource, SNNote } from '@standardnotes/snjs'
 
 /**
  * LAZY-DECRYPT CONSUMER RE-HYDRATION

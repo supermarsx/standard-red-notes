@@ -237,9 +237,10 @@ describe('pdfOcr', () => {
     })
 
     it('lets the overlay DISABLE browser OCR and falls back to the window language when blank', () => {
-      expect(
-        resolveBrowserOcrConfig({ enabled: true, defaultLanguage: 'fra' }, { clientOcrEnabled: false }),
-      ).toEqual({ enabled: false, defaultLanguage: 'fra' })
+      expect(resolveBrowserOcrConfig({ enabled: true, defaultLanguage: 'fra' }, { clientOcrEnabled: false })).toEqual({
+        enabled: false,
+        defaultLanguage: 'fra',
+      })
     })
   })
 })

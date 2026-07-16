@@ -38,8 +38,8 @@ const TabButton = forwardRef(
 
     return (
       <button
-        className={`relative mr-2 cursor-pointer border-0 pb-1.5 text-mobile-menu-item focus:shadow-none md:text-tablet-menu-item lg:text-menu-item ${
-          isSelected ? 'font-medium text-info' : 'text-text'
+        className={`text-mobile-menu-item md:text-tablet-menu-item lg:text-menu-item relative mr-2 cursor-pointer border-0 pb-1.5 focus:shadow-none ${
+          isSelected ? 'text-info font-medium' : 'text-text'
         }`}
         onClick={() => {
           selectTab(type)
@@ -170,16 +170,16 @@ const IconPicker = ({
               value={emojiInputValue as string}
               onChange={(value) => handleEmojiChange(value)}
             />
-            <div className="mt-2 text-sm text-passive-0 lg:text-xs">
+            <div className="text-passive-0 mt-2 text-sm lg:text-xs">
               Use your keyboard to enter or paste in an emoji character.
             </div>
             {isMacOS && (
-              <div className="mt-2 text-sm text-passive-0 lg:text-xs">
+              <div className="text-passive-0 mt-2 text-sm lg:text-xs">
                 On macOS: ⌘ + ⌃ + Space bar to bring up emoji picker.
               </div>
             )}
             {isWindows && (
-              <div className="mt-2 text-sm text-passive-0 lg:text-xs">
+              <div className="text-passive-0 mt-2 text-sm lg:text-xs">
                 On Windows: Windows key + . to bring up emoji picker.
               </div>
             )}

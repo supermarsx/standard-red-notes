@@ -242,13 +242,13 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
                     onFocus={onFocus}
                     onBlur={handleBlur}
                   />
-                  <div className="search-highlight-container pointer-events-none absolute left-0 top-0 h-full w-full" />
+                  <div className="search-highlight-container pointer-events-none absolute top-0 left-0 h-full w-full" />
                 </div>
               </div>
             }
             placeholder={
-              <div className="pointer-events-none absolute left-4 top-4 text-[length:--font-size] text-passive-1">
-                Type <span className="rounded bg-passive-4-opacity-variant p-0.5">/</span> for commands...
+              <div className="text-passive-1 pointer-events-none absolute top-4 left-4 text-[length:--font-size]">
+                Type <span className="bg-passive-4-opacity-variant rounded p-0.5">/</span> for commands...
               </div>
             }
             ErrorBoundary={LexicalErrorBoundary}

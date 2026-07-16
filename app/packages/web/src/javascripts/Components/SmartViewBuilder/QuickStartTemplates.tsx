@@ -30,19 +30,21 @@ const QuickStartTemplates = ({ controller }: Props) => {
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border bg-contrast px-4 py-3">
+    <div className="border-border bg-contrast flex flex-col gap-2 rounded-md border px-4 py-3">
       <div className="flex items-center gap-2">
-        <Icon type="star" size="small" className="flex-shrink-0 text-info" />
+        <Icon type="star" size="small" className="text-info flex-shrink-0" />
         <div className="text-sm font-semibold">Start from a template</div>
       </div>
-      <div className="text-xs text-passive-1">Pick a ready-made view to get going, then tweak the conditions below.</div>
+      <div className="text-passive-1 text-xs">
+        Pick a ready-made view to get going, then tweak the conditions below.
+      </div>
       <div className="flex flex-wrap gap-2">
         {templates.map((preset) => (
           <button
             key={preset.label}
             type="button"
             title={preset.description}
-            className="flex items-center gap-1.5 rounded-full border border-border bg-default px-3 py-1 text-sm hover:bg-info hover:text-info-contrast focus:bg-info focus:text-info-contrast focus:outline-none"
+            className="border-border bg-default hover:bg-info hover:text-info-contrast focus:bg-info focus:text-info-contrast flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm focus:outline-none"
             onClick={() => {
               controller.applyTemplate(preset)
             }}

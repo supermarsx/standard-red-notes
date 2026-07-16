@@ -53,7 +53,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         uuid: folder.uuid,
         title: folder.title,
         parentUuid: folder.parentId,
-        parentTitle: folder.parentId ? folderTitleByUuid.get(folder.parentId) ?? '' : '',
+        parentTitle: folder.parentId ? (folderTitleByUuid.get(folder.parentId) ?? '') : '',
         noteCount: folder.noteReferences.length,
       }))
     }
@@ -262,14 +262,14 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
 
           <div className="mb-3 flex items-center gap-2">
             <input
-              className="flex-grow rounded border border-border bg-default px-3 py-1.5 text-sm text-text"
+              className="border-border bg-default text-text flex-grow rounded border px-3 py-1.5 text-sm"
               placeholder="Filter by title…"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
             />
             <button
               type="button"
-              className="whitespace-nowrap rounded border border-border bg-default px-3 py-1.5 text-sm text-text hover:bg-contrast"
+              className="border-border bg-default text-text hover:bg-contrast rounded border px-3 py-1.5 text-sm whitespace-nowrap"
               onClick={selectDuplicates}
             >
               Select duplicates
@@ -277,12 +277,12 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
           </div>
 
           {selectedCount > 0 && (
-            <div className="mb-3 flex flex-wrap items-center gap-3 rounded bg-contrast px-3 py-2">
+            <div className="bg-contrast mb-3 flex flex-wrap items-center gap-3 rounded px-3 py-2">
               <span className="text-sm font-semibold">{selectedCount} selected</span>
               <label className="flex items-center gap-1 text-sm">
                 Move to
                 <select
-                  className="rounded border border-border bg-default px-2 py-1 text-sm text-text"
+                  className="border-border bg-default text-text rounded border px-2 py-1 text-sm"
                   value=""
                   onChange={(event) => {
                     const value = event.target.value
@@ -303,7 +303,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
               </label>
               <button
                 type="button"
-                className="rounded bg-danger px-3 py-1 text-sm font-semibold text-danger-contrast"
+                className="bg-danger text-danger-contrast rounded px-3 py-1 text-sm font-semibold"
                 onClick={() => void deleteSelected()}
               >
                 Delete selected
@@ -315,7 +315,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         <div className="min-h-0 flex-grow overflow-y-auto px-4 pb-4">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-border text-passive-0">
+              <tr className="border-border text-passive-0 border-b">
                 <th className="w-8 py-2">
                   <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} />
                 </th>
@@ -327,19 +327,15 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
             </thead>
             <tbody>
               {visibleRows.map((row) => (
-                <tr key={row.uuid} className="border-b border-border">
+                <tr key={row.uuid} className="border-border border-b">
                   <td className="py-2">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(row.uuid)}
-                      onChange={() => toggleRow(row.uuid)}
-                    />
+                    <input type="checkbox" checked={selected.has(row.uuid)} onChange={() => toggleRow(row.uuid)} />
                   </td>
                   <td className="py-2">
                     {editingUuid === row.uuid ? (
                       <input
                         autoFocus
-                        className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-text"
+                        className="border-border bg-default text-text w-full rounded border px-2 py-1 text-sm"
                         value={editingValue}
                         onChange={(event) => setEditingValue(event.target.value)}
                         onBlur={() => void commitEdit(row.uuid)}
@@ -354,20 +350,20 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
                     ) : (
                       <button
                         type="button"
-                        className="cursor-text text-left text-text hover:underline"
+                        className="text-text cursor-text text-left hover:underline"
                         onClick={() => beginEdit(row)}
                       >
                         {row.title || '(untitled)'}
                       </button>
                     )}
                   </td>
-                  <td className="py-2 text-passive-0">{row.parentTitle || '—'}</td>
-                  <td className="py-2 text-right text-passive-0">{row.noteCount}</td>
+                  <td className="text-passive-0 py-2">{row.parentTitle || '—'}</td>
+                  <td className="text-passive-0 py-2 text-right">{row.noteCount}</td>
                   <td className="py-2">
                     <button
                       type="button"
                       title="Delete"
-                      className="flex items-center text-danger"
+                      className="text-danger flex items-center"
                       onClick={() => void deleteSingle(row.uuid)}
                     >
                       <Icon type="trash-filled" />
@@ -377,7 +373,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
               ))}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-passive-0">
+                  <td colSpan={5} className="text-passive-0 py-6 text-center">
                     No {tab} to show.
                   </td>
                 </tr>

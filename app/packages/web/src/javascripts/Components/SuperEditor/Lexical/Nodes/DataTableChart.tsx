@@ -17,8 +17,13 @@ type Props = {
   config: DataTableChartConfig
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const buildOption = (columns: string[], rows: string[][], types: ColumnType[], config: DataTableChartConfig, textColor: string): any => {
+const buildOption = (
+  columns: string[],
+  rows: string[][],
+  types: ColumnType[],
+  config: DataTableChartConfig,
+  textColor: string,
+): any => {
   const { type, xColumn, yColumns } = config
   const baseText = { color: textColor }
 
@@ -109,13 +114,13 @@ export default function DataTableChart({ columns, rows, types, config }: Props):
   }, [lib, signature])
 
   if (failed) {
-    return <div className="p-3 text-sm text-passive-1">Could not load the charting library.</div>
+    return <div className="text-passive-1 p-3 text-sm">Could not load the charting library.</div>
   }
 
   return (
     <div className="relative w-full">
-      {!lib && <div className="p-3 text-sm text-passive-1">Loading chart…</div>}
-      <div ref={containerRef} className="h-80 w-full text-text" />
+      {!lib && <div className="text-passive-1 p-3 text-sm">Loading chart…</div>}
+      <div ref={containerRef} className="text-text h-80 w-full" />
     </div>
   )
 }

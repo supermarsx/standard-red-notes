@@ -3,11 +3,11 @@ import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessS
 import { NoteType, PrefKey, SNNote, PrefDefaults, FileItem, PrefValue, isItemExportable } from '@standardnotes/snjs'
 import { WebApplicationInterface } from '@standardnotes/ui-services'
 import { type ZipDirectoryEntry } from '@zip.js/zip.js'
-// @ts-ignore inline webpack loader imports
+// @ts-expect-error inline webpack loader imports
 import superEditorCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/editor.scss'
-// @ts-ignore inline webpack loader imports
+// @ts-expect-error inline webpack loader imports
 import snColorsCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!@standardnotes/styles/src/Styles/_colors.scss'
-// @ts-ignore inline webpack loader imports
+// @ts-expect-error inline webpack loader imports
 import exportOverridesCSS from '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/export-overrides.scss'
 import { getBase64FromBlob } from './Utils'
 import {

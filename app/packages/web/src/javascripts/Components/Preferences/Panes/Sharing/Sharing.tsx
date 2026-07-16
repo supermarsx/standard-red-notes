@@ -278,7 +278,7 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
         <PreferencesSegment>
           <Title>Sharing &amp; Collaboration</Title>
           <Subtitle>An overview of what you share and who you collaborate with.</Subtitle>
-          <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
+          <div className="border-border bg-contrast mt-2.5 rounded border p-3 text-sm">
             <div className="mb-1.5 flex items-center gap-2 font-semibold">
               <Icon type="info" size="small" />
               How collaboration works
@@ -320,11 +320,11 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
             </Text>
           )}
           {overviews.map((overview) => (
-            <div key={overview.vault.uuid} className="mt-3 rounded border border-border p-3">
+            <div key={overview.vault.uuid} className="border-border mt-3 rounded border p-3">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <Icon type="safe-square" size="small" />
                 <span className="font-semibold">{overview.vault.name}</span>
-                <span className="rounded bg-info px-1.5 py-0.5 text-xs text-info-contrast">
+                <span className="bg-info text-info-contrast rounded px-1.5 py-0.5 text-xs">
                   {formatVaultRole(overview.role)}
                 </span>
               </div>
@@ -334,17 +334,17 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
                 <div className="space-y-2">
                   {overview.itemGroups.map((group) => (
                     <div key={group.contentType}>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-passive-0">
+                      <div className="text-passive-0 text-xs font-semibold tracking-wide uppercase">
                         {group.label} ({group.count})
                       </div>
                       <ul className="mt-1 space-y-0.5">
                         {group.items.slice(0, 8).map((item) => (
-                          <li key={item.uuid} className="truncate text-sm text-text">
+                          <li key={item.uuid} className="text-text truncate text-sm">
                             {item.title || 'Untitled'}
                           </li>
                         ))}
                         {group.items.length > 8 && (
-                          <li className="text-xs text-passive-1">+{group.items.length - 8} more…</li>
+                          <li className="text-passive-1 text-xs">+{group.items.length - 8} more…</li>
                         )}
                       </ul>
                     </div>
@@ -366,17 +366,17 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
                 const meta = record.message.data.metadata
                 const permission = application.vaultUsers.getFormattedMemberPermission(record.invite.permission)
                 return (
-                  <div key={record.invite.uuid} className="rounded border border-border p-3">
+                  <div key={record.invite.uuid} className="border-border rounded border p-3">
                     <div className="text-sm font-semibold">{meta.name}</div>
-                    {meta.description && <div className="text-sm text-passive-1">{meta.description}</div>}
-                    <div className="mt-1 text-xs text-passive-1">Permission: {permission}</div>
+                    {meta.description && <div className="text-passive-1 text-sm">{meta.description}</div>}
+                    <div className="text-passive-1 mt-1 text-xs">Permission: {permission}</div>
                     {record.trusted ? (
                       <div className="mt-2 flex gap-2">
                         <Button small label="Accept" onClick={() => acceptInvite(record)} />
                         <Button small label="Decline" onClick={() => declineInvite(record)} />
                       </div>
                     ) : (
-                      <div className="mt-2 text-xs text-passive-1">
+                      <div className="text-passive-1 mt-2 text-xs">
                         Sender isn't a trusted contact yet. Add them as a trusted contact from the Vaults pane to
                         accept.
                         <div className="mt-2">
@@ -400,11 +400,11 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
             <Subtitle>Who you're collaborating with. Full contact management lives in the Vaults pane.</Subtitle>
             <div className="mt-2 space-y-4">
               {overviews.map((overview) => (
-                <div key={overview.vault.uuid} className="rounded border border-border p-3">
+                <div key={overview.vault.uuid} className="border-border rounded border p-3">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{overview.vault.name}</span>
-                      <span className="rounded bg-info px-1.5 py-0.5 text-xs text-info-contrast">
+                      <span className="bg-info text-info-contrast rounded px-1.5 py-0.5 text-xs">
                         {formatVaultRole(overview.role)}
                       </span>
                     </div>
@@ -422,7 +422,7 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
                           <div className="flex min-w-0 items-center gap-2">
                             <Icon type="user" size="small" />
                             <span className="truncate text-sm">{nameForUser(member.user_uuid)}</span>
-                            <span className="text-xs text-passive-1">
+                            <span className="text-passive-1 text-xs">
                               {application.vaultUsers.getFormattedMemberPermission(member.permission)}
                               {isOwnerMember ? ' · Owner' : ''}
                             </span>
@@ -436,14 +436,14 @@ const SharedVaultsOverview = observer(({ application }: SharingPaneProps) => {
                   </div>
 
                   {overview.outboundInvites.length > 0 && (
-                    <div className="mt-2.5 border-t border-border pt-2">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-passive-0">
+                    <div className="border-border mt-2.5 border-t pt-2">
+                      <div className="text-passive-0 text-xs font-semibold tracking-wide uppercase">
                         Pending invites sent
                       </div>
                       <div className="mt-1 space-y-1.5">
                         {overview.outboundInvites.map((invite) => (
                           <div key={invite.uuid} className="flex items-center justify-between gap-2">
-                            <span className="truncate text-sm text-passive-1">{nameForUser(invite.user_uuid)}</span>
+                            <span className="text-passive-1 truncate text-sm">{nameForUser(invite.user_uuid)}</span>
                             <Button small label="Cancel" onClick={() => cancelOutboundInvite(invite)} />
                           </div>
                         ))}

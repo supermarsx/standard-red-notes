@@ -52,10 +52,7 @@ export function computeFootnoteNumbering(orderedFootnoteIds: string[]): Map<stri
  * references with no entry get an empty placeholder entry so the section stays
  * paired with the markers.
  */
-export function orderEntriesByReferences(
-  orderedFootnoteIds: string[],
-  entries: FootnoteEntry[],
-): FootnoteEntry[] {
+export function orderEntriesByReferences(orderedFootnoteIds: string[], entries: FootnoteEntry[]): FootnoteEntry[] {
   const byId = new Map(entries.map((entry) => [entry.footnoteId, entry]))
   const seen = new Set<string>()
   const ordered: FootnoteEntry[] = []

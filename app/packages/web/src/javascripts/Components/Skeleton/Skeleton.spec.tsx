@@ -5,9 +5,8 @@
  * assert the rendered DOM contract (structure, row count, class merging, and
  * the accessibility affordances) rather than visual motion.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { SkeletonBlock, SkeletonCircle, SkeletonLine, SkeletonList } from '@/Components/Skeleton/Skeleton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

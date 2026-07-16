@@ -34,7 +34,7 @@ const ConstellationButton: FunctionComponent<Props> = ({ application }) => {
         aria-pressed={isOpen}
       >
         <div className="h-5">
-          <Icon type="star-filled" className={classNames(isOpen && 'text-info', 'rounded hover:text-info')} />
+          <Icon type="star-filled" className={classNames(isOpen && 'text-info', 'hover:text-info rounded')} />
         </div>
       </button>
     </StyledTooltip>

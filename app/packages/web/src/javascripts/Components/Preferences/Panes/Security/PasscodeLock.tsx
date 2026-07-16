@@ -226,7 +226,7 @@ const PasscodeLock = ({ application }: Props) => {
                 onChange={handleConfirmPasscodeChange}
                 placeholder="Confirm Passcode"
               />
-              <Button primary onClick={submitPasscodeForm} label="Set Passcode" className="mr-3 mt-3" />
+              <Button primary onClick={submitPasscodeForm} label="Set Passcode" className="mt-3 mr-3" />
               <Button onClick={cancelPasscodeForm} label="Cancel" />
             </form>
           )}
@@ -258,7 +258,7 @@ const PasscodeLock = ({ application }: Props) => {
                       className={classNames(
                         'mr-3 cursor-pointer rounded',
                         option.value === selectedAutoLockInterval
-                          ? 'bg-info px-1.5 py-0.5 text-info-contrast'
+                          ? 'bg-info text-info-contrast px-1.5 py-0.5'
                           : 'text-info',
                       )}
                       onClick={() => selectDesktopAutoLockInterval(option.value)}

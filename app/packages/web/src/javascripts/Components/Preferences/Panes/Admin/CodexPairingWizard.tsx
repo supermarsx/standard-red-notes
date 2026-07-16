@@ -145,7 +145,9 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
     timeoutRef.current = window.setTimeout(() => {
       stopPolling()
       if (mountedRef.current) {
-        setError('Timed out waiting for pairing. Finish the ChatGPT login, then click "Check pairing" or paste the code.')
+        setError(
+          'Timed out waiting for pairing. Finish the ChatGPT login, then click "Check pairing" or paste the code.',
+        )
       }
     }, POLL_TIMEOUT_MS)
   }, [refreshStatus, stopPolling])
@@ -155,10 +157,17 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
     setLoading(true)
     try {
       // Send the (optional) target slot id so multiple subscriptions can be paired.
-      const { ok, status: httpStatus, data } = await application.serverJsonRequest<{
+      const {
+        ok,
+        status: httpStatus,
+        data,
+      } = await application.serverJsonRequest<{
         authorizeUrl?: string
         state?: string
-      }>('/v1/assistant/subscription/start', subscriptionId.trim() !== '' ? { subscriptionId: subscriptionId.trim() } : {})
+      }>(
+        '/v1/assistant/subscription/start',
+        subscriptionId.trim() !== '' ? { subscriptionId: subscriptionId.trim() } : {},
+      )
       if (!ok || !data?.authorizeUrl) {
         throw new Error(
           httpStatus === 503
@@ -261,7 +270,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
         held, and auto-refreshed on the server and is never shown here.
       </Text>
 
-      <div className="mt-3 rounded border border-solid border-warning bg-warning-faded p-3">
+      <div className="border-warning bg-warning-faded mt-3 rounded border border-solid p-3">
         <Subtitle className="text-warning">Best-effort, unverified integration</Subtitle>
         <Text className="mt-1">
           The ChatGPT/Codex OAuth flow is not a stable public API — endpoints, client id and scopes are best-effort
@@ -277,7 +286,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
       <div className="mb-4 flex items-center justify-between gap-2">
         <Subtitle>Current status</Subtitle>
         <span
-          className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${
+          className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${
             paired ? 'bg-success text-success-contrast' : 'bg-passive-4 text-foreground'
           }`}
         >
@@ -286,26 +295,29 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
       </div>
       {paired && (
         <Text className="mb-3">
-          Paired{status?.accountLabel ? ` as ${status.accountLabel}` : status?.accountId ? ` (${status.accountId})` : ''}
+          Paired
+          {status?.accountLabel ? ` as ${status.accountLabel}` : status?.accountId ? ` (${status.accountId})` : ''}
           {expiry ? `. Access token expires: ${expiry}` : '.'}
           {status?.needsRepair && (
-            <span className="block text-warning">The stored token needs re-pairing — run the wizard again.</span>
+            <span className="text-warning block">The stored token needs re-pairing — run the wizard again.</span>
           )}
         </Text>
       )}
       {!paired && status?.usingEnvFallback && (
-        <Text className="mb-3 text-passive-1">
+        <Text className="text-passive-1 mb-3">
           The server is using an environment-configured subscription token as a fallback. Pairing here takes precedence.
         </Text>
       )}
-      {!paired && status?.reason && <Text className="mb-3 text-passive-1">{status.reason}</Text>}
+      {!paired && status?.reason && <Text className="text-passive-1 mb-3">{status.reason}</Text>}
 
       {/* Step 1 */}
       <div className="mb-4 flex items-start gap-3">
         <StepBadge n={1} active={step === 'idle'} done={step !== 'idle'} />
         <div className="flex-1">
           <Subtitle>Generate the authorization link</Subtitle>
-          <Text className="mt-1">The server creates a PKCE challenge and a one-time state. No secret leaves the server.</Text>
+          <Text className="mt-1">
+            The server creates a PKCE challenge and a one-time state. No secret leaves the server.
+          </Text>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <DecoratedInput
               className={{ container: 'w-64' }}
@@ -321,7 +333,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
               disabled={loading}
             />
           </div>
-          <Text className="mt-1 text-xs text-passive-1">
+          <Text className="text-passive-1 mt-1 text-xs">
             Leave the id empty for the default subscription, or set one (matching a subscription backend profile) to add
             an additional pairing without dropping the existing ones.
           </Text>
@@ -336,7 +348,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
           <Text className="mt-1">Open the URL, log in to ChatGPT, and approve access.</Text>
           {step === 'authorize' && authorizeUrl && (
             <>
-              <div className="mt-2 break-all rounded border border-border bg-passive-5 p-2 font-mono text-xs">
+              <div className="border-border bg-passive-5 mt-2 rounded border p-2 font-mono text-xs break-all">
                 {authorizeUrl}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -380,7 +392,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
         </div>
       </div>
 
-      {error && <Text className="mt-3 text-danger">{error}</Text>}
+      {error && <Text className="text-danger mt-3">{error}</Text>}
 
       {(paired || step === 'done') && (
         <>

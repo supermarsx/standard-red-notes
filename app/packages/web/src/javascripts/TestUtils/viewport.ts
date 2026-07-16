@@ -81,7 +81,7 @@ export const setViewport = (
   options: { height?: number; colorScheme?: ColorScheme } = {},
 ): (() => void) => {
   const height = options.height ?? 800
-  let colorScheme: ColorScheme = options.colorScheme ?? 'no-preference'
+  const colorScheme: ColorScheme = options.colorScheme ?? 'no-preference'
 
   const previousMatchMedia = window.matchMedia
   const previousWidth = window.innerWidth

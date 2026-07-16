@@ -11,11 +11,7 @@ import {
 } from 'lexical'
 import { useEffect } from 'react'
 import { $createFootnoteReferenceNode, FootnoteReferenceNode } from '../../Lexical/Nodes/FootnoteReferenceNode'
-import {
-  $createFootnotesNode,
-  $isFootnotesNode,
-  FootnotesNode,
-} from '../../Lexical/Nodes/FootnotesNode'
+import { $createFootnotesNode, $isFootnotesNode, FootnotesNode } from '../../Lexical/Nodes/FootnotesNode'
 import { $getOrderedFootnoteReferences, footnoteEntryDomId } from '../../Lexical/Nodes/FootnoteShared'
 
 export const INSERT_FOOTNOTE_COMMAND: LexicalCommand<void> = createCommand('INSERT_FOOTNOTE_COMMAND')
@@ -54,9 +50,7 @@ export default function FootnotePlugin(): null {
           // Focus the new entry's textarea after the DOM has rendered.
           const footnoteId = reference.getFootnoteId()
           requestAnimationFrame(() => {
-            const entry = editor
-              .getRootElement()
-              ?.ownerDocument.getElementById(footnoteEntryDomId(footnoteId))
+            const entry = editor.getRootElement()?.ownerDocument.getElementById(footnoteEntryDomId(footnoteId))
             entry?.querySelector<HTMLElement>('[data-footnote-entry-input="true"]')?.focus()
           })
           return true

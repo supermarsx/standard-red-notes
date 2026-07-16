@@ -56,7 +56,7 @@ export const SupportsPassiveListeners = (() => {
     })
     window.addEventListener('test', null as never, opts)
     window.removeEventListener('test', null as never, opts)
-  } catch (e) {
+  } catch {
     /* empty */
   }
   return supportsPassive

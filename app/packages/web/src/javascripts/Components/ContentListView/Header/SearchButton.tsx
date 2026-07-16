@@ -31,7 +31,7 @@ const SearchButton = ({ itemListController }: Props) => {
             isSearchBarVisible ? 'scale-x-1 opacity-100' : 'scale-x-0 opacity-0',
             'origin-right px-1 transition-all duration-200 ease-in-out',
           ),
-          input: 'text-base placeholder:text-passive-0 lg:text-sm',
+          input: 'placeholder:text-passive-0 text-base lg:text-sm',
         }}
         placeholder={t('searchPlaceholder')}
         value={noteFilterText}
@@ -41,7 +41,7 @@ const SearchButton = ({ itemListController }: Props) => {
           }
         }}
         onChange={(query) => setNoteFilterText(query)}
-        left={[<Icon type="search" className="mr-1 h-4.5 w-4.5 flex-shrink-0 text-passive-1" />]}
+        left={[<Icon type="search" className="text-passive-1 mr-1 h-4.5 w-4.5 flex-shrink-0" />]}
         right={[noteFilterText && <ClearInputButton onClick={clearFilterText} />]}
         roundedFull
       />

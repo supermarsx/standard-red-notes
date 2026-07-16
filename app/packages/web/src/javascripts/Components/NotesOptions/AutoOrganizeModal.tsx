@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import {
-  FolderContent,
-  FolderContentType,
-  FolderMutator,
-  SNFolder,
-  SNNote,
-  SNTag,
-} from '@standardnotes/snjs'
+import { FolderContent, FolderContentType, FolderMutator, SNFolder, SNNote, SNTag } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
 import Modal from '../Modal/Modal'
@@ -78,7 +71,13 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
   const existingTagNames = useMemo(() => new Set(existingTags.map((t) => lower(t.title))), [existingTags])
 
   const buildPreviewFromPlan = useCallback(
-    (folders: string[], tags: string[], assignments: ResolvedAssignment[], considered: number, skipped: number): Preview => {
+    (
+      folders: string[],
+      tags: string[],
+      assignments: ResolvedAssignment[],
+      considered: number,
+      skipped: number,
+    ): Preview => {
       const newFolders = folders.filter((name) => !existingFolderNames.has(lower(name)))
       const newTags = tags.filter((name) => !existingTagNames.has(lower(name)))
       return { newFolders, newTags, assignments, consideredCount: considered, skippedCount: skipped }
@@ -112,7 +111,12 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
         }
         const plan = await requestCurrentNotePlan(
           application,
-          { title: note.title ?? '', plaintext, existingFolders: existingFolderTitles, existingTags: existingTagTitles },
+          {
+            title: note.title ?? '',
+            plaintext,
+            existingFolders: existingFolderTitles,
+            existingTags: existingTagTitles,
+          },
           { signal: controller.signal },
         )
         const assignments: ResolvedAssignment[] =
@@ -152,7 +156,9 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
             return resolved ? { note: resolved, folder: a.folder, tags: a.tags } : undefined
           })
           .filter((a): a is ResolvedAssignment => !!a)
-        setPreview(buildPreviewFromPlan(plan.folders, plan.tags, assignments, digest.includedCount, digest.omittedCount))
+        setPreview(
+          buildPreviewFromPlan(plan.folders, plan.tags, assignments, digest.includedCount, digest.omittedCount),
+        )
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -270,8 +276,8 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
     >
       <div className="flex flex-col gap-4">
         {/* Data-exposure notice — same pattern as Suggest tags / Narrate. */}
-        <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-          <div className="font-semibold text-warning">Auto-organize sends note content to an AI</div>
+        <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+          <div className="text-warning font-semibold">Auto-organize sends note content to an AI</div>
           <p className="mt-1">
             {mode === 'current-note'
               ? 'Generating a plan sends this note’s title and text to the AI provider you configured.'
@@ -283,7 +289,7 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            className="flex items-center gap-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             onClick={() => void generate()}
             disabled={!aiAvailability.available || generating || applying}
           >
@@ -292,10 +298,10 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
           </button>
         </div>
 
-        {!aiAvailability.available && <p className="text-xs text-passive-0">{aiAvailability.reason}</p>}
-        {error && <p className="text-sm text-danger">Could not generate a plan: {error}</p>}
+        {!aiAvailability.available && <p className="text-passive-0 text-xs">{aiAvailability.reason}</p>}
+        {error && <p className="text-danger text-sm">Could not generate a plan: {error}</p>}
         {noPlan && (
-          <p className="text-sm text-passive-0">
+          <p className="text-passive-0 text-sm">
             The AI didn’t return a usable organization plan. Try generating again.
           </p>
         )}
@@ -303,7 +309,7 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
         {preview && preview.assignments.length > 0 && (
           <div className="flex flex-col gap-3">
             {mode === 'all-notes' && preview.skippedCount > 0 && (
-              <p className="text-xs text-passive-0">
+              <p className="text-passive-0 text-xs">
                 Considered {preview.consideredCount} note{preview.consideredCount === 1 ? '' : 's'};{' '}
                 {preview.skippedCount} not included (library exceeds the {DEFAULT_MAX_NOTES}-note limit or the size
                 budget). Run again after organizing to handle the rest.
@@ -315,13 +321,13 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
                 <span className="text-sm font-semibold">Will create</span>
                 <div className="flex flex-wrap items-center gap-1.5 text-sm">
                   {preview.newFolders.map((name) => (
-                    <span key={`f-${name}`} className="flex items-center gap-1 rounded bg-contrast px-2 py-0.5">
+                    <span key={`f-${name}`} className="bg-contrast flex items-center gap-1 rounded px-2 py-0.5">
                       <Icon type="folder" size="small" className="text-info" />
                       {name}
                     </span>
                   ))}
                   {preview.newTags.map((name) => (
-                    <span key={`t-${name}`} className="flex items-center gap-1 rounded bg-contrast px-2 py-0.5">
+                    <span key={`t-${name}`} className="bg-contrast flex items-center gap-1 rounded px-2 py-0.5">
                       <Icon type="hashtag" size="small" className="text-info" />
                       {name}
                     </span>
@@ -336,17 +342,17 @@ const AutoOrganizeModalContent = observer(({ application, note, mode, close }: O
               </span>
               <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
                 {preview.assignments.map((assignment) => (
-                  <div key={assignment.note.uuid} className="rounded border border-border p-2 text-sm">
+                  <div key={assignment.note.uuid} className="border-border rounded border p-2 text-sm">
                     <div className="font-medium">{assignment.note.title || 'Untitled note'}</div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
                       {assignment.folder && (
-                        <span className="flex items-center gap-1 text-neutral">
+                        <span className="text-neutral flex items-center gap-1">
                           <Icon type="folder" size="small" />
                           {assignment.folder}
                         </span>
                       )}
                       {assignment.tags.map((tag) => (
-                        <span key={tag} className="flex items-center gap-0.5 text-neutral">
+                        <span key={tag} className="text-neutral flex items-center gap-0.5">
                           <Icon type="hashtag" size="small" />
                           {tag}
                         </span>

@@ -189,11 +189,13 @@ maybe('RoomCrypto (AES-GCM, requires WebCrypto)', () => {
   it('round-trips an encrypted yjs update', async () => {
     const key = await deriveRoomKey('vault-secret', 'note-1')
     const cipher = createRoomCipher(key)
-    const plaintext = Y.encodeStateAsUpdate(((): Y.Doc => {
-      const d = new Y.Doc()
-      d.getText('content').insert(0, 'secret note body')
-      return d
-    })())
+    const plaintext = Y.encodeStateAsUpdate(
+      ((): Y.Doc => {
+        const d = new Y.Doc()
+        d.getText('content').insert(0, 'secret note body')
+        return d
+      })(),
+    )
     const payload = await cipher.encrypt(plaintext)
     expect(typeof payload).toBe('string')
     const back = await cipher.decrypt(payload)

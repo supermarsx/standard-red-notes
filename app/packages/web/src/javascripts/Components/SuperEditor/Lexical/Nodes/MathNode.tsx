@@ -55,11 +55,11 @@ function MathComponent({ equation, nodeKey }: { equation: string; nodeKey: NodeK
   }, [draft, editor, nodeKey, render])
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-math-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-math-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Equation</span>
         <button
-          className="rounded px-2 py-0.5 hover:bg-contrast"
+          className="hover:bg-contrast rounded px-2 py-0.5"
           onClick={() => (editing ? commit() : setEditing(true))}
           type="button"
         >
@@ -69,7 +69,7 @@ function MathComponent({ equation, nodeKey }: { equation: string; nodeKey: NodeK
 
       {editing ? (
         <textarea
-          className="w-full resize-y bg-default p-2 font-mono text-sm text-foreground outline-none"
+          className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
           rows={Math.max(2, draft.split('\n').length + 1)}
           value={draft}
           spellCheck={false}
@@ -83,7 +83,7 @@ function MathComponent({ equation, nodeKey }: { equation: string; nodeKey: NodeK
         {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <div className="text-sm text-passive-1">Empty equation</div>
+          <div className="text-passive-1 text-sm">Empty equation</div>
         )}
       </div>
     </div>

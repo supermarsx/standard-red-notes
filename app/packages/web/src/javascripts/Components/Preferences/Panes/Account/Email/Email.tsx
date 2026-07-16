@@ -36,7 +36,7 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
     try {
       await application.settings.updateSetting(settingName, payload, false)
       return true
-    } catch (e) {
+    } catch {
       application.alerts.alert(STRING_FAILED_TO_UPDATE_USER_SETTING()).catch(console.error)
       return false
     }
@@ -46,7 +46,7 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
     try {
       await application.settings.updateSubscriptionSetting(settingName, payload, false)
       return true
-    } catch (e) {
+    } catch {
       application.alerts.alert(STRING_FAILED_TO_UPDATE_USER_SETTING()).catch(console.error)
       return false
     }
@@ -60,18 +60,18 @@ const Email: FunctionComponent<Props> = ({ application }: Props) => {
 
     try {
       const userSettings = await application.settings.listSettings()
-      ;(setSignInEmailsMutedValue(
+      setSignInEmailsMutedValue(
         userSettings.getSettingValue<MuteSignInEmailsOption>(
           SettingName.create(SettingName.NAMES.MuteSignInEmails).getValue(),
           MuteSignInEmailsOption.NotMuted,
         ),
-      ),
-        setMarketingEmailsMutedValue(
-          userSettings.getSettingValue<MuteMarketingEmailsOption>(
-            SettingName.create(SettingName.NAMES.MuteMarketingEmails).getValue(),
-            MuteMarketingEmailsOption.NotMuted,
-          ),
-        ))
+      )
+      setMarketingEmailsMutedValue(
+        userSettings.getSettingValue<MuteMarketingEmailsOption>(
+          SettingName.create(SettingName.NAMES.MuteMarketingEmails).getValue(),
+          MuteMarketingEmailsOption.NotMuted,
+        ),
+      )
     } catch (error) {
       console.error(error)
     } finally {

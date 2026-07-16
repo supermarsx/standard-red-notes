@@ -15,15 +15,12 @@ type WindowMeterProps = {
  */
 const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => {
   const model = useMemo(() => buildMeterModel(window), [window])
-  const resetIn = useMemo(
-    () => (window && !window.unavailable ? formatResetDuration(window.resetsAt) : ''),
-    [window],
-  )
+  const resetIn = useMemo(() => (window && !window.unavailable ? formatResetDuration(window.resetsAt) : ''), [window])
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-passive-1">{label}</span>
+        <span className="text-passive-1 text-xs font-semibold tracking-wide uppercase">{label}</span>
         <span className={classNames('text-xs tabular-nums', model.textColorClass)}>
           {model.unlimited ? (
             <>
@@ -35,7 +32,7 @@ const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => 
         </span>
       </div>
       <div
-        className="h-1.5 w-full overflow-hidden rounded-full bg-passive-3"
+        className="bg-passive-3 h-1.5 w-full overflow-hidden rounded-full"
         role="progressbar"
         aria-label={`${label} AI token usage`}
         aria-valuemin={0}
@@ -49,7 +46,7 @@ const WindowMeter: FunctionComponent<WindowMeterProps> = ({ label, window }) => 
           />
         )}
       </div>
-      <div className="flex items-center justify-between gap-2 text-[0.65rem] text-passive-1">
+      <div className="text-passive-1 flex items-center justify-between gap-2 text-[0.65rem]">
         {model.unavailable ? (
           <span>Usage unavailable</span>
         ) : model.unlimited ? (

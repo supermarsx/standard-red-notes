@@ -173,7 +173,9 @@ async function fetchModelSpeech(
     } catch {
       /* ignore */
     }
-    throw new Error(`speech endpoint: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`)
+    throw new Error(
+      `speech endpoint: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`,
+    )
   }
 
   return response.blob()
@@ -195,11 +197,7 @@ export function playNarration(application: WebApplication, options: TtsPlayOptio
   return playWithWebSpeech(options)
 }
 
-function playWithModel(
-  application: WebApplication,
-  options: TtsPlayOptions,
-  availability: TtsAvailability,
-): TtsHandle {
+function playWithModel(application: WebApplication, options: TtsPlayOptions, availability: TtsAvailability): TtsHandle {
   const audio = new Audio()
   const abort = new AbortController()
   let objectUrl: string | null = null

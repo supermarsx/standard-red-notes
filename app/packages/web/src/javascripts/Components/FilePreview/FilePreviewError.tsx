@@ -20,7 +20,7 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
       <div className="mb-2 text-base font-bold">{t('fileCannotBePreviewed')}</div>
       {isFilePreviewable ? (
         <>
-          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('errorLoadingFile')}</div>
+          <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('errorLoadingFile')}</div>
           <div className="flex items-center">
             <Button
               primary
@@ -49,7 +49,7 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
         </>
       ) : (
         <>
-          <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('downloadToView')}</div>
+          <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToView')}</div>
           <Button
             primary
             onClick={() => {

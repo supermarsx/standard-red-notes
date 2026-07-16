@@ -30,15 +30,7 @@
  * stamps the matching marker onto each descendant list keyed by its visual depth,
  * so "Define new multilevel list" choices survive reload.
  */
-import {
-  $getEditor,
-  $getNodeByKey,
-  $getRoot,
-  $isElementNode,
-  BaseSelection,
-  LexicalEditor,
-  LexicalNode,
-} from 'lexical'
+import { $getEditor, $getNodeByKey, $getRoot, $isElementNode, BaseSelection, LexicalEditor, LexicalNode } from 'lexical'
 import { $getNearestNodeOfType } from '@lexical/utils'
 import { $isListNode, ListNode } from '@lexical/list'
 
@@ -182,11 +174,7 @@ const stripCssQuotes = (value: string | undefined): string => {
     return ''
   }
   const trimmed = value.trim()
-  if (
-    trimmed.length >= 2 &&
-    (trimmed[0] === '"' || trimmed[0] === "'") &&
-    trimmed[trimmed.length - 1] === trimmed[0]
-  ) {
+  if (trimmed.length >= 2 && (trimmed[0] === '"' || trimmed[0] === "'") && trimmed[trimmed.length - 1] === trimmed[0]) {
     return trimmed.slice(1, -1)
   }
   return trimmed
@@ -351,7 +339,7 @@ export const $getCustomListGlyph = (listNode: ListNode): string =>
 const persistMarker = (writable: ListNode, styleValue: string, customGlyph?: string): void => {
   const preset = PRESET_BY_VALUE.get(styleValue)
   const isCustom = styleValue === CUSTOM_MARKER_VALUE
-  const cssType = isCustom ? 'none' : preset ? preset.listStyleType ?? 'none' : styleValue
+  const cssType = isCustom ? 'none' : preset ? (preset.listStyleType ?? 'none') : styleValue
   let css = withProperty(writable.getStyle(), LIST_STYLE_PROPERTY, cssType)
   css = withProperty(css, MARKER_PROPERTY, styleValue)
   if (isCustom) {

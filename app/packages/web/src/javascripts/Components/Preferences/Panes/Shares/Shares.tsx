@@ -103,66 +103,66 @@ const Shares: FunctionComponent<Props> = ({ application }: Props) => {
       <PreferencesGroup>
         <PreferencesSegment>
           <Title>Share Links</Title>
-        <Text>
-          Share links let anyone with the URL read a note (or tag bundle) without an account. The content is encrypted
-          in your browser under a secret key that lives only in the link's fragment and is never sent to the server —
-          the server stores only ciphertext. Revoke a link any time to immediately cut off access.
-        </Text>
-
-        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
-          <Subtitle className="text-warning">Anyone with the link can read the shared content</Subtitle>
-          <Text className="mt-1">
-            A share link removes end-to-end encryption for whatever you share: anyone who has the full URL can read it,
-            and it can be forwarded or leaked beyond who you intended. The encrypted content and the link itself live on
-            the server, which mediates every view. The server cannot decrypt the content on its own (the key stays in
-            the link), but anyone who obtains the full link can. Only share content you are comfortable exposing this
-            way, and revoke the link to immediately cut off access.
+          <Text>
+            Share links let anyone with the URL read a note (or tag bundle) without an account. The content is encrypted
+            in your browser under a secret key that lives only in the link's fragment and is never sent to the server —
+            the server stores only ciphertext. Revoke a link any time to immediately cut off access.
           </Text>
-        </div>
 
-        <Text className="mt-2">
-          Create a share link from a note's options menu ("Create share link"). Manage and revoke your existing links
-          below.
-        </Text>
-      </PreferencesSegment>
+          <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
+            <Subtitle className="text-warning">Anyone with the link can read the shared content</Subtitle>
+            <Text className="mt-1">
+              A share link removes end-to-end encryption for whatever you share: anyone who has the full URL can read
+              it, and it can be forwarded or leaked beyond who you intended. The encrypted content and the link itself
+              live on the server, which mediates every view. The server cannot decrypt the content on its own (the key
+              stays in the link), but anyone who obtains the full link can. Only share content you are comfortable
+              exposing this way, and revoke the link to immediately cut off access.
+            </Text>
+          </div>
 
-      <HorizontalSeparator classes="my-4" />
+          <Text className="mt-2">
+            Create a share link from a note's options menu ("Create share link"). Manage and revoke your existing links
+            below.
+          </Text>
+        </PreferencesSegment>
 
-      <PreferencesSegment>
-        <Subtitle>Your share links</Subtitle>
-        {loading && <Spinner className="mt-2 h-4 w-4" />}
-        {!loading && shares.length === 0 && <Text className="mt-2">You have no share links.</Text>}
-        {!loading &&
-          shares.map((share) => (
-            <div
-              key={share.uuid}
-              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="flex min-w-0 flex-col">
-                <span className="break-words text-base font-medium lg:text-sm">
-                  {share.nickname || `${share.type} share`}
-                </span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
-                  {share.type} ·{' '}
-                  {share.revoked
-                    ? share.oneTimeView && share.firstOpenedAt
-                      ? 'Burned (opened)'
-                      : 'Revoked'
-                    : 'Active'}
-                </span>
-                {describeBurn(share) && (
-                  <span className="break-words text-sm text-warning lg:text-xs">{describeBurn(share)}</span>
+        <HorizontalSeparator classes="my-4" />
+
+        <PreferencesSegment>
+          <Subtitle>Your share links</Subtitle>
+          {loading && <Spinner className="mt-2 h-4 w-4" />}
+          {!loading && shares.length === 0 && <Text className="mt-2">You have no share links.</Text>}
+          {!loading &&
+            shares.map((share) => (
+              <div
+                key={share.uuid}
+                className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex min-w-0 flex-col">
+                  <span className="text-base font-medium break-words lg:text-sm">
+                    {share.nickname || `${share.type} share`}
+                  </span>
+                  <span className="text-passive-0 text-sm break-words lg:text-xs">
+                    {share.type} ·{' '}
+                    {share.revoked
+                      ? share.oneTimeView && share.firstOpenedAt
+                        ? 'Burned (opened)'
+                        : 'Revoked'
+                      : 'Active'}
+                  </span>
+                  {describeBurn(share) && (
+                    <span className="text-warning text-sm break-words lg:text-xs">{describeBurn(share)}</span>
+                  )}
+                  <span className="text-passive-0 text-sm break-words lg:text-xs">
+                    Created {formatDate(share.createdAt)}
+                    {share.firstOpenedAt ? ` · First opened ${formatDate(share.firstOpenedAt)}` : ''}
+                  </span>
+                </div>
+                {!share.revoked && (
+                  <Button className="flex-shrink-0" label="Revoke" onClick={() => handleRevoke(share.uuid)} />
                 )}
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
-                  Created {formatDate(share.createdAt)}
-                  {share.firstOpenedAt ? ` · First opened ${formatDate(share.firstOpenedAt)}` : ''}
-                </span>
               </div>
-              {!share.revoked && (
-                <Button className="flex-shrink-0" label="Revoke" onClick={() => handleRevoke(share.uuid)} />
-              )}
-            </div>
-          ))}
+            ))}
         </PreferencesSegment>
       </PreferencesGroup>
     </PreferencesPane>

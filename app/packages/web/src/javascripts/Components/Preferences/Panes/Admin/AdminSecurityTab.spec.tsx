@@ -94,8 +94,7 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
 
 const tabWithText = (text: string): HTMLButtonElement | undefined =>
   Array.from(container.querySelectorAll('button[role="tab"]')).find((b) => (b.textContent ?? '').includes(text)) as
-    | HTMLButtonElement
-    | undefined
+    HTMLButtonElement | undefined
 
 const clickSubtab = async (label: string) => {
   const tab = tabWithText(label)

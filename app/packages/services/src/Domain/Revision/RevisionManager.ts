@@ -15,9 +15,7 @@ export class RevisionManager extends AbstractService implements RevisionClientIn
     super(internalEventBus)
   }
 
-  async listRevisions(
-    itemUuid: Uuid,
-  ): Promise<
+  async listRevisions(itemUuid: Uuid): Promise<
     {
       uuid: string
       content_type: string

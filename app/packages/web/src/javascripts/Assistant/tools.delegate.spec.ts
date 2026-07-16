@@ -14,7 +14,10 @@ const fakeApp = {} as unknown as WebApplication
 
 describe('AssistantTools delegate', () => {
   it('exposes the delegate tool at the top level when a sub-agent runner is provided', () => {
-    const tools = new AssistantTools(fakeApp, makeContext(async () => 'ok'))
+    const tools = new AssistantTools(
+      fakeApp,
+      makeContext(async () => 'ok'),
+    )
     expect(tools.tools().some((t) => t.name === 'delegate')).toBe(true)
   })
 
@@ -24,7 +27,11 @@ describe('AssistantTools delegate', () => {
   })
 
   it('withholds delegate from sub-agents (recursion guard) and rejects the call', async () => {
-    const sub = new AssistantTools(fakeApp, makeContext(async () => 'ok'), false)
+    const sub = new AssistantTools(
+      fakeApp,
+      makeContext(async () => 'ok'),
+      false,
+    )
     expect(sub.tools().some((t) => t.name === 'delegate')).toBe(false)
     await expect(sub.call('delegate', { task: 'x' })).rejects.toThrow('Unknown tool')
   })
@@ -42,7 +49,10 @@ describe('AssistantTools delegate', () => {
   })
 
   it('rejects a delegate call with no task', async () => {
-    const tools = new AssistantTools(fakeApp, makeContext(async () => 'ok'))
+    const tools = new AssistantTools(
+      fakeApp,
+      makeContext(async () => 'ok'),
+    )
     await expect(tools.call('delegate', {})).rejects.toThrow('task')
   })
 })

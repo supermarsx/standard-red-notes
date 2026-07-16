@@ -59,8 +59,7 @@ export class NarrationPlayerStore {
     this.currentTime = 0
     this.duration = 0
     this.errorMessage = null
-    this.unsubscribeTime =
-      handle.onTime?.((current, duration) => this.setTime(current, duration)) ?? null
+    this.unsubscribeTime = handle.onTime?.((current, duration) => this.setTime(current, duration)) ?? null
   }
 
   setState(state: TtsState): void {

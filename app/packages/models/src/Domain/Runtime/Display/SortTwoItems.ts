@@ -20,11 +20,7 @@ export const KeepSameOrder = 0
  * ordered items, and tie-break among themselves by a stable secondary sort
  * (title, then created_at) so their position is deterministic.
  */
-export function sortByCustomOrder(
-  a: DisplayItem,
-  b: DisplayItem,
-  orderMap: Record<string, number>,
-): number {
+export function sortByCustomOrder(a: DisplayItem, b: DisplayItem, orderMap: Record<string, number>): number {
   const aIndex = orderMap[a.uuid]
   const bIndex = orderMap[b.uuid]
   const aHas = aIndex !== undefined

@@ -13,7 +13,7 @@ const ModalDialogButtons: FunctionComponent<Props> = ({ children, className }) =
   return (
     <div
       className={classNames(
-        'flex items-center justify-end gap-3 border-t border-border px-4 py-4',
+        'border-border flex items-center justify-end gap-3 border-t px-4 py-4',
         hasBottomInset && 'pb-safe-bottom',
         className,
       )}

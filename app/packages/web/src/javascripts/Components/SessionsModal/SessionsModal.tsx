@@ -152,7 +152,7 @@ const SessionsModalContent: FunctionComponent<{
                       <p>Signed in on {formatter.format(new Date(session.created_at))}</p>
                       <p>Last active {formatter.format(new Date(session.updated_at))}</p>
                       {session.current ? (
-                        <span className="font-bold text-info">Current session</span>
+                        <span className="text-info font-bold">Current session</span>
                       ) : (
                         <Button
                           primary
@@ -176,12 +176,12 @@ const SessionsModalContent: FunctionComponent<{
         <AlertDialog closeDialog={closeRevokeConfirmationDialog}>
           <div className="flex items-center justify-between text-lg font-bold">
             {SessionStrings.RevokeTitle}
-            <button className="rounded p-1 font-bold hover:bg-contrast" onClick={closeRevokeConfirmationDialog}>
+            <button className="hover:bg-contrast rounded p-1 font-bold" onClick={closeRevokeConfirmationDialog}>
               <Icon type="close" />
             </button>
           </div>
           <div className="sk-panel-row">
-            <p className="text-base text-foreground lg:text-sm">{SessionStrings.RevokeText}</p>
+            <p className="text-foreground text-base lg:text-sm">{SessionStrings.RevokeText}</p>
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button ref={cancelRevokeRef} onClick={closeRevokeSessionAlert}>

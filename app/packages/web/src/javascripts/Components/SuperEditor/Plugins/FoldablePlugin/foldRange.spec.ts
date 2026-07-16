@@ -80,10 +80,7 @@ describe('computeHiddenListItemKeys', () => {
 
   it('dedupes overlapping nested folds (ancestor + descendant collapsed)', () => {
     // li1's subtree includes li2 and its children; both collapsed.
-    const items = [
-      item('li1', ['nl1', 'li2', 'nl2', 'li3']),
-      item('li2', ['nl2', 'li3']),
-    ]
+    const items = [item('li1', ['nl1', 'li2', 'nl2', 'li3']), item('li2', ['nl2', 'li3'])]
     const hidden = computeHiddenListItemKeys(items, new Set(['li1', 'li2']))
     expect([...hidden].sort()).toEqual(['li2', 'li3', 'nl1', 'nl2'])
   })

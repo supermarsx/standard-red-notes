@@ -131,8 +131,9 @@ describe('item list controller', () => {
     beforeEach(() => {
       selectHomeNavigationView = jest.fn().mockResolvedValue(undefined)
 
-      ;(controller as unknown as { publishCrossControllerEventSync: jest.Mock }).publishCrossControllerEventSync =
-        jest.fn().mockResolvedValue(undefined)
+      ;(controller as unknown as { publishCrossControllerEventSync: jest.Mock }).publishCrossControllerEventSync = jest
+        .fn()
+        .mockResolvedValue(undefined)
       controller.titleForNewNote = jest.fn().mockReturnValue('title')
       controller.scrollToItem = jest.fn()
       controller.createNewNoteController = jest.fn().mockResolvedValue({ item: { uuid: 'new-note' } })
@@ -268,9 +269,7 @@ describe('item list controller', () => {
   describe('MaxIndexedNotes ceiling (OOM guard)', () => {
     const setPrefs = (overrides: Record<string, unknown>) => {
       ;(controller as unknown as { preferences: { getValue: jest.Mock } }).preferences = {
-        getValue: jest.fn((key: string, fallback: unknown) =>
-          key in overrides ? overrides[key] : fallback,
-        ),
+        getValue: jest.fn((key: string, fallback: unknown) => (key in overrides ? overrides[key] : fallback)),
       }
     }
 
@@ -285,9 +284,7 @@ describe('item list controller', () => {
     // reconcileSearchIndexOptions (which may swap the instance when prefs change).
     let rebuildSpy: jest.SpyInstance
     beforeEach(() => {
-      rebuildSpy = jest
-        .spyOn(ThreadedSearchIndex.prototype, 'rebuild')
-        .mockResolvedValue(undefined)
+      rebuildSpy = jest.spyOn(ThreadedSearchIndex.prototype, 'rebuild').mockResolvedValue(undefined)
     })
     afterEach(() => {
       rebuildSpy.mockRestore()

@@ -53,7 +53,6 @@ export function registerServiceWorker(): void {
         })
       })
       .catch((error) => {
-        // eslint-disable-next-line no-console
         console.error('Service worker registration failed:', error)
       })
 

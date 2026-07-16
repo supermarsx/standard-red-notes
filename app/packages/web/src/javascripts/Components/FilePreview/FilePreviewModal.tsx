@@ -158,7 +158,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
         onKeyDown={keyDownHandler}
         ref={focusElementOnMount}
       >
-        <div className="hidden min-h-6 flex-shrink-0 flex-wrap items-center justify-between gap-2 border-0 border-b border-solid border-border px-4 py-3 focus:shadow-none md:flex">
+        <div className="border-border hidden min-h-6 flex-shrink-0 flex-wrap items-center justify-between gap-2 border-0 border-b border-solid px-4 py-3 focus:shadow-none md:flex">
           <div className="flex items-center">
             <div className="h-6 w-6">{IconComponent}</div>
             {isRenaming ? (
@@ -172,7 +172,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
                 }}
                 right={[
                   <button
-                    className="flex h-full items-center justify-center border-l border-border px-2 py-1.5 text-neutral hover:bg-passive-4"
+                    className="border-border text-neutral hover:bg-passive-4 flex h-full items-center justify-center border-l px-2 py-1.5"
                     title={t('submit')}
                     onClick={handleRename}
                   >
@@ -189,7 +189,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
             {!isReadonly && (
               <StyledTooltip label={t('renameFile')} className="!z-modal">
                 <button
-                  className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
+                  className="border-border hover:bg-contrast mr-4 flex cursor-pointer rounded border border-solid bg-transparent p-1.5"
                   onClick={() => setIsRenaming((isRenaming) => !isRenaming)}
                   aria-label={t('renameFile')}
                 >
@@ -199,7 +199,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
             )}
             <StyledTooltip label={t('showLinkedItems')} className="!z-modal">
               <button
-                className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
+                className="border-border hover:bg-contrast mr-4 flex cursor-pointer rounded border border-solid bg-transparent p-1.5"
                 onClick={toggleLinkedBubblesContainer}
                 aria-label={t('showLinkedItems')}
               >
@@ -208,7 +208,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
             </StyledTooltip>
             <StyledTooltip label={t('showFileOptions')} className="!z-modal">
               <button
-                className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
+                className="border-border hover:bg-contrast mr-4 flex cursor-pointer rounded border border-solid bg-transparent p-1.5"
                 onClick={toggleOptionsMenu}
                 ref={menuButtonRef}
                 aria-label={t('showFileOptions')}
@@ -237,7 +237,7 @@ const FilePreviewModal = observer(({ application }: Props) => {
             </Popover>
             <StyledTooltip label={t('showFileInfo')} className="!z-modal">
               <button
-                className="mr-4 flex cursor-pointer rounded border border-solid border-border bg-transparent p-1.5 hover:bg-contrast"
+                className="border-border hover:bg-contrast mr-4 flex cursor-pointer rounded border border-solid bg-transparent p-1.5"
                 onClick={toggleInfoPanel}
                 aria-label={t('showFileInfo')}
               >
@@ -248,14 +248,14 @@ const FilePreviewModal = observer(({ application }: Props) => {
               ref={closeButtonRef}
               onClick={dismiss}
               aria-label={t('closeModal')}
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1"
             >
               <Icon type="close" className="text-neutral" />
             </button>
           </div>
         </div>
         {showLinkedBubblesContainer && (
-          <div className="-mt-1 min-h-0 flex-shrink-0 border-b border-border px-3.5 py-1.5">
+          <div className="border-border -mt-1 min-h-0 flex-shrink-0 border-b px-3.5 py-1.5">
             <LinkedItemBubblesContainer
               linkingController={application.linkingController}
               item={currentFile}
@@ -267,15 +267,10 @@ const FilePreviewModal = observer(({ application }: Props) => {
           <div
             className={classNames(
               'relative flex max-w-full flex-grow items-center justify-center',
-              showFileInfoPanel && 'border-t border-border md:border-b-0 md:border-r',
+              showFileInfoPanel && 'border-border border-t md:border-r md:border-b-0',
             )}
           >
-            <FilePreview
-              file={currentFile}
-              application={application}
-              key={currentFile.uuid}
-              pdfTarget={pdfTarget}
-            />
+            <FilePreview file={currentFile} application={application} key={currentFile.uuid} pdfTarget={pdfTarget} />
           </div>
           {showFileInfoPanel && <FilePreviewInfoPanel file={currentFile} />}
         </div>

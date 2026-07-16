@@ -134,9 +134,7 @@ export const hasLinks = (links: ReadonlyArray<LinkColumnConfig | null | undefine
  * Distinct list of target table ids referenced by a table's link columns,
  * in first-seen order. Used for the "linked tables" indicator.
  */
-export const linkedTargetIds = (
-  links: ReadonlyArray<LinkColumnConfig | null | undefined> | undefined,
-): string[] => {
+export const linkedTargetIds = (links: ReadonlyArray<LinkColumnConfig | null | undefined> | undefined): string[] => {
   const seen = new Set<string>()
   const out: string[] = []
   if (!links) {

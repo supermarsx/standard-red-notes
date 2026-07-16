@@ -170,10 +170,11 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
 
     const icon = selectedTag?.iconString
 
-    const filteredItems = useMemo(
-      () => (isFilesSmartView ? (filterItemsByFolder(items, filesFolderFilter, navigationController) as typeof items) : items),
-      [isFilesSmartView, items, filesFolderFilter, navigationController, navigationController.folders],
-    )
+    const filteredItems = useMemo(() => {
+      return isFilesSmartView
+        ? (filterItemsByFolder(items, filesFolderFilter, navigationController) as typeof items)
+        : items
+    }, [isFilesSmartView, items, filesFolderFilter, navigationController, navigationController.folders])
 
     const addNewItem = useCallback(async () => {
       if (isFilesSmartView) {
@@ -344,14 +345,14 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
     return (
       <div
         id={id}
-        className={classNames(className, 'sn-component section h-full overflow-hidden pt-safe-top')}
+        className={classNames(className, 'sn-component section pt-safe-top h-full overflow-hidden')}
         aria-label={t('notesAndFiles')}
         ref={mergeRefs([ref, innerRef, setElement])}
       >
         {isMobileScreen && !itemListController.isMultipleSelectionMode && (
           <FloatingAddButton onClick={addNewItem} label={addButtonLabel} style={dailyMode ? 'danger' : 'info'} />
         )}
-        <div id="items-title-bar" className="section-title-bar border-b border-solid border-border">
+        <div id="items-title-bar" className="section-title-bar border-border border-b border-solid">
           <div id="items-title-bar-container">
             {selectedTag && (
               <ContentListHeader
@@ -389,11 +390,11 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
           />
         )}
         {itemListController.isMultipleSelectionMode && (
-          <div className="flex items-center border-b border-l-2 border-border border-l-transparent py-2.5 pr-4">
+          <div className="border-border flex items-center border-b border-l-2 border-l-transparent py-2.5 pr-4">
             <div className="px-4">
               <StyledTooltip label={t('selectAllItems')} showOnHover showOnMobile>
                 <button
-                  className="ml-auto rounded border border-border p-1 hover:bg-contrast"
+                  className="border-border hover:bg-contrast ml-auto rounded border p-1"
                   onClick={() => {
                     itemListController.selectAll()
                   }}
@@ -407,7 +408,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
             </div>
             <StyledTooltip label={t('cancelMultipleSelection')} showOnHover showOnMobile>
               <button
-                className="ml-auto rounded border border-border p-1 hover:bg-contrast"
+                className="border-border hover:bg-contrast ml-auto rounded border p-1"
                 onClick={() => {
                   itemListController.cancelMultipleSelection()
                 }}
@@ -453,7 +454,7 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
         {isMobileScreen && itemListController.isMultipleSelectionMode && (
           <MobileMultiSelectionToolbar notesController={notesController} navigationController={navigationController} />
         )}
-        <div className="absolute bottom-0 h-safe-bottom w-full" />
+        <div className="h-safe-bottom absolute bottom-0 w-full" />
         {children}
       </div>
     )

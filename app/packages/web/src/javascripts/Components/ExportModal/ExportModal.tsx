@@ -55,39 +55,40 @@ const ExportModal = ({ exportModalController }: { exportModalController: ExportM
     [close],
   )
 
-  const options: { kind: ExportKind; title: string; description: string; disabled?: boolean; disabledHint?: string }[] = [
-    {
-      kind: 'encrypted',
-      title: c('Title').t`Encrypted backup`,
-      description: c('Info')
-        .t`A complete, end-to-end-encrypted backup of your account in the native Standard Red Notes format. Re-importable with your password.`,
-      disabled: !hasAccount,
-      disabledHint: c('Info')
-        .t`Sign in or create an account to export an encrypted backup. A decrypted or Markdown export is available offline.`,
-    },
-    {
-      kind: 'decrypted',
-      title: c('Title').t`Decrypted backup`,
-      description: c('Info')
-        .t`A plaintext backup in the native Standard Red Notes format (a .zip of your items). Re-importable; keep it somewhere safe.`,
-    },
-    {
-      kind: 'markdown',
-      title: c('Title').t`Markdown`,
-      description: c('Info')
-        .t`A simple .zip of all your notes as plain Markdown (.md) files. Great for reading elsewhere — not re-importable as a full backup.`,
-    },
-  ]
+  const options: { kind: ExportKind; title: string; description: string; disabled?: boolean; disabledHint?: string }[] =
+    [
+      {
+        kind: 'encrypted',
+        title: c('Title').t`Encrypted backup`,
+        description: c('Info')
+          .t`A complete, end-to-end-encrypted backup of your account in the native Standard Red Notes format. Re-importable with your password.`,
+        disabled: !hasAccount,
+        disabledHint: c('Info')
+          .t`Sign in or create an account to export an encrypted backup. A decrypted or Markdown export is available offline.`,
+      },
+      {
+        kind: 'decrypted',
+        title: c('Title').t`Decrypted backup`,
+        description: c('Info')
+          .t`A plaintext backup in the native Standard Red Notes format (a .zip of your items). Re-importable; keep it somewhere safe.`,
+      },
+      {
+        kind: 'markdown',
+        title: c('Title').t`Markdown`,
+        description: c('Info')
+          .t`A simple .zip of all your notes as plain Markdown (.md) files. Great for reading elsewhere — not re-importable as a full backup.`,
+      },
+    ]
 
   return (
     <ModalOverlay isOpen={isVisible} close={close}>
       <Modal title={c('Title').t`Export`} close={close} actions={modalActions} className="flex flex-col">
-        <div className="min-h-0 flex-grow divide-y divide-border overflow-y-auto px-4 py-2">
+        <div className="divide-border min-h-0 flex-grow divide-y overflow-y-auto px-4 py-2">
           {options.map((option) => (
             <div key={option.kind} className="flex items-center justify-between gap-4 py-3.5">
               <div className="flex flex-col pr-2">
                 <div className="text-base font-semibold lg:text-sm">{option.title}</div>
-                <div className="mt-1 text-sm text-passive-0 lg:text-xs">
+                <div className="text-passive-0 mt-1 text-sm lg:text-xs">
                   {option.disabled && option.disabledHint ? option.disabledHint : option.description}
                 </div>
               </div>

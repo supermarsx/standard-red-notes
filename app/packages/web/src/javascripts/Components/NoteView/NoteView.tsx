@@ -977,9 +977,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         scrollTop: contentEl?.scrollTop,
       }
       // Drive the inline-anchor insertion through the Super plugin.
-      superEl?.dispatchEvent(
-        new CustomEvent(BOOKMARK_INSERT_DOM_EVENT, { detail: { bookmarkId }, bubbles: false }),
-      )
+      superEl?.dispatchEvent(new CustomEvent(BOOKMARK_INSERT_DOM_EVENT, { detail: { bookmarkId }, bubbles: false }))
     } else {
       const textarea = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement | null
       const text = this.note.text ?? ''
@@ -1053,27 +1051,27 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       this.note.editorIdentifier === CanvasEditorIdentifier
         ? 'canvas'
         : this.note.editorIdentifier === BaseEditorIdentifier
-        ? 'base'
-        : this.note.editorIdentifier === JsSandboxEditorIdentifier ||
-          this.note.editorIdentifier === WebSandboxEditorIdentifier
-        ? 'sandbox'
-        : this.note.editorIdentifier === CalendarEditorIdentifier
-        ? 'calendar'
-        : this.note.editorIdentifier === KanbanEditorIdentifier
-        ? 'kanban'
-        : this.note.editorIdentifier === TimelineEditorIdentifier
-        ? 'timeline'
-        : this.note.editorIdentifier === FlashcardsEditorIdentifier
-        ? 'flashcards'
-        : this.note.editorIdentifier === MapEditorIdentifier
-        ? 'map'
-        : this.note.noteType === NoteType.Super
-          ? 'super'
-          : this.state.editorStateDidLoad && !this.state.editorComponentViewer
-            ? 'plain'
-            : this.state.editorComponentViewer
-              ? 'component'
-              : 'plain'
+          ? 'base'
+          : this.note.editorIdentifier === JsSandboxEditorIdentifier ||
+              this.note.editorIdentifier === WebSandboxEditorIdentifier
+            ? 'sandbox'
+            : this.note.editorIdentifier === CalendarEditorIdentifier
+              ? 'calendar'
+              : this.note.editorIdentifier === KanbanEditorIdentifier
+                ? 'kanban'
+                : this.note.editorIdentifier === TimelineEditorIdentifier
+                  ? 'timeline'
+                  : this.note.editorIdentifier === FlashcardsEditorIdentifier
+                    ? 'flashcards'
+                    : this.note.editorIdentifier === MapEditorIdentifier
+                      ? 'map'
+                      : this.note.noteType === NoteType.Super
+                        ? 'super'
+                        : this.state.editorStateDidLoad && !this.state.editorComponentViewer
+                          ? 'plain'
+                          : this.state.editorComponentViewer
+                            ? 'component'
+                            : 'plain'
 
     const shouldShowConflictsButton = this.state.conflictedNotes.length > 0 && !this.state.readonly
 
@@ -1089,7 +1087,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         )}
 
         {this.state.readonly && (
-          <div className="bg-warning-faded flex items-center px-3.5 py-2 text-sm text-accessory-tint-3">
+          <div className="bg-warning-faded text-accessory-tint-3 flex items-center px-3.5 py-2 text-sm">
             <Icon type="pencil-off" className="mr-3" />
             You don't have permission to edit this note
           </div>
@@ -1116,7 +1114,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         {this.note && (
           <div
             id="editor-title-bar"
-            className="content-title-bar section-title-bar z-editor-title-bar w-full bg-default pt-4"
+            className="content-title-bar section-title-bar z-editor-title-bar bg-default w-full pt-4"
             style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
           >
             <div
@@ -1204,7 +1202,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 />
               </div>
             </div>
-            <div className="mb-1 mt-2.5 md:hidden">
+            <div className="mt-2.5 mb-1 md:hidden">
               <CollaborationInfoHUD item={this.note} />
             </div>
             <div className="hidden md:block">
@@ -1223,7 +1221,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         <EditorContentWithSafeAreaPadding editorLineWidth={this.state.editorLineWidth} ref={this.editorContentRef}>
           {editorMode === 'component' && this.state.editorComponentViewer && (
             <div className="component-view relative flex-grow">
-              {this.state.paneGestureEnabled && <div className="absolute left-0 top-0 h-full w-[20px] md:hidden" />}
+              {this.state.paneGestureEnabled && <div className="absolute top-0 left-0 h-full w-[20px] md:hidden" />}
               <IframeFeatureView
                 key={this.state.editorComponentViewer.identifier}
                 componentViewer={this.state.editorComponentViewer}
@@ -1369,7 +1367,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           {this.state.availableStackComponents.length > 0 && (
             <div
               id="component-stack-menu-bar"
-              className="flex h-6 w-full items-center justify-between border-t border-solid border-border bg-contrast px-2 py-0 text-text"
+              className="border-border bg-contrast text-text flex h-6 w-full items-center justify-between border-t border-solid px-2 py-0"
             >
               <div className="flex h-full">
                 {this.state.availableStackComponents.map((component) => {
@@ -1387,7 +1385,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                         {!this.stackComponentExpanded(component) && <IndicatorCircle style="neutral" />}
                       </div>
                       <div className="flex h-full items-center [&:not(:first-child)]:ml-2">
-                        <div className="whitespace-nowrap text-xs font-bold">{component.name}</div>
+                        <div className="text-xs font-bold whitespace-nowrap">{component.name}</div>
                       </div>
                     </div>
                   )

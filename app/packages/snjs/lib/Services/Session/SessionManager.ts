@@ -271,7 +271,7 @@ export class SessionManager
   isUserMissingKeyPair(): boolean {
     try {
       return this.getPublicKey() == undefined
-    } catch (error) {
+    } catch {
       return true
     }
   }
@@ -435,17 +435,16 @@ export class SessionManager
    */
   private async requestMagicLinkCode(email: string): Promise<string | undefined> {
     try {
-      const response = await this.httpService.post<{ emailed?: boolean; code?: string }>(
-        '/v1/mfa/magic-link/request',
-        { email },
-      )
+      const response = await this.httpService.post<{ emailed?: boolean; code?: string }>('/v1/mfa/magic-link/request', {
+        email,
+      })
 
       if (isErrorResponse(response)) {
         return undefined
       }
 
       return response.data?.code
-    } catch (error) {
+    } catch {
       return undefined
     }
   }

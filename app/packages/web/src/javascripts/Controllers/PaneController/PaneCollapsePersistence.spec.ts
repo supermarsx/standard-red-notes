@@ -31,8 +31,7 @@ type State = {
 
 // Verbatim from PaneController.removePane / insertPaneAtIndex (minus logging).
 const removePane = (state: State, pane: AppPaneId) => removeFromArray(state.panes, pane)
-const insertPaneAtIndex = (state: State, pane: AppPaneId, index: number) =>
-  state.panes.splice(index, 0, pane)
+const insertPaneAtIndex = (state: State, pane: AppPaneId, index: number) => state.panes.splice(index, 0, pane)
 
 // Verbatim from PaneController.toggleListPane.
 const toggleListPane = (state: State) => {
@@ -66,10 +65,7 @@ const makeState = (panes: AppPaneId[]): State => ({
 })
 
 // Real prototype getters under test.
-const getIsListPaneCollapsed = Object.getOwnPropertyDescriptor(
-  PaneController.prototype,
-  'isListPaneCollapsed',
-)!.get!
+const getIsListPaneCollapsed = Object.getOwnPropertyDescriptor(PaneController.prototype, 'isListPaneCollapsed')!.get!
 const getIsNavigationPaneCollapsed = Object.getOwnPropertyDescriptor(
   PaneController.prototype,
   'isNavigationPaneCollapsed',

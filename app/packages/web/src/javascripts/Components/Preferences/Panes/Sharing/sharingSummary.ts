@@ -19,11 +19,7 @@ export type PresenceLike = {
  * exposes (isCurrentUserSharedVaultOwner / ...Admin / ...ReadonlyVaultMember).
  * Owner implies admin, so owner is checked first.
  */
-export function deriveVaultRole(flags: {
-  isOwner: boolean
-  isAdmin: boolean
-  isReadonly: boolean
-}): VaultRole {
+export function deriveVaultRole(flags: { isOwner: boolean; isAdmin: boolean; isReadonly: boolean }): VaultRole {
   if (flags.isOwner) {
     return 'owner'
   }

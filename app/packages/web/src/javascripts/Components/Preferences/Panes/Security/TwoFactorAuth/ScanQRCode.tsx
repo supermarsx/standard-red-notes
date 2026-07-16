@@ -17,9 +17,9 @@ const ScanQRCode: FunctionComponent<Props> = ({ activation: act }) => {
 
   return (
     <div className="flex flex-col items-center gap-5 px-4 py-4 md:flex-row md:items-start">
-      <div className="flex flex-shrink-0 items-center justify-center bg-info p-2">
+      <div className="bg-info flex flex-shrink-0 items-center justify-center p-2">
         <QRCode
-          className="border-2 border-solid border-neutral-contrast"
+          className="border-neutral-contrast border-2 border-solid"
           value={act.qrCode}
           size={isMobileScreen ? 200 : 150}
         />
@@ -42,7 +42,7 @@ const ScanQRCode: FunctionComponent<Props> = ({ activation: act }) => {
           </div>
         </div>
         <DecoratedInput
-          className={{ container: 'w-92 ml-4' }}
+          className={{ container: 'ml-4 w-92' }}
           disabled={true}
           value={act.secretKey}
           right={[<CopyButton copyValue={act.secretKey} successMessage="Secret key copied to clipboard" />]}

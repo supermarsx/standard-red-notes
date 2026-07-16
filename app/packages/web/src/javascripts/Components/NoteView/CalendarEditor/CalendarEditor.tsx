@@ -275,12 +275,9 @@ export const CalendarEditor: FunctionComponent<Props> = ({
     [replaceEvent],
   )
 
-  const onDayClick = useCallback(
-    (date: string) => {
-      setSelectedDate((prev) => (prev === date ? null : date))
-    },
-    [],
-  )
+  const onDayClick = useCallback((date: string) => {
+    setSelectedDate((prev) => (prev === date ? null : date))
+  }, [])
 
   // The day editor edits source events anchored on the selected day, plus a
   // read-only note of recurring occurrences that merely *land* on this day.
@@ -310,31 +307,27 @@ export const CalendarEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="clock" className="flex-shrink-0 text-info" />
+          <Icon type="clock" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">
             {MONTH_LABELS[view.month]} {view.year}
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => goToMonth(-1)}
             title="Previous month"
             aria-label="Previous month"
           >
             <Icon type="chevron-left" size="small" />
           </button>
-          <button
-            className="rounded px-2 py-1 text-sm hover:bg-default"
-            onClick={goToToday}
-            title="Go to today"
-          >
+          <button className="hover:bg-default rounded px-2 py-1 text-sm" onClick={goToToday} title="Go to today">
             Today
           </button>
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => goToMonth(1)}
             title="Next month"
             aria-label="Next month"
@@ -342,7 +335,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
             <Icon type="chevron-right" size="small" />
           </button>
           <button
-            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            className="hover:bg-default rounded p-1 disabled:opacity-40"
             onClick={exportICS}
             disabled={document.events.length === 0}
             title="Export this calendar's events to .ics"
@@ -354,7 +347,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a calendar and a new one was started. Your original text is
             preserved until you make a change.
@@ -369,7 +362,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
       <div className="min-h-0 flex-grow overflow-auto p-2">
         <div className="grid grid-cols-7 gap-px">
           {WEEKDAY_LABELS.map((label) => (
-            <div key={label} className="px-1 py-1 text-center text-xs font-bold uppercase tracking-wide text-passive-1">
+            <div key={label} className="text-passive-1 px-1 py-1 text-center text-xs font-bold tracking-wide uppercase">
               <span className="hidden sm:inline">{label}</span>
               <span className="sm:hidden">{label.charAt(0)}</span>
             </div>
@@ -394,7 +387,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                 <span
                   className={classNames(
                     'mb-0.5 inline-flex h-5 w-5 items-center justify-center self-start rounded-full text-xs',
-                    isToday ? 'bg-info font-bold text-info-contrast' : 'text-passive-1',
+                    isToday ? 'bg-info text-info-contrast font-bold' : 'text-passive-1',
                   )}
                 >
                   {cell.day}
@@ -415,7 +408,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                     </span>
                   ))}
                   {dayEvents.length > 3 && (
-                    <span className="px-1 text-[0.625rem] text-passive-1">+{dayEvents.length - 3} more</span>
+                    <span className="text-passive-1 px-1 text-[0.625rem]">+{dayEvents.length - 3} more</span>
                   )}
                 </span>
               </button>
@@ -426,13 +419,13 @@ export const CalendarEditor: FunctionComponent<Props> = ({
 
       {/* Selected day event editor. */}
       {selectedDate && (
-        <div className="max-h-[40%] overflow-auto border-t border-border bg-default px-3 py-3">
+        <div className="border-border bg-default max-h-[40%] overflow-auto border-t px-3 py-3">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-bold">{selectedDate}</h3>
             <div className="flex items-center gap-2">
               {!isReadonly && (
                 <button
-                  className="flex items-center gap-1 rounded bg-info px-2 py-1 text-xs font-semibold text-info-contrast hover:opacity-90"
+                  className="bg-info text-info-contrast flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold hover:opacity-90"
                   onClick={() => addEvent(selectedDate)}
                 >
                   <Icon type="add" size="small" />
@@ -440,7 +433,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                 </button>
               )}
               <button
-                className="rounded p-1 hover:bg-contrast"
+                className="hover:bg-contrast rounded p-1"
                 onClick={() => setSelectedDate(null)}
                 aria-label="Close day"
                 title="Close"
@@ -450,24 +443,24 @@ export const CalendarEditor: FunctionComponent<Props> = ({
             </div>
           </div>
           {selectedEvents.length === 0 && selectedRecurringHits.length === 0 ? (
-            <p className="text-xs text-passive-1">No events on this day.</p>
+            <p className="text-passive-1 text-xs">No events on this day.</p>
           ) : (
             <ul className="flex flex-col gap-3">
               {selectedEvents.map((event) => {
                 const timed = isTimedEvent(event)
                 const time = eventTimeOfDay(event) ?? '09:00'
                 return (
-                  <li key={event.id} className="flex flex-col gap-1.5 rounded border border-border p-2">
+                  <li key={event.id} className="border-border flex flex-col gap-1.5 rounded border p-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <input
-                        className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm text-text disabled:opacity-50"
+                        className="border-border bg-default text-text min-w-0 flex-grow rounded border px-2 py-1 text-sm disabled:opacity-50"
                         value={event.title}
                         placeholder="Event title"
                         disabled={isReadonly}
                         onChange={(e) => updateEvent(event.id, { title: e.target.value })}
                       />
                       <button
-                        className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                        className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                         disabled={isReadonly}
                         onClick={() => deleteEvent(event.id)}
                         title="Delete event"
@@ -479,7 +472,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <input
                         type="date"
-                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        className="border-border bg-default text-text rounded border px-2 py-1 text-xs disabled:opacity-50"
                         value={event.date}
                         disabled={isReadonly}
                         onChange={(e) => {
@@ -501,7 +494,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                       {timed && (
                         <input
                           type="time"
-                          className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                          className="border-border bg-default text-text rounded border px-2 py-1 text-xs disabled:opacity-50"
                           value={time}
                           disabled={isReadonly}
                           onChange={(e) => e.target.value && setEventTime(event, e.target.value)}
@@ -511,7 +504,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <select
-                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        className="border-border bg-default text-text rounded border px-2 py-1 text-xs disabled:opacity-50"
                         value={event.recurrence?.freq ?? ''}
                         disabled={isReadonly}
                         aria-label="Repeat"
@@ -536,7 +529,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
                             type="number"
                             min={1}
                             max={365}
-                            className="w-14 rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                            className="border-border bg-default text-text w-14 rounded border px-2 py-1 text-xs disabled:opacity-50"
                             value={event.recurrence.interval ?? 1}
                             disabled={isReadonly}
                             aria-label="Repeat interval"
@@ -569,7 +562,7 @@ export const CalendarEditor: FunctionComponent<Props> = ({
               {selectedRecurringHits.map((occ) => (
                 <li
                   key={`hit-${occ.event.id}`}
-                  className="flex items-center gap-2 rounded border border-dashed border-border px-2 py-1 text-xs text-passive-1"
+                  className="border-border text-passive-1 flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs"
                 >
                   <Icon type="restore" size="small" className="flex-shrink-0" />
                   <span className="truncate">

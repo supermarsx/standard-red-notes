@@ -203,8 +203,9 @@ const clampInt = (value: unknown, min: number, max: number, fallback: number): n
 
 const asString = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback)
 
-const asEnum = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
-  typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
+const asEnum = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T => {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
+}
 
 /** Coerce a persisted value into a safe PageNumbering. Never throws. */
 function normalizePageNumbering(raw: unknown): PageNumbering {

@@ -44,7 +44,7 @@ const HomeServerSettings = () => {
         result.status === 'on' ? (
           <>
             Accessible on local network at{' '}
-            <a href={result.url} className="font-bold text-info" target="_blank">
+            <a href={result.url} className="text-info font-bold" target="_blank">
               {result.url}
             </a>
           </>
@@ -328,7 +328,7 @@ const HomeServerSettings = () => {
                         <textarea
                           ref={logsTextarea}
                           disabled={true}
-                          className="h-[500px] overflow-y-auto whitespace-pre-wrap bg-contrast p-2"
+                          className="bg-contrast h-[500px] overflow-y-auto p-2 whitespace-pre-wrap"
                           value={logs.join('\n')}
                         />
                       </div>

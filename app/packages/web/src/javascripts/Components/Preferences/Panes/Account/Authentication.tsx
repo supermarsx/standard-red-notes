@@ -27,7 +27,7 @@ const Authentication: FunctionComponent<Props> = ({ application }) => {
   }
 
   const loginLink = (
-    <button className="cursor-pointer border-0 bg-default p-0 text-info underline" onClick={clickSignIn}>
+    <button className="bg-default text-info cursor-pointer border-0 p-0 underline" onClick={clickSignIn}>
       {c('Action').t`Sign in`}
     </button>
   )

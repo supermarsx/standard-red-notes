@@ -247,14 +247,7 @@ export const groupBlockCatalogByCategory = (
  * low-frequency `Embeds` + `Advanced` categories (and, in the toolbar, the three
  * non-catalog Insert actions Link / Create-note-from-selection / Dictate).
  */
-export type InsertSectionId =
-  | 'basic'
-  | 'lists'
-  | 'media'
-  | 'dataTables'
-  | 'diagramsCharts'
-  | 'finance'
-  | 'others'
+export type InsertSectionId = 'basic' | 'lists' | 'media' | 'dataTables' | 'diagramsCharts' | 'finance' | 'others'
 
 export type InsertSection = { id: InsertSectionId; entries: BlockCatalogEntry[] }
 

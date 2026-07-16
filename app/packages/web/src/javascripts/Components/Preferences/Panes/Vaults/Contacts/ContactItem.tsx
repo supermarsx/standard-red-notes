@@ -39,18 +39,18 @@ const ContactItem = ({ contact }: Props) => {
         <EditContactModal editContactUuid={contact.contactUuid} onCloseDialog={closeContactModal} />
       </ModalOverlay>
 
-      <div className="flex items-start gap-3.5 rounded-lg border border-border px-3.5 py-2.5 shadow-sm">
+      <div className="border-border flex items-start gap-3.5 rounded-lg border px-3.5 py-2.5 shadow-sm">
         <div className="grid grid-cols-[1fr_auto] grid-rows-2 place-items-center gap-x-3.5 gap-y-1 overflow-hidden">
           <Icon type="user" size="custom" className="h-5 w-5 flex-shrink-0" />
           <span
             className={classNames(
-              'w-full overflow-hidden text-ellipsis text-base font-bold',
+              'w-full overflow-hidden text-base font-bold text-ellipsis',
               contact.isMe ? 'text-info' : '',
             )}
           >
             {contact.name}
           </span>
-          <span className="col-start-2 w-full overflow-hidden text-ellipsis text-sm brightness-75">
+          <span className="col-start-2 w-full overflow-hidden text-sm text-ellipsis brightness-75">
             {collaborationID}
           </span>
         </div>

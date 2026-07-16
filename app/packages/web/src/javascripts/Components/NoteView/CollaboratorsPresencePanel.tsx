@@ -2,10 +2,7 @@ import { FunctionComponent, useEffect, useMemo, useState } from 'react'
 import { DecryptedItemInterface, SharedVaultUserServerHash } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
-import {
-  collaboratorColor,
-  collaboratorInitials,
-} from '../SuperEditor/Collaboration/collaboratorColor'
+import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collaboration/collaboratorColor'
 import { PresenceRegistry, PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
 
 type Props = {
@@ -122,13 +119,13 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
   const onlineCount = displayMembers.filter(isOnline).length
 
   return (
-    <div className="rounded border border-border bg-default p-2.5">
+    <div className="border-border bg-default rounded border p-2.5">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-passive-0">Collaborators</div>
+        <div className="text-passive-0 text-xs font-semibold tracking-wide uppercase">Collaborators</div>
         {liveEnabled ? (
-          <div className="text-xs text-passive-1">{onlineCount} online</div>
+          <div className="text-passive-1 text-xs">{onlineCount} online</div>
         ) : (
-          <div className="text-xs text-passive-2" title="Live presence requires collaboration to be enabled">
+          <div className="text-passive-2 text-xs" title="Live presence requires collaboration to be enabled">
             live status unavailable
           </div>
         )}
@@ -140,7 +137,7 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
             <div key={member.userUuid} className="flex items-center gap-2">
               <div className="relative">
                 <div
-                  className="flex h-6 w-6 select-none items-center justify-center rounded-full text-[0.6rem] font-bold text-white"
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-[0.6rem] font-bold text-white select-none"
                   style={{ backgroundColor: member.color }}
                   aria-hidden
                 >
@@ -148,15 +145,15 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
                 </div>
                 {liveEnabled && online && (
                   <span
-                    className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-default bg-success"
+                    className="border-default bg-success absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2"
                     title="Online — editing this note now"
                   />
                 )}
               </div>
               <div className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-medium text-text">{member.name}</span>
+                <span className="text-text truncate text-sm font-medium">{member.name}</span>
                 {liveEnabled && (
-                  <span className={online ? 'text-xs text-success' : 'text-xs text-passive-2'}>
+                  <span className={online ? 'text-success text-xs' : 'text-passive-2 text-xs'}>
                     {member.isSelf ? 'You' : online ? 'Online now' : 'Offline'}
                   </span>
                 )}

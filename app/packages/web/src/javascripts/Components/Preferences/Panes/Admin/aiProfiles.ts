@@ -235,7 +235,7 @@ export const buildProfilesUpdate = (
   defaultProfileId:
     defaultProfileId && rows.some((row) => row.id === defaultProfileId)
       ? defaultProfileId
-      : rows.find((row) => row.enabled)?.id ?? rows[0]?.id ?? null,
+      : (rows.find((row) => row.enabled)?.id ?? rows[0]?.id ?? null),
 })
 
 /** Human summary of a profile row for the collapsed list view. */

@@ -6,14 +6,7 @@
  * resolving real notes into the simple {@link BaseRow} shape consumed here.
  */
 
-import {
-  BuiltinPropertyId,
-  ColumnDef,
-  Filter,
-  FilterOperator,
-  BaseSort,
-  builtinPropertyType,
-} from './BaseDocument'
+import { BuiltinPropertyId, ColumnDef, Filter, FilterOperator, BaseSort, builtinPropertyType } from './BaseDocument'
 
 /**
  * The resolved per-note value bag. Built-in properties are keyed by their

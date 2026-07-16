@@ -4,7 +4,7 @@ import { usePremiumModal } from '@/Hooks/usePremiumModal'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Switch from '@/Components/Switch/Switch'
 import { WebApplication } from '@/Application/WebApplication'
-import { FeatureStatus, naturalSort, LocalPrefKey } from '@standardnotes/snjs'
+import { naturalSort, LocalPrefKey } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useEffect, useState } from 'react'
 import { Subtitle, Title, Text } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -178,8 +178,8 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
           <div className="mt-2">
             <Subtitle>New tab opens</Subtitle>
             <Text>
-              What the editor tab bar's "+" button does. "New note" creates a fresh note (the default); "Empty tab" opens
-              a blank placeholder you can turn into a note or fill from the notes list.
+              What the editor tab bar's "+" button does. "New note" creates a fresh note (the default); "Empty tab"
+              opens a blank placeholder you can turn into a note or fill from the notes list.
             </Text>
             <div className="mt-2">
               <Dropdown

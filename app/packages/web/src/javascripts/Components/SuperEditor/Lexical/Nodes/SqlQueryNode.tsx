@@ -123,13 +123,7 @@ export async function runSqlQuery(setup: string, query: string): Promise<SqlResu
   }
 }
 
-function SqlQueryComponent({
-  data,
-  nodeKey,
-}: {
-  data: SqlQueryData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function SqlQueryComponent({ data, nodeKey }: { data: SqlQueryData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [setupDraft, setSetupDraft] = useState(data.setup)
   const [queryDraft, setQueryDraft] = useState(data.query)
@@ -187,12 +181,12 @@ function SqlQueryComponent({
   }, [persist, setupDraft, queryDraft])
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-sql-query-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-sql-query-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">SQL query (local, in-browser)</span>
         <button
           type="button"
-          className="rounded bg-info px-2 py-0.5 text-info-contrast disabled:opacity-50"
+          className="bg-info text-info-contrast rounded px-2 py-0.5 disabled:opacity-50"
           disabled={running}
           onClick={() => void run()}
         >
@@ -201,10 +195,10 @@ function SqlQueryComponent({
       </div>
 
       <div className="flex flex-col gap-2 p-2">
-        <label className="flex flex-col gap-1 text-xs text-passive-1">
+        <label className="text-passive-1 flex flex-col gap-1 text-xs">
           Data (CREATE TABLE / INSERT, or any setup SQL)
           <textarea
-            className="w-full resize-y rounded border border-border bg-default p-2 font-mono text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full resize-y rounded border p-2 font-mono text-sm outline-none"
             rows={Math.max(3, Math.min(10, setupDraft.split('\n').length + 1))}
             value={setupDraft}
             spellCheck={false}
@@ -214,10 +208,10 @@ function SqlQueryComponent({
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-xs text-passive-1">
+        <label className="text-passive-1 flex flex-col gap-1 text-xs">
           Query
           <textarea
-            className="w-full resize-y rounded border border-border bg-default p-2 font-mono text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full resize-y rounded border p-2 font-mono text-sm outline-none"
             rows={Math.max(2, Math.min(8, queryDraft.split('\n').length + 1))}
             value={queryDraft}
             spellCheck={false}
@@ -227,20 +221,18 @@ function SqlQueryComponent({
           />
         </label>
 
-        <p className="text-xs text-passive-1">
+        <p className="text-passive-1 text-xs">
           Runs against a fresh in-memory SQLite database built only from the data above. It does not connect to any
           external or real database.
         </p>
 
         {error ? (
-          <div className="rounded border border-danger bg-contrast p-2 font-mono text-xs text-danger">{error}</div>
+          <div className="border-danger bg-contrast text-danger rounded border p-2 font-mono text-xs">{error}</div>
         ) : null}
 
         {result && !error ? (
           result.empty ? (
-            <div className="text-xs text-passive-1">
-              Query executed successfully. No rows returned.
-            </div>
+            <div className="text-passive-1 text-xs">Query executed successfully. No rows returned.</div>
           ) : (
             <div className="overflow-auto">
               <table className="w-full border-collapse text-sm">
@@ -249,7 +241,7 @@ function SqlQueryComponent({
                     {result.columns.map((col, i) => (
                       <th
                         key={i}
-                        className="border border-border bg-contrast px-2 py-1 text-left font-semibold text-foreground"
+                        className="border-border bg-contrast text-foreground border px-2 py-1 text-left font-semibold"
                       >
                         {col}
                       </th>
@@ -260,7 +252,7 @@ function SqlQueryComponent({
                   {result.rows.map((row, ri) => (
                     <tr key={ri}>
                       {row.map((cell, ci) => (
-                        <td key={ci} className="border border-border px-2 py-1 text-foreground">
+                        <td key={ci} className="border-border text-foreground border px-2 py-1">
                           {cell}
                         </td>
                       ))}
@@ -268,7 +260,7 @@ function SqlQueryComponent({
                   ))}
                 </tbody>
               </table>
-              <div className="mt-1 text-xs text-passive-1">
+              <div className="text-passive-1 mt-1 text-xs">
                 {result.rowCount} {result.rowCount === 1 ? 'row' : 'rows'}
               </div>
             </div>

@@ -8,7 +8,12 @@
  * `undefined` (or an all-absent object) means: no headers, no footers, no page
  * numbering — i.e. the generators emit exactly their pre-t48 baseline output.
  */
-import type { HeaderFooterAlign, HeaderFooterFontId, NoteLayout, PageNumberFormat } from '../../../Layout/layoutSettings'
+import type {
+  HeaderFooterAlign,
+  HeaderFooterFontId,
+  NoteLayout,
+  PageNumberFormat,
+} from '../../../Layout/layoutSettings'
 
 /** Tokens a header/footer `text` may embed; substituted with live fields per generator. */
 export const PAGE_TOKEN = '{page}'
@@ -120,5 +125,6 @@ export const hasBandAt = (options: PageLayoutOptions, location: 'header' | 'foot
 }
 
 /** The page-number offset a `startAt` implies (page 1 shows `startAt`). */
-export const pageStartOffset = (options: PageLayoutOptions): number =>
-  options.pageNumber ? options.pageNumber.startAt - 1 : 0
+export const pageStartOffset = (options: PageLayoutOptions): number => {
+  return options.pageNumber ? options.pageNumber.startAt - 1 : 0
+}

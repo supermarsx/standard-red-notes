@@ -58,9 +58,9 @@ const isStrategyValue = (value: string | undefined): value is ConflictResolution
 
 export const useConflicts = (application: WebApplication): ConflictResolutionController => {
   const [version, setVersion] = useState(0)
-  const [serverDefaultStrategy, setServerDefaultStrategy] = useState<
-    ConflictResolutionStrategyValue | undefined
-  >(undefined)
+  const [serverDefaultStrategy, setServerDefaultStrategy] = useState<ConflictResolutionStrategyValue | undefined>(
+    undefined,
+  )
 
   // Recompute the pair list whenever items change (e.g. after a resolution or a sync).
   useEffect(() => {
@@ -84,10 +84,7 @@ export const useConflicts = (application: WebApplication): ConflictResolutionCon
         if (!user) {
           return
         }
-        const response = await application.legacyApi.getSetting(
-          user.uuid,
-          CONFLICT_RESOLUTION_STRATEGY_SETTING,
-        )
+        const response = await application.legacyApi.getSetting(user.uuid, CONFLICT_RESOLUTION_STRATEGY_SETTING)
         if (isErrorResponse(response)) {
           return
         }

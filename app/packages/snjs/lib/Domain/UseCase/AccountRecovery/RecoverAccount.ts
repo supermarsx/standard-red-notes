@@ -1,10 +1,7 @@
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 
-import {
-  AccountRecoveryEscrowPayload,
-  AccountRecoveryEscrowSecret,
-} from './AccountRecoveryEscrowTypes'
+import { AccountRecoveryEscrowPayload, AccountRecoveryEscrowSecret } from './AccountRecoveryEscrowTypes'
 
 export interface RecoverAccountResult {
   /** The recovered account master key (encrypts the user's items keys). */
@@ -61,7 +58,7 @@ export class RecoverAccount implements UseCaseInterface<RecoverAccountResult> {
     let escrow: AccountRecoveryEscrowPayload
     try {
       escrow = JSON.parse(escrowJson) as AccountRecoveryEscrowPayload
-    } catch (_error) {
+    } catch {
       return Result.fail('Recovery escrow is malformed and could not be parsed.')
     }
 
@@ -85,7 +82,7 @@ export class RecoverAccount implements UseCaseInterface<RecoverAccountResult> {
     let secret: AccountRecoveryEscrowSecret
     try {
       secret = JSON.parse(decrypted) as AccountRecoveryEscrowSecret
-    } catch (_error) {
+    } catch {
       return Result.fail('Recovered escrow contents are malformed.')
     }
 

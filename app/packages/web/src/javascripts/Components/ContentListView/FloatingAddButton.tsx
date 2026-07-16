@@ -20,7 +20,7 @@ const FloatingAddButton = ({ label, style, onClick }: Props) => {
   return (
     <button
       className={classNames(
-        'fixed right-6 z-editor-title-bar ml-3 flex h-15 w-15 cursor-pointer items-center',
+        'z-editor-title-bar fixed right-6 ml-3 flex h-15 w-15 cursor-pointer items-center',
         `justify-center rounded-full border border-solid border-transparent ${buttonClasses}`,
         'hover:brightness-125',
         hasBottomInset ? 'bottom-[calc(var(--safe-area-inset-bottom)+0.5rem)]' : 'bottom-6',

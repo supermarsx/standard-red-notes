@@ -81,12 +81,13 @@ const titleForController = (controller: Controller): string => {
   return title && title.length > 0 ? title : 'Untitled'
 }
 
-const targetsEqual = (a: TabTarget, b: TabTarget): boolean =>
-  a.kind === 'view' && b.kind === 'view'
+const targetsEqual = (a: TabTarget, b: TabTarget): boolean => {
+  return a.kind === 'view' && b.kind === 'view'
     ? a.id === b.id
     : a.kind === 'controller' && b.kind === 'controller'
       ? a.runtimeId === b.runtimeId
       : false
+}
 
 /**
  * Browser-style tab bar for the open note/file controllers. Operates on the SAME
@@ -137,7 +138,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
     setRenamingRuntimeId(controller.runtimeId)
     // Seed with the current custom name (not the title) so an empty box clearly
     // means "revert to title" and a populated box means "edit the custom name".
-    setRenameDraft(controller.item?.uuid ? customNames?.[controller.item.uuid] ?? '' : '')
+    setRenameDraft(controller.item?.uuid ? (customNames?.[controller.item.uuid] ?? '') : '')
   }
 
   const commitRename = (controller: Controller) => {
@@ -188,7 +189,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
 
   return (
     <div
-      className="note-tab-bar flex flex-shrink-0 items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border bg-contrast px-2 py-1.5 md:py-1"
+      className="note-tab-bar border-border bg-contrast flex flex-shrink-0 items-center gap-1 overflow-x-auto overflow-y-hidden border-b px-2 py-1.5 md:py-1"
       style={{ WebkitOverflowScrolling: 'touch' }}
       role="tablist"
       aria-label="Open notes"
@@ -224,7 +225,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
             className={classNames(
               'flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
               isActive
-                ? 'border-info bg-default font-semibold text-text'
+                ? 'border-info bg-default text-text font-semibold'
                 : 'border-border bg-contrast text-passive-0 hover:text-text',
             )}
             title={tab.title}
@@ -233,7 +234,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
             <span className="max-w-[8rem] truncate md:max-w-[10rem]">{tab.title}</span>
             <button
               type="button"
-              className="-mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-contrast md:h-auto md:w-auto md:p-0.5"
+              className="hover:bg-contrast -mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded md:h-auto md:w-auto md:p-0.5"
               onClick={(event) => {
                 event.stopPropagation()
                 onCloseViewTab(tab)
@@ -287,7 +288,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
             className={classNames(
               'flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
               isActive
-                ? 'border-info bg-default font-semibold text-text'
+                ? 'border-info bg-default text-text font-semibold'
                 : 'border-border bg-contrast text-passive-0 hover:text-text',
             )}
             title={title}
@@ -296,7 +297,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
               <input
                 type="text"
                 autoFocus
-                className="max-w-[8rem] flex-shrink rounded border border-info bg-default px-1 text-sm text-text md:max-w-[10rem] md:text-xs"
+                className="border-info bg-default text-text max-w-[8rem] flex-shrink rounded border px-1 text-sm md:max-w-[10rem] md:text-xs"
                 aria-label="Rename tab"
                 value={renameDraft}
                 placeholder={titleForController(controller)}
@@ -319,7 +320,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
             )}
             <button
               type="button"
-              className="-mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-contrast md:h-auto md:w-auto md:p-0.5"
+              className="hover:bg-contrast -mr-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded md:h-auto md:w-auto md:p-0.5"
               onClick={(event) => {
                 event.stopPropagation()
                 onClose(controller)
@@ -335,8 +336,8 @@ const NoteTabBar: FunctionComponent<Props> = ({
       <button
         type="button"
         className={classNames(
-          'flex h-9 w-9 flex-shrink-0 touch-manipulation items-center justify-center rounded border border-border bg-contrast md:h-auto md:w-auto md:p-1',
-          canAddTab ? 'text-passive-0 hover:text-text' : 'cursor-not-allowed text-passive-2',
+          'border-border bg-contrast flex h-9 w-9 flex-shrink-0 touch-manipulation items-center justify-center rounded border md:h-auto md:w-auto md:p-1',
+          canAddTab ? 'text-passive-0 hover:text-text' : 'text-passive-2 cursor-not-allowed',
         )}
         onClick={onAddTab}
         disabled={!canAddTab}
@@ -349,11 +350,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
         type="button"
         className={classNames(
           'flex h-9 w-9 flex-shrink-0 touch-manipulation items-center justify-center rounded border md:h-auto md:w-auto md:p-1',
-          isSplit
-            ? 'border-info bg-info text-info-contrast'
-            : 'border-border bg-contrast',
+          isSplit ? 'border-info bg-info text-info-contrast' : 'border-border bg-contrast',
           canSplit && !isSplit ? 'text-passive-0 hover:text-text' : '',
-          !canSplit ? 'cursor-not-allowed text-passive-2' : '',
+          !canSplit ? 'text-passive-2 cursor-not-allowed' : '',
         )}
         onClick={onToggleSplit}
         disabled={!canSplit}

@@ -37,13 +37,7 @@ const AdminPagination: FunctionComponent<Props> = ({
 }) => (
   <div className={classNames('flex items-center gap-2', className)}>
     <StyledTooltip label={previousLabel}>
-      <Button
-        small
-        className="!px-2"
-        disabled={previousDisabled}
-        onClick={onPrevious}
-        aria-label={previousLabel}
-      >
+      <Button small className="!px-2" disabled={previousDisabled} onClick={onPrevious} aria-label={previousLabel}>
         <Icon type="chevron-left" size="medium" />
       </Button>
     </StyledTooltip>

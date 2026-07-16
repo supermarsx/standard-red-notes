@@ -84,8 +84,7 @@ describe('isAppLockPasskeySupported', () => {
     Object.defineProperty(window, 'PublicKeyCredential', { value: originalPKC, configurable: true })
   })
 
-  const setPKC = (value: unknown) =>
-    Object.defineProperty(window, 'PublicKeyCredential', { value, configurable: true })
+  const setPKC = (value: unknown) => Object.defineProperty(window, 'PublicKeyCredential', { value, configurable: true })
 
   it('is false on native mobile web', () => {
     setPKC(function () {})

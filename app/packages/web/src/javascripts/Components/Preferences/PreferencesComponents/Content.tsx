@@ -8,7 +8,7 @@ type Props = {
 }
 
 export const Title: FunctionComponent<Props> = ({ children, className }) => (
-  <h2 className={classNames('m-0 mb-2 text-lg font-bold text-info md:text-base', className)}>{children}</h2>
+  <h2 className={classNames('text-info m-0 mb-2 text-lg font-bold md:text-base', className)}>{children}</h2>
 )
 
 export const Subtitle: FunctionComponent<Props> = ({ children, className }) => (
@@ -36,7 +36,7 @@ export const LinkButton: FunctionComponent<{
   <a
     target="_blank"
     className={classNames(
-      'block w-fit rounded border border-solid border-border bg-normal-button px-4 py-1.5 text-base font-bold text-text hover:bg-contrast focus:bg-contrast lg:text-sm',
+      'border-border bg-normal-button text-text hover:bg-contrast focus:bg-contrast block w-fit rounded border border-solid px-4 py-1.5 text-base font-bold lg:text-sm',
       className,
     )}
     href={link}

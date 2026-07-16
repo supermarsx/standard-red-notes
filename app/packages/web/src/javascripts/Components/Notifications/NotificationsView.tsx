@@ -42,21 +42,24 @@ const FullNotificationRow: FunctionComponent<{
   isRead: boolean
   onDismiss: (id: string) => void
 }> = ({ notification, isRead, onDismiss }) => (
-  <div className="flex gap-3 rounded-md border border-border bg-default p-3.5">
+  <div className="border-border bg-default flex gap-3 rounded-md border p-3.5">
     {notification.icon ? (
       <div className="mt-0.5 flex-shrink-0">{notification.icon}</div>
     ) : (
-      <Icon type={LEVEL_ICON[notification.level]} className={classNames('mt-0.5 flex-shrink-0', LEVEL_ACCENT[notification.level])} />
+      <Icon
+        type={LEVEL_ICON[notification.level]}
+        className={classNames('mt-0.5 flex-shrink-0', LEVEL_ACCENT[notification.level])}
+      />
     )}
     <div className="min-w-0 flex-grow">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-bold text-text">{notification.title}</span>
-        {!isRead && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-info" aria-label="Unread" />}
+        <span className="text-text text-sm font-bold">{notification.title}</span>
+        {!isRead && <span className="bg-info h-2 w-2 flex-shrink-0 rounded-full" aria-label="Unread" />}
       </div>
-      <div className="mt-0.5 text-sm text-neutral">{notification.message}</div>
+      <div className="text-neutral mt-0.5 text-sm">{notification.message}</div>
       {notification.action && (
         <button
-          className="mt-2 rounded bg-info px-2.5 py-1 text-xs font-semibold text-info-contrast hover:brightness-110"
+          className="bg-info text-info-contrast mt-2 rounded px-2.5 py-1 text-xs font-semibold hover:brightness-110"
           onClick={() => notification.action?.run()}
         >
           {notification.action.label}
@@ -65,7 +68,7 @@ const FullNotificationRow: FunctionComponent<{
     </div>
     {notification.dismissable && (
       <button
-        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-neutral hover:bg-contrast"
+        className="text-neutral hover:bg-contrast flex h-6 w-6 flex-shrink-0 items-center justify-center rounded"
         onClick={() => onDismiss(notification.id)}
         aria-label="Dismiss notification"
         title="Dismiss"
@@ -83,8 +86,8 @@ const SettingRow: FunctionComponent<{ title: string; description?: string; child
 }) => (
   <div className="flex items-center justify-between gap-4 py-2.5">
     <div className="min-w-0">
-      <div className="text-sm font-semibold text-text">{title}</div>
-      {description && <div className="mt-0.5 text-xs text-passive-0">{description}</div>}
+      <div className="text-text text-sm font-semibold">{title}</div>
+      {description && <div className="text-passive-0 mt-0.5 text-xs">{description}</div>}
     </div>
     <div className="flex-shrink-0">{children}</div>
   </div>
@@ -108,13 +111,13 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
   }, [controller])
 
   return (
-    <div id={id} className={classNames('flex flex-col overflow-hidden bg-contrast', className)}>
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+    <div id={id} className={classNames('bg-contrast flex flex-col overflow-hidden', className)}>
+      <div className="border-border flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <Icon type="info" className="text-info" />
-          <span className="text-base font-bold text-text">Notifications</span>
+          <span className="text-text text-base font-bold">Notifications</span>
           {controller.unreadCount > 0 && (
-            <span className="flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-info px-1.5 text-xs font-bold text-info-contrast">
+            <span className="bg-info text-info-contrast flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-xs font-bold">
               {controller.unreadCount}
             </span>
           )}
@@ -122,7 +125,7 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
         <div className="flex items-center gap-1.5">
           {notifications.length > 0 && controller.unreadCount > 0 && (
             <button
-              className="rounded px-2 py-1 text-xs font-semibold text-info hover:bg-default"
+              className="text-info hover:bg-default rounded px-2 py-1 text-xs font-semibold"
               onClick={() => controller.markAllRead()}
             >
               Mark all read
@@ -130,7 +133,7 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
           )}
           <button
             className={classNames(
-              'flex items-center gap-1.5 rounded px-2 py-1 text-xs font-semibold hover:bg-default',
+              'hover:bg-default flex items-center gap-1.5 rounded px-2 py-1 text-xs font-semibold',
               showSettings ? 'text-info' : 'text-neutral',
             )}
             onClick={() => setShowSettings((value) => !value)}
@@ -144,16 +147,19 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
 
       <div className="min-h-0 flex-grow overflow-y-auto p-4">
         {showSettings && (
-          <div className="mb-4 rounded-lg border border-border bg-default p-4">
-            <div className="mb-1 text-sm font-bold text-text">Notification settings</div>
-            <div className="divide-y divide-border">
+          <div className="border-border bg-default mb-4 rounded-lg border p-4">
+            <div className="text-text mb-1 text-sm font-bold">Notification settings</div>
+            <div className="divide-border divide-y">
               <SettingRow title="Notifications" description="Master switch for the whole notifications feature.">
-                <Switch checked={settings.enabled} onChange={(checked) => controller.updateSettings({ enabled: checked })} />
+                <Switch
+                  checked={settings.enabled}
+                  onChange={(checked) => controller.updateSettings({ enabled: checked })}
+                />
               </SettingRow>
 
               <div className="py-2.5">
-                <div className="text-sm font-semibold text-text">Mark as read</div>
-                <div className="mt-0.5 text-xs text-passive-0">
+                <div className="text-text text-sm font-semibold">Mark as read</div>
+                <div className="text-passive-0 mt-0.5 text-xs">
                   {READ_TRIGGER_OPTIONS.find((option) => option.value === settings.readTrigger)?.hint}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -173,17 +179,15 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
                   ))}
                 </div>
                 {settings.readTrigger === 'time' && (
-                  <label className="mt-2 flex items-center gap-2 text-xs text-neutral">
+                  <label className="text-neutral mt-2 flex items-center gap-2 text-xs">
                     Mark read after
                     <input
                       type="number"
                       min={READ_AFTER_SECONDS_MIN}
                       max={READ_AFTER_SECONDS_MAX}
                       value={settings.readAfterSeconds}
-                      onChange={(event) =>
-                        controller.updateSettings({ readAfterSeconds: Number(event.target.value) })
-                      }
-                      className="w-16 rounded border border-border bg-default px-2 py-1 text-center"
+                      onChange={(event) => controller.updateSettings({ readAfterSeconds: Number(event.target.value) })}
+                      className="border-border bg-default w-16 rounded border px-2 py-1 text-center"
                     />
                     seconds visible
                   </label>
@@ -197,7 +201,7 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
                 />
               </SettingRow>
               {settings.reminderEnabled && (
-                <label className="flex items-center gap-2 py-2.5 text-xs text-neutral">
+                <label className="text-neutral flex items-center gap-2 py-2.5 text-xs">
                   Remind every
                   <input
                     type="number"
@@ -207,14 +211,14 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
                     onChange={(event) =>
                       controller.updateSettings({ reminderIntervalMinutes: Number(event.target.value) })
                     }
-                    className="w-20 rounded border border-border bg-default px-2 py-1 text-center"
+                    className="border-border bg-default w-20 rounded border px-2 py-1 text-center"
                   />
                   minutes
                 </label>
               )}
 
               <div className="py-2.5">
-                <div className="text-sm font-semibold text-text">Show alerts for</div>
+                <div className="text-text text-sm font-semibold">Show alerts for</div>
                 <div className="mt-1">
                   <SettingRow title="Backup reminders" description="“Data not backed up” when signed out.">
                     <Switch
@@ -235,7 +239,7 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
                     />
                   </SettingRow>
                 </div>
-                <div className="mt-1 text-xs text-passive-1">The critical “Sign in needed” alert always shows.</div>
+                <div className="text-passive-1 mt-1 text-xs">The critical “Sign in needed” alert always shows.</div>
               </div>
             </div>
           </div>
@@ -244,7 +248,7 @@ const NotificationsView: FunctionComponent<Props> = ({ application, className, i
         {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <Icon type="check-circle-filled" size="large" className="text-success" />
-            <div className="mt-2 text-sm text-passive-1">You're all caught up — no notifications.</div>
+            <div className="text-passive-1 mt-2 text-sm">You're all caught up — no notifications.</div>
           </div>
         ) : (
           <div className="mx-auto flex max-w-2xl flex-col gap-2.5">

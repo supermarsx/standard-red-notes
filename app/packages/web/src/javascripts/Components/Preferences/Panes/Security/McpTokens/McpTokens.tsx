@@ -73,9 +73,9 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
   }, [loadMcpTokens])
 
   const toggleTag = useCallback((tagUuid: string) => {
-    setScopeTagUuids((current) =>
-      current.includes(tagUuid) ? current.filter((uuid) => uuid !== tagUuid) : [...current, tagUuid],
-    )
+    setScopeTagUuids((current) => {
+      return current.includes(tagUuid) ? current.filter((uuid) => uuid !== tagUuid) : [...current, tagUuid]
+    })
   }, [])
 
   const handleCreate = useCallback(async () => {
@@ -189,7 +189,7 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
           using it.
         </Text>
 
-        <div className="mt-4 rounded border border-solid border-warning bg-warning-faded p-3">
+        <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
           <Subtitle className="text-warning">The full token can decrypt and read your notes</Subtitle>
           <Text className="mt-1">
             This token grants the MCP bridge programmatic, decrypting access to your notes within the scope you choose
@@ -260,14 +260,14 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
         </div>
 
         {createdToken && (
-          <div className="mt-3 rounded border border-solid border-border p-3">
+          <div className="border-border mt-3 rounded border border-solid p-3">
             <Subtitle>Copy your new MCP token now</Subtitle>
             <Text className="mb-2">
               Copy now — it grants decrypting access and won't be shown again. Set it as STANDARD_RED_NOTES_MCP_TOKEN in
               the MCP bridge.
             </Text>
             <div className="flex flex-row items-center gap-2">
-              <code className="select-text break-all rounded bg-contrast px-2 py-1 text-sm">{createdToken}</code>
+              <code className="bg-contrast rounded px-2 py-1 text-sm break-all select-text">{createdToken}</code>
               <CopyButton copyValue={createdToken} successMessage="MCP token copied to clipboard" />
             </div>
             <Button className="mt-3" label="Done" onClick={() => setCreatedToken(null)} />
@@ -285,17 +285,17 @@ const McpTokens: FunctionComponent<Props> = ({ application }: Props) => {
           mcpTokens.map((mcpToken) => (
             <div
               key={mcpToken.uuid}
-              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="break-words text-base font-medium lg:text-sm">{mcpToken.label}</span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-base font-medium break-words lg:text-sm">{mcpToken.label}</span>
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   {mcpToken.scope} ·{' '}
                   {mcpToken.scopeTagUuids && mcpToken.scopeTagUuids.length > 0
                     ? `${mcpToken.scopeTagUuids.length} tag(s)`
                     : 'all notes'}
                 </span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   Created {formatDate(mcpToken.createdAt)} · Last used {formatDate(mcpToken.lastUsedAt)}
                 </span>
               </div>

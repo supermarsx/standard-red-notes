@@ -1,5 +1,5 @@
 {
-  "extends": "../../node_modules/@standardnotes/config/src/tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "skipLibCheck": true,
     "rootDir": "./src",

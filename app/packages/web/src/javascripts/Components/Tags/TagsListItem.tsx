@@ -76,9 +76,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     // Tags support subtags (a nestable label hierarchy), shown as a collapsible tree.
     const isFlatTag = false
 
-    const childrenTags = computed(() =>
-      isFlatTag ? [] : navigationController.getChildren(tag),
-    ).get()
+    const childrenTags = computed(() => (isFlatTag ? [] : navigationController.getChildren(tag))).get()
     const hasChildren = childrenTags.length > 0
 
     const displayIconType = tag.iconString as IconType
@@ -359,7 +357,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
             (isSelected || isContextMenuOpenForTag) && 'selected',
             isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
-            isReorderBefore && 'border-t-2 !border-t-info',
+            isReorderBefore && '!border-t-info border-t-2',
           )}
           onClick={selectCurrentTag}
           onDoubleClick={clearSearchAndSelectCurrentTag}
@@ -401,7 +399,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
         >
           {tag.color && (
             <div
-              className="absolute bottom-0 left-0 top-0 w-1 rounded-r"
+              className="absolute top-0 bottom-0 left-0 w-1 rounded-r"
               style={{ backgroundColor: tag.color }}
               aria-hidden="true"
             />
@@ -423,7 +421,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
 
             {isEditing && (
               <input
-                className="title editing min-w-0 overflow-hidden text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                className="title editing text-mobile-navigation-list-item lg:text-navigation-list-item min-w-0 overflow-hidden focus:shadow-none focus:outline-none"
                 id={`react-tag-${tag.uuid}-${type}`}
                 onBlur={onBlur}
                 onInput={onInput}
@@ -437,7 +435,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             {!isEditing && (
               <>
                 <div
-                  className="title overflow-hidden text-left text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                  className="title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left focus:shadow-none focus:outline-none"
                   id={`react-tag-${tag.uuid}-${type}`}
                 >
                   {tagHierarchyPrefix && <span className="opacity-50">{tagHierarchyPrefix}</span>}
@@ -451,7 +449,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
                 <a
                   role="button"
                   className={
-                    'mr-2 flex cursor-pointer items-center justify-center rounded border-0 bg-transparent hover:bg-contrast focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem]'
+                    'hover:bg-contrast mr-2 flex cursor-pointer items-center justify-center rounded border-0 bg-transparent focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem]'
                   }
                   onClick={toggleContextMenu}
                   onMouseDown={(e) => {
@@ -490,7 +488,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             </div>
           </div>
 
-          {tag.conflictOf && <div className="-mt-1 text-[0.625rem] font-bold text-danger">Conflicted Copy</div>}
+          {tag.conflictOf && <div className="text-danger -mt-1 text-[0.625rem] font-bold">Conflicted Copy</div>}
         </div>
         {isAddingSubtag && (
           <div
@@ -502,10 +500,10 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             <div className="tag-info">
               <div className="flex h-full min-w-[22px] items-center border-0 bg-transparent p-0" />
               <div className="tag-icon mr-1">
-                <Icon type="hashtag" className="mr-1 text-neutral" />
+                <Icon type="hashtag" className="text-neutral mr-1" />
               </div>
               <input
-                className="title w-full text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                className="title text-mobile-navigation-list-item lg:text-navigation-list-item w-full focus:shadow-none focus:outline-none"
                 type="text"
                 ref={subtagInputRef}
                 onBlur={onSubtagInputBlur}

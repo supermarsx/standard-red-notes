@@ -56,7 +56,8 @@ const files = {
 
   // FilePreviewError
   fileCannotBePreviewed: "This file can't be previewed.",
-  errorLoadingFile: 'There was an error loading the file. Try again, or download the file and open it using another application.',
+  errorLoadingFile:
+    'There was an error loading the file. Try again, or download the file and open it using another application.',
   tryAgain: 'Try again',
   downloadToView: 'To view this file, download it and open it using another application.',
 
@@ -123,7 +124,8 @@ const files = {
   ocrProgress: 'OCR page {{current}} / {{total}} ({{percent}}%)',
   ocrCachedReRunTooltip: 'Text already extracted (cached). Re-run OCR in your browser (stays on your device).',
   ocrExtractedReRunTooltip: 'Text extracted. Re-run OCR in your browser (stays on your device).',
-  ocrExtractTooltip: 'Extract text from scanned pages with OCR. Runs in your browser; nothing leaves your device (slow; downloads language data).',
+  ocrExtractTooltip:
+    'Extract text from scanned pages with OCR. Runs in your browser; nothing leaves your device (slow; downloads language data).',
   extractTextWithOcrBrowser: 'Extract text with OCR in your browser',
   reRunOcrBrowser: 'Re-run OCR (browser)',
   extractTextOcr: 'Extract text (OCR)',
@@ -140,7 +142,8 @@ const files = {
   previousMatch: 'Previous match',
   nextMatch: 'Next match',
   closeSearch: 'Close search',
-  serverOcrDisclosurePrefix: 'Server OCR is available for your account. It sends this PDF’s page images to the server and',
+  serverOcrDisclosurePrefix:
+    'Server OCR is available for your account. It sends this PDF’s page images to the server and',
   serverOcrDisclosureBold: 'leaves end-to-end encryption',
   serverOcrDisclosureSuffix:
     ' — the server (and anyone who controls it) can read that content. Browser OCR keeps everything on your device. Default is browser OCR.',

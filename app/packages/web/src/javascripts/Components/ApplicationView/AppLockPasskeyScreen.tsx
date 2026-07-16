@@ -64,7 +64,7 @@ const AppLockPasskeyScreen: FunctionComponent<Props> = ({ application, onUnlocke
       hideOnInteractOutside={false}
       backdropClassName="bg-passive-5"
       className={classNames(
-        'sn-component challenge-modal relative m-0 flex h-full w-full flex-col items-center rounded border-solid border-border bg-default p-0 md:h-auto md:!w-max',
+        'sn-component challenge-modal border-border bg-default relative m-0 flex h-full w-full flex-col items-center rounded border-solid p-0 md:h-auto md:!w-max',
         !isMobileScreen && 'shadow-overlay-light',
       )}
     >
@@ -75,7 +75,7 @@ const AppLockPasskeyScreen: FunctionComponent<Props> = ({ application, onUnlocke
           <div className="break-word mb-4 max-w-76 text-center text-sm">
             Verify with your passkey to unlock this app on this device.
           </div>
-          {error && <div className="mb-3 max-w-76 text-center text-sm text-danger">{error}</div>}
+          {error && <div className="text-danger mb-3 max-w-76 text-center text-sm">{error}</div>}
           <Button primary disabled={isAuthenticating} className="mb-2 min-w-76" onClick={() => void attempt()}>
             {isAuthenticating ? 'Waiting for passkey…' : 'Unlock with passkey'}
           </Button>

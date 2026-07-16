@@ -148,9 +148,7 @@ describe('capture / apply against a headless editor', () => {
       const para = $getRoot().getFirstChild()
       const children = $isElementNode(para) ? para.getChildren() : []
       // Expect a split: the middle segment "cd" is bold, the rest is not.
-      const boldText = children
-        .filter($isTextNode)
-        .find((c) => c.getTextContent() === 'cd')
+      const boldText = children.filter($isTextNode).find((c) => c.getTextContent() === 'cd')
       expect(boldText).toBeDefined()
       expect(boldText?.getFormat()).toBe(IS_BOLD)
     })

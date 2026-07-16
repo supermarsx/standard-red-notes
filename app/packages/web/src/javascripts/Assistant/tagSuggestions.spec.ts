@@ -89,7 +89,12 @@ describe('buildFileTagSuggestionPrompt', () => {
   })
 
   it('always includes filename, mime type, and size in the user message', () => {
-    const { user } = buildFileTagSuggestionPrompt({ ...base, name: 'Q3 report.pdf', mimeType: 'application/pdf', sizeLabel: '1.2 MB' })
+    const { user } = buildFileTagSuggestionPrompt({
+      ...base,
+      name: 'Q3 report.pdf',
+      mimeType: 'application/pdf',
+      sizeLabel: '1.2 MB',
+    })
     expect(user).toContain('Filename: Q3 report.pdf')
     expect(user).toContain('Type: application/pdf')
     expect(user).toContain('Size: 1.2 MB')

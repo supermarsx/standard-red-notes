@@ -58,17 +58,17 @@ const RecentNoteRow: FunctionComponent<{
 
   return (
     <button
-      className={`flex w-full items-center justify-between gap-3 rounded border border-solid border-border px-3 py-2 text-left ${
-        isAvailable ? 'cursor-pointer hover:bg-contrast' : 'cursor-default opacity-60'
+      className={`border-border flex w-full items-center justify-between gap-3 rounded border border-solid px-3 py-2 text-left ${
+        isAvailable ? 'hover:bg-contrast cursor-pointer' : 'cursor-default opacity-60'
       }`}
       onClick={handleOpen}
       disabled={!isAvailable}
       title={isAvailable ? 'Open this note' : 'This note is no longer available'}
     >
-      <span className={`min-w-0 flex-grow truncate ${isAvailable ? 'text-text' : 'italic text-passive-1'}`}>
+      <span className={`min-w-0 flex-grow truncate ${isAvailable ? 'text-text' : 'text-passive-1 italic'}`}>
         {title}
       </span>
-      <span className="flex-shrink-0 text-xs text-passive-1">{formatRelativeTime(entry.openedAt)}</span>
+      <span className="text-passive-1 flex-shrink-0 text-xs">{formatRelativeTime(entry.openedAt)}</span>
     </button>
   )
 }

@@ -153,7 +153,7 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
           <div className="flex items-center gap-2.5">
             <div className="text-sm font-semibold">Title:</div>
             <input
-              className="rounded border border-border bg-default px-2 py-1 md:translucent-ui:bg-transparent"
+              className="border-border bg-default md:translucent-ui:bg-transparent rounded border px-2 py-1"
               value={title}
               onChange={(event) => {
                 setTitle(event.target.value)
@@ -164,7 +164,7 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
           <div className="flex items-center gap-2.5">
             <div className="text-sm font-semibold">Icon:</div>
             <button
-              className="rounded border border-border p-2"
+              className="border-border rounded border p-2"
               aria-label="Change icon"
               onClick={toggleIconPicker}
               ref={iconPickerButtonRef}
@@ -215,7 +215,7 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
               </TabPanel>
               <TabPanel state={tabState} id="custom" className="flex flex-grow flex-col">
                 <textarea
-                  className="h-full min-h-[10rem] w-full flex-grow resize-none bg-default px-2.5 py-1.5 font-mono text-sm"
+                  className="bg-default h-full min-h-[10rem] w-full flex-grow resize-none px-2.5 py-1.5 font-mono text-sm"
                   value={customPredicateJson}
                   onChange={(event) => {
                     setCustomPredicateJson(event.target.value)
@@ -229,16 +229,16 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
                 <div
                   id="custom-predicate-validation"
                   aria-live="polite"
-                  className="border-t border-border px-2.5 py-1.5 text-sm"
+                  className="border-border border-t px-2.5 py-1.5 text-sm"
                 >
                   {customPredicateJson && isCustomJsonValidPredicate === false && (
-                    <div className="flex items-start gap-1.5 text-danger">
+                    <div className="text-danger flex items-start gap-1.5">
                       <Icon type="warning" className="mt-0.5 flex-shrink-0" size="small" />
                       <span>{customPredicateValidationError ?? 'Invalid predicate. Double check your entry.'}</span>
                     </div>
                   )}
                   {customPredicateJson && isCustomJsonValidPredicate === true && (
-                    <div className="flex items-center gap-1.5 text-success">
+                    <div className="text-success flex items-center gap-1.5">
                       <Icon type="check-circle-filled" className="flex-shrink-0" size="small" />
                       <span>Valid predicate. This smart view is ready to save.</span>
                     </div>
@@ -253,12 +253,12 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
             </TabsContainer>
             {tabState.activeTab === 'custom' && (
               <>
-                <div className="flex flex-col gap-1.5 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3">
+                <div className="border-info-backdrop bg-info-backdrop flex flex-col gap-1.5 rounded-md border-2 px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <Icon type="info" className="flex-shrink-0 text-info" size="small" />
+                    <Icon type="info" className="text-info flex-shrink-0" size="small" />
                     <div className="text-sm font-semibold">What is a smart view?</div>
                   </div>
-                  <div className="text-sm text-passive-0">
+                  <div className="text-passive-0 text-sm">
                     A smart view automatically collects every note that matches a rule you define, called a{' '}
                     <span className="font-semibold">predicate</span>. A predicate is a small JSON object with three
                     parts: a <span className="font-mono">keypath</span> (the field to look at, such as{' '}
@@ -272,7 +272,7 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2 rounded-md border border-border px-4 py-3">
+                <div className="border-border flex flex-col gap-2 rounded-md border px-4 py-3">
                   <div className="text-sm font-semibold">Insert an example</div>
                   <div className="flex flex-wrap gap-2">
                     {presets.map((preset) => (
@@ -280,7 +280,7 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
                         key={preset.label}
                         type="button"
                         title={preset.description}
-                        className="flex items-center gap-1.5 rounded border border-border bg-default px-2.5 py-1 text-sm hover:bg-contrast focus:bg-contrast"
+                        className="border-border bg-default hover:bg-contrast focus:bg-contrast flex items-center gap-1.5 rounded border px-2.5 py-1 text-sm"
                         onClick={() => {
                           insertPreset(preset)
                           customJsonInputRef.current?.focus()
@@ -291,12 +291,12 @@ const AddSmartViewModal = ({ controller, platform }: Props) => {
                       </button>
                     ))}
                   </div>
-                  <div className="text-xs text-passive-1">
+                  <div className="text-passive-1 text-xs">
                     Selecting an example fills the editor above with a valid predicate you can save as-is or edit.
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-1.5 rounded-md border-2 border-info-backdrop bg-info-backdrop px-4 py-3">
+                <div className="border-info-backdrop bg-info-backdrop flex flex-col gap-1.5 rounded-md border-2 px-4 py-3">
                   <Disclosure
                     store={jsonExamplesDisclosure}
                     className="flex items-center justify-between focus:shadow-none focus:outline-none"

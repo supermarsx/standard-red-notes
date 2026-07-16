@@ -103,7 +103,7 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
       togglePopover={() => navigationController.setContextMenuOpen(!contextMenuOpen)}
       className="py-2"
     >
-      <div className="flex flex-col gap-1 px-4 py-0.5 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
+      <div className="text-mobile-menu-item md:text-tablet-menu-item lg:text-menu-item flex flex-col gap-1 px-4 py-0.5 md:px-3">
         <div className="font-semibold">Name</div>
         <div className="flex gap-2.5">
           <DecoratedInput
@@ -123,7 +123,7 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
           />
           <button
             aria-label="Save folder name"
-            className="rounded border border-border bg-transparent px-1.5 active:bg-default translucent-ui:border-[--popover-border-color] md:hidden"
+            className="border-border active:bg-default translucent-ui:border-[--popover-border-color] rounded border bg-transparent px-1.5 md:hidden"
             onClick={() => saveTitle(true)}
           >
             <Icon type="check" />
@@ -142,26 +142,26 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
           iconGridClassName="max-h-30"
           autoFocus={false}
         />
-        <div className="px-4 py-1.5 text-mobile-menu-item md:px-3 md:text-tablet-menu-item lg:text-menu-item">
+        <div className="text-mobile-menu-item md:text-tablet-menu-item lg:text-menu-item px-4 py-1.5 md:px-3">
           <TagColorPicker selectedColor={selectedFolder.color} onChange={handleColorChange} />
         </div>
         <MenuSection>
           <MenuItem className={'justify-between py-1.5'} onClick={onClickAddSubfolder}>
             <div className="flex items-center">
-              <Icon type="add" className="mr-2 text-neutral" />
+              <Icon type="add" className="text-neutral mr-2" />
               Add subfolder
             </div>
             {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
-            <Icon type="cloud-off" className="mr-2 text-neutral" />
+            <Icon type="cloud-off" className="text-neutral mr-2" />
             <div className="flex flex-col">
               <div>
                 {folderHasLocalOnlyNotes
                   ? "Re-enable sync for this folder's notes"
                   : "Keep this folder's notes local only"}
               </div>
-              <div className="mt-0.5 text-xs text-passive-0">
+              <div className="text-passive-0 mt-0.5 text-xs">
                 {folderHasLocalOnlyNotes
                   ? 'Notes will sync to the server again.'
                   : "Notes stay on this device. Won't be backed up or appear on other devices."}
@@ -169,13 +169,13 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
             </div>
           </MenuItem>
           <MenuItem className={'py-1.5'} onClick={onClickDelete}>
-            <Icon type="trash" className="mr-2 text-danger" />
+            <Icon type="trash" className="text-danger mr-2" />
             <span className="text-danger">Delete</span>
           </MenuItem>
         </MenuSection>
       </Menu>
       <HorizontalSeparator classes="my-2" />
-      <div className="px-4 pb-1.5 pt-1 text-sm font-medium text-neutral md:px-3 lg:text-xs">
+      <div className="text-neutral px-4 pt-1 pb-1.5 text-sm font-medium md:px-3 lg:text-xs">
         <div className="mb-1">
           <span className="font-semibold">Last modified:</span> {folderLastModified}
         </div>

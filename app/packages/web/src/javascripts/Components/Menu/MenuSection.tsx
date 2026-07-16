@@ -13,12 +13,12 @@ const MenuSection = ({
   return (
     <div
       className={classNames(
-        'my-4 md:my-2 md:border-b md:border-border md:pb-2 md:last:mb-0 md:last:border-b-0 md:last:pb-0 md:first:last:mt-0 md:translucent-ui:border-[--popover-border-color]',
+        'md:border-border md:translucent-ui:border-[--popover-border-color] my-4 md:my-2 md:border-b md:pb-2 md:last:mb-0 md:last:border-b-0 md:last:pb-0 md:first:last:mt-0',
         className,
       )}
     >
-      {title && <div className="px-3 py-1 text-sm font-semibold uppercase text-text lg:text-xs">{title}</div>}
-      <div className="divide-y divide-passive-3 overflow-hidden rounded-md bg-default md:divide-none md:rounded-none md:bg-transparent">
+      {title && <div className="text-text px-3 py-1 text-sm font-semibold uppercase lg:text-xs">{title}</div>}
+      <div className="divide-passive-3 bg-default divide-y overflow-hidden rounded-md md:divide-none md:rounded-none md:bg-transparent">
         {children}
       </div>
     </div>

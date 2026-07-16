@@ -1,12 +1,5 @@
 import * as React from 'react'
-import {
-  DecoratorNode,
-  EditorConfig,
-  LexicalEditor,
-  LexicalNode,
-  NodeKey,
-  SerializedLexicalNode,
-} from 'lexical'
+import { DecoratorNode, EditorConfig, LexicalEditor, LexicalNode, NodeKey, SerializedLexicalNode } from 'lexical'
 import { PAGE_BREAK_CLASS } from '../../Layout/applyPrintLayout'
 
 /**
@@ -18,13 +11,13 @@ import { PAGE_BREAK_CLASS } from '../../Layout/applyPrintLayout'
 function PageBreakComponent(): React.JSX.Element {
   return (
     <div
-      className={`${PAGE_BREAK_CLASS} my-4 flex select-none items-center gap-3 text-xs font-medium uppercase tracking-wide text-passive-1`}
+      className={`${PAGE_BREAK_CLASS} text-passive-1 my-4 flex items-center gap-3 text-xs font-medium tracking-wide uppercase select-none`}
       contentEditable={false}
       data-page-break="true"
     >
-      <span className="h-px flex-grow border-t border-dashed border-border" />
+      <span className="border-border h-px flex-grow border-t border-dashed" />
       <span className="flex-shrink-0">Page break</span>
-      <span className="h-px flex-grow border-t border-dashed border-border" />
+      <span className="border-border h-px flex-grow border-t border-dashed" />
     </div>
   )
 }

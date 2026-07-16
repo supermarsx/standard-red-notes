@@ -52,9 +52,9 @@ const Spellcheck: FunctionComponent<Props> = ({ application }) => {
       if (!spellcheckerDevice) {
         return
       }
-      const updated = languages.map((language) =>
-        language.code === code ? { ...language, enabled: !language.enabled } : language,
-      )
+      const updated = languages.map((language) => {
+        return language.code === code ? { ...language, enabled: !language.enabled } : language
+      })
       const enabledCodes = updated.filter((language) => language.enabled).map((language) => language.code)
       spellcheckerDevice.setSpellCheckerLanguages(enabledCodes)
       // Re-read from the device so the displayed state reflects what was

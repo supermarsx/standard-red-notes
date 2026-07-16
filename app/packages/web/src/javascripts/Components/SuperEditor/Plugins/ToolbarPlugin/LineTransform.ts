@@ -47,10 +47,7 @@ export const $collectSelectedLineBlocks = (selection: RangeSelection): ElementNo
  * collect them, run `transform` on their text, then rewrite each block in the new
  * order (surplus blocks are removed). Returns true if the document changed.
  */
-export const $applyLineTransform = (
-  selection: RangeSelection,
-  transform: (texts: string[]) => string[],
-): boolean => {
+export const $applyLineTransform = (selection: RangeSelection, transform: (texts: string[]) => string[]): boolean => {
   const blocks = $collectSelectedLineBlocks(selection)
   if (blocks.length < 2) {
     return false

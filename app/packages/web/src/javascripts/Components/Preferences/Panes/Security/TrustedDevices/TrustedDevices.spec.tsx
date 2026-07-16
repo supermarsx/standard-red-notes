@@ -14,9 +14,8 @@
  * The repo has no @testing-library, so we drive React directly with
  * react-dom/client's createRoot + act (mirroring ComponentErrorBoundary.spec).
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 
 jest.mock('@standardnotes/toast', () => ({
   addToast: jest.fn(),

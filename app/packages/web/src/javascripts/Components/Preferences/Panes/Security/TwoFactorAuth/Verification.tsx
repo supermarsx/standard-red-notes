@@ -12,7 +12,7 @@ const Verification: FunctionComponent<Props> = ({ activation: act }) => {
   const secretKeyClass = act.verificationStatus === 'invalid-secret' ? 'border-danger' : ''
   const authTokenClass = act.verificationStatus === 'invalid-auth-code' ? 'border-danger' : ''
   return (
-    <div className="h-33 flex flex-row items-center px-4 py-4">
+    <div className="flex h-33 flex-row items-center px-4 py-4">
       <div className="flex flex-grow flex-col gap-4">
         <div className="flex flex-row flex-wrap items-center gap-1">
           <div className="text-sm">
@@ -39,10 +39,10 @@ const Verification: FunctionComponent<Props> = ({ activation: act }) => {
           />
         </div>
         {act.verificationStatus === 'invalid-auth-code' && (
-          <div className="flex-grow text-sm text-danger">Incorrect authentication code, please try again.</div>
+          <div className="text-danger flex-grow text-sm">Incorrect authentication code, please try again.</div>
         )}
         {act.verificationStatus === 'invalid-secret' && (
-          <div className="flex-grow text-sm text-danger">Incorrect secret key, please try again.</div>
+          <div className="text-danger flex-grow text-sm">Incorrect secret key, please try again.</div>
         )}
       </div>
     </div>

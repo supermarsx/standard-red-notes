@@ -1,12 +1,9 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
 import { MessageToWebApp } from '../Shared/IpcMessages'
 import { ElectronMainEvents, MainEventHandler } from '../Shared/ElectronMainEvents'
-import {
-  RemoteBridgeConfig,
-  RemoteBridgeInvokeChannel,
-  RemoteBridgeSyncChannel,
-} from '../Shared/RemoteBridgeChannels'
+import { RemoteBridgeConfig, RemoteBridgeInvokeChannel, RemoteBridgeSyncChannel } from '../Shared/RemoteBridgeChannels'
 import { CrossProcessBridge } from './CrossProcessBridge'
-const { contextBridge, ipcRenderer } = require('electron')
 
 /**
  * Builds the renderer-facing remote bridge.
@@ -85,8 +82,7 @@ function buildRemoteBridge(): CrossProcessBridge {
       invoke(I.SetHomeServerConfiguration, configurationJSONString),
     getHomeServerConfiguration: () => invoke(I.GetHomeServerConfiguration),
     setHomeServerDataLocation: (location) => invoke(I.SetHomeServerDataLocation, location),
-    activatePremiumFeatures: (username, subscriptionId) =>
-      invoke(I.ActivatePremiumFeatures, username, subscriptionId),
+    activatePremiumFeatures: (username, subscriptionId) => invoke(I.ActivatePremiumFeatures, username, subscriptionId),
     isHomeServerRunning: () => invoke(I.IsHomeServerRunning),
     getHomeServerLogs: () => invoke(I.GetHomeServerLogs),
     getHomeServerUrl: () => invoke(I.GetHomeServerUrl),

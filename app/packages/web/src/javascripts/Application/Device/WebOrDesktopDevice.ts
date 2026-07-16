@@ -71,7 +71,7 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
 
     try {
       return JSON.parse(value)
-    } catch (e) {
+    } catch {
       return value
     }
   }

@@ -65,7 +65,7 @@ const BooleanStatement = ({
 }) => (
   <div className="flex flex-grow items-center gap-2.5">
     <span className="text-sm font-medium">{booleanStatementLabel(keypath)}</span>
-    <div className="inline-flex overflow-hidden rounded border border-border" role="group" aria-label="Yes or no">
+    <div className="border-border inline-flex overflow-hidden rounded border" role="group" aria-label="Yes or no">
       {[
         { label: 'Yes', on: true },
         { label: 'No', on: false },
@@ -189,7 +189,7 @@ const CompoundPredicateBuilder = ({ controller }: Props) => {
           <div className="flex flex-col gap-1" key={index}>
             <div className="flex w-full flex-col gap-2 md:flex-row md:items-center">
               {index !== 0 && (
-                <div className="mr-2 text-sm font-semibold text-passive-1">{operator === 'and' ? 'AND' : 'OR'}</div>
+                <div className="text-passive-1 mr-2 text-sm font-semibold">{operator === 'and' ? 'AND' : 'OR'}</div>
               )}
 
               <FieldSelect
@@ -243,7 +243,7 @@ const CompoundPredicateBuilder = ({ controller }: Props) => {
 
               {index !== 0 && (
                 <button
-                  className="rounded border border-border p-1 text-danger"
+                  className="border-border text-danger rounded border p-1"
                   aria-label="Remove condition"
                   onClick={() => {
                     removePredicate(index)
@@ -254,7 +254,7 @@ const CompoundPredicateBuilder = ({ controller }: Props) => {
               )}
             </div>
 
-            {type !== undefined && <div className="text-xs text-passive-1">{getFieldDescription(keypath)}</div>}
+            {type !== undefined && <div className="text-passive-1 text-xs">{getFieldDescription(keypath)}</div>}
 
             {index === predicates.length - 1 && (
               <Button

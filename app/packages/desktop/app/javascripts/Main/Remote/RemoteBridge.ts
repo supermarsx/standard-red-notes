@@ -1,9 +1,8 @@
+import path from 'path'
+
 import { CrossProcessBridge } from '../../Renderer/CrossProcessBridge'
 import { Store } from '../Store/Store'
 import { StoreKeys } from '../Store/StoreKeys'
-
-const path = require('path')
-const rendererPath = path.join('file://', __dirname, '/renderer.js')
 
 import {
   FileBackupsDevice,
@@ -27,6 +26,8 @@ import {
   RemoteBridgeInvokeChannel,
   RemoteBridgeSyncChannel,
 } from '../../Shared/RemoteBridgeChannels'
+
+const rendererPath = path.join('file://', __dirname, '/renderer.js')
 
 /**
  * Validates that a value received over IPC is a non-empty string. Throws on

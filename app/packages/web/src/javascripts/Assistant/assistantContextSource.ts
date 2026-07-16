@@ -3,14 +3,7 @@
 // touch `application.items`; the assembly itself (assistantContext.ts) stays a
 // pure, testable function with no app dependency.
 
-import {
-  ContentType,
-  SNNote,
-  SNTag,
-  SNFolder,
-  isNote,
-  isFolderItem,
-} from '@standardnotes/snjs'
+import { ContentType, SNNote, SNTag, SNFolder, isNote, isFolderItem } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewController'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
@@ -23,9 +16,7 @@ import { AssistantContextScope, ContextNote, BuiltAssistantContext, buildAssista
  * multi-selected.
  */
 export type CollectionSelection =
-  | { type: 'tag'; uuid: string }
-  | { type: 'folder'; uuid: string }
-  | { type: 'notes'; uuids: string[] }
+  { type: 'tag'; uuid: string } | { type: 'folder'; uuid: string } | { type: 'notes'; uuids: string[] }
 
 export interface AssistantContextSelection {
   scope: AssistantContextScope
@@ -94,14 +85,15 @@ function notesMatchingTopic(application: WebApplication, query: string): SNNote[
 
 /** Notes referencing a tag (notes point at tags), most relevant first by app sort. */
 function notesForTag(application: WebApplication, tag: SNTag): SNNote[] {
-  return application.items.itemsReferencingItem(tag).filter(isNote).filter((note) => !note.trashed)
+  return application.items
+    .itemsReferencingItem(tag)
+    .filter(isNote)
+    .filter((note) => !note.trashed)
 }
 
 /** Notes a folder references (folders point at notes). */
 function notesForFolder(application: WebApplication, folder: SNFolder): SNNote[] {
-  return application.items
-    .referencesForItem<SNNote>(folder, ContentType.TYPES.Note)
-    .filter((note) => !note.trashed)
+  return application.items.referencesForItem<SNNote>(folder, ContentType.TYPES.Note).filter((note) => !note.trashed)
 }
 
 /** The notes resolved for a selection, plus how many were dropped by the count cap. */

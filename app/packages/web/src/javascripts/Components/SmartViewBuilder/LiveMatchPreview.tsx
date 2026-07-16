@@ -49,16 +49,16 @@ const LiveMatchPreview = ({ controller }: Props) => {
   const isUsable = result != null && result.status === 'ok'
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border bg-contrast px-4 py-3" aria-live="polite">
+    <div className="border-border bg-contrast flex flex-col gap-2 rounded-md border px-4 py-3" aria-live="polite">
       <div className="flex items-center gap-2">
-        <Icon type="search" size="small" className="flex-shrink-0 text-info" />
+        <Icon type="search" size="small" className="text-info flex-shrink-0" />
         <div className="text-sm font-semibold">
           {!isUsable ? (
             <span className="text-passive-0">Add a condition to preview matches</span>
           ) : (
             <span>
-              Matches <span className="text-info">{result.count}</span>{' '}
-              {result.count === 1 ? 'item' : 'items'} right now
+              Matches <span className="text-info">{result.count}</span> {result.count === 1 ? 'item' : 'items'} right
+              now
             </span>
           )}
         </div>
@@ -66,7 +66,7 @@ const LiveMatchPreview = ({ controller }: Props) => {
       </div>
 
       {!isUsable && (
-        <div className="text-xs text-passive-1">
+        <div className="text-passive-1 text-xs">
           {result?.message ?? 'Choose a field, phrase, and value to see how many notes match.'}
         </div>
       )}
@@ -74,23 +74,23 @@ const LiveMatchPreview = ({ controller }: Props) => {
       {isUsable && result.sampleTitles.length > 0 && (
         <ul className="ml-1 flex flex-col gap-1">
           {result.sampleTitles.map((title, index) => (
-            <li key={index} className="flex items-center gap-1.5 text-sm text-passive-0">
-              <Icon type="notes" size="small" className="flex-shrink-0 text-passive-1" />
+            <li key={index} className="text-passive-0 flex items-center gap-1.5 text-sm">
+              <Icon type="notes" size="small" className="text-passive-1 flex-shrink-0" />
               <span className="truncate">{title}</span>
             </li>
           ))}
           {result.count > result.sampleTitles.length && (
-            <li className="ml-6 text-xs text-passive-1">and {result.count - result.sampleTitles.length} more…</li>
+            <li className="text-passive-1 ml-6 text-xs">and {result.count - result.sampleTitles.length} more…</li>
           )}
         </ul>
       )}
 
       {isUsable && result.count === 0 && (
-        <div className="text-xs text-passive-1">No items match yet. Try loosening the conditions.</div>
+        <div className="text-passive-1 text-xs">No items match yet. Try loosening the conditions.</div>
       )}
 
       {isUsable && result.limited && (
-        <div className="text-xs text-passive-1">
+        <div className="text-passive-1 text-xs">
           Previewing the first {result.scanned.toLocaleString()} of {result.totalAvailable.toLocaleString()} items for
           speed.
         </div>

@@ -53,7 +53,6 @@ const SplitNoteModalContent = observer(({ application, note, close }: Omit<Props
       return 0
     }
     // Recompute when inputs that affect the split change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notesController, note, mode, delimiter])
 
   const canSplit = partCount >= 2 && !(mode === 'delimiter' && delimiter.length === 0)
@@ -99,8 +98,8 @@ const SplitNoteModalContent = observer(({ application, note, close }: Omit<Props
     >
       <div className="flex flex-col gap-4">
         {isSuper && (
-          <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-            <div className="font-semibold text-warning">Super note becomes plain-text parts</div>
+          <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+            <div className="text-warning font-semibold">Super note becomes plain-text parts</div>
             <p className="mt-1">
               This is a Super note. Splitting extracts its visible text and creates the parts as plain-text notes, so
               rich formatting (tables, embeds, styling) is not carried over. The original Super note is unchanged.
@@ -122,7 +121,7 @@ const SplitNoteModalContent = observer(({ application, note, close }: Omit<Props
               />
               <span className="flex flex-col">
                 <span className="text-sm">{option.label}</span>
-                <span className="text-xs text-passive-0">{option.description}</span>
+                <span className="text-passive-0 text-xs">{option.description}</span>
               </span>
             </label>
           ))}
@@ -132,12 +131,12 @@ const SplitNoteModalContent = observer(({ application, note, close }: Omit<Props
           <div className="flex flex-col gap-1">
             <label className="text-sm font-semibold">Delimiter</label>
             <input
-              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              className="border-border bg-default rounded border px-2 py-1.5 text-sm"
               value={delimiter}
               onChange={(event) => setDelimiter(event.target.value)}
               placeholder="e.g. --- or ==="
             />
-            {delimiter.length === 0 && <span className="text-xs text-danger">Enter a delimiter to split on.</span>}
+            {delimiter.length === 0 && <span className="text-danger text-xs">Enter a delimiter to split on.</span>}
           </div>
         )}
 
@@ -156,12 +155,12 @@ const SplitNoteModalContent = observer(({ application, note, close }: Omit<Props
             Keep the original note
           </label>
           {!keepOriginal && (
-            <span className="ml-6 text-xs text-warning">The original note will be moved to the trash.</span>
+            <span className="text-warning ml-6 text-xs">The original note will be moved to the trash.</span>
           )}
         </div>
 
         {/* Preview */}
-        <div className="rounded border border-border bg-contrast p-3 text-sm">
+        <div className="border-border bg-contrast rounded border p-3 text-sm">
           {canSplit ? (
             <span>
               This will create <strong>{partCount}</strong> {partCount === 1 ? 'note' : 'notes'}.

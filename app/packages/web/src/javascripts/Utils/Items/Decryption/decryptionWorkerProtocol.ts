@@ -7,11 +7,7 @@
 // JSON, the key is a single hex string, and DecryptedParameters/Error markers are
 // plain objects. No @standardnotes model instances cross the boundary.
 
-import {
-  DecryptedParameters,
-  EncryptedInputParameters,
-  ErrorDecryptingParameters,
-} from '@standardnotes/snjs'
+import { DecryptedParameters, EncryptedInputParameters, ErrorDecryptingParameters } from '@standardnotes/snjs'
 
 /** One payload to decrypt: encrypted params + the hex itemsKey the V004 use-case reads. */
 export type DecryptionWorkerJob = {

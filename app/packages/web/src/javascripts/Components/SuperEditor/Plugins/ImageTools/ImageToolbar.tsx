@@ -5,11 +5,7 @@ import IconButton from '@/Components/Button/IconButton'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { ImageAlignmentOptions } from '@/Components/FilePreview/ImageAlignmentOptions'
 import { getOverflows } from '@/Components/Popover/Utils/Collisions'
-import {
-  ImageFloat,
-  ImageSizePreset,
-  ImageSizePresetLabels,
-} from './ImageToolsTypes'
+import { ImageFloat, ImageSizePreset, ImageSizePresetLabels } from './ImageToolsTypes'
 
 export type ImageToolbarProps = {
   /** Whether the toolbar is shown (image selected/hovered). */
@@ -85,7 +81,7 @@ export default function ImageToolbar({
         }
       }}
     >
-      <div className="flex flex-wrap items-center gap-0.5 divide-x divide-border rounded border border-border bg-default shadow-md">
+      <div className="divide-border border-border bg-default flex flex-wrap items-center gap-0.5 divide-x rounded border shadow-md">
         <div className="flex items-center gap-1 px-1 py-0.5">
           <ImageAlignmentOptions alignment={alignment} changeAlignment={onAlignmentChange} />
         </div>
@@ -93,7 +89,7 @@ export default function ImageToolbar({
         <div className="relative flex items-center px-1 py-0.5">
           <StyledTooltip label="Resize">
             <IconButton
-              className="rounded p-1 hover:bg-contrast"
+              className="hover:bg-contrast rounded p-1"
               icon={'image' as IconType}
               title="Resize"
               focusable={true}
@@ -106,11 +102,11 @@ export default function ImageToolbar({
             />
           </StyledTooltip>
           {showPresets && (
-            <div className="absolute left-0 top-full z-40 mt-1 flex flex-col rounded border border-border bg-default py-1 shadow-md">
+            <div className="border-border bg-default absolute top-full left-0 z-40 mt-1 flex flex-col rounded border py-1 shadow-md">
               {Presets.map((preset) => (
                 <button
                   key={preset}
-                  className="px-3 py-1.5 text-left text-sm hover:bg-contrast"
+                  className="hover:bg-contrast px-3 py-1.5 text-left text-sm"
                   onClick={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
@@ -129,10 +125,7 @@ export default function ImageToolbar({
         <div className="flex items-center px-1 py-0.5">
           <StyledTooltip label={floatLabel}>
             <IconButton
-              className={classNames(
-                'rounded p-1 hover:bg-contrast',
-                float !== 'none' && '!bg-info text-info-contrast',
-              )}
+              className={classNames('hover:bg-contrast rounded p-1', float !== 'none' && '!bg-info text-info-contrast')}
               icon={'line-width' as IconType}
               title={floatLabel}
               focusable={true}
@@ -149,10 +142,7 @@ export default function ImageToolbar({
         <div className="flex items-center px-1 py-0.5">
           <StyledTooltip label={captionEnabled ? 'Remove caption' : 'Add caption'}>
             <IconButton
-              className={classNames(
-                'rounded p-1 hover:bg-contrast',
-                captionEnabled && '!bg-info text-info-contrast',
-              )}
+              className={classNames('hover:bg-contrast rounded p-1', captionEnabled && '!bg-info text-info-contrast')}
               icon={'text-paragraph-long' as IconType}
               title={captionEnabled ? 'Remove caption' : 'Add caption'}
               focusable={true}

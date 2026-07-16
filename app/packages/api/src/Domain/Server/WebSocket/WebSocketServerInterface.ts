@@ -7,7 +7,5 @@ export interface WebSocketServerInterface {
   createConnectionToken(
     params: WebSocketConnectionTokenRequestParams,
   ): Promise<HttpResponse<WebSocketConnectionTokenResponseBody>>
-  authorizeCollaboration(params: {
-    noteUuid: string
-  }): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
+  authorizeCollaboration(params: { noteUuid: string }): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
 }

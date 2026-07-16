@@ -12,7 +12,13 @@
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
-import { PAGE_TOKEN, TOTAL_TOKEN, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from './PageLayoutOptions'
+import {
+  PAGE_TOKEN,
+  TOTAL_TOKEN,
+  resolveFont,
+  type HeaderFooterStyle,
+  type PageLayoutOptions,
+} from './PageLayoutOptions'
 
 export const ODT_MIME_TYPE = 'application/vnd.oasis.opendocument.text'
 
@@ -318,8 +324,9 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </office:document-styles>`
 
 /** ODF text-align keyword for a header/footer alignment. */
-const odfTextAlign = (align: HeaderFooterAlign): string =>
-  align === 'left' ? 'start' : align === 'right' ? 'end' : 'center'
+const odfTextAlign = (align: HeaderFooterAlign): string => {
+  return align === 'left' ? 'start' : align === 'right' ? 'end' : 'center'
+}
 
 /** The three header/footer alignment paragraph styles (added only when options present). */
 const HF_ALIGN_STYLES = (['left', 'center', 'right'] as HeaderFooterAlign[])
@@ -427,13 +434,13 @@ const odfHeaderFooterText = (text: string): string =>
   text
     .split(/(\{page\}|\{total\})/g)
     .filter((part) => part !== '')
-    .map((part) =>
-      part === PAGE_TOKEN
+    .map((part) => {
+      return part === PAGE_TOKEN
         ? '<text:page-number text:select-page="current"/>'
         : part === TOTAL_TOKEN
           ? ODF_PAGE_COUNT_FIELD
-          : xmlEscape(part),
-    )
+          : xmlEscape(part)
+    })
     .join('')
 
 /** `<style:header>` / `<style:footer>` for one band, or '' when it carries nothing. */
@@ -494,7 +501,10 @@ const buildStylesXml = (options?: PageLayoutOptions): string => {
   if (!options) {
     return STYLES_XML
   }
-  return STYLES_XML.replace('</office:document-styles>', `${buildPageStylesInsertion(options)}</office:document-styles>`)
+  return STYLES_XML.replace(
+    '</office:document-styles>',
+    `${buildPageStylesInsertion(options)}</office:document-styles>`,
+  )
 }
 
 const META_XML = `<?xml version="1.0" encoding="UTF-8"?>

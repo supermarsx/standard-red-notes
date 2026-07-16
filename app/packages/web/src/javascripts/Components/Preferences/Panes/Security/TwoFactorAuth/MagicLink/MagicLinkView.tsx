@@ -57,8 +57,8 @@ const MagicLinkView: FunctionComponent<Props> = ({ application }) => {
           <div className="flex flex-grow flex-col">
             <Title>Magic link</Title>
             <Text>
-              Receive a one-time verification code by email when signing in. If email is not configured on your
-              server, the code is shown on screen as a fallback.
+              Receive a one-time verification code by email when signing in. If email is not configured on your server,
+              the code is shown on screen as a fallback.
             </Text>
           </div>
           <Switch
@@ -69,7 +69,7 @@ const MagicLinkView: FunctionComponent<Props> = ({ application }) => {
             }}
           />
         </div>
-        {error && <Text className="mt-2 text-danger">{error}</Text>}
+        {error && <Text className="text-danger mt-2">{error}</Text>}
       </PreferencesSegment>
     </PreferencesGroup>
   )

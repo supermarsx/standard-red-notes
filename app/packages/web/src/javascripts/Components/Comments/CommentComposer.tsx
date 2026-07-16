@@ -1,11 +1,6 @@
 import { FunctionComponent, KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import Icon from '@/Components/Icon/Icon'
-import {
-  buildMentionToken,
-  detectMentionQuery,
-  filterMentionCandidates,
-  MentionCandidate,
-} from '@/Comments/mentions'
+import { buildMentionToken, detectMentionQuery, filterMentionCandidates, MentionCandidate } from '@/Comments/mentions'
 
 type Props = {
   candidates: MentionCandidate[]
@@ -152,11 +147,11 @@ export const CommentComposer: FunctionComponent<Props> = ({
         onClick={(event) => recomputeQuery(value, event.currentTarget.selectionStart ?? 0)}
         placeholder={placeholder ?? 'Add a comment… use @ to mention someone'}
         rows={2}
-        className="w-full resize-y rounded border border-border bg-default px-2 py-1.5 text-sm text-text focus:border-info focus:outline-none"
+        className="border-border bg-default text-text focus:border-info w-full resize-y rounded border px-2 py-1.5 text-sm focus:outline-none"
       />
       {menuOpen && (
         <ul
-          className="absolute left-0 right-0 z-10 mt-1 max-h-44 overflow-y-auto rounded border border-border bg-default py-1 shadow-main"
+          className="border-border bg-default shadow-main absolute right-0 left-0 z-10 mt-1 max-h-44 overflow-y-auto rounded border py-1"
           role="listbox"
         >
           {filtered.map((candidate, index) => (
@@ -185,7 +180,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-2 py-1 text-xs text-passive-1 hover:bg-contrast"
+            className="text-passive-1 hover:bg-contrast rounded px-2 py-1 text-xs"
           >
             Cancel
           </button>
@@ -194,7 +189,7 @@ export const CommentComposer: FunctionComponent<Props> = ({
           type="button"
           onClick={submit}
           disabled={value.trim().length === 0}
-          className="rounded bg-info px-3 py-1 text-xs font-semibold text-info-contrast disabled:opacity-50"
+          className="bg-info text-info-contrast rounded px-3 py-1 text-xs font-semibold disabled:opacity-50"
         >
           {submitLabel}
         </button>

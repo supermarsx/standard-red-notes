@@ -96,7 +96,7 @@ const EditSmartViewModal = ({ controller, platform }: Props) => {
           <div className="flex items-center gap-2.5">
             <div className="text-sm font-semibold">Title:</div>
             <input
-              className="rounded border border-border bg-default px-2 py-1 md:translucent-ui:bg-transparent"
+              className="border-border bg-default md:translucent-ui:bg-transparent rounded border px-2 py-1"
               value={title}
               onChange={(event) => {
                 setTitle(event.target.value)
@@ -107,7 +107,7 @@ const EditSmartViewModal = ({ controller, platform }: Props) => {
           <div className="flex items-center gap-2.5">
             <div className="text-sm font-semibold">Icon:</div>
             <button
-              className="rounded border border-border p-2"
+              className="border-border rounded border p-2"
               aria-label="Change icon"
               onClick={toggleIconPicker}
               ref={iconPickerButtonRef}
@@ -137,9 +137,9 @@ const EditSmartViewModal = ({ controller, platform }: Props) => {
           </div>
           <div className="flex flex-grow flex-col gap-2.5">
             <div className="text-sm font-semibold">Predicate:</div>
-            <div className="flex flex-grow flex-col overflow-hidden rounded-md border border-border">
+            <div className="border-border flex flex-grow flex-col overflow-hidden rounded-md border">
               <textarea
-                className="h-full min-h-[10rem] w-full flex-grow resize-none bg-default px-2.5 py-1.5 font-mono text-sm md:translucent-ui:bg-transparent"
+                className="bg-default md:translucent-ui:bg-transparent h-full min-h-[10rem] w-full flex-grow resize-none px-2.5 py-1.5 font-mono text-sm"
                 value={predicateJson}
                 onChange={(event) => {
                   setPredicateJson(event.target.value)
@@ -149,7 +149,7 @@ const EditSmartViewModal = ({ controller, platform }: Props) => {
                 ref={predicateJsonInputRef}
               />
               {!isPredicateJsonValid && (
-                <div className="border-t border-border px-2.5 py-1.5 text-sm text-danger">
+                <div className="border-border text-danger border-t px-2.5 py-1.5 text-sm">
                   Invalid JSON. Double check your entry and try again.
                 </div>
               )}

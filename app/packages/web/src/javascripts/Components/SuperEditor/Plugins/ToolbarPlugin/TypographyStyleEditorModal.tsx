@@ -61,7 +61,7 @@ const cloneBlocks = (blocks: DraftBlocks | undefined): DraftBlocks => {
 
 const Field = ({ label, children }: { label: string; children: ReactNode }) => (
   <label className="flex items-center justify-between gap-3 py-1">
-    <span className="flex-shrink-0 text-sm text-text">{label}</span>
+    <span className="text-text flex-shrink-0 text-sm">{label}</span>
     <span className="flex min-w-0 items-center gap-1.5">{children}</span>
   </label>
 )
@@ -81,7 +81,7 @@ const TextControl = ({
     value={value}
     placeholder={placeholder ?? 'inherit'}
     onChange={(event) => onChange(event.target.value)}
-    className="w-40 min-w-0 rounded border border-border bg-default px-2 py-1 text-sm text-text focus:border-info focus:outline-none"
+    className="border-border bg-default text-text focus:border-info w-40 min-w-0 rounded border px-2 py-1 text-sm focus:outline-none"
   />
 )
 
@@ -131,7 +131,7 @@ const ColorControl = ({ value, onChange }: { value: string; onChange: (value: st
         aria-label="Colour swatch"
         value={swatchValue}
         onChange={(event) => onChange(event.target.value)}
-        className="h-7 w-8 flex-shrink-0 cursor-pointer rounded border border-border bg-transparent p-0"
+        className="border-border h-7 w-8 flex-shrink-0 cursor-pointer rounded border bg-transparent p-0"
       />
       <TextControl value={value} placeholder="inherit" onChange={onChange} />
     </span>
@@ -165,11 +165,11 @@ const SelectControl = ({
 const Group = ({ title, defaultOpen, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) => {
   const [open, setOpen] = useState(Boolean(defaultOpen))
   return (
-    <div className="border-b border-border">
+    <div className="border-border border-b">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-text hover:bg-contrast"
+        className="text-text hover:bg-contrast flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold"
       >
         {title}
         <Icon type="chevron-down" size="small" className={classNames('text-passive-1', open ? 'rotate-180' : '')} />
@@ -319,14 +319,14 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
         { label: 'Save', type: 'primary', onClick: onSave, mobileSlot: 'right' },
       ]}
     >
-      <div className="flex flex-col md:flex-row md:divide-x md:divide-border">
+      <div className="md:divide-border flex flex-col md:flex-row md:divide-x">
         {/* Left: block-type selector (P2 preview squares, now live on the draft),
             in the user's saved gallery order. A "Reorder" toggle swaps the grid
             for a dependency-free move-up/down list that writes the global order
             pref immediately (independent of this modal's Save/Cancel). */}
-        <div className="flex-shrink-0 border-b border-border p-2 md:w-52 md:border-b-0">
+        <div className="border-border flex-shrink-0 border-b p-2 md:w-52 md:border-b-0">
           <div className="mb-1 flex items-center justify-between gap-2 px-1">
-            <span className="text-xs text-passive-1">Block type</span>
+            <span className="text-passive-1 text-xs">Block type</span>
             <button
               type="button"
               aria-pressed={reordering}
@@ -347,10 +347,10 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
               {orderedBlocks.map((descriptor, index) => (
                 <div
                   key={descriptor.key}
-                  className="flex items-center gap-1 rounded border border-border bg-default px-2 py-1"
+                  className="border-border bg-default flex items-center gap-1 rounded border px-2 py-1"
                 >
-                  <Icon type={descriptor.iconName} size="custom" className="h-3.5 w-3.5 flex-shrink-0 text-passive-1" />
-                  <span className="min-w-0 flex-grow overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text">
+                  <Icon type={descriptor.iconName} size="custom" className="text-passive-1 h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="text-text min-w-0 flex-grow overflow-hidden text-xs text-ellipsis whitespace-nowrap">
                     {descriptor.label}
                   </span>
                   <button
@@ -359,7 +359,7 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
                     title={t('moveBlockStyleUp')}
                     disabled={index === 0}
                     onClick={() => moveBlock(descriptor.key, -1)}
-                    className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast disabled:opacity-30 disabled:hover:bg-transparent"
+                    className="text-passive-1 hover:bg-contrast flex-shrink-0 rounded p-0.5 disabled:opacity-30 disabled:hover:bg-transparent"
                   >
                     <Icon type="chevron-up" size="custom" className="h-4 w-4" />
                   </button>
@@ -369,7 +369,7 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
                     title={t('moveBlockStyleDown')}
                     disabled={index === orderedBlocks.length - 1}
                     onClick={() => moveBlock(descriptor.key, 1)}
-                    className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast disabled:opacity-30 disabled:hover:bg-transparent"
+                    className="text-passive-1 hover:bg-contrast flex-shrink-0 rounded p-0.5 disabled:opacity-30 disabled:hover:bg-transparent"
                   >
                     <Icon type="chevron-down" size="custom" className="h-4 w-4" />
                   </button>
@@ -378,7 +378,7 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
               <button
                 type="button"
                 onClick={resetOrder}
-                className="mt-1 rounded border border-border px-2 py-1 text-xs text-passive-0 hover:bg-contrast"
+                className="border-border text-passive-0 hover:bg-contrast mt-1 rounded border px-2 py-1 text-xs"
               >
                 {t('resetBlockStyleOrder')}
               </button>
@@ -393,7 +393,7 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
                   aria-pressed={descriptor.key === selectedKey}
                   onClick={() => setSelectedKey(descriptor.key)}
                   className={classNames(
-                    'flex select-none flex-col items-stretch gap-1 rounded border p-1.5 transition-colors duration-75',
+                    'flex flex-col items-stretch gap-1 rounded border p-1.5 transition-colors duration-75 select-none',
                     descriptor.key === selectedKey
                       ? 'border-info bg-contrast'
                       : 'border-border bg-default hover:border-info',
@@ -412,9 +412,9 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
                     <Icon
                       type={descriptor.iconName}
                       size="custom"
-                      className="h-3.5 w-3.5 flex-shrink-0 text-passive-1"
+                      className="text-passive-1 h-3.5 w-3.5 flex-shrink-0"
                     />
-                    <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-0">
+                    <span className="text-passive-0 overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
                       {descriptor.label}
                     </span>
                   </span>
@@ -426,8 +426,8 @@ const ModalContent = ({ close, profileId }: { close: () => void; profileId?: str
 
         {/* Right: live preview + grouped controls for the selected block. */}
         <div className="flex min-w-0 flex-grow flex-col">
-          <div className="border-b border-border p-3">
-            <div className="mb-1 text-xs text-passive-1">Live preview · {selectedDescriptor.label}</div>
+          <div className="border-border border-b p-3">
+            <div className="text-passive-1 mb-1 text-xs">Live preview · {selectedDescriptor.label}</div>
             <div
               className="flex min-h-16 items-center overflow-hidden rounded px-3 py-2"
               style={{

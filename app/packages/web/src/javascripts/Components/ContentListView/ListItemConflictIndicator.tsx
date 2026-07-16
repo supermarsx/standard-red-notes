@@ -12,7 +12,7 @@ const ListItemConflictIndicator: FunctionComponent<Props> = ({ item }) => {
   const { t } = useTranslation('notes')
   return item.conflictOf ? (
     <div className="mt-0.5 flex flex-wrap items-center">
-      <div className={'mr-1 mt-2 rounded bg-danger px-1.5 py-1 text-danger-contrast'}>
+      <div className={'bg-danger text-danger-contrast mt-2 mr-1 rounded px-1.5 py-1'}>
         <div className="text-center text-xs font-bold">{t('conflictedCopy')}</div>
       </div>
     </div>

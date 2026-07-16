@@ -2,9 +2,7 @@ import { toEmbedUrl, toTrustedEmbedUrl } from './toEmbedUrl'
 
 describe('toEmbedUrl', () => {
   it('converts a youtube.com/watch?v=ID URL to the embed form', () => {
-    expect(toEmbedUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(
-      'https://www.youtube.com/embed/dQw4w9WgXcQ',
-    )
+    expect(toEmbedUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('https://www.youtube.com/embed/dQw4w9WgXcQ')
   })
 
   it('converts a youtu.be/ID short URL to the embed form', () => {
@@ -12,15 +10,11 @@ describe('toEmbedUrl', () => {
   })
 
   it('converts a youtube.com/shorts/ID URL to the embed form', () => {
-    expect(toEmbedUrl('https://www.youtube.com/shorts/dQw4w9WgXcQ')).toBe(
-      'https://www.youtube.com/embed/dQw4w9WgXcQ',
-    )
+    expect(toEmbedUrl('https://www.youtube.com/shorts/dQw4w9WgXcQ')).toBe('https://www.youtube.com/embed/dQw4w9WgXcQ')
   })
 
   it('passes through an already-embeddable youtube.com/embed/ID URL', () => {
-    expect(toEmbedUrl('https://www.youtube.com/embed/dQw4w9WgXcQ')).toBe(
-      'https://www.youtube.com/embed/dQw4w9WgXcQ',
-    )
+    expect(toEmbedUrl('https://www.youtube.com/embed/dQw4w9WgXcQ')).toBe('https://www.youtube.com/embed/dQw4w9WgXcQ')
   })
 
   it('preserves a numeric t= timestamp as ?start=SECONDS', () => {
@@ -36,9 +30,7 @@ describe('toEmbedUrl', () => {
   })
 
   it('preserves a t=90s timestamp on a youtu.be URL', () => {
-    expect(toEmbedUrl('https://youtu.be/dQw4w9WgXcQ?t=90s')).toBe(
-      'https://www.youtube.com/embed/dQw4w9WgXcQ?start=90',
-    )
+    expect(toEmbedUrl('https://youtu.be/dQw4w9WgXcQ?t=90s')).toBe('https://www.youtube.com/embed/dQw4w9WgXcQ?start=90')
   })
 
   it('handles a watch URL where v= is not the first query param', () => {
@@ -62,9 +54,7 @@ describe('toEmbedUrl', () => {
   })
 
   it('normalizes an already-embeddable player.vimeo.com/video/ID URL', () => {
-    expect(toEmbedUrl('https://player.vimeo.com/video/123456789')).toBe(
-      'https://player.vimeo.com/video/123456789',
-    )
+    expect(toEmbedUrl('https://player.vimeo.com/video/123456789')).toBe('https://player.vimeo.com/video/123456789')
   })
 
   it('returns null for empty input', () => {

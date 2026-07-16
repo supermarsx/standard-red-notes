@@ -179,12 +179,12 @@ export const ReadonlyNoteContent = ({
           {content.text.length ? (
             <textarea
               readOnly={true}
-              className="font-editor h-full w-full resize-none border-0 bg-default p-4 pt-0 text-editor text-text"
+              className="font-editor bg-default text-editor text-text h-full w-full resize-none border-0 p-4 pt-0"
               value={content.text}
               onScroll={onScroll}
             />
           ) : (
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-passive-0">
+            <div className="text-passive-0 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
               Empty note.
             </div>
           )}

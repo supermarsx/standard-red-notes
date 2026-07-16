@@ -99,7 +99,7 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
     <div className="sn-component section editor" aria-label={t('fileAriaLabel')} ref={fileDragTargetRef}>
       <div className="flex flex-col">
         {isReadonly && (
-          <div className="bg-warning-faded relative flex items-center px-3.5 py-2 text-sm text-accessory-tint-3">
+          <div className="bg-warning-faded text-accessory-tint-3 relative flex items-center px-3.5 py-2 text-sm">
             <Icon type="pencil-off" className="mr-3" />
             {t('fileReadonly')}
           </div>

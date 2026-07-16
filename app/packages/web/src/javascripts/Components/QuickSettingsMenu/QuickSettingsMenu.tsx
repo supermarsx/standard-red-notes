@@ -126,7 +126,7 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
               checked={application.componentManager.isComponentActive(component)}
               key={component.uuid}
             >
-              <Icon type="window" className="mr-2 text-neutral" />
+              <Icon type="window" className="text-neutral mr-2" />
               {component.displayName}
             </MenuSwitchButtonItem>
           ))}

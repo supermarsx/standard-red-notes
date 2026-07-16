@@ -22,7 +22,7 @@ const LinkedItemMeta = ({ item, searchQuery }: Props) => {
   return (
     <>
       <Icon type={icon} className={classNames('flex-shrink-0', className)} />
-      <div className="min-w-0 flex-grow break-words text-left text-base lg:text-sm">
+      <div className="min-w-0 flex-grow text-left text-base break-words lg:text-sm">
         {tagTitle && <span className="text-passive-1">{tagTitle.titlePrefix}</span>}
         {searchQuery
           ? splitQueryInString(title, searchQuery).map((substring, index) => (
@@ -30,7 +30,7 @@ const LinkedItemMeta = ({ item, searchQuery }: Props) => {
                 key={index}
                 className={`${
                   substring.toLowerCase() === searchQuery.toLowerCase()
-                    ? 'whitespace-pre-wrap font-bold'
+                    ? 'font-bold whitespace-pre-wrap'
                     : 'whitespace-pre-wrap'
                 }`}
               >

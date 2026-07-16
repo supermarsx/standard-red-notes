@@ -116,9 +116,7 @@ export default function SuperEmbeddedImage({
         />
         <div
           className={
-            isSelected
-              ? 'visible'
-              : 'invisible focus-within:visible group-hover:visible [.embedBlockFocused_&]:visible'
+            isSelected ? 'visible' : 'invisible group-hover:visible focus-within:visible [.embedBlockFocused_&]:visible'
           }
         >
           <ImageToolbar

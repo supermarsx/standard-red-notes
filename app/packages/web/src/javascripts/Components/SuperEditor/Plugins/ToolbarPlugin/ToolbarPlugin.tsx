@@ -51,6 +51,7 @@ import { $createCodeNode, $isCodeNode } from '@lexical/code'
 import {
   ComponentPropsWithoutRef,
   ForwardedRef,
+  Fragment,
   ReactNode,
   forwardRef,
   useCallback,
@@ -97,7 +98,7 @@ import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
 import { useStateRef } from '@/Hooks/useStateRef'
 import { getDOMRangeRect } from '../../Lexical/Utils/getDOMRangeRect'
 import { getPositionedPopoverStyles } from '@/Components/Popover/GetPositionedPopoverStyles'
-import usePreference from '@/Hooks/usePreference'
+import usePreference, { useLocalPreference } from '@/Hooks/usePreference'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { $isDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
 import LinkViewer from './LinkViewer'
@@ -132,7 +133,6 @@ import {
 } from '../../Layout/layoutSettings'
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
-import { useLocalPreference } from '@/Hooks/usePreference'
 import {
   applyToolbarConfig,
   groupsBySuperGroup,
@@ -144,13 +144,7 @@ import { $selectAllText } from './selectAllText'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
-import { Fragment } from 'react'
-import {
-  BlockCatalogContext,
-  buildInsertSections,
-  getFullBlockCatalog,
-  InsertSectionId,
-} from '../Blocks/blockCatalog'
+import { BlockCatalogContext, buildInsertSections, getFullBlockCatalog, InsertSectionId } from '../Blocks/blockCatalog'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import {
   $deleteTableColumnAtSelection,
@@ -175,8 +169,7 @@ import {
   resolveContextualWidget,
 } from './ContextualToolbar'
 import BlockZoomOverlay from './BlockZoomOverlay'
-import { FORMAT_PAINTER_TOGGLE } from '../FormatPainterPlugin'
-import { useFormatPainter } from '../FormatPainterPlugin'
+import { FORMAT_PAINTER_TOGGLE, useFormatPainter } from '../FormatPainterPlugin'
 import { useFormattingMarks } from '../FormattingMarksPlugin/FormattingMarksPlugin'
 import {
   pasteWithoutFormatting,
@@ -416,9 +409,9 @@ const INSERT_SECTION_CAPTION_CATEGORY: Record<Exclude<InsertSectionId, 'others'>
 const toCamelCase = (text: string): string => {
   const words = text.split(/[^a-zA-Z0-9]+/).filter((word) => word.length > 0)
   return words
-    .map((word, index) =>
-      index === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
-    )
+    .map((word, index) => {
+      return index === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    })
     .join('')
 }
 
@@ -451,7 +444,7 @@ const ToolbarButton = forwardRef(
       >
         <ToolbarItem
           className={classNames(
-            'flex select-none items-center justify-center rounded-md p-0.5 transition-colors duration-75 focus:shadow-none focus:outline-none md:border md:border-transparent',
+            'flex items-center justify-center rounded-md p-0.5 transition-colors duration-75 select-none focus:shadow-none focus:outline-none md:border md:border-transparent',
             'hover:bg-passive-4 focus-visible:bg-passive-4 active:bg-passive-3 hover:md:border-border',
             // Disabled buttons keep aria-disabled (not the native attribute) so they
             // stay hoverable and their tooltip still explains them; override the
@@ -507,7 +500,7 @@ const ToolbarButton = forwardRef(
 )
 
 const ToolbarSeparator = () => (
-  <div aria-hidden className="mx-1 my-1 h-6 w-px flex-shrink-0 self-center bg-border" role="separator" />
+  <div aria-hidden className="bg-border mx-1 my-1 h-6 w-px flex-shrink-0 self-center" role="separator" />
 )
 
 const TOOLBAR_UTILITY_BUTTON_IDS = [
@@ -553,12 +546,12 @@ const ListMarkerSwatch = ({ preset, onClick }: { preset: ListStylePreset; onClic
   <button
     type="button"
     title={preset.label}
-    className="flex flex-col items-center gap-0.5 rounded border border-border px-1 py-1.5 hover:bg-contrast"
+    className="border-border hover:bg-contrast flex flex-col items-center gap-0.5 rounded border px-1 py-1.5"
     onClick={onClick}
     onMouseDown={(e) => e.preventDefault()}
   >
     <span className="text-base leading-none">{preset.preview}</span>
-    <span className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-1">
+    <span className="text-passive-1 max-w-full overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
       {preset.label}
     </span>
   </button>
@@ -609,7 +602,6 @@ const ToolbarPlugin = () => {
 
   const [isTOCOpen, setIsTOCOpen] = useState(false)
   const tocAnchorRef = useRef<HTMLButtonElement>(null)
-
 
   const [isTextStyleMenuOpen, setIsTextStyleMenuOpen] = useState(false)
   const textStyleAnchorRef = useRef<HTMLButtonElement>(null)
@@ -1724,11 +1716,7 @@ const ToolbarPlugin = () => {
 
   const openCustomizeDialog = useCallback(() => {
     showModal(t('customizeToolbar'), (onClose) => (
-      <CustomizeToolbarDialog
-        config={toolbarConfig}
-        onChange={(next) => setToolbarConfig(next)}
-        onClose={onClose}
-      />
+      <CustomizeToolbarDialog config={toolbarConfig} onChange={(next) => setToolbarConfig(next)} onClose={onClose} />
     ))
   }, [showModal, toolbarConfig, setToolbarConfig, t])
 
@@ -1817,10 +1805,7 @@ const ToolbarPlugin = () => {
       />
     ) : null,
     [ToolbarButtonId.Search]: canShowAllItems ? (
-      <ToolbarButton
-        name={t('search')}
-        onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}
-      >
+      <ToolbarButton name={t('search')} onSelect={() => editor.dispatchCommand(OPEN_SUPER_SEARCH_COMMAND, undefined)}>
         <Icon type="search" size="custom" className="super-toolbar-icon" />
         <span className="ml-1.5 text-sm leading-none">Find</span>
       </ToolbarButton>
@@ -1835,7 +1820,10 @@ const ToolbarPlugin = () => {
       </ToolbarButton>
     ) : null,
     [ToolbarButtonId.FindNext]: canShowAllItems ? (
-      <ToolbarButton name="Find next" onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}>
+      <ToolbarButton
+        name="Find next"
+        onSelect={() => editor.dispatchCommand(SUPER_SEARCH_GO_TO_NEXT_COMMAND, undefined)}
+      >
         <Icon type="arrow-down" size="custom" className="super-toolbar-icon" />
         <span className="ml-1.5 text-sm leading-none">Find next</span>
       </ToolbarButton>
@@ -2057,11 +2045,7 @@ const ToolbarPlugin = () => {
         onSelect={() => editor.dispatchCommand(FORMAT_PAINTER_TOGGLE, undefined)}
       >
         <div className="flex flex-col items-center justify-center gap-1">
-          <Icon
-            type="pencil"
-            size="custom"
-            className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current"
-          />
+          <Icon type="pencil" size="custom" className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current" />
           <span className="text-center text-[10px] leading-none md:text-xs">Format painter</span>
         </div>
       </ToolbarButton>
@@ -2075,7 +2059,7 @@ const ToolbarPlugin = () => {
       >
         <span className="flex flex-col items-center justify-center leading-none">
           <span className="text-sm font-semibold">A</span>
-          <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
+          <span className="bg-info -mt-0.5 h-1 w-3.5 rounded-sm" />
         </span>
       </ToolbarButton>
     ),
@@ -2087,12 +2071,8 @@ const ToolbarPlugin = () => {
         className={isBgColorMenuOpen ? 'md:bg-default' : ''}
       >
         <span className="flex flex-col items-center justify-center leading-none">
-          <Icon
-            type="highlighter"
-            size="custom"
-            className="super-toolbar-icon !text-current [&>path]:!text-current"
-          />
-          <span className="-mt-0.5 h-1 w-3.5 rounded-sm bg-info" />
+          <Icon type="highlighter" size="custom" className="super-toolbar-icon !text-current [&>path]:!text-current" />
+          <span className="bg-info -mt-0.5 h-1 w-3.5 rounded-sm" />
         </span>
       </ToolbarButton>
     ),
@@ -2105,7 +2085,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Outline]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        className="hover:border-border flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent md:h-7"
         key="outlineControl"
       >
         <ToolbarButton
@@ -2121,7 +2101,7 @@ const ToolbarPlugin = () => {
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setIsOutlineMenuOpen(!isOutlineMenuOpen)}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isOutlineMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2131,7 +2111,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.Kerning]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        className="hover:border-border flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent md:h-7"
         key="kerningControl"
       >
         <ToolbarButton
@@ -2147,7 +2127,7 @@ const ToolbarPlugin = () => {
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setIsKerningMenuOpen(!isKerningMenuOpen)}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isKerningMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2157,7 +2137,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.WordSpacing]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        className="hover:border-border flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent md:h-7"
         key="wordSpacingControl"
       >
         <ToolbarButton
@@ -2173,7 +2153,7 @@ const ToolbarPlugin = () => {
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setIsWordSpacingMenuOpen(!isWordSpacingMenuOpen)}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isWordSpacingMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2197,7 +2177,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.FontSize]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-border bg-default focus-within:border-info md:h-7"
+        className="border-border bg-default focus-within:border-info flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border md:h-7"
         key="fontSizeInput"
       >
         <input
@@ -2245,7 +2225,7 @@ const ToolbarPlugin = () => {
           }}
           onClick={() => setIsFontSizeMenuOpen(!isFontSizeMenuOpen)}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isFontSizeMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2258,10 +2238,10 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.FontSizeStepper]: (
       <div className="flex flex-shrink-0 items-center" key="fontSizeStepper">
         <ToolbarButton name={t('decreaseFontSize')} onSelect={() => stepFontSize(-1)}>
-          <span className="text-xs font-semibold leading-none">A&minus;</span>
+          <span className="text-xs leading-none font-semibold">A&minus;</span>
         </ToolbarButton>
         <ToolbarButton name={t('increaseFontSize')} onSelect={() => stepFontSize(1)}>
-          <span className="text-sm font-semibold leading-none">A+</span>
+          <span className="text-sm leading-none font-semibold">A+</span>
         </ToolbarButton>
       </div>
     ),
@@ -2273,7 +2253,7 @@ const ToolbarPlugin = () => {
         className={isFontFamilyMenuOpen ? 'md:bg-default' : ''}
       >
         <span
-          className="max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-none"
+          className="max-w-[6.5rem] overflow-hidden text-sm leading-none text-ellipsis whitespace-nowrap"
           style={{ fontFamily: currentFontFamily || undefined }}
         >
           {findFontByCss(currentFontFamily).name}
@@ -2288,7 +2268,7 @@ const ToolbarPlugin = () => {
         ref={fontWeightAnchorRef}
         className={isFontWeightMenuOpen ? 'md:bg-default' : ''}
       >
-        <span className="max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-none">
+        <span className="max-w-[6.5rem] overflow-hidden text-sm leading-none text-ellipsis whitespace-nowrap">
           {findFontByCss(currentFontFamily).weights.find((wt) => String(wt.value) === currentFontWeight)?.label ??
             'Regular'}
         </span>
@@ -2297,7 +2277,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.BulletedList]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        className="hover:border-border flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent md:h-7"
         key="bulletedListControl"
       >
         <ToolbarButton
@@ -2314,7 +2294,7 @@ const ToolbarPlugin = () => {
           onMouseDown={(event) => event.preventDefault()}
           onClick={toggleBulletStyleMenu}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isBulletStyleMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2324,7 +2304,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.NumberedList]: (
       <div
-        className="flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent hover:border-border md:h-7"
+        className="hover:border-border flex h-8 flex-shrink-0 items-center overflow-hidden rounded-md border border-transparent md:h-7"
         key="numberedListControl"
       >
         <ToolbarButton
@@ -2341,7 +2321,7 @@ const ToolbarPlugin = () => {
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setIsNumberStyleMenuOpen(!isNumberStyleMenuOpen)}
           className={classNames(
-            'flex h-full items-center border-l border-border px-0.5 hover:bg-contrast',
+            'border-border hover:bg-contrast flex h-full items-center border-l px-0.5',
             isNumberStyleMenuOpen ? 'bg-contrast' : '',
           )}
         >
@@ -2357,7 +2337,7 @@ const ToolbarPlugin = () => {
         className={isMultilevelMenuOpen ? 'md:bg-default' : ''}
       >
         <Icon type="list-numbered" size="custom" className="super-toolbar-icon" />
-        <span className="-ml-0.5 text-[0.6rem] font-bold leading-none">+</span>
+        <span className="-ml-0.5 text-[0.6rem] leading-none font-bold">+</span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2379,7 +2359,7 @@ const ToolbarPlugin = () => {
         ref={caseAnchorRef}
         className={isCaseMenuOpen ? 'md:bg-default' : ''}
       >
-        <span className="text-xs font-semibold leading-none">aA</span>
+        <span className="text-xs leading-none font-semibold">aA</span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
     ),
@@ -2464,7 +2444,7 @@ const ToolbarPlugin = () => {
     ),
     [ToolbarButtonId.FormattingMarks]: (
       <ToolbarButton name={t('formattingMarks')} active={marksOn} onSelect={toggleMarks}>
-        <span className="text-base font-semibold leading-none">¶</span>
+        <span className="text-base leading-none font-semibold">¶</span>
       </ToolbarButton>
     ),
     // Standard Red Notes: the former general Insert dropdown (InsertMenu) and its
@@ -2518,7 +2498,7 @@ const ToolbarPlugin = () => {
           type={noteLayout.orientation === 'portrait' ? 'arrows-vertical' : 'line-width'}
           className="-mt-px mr-1.5 flex-shrink-0"
         />
-        <span className="text-sm capitalize leading-none">{noteLayout.orientation}</span>
+        <span className="text-sm leading-none capitalize">{noteLayout.orientation}</span>
       </ToolbarButton>
     ),
     [ToolbarButtonId.PageMargins]: (
@@ -2532,7 +2512,7 @@ const ToolbarPlugin = () => {
         <span className="text-sm leading-none">
           {noteLayout.marginId === CUSTOM_MARGIN_ID
             ? 'Custom'
-            : MARGIN_PRESETS.find((preset) => preset.id === noteLayout.marginId)?.label ?? 'Normal'}
+            : (MARGIN_PRESETS.find((preset) => preset.id === noteLayout.marginId)?.label ?? 'Normal')}
         </span>
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
@@ -2562,7 +2542,7 @@ const ToolbarPlugin = () => {
         <Icon type="hashtag" className="-mt-px mr-1.5 flex-shrink-0" />
         <span className="text-sm leading-none">Header/Footer</span>
         {(noteLayout.pageNumbering.enabled || noteLayout.header.enabled || noteLayout.footer.enabled) && (
-          <span className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-info" aria-hidden="true" />
+          <span className="bg-info ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full" aria-hidden="true" />
         )}
         <Icon type="chevron-down" size="custom" className="ml-1 h-4 w-4 md:h-3.5 md:w-3.5" />
       </ToolbarButton>
@@ -2571,11 +2551,7 @@ const ToolbarPlugin = () => {
     [ToolbarButtonId.CustomizeToolbar]: (
       <ToolbarButton name={t('customizeToolbar')} className="w-full justify-center" onSelect={openCustomizeDialog}>
         <div className="flex flex-col items-center justify-center gap-1">
-          <Icon
-            type="settings"
-            size="custom"
-            className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current"
-          />
+          <Icon type="settings" size="custom" className="h-9 w-9 !text-current md:h-8 md:w-8 [&>path]:!text-current" />
           <span className="text-center text-[10px] leading-none md:text-xs">Customize toolbar</span>
         </div>
       </ToolbarButton>
@@ -2624,8 +2600,7 @@ const ToolbarPlugin = () => {
       openInsertImageFromUrlDialog: () =>
         showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => activeEditor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
-      openInsertSymbolPicker: () =>
-        showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
+      openInsertSymbolPicker: () => showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
     }),
     [showModal, editor, activeEditor, t],
   )
@@ -2882,7 +2857,6 @@ const ToolbarPlugin = () => {
     if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasContextualTab])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
@@ -3056,10 +3030,10 @@ const ToolbarPlugin = () => {
           'bg-contrast',
           !isEditable ? 'hidden opacity-0' : '',
           isMobile && !canShowToolbarOnMobile ? 'hidden' : '',
-          !isMobile && 'border-b border-border bg-default',
+          !isMobile && 'border-border bg-default border-b',
           !isMobile
             ? !isToolbarFixedToTop
-              ? 'fixed left-0 top-0 z-tooltip hidden translate-x-[--translate-x] translate-y-[--translate-y] rounded border py-0.5 translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)]'
+              ? 'z-tooltip translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-[--translate-x] translate-y-[--translate-y] rounded border py-0.5'
               : 'w-full px-1 py-1'
             : '',
         )}
@@ -3093,10 +3067,10 @@ const ToolbarPlugin = () => {
             linkTextNode={linkTextNode}
           />
         )}
-        <div className="flex w-full flex-shrink-0 flex-col border-t border-border md:border-0">
+        <div className="border-border flex w-full flex-shrink-0 flex-col border-t md:border-0">
           {canShowAllItems && (
             <Toolbar
-              className="super-toolbar flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1"
+              className="super-toolbar border-border flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto border-b px-2 py-1"
               store={utilityToolbarStore}
               aria-label="Clipboard and history tools"
             >
@@ -3123,14 +3097,14 @@ const ToolbarPlugin = () => {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => setActiveTabId(tab.id)}
                     className={classNames(
-                      'whitespace-nowrap rounded-t-md border-b-2 px-3 py-1 text-xs font-semibold transition-colors',
+                      'rounded-t-md border-b-2 px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors',
                       isContextualTab
                         ? isActive
                           ? 'border-info bg-info text-info-contrast'
                           : 'border-info/40 text-info hover:bg-contrast'
                         : isActive
                           ? 'border-info bg-contrast text-info'
-                          : 'border-transparent text-passive-1 hover:text-text',
+                          : 'text-passive-1 hover:text-text border-transparent',
                     )}
                   >
                     {tab.label}
@@ -3140,232 +3114,232 @@ const ToolbarPlugin = () => {
             </div>
           )}
           <div className="flex w-full">
-          {isContextualActive ? (
-            <Toolbar
-              // Mirror the normal super-group layout: spaced, captioned segment
-              // blocks instead of one flat run of buttons.
-              className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pb-1 pt-2"
-              store={contextualToolbarStore}
-              aria-label={`${contextualWidget?.label ?? ''} tools`}
-            >
-              {contextualSegments.map((segment) => (
-                // Reuse the exact segment container + caption treatment used by
-                // the normal super groups (see the `activeGroups.map` renderer
-                // below) so the contextual tab is visually consistent.
-                <div
-                  key={segment.key}
-                  role="group"
-                  aria-label={segment.caption}
-                  className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
-                >
-                  <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
-                    <div className="flex items-center justify-start gap-0.5">{segment.buttons}</div>
-                  </div>
-                  <span
-                    aria-hidden
-                    className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
+            {isContextualActive ? (
+              <Toolbar
+                // Mirror the normal super-group layout: spaced, captioned segment
+                // blocks instead of one flat run of buttons.
+                className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-2 pb-1"
+                store={contextualToolbarStore}
+                aria-label={`${contextualWidget?.label ?? ''} tools`}
+              >
+                {contextualSegments.map((segment) => (
+                  // Reuse the exact segment container + caption treatment used by
+                  // the normal super groups (see the `activeGroups.map` renderer
+                  // below) so the contextual tab is visually consistent.
+                  <div
+                    key={segment.key}
+                    role="group"
+                    aria-label={segment.caption}
+                    className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                   >
-                    {segment.caption}
-                  </span>
-                </div>
-              ))}
-            </Toolbar>
-          ) : (
-          <Toolbar
-            className={classNames(
-              // A little breathing room above the group blocks pushes the (scroll)
-              // content down so the horizontal scrollbar sits slightly lower.
-              'super-toolbar flex flex-grow items-center gap-1.5 px-1 pb-1 pt-2',
-              // Default: one horizontal line of groups (each group stacks into up
-              // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
-              horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
-            )}
-            ref={toolbarRef}
-            store={toolbarStore}
-          >
-            {canShowAllItems
-              ? activeRibbonGroups.map((group) => {
-                  // Standard Red Notes: the Block-style group is a vertical stack.
-                  // LINE 1 is a row of three always-visible action buttons — Smart
-                  // checklist (a TOGGLE bound to autoMoveCompleted), Restore
-                  // completed tasks (a plain action), and Edit styles (opens the P3
-                  // typography editor modal). LINES 2–3 are the responsive squares
-                  // gallery bar (preview squares that fill the group width + an
-                  // overflow "▾" dropdown for the rest). Nothing is hidden in a "⋮"
-                  // menu, and the squares track grows to fill the group width so it
-                  // degrades gracefully.
-                  if (group.id === ToolbarGroupId.BlockStyle) {
-                    return (
-                      <div
-                        key={group.id}
-                        role="group"
-                        aria-label={group.label}
-                        className="super-toolbar-group flex min-w-[12rem] flex-grow flex-col rounded-lg bg-contrast px-1 py-0.5"
-                      >
-                        <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[7.375rem]">
-                          {/* Line 1: the three action buttons. */}
-                          <div className="flex items-center gap-1.5">
-                            <ToolbarButton
-                              name={t('smartChecklist')}
-                              iconName="list-check"
-                              active={autoMoveCompleted}
-                              onSelect={toggleAutoMoveCompleted}
-                              className="flex-shrink-0 self-center"
-                            />
-                            <ToolbarButton
-                              name={t('restoreCompletedTasks')}
-                              iconName="arrow-left"
-                              onSelect={restoreCompletedTasks}
-                              className="flex-shrink-0 self-center"
-                            />
-                            {/* Edit styles — a plain icon-only ToolbarButton like
+                    <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+                      <div className="flex items-center justify-start gap-0.5">{segment.buttons}</div>
+                    </div>
+                    <span
+                      aria-hidden
+                      className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+                    >
+                      {segment.caption}
+                    </span>
+                  </div>
+                ))}
+              </Toolbar>
+            ) : (
+              <Toolbar
+                className={classNames(
+                  // A little breathing room above the group blocks pushes the (scroll)
+                  // content down so the horizontal scrollbar sits slightly lower.
+                  'super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-2 pb-1',
+                  // Default: one horizontal line of groups (each group stacks into up
+                  // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
+                  horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
+                )}
+                ref={toolbarRef}
+                store={toolbarStore}
+              >
+                {canShowAllItems
+                  ? activeRibbonGroups.map((group) => {
+                      // Standard Red Notes: the Block-style group is a vertical stack.
+                      // LINE 1 is a row of three always-visible action buttons — Smart
+                      // checklist (a TOGGLE bound to autoMoveCompleted), Restore
+                      // completed tasks (a plain action), and Edit styles (opens the P3
+                      // typography editor modal). LINES 2–3 are the responsive squares
+                      // gallery bar (preview squares that fill the group width + an
+                      // overflow "▾" dropdown for the rest). Nothing is hidden in a "⋮"
+                      // menu, and the squares track grows to fill the group width so it
+                      // degrades gracefully.
+                      if (group.id === ToolbarGroupId.BlockStyle) {
+                        return (
+                          <div
+                            key={group.id}
+                            role="group"
+                            aria-label={group.label}
+                            className="super-toolbar-group bg-contrast flex min-w-[12rem] flex-grow flex-col rounded-lg px-1 py-0.5"
+                          >
+                            <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[7.375rem]">
+                              {/* Line 1: the three action buttons. */}
+                              <div className="flex items-center gap-1.5">
+                                <ToolbarButton
+                                  name={t('smartChecklist')}
+                                  iconName="list-check"
+                                  active={autoMoveCompleted}
+                                  onSelect={toggleAutoMoveCompleted}
+                                  className="flex-shrink-0 self-center"
+                                />
+                                <ToolbarButton
+                                  name={t('restoreCompletedTasks')}
+                                  iconName="arrow-left"
+                                  onSelect={restoreCompletedTasks}
+                                  className="flex-shrink-0 self-center"
+                                />
+                                {/* Edit styles — a plain icon-only ToolbarButton like
                                 its two siblings; opens the P3 typography editor
                                 modal (where the active profile is shown/edited). */}
-                            <ToolbarButton
-                              name={t('editStyles')}
-                              iconName="pencil-filled"
-                              onSelect={() => setIsTypographyEditorOpen(true)}
-                              className="flex-shrink-0 self-center"
-                            />
-                          </div>
-                          {/* Lines 2–3: the full-width squares gallery. */}
-                          <div className="flex w-full min-w-0">
-                            <BlockStyleGalleryBar
-                              profile={activeTypographyProfile}
-                              onApplyBlock={applyTypographyBlock}
-                              activeBlockType={blockType}
-                              activeBlockStyle={activeBlockStyle}
-                              blocks={orderedGalleryBlocks}
-                            />
-                          </div>
-                        </div>
-                        <span
-                          aria-hidden
-                          className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
-                        >
-                          {group.caption ?? group.label}
-                        </span>
-                      </div>
-                    )
-                  }
-                  // Standard Red Notes: the Insert group renders as always-visible
-                  // captioned catalog sections (Basic / Lists / Media / Data &
-                  // tables / Diagrams & charts / Finance / Others) instead of a
-                  // single general dropdown. Sections are derived from the shared
-                  // blockCatalog (single source of truth, same list the slash
-                  // picker uses); each catalog entry becomes a ToolbarButton that
-                  // runs its `onSelect`. The three non-catalog Insert actions still
-                  // in this group's (hide-aware) config — Link, Create-note-from-
-                  // selection, Dictate — are appended, renderer-backed, to "Others".
-                  if (group.id === ToolbarGroupId.Insert) {
-                    const sections = buildInsertSections(getFullBlockCatalog(editor))
-                    const actionIds = new Set<ToolbarButtonId>([
-                      ToolbarButtonId.Link,
-                      ToolbarButtonId.NoteFromSelection,
-                      ToolbarButtonId.Dictation,
-                    ])
-                    // Preserve config order / respect hidden buttons by filtering
-                    // over the resolved group's own buttons, not a static list.
-                    const actionButtons: ReactNode[] = group.buttons
-                      .filter((button) => actionIds.has(button.id))
-                      .map((button) => <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>)
-                    const rendered = sections.map((section) => {
-                      const caption =
-                        section.id === 'others'
-                          ? t('blockSectionOthers')
-                          : translateBlockCategory(INSERT_SECTION_CAPTION_CATEGORY[section.id], t)
-                      const buttons: ReactNode[] = section.entries.map((entry) => (
-                        <ToolbarButton
-                          key={entry.key}
-                          name={translateBlockName(entry.name, t)}
-                          iconName={entry.iconName}
-                          onSelect={() => entry.onSelect(editor, blockCatalogContext)}
-                        />
-                      ))
-                      if (section.id === 'others') {
-                        buttons.push(...actionButtons)
-                      }
-                      return { key: section.id, caption, rows: splitIntoRows(buttons, 3) }
-                    })
-                    return <InsertSectionsBar key={group.id} sections={rendered} />
-                  }
-                  // Word/Office-style segmented groups: each group is a rounded
-                  // cluster (tight inner spacing) with a small caption title
-                  // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
-                  // so a button-heavy group becomes a tidy 2–3 row block instead
-                  // of a long single row.
-                  // On desktop every group is a uniform three-icon-tall block so the
-                  // segmented toolbar keeps a consistent height regardless of how many
-                  // buttons a group holds: buttons pack top-heavy into 3 rows and the
-                  // button area reserves the height of three icon-button rows (≈38px
-                  // each + two 2px gaps = 118px) via md:min-height, with shorter groups
-                  // leaving empty space below. Icons are left-aligned within the group.
-                  const TOOLBAR_GROUP_ROWS = 3
-                  // Default to a full 3-row pack; a per-group override (Customize
-                  // Toolbar) still tunes how buttons stack, while md:min-height keeps
-                  // every group the same height regardless.
-                  const rows = Math.min(TOOLBAR_GROUP_ROWS, Math.max(1, group.rows ?? TOOLBAR_GROUP_ROWS))
-                  // Groups can opt into an EXPLICIT row layout (ids per row); we
-                  // resolve those ids back to this group's own descriptors and
-                  // drop any that were hidden/filtered. Otherwise fall back to the
-                  // automatic top-heavy packing.
-                  const byId = new Map(group.buttons.map((b) => [b.id, b]))
-                  // Layout rows keep layout-only sentinels (e.g. Divider) inline
-                  // so the row renderer can draw a vertical rule; real ids resolve
-                  // to descriptors and any hidden/unknown ones are dropped.
-                  const buttonRows: { id: ToolbarButtonId }[][] = group.layout
-                    ? group.layout.map((row) =>
-                        row
-                          .map((id) => (isLayoutSentinel(id) ? { id } : byId.get(id)))
-                          .filter((b): b is NonNullable<typeof b> => Boolean(b)),
-                      )
-                    : splitIntoRows(group.buttons, rows)
-                  return (
-                    <div
-                      key={group.id}
-                      role="group"
-                      aria-label={group.label}
-                      className="super-toolbar-group flex flex-shrink-0 flex-col rounded-lg bg-contrast px-1 py-0.5"
-                    >
-                      <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
-                        {buttonRows.map((rowButtons, rowIndex) => (
-                          <div key={rowIndex} className="flex items-center justify-start gap-0.5">
-                            {rowButtons.map((button, buttonIndex) =>
-                              button.id === ToolbarButtonId.Divider ? (
-                                <div
-                                  key={`divider-${buttonIndex}`}
-                                  aria-hidden
-                                  role="separator"
-                                  className="mx-1 h-6 w-px flex-shrink-0 self-center border-l border-border"
+                                <ToolbarButton
+                                  name={t('editStyles')}
+                                  iconName="pencil-filled"
+                                  onSelect={() => setIsTypographyEditorOpen(true)}
+                                  className="flex-shrink-0 self-center"
                                 />
-                              ) : (
-                                <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
-                              ),
-                            )}
+                              </div>
+                              {/* Lines 2–3: the full-width squares gallery. */}
+                              <div className="flex w-full min-w-0">
+                                <BlockStyleGalleryBar
+                                  profile={activeTypographyProfile}
+                                  onApplyBlock={applyTypographyBlock}
+                                  activeBlockType={blockType}
+                                  activeBlockStyle={activeBlockStyle}
+                                  blocks={orderedGalleryBlocks}
+                                />
+                              </div>
+                            </div>
+                            <span
+                              aria-hidden
+                              className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+                            >
+                              {group.caption ?? group.label}
+                            </span>
                           </div>
-                        ))}
-                      </div>
-                      <span
-                        aria-hidden
-                        className="mt-px hidden select-none truncate text-center text-[10px] font-medium uppercase leading-none tracking-wide text-passive-1 md:block"
-                      >
-                        {group.caption ?? group.label}
-                      </span>
-                    </div>
-                  )
-                })
-              : floatingSelectionToolbar}
-          </Toolbar>
-          )}
-          {isMobile && (
-            <button
-              className="flex flex-shrink-0 items-center justify-center rounded border-l border-border px-3 py-3"
-              aria-label={t('dismissKeyboard')}
-              ref={dismissButtonRef}
-            >
-              <Icon type="keyboard-close" size="medium" />
-            </button>
-          )}
+                        )
+                      }
+                      // Standard Red Notes: the Insert group renders as always-visible
+                      // captioned catalog sections (Basic / Lists / Media / Data &
+                      // tables / Diagrams & charts / Finance / Others) instead of a
+                      // single general dropdown. Sections are derived from the shared
+                      // blockCatalog (single source of truth, same list the slash
+                      // picker uses); each catalog entry becomes a ToolbarButton that
+                      // runs its `onSelect`. The three non-catalog Insert actions still
+                      // in this group's (hide-aware) config — Link, Create-note-from-
+                      // selection, Dictate — are appended, renderer-backed, to "Others".
+                      if (group.id === ToolbarGroupId.Insert) {
+                        const sections = buildInsertSections(getFullBlockCatalog(editor))
+                        const actionIds = new Set<ToolbarButtonId>([
+                          ToolbarButtonId.Link,
+                          ToolbarButtonId.NoteFromSelection,
+                          ToolbarButtonId.Dictation,
+                        ])
+                        // Preserve config order / respect hidden buttons by filtering
+                        // over the resolved group's own buttons, not a static list.
+                        const actionButtons: ReactNode[] = group.buttons
+                          .filter((button) => actionIds.has(button.id))
+                          .map((button) => <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>)
+                        const rendered = sections.map((section) => {
+                          const caption =
+                            section.id === 'others'
+                              ? t('blockSectionOthers')
+                              : translateBlockCategory(INSERT_SECTION_CAPTION_CATEGORY[section.id], t)
+                          const buttons: ReactNode[] = section.entries.map((entry) => (
+                            <ToolbarButton
+                              key={entry.key}
+                              name={translateBlockName(entry.name, t)}
+                              iconName={entry.iconName}
+                              onSelect={() => entry.onSelect(editor, blockCatalogContext)}
+                            />
+                          ))
+                          if (section.id === 'others') {
+                            buttons.push(...actionButtons)
+                          }
+                          return { key: section.id, caption, rows: splitIntoRows(buttons, 3) }
+                        })
+                        return <InsertSectionsBar key={group.id} sections={rendered} />
+                      }
+                      // Word/Office-style segmented groups: each group is a rounded
+                      // cluster (tight inner spacing) with a small caption title
+                      // beneath it. Buttons wrap into up to `rows` (1–3) compact rows
+                      // so a button-heavy group becomes a tidy 2–3 row block instead
+                      // of a long single row.
+                      // On desktop every group is a uniform three-icon-tall block so the
+                      // segmented toolbar keeps a consistent height regardless of how many
+                      // buttons a group holds: buttons pack top-heavy into 3 rows and the
+                      // button area reserves the height of three icon-button rows (≈38px
+                      // each + two 2px gaps = 118px) via md:min-height, with shorter groups
+                      // leaving empty space below. Icons are left-aligned within the group.
+                      const TOOLBAR_GROUP_ROWS = 3
+                      // Default to a full 3-row pack; a per-group override (Customize
+                      // Toolbar) still tunes how buttons stack, while md:min-height keeps
+                      // every group the same height regardless.
+                      const rows = Math.min(TOOLBAR_GROUP_ROWS, Math.max(1, group.rows ?? TOOLBAR_GROUP_ROWS))
+                      // Groups can opt into an EXPLICIT row layout (ids per row); we
+                      // resolve those ids back to this group's own descriptors and
+                      // drop any that were hidden/filtered. Otherwise fall back to the
+                      // automatic top-heavy packing.
+                      const byId = new Map(group.buttons.map((b) => [b.id, b]))
+                      // Layout rows keep layout-only sentinels (e.g. Divider) inline
+                      // so the row renderer can draw a vertical rule; real ids resolve
+                      // to descriptors and any hidden/unknown ones are dropped.
+                      const buttonRows: { id: ToolbarButtonId }[][] = group.layout
+                        ? group.layout.map((row) =>
+                            row
+                              .map((id) => (isLayoutSentinel(id) ? { id } : byId.get(id)))
+                              .filter((b): b is NonNullable<typeof b> => Boolean(b)),
+                          )
+                        : splitIntoRows(group.buttons, rows)
+                      return (
+                        <div
+                          key={group.id}
+                          role="group"
+                          aria-label={group.label}
+                          className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
+                        >
+                          <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+                            {buttonRows.map((rowButtons, rowIndex) => (
+                              <div key={rowIndex} className="flex items-center justify-start gap-0.5">
+                                {rowButtons.map((button, buttonIndex) => {
+                                  return button.id === ToolbarButtonId.Divider ? (
+                                    <div
+                                      key={`divider-${buttonIndex}`}
+                                      aria-hidden
+                                      role="separator"
+                                      className="border-border mx-1 h-6 w-px flex-shrink-0 self-center border-l"
+                                    />
+                                  ) : (
+                                    <Fragment key={button.id}>{buttonRenderers[button.id]}</Fragment>
+                                  )
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                          <span
+                            aria-hidden
+                            className="text-passive-1 mt-px hidden truncate text-center text-[10px] leading-none font-medium tracking-wide uppercase select-none md:block"
+                          >
+                            {group.caption ?? group.label}
+                          </span>
+                        </div>
+                      )
+                    })
+                  : floatingSelectionToolbar}
+              </Toolbar>
+            )}
+            {isMobile && (
+              <button
+                className="border-border flex flex-shrink-0 items-center justify-center rounded border-l px-3 py-3"
+                aria-label={t('dismissKeyboard')}
+                ref={dismissButtonRef}
+              >
+                <Icon type="keyboard-close" size="medium" />
+              </button>
+            )}
           </div>
         </div>
         {/* Element-specific tooling on its own line: when a table/image/link/etc.
@@ -3373,8 +3347,8 @@ const ToolbarPlugin = () => {
             element type. In ribbon mode this surfaces as a ribbon tab instead, so
             this separate line is kept only for the floating selection toolbar. */}
         {!canShowAllItems && contextualWidget && contextualButtons.length > 0 && (
-          <div className="flex w-full flex-shrink-0 items-start gap-1.5 border-t border-border px-1 py-0.5">
-            <span className="mt-0.5 flex-shrink-0 select-none whitespace-nowrap rounded bg-info/10 px-1.5 py-0.5 text-xs font-semibold uppercase text-info">
+          <div className="border-border flex w-full flex-shrink-0 items-start gap-1.5 border-t px-1 py-0.5">
+            <span className="bg-info/10 text-info mt-0.5 flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap uppercase select-none">
               {contextualWidget.label}
             </span>
             <Toolbar
@@ -3401,7 +3375,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-1.5 mt-1 px-3 text-sm font-semibold uppercase text-text">{t('tableOfContents')}</div>
+        <div className="text-text mt-1 mb-1.5 px-3 text-sm font-semibold uppercase">{t('tableOfContents')}</div>
         <TableOfContentsPlugin>
           {(tableOfContents) => {
             if (!tableOfContents.length) {
@@ -3594,11 +3568,11 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-2 text-sm font-semibold text-text">{t('textColor')}</div>
+        <div className="text-text mb-2 text-sm font-semibold">{t('textColor')}</div>
         <div className="max-h-64 min-w-[10rem] overflow-y-auto" onMouseDown={(e) => e.preventDefault()}>
           <button
             type="button"
-            className="flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm text-text hover:bg-contrast"
+            className="text-text hover:bg-contrast flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm"
             onClick={() => {
               applyStyleText({ color: null })
               setIsTextColorMenuOpen(false)
@@ -3606,7 +3580,7 @@ const ToolbarPlugin = () => {
           >
             <span
               aria-hidden
-              className="h-5 w-5 shrink-0 rounded border border-border bg-default"
+              className="border-border bg-default h-5 w-5 shrink-0 rounded border"
               style={AUTO_COLOR_CHIP_STYLE}
             />
             {t('autoTextColor')}
@@ -3616,7 +3590,7 @@ const ToolbarPlugin = () => {
               key={value}
               type="button"
               aria-label={t('textColorSwatch', { color: label })}
-              className="flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm text-text hover:bg-contrast"
+              className="text-text hover:bg-contrast flex w-full touch-manipulation items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm"
               onClick={() => {
                 applyStyleText({ color: value })
                 setIsTextColorMenuOpen(false)
@@ -3624,7 +3598,7 @@ const ToolbarPlugin = () => {
             >
               <span
                 aria-hidden
-                className="h-5 w-5 shrink-0 rounded border border-border"
+                className="border-border h-5 w-5 shrink-0 rounded border"
                 style={{ backgroundColor: value }}
               />
               {label}
@@ -3632,14 +3606,14 @@ const ToolbarPlugin = () => {
           ))}
         </div>
         <div
-          className="mt-2 flex items-center gap-2 border-t border-border pt-2"
+          className="border-border mt-2 flex items-center gap-2 border-t pt-2"
           onMouseDown={(e) => e.preventDefault()}
         >
           <label className="flex items-center gap-2 text-sm">
             {t('custom')}
             <input
               type="color"
-              className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
+              className="border-border h-9 w-12 cursor-pointer touch-manipulation rounded border bg-transparent p-0 md:h-7 md:w-10"
               onChange={(event) => applyStyleText({ color: event.target.value })}
             />
           </label>
@@ -3658,14 +3632,14 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="mb-2 text-sm font-semibold text-text">{t('highlightColor')}</div>
+        <div className="text-text mb-2 text-sm font-semibold">{t('highlightColor')}</div>
         <div className="grid grid-cols-5 gap-2" onMouseDown={(e) => e.preventDefault()}>
           {COLOR_PRESETS.map((color) => (
             <button
               key={color}
               type="button"
               aria-label={t('highlightColorSwatch', { color })}
-              className="h-8 w-8 touch-manipulation rounded border border-border md:h-6 md:w-6"
+              className="border-border h-8 w-8 touch-manipulation rounded border md:h-6 md:w-6"
               style={{ backgroundColor: color }}
               onClick={() => {
                 applyStyleText({ 'background-color': color })
@@ -3679,13 +3653,13 @@ const ToolbarPlugin = () => {
             {t('custom')}
             <input
               type="color"
-              className="h-9 w-12 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-7 md:w-10"
+              className="border-border h-9 w-12 cursor-pointer touch-manipulation rounded border bg-transparent p-0 md:h-7 md:w-10"
               onChange={(event) => applyStyleText({ 'background-color': event.target.value })}
             />
           </label>
           <button
             type="button"
-            className="ml-auto rounded px-2 py-1 text-sm hover:bg-contrast"
+            className="hover:bg-contrast ml-auto rounded px-2 py-1 text-sm"
             onClick={() => {
               applyStyleText({ 'background-color': null })
               setIsBgColorMenuOpen(false)
@@ -3709,9 +3683,9 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div className="px-2 pb-1.5 pt-1">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-default px-2 py-1.5">
-            <Icon type="search" size="custom" className="h-4 w-4 flex-shrink-0 text-passive-1" />
+        <div className="px-2 pt-1 pb-1.5">
+          <div className="border-border bg-default flex items-center gap-2 rounded-md border px-2 py-1.5">
+            <Icon type="search" size="custom" className="text-passive-1 h-4 w-4 flex-shrink-0" />
             <input
               type="text"
               autoFocus
@@ -3721,13 +3695,13 @@ const ToolbarPlugin = () => {
               onKeyDown={(event) => event.stopPropagation()}
               placeholder="Search fonts…"
               aria-label={t('fontFamily')}
-              className="w-full bg-transparent text-sm text-text placeholder:text-passive-1 focus:outline-none"
+              className="text-text placeholder:text-passive-1 w-full bg-transparent text-sm focus:outline-none"
             />
             {fontQuery && (
               <button
                 type="button"
                 aria-label={t('clearSearch')}
-                className="flex-shrink-0 rounded p-0.5 text-passive-1 hover:bg-contrast"
+                className="text-passive-1 hover:bg-contrast flex-shrink-0 rounded p-0.5"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setFontQuery('')}
               >
@@ -3741,13 +3715,12 @@ const ToolbarPlugin = () => {
             <Fragment key={group.category}>
               <div
                 aria-hidden
-                className="select-none px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-passive-1"
+                className="text-passive-1 px-3 pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wide uppercase select-none"
               >
                 {group.category}
               </div>
               {group.fonts.map((font) => {
-                const isActive =
-                  font.css === null ? currentFontFamily === '' : currentFontFamily === font.css
+                const isActive = font.css === null ? currentFontFamily === '' : currentFontFamily === font.css
                 return (
                   <button
                     key={font.name}
@@ -3908,29 +3881,27 @@ const ToolbarPlugin = () => {
                 onMouseDown={(e) => e.preventDefault()}
               >
                 <span className="text-sm">{preset.label}</span>
-                <span className="ml-auto text-xs text-passive-1">{preset.value}</span>
+                <span className="text-passive-1 ml-auto text-xs">{preset.value}</span>
                 {isActive && <Icon type="check" className="ml-2" />}
               </MenuItem>
             )
           })}
         </Menu>
-        <div className="border-t border-border px-3 py-2">
-          <label className="mb-1 block text-xs text-passive-1">Custom…</label>
+        <div className="border-border border-t px-3 py-2">
+          <label className="text-passive-1 mb-1 block text-xs">Custom…</label>
           <input
             type="text"
             aria-label="Custom margin"
             placeholder="e.g. 1cm, 0.5in"
             value={noteLayout.marginId === CUSTOM_MARGIN_ID ? noteLayout.customMargin : ''}
-            onChange={(event) =>
-              updateNoteLayout({ marginId: CUSTOM_MARGIN_ID, customMargin: event.target.value })
-            }
+            onChange={(event) => updateNoteLayout({ marginId: CUSTOM_MARGIN_ID, customMargin: event.target.value })}
             onKeyDown={(event) => {
               event.stopPropagation()
               if (event.key === 'Enter') {
                 setIsPageMarginsMenuOpen(false)
               }
             }}
-            className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+            className="border-border bg-default focus:border-info h-8 w-full rounded-md border px-2 text-sm focus:outline-none"
           />
         </div>
       </Popover>
@@ -3968,8 +3939,8 @@ const ToolbarPlugin = () => {
             )
           })}
         </Menu>
-        <div className="border-t border-border px-3 py-2">
-          <label className="mb-1 block text-xs text-passive-1">Custom…</label>
+        <div className="border-border border-t px-3 py-2">
+          <label className="text-passive-1 mb-1 block text-xs">Custom…</label>
           <input
             type="number"
             min={MIN_COLUMNS}
@@ -3988,7 +3959,7 @@ const ToolbarPlugin = () => {
                 setIsPageColumnsMenuOpen(false)
               }
             }}
-            className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+            className="border-border bg-default focus:border-info h-8 w-full rounded-md border px-2 text-sm focus:outline-none"
           />
         </div>
       </Popover>
@@ -4010,12 +3981,12 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
-          <p className="mb-3 text-xs text-passive-1">
+          <p className="text-passive-1 mb-3 text-xs">
             Applied when exporting to PDF, Word (.docx) or OpenDocument (.odt). Browser print cannot render these.
           </p>
 
           {/* Subsection 1 — Page numbers (styling is out of scope for this band). */}
-          <div className="rounded-md border border-border p-3">
+          <div className="border-border rounded-md border p-3">
             <label className="flex items-center gap-2 text-sm font-medium">
               <input
                 type="checkbox"
@@ -4029,7 +4000,7 @@ const ToolbarPlugin = () => {
             {noteLayout.pageNumbering.enabled && (
               <div className="mt-2 flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-passive-1">Format</span>
+                  <span className="text-passive-1 text-xs">Format</span>
                   <select
                     aria-label="Page number format"
                     value={noteLayout.pageNumbering.format}
@@ -4038,7 +4009,7 @@ const ToolbarPlugin = () => {
                         pageNumbering: { ...noteLayout.pageNumbering, format: event.target.value as PageNumberFormat },
                       })
                     }
-                    className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                    className="border-border bg-default focus:border-info h-8 rounded-md border px-2 text-sm focus:outline-none"
                   >
                     <option value="page-n">Page 1</option>
                     <option value="n">1</option>
@@ -4046,7 +4017,7 @@ const ToolbarPlugin = () => {
                   </select>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-passive-1">Position</span>
+                  <span className="text-passive-1 text-xs">Position</span>
                   <select
                     aria-label="Page number position"
                     value={noteLayout.pageNumbering.location}
@@ -4058,14 +4029,14 @@ const ToolbarPlugin = () => {
                         },
                       })
                     }
-                    className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                    className="border-border bg-default focus:border-info h-8 rounded-md border px-2 text-sm focus:outline-none"
                   >
                     <option value="header">Header (top)</option>
                     <option value="footer">Footer (bottom)</option>
                   </select>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-passive-1">Align</span>
+                  <span className="text-passive-1 text-xs">Align</span>
                   <select
                     aria-label="Page number alignment"
                     value={noteLayout.pageNumbering.align}
@@ -4074,7 +4045,7 @@ const ToolbarPlugin = () => {
                         pageNumbering: { ...noteLayout.pageNumbering, align: event.target.value as HeaderFooterAlign },
                       })
                     }
-                    className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                    className="border-border bg-default focus:border-info h-8 rounded-md border px-2 text-sm capitalize focus:outline-none"
                   >
                     {HEADER_FOOTER_ALIGNS.map((align) => (
                       <option key={align} value={align}>
@@ -4084,7 +4055,7 @@ const ToolbarPlugin = () => {
                   </select>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-passive-1">Start at</span>
+                  <span className="text-passive-1 text-xs">Start at</span>
                   <input
                     type="number"
                     min={1}
@@ -4102,7 +4073,7 @@ const ToolbarPlugin = () => {
                         })
                       }
                     }}
-                    className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                    className="border-border bg-default focus:border-info h-8 w-20 rounded-md border px-2 text-sm focus:outline-none"
                   />
                 </div>
               </div>
@@ -4115,7 +4086,7 @@ const ToolbarPlugin = () => {
             const title = band === 'header' ? 'Header' : 'Footer'
             const placeholder = band === 'header' ? 'e.g. My document' : 'e.g. Confidential'
             return (
-              <div key={band} className="mt-3 rounded-md border border-border p-3">
+              <div key={band} className="border-border mt-3 rounded-md border p-3">
                 <label className="flex items-center gap-2 text-sm font-medium">
                   <input
                     type="checkbox"
@@ -4132,15 +4103,15 @@ const ToolbarPlugin = () => {
                       placeholder={placeholder}
                       value={value.text}
                       onChange={(event) => updateBand(band, { text: event.target.value })}
-                      className="h-8 w-full rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                      className="border-border bg-default focus:border-info h-8 w-full rounded-md border px-2 text-sm focus:outline-none"
                     />
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-passive-1">Align</span>
+                      <span className="text-passive-1 text-xs">Align</span>
                       <select
                         aria-label={`${title} alignment`}
                         value={value.align}
                         onChange={(event) => updateBand(band, { align: event.target.value as HeaderFooterAlign })}
-                        className="h-8 rounded-md border border-border bg-default px-2 text-sm capitalize focus:border-info focus:outline-none"
+                        className="border-border bg-default focus:border-info h-8 rounded-md border px-2 text-sm capitalize focus:outline-none"
                       >
                         {HEADER_FOOTER_ALIGNS.map((align) => (
                           <option key={align} value={align}>
@@ -4150,7 +4121,7 @@ const ToolbarPlugin = () => {
                       </select>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-passive-1">Font</span>
+                      <span className="text-passive-1 text-xs">Font</span>
                       <select
                         aria-label={`${title} font`}
                         value={value.fontId ?? 'default'}
@@ -4158,7 +4129,7 @@ const ToolbarPlugin = () => {
                           const fontId = event.target.value as HeaderFooterFontId
                           updateBand(band, { fontId: fontId === 'default' ? undefined : fontId })
                         }}
-                        className="h-8 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                        className="border-border bg-default focus:border-info h-8 rounded-md border px-2 text-sm focus:outline-none"
                       >
                         {HEADER_FOOTER_FONTS.map((font) => (
                           <option key={font.id} value={font.id}>
@@ -4168,7 +4139,7 @@ const ToolbarPlugin = () => {
                       </select>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-passive-1">Size</span>
+                      <span className="text-passive-1 text-xs">Size</span>
                       <input
                         type="number"
                         min={MIN_HF_FONT_PT}
@@ -4187,11 +4158,11 @@ const ToolbarPlugin = () => {
                             updateBand(band, { fontSizePt: Math.min(MAX_HF_FONT_PT, Math.max(MIN_HF_FONT_PT, next)) })
                           }
                         }}
-                        className="h-8 w-20 rounded-md border border-border bg-default px-2 text-sm focus:border-info focus:outline-none"
+                        className="border-border bg-default focus:border-info h-8 w-20 rounded-md border px-2 text-sm focus:outline-none"
                       />
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-passive-1">Style</span>
+                      <span className="text-passive-1 text-xs">Style</span>
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -4199,7 +4170,7 @@ const ToolbarPlugin = () => {
                           aria-pressed={value.bold === true}
                           onClick={() => updateBand(band, { bold: value.bold ? undefined : true })}
                           className={classNames(
-                            'h-8 w-8 rounded-md border border-border text-sm font-bold',
+                            'border-border h-8 w-8 rounded-md border text-sm font-bold',
                             value.bold ? '!bg-info !text-info-contrast' : 'bg-default',
                           )}
                         >
@@ -4211,7 +4182,7 @@ const ToolbarPlugin = () => {
                           aria-pressed={value.italic === true}
                           onClick={() => updateBand(band, { italic: value.italic ? undefined : true })}
                           className={classNames(
-                            'h-8 w-8 rounded-md border border-border text-sm italic',
+                            'border-border h-8 w-8 rounded-md border text-sm italic',
                             value.italic ? '!bg-info !text-info-contrast' : 'bg-default',
                           )}
                         >
@@ -4223,7 +4194,7 @@ const ToolbarPlugin = () => {
                           aria-pressed={value.underline === true}
                           onClick={() => updateBand(band, { underline: value.underline ? undefined : true })}
                           className={classNames(
-                            'h-8 w-8 rounded-md border border-border text-sm underline',
+                            'border-border h-8 w-8 rounded-md border text-sm underline',
                             value.underline ? '!bg-info !text-info-contrast' : 'bg-default',
                           )}
                         >
@@ -4232,20 +4203,20 @@ const ToolbarPlugin = () => {
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-passive-1">Color</span>
+                      <span className="text-passive-1 text-xs">Color</span>
                       <div className="flex items-center gap-2">
                         <input
                           type="color"
                           aria-label={`${title} text color`}
                           value={value.color ?? '#000000'}
                           onChange={(event) => updateBand(band, { color: event.target.value })}
-                          className="h-8 w-10 cursor-pointer rounded-md border border-border bg-default"
+                          className="border-border bg-default h-8 w-10 cursor-pointer rounded-md border"
                         />
                         <button
                           type="button"
                           aria-label={`${title} color auto`}
                           onClick={() => updateBand(band, { color: undefined })}
-                          className="h-8 rounded-md border border-border bg-default px-2 text-xs"
+                          className="border-border bg-default h-8 rounded-md border px-2 text-xs"
                         >
                           Auto
                         </button>
@@ -4261,7 +4232,7 @@ const ToolbarPlugin = () => {
               export band; toggling it shows/hides the live sidebar via the DOM bridge. */}
           <NavigationLayoutSubsection navigation={noteLayout.navigation} onChange={setNavigation} />
 
-          <p className="mt-3 text-xs text-passive-1">
+          <p className="text-passive-1 mt-3 text-xs">
             Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.
           </p>
         </div>
@@ -4282,21 +4253,21 @@ const ToolbarPlugin = () => {
       >
         <Menu a11yLabel={t('changeCase')} className="!px-0" onClick={() => setIsCaseMenuOpen(false)}>
           <MenuItem
-            className="overflow-hidden hover:bg-contrast md:py-2"
+            className="hover:bg-contrast overflow-hidden md:py-2"
             onClick={() => transformCase('upper')}
             onMouseDown={(e) => e.preventDefault()}
           >
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('uppercase')}</span>
           </MenuItem>
           <MenuItem
-            className="overflow-hidden hover:bg-contrast md:py-2"
+            className="hover:bg-contrast overflow-hidden md:py-2"
             onClick={() => transformCase('lower')}
             onMouseDown={(e) => e.preventDefault()}
           >
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t('lowercase')}</span>
           </MenuItem>
           <MenuItem
-            className="overflow-hidden hover:bg-contrast md:py-2"
+            className="hover:bg-contrast overflow-hidden md:py-2"
             onClick={() => transformCase('camel')}
             onMouseDown={(e) => e.preventDefault()}
           >
@@ -4319,11 +4290,11 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <Menu a11yLabel={t('sortAndDeduplicateLines')} className="!px-0" onClick={() => setIsSortMenuOpen(false)}>
-          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">{t('sortLines')}</div>
+          <div className="text-passive-0 px-3 py-1 text-xs font-semibold uppercase">{t('sortLines')}</div>
           {LINE_SORT_MODES.map(({ mode, label }) => (
             <MenuItem
               key={mode}
-              className="overflow-hidden hover:bg-contrast md:py-2"
+              className="hover:bg-contrast overflow-hidden md:py-2"
               onClick={() => transformLines(mode)}
               onMouseDown={(e) => e.preventDefault()}
             >
@@ -4331,11 +4302,11 @@ const ToolbarPlugin = () => {
             </MenuItem>
           ))}
           <MenuItemSeparator />
-          <div className="px-3 py-1 text-xs font-semibold uppercase text-passive-0">{t('deduplicate')}</div>
+          <div className="text-passive-0 px-3 py-1 text-xs font-semibold uppercase">{t('deduplicate')}</div>
           {LINE_DEDUPE_MODES.map(({ mode, label }) => (
             <MenuItem
               key={mode}
-              className="overflow-hidden hover:bg-contrast md:py-2"
+              className="hover:bg-contrast overflow-hidden md:py-2"
               onClick={() => transformLines(mode)}
               onMouseDown={(e) => e.preventDefault()}
             >
@@ -4344,7 +4315,7 @@ const ToolbarPlugin = () => {
           ))}
           <MenuItemSeparator />
           <MenuItem
-            className="overflow-hidden hover:bg-contrast md:py-2"
+            className="hover:bg-contrast overflow-hidden md:py-2"
             onClick={openMultiKeySortDialog}
             onMouseDown={(e) => e.preventDefault()}
           >
@@ -4375,16 +4346,16 @@ const ToolbarPlugin = () => {
             <button
               key={preset.label}
               type="button"
-              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              className="hover:bg-contrast flex items-center px-3 py-2 text-left"
               onClick={() => applyStyleText({ '-webkit-text-stroke': preset.value })}
             >
               <span>{preset.label}</span>
             </button>
           ))}
-          <div className="mx-3 my-1 h-px bg-border" />
+          <div className="bg-border mx-3 my-1 h-px" />
           <button
             type="button"
-            className="flex items-center gap-2.5 px-3 py-2 text-left text-danger hover:bg-contrast"
+            className="text-danger hover:bg-contrast flex items-center gap-2.5 px-3 py-2 text-left"
             onClick={() => applyStyleText({ '-webkit-text-stroke': null })}
           >
             <Icon type="trash-sweep" size="custom" className="h-4 w-4 flex-shrink-0" />
@@ -4417,7 +4388,7 @@ const ToolbarPlugin = () => {
             <button
               key={preset.label}
               type="button"
-              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              className="hover:bg-contrast flex items-center px-3 py-2 text-left"
               onClick={() => applyStyleText({ 'letter-spacing': preset.value })}
             >
               <span>{preset.label}</span>
@@ -4449,7 +4420,7 @@ const ToolbarPlugin = () => {
             <button
               key={preset.label}
               type="button"
-              className="flex items-center px-3 py-2 text-left hover:bg-contrast"
+              className="hover:bg-contrast flex items-center px-3 py-2 text-left"
               onClick={() => applyStyleText({ 'word-spacing': preset.value })}
             >
               <span>{preset.label}</span>
@@ -4475,12 +4446,14 @@ const ToolbarPlugin = () => {
           {undoPreviews.map((preview, index) => (
             <MenuItem
               key={index}
-              className="flex items-center gap-2 overflow-hidden hover:bg-contrast md:py-1.5"
+              className="hover:bg-contrast flex items-center gap-2 overflow-hidden md:py-1.5"
               onClick={() => historyStore.undo(index + 1)}
               onMouseDown={(e) => e.preventDefault()}
             >
-              <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || t('emptyHistoryPreview')}</span>
+              <span className="text-passive-1 w-7 flex-shrink-0 text-right text-xs">{index + 1}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
+                {preview || t('emptyHistoryPreview')}
+              </span>
             </MenuItem>
           ))}
         </Menu>
@@ -4503,12 +4476,14 @@ const ToolbarPlugin = () => {
           {redoPreviews.map((preview, index) => (
             <MenuItem
               key={index}
-              className="flex items-center gap-2 overflow-hidden hover:bg-contrast md:py-1.5"
+              className="hover:bg-contrast flex items-center gap-2 overflow-hidden md:py-1.5"
               onClick={() => historyStore.redo(index + 1)}
               onMouseDown={(e) => e.preventDefault()}
             >
-              <span className="w-7 flex-shrink-0 text-right text-xs text-passive-1">{index + 1}</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{preview || t('emptyHistoryPreview')}</span>
+              <span className="text-passive-1 w-7 flex-shrink-0 text-right text-xs">{index + 1}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
+                {preview || t('emptyHistoryPreview')}
+              </span>
             </MenuItem>
           ))}
         </Menu>
@@ -4536,11 +4511,7 @@ const ToolbarPlugin = () => {
             iconName="clipboard"
             onClick={() => void pasteWithoutFormatting(activeEditor)}
           />
-          <ToolbarMenuItem
-            name={t('pasteClean')}
-            iconName="clipboard"
-            onClick={() => void pasteSafe(activeEditor)}
-          />
+          <ToolbarMenuItem name={t('pasteClean')} iconName="clipboard" onClick={() => void pasteSafe(activeEditor)} />
           <ToolbarMenuItem
             name={t('keepSourceFormatting')}
             iconName="clipboard"
@@ -4551,11 +4522,7 @@ const ToolbarPlugin = () => {
             iconName="clipboard"
             onClick={() => void pasteMergeFormatting(activeEditor)}
           />
-          <ToolbarMenuItem
-            name={t('pasteAsImage')}
-            iconName="image"
-            onClick={() => void pasteAsImage(activeEditor)}
-          />
+          <ToolbarMenuItem name={t('pasteAsImage')} iconName="image" onClick={() => void pasteAsImage(activeEditor)} />
         </Menu>
       </Popover>
       <Popover
@@ -4578,11 +4545,7 @@ const ToolbarPlugin = () => {
             iconName="copy"
             onClick={() => void copyWithoutFormatting(activeEditor)}
           />
-          <ToolbarMenuItem
-            name={t('copyTextOnly')}
-            iconName="copy"
-            onClick={() => void copyTextOnly(activeEditor)}
-          />
+          <ToolbarMenuItem name={t('copyTextOnly')} iconName="copy" onClick={() => void copyTextOnly(activeEditor)} />
           <ToolbarMenuItem
             name={t('copyImagesOnly')}
             iconName="image"
@@ -4610,11 +4573,7 @@ const ToolbarPlugin = () => {
             iconName="scissors"
             onClick={() => void cutWithoutFormatting(activeEditor)}
           />
-          <ToolbarMenuItem
-            name={t('cutTextOnly')}
-            iconName="scissors"
-            onClick={() => void cutTextOnly(activeEditor)}
-          />
+          <ToolbarMenuItem name={t('cutTextOnly')} iconName="scissors" onClick={() => void cutTextOnly(activeEditor)} />
           <ToolbarMenuItem
             name={t('cutImagesOnly')}
             iconName="image"
@@ -4640,105 +4599,105 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('lineSpacing')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('lineSpacing')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {LINE_HEIGHT_PRESETS.map((value) => (
               <button
                 key={value}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
                 onClick={() => runBlockFormat((selection) => $setLineHeight(selection, value))}
               >
                 {value}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('spaceBefore')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('spaceBefore')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {SPACING_PRESETS.map((value) => (
               <button
                 key={`before-${value}`}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
                 onClick={() => runBlockFormat((selection) => $setSpaceBefore(selection, value))}
               >
                 {value === '0' ? t('none') : value}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('spaceAfter')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('spaceAfter')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {SPACING_PRESETS.map((value) => (
               <button
                 key={`after-${value}`}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
                 onClick={() => runBlockFormat((selection) => $setSpaceAfter(selection, value))}
               >
                 {value === '0' ? t('none') : value}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('indentation')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('indentation')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setIndent(selection, INDENT_STEP))}
             >
               {t('increaseLeft')}
             </button>
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setIndent(selection, ''))}
             >
               {t('decreaseLeft')}
             </button>
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setIndentRight(selection, INDENT_STEP))}
             >
               {t('increaseRight')}
             </button>
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setIndentRight(selection, ''))}
             >
               {t('decreaseRight')}
             </button>
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, INDENT_STEP))}
             >
               {t('firstLine')}
             </button>
             <button
               type="button"
-              className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setFirstLineIndent(selection, ''))}
             >
               {t('noFirstLine')}
             </button>
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('textShading')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('textShading')}</div>
           <div className="flex flex-wrap items-center gap-1.5 px-2">
             {TEXT_SHADING_PRESETS.map((color) => (
               <button
                 key={color ?? 'none'}
                 type="button"
                 aria-label={color ? t('textShadingSwatch', { color }) : t('noTextShading')}
-                className="h-6 w-6 rounded border border-border"
+                className="border-border h-6 w-6 rounded border"
                 style={{ backgroundColor: color ?? 'transparent' }}
                 onClick={() => runBlockFormat((selection) => $setTextShading(selection, color))}
               />
             ))}
             <button
               type="button"
-              className="rounded px-1.5 text-xs hover:bg-contrast"
+              className="hover:bg-contrast rounded px-1.5 text-xs"
               onClick={() => runBlockFormat((selection) => $setTextShading(selection, null))}
             >
               {t('clear')}
@@ -4763,26 +4722,26 @@ const ToolbarPlugin = () => {
         documentElement={popoverDocumentElement}
       >
         <div className="flex flex-col gap-1 p-1 text-sm" onMouseDown={(e) => e.preventDefault()}>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('bulleted')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('bulleted')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {BULLET_STYLES.map((preset) => (
               <button
                 key={preset.value}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
                 onClick={() => applyListStyle(preset.value)}
               >
                 {preset.label}
               </button>
             ))}
           </div>
-          <div className="px-3 pt-1 text-xs font-semibold uppercase text-passive-0">{t('numbered')}</div>
+          <div className="text-passive-0 px-3 pt-1 text-xs font-semibold uppercase">{t('numbered')}</div>
           <div className="flex flex-wrap gap-1 px-2">
             {NUMBER_STYLES.map((preset) => (
               <button
                 key={preset.value}
                 type="button"
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
                 onClick={() => applyListStyle(preset.value)}
               >
                 {preset.label}
@@ -4808,10 +4767,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div
-          className="grid w-52 grid-cols-3 gap-1 p-2 text-sm"
-          onMouseDown={(e) => e.preventDefault()}
-        >
+        <div className="grid w-52 grid-cols-3 gap-1 p-2 text-sm" onMouseDown={(e) => e.preventDefault()}>
           {BULLET_STYLES.map((preset) => (
             <ListMarkerSwatch
               key={preset.value}
@@ -4823,10 +4779,8 @@ const ToolbarPlugin = () => {
             />
           ))}
           {/* Custom marker: type any character/emoji to use as the bullet glyph. */}
-          <div className="col-span-3 mt-1 border-t border-border pt-2">
-            <div className="mb-1 px-0.5 text-[0.65rem] font-semibold uppercase text-passive-1">
-              {t('customMarker')}
-            </div>
+          <div className="border-border col-span-3 mt-1 border-t pt-2">
+            <div className="text-passive-1 mb-1 px-0.5 text-[0.65rem] font-semibold uppercase">{t('customMarker')}</div>
             <div className="flex items-center gap-1">
               <input
                 type="text"
@@ -4843,11 +4797,11 @@ const ToolbarPlugin = () => {
                 maxLength={16}
                 placeholder={t('customMarkerPlaceholder')}
                 aria-label={t('customMarker')}
-                className="min-w-0 flex-1 rounded border border-border bg-default px-1.5 py-1 text-sm text-text placeholder:text-passive-1 focus:outline-none"
+                className="border-border bg-default text-text placeholder:text-passive-1 min-w-0 flex-1 rounded border px-1.5 py-1 text-sm focus:outline-none"
               />
               <button
                 type="button"
-                className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-contrast disabled:opacity-50"
+                className="border-border hover:bg-contrast flex-shrink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
                 disabled={sanitizeCustomGlyph(customBulletGlyph) === ''}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => applyCustomBulletMarker(customBulletGlyph)}
@@ -4873,10 +4827,7 @@ const ToolbarPlugin = () => {
         portal={false}
         documentElement={popoverDocumentElement}
       >
-        <div
-          className="grid w-52 grid-cols-2 gap-1 p-2 text-sm"
-          onMouseDown={(e) => e.preventDefault()}
-        >
+        <div className="grid w-52 grid-cols-2 gap-1 p-2 text-sm" onMouseDown={(e) => e.preventDefault()}>
           {NUMBER_STYLES.map((preset) => (
             <ListMarkerSwatch
               key={preset.value}
@@ -4919,14 +4870,16 @@ const ToolbarPlugin = () => {
             }
           }}
         >
-          <div className="text-xs font-semibold uppercase text-passive-0">{t('multilevelListHint')}</div>
+          <div className="text-passive-0 text-xs font-semibold uppercase">{t('multilevelListHint')}</div>
           {[1, 2, 3, 4, 5].map((level) => {
             const selected = multilevelDraft[level]
             return (
               <div key={level} className="flex items-center gap-2">
-                <span className="w-12 flex-shrink-0 text-xs text-passive-1">{t('level')} {level}</span>
+                <span className="text-passive-1 w-12 flex-shrink-0 text-xs">
+                  {t('level')} {level}
+                </span>
                 <select
-                  className="min-w-0 flex-1 rounded border border-border bg-default px-1.5 py-1 text-xs"
+                  className="border-border bg-default min-w-0 flex-1 rounded border px-1.5 py-1 text-xs"
                   value={selected ?? ''}
                   onChange={(e) => {
                     const next = { ...multilevelDraft }
@@ -4960,7 +4913,7 @@ const ToolbarPlugin = () => {
           <div className="mt-1 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded px-2 py-1 text-xs hover:bg-contrast"
+              className="hover:bg-contrast rounded px-2 py-1 text-xs"
               onClick={() => {
                 setMultilevelDraft({})
                 applyMultilevelDraft({})
@@ -4970,7 +4923,7 @@ const ToolbarPlugin = () => {
             </button>
             <button
               type="button"
-              className="rounded bg-info px-3 py-1 text-xs text-info-contrast hover:brightness-110"
+              className="bg-info text-info-contrast rounded px-3 py-1 text-xs hover:brightness-110"
               onClick={() => {
                 applyMultilevelDraft(multilevelDraft)
                 setIsMultilevelMenuOpen(false)
@@ -5033,16 +4986,16 @@ const ToolbarPlugin = () => {
           {/* Inline color swatches keep these actions self-contained so no
               secondary anchor (absent in floating mode) is needed. */}
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
-            <div className="mb-1 text-xs font-semibold text-text">{t('textColor')}</div>
+            <div className="text-text mb-1 text-xs font-semibold">{t('textColor')}</div>
             <div className="max-h-56 overflow-y-auto">
               <button
                 type="button"
-                className="flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs text-text hover:bg-contrast"
+                className="text-text hover:bg-contrast flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs"
                 onClick={() => applyStyleText({ color: null })}
               >
                 <span
                   aria-hidden
-                  className="h-4 w-4 shrink-0 rounded border border-border bg-default"
+                  className="border-border bg-default h-4 w-4 shrink-0 rounded border"
                   style={AUTO_COLOR_CHIP_STYLE}
                 />
                 {t('autoTextColor')}
@@ -5052,12 +5005,12 @@ const ToolbarPlugin = () => {
                   key={`fg-${value}`}
                   type="button"
                   aria-label={t('textColorSwatch', { color: label })}
-                  className="flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs text-text hover:bg-contrast"
+                  className="text-text hover:bg-contrast flex w-full touch-manipulation items-center gap-2 rounded px-1.5 py-1 text-left text-xs"
                   onClick={() => applyStyleText({ color: value })}
                 >
                   <span
                     aria-hidden
-                    className="h-4 w-4 shrink-0 rounded border border-border"
+                    className="border-border h-4 w-4 shrink-0 rounded border"
                     style={{ backgroundColor: value }}
                   />
                   {label}
@@ -5066,21 +5019,21 @@ const ToolbarPlugin = () => {
             </div>
           </div>
           <div className="px-3 py-1.5" onMouseDown={(e) => e.preventDefault()}>
-            <div className="mb-1 text-xs font-semibold text-text">{t('highlightColor')}</div>
+            <div className="text-text mb-1 text-xs font-semibold">{t('highlightColor')}</div>
             <div className="flex flex-wrap gap-1.5">
               {COLOR_PRESETS.map((color) => (
                 <button
                   key={`bg-${color}`}
                   type="button"
                   aria-label={t('highlightColorSwatch', { color })}
-                  className="h-6 w-6 rounded border border-border"
+                  className="border-border h-6 w-6 rounded border"
                   style={{ backgroundColor: color }}
                   onClick={() => applyStyleText({ 'background-color': color })}
                 />
               ))}
               <button
                 type="button"
-                className="rounded px-1.5 text-xs hover:bg-contrast"
+                className="hover:bg-contrast rounded px-1.5 text-xs"
                 onClick={() => applyStyleText({ 'background-color': null })}
               >
                 {t('clear')}

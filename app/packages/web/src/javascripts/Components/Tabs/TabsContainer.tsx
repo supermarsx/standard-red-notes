@@ -19,8 +19,8 @@ type Props = {
 
 const TabsContainer = ({ tabs, state, className, children }: Props) => {
   return (
-    <div className={classNames('overflow-hidden rounded-md border border-border', className)}>
-      <TabList state={state} className="border-b border-border">
+    <div className={classNames('border-border overflow-hidden rounded-md border', className)}>
+      <TabList state={state} className="border-border border-b">
         {tabs.map(({ id, title, icon }) => (
           <Tab key={id} id={id} className="inline-flex items-center gap-1.5 first:rounded-tl-md">
             {icon && <Icon type={icon} size="medium" />}

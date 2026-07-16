@@ -100,8 +100,8 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
       <div className="flex flex-col gap-4">
         {!createdLink && (
           <>
-            <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-              <div className="font-semibold text-warning">Anyone with the link can read this note</div>
+            <div className="border-warning bg-warning-faded rounded border border-solid p-3 text-sm">
+              <div className="text-warning font-semibold">Anyone with the link can read this note</div>
               <p className="mt-1">
                 A share link is read-only and decrypted in the recipient&rsquo;s browser; the server only stores
                 ciphertext and never sees the key (it stays in the link fragment). Anyone who obtains the full link can
@@ -118,7 +118,7 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
               />
               <span className="flex flex-col">
                 <span className="font-semibold">Burn after reading (one-time view)</span>
-                <span className="text-xs text-passive-0">
+                <span className="text-passive-0 text-xs">
                   The link stops working as soon as it is first opened. It cannot be reopened.
                 </span>
               </span>
@@ -133,7 +133,7 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
               />
               <span className="flex flex-col">
                 <span className="font-semibold">Expire after the first open</span>
-                <span className="text-xs text-passive-0">
+                <span className="text-passive-0 text-xs">
                   Once opened, the link keeps working for this many minutes, then expires.
                 </span>
               </span>
@@ -146,12 +146,12 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
                   type="number"
                   min={1}
                   step={1}
-                  className="w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                  className="border-border bg-default w-32 rounded border px-2 py-1.5 text-sm"
                   value={expiryMinutes}
                   onChange={(event) => setExpiryMinutes(event.target.value)}
                 />
                 {!expiryValid && (
-                  <span className="text-xs text-danger">Enter a whole number of minutes greater than zero.</span>
+                  <span className="text-danger text-xs">Enter a whole number of minutes greater than zero.</span>
                 )}
               </div>
             )}
@@ -162,16 +162,18 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
           <div className="flex flex-col gap-2">
             <div className="text-sm">
               Your share link is ready{oneTimeView ? ' and will self-destruct after the first open' : ''}
-              {useExpiry ? ` (expires ${parsedMinutes} minute${parsedMinutes === 1 ? '' : 's'} after the first open)` : ''}
+              {useExpiry
+                ? ` (expires ${parsedMinutes} minute${parsedMinutes === 1 ? '' : 's'} after the first open)`
+                : ''}
               .
             </div>
             <textarea
               readOnly
-              className="h-24 w-full resize-none rounded border border-border bg-contrast p-2 text-xs"
+              className="border-border bg-contrast h-24 w-full resize-none rounded border p-2 text-xs"
               value={createdLink}
               onFocus={(event) => event.currentTarget.select()}
             />
-            <div className="text-xs text-passive-0">
+            <div className="text-passive-0 text-xs">
               It has been copied to your clipboard. The decryption key is in the part after the <code>#</code> and never
               reaches the server.
             </div>

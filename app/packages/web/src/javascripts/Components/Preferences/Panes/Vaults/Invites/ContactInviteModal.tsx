@@ -100,7 +100,7 @@ const ContactInviteModal: FunctionComponent<Props> = ({ vault, onCloseDialog }) 
     <Modal title="Add New Contact" close={handleDialogClose} actions={modalActions}>
       <div className={classNames('flex w-full flex-col gap-3 px-4.5 py-4', isLoadingContacts && 'items-center')}>
         {!isLoadingContacts && contacts.length > 0 && (
-          <div className="rounded border border-solid border-warning bg-warning-faded p-3 text-warning">
+          <div className="border-warning bg-warning-faded text-warning rounded border border-solid p-3">
             <div className="text-base font-semibold">Inviting a contact shares this vault's notes with them</div>
             <div className="mt-1 text-sm">
               The contacts you invite will be able to access the notes and files in this shared vault, according to the
@@ -124,7 +124,7 @@ const ContactInviteModal: FunctionComponent<Props> = ({ vault, onCloseDialog }) 
               >
                 <input
                   id={contact.uuid}
-                  className="h-4 w-4 self-center accent-info"
+                  className="accent-info h-4 w-4 self-center"
                   type="checkbox"
                   checked={isSelected}
                   onChange={() => toggleContact(contact)}

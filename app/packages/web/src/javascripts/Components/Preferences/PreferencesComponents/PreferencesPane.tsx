@@ -14,7 +14,7 @@ const PreferencesPane: FunctionComponent<{ children?: ReactNode }> = ({ children
   const isWide = useIsWidePane()
 
   return (
-    <div className="flex min-h-0 flex-grow flex-col overflow-y-auto text-foreground md:flex-row">
+    <div className="text-foreground flex min-h-0 flex-grow flex-col overflow-y-auto md:flex-row">
       <div className={classNames('flex flex-grow flex-col items-center px-3 py-6', isWide ? 'md:px-6' : 'md:px-0')}>
         <div
           className={classNames(

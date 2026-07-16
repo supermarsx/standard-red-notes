@@ -72,7 +72,7 @@ type SkeletonCircleProps = DivPassthrough & {
 /** A circular placeholder (avatars, icons). */
 export const SkeletonCircle: FunctionComponent<SkeletonCircleProps> = ({ className, size = '2.5rem', ...rest }) => (
   <div
-    className={cx('animate-pulse rounded-full bg-passive-3', className)}
+    className={cx('bg-passive-3 animate-pulse rounded-full', className)}
     style={{ width: size, height: size }}
     {...rest}
   />

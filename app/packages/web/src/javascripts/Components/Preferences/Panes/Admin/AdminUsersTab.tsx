@@ -1074,16 +1074,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       })
       // Keep the table's Roles column in sync with the detail editor.
       setRows((current) =>
-        current.map((row) =>
-          row.uuid === user.uuid
+        current.map((row) => {
+          return row.uuid === user.uuid
             ? {
                 ...row,
                 roles: granting
                   ? Array.from(new Set([...row.roles, ADMIN_USER]))
                   : row.roles.filter((name) => name !== ADMIN_USER),
               }
-            : row,
-        ),
+            : row
+        }),
       )
       await loadPermissions(user.uuid)
     } catch (error) {
@@ -1174,13 +1174,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       {/* Filter bar: search + the quick dropdowns on one airy row, the date
           range and page size on a lighter second row, and an active-filters
           summary with one-click clear when anything is narrowing the list. */}
-      <div className="mt-3 rounded-md border border-border p-3">
+      <div className="border-border mt-3 rounded-md border p-3">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-[280px] flex-grow flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Search</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Search</Text>
             <DecoratedInput
               className={{ container: 'w-full' }}
-              left={[<Icon type="search" size="small" className="flex-shrink-0 text-passive-1" />]}
+              left={[<Icon type="search" size="small" className="text-passive-1 flex-shrink-0" />]}
               placeholder="Search by email…"
               value={emailSearchInput}
               onChange={setEmailSearchInput}
@@ -1188,7 +1188,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Subscription</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Subscription</Text>
             <Dropdown
               label="Subscription filter"
               items={[
@@ -1202,7 +1202,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Banned</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Banned</Text>
             <Dropdown
               label="Banned filter"
               items={[
@@ -1216,7 +1216,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           </div>
           {availableRoles.length > 0 && (
             <div className="flex flex-col">
-              <Text className="mb-1 text-xs font-medium text-passive-1">Role</Text>
+              <Text className="text-passive-1 mb-1 text-xs font-medium">Role</Text>
               <Dropdown
                 label="Role filter"
                 items={[{ label: 'Any', value: '' }, ...availableRoles.map((role) => ({ label: role, value: role }))]}
@@ -1229,7 +1229,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Created after</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Created after</Text>
             <DecoratedInput
               className={{ container: 'w-40' }}
               value={filters.createdAfter}
@@ -1238,7 +1238,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Created before</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Created before</Text>
             <DecoratedInput
               className={{ container: 'w-40' }}
               value={filters.createdBefore}
@@ -1247,7 +1247,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             />
           </div>
           <div className="flex flex-col">
-            <Text className="mb-1 text-xs font-medium text-passive-1">Per page</Text>
+            <Text className="text-passive-1 mb-1 text-xs font-medium">Per page</Text>
             <Dropdown
               label="Users per page"
               items={[
@@ -1266,7 +1266,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           </div>
           <Button small label="Refresh" onClick={() => void loadUsers()} disabled={listLoading} />
           {!listLoading && !listError && (
-            <Text className="ml-auto pb-1.5 text-xs text-passive-1">
+            <Text className="text-passive-1 ml-auto pb-1.5 text-xs">
               {total.toLocaleString()} {filtersActive ? 'matching ' : ''}
               {total === 1 ? 'user' : 'users'}
             </Text>
@@ -1274,18 +1274,18 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         </div>
 
         {activeFilterChips.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <Text className="text-xs text-passive-1">Filtering:</Text>
+          <div className="border-border mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+            <Text className="text-passive-1 text-xs">Filtering:</Text>
             {activeFilterChips.map((chip) => (
               <span
                 key={chip.key}
-                className="rounded-full bg-info-backdrop px-2.5 py-0.5 text-xs font-medium text-foreground"
+                className="bg-info-backdrop text-foreground rounded-full px-2.5 py-0.5 text-xs font-medium"
               >
                 {chip.label}
               </span>
             ))}
             <button
-              className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline"
+              className="text-info cursor-pointer border-0 bg-transparent p-0 text-xs underline"
               onClick={clearFilters}
             >
               Clear filters
@@ -1300,11 +1300,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         ) : listError ? (
           <Text className="text-danger">{listError}</Text>
         ) : rows.length === 0 ? (
-          <div className="flex flex-col items-start gap-2 rounded-md border border-border p-4">
+          <div className="border-border flex flex-col items-start gap-2 rounded-md border p-4">
             <Text>{filtersActive ? 'No users match these filters.' : 'No users yet.'}</Text>
             {filtersActive && (
               <button
-                className="cursor-pointer border-0 bg-transparent p-0 text-sm text-info underline"
+                className="text-info cursor-pointer border-0 bg-transparent p-0 text-sm underline"
                 onClick={clearFilters}
               >
                 Clear filters
@@ -1317,17 +1317,17 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 at least one row on the page is selected. Acts on the current
                 selection with bounded concurrency + partial-failure handling. */}
             {selectionCount > 0 && (
-              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-info bg-info-backdrop p-3">
-                <Text className="font-semibold text-foreground">{selectionCount} selected</Text>
+              <div className="border-info bg-info-backdrop mb-3 flex flex-wrap items-center gap-2 rounded-md border p-3">
+                <Text className="text-foreground font-semibold">{selectionCount} selected</Text>
                 <button
-                  className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline disabled:opacity-50"
+                  className="text-info cursor-pointer border-0 bg-transparent p-0 text-xs underline disabled:opacity-50"
                   onClick={clearSelection}
                   disabled={bulkInProgress}
                 >
                   Clear selection
                 </button>
 
-                <div className="mx-1 h-5 w-px bg-border" />
+                <div className="bg-border mx-1 h-5 w-px" />
 
                 <Button
                   small
@@ -1351,11 +1351,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   disabled={bulkInProgress}
                 />
 
-                <div className="mx-1 h-5 w-px bg-border" />
+                <div className="bg-border mx-1 h-5 w-px" />
 
                 {/* Bulk feature flag: reuses the per-user adminSetUserFeatureFlag
                     call, so it composes cleanly with the single-user switches. */}
-                <Text className="text-xs text-passive-1">Flag:</Text>
+                <Text className="text-passive-1 text-xs">Flag:</Text>
                 <Dropdown
                   label="Bulk feature flag"
                   items={BULK_FLAG_OPTIONS}
@@ -1378,7 +1378,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 {bulkInProgress && bulkProgress && (
                   <div className="ml-auto flex items-center gap-2">
                     <Spinner className="h-4 w-4" />
-                    <Text className="text-xs text-passive-1">
+                    <Text className="text-passive-1 text-xs">
                       Processing {bulkProgress.completed}/{bulkProgress.total}…
                     </Text>
                   </div>
@@ -1389,19 +1389,19 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             {/* Partial-failure detail — survives the post-action refresh (which
                 clears the selection) so the admin can see which users failed. */}
             {bulkFailures && bulkFailures.length > 0 && (
-              <div className="mb-3 rounded-md border border-danger p-3">
+              <div className="border-danger mb-3 rounded-md border p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <Text className="font-semibold text-danger">
+                  <Text className="text-danger font-semibold">
                     {bulkFailures.length} {pluralizeUsers(bulkFailures.length)} failed
                   </Text>
                   <button
-                    className="cursor-pointer border-0 bg-transparent p-0 text-xs text-info underline"
+                    className="text-info cursor-pointer border-0 bg-transparent p-0 text-xs underline"
                     onClick={() => setBulkFailures(null)}
                   >
                     Dismiss
                   </button>
                 </div>
-                <ul className="mt-2 max-h-40 list-disc overflow-auto pl-5 text-xs text-passive-1">
+                <ul className="text-passive-1 mt-2 max-h-40 list-disc overflow-auto pl-5 text-xs">
                   {bulkFailures.map((failure) => (
                     <li key={failure.uuid}>
                       {emailForUuid(failure.uuid)}
@@ -1414,11 +1414,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
             {/* Vertical max-height makes the sticky header useful on tall
                 pages; horizontal overflow keeps narrow widths scrollable. */}
-            <div className="max-h-[32rem] overflow-auto rounded-md border border-border">
+            <div className="border-border max-h-[32rem] overflow-auto rounded-md border">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="sticky top-0 z-10 w-10 border-b border-border bg-contrast px-3 py-2">
+                    <th className="border-border bg-contrast sticky top-0 z-10 w-10 border-b px-3 py-2">
                       <input
                         type="checkbox"
                         aria-label="Select all users on this page"
@@ -1432,35 +1432,35 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         onChange={toggleSelectAllOnPage}
                       />
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       Email
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       Created
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       Roles
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       Subscription
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       Banned
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       MFA
                     </th>
-                    <th className="sticky top-0 z-10 border-b border-border bg-contrast px-3 py-2 text-right font-semibold">
+                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 text-right font-semibold">
                       Storage
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className="divide-border divide-y">
                   {rows.map((row) => (
                     <tr
                       key={row.uuid}
                       onClick={() => selectRow(row)}
-                      className={`cursor-pointer hover:bg-info-backdrop ${
+                      className={`hover:bg-info-backdrop cursor-pointer ${
                         selectedUuids.has(row.uuid) || user?.uuid === row.uuid ? 'bg-info-backdrop' : ''
                       }`}
                     >
@@ -1476,7 +1476,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         />
                       </td>
                       <td className="px-3 py-2.5">{row.email}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5">{formatAdminUserDate(row.createdAt)}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">{formatAdminUserDate(row.createdAt)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserRoles(row.roles)}</td>
                       <td className="px-3 py-2.5">{formatAdminUserSubscription(row.subscription)}</td>
                       <td className="px-3 py-2.5">
@@ -1498,7 +1498,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                               </span>
                             )}
                             {row.suspended && (
-                              <span className="rounded-full border border-danger px-2 py-0.5 text-xs font-medium text-danger">
+                              <span className="border-danger text-danger rounded-full border px-2 py-0.5 text-xs font-medium">
                                 Suspended
                               </span>
                             )}
@@ -1508,7 +1508,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         )}
                       </td>
                       <td className="px-3 py-2.5">{row.mfaEnabled ? 'On' : 'Off'}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums">
                         {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
                       </td>
                     </tr>
@@ -1518,7 +1518,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             </div>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <Text className="text-xs text-passive-1">
+              <Text className="text-passive-1 text-xs">
                 Showing {firstShown}&ndash;{lastShown} of {total.toLocaleString()}
               </Text>
               <AdminPagination
@@ -1527,7 +1527,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 onPrevious={() => setPage((p) => Math.max(0, p - 1))}
                 onNext={() => setPage((p) => p + 1)}
               >
-                <Text className="whitespace-nowrap text-xs">
+                <Text className="text-xs whitespace-nowrap">
                   Page {page + 1} of {pageCount}
                 </Text>
               </AdminPagination>
@@ -1802,7 +1802,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
                 <div className="mt-1 flex flex-wrap items-end gap-3">
                   <div className="flex flex-col">
-                    <Text className="mb-1 text-xs font-medium text-passive-1">Type</Text>
+                    <Text className="text-passive-1 mb-1 text-xs font-medium">Type</Text>
                     <Dropdown
                       label="Ban type"
                       items={[
@@ -1816,7 +1816,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   </div>
                   {banTypeInput === 'temporary' && (
                     <div className="flex flex-col">
-                      <Text className="mb-1 text-xs font-medium text-passive-1">Banned until</Text>
+                      <Text className="text-passive-1 mb-1 text-xs font-medium">Banned until</Text>
                       <DecoratedInput
                         className={{ container: 'w-56' }}
                         value={banUntilInput}
@@ -1826,7 +1826,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     </div>
                   )}
                   <div className="flex flex-grow flex-col">
-                    <Text className="mb-1 text-xs font-medium text-passive-1">Reason (optional)</Text>
+                    <Text className="text-passive-1 mb-1 text-xs font-medium">Reason (optional)</Text>
                     <DecoratedInput
                       className={{ container: 'w-full' }}
                       placeholder="e.g. spam / abuse report #123"
@@ -1843,9 +1843,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     onClick={() => void applyBan()}
                     disabled={banningInProgress}
                   />
-                  {banned && (
-                    <Button label="Unban user" onClick={() => void liftBan()} disabled={banningInProgress} />
-                  )}
+                  {banned && <Button label="Unban user" onClick={() => void liftBan()} disabled={banningInProgress} />}
                 </div>
               </div>
 
@@ -1876,7 +1874,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
                     <div className="mt-1 flex flex-wrap items-end gap-3">
                       <div className="flex flex-grow flex-col">
-                        <Text className="mb-1 text-xs font-medium text-passive-1">Reason (optional)</Text>
+                        <Text className="text-passive-1 mb-1 text-xs font-medium">Reason (optional)</Text>
                         <DecoratedInput
                           className={{ container: 'w-full' }}
                           placeholder="e.g. pending account review"
@@ -1922,7 +1920,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     <Text>
                       Effective permissions: <strong>{permissions.effectivePermissionNames.length}</strong>{' '}
                       <button
-                        className="cursor-pointer border-0 bg-transparent p-0 text-info underline"
+                        className="text-info cursor-pointer border-0 bg-transparent p-0 underline"
                         onClick={() => setPermissionsVisible((current) => !current)}
                       >
                         {permissionsVisible ? 'hide' : 'show'}
@@ -2009,7 +2007,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 <>
                   <HorizontalSeparator classes="my-3" />
 
-                  <div className="flex flex-col gap-2 rounded-md border border-danger p-3">
+                  <div className="border-danger flex flex-col gap-2 rounded-md border p-3">
                     <Subtitle>Delete account</Subtitle>
                     <Text>
                       <strong>Permanently delete this account.</strong> This removes the account and all of its notes,

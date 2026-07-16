@@ -73,9 +73,7 @@ describe('getSelectionActions', () => {
   })
 
   it('falls back to defaults when the override preference is malformed JSON', () => {
-    const actions = getSelectionActions(
-      fakeApplication({ [PrefKey.AssistantSelectionActions]: '{ not valid json ]' }),
-    )
+    const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: '{ not valid json ]' }))
     expect(actions).toEqual(DEFAULT_SELECTION_ACTIONS)
   })
 
@@ -108,9 +106,7 @@ describe('custom selection actions', () => {
   it('appends custom actions after the built-ins from the new pref shape', () => {
     const pref = {
       overrides: { summarize: { prompt: 'Short summary.' } },
-      custom: [
-        { id: `${CUSTOM_ACTION_ID_PREFIX}1`, label: 'Bulletize', prompt: 'Turn into bullets.', enabled: true },
-      ],
+      custom: [{ id: `${CUSTOM_ACTION_ID_PREFIX}1`, label: 'Bulletize', prompt: 'Turn into bullets.', enabled: true }],
     }
     const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: JSON.stringify(pref) }))
     expect(actions.find((a) => a.id === 'summarize')!.prompt).toBe('Short summary.')

@@ -4,6 +4,4 @@ import { DeletedItemInterface } from './DeletedItem'
 import { EncryptedItemInterface } from './EncryptedItem'
 
 export type AnyItemInterface<C extends ItemContent = ItemContent> =
-  | EncryptedItemInterface
-  | DecryptedItemInterface<C>
-  | DeletedItemInterface
+  EncryptedItemInterface | DecryptedItemInterface<C> | DeletedItemInterface

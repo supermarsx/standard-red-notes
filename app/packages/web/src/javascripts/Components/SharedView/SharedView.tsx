@@ -160,39 +160,38 @@ const SharedView = ({ shareId }: Props) => {
 
   return (
     <div
-      className="relative flex h-full w-full justify-center overflow-auto bg-default px-4 py-10 text-foreground"
+      className="bg-default text-foreground relative flex h-full w-full justify-center overflow-auto px-4 py-10"
       onContextMenu={blockContextMenu}
     >
       <div className="w-full max-w-2xl">
-        {state.status === 'loading' && <div className="text-center text-passive-0">{t('common:loading')}</div>}
+        {state.status === 'loading' && <div className="text-passive-0 text-center">{t('common:loading')}</div>}
 
         {state.status === 'gone' && (
-          <div className="rounded border border-solid border-border p-6 text-center">
+          <div className="border-border rounded border border-solid p-6 text-center">
             <div className="text-lg font-bold">{t('shareUnavailableTitle')}</div>
-            <div className="mt-2 text-passive-0">{t('shareUnavailableMessage')}</div>
+            <div className="text-passive-0 mt-2">{t('shareUnavailableMessage')}</div>
           </div>
         )}
 
         {state.status === 'invalid' && (
-          <div className="rounded border border-solid border-border p-6 text-center">
+          <div className="border-border rounded border border-solid p-6 text-center">
             <div className="text-lg font-bold">{t('invalidLinkTitle')}</div>
-            <div className="mt-2 text-passive-0">{t('invalidLinkMessage')}</div>
+            <div className="text-passive-0 mt-2">{t('invalidLinkMessage')}</div>
           </div>
         )}
 
         {isBurn && (
-          <div className="mb-4 rounded border border-solid border-danger bg-danger-faded p-3 text-center text-sm">
-            <div className="font-bold text-danger">{t('selfDestructTitle')}</div>
+          <div className="border-danger bg-danger-faded mb-4 rounded border border-solid p-3 text-center text-sm">
+            <div className="text-danger font-bold">{t('selfDestructTitle')}</div>
             <div className="mt-1">
               {t('oneTimeViewConsumed')}
-              {expiresMinutes != null ? t('oneTimeViewExpiresClause', { count: expiresMinutes }) : ''}
-              .
+              {expiresMinutes != null ? t('oneTimeViewExpiresClause', { count: expiresMinutes }) : ''}.
             </div>
           </div>
         )}
 
         {isReady && !isBurn && expiresMinutes != null && (
-          <div className="mb-4 rounded border border-solid border-warning bg-warning-faded p-3 text-center text-sm">
+          <div className="border-warning bg-warning-faded mb-4 rounded border border-solid p-3 text-center text-sm">
             {t('linkExpires', { count: expiresMinutes })}
           </div>
         )}
@@ -212,7 +211,7 @@ const SharedView = ({ shareId }: Props) => {
             <h1 className="mb-6 text-2xl font-bold">{state.payload.title || t('untitled')}</h1>
             {state.payload.notes.length === 0 && <div className="text-passive-0">{t('tagHasNoNotes')}</div>}
             {state.payload.notes.map((note, index) => (
-              <section key={index} className="mb-8 border-b border-solid border-border pb-6 last:border-b-0">
+              <section key={index} className="border-border mb-8 border-b border-solid pb-6 last:border-b-0">
                 <h2 className="mb-2 text-xl font-semibold">{note.title || t('untitled')}</h2>
                 <div
                   className="markdown-preview font-editor break-words"
@@ -224,7 +223,7 @@ const SharedView = ({ shareId }: Props) => {
         )}
 
         {state.status === 'ready' && (
-          <div className="mt-10 border-t border-solid border-border pt-4 text-center text-xs text-passive-0">
+          <div className="border-border text-passive-0 mt-10 border-t border-solid pt-4 text-center text-xs">
             {t('publicReadOnlyFooter')}
           </div>
         )}
@@ -236,18 +235,16 @@ const SharedView = ({ shareId }: Props) => {
           aria-hidden
           className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden opacity-10"
         >
-          <span className="-rotate-45 whitespace-nowrap text-3xl font-bold uppercase tracking-widest">
-            {watermark}
-          </span>
+          <span className="-rotate-45 text-3xl font-bold tracking-widest whitespace-nowrap uppercase">{watermark}</span>
         </div>
       )}
 
       {/* Blur/visibility overlay: hides content when the window is inactive. */}
       {isReady && obscured && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-default text-center">
+        <div className="bg-default absolute inset-0 z-10 flex items-center justify-center text-center">
           <div className="px-6">
             <div className="text-lg font-bold">{t('contentHiddenTitle')}</div>
-            <div className="mt-2 text-passive-0">{t('contentHiddenMessage')}</div>
+            <div className="text-passive-0 mt-2">{t('contentHiddenMessage')}</div>
           </div>
         </div>
       )}

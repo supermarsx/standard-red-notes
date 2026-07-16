@@ -54,18 +54,14 @@ const ServerPicker = ({ className }: Props) => {
       handleSyncServerChange(window.defaultSyncServer, window.websocketUrl)
     } else if (type === 'home server') {
       if (!application.homeServer) {
-        application.alerts
-          .alert(t('homeServerNotRunning'))
-          .catch(console.error)
+        application.alerts.alert(t('homeServerNotRunning')).catch(console.error)
 
         return
       }
 
       const homeServerUrl = await application.homeServer.getHomeServerUrl()
       if (!homeServerUrl) {
-        application.alerts
-          .alert(t('homeServerNotRunning'))
-          .catch(console.error)
+        application.alerts.alert(t('homeServerNotRunning')).catch(console.error)
 
         return
       }

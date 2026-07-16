@@ -5,9 +5,8 @@
  * elapsed, formatResetDuration returns 'now' — the meter must NOT print the
  * nonsensical "resets in now". A still-open window keeps the "resets in …" hint.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import AssistantUsageMeter from '@/Components/Assistant/AssistantUsageMeter'
 import { TokenWindowUsage } from '@/Assistant/usageMeter'
 
@@ -45,12 +44,18 @@ const render = (props: Parameters<typeof AssistantUsageMeter>[0]): HTMLElement =
 
 describe('AssistantUsageMeter', () => {
   it('does NOT render the reset clause for an already-elapsed window', () => {
-    const el = render({ fiveHour: window({ resetsAt: new Date(Date.now() - 60_000).toISOString() }), weekly: undefined })
+    const el = render({
+      fiveHour: window({ resetsAt: new Date(Date.now() - 60_000).toISOString() }),
+      weekly: undefined,
+    })
     expect(el.textContent).not.toContain('resets')
   })
 
   it('renders the "resets in …" hint for a still-open window', () => {
-    const el = render({ fiveHour: window({ resetsAt: new Date(Date.now() + 45 * 60_000).toISOString() }), weekly: undefined })
+    const el = render({
+      fiveHour: window({ resetsAt: new Date(Date.now() + 45 * 60_000).toISOString() }),
+      weekly: undefined,
+    })
     expect(el.textContent).toContain('resets in')
     expect(el.textContent).not.toContain('resets in now')
   })

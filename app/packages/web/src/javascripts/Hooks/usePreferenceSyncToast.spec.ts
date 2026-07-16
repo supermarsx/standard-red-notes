@@ -1,9 +1,5 @@
 import { PayloadEmitSource } from '@standardnotes/snjs'
-import {
-  initialPreferenceSyncState,
-  PreferenceSyncState,
-  reducePreferenceSync,
-} from './usePreferenceSyncToast'
+import { initialPreferenceSyncState, PreferenceSyncState, reducePreferenceSync } from './usePreferenceSyncToast'
 
 /**
  * Drive a sequence of prefs-item emits through the reducer and collect every

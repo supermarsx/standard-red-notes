@@ -158,7 +158,7 @@ const ScanCollaborationIDModal: FunctionComponent<Props> = ({ onScan, close }) =
           Point your camera at a contact's CollaborationID QR code, or upload a saved image of one.
         </div>
         {cameraStatus !== 'unavailable' ? (
-          <div className="relative w-full overflow-hidden rounded-md bg-contrast">
+          <div className="bg-contrast relative w-full overflow-hidden rounded-md">
             <video ref={videoRef} className="max-h-80 w-full object-contain" muted playsInline />
             {cameraStatus === 'initializing' && (
               <div className="absolute inset-0 flex items-center justify-center gap-2 text-base">
@@ -168,12 +168,12 @@ const ScanCollaborationIDModal: FunctionComponent<Props> = ({ onScan, close }) =
             )}
           </div>
         ) : (
-          <div className="flex items-center gap-2 rounded-md bg-contrast px-3 py-3 text-sm">
+          <div className="bg-contrast flex items-center gap-2 rounded-md px-3 py-3 text-sm">
             <Icon type="camera" className="flex-shrink-0 text-neutral-300" />
             Camera is unavailable. You can still upload an image of the QR code below.
           </div>
         )}
-        {errorMessage && <div className="text-sm text-danger">{errorMessage}</div>}
+        {errorMessage && <div className="text-danger text-sm">{errorMessage}</div>}
         <input
           type="file"
           accept="image/*"

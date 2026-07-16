@@ -15,7 +15,9 @@
  * `MessagePort`/`MessageChannel` and other globals jsdom lacks. A tiny stream-
  * draining shim is enough for zip.js and keeps the test env minimal.
  */
-/* eslint-disable @typescript-eslint/no-var-requires */
+import { Blob as NodeBlob } from 'node:buffer'
+import * as nodeStreamWeb from 'node:stream/web'
+import { TextDecoder as NodeTextDecoder, TextEncoder as NodeTextEncoder } from 'node:util'
 
 type AnyRecord = Record<string, unknown>
 
@@ -78,13 +80,10 @@ export const installExportTestEnv = (): void => {
   }
   installed = true
 
-  const nodeUtil = require('util')
-  const nodeStreamWeb = require('stream/web')
-  const nodeBuffer = require('node:buffer')
   const g = globalThis as unknown as AnyRecord
 
-  g.TextEncoder = g.TextEncoder ?? nodeUtil.TextEncoder
-  g.TextDecoder = g.TextDecoder ?? nodeUtil.TextDecoder
+  g.TextEncoder = g.TextEncoder ?? NodeTextEncoder
+  g.TextDecoder = g.TextDecoder ?? NodeTextDecoder
 
   for (const key of [
     'ReadableStream',
@@ -100,7 +99,6 @@ export const installExportTestEnv = (): void => {
   }
 
   // Node's Blob has a working arrayBuffer(); jsdom's does not.
-  const NodeBlob = nodeBuffer.Blob
   g.Blob = NodeBlob
 
   // Minimal Response: enough for zip.js `new Response(stream).blob()/.arrayBuffer()`.

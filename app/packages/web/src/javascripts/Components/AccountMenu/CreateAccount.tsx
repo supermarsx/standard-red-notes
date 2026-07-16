@@ -121,11 +121,11 @@ const CreateAccount: FunctionComponent<Props> = ({
 
   return (
     <>
-      <div className="mb-3 mt-1 flex items-center px-3">
+      <div className="mt-1 mb-3 flex items-center px-3">
         <IconButton
           icon="arrow-left"
           title={t('goBack')}
-          className="mr-2 flex p-0 text-neutral"
+          className="text-neutral mr-2 flex p-0"
           onClick={handleClose}
           focusable={true}
         />
@@ -169,13 +169,7 @@ const CreateAccount: FunctionComponent<Props> = ({
           value={workspaceIdentifier}
           spellcheck={false}
         />
-        <Button
-          className="mt-1"
-          label={t('common:next')}
-          primary
-          onClick={handleRegisterFormSubmit}
-          fullWidth={true}
-        />
+        <Button className="mt-1" label={t('common:next')} primary onClick={handleRegisterFormSubmit} fullWidth={true} />
       </form>
       <HorizontalSeparator classes="my-2" />
       <AdvancedOptions onPrivateUsernameModeChange={onPrivateUsernameChange} />

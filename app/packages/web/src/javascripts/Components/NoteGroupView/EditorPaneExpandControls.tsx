@@ -18,7 +18,7 @@ const EditorPaneExpandControls = () => {
   }
 
   return (
-    <div className="hidden flex-shrink-0 items-center gap-1 border-b border-border bg-default px-2 py-1 md:flex">
+    <div className="border-border bg-default hidden flex-shrink-0 items-center gap-1 border-b px-2 py-1 md:flex">
       {isNavigationPaneCollapsed && (
         <PaneCollapseButton
           onClick={toggleNavigationPane}
@@ -28,12 +28,7 @@ const EditorPaneExpandControls = () => {
         />
       )}
       {isListPaneCollapsed && (
-        <PaneCollapseButton
-          onClick={toggleListPane}
-          label="Expand notes panel"
-          icon="chevron-right"
-          expanded={false}
-        />
+        <PaneCollapseButton onClick={toggleListPane} label="Expand notes panel" icon="chevron-right" expanded={false} />
       )}
     </div>
   )

@@ -91,7 +91,7 @@ const ItemLinkAutocompleteInput = forwardRef(
               placeholder="Link topics, notes, files..."
               className={classNames(
                 `${tagsLinkedToItem.length > 0 ? 'w-80' : 'mr-10 w-70'}`,
-                'h-7 w-70 bg-transparent text-sm text-text focus:border-b-2 focus:border-info focus:shadow-none focus:outline-none lg:text-xs',
+                'text-text focus:border-info h-7 w-70 bg-transparent text-sm focus:border-b-2 focus:shadow-none focus:outline-none lg:text-xs',
               )}
               title={hoverLabel}
               id={ElementIds.ItemLinkAutocompleteInput}
@@ -103,7 +103,7 @@ const ItemLinkAutocompleteInput = forwardRef(
           <ComboboxPopover
             store={combobox}
             className={classNames(
-              'z-dropdown-menu max-h-[var(--popover-available-height)] w-[var(--popover-anchor-width)] overflow-y-auto rounded bg-default py-2 shadow-main',
+              'z-dropdown-menu bg-default shadow-main max-h-[var(--popover-available-height)] w-[var(--popover-anchor-width)] overflow-y-auto rounded py-2',
               unlinkedItems.length === 0 && !shouldShowCreateTag && 'hidden',
             )}
           >
@@ -113,7 +113,7 @@ const ItemLinkAutocompleteInput = forwardRef(
               return (
                 <ComboboxItem
                   key={result.uuid}
-                  className="flex w-full cursor-pointer items-center justify-between gap-4 overflow-hidden px-3 py-2 hover:bg-contrast hover:text-foreground [&[data-active-item]]:bg-info-backdrop"
+                  className="hover:bg-contrast hover:text-foreground [&[data-active-item]]:bg-info-backdrop flex w-full cursor-pointer items-center justify-between gap-4 overflow-hidden px-3 py-2"
                   hideOnClick
                   onClick={() => {
                     linkItems(item, result).catch(console.error)
@@ -121,7 +121,7 @@ const ItemLinkAutocompleteInput = forwardRef(
                   }}
                 >
                   <LinkedItemMeta item={result} searchQuery={searchQuery} />
-                  {cannotLinkItem && <Icon type={PremiumFeatureIconName} className="ml-auto flex-shrink-0 text-info" />}
+                  {cannotLinkItem && <Icon type={PremiumFeatureIconName} className="text-info ml-auto flex-shrink-0" />}
                 </ComboboxItem>
               )
             })}

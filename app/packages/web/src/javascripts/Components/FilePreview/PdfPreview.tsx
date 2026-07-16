@@ -218,9 +218,9 @@ const PdfPage: FunctionComponent<{
       style={{ width: `${Math.floor(baseViewport.width)}px`, height: `${Math.floor(baseViewport.height)}px` }}
     >
       <canvas ref={canvasRef} className="block" />
-      <div ref={textLayerRef} className="textLayer pdf-text-layer absolute left-0 top-0 overflow-hidden opacity-100" />
+      <div ref={textLayerRef} className="textLayer pdf-text-layer absolute top-0 left-0 overflow-hidden opacity-100" />
       {!isRendered && (
-        <div className="absolute inset-0 flex items-center justify-center text-passive-1">
+        <div className="text-passive-1 absolute inset-0 flex items-center justify-center">
           <Spinner className="h-5 w-5" />
         </div>
       )}
@@ -327,7 +327,6 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         setPages(loadedPages)
       } catch (error) {
         if (!cancelled) {
-          // eslint-disable-next-line no-console
           console.error('Failed to load PDF', error)
           setLoadError(true)
         }
@@ -574,7 +573,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           setOcrStatus('idle')
           return
         }
-        // eslint-disable-next-line no-console
+
         console.error('PDF OCR failed', error)
         setOcrError(
           mode === 'server'
@@ -712,9 +711,9 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
   if (loadError) {
     return (
       <div className="flex flex-grow flex-col items-center justify-center p-4 text-center">
-        <Icon type="file-pdf" size="large" className="mb-3 text-passive-1" />
+        <Icon type="file-pdf" size="large" className="text-passive-1 mb-3" />
         <div className="text-base font-bold">{t('unableToRenderPdf')}</div>
-        <p className="mt-1 max-w-[40ch] text-sm text-passive-0">{t('pdfCorruptedOrProtected')}</p>
+        <p className="text-passive-0 mt-1 max-w-[40ch] text-sm">{t('pdfCorruptedOrProtected')}</p>
       </div>
     )
   }
@@ -723,7 +722,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
         <Spinner className="h-6 w-6" />
-        <span className="mt-3 text-sm text-passive-0">{t('loadingPdf')}</span>
+        <span className="text-passive-0 mt-3 text-sm">{t('loadingPdf')}</span>
       </div>
     )
   }
@@ -731,11 +730,11 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
   return (
     <div className="flex h-full w-full flex-col" onKeyDown={handleKeyDown}>
       {/* Toolbar */}
-      <div className="flex flex-shrink-0 flex-wrap items-center gap-1 border-b border-border bg-default px-2 py-1.5">
+      <div className="border-border bg-default flex flex-shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1.5">
         <div className="flex items-center gap-1">
           <StyledTooltip label={t('previousPage')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
               onClick={() => goToPage(currentPage - 1)}
               disabled={currentPage <= 1}
               aria-label={t('previousPage')}
@@ -743,9 +742,9 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               <Icon type="chevron-left" className="text-neutral" />
             </button>
           </StyledTooltip>
-          <div className="flex items-center text-sm text-neutral">
+          <div className="text-neutral flex items-center text-sm">
             <input
-              className="w-10 rounded border border-border bg-default px-1 py-0.5 text-center text-sm text-text"
+              className="border-border bg-default text-text w-10 rounded border px-1 py-0.5 text-center text-sm"
               value={pageInput}
               inputMode="numeric"
               aria-label={t('pageNumber')}
@@ -758,11 +757,11 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                 }
               }}
             />
-            <span className="mx-1 whitespace-nowrap text-passive-1">/ {numPages}</span>
+            <span className="text-passive-1 mx-1 whitespace-nowrap">/ {numPages}</span>
           </div>
           <StyledTooltip label={t('nextPage')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
               onClick={() => goToPage(currentPage + 1)}
               disabled={currentPage >= numPages}
               aria-label={t('nextPage')}
@@ -772,12 +771,12 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           </StyledTooltip>
         </div>
 
-        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="bg-border mx-1 h-5 w-px" />
 
         <div className="flex items-center gap-1">
           <StyledTooltip label={t('zoomOut')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
               onClick={zoomOut}
               disabled={scale <= MIN_SCALE}
               aria-label={t('zoomOut')}
@@ -785,10 +784,10 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               <Icon type="subtract" className="text-neutral" />
             </button>
           </StyledTooltip>
-          <span className="w-12 text-center text-sm text-passive-1">{Math.round(scale * 100)}%</span>
+          <span className="text-passive-1 w-12 text-center text-sm">{Math.round(scale * 100)}%</span>
           <StyledTooltip label={t('zoomIn')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
               onClick={zoomIn}
               disabled={scale >= MAX_SCALE}
               aria-label={t('zoomIn')}
@@ -798,21 +797,21 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           </StyledTooltip>
           <StyledTooltip label={t('fitWidth')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5"
               onClick={fitWidth}
               aria-label={t('fitWidth')}
             >
-              <Icon type="arrows-vertical" className="rotate-90 text-neutral" />
+              <Icon type="arrows-vertical" className="text-neutral rotate-90" />
             </button>
           </StyledTooltip>
         </div>
 
-        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="bg-border mx-1 h-5 w-px" />
 
         <div className="flex items-center gap-1">
           <StyledTooltip label={t('searchInDocumentShortcut')} className="!z-modal">
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5"
               onClick={() => (showSearch ? closeSearch() : openSearch())}
               aria-label={t('searchInDocument')}
             >
@@ -823,7 +822,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
             <>
               <StyledTooltip label={t('copyLinkToPage', { page: currentPage })} className="!z-modal">
                 <button
-                  className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+                  className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5"
                   onClick={copyPageLink}
                   aria-label={t('copyLinkToThisPage')}
                 >
@@ -832,7 +831,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               </StyledTooltip>
               <StyledTooltip label={t('copyLinkToSelectedText')} className="!z-modal">
                 <button
-                  className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+                  className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5"
                   onClick={copyQuoteLink}
                   aria-label={t('copyLinkToSelectedText')}
                 >
@@ -846,12 +845,12 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
         {/* Client-side OCR (only when the server operator has enabled it). */}
         {ocrConfig.enabled && (
           <>
-            <div className="mx-1 h-5 w-px bg-border" />
+            <div className="bg-border mx-1 h-5 w-px" />
             <div className="flex items-center gap-1">
               {ocrStatus === 'running' ? (
                 <div className="flex items-center gap-2 px-1">
                   <Spinner className="h-4 w-4" />
-                  <span className="whitespace-nowrap text-xs text-passive-1">
+                  <span className="text-passive-1 text-xs whitespace-nowrap">
                     {ocrProgress && ocrProgress.totalPages > 0
                       ? t('ocrProgress', {
                           current: ocrProgress.completedPages + (ocrProgress.pageProgress < 1 ? 1 : 0),
@@ -861,7 +860,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                       : t('preparingOcr')}
                   </span>
                   <button
-                    className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
+                    className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1"
                     onClick={cancelOcr}
                     aria-label={t('cancelOcr')}
                   >
@@ -881,7 +880,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                     className="!z-modal"
                   >
                     <button
-                      className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-neutral hover:bg-contrast"
+                      className="text-neutral hover:bg-contrast flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm"
                       onClick={() => runOcr('browser')}
                       aria-label={t('extractTextWithOcrBrowser')}
                     >
@@ -898,7 +897,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                   {serverOcr?.available && (
                     <StyledTooltip label={t('serverOcrTooltip')} className="!z-modal">
                       <button
-                        className="flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm text-warning hover:bg-contrast"
+                        className="text-warning hover:bg-contrast flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-2 py-1.5 text-sm"
                         onClick={() => runOcr('server')}
                         aria-label={t('runOcrOnServerAria')}
                       >
@@ -912,7 +911,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               {ocrStatus === 'done' && extractedPages && (
                 <StyledTooltip label={t('copyAllExtractedText')} className="!z-modal">
                   <button
-                    className="flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+                    className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1.5"
                     onClick={copyExtractedText}
                     aria-label={t('copyExtractedTextAria')}
                   >
@@ -921,7 +920,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                 </StyledTooltip>
               )}
               {ocrStatus === 'error' && ocrError && (
-                <span className="whitespace-nowrap text-xs text-danger">{ocrError}</span>
+                <span className="text-danger text-xs whitespace-nowrap">{ocrError}</span>
               )}
             </div>
           </>
@@ -931,7 +930,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           <div className="ml-auto flex items-center gap-1">
             <input
               ref={searchInputRef}
-              className="w-40 rounded border border-border bg-default px-2 py-0.5 text-sm text-text"
+              className="border-border bg-default text-text w-40 rounded border px-2 py-0.5 text-sm"
               placeholder={t('findInDocument')}
               autoFocus
               value={searchQuery}
@@ -950,7 +949,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
             <StyledTooltip label={t('matchCase')} className="!z-modal">
               <button
                 className={`flex cursor-pointer rounded border-0 p-1 text-sm font-bold ${
-                  matchCase ? 'bg-info text-info-contrast' : 'bg-transparent text-neutral hover:bg-contrast'
+                  matchCase ? 'bg-info text-info-contrast' : 'text-neutral hover:bg-contrast bg-transparent'
                 }`}
                 onClick={() => setMatchCase((m) => !m)}
                 aria-label={t('matchCase')}
@@ -959,7 +958,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                 Aa
               </button>
             </StyledTooltip>
-            <span className="min-w-[4.5rem] text-center text-xs text-passive-1">
+            <span className="text-passive-1 min-w-[4.5rem] text-center text-xs">
               {committedQuery
                 ? matches.length === 0
                   ? t('noResults')
@@ -967,7 +966,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
                 : ''}
             </span>
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1 disabled:opacity-40"
               onClick={() => goToMatch(-1)}
               disabled={matches.length === 0}
               aria-label={t('previousMatch')}
@@ -975,7 +974,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               <Icon type="chevron-up" className="text-neutral" size="small" />
             </button>
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1 disabled:opacity-40"
               onClick={() => goToMatch(1)}
               disabled={matches.length === 0}
               aria-label={t('nextMatch')}
@@ -983,7 +982,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
               <Icon type="chevron-down" className="text-neutral" size="small" />
             </button>
             <button
-              className="flex cursor-pointer rounded border-0 bg-transparent p-1 hover:bg-contrast"
+              className="hover:bg-contrast flex cursor-pointer rounded border-0 bg-transparent p-1"
               onClick={closeSearch}
               aria-label={t('closeSearch')}
             >
@@ -997,7 +996,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
           an end-to-end-encryption downgrade, so the tradeoff must be visible
           before the user clicks, not only while running. */}
       {ocrConfig.enabled && serverOcr?.available && ocrStatus === 'idle' && (
-        <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
+        <div className="border-border bg-warning-faded text-warning flex-shrink-0 border-b px-3 py-1.5 text-xs">
           {t('serverOcrDisclosurePrefix')} <strong>{t('serverOcrDisclosureBold')}</strong>
           {t('serverOcrDisclosureSuffix')}
         </div>
@@ -1006,7 +1005,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       {/* Honest OCR caveat banner: distinguishes the E2E-safe browser path from
           the server path (which leaves end-to-end encryption). */}
       {ocrConfig.enabled && (ocrStatus === 'running' || (ocrStatus === 'done' && !ocrFromCache)) && (
-        <div className="flex-shrink-0 border-b border-border bg-warning-faded px-3 py-1.5 text-xs text-warning">
+        <div className="border-border bg-warning-faded text-warning flex-shrink-0 border-b px-3 py-1.5 text-xs">
           {ocrStatus === 'running'
             ? ocrMode === 'server'
               ? t('ocrRunningServer')
@@ -1018,7 +1017,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
       )}
 
       {/* Pages */}
-      <div ref={scrollContainerRef} data-pdf-scroll-container className="flex-grow overflow-auto bg-passive-5 p-2">
+      <div ref={scrollContainerRef} data-pdf-scroll-container className="bg-passive-5 flex-grow overflow-auto p-2">
         {pages.map((page, index) => (
           <PdfPage
             key={index}

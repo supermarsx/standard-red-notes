@@ -13,10 +13,12 @@ import { MAX_RECENT_NOTES, RecentNotesState } from './RecentNotesState'
 
 type ActiveItem = { uuid: string; content_type: string } | undefined
 
-const makeHarness = (opts: {
-  stored?: unknown
-  items?: Record<string, SNNote>
-} = {}) => {
+const makeHarness = (
+  opts: {
+    stored?: unknown
+    items?: Record<string, SNNote>
+  } = {},
+) => {
   const activeBox = observable.box<ActiveItem>(undefined)
   const prefs: Record<string, unknown> = {
     [PrefKey.RecentNotesHistory]: opts.stored,
@@ -42,8 +44,7 @@ const makeHarness = (opts: {
     },
   } as unknown as WebApplication
 
-  const openNote = (uuid: string) =>
-    runInAction(() => activeBox.set({ uuid, content_type: ContentType.TYPES.Note }))
+  const openNote = (uuid: string) => runInAction(() => activeBox.set({ uuid, content_type: ContentType.TYPES.Note }))
 
   return { application, openNote, setPreference, prefs, activeBox }
 }

@@ -204,7 +204,7 @@ export class DeprecatedHttpService extends AbstractService {
         if (response.data == undefined || response.data.error == undefined) {
           try {
             response.error = { message: request.responseText || UNKNOWN_ERROR, status: httpStatus }
-          } catch (error) {
+          } catch {
             response.error = { message: UNKNOWN_ERROR, status: httpStatus }
           }
         } else {

@@ -11,8 +11,8 @@ const EmptyFilesView = ({ addNewItem }: Props) => {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center">
       <FilesIllustration className="h-32 w-32" />
-      <div className="mb-2 mt-4 text-lg font-bold">{t('noFilesYet')}</div>
-      <div className="mb-4 max-w-[35ch] text-center text-sm text-passive-0">{t('filesAttachedAppearHere')}</div>
+      <div className="mt-4 mb-2 text-lg font-bold">{t('noFilesYet')}</div>
+      <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('filesAttachedAppearHere')}</div>
       <Button primary onClick={addNewItem}>
         {t('uploadFiles')}
       </Button>

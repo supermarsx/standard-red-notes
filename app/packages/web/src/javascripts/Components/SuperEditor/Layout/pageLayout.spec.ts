@@ -84,7 +84,8 @@ describe('normalizeNoteLayout — page numbering / header / footer back-fill', (
 })
 
 describe('noteLayoutToPageLayoutOptions', () => {
-  const withLayout = (patch: Partial<NoteLayout>): NoteLayout => normalizeNoteLayout({ ...DEFAULT_NOTE_LAYOUT, ...patch })
+  const withLayout = (patch: Partial<NoteLayout>): NoteLayout =>
+    normalizeNoteLayout({ ...DEFAULT_NOTE_LAYOUT, ...patch })
 
   it('returns undefined when nothing is enabled (baseline export path)', () => {
     expect(noteLayoutToPageLayoutOptions(DEFAULT_NOTE_LAYOUT)).toBeUndefined()
@@ -191,9 +192,7 @@ describe('normalizeHeaderFooter — optional style fields', () => {
   })
 
   it('never throws on garbage style values', () => {
-    expect(() =>
-      normalizeNoteLayout({ header: { fontId: {}, fontSizePt: [], bold: null, color: [] } }),
-    ).not.toThrow()
+    expect(() => normalizeNoteLayout({ header: { fontId: {}, fontSizePt: [], bold: null, color: [] } })).not.toThrow()
   })
 })
 
@@ -251,7 +250,9 @@ describe('noteLayoutToPageLayoutOptions — navigation is NOT an export band', (
           navigation: nav,
         }),
       )
-    expect(withHeader({ visible: true, showBookmarks: true })).toEqual(withHeader({ visible: false, showBookmarks: false }))
+    expect(withHeader({ visible: true, showBookmarks: true })).toEqual(
+      withHeader({ visible: false, showBookmarks: false }),
+    )
     expect(withHeader({ visible: true, showBookmarks: true })).toEqual({ header: { text: 'Title', align: 'center' } })
   })
 })

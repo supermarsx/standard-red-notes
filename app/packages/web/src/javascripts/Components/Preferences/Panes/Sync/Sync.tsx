@@ -90,10 +90,10 @@ type StatRowProps = {
 }
 
 const StatRow: FunctionComponent<StatRowProps> = ({ icon, label, synced, localOnly }) => (
-  <div className="flex items-center justify-between gap-2 border-b border-border py-2 last:border-b-0">
+  <div className="border-border flex items-center justify-between gap-2 border-b py-2 last:border-b-0">
     <div className="flex items-center gap-2">
-      <Icon type={icon} className="flex-shrink-0 text-neutral" size="small" />
-      <span className="text-sm font-medium text-text">{label}</span>
+      <Icon type={icon} className="text-neutral flex-shrink-0" size="small" />
+      <span className="text-text text-sm font-medium">{label}</span>
     </div>
     <div className="flex items-center gap-4 text-sm">
       <span className="text-success" title="Synced to your account">
@@ -314,41 +314,41 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
               </Subtitle>
 
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
-                  <Icon type={connectionIcon} size="medium" className="flex-shrink-0 text-info" />
+                <div className="border-border bg-contrast flex items-center gap-3 rounded-md border p-3">
+                  <Icon type={connectionIcon} size="medium" className="text-info flex-shrink-0" />
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">Status</div>
-                    <div className="text-sm font-bold text-text">{connectionLabel}</div>
+                    <div className="text-passive-1 text-xs font-semibold tracking-wide uppercase">Status</div>
+                    <div className="text-text text-sm font-bold">{connectionLabel}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 rounded-md border border-border bg-contrast p-3">
-                  <Icon type="clock" size="medium" className="flex-shrink-0 text-info" />
+                <div className="border-border bg-contrast flex items-center gap-3 rounded-md border p-3">
+                  <Icon type="clock" size="medium" className="text-info flex-shrink-0" />
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-passive-1">
+                    <div className="text-passive-1 text-xs font-semibold tracking-wide uppercase">
                       Last successful sync
                     </div>
                     {/* A last-sync timestamp is only meaningful with an account; a
                     purely-local install has no server sync to report. */}
-                    <div className="truncate text-sm font-bold text-text">
+                    <div className="text-text truncate text-sm font-bold">
                       {syncStatus.showLastSync ? lastSyncLabel : 'Not signed in'}
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-4 rounded-md border border-border bg-default p-3">
-                <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-passive-1">
+              <div className="border-border bg-default mt-4 rounded-md border p-3">
+                <div className="text-passive-1 mb-1 flex items-center justify-between text-xs font-semibold tracking-wide uppercase">
                   <span>Type</span>
                   <span>Synced · Local-only</span>
                 </div>
                 <StatRow icon="notes" label="Notes" synced={summary.synced.note} localOnly={summary.localOnly.note} />
                 <StatRow icon="hashtag" label="Tags" synced={summary.synced.tag} localOnly={summary.localOnly.tag} />
                 <StatRow icon="file" label="Files" synced={summary.synced.file} localOnly={summary.localOnly.file} />
-                <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm font-bold">
+                <div className="border-border mt-2 flex items-center justify-between border-t pt-2 text-sm font-bold">
                   <span className="text-text">Total</span>
                   <span>
                     <span className="text-success">{summary.synced.total} synced</span>
-                    <span className="mx-1 text-passive-1">·</span>
+                    <span className="text-passive-1 mx-1">·</span>
                     <span className={totalLocalOnly > 0 ? 'text-warning' : 'text-passive-1'}>
                       {totalLocalOnly} local-only
                     </span>
@@ -375,8 +375,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
               </div>
 
               {manualSyncMode && (
-                <div className="mt-3 rounded-md border border-warning bg-warning-faded p-3 text-sm">
-                  <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
+                <div className="border-warning bg-warning-faded mt-3 rounded-md border p-3 text-sm">
+                  <div className="text-warning mb-1 flex items-center gap-2 font-semibold">
                     <Icon type="warning" size="small" className="flex-shrink-0" />
                     Unsynced changes are at risk
                   </div>
@@ -444,11 +444,11 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                   {summary.localOnlyItems.map((item) => (
                     <li
                       key={item.uuid}
-                      className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                      className="border-border flex items-center justify-between gap-2 rounded border px-3 py-2"
                     >
                       <div className="flex min-w-0 items-center gap-2">
-                        <Icon type={ICON_FOR_KIND[item.kind]} size="small" className="flex-shrink-0 text-neutral" />
-                        <span className="truncate text-sm text-text">{item.title}</span>
+                        <Icon type={ICON_FOR_KIND[item.kind]} size="small" className="text-neutral flex-shrink-0" />
+                        <span className="text-text truncate text-sm">{item.title}</span>
                       </div>
                       <Button
                         small
@@ -468,7 +468,7 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
             <PreferencesSegment>
               <Title>Configure selective sync</Title>
               <Subtitle>Mark a tag or folder local-only to keep all of its notes on this device.</Subtitle>
-              <div className="mt-2.5 rounded border border-border bg-contrast p-3 text-sm">
+              <div className="border-border bg-contrast mt-2.5 rounded border p-3 text-sm">
                 <div className="mb-1.5 flex items-center gap-2 font-semibold">
                   <Icon type="info" size="small" />
                   How this works
@@ -497,17 +497,17 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                     return (
                       <li
                         key={tagOrFolder.uuid}
-                        className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                        className="border-border flex items-center justify-between gap-2 rounded border px-3 py-2"
                       >
                         <div className="flex min-w-0 items-center gap-2">
                           <Icon
                             type={isFolder ? 'folder' : 'hashtag'}
                             size="small"
-                            className="flex-shrink-0 text-neutral"
+                            className="text-neutral flex-shrink-0"
                           />
-                          <span className="truncate text-sm text-text">{tagOrFolder.title || 'Untitled'}</span>
+                          <span className="text-text truncate text-sm">{tagOrFolder.title || 'Untitled'}</span>
                           {hasLocalOnly && (
-                            <span className="rounded bg-warning px-1.5 py-0.5 text-xs text-warning-contrast">
+                            <span className="bg-warning text-warning-contrast rounded px-1.5 py-0.5 text-xs">
                               local-only
                             </span>
                           )}

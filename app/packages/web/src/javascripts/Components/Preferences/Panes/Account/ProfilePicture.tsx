@@ -63,7 +63,7 @@ const ProfilePicture: FunctionComponent<Props> = ({ application }) => {
           .t`Set a profile picture shown on your account menu and here. It defaults to your initials when none is set.`}</Text>
 
         <div className="mt-3 flex items-center gap-4">
-          <Avatar email={email} size={64} className="border border-border" />
+          <Avatar email={email} size={64} className="border-border border" />
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
               <Button
@@ -71,9 +71,7 @@ const ProfilePicture: FunctionComponent<Props> = ({ application }) => {
                 onClick={onPickClick}
                 disabled={isProcessing}
               />
-              {avatar && (
-                <Button label={c('Action').t`Remove photo`} onClick={onRemove} disabled={isProcessing} />
-              )}
+              {avatar && <Button label={c('Action').t`Remove photo`} onClick={onRemove} disabled={isProcessing} />}
             </div>
             <Subtitle className="m-0">
               {isProcessing ? c('Status').t`Processing image…` : c('Info').t`PNG, JPEG, WebP or GIF, up to 10 MB.`}
@@ -81,11 +79,10 @@ const ProfilePicture: FunctionComponent<Props> = ({ application }) => {
           </div>
         </div>
 
-        {error && <Text className="mt-2 text-danger">{error}</Text>}
+        {error && <Text className="text-danger mt-2">{error}</Text>}
 
-        <SmallText className="mt-3 text-passive-0">
-          {c('Info')
-            .t`Your profile picture is stored locally on this device only and is not synced across devices.`}
+        <SmallText className="text-passive-0 mt-3">
+          {c('Info').t`Your profile picture is stored locally on this device only and is not synced across devices.`}
         </SmallText>
 
         <input

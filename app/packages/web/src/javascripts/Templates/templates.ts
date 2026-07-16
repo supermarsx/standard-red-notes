@@ -71,7 +71,6 @@ export function filterTemplates(templates: TemplateEntry[], query: string): Temp
     return templates
   }
   return templates.filter(
-    (entry) =>
-      entry.title.toLowerCase().includes(trimmed) || entry.preview.toLowerCase().includes(trimmed),
+    (entry) => entry.title.toLowerCase().includes(trimmed) || entry.preview.toLowerCase().includes(trimmed),
   )
 }

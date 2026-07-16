@@ -36,11 +36,11 @@ const U2FDevicesList: FunctionComponent<Props> = ({ application, devices, onErro
       {devices.length > 0 && (
         <>
           <Subtitle>Devices</Subtitle>
-          <div className="flex flex-grow flex-col divide-y divide-border">
+          <div className="divide-border flex flex-grow flex-col divide-y">
             {devices.map((device) => (
               <div className="flex items-center py-2" key={`device-${device.id}`}>
                 <Icon type="security" />
-                <div className="ml-2 mr-auto text-sm">{device.name}</div>
+                <div className="mr-auto ml-2 text-sm">{device.name}</div>
                 <Button
                   small
                   key={device.id}

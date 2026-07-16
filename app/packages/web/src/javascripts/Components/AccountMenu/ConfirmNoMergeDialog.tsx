@@ -16,14 +16,14 @@ const ConfirmNoMergeDialog: FunctionComponent<Props> = ({ onClose, onConfirm }) 
     <AlertDialog closeDialog={onClose}>
       <div className="flex items-center justify-between text-lg font-bold">
         {t('deleteLocalDataTitle')}
-        <button className="rounded p-1 font-bold hover:bg-contrast" onClick={onClose}>
+        <button className="hover:bg-contrast rounded p-1 font-bold" onClick={onClose}>
           <Icon type="close" />
         </button>
       </div>
       <div className="sk-panel-row">
         <div>
-          <p className="text-base text-foreground lg:text-sm">{t('noMergeWarning')}</p>
-          <p className="mt-2 text-base font-semibold text-danger lg:text-sm">{t('noMergeConfirmQuestion')}</p>
+          <p className="text-foreground text-base lg:text-sm">{t('noMergeWarning')}</p>
+          <p className="text-danger mt-2 text-base font-semibold lg:text-sm">{t('noMergeConfirmQuestion')}</p>
         </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">

@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: git-sync
-        uses: wei/git-sync@v3
+        uses: wei/git-sync@v3.0.0
         with:
           source_repo: "standardnotes/app"
           source_branch: "refs/remotes/source/*"
@@ -25,7 +25,7 @@ jobs:
         run: sleep 10
         shell: bash
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7.0.0
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           repository: standardnotes/internal-app
@@ -33,11 +33,11 @@ jobs:
 
       - name: Extract branch name
         shell: bash
-        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
         id: extract_branch
 
       - name: Find open PR
-        uses: juliangruber/find-pull-request-action@v1
+        uses: juliangruber/find-pull-request-action@v1.11.1
         id: find-pull-request
         with:
           branch: ${{ steps.extract_branch.outputs.branch }}
@@ -46,7 +46,7 @@ jobs:
           number: ${{ steps.find-pull-request.outputs.number }}
           sha: ${{ steps.find-pull-request.outputs.head-sha }}
 
-      - uses: peter-evans/create-pull-request@v4
+      - uses: peter-evans/create-pull-request@v8.1.1
         if: startsWith(github.event.head_commit.message, 'chore(deps)') == false && startsWith(github.event.head_commit.message, 'chore(deps-dev)') == false
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}

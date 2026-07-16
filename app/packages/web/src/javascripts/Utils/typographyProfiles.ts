@@ -183,9 +183,7 @@ export const blockStyleToCss = (profile: TypographyProfile): string => {
       continue
     }
 
-    const scopedSelector = selectors
-      .map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel}`)
-      .join(', ')
+    const scopedSelector = selectors.map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel}`).join(', ')
 
     const decls = blockStyleToDeclarations(style)
     if (decls.length > 0) {
@@ -194,9 +192,7 @@ export const blockStyleToCss = (profile: TypographyProfile): string => {
 
     // ::marker colour needs its own rule (targets the list-item markers).
     if (isSafeCssValue(style.markerColor)) {
-      const markerSelector = selectors
-        .map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel} ::marker`)
-        .join(', ')
+      const markerSelector = selectors.map((sel) => `${TYPOGRAPHY_SCOPE_SELECTOR} ${sel} ::marker`).join(', ')
       rules.push(`${markerSelector} {\n  color: ${style.markerColor.trim()};\n}`)
     }
   }
@@ -245,7 +241,5 @@ export const resolveActiveTypographyProfile = (
   if (!Array.isArray(profiles) || profiles.length === 0) {
     return null
   }
-  return (
-    profiles.find((p) => p.id === activeId) ?? profiles.find((p) => p.isDefault) ?? profiles[0] ?? null
-  )
+  return profiles.find((p) => p.id === activeId) ?? profiles.find((p) => p.isDefault) ?? profiles[0] ?? null
 }

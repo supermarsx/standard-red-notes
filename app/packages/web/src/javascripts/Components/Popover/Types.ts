@@ -65,5 +65,4 @@ export type PopoverContentProps = CommonPopoverProps & {
 }
 
 export type PopoverProps =
-  | (CommonPopoverProps & PopoverAnchorElementProps)
-  | (CommonPopoverProps & PopoverAnchorPointProps)
+  (CommonPopoverProps & PopoverAnchorElementProps) | (CommonPopoverProps & PopoverAnchorPointProps)

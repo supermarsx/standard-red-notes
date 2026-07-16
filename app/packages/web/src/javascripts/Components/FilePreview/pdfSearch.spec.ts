@@ -1,10 +1,4 @@
-import {
-  findMatchesAcrossPages,
-  findMatchOffsetsInText,
-  joinTextItems,
-  PdfPageText,
-  wrapMatchIndex,
-} from './pdfSearch'
+import { findMatchesAcrossPages, findMatchOffsetsInText, joinTextItems, PdfPageText, wrapMatchIndex } from './pdfSearch'
 
 describe('pdfSearch', () => {
   describe('findMatchOffsetsInText', () => {

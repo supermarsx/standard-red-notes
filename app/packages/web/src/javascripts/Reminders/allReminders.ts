@@ -1,10 +1,5 @@
 import { SNNote } from '@standardnotes/snjs'
-import {
-  Reminder,
-  ReminderWithNote,
-  describeRecurrence,
-  getNoteReminders,
-} from './reminders'
+import { Reminder, ReminderWithNote, describeRecurrence, getNoteReminders } from './reminders'
 
 /**
  * Standard Red Notes: cross-note reminders collector for the Reminders aggregate

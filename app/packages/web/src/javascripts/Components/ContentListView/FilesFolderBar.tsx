@@ -67,8 +67,11 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
     )
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain border-b border-border px-3 py-2">
-      <button className={chipClass(activeFilter === FilesFolderFilterAll)} onClick={() => onChange(FilesFolderFilterAll)}>
+    <div className="border-border flex items-center gap-2 overflow-x-auto overscroll-x-contain border-b px-3 py-2">
+      <button
+        className={chipClass(activeFilter === FilesFolderFilterAll)}
+        onClick={() => onChange(FilesFolderFilterAll)}
+      >
         <Icon type="files" className="h-4 w-4" />
         {t('allFiles')}
       </button>
@@ -94,7 +97,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
       {isCreating ? (
         <input
           ref={inputRef}
-          className="min-h-[2.25rem] flex-shrink-0 rounded-full border border-info bg-default px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]"
+          className="border-info bg-default min-h-[2.25rem] flex-shrink-0 rounded-full border px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]"
           placeholder={t('folderNamePlaceholder')}
           autoFocus
           onKeyDown={(event) => {
@@ -111,7 +114,7 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
         />
       ) : (
         <button
-          className="flex min-h-[2.25rem] flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1 text-sm text-neutral hover:bg-contrast pointer-coarse:min-h-[2.5rem]"
+          className="border-border text-neutral hover:bg-contrast flex min-h-[2.25rem] flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed px-3 py-1 text-sm pointer-coarse:min-h-[2.5rem]"
           onClick={() => setIsCreating(true)}
           title={t('createNewFolder')}
         >

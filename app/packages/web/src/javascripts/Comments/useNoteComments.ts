@@ -2,12 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ContentType, SNNote } from '@standardnotes/snjs'
 import { addToast, ToastType } from '@standardnotes/toast'
 import { useApplication } from '@/Components/ApplicationProvider'
-import {
-  generateCommentId,
-  getNoteComments,
-  NoteComment,
-  sortCommentsByCreatedAt,
-} from './comments'
+import { generateCommentId, getNoteComments, NoteComment, sortCommentsByCreatedAt } from './comments'
 import { extractMentionedUuids, textMentionsUser } from './mentions'
 import { CommentRelay } from './CommentRelay'
 

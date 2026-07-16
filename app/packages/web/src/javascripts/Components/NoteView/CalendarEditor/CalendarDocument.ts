@@ -285,8 +285,7 @@ export const toIsoDate = (year: number, month: number, day: number): string =>
   `${year.toString().padStart(4, '0')}-${pad2(month + 1)}-${pad2(day)}`
 
 /** ISO YYYY-MM-DD for "today" (local time). */
-export const todayIso = (now: Date = new Date()): string =>
-  toIsoDate(now.getFullYear(), now.getMonth(), now.getDate())
+export const todayIso = (now: Date = new Date()): string => toIsoDate(now.getFullYear(), now.getMonth(), now.getDate())
 
 /**
  * Build a 6-row x 7-col (42 cell) month grid for the given year/month (0-based).

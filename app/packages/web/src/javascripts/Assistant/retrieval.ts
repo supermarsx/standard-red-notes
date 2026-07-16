@@ -34,8 +34,36 @@ export interface RetrieveOptions {
 // A small, conservative stopword list. Kept short on purpose: aggressive
 // stopword removal hurts short-note retrieval more than it helps.
 const STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'is', 'it', 'for', 'on', 'with', 'as', 'at', 'by',
-  'be', 'this', 'that', 'are', 'was', 'from', 'but', 'not', 'i', 'you', 'we', 'they', 'he', 'she',
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'of',
+  'to',
+  'in',
+  'is',
+  'it',
+  'for',
+  'on',
+  'with',
+  'as',
+  'at',
+  'by',
+  'be',
+  'this',
+  'that',
+  'are',
+  'was',
+  'from',
+  'but',
+  'not',
+  'i',
+  'you',
+  'we',
+  'they',
+  'he',
+  'she',
 ])
 
 const MAX_CHUNK_CHARS = 600

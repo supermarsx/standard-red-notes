@@ -16,9 +16,7 @@ const TagContextMenuWrapper = ({ navigationController }: Props) => {
     return null
   }
 
-  return (
-    <TagContextMenu navigationController={navigationController} selectedTag={selectedTag} />
-  )
+  return <TagContextMenu navigationController={navigationController} selectedTag={selectedTag} />
 }
 
 export default observer(TagContextMenuWrapper)

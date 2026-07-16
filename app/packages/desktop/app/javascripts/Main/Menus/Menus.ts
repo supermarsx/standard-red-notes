@@ -148,7 +148,6 @@ export function createMenuManager({
           throw new Error('called popupMenu() before loading')
         }
       }
-      // eslint-disable-next-line no-unused-expressions
       menu?.popup()
     },
   }
@@ -296,22 +295,20 @@ function spellcheckerMenu(spellcheckerManager: SpellcheckerManager, reload: () =
   return {
     id: MenuId.SpellcheckerLanguages,
     label: str().spellcheckerLanguages,
-    submenu: spellcheckerManager.languages().map(
-      ({ name, code, enabled }): MenuItemConstructorOptions => ({
-        ...{},
-        label: name,
-        type: MenuItemTypes.CheckBox,
-        checked: enabled,
-        click: () => {
-          if (enabled) {
-            spellcheckerManager.removeLanguage(code)
-          } else {
-            spellcheckerManager.addLanguage(code)
-          }
-          reload()
-        },
-      }),
-    ),
+    submenu: spellcheckerManager.languages().map(({ name, code, enabled }): MenuItemConstructorOptions => ({
+      ...{},
+      label: name,
+      type: MenuItemTypes.CheckBox,
+      checked: enabled,
+      click: () => {
+        if (enabled) {
+          spellcheckerManager.removeLanguage(code)
+        } else {
+          spellcheckerManager.addLanguage(code)
+        }
+        reload()
+      },
+    })),
   }
 }
 

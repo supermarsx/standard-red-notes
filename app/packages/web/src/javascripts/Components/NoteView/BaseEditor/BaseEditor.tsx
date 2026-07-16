@@ -1,12 +1,5 @@
 import { WebApplication } from '@/Application/WebApplication'
-import {
-  ContentType,
-  isPayloadSourceRetrieved,
-  NoteType,
-  SNFolder,
-  SNNote,
-  SNTag,
-} from '@standardnotes/snjs'
+import { ContentType, isPayloadSourceRetrieved, SNFolder, SNNote, SNTag } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
@@ -185,10 +178,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
   }, [])
 
   const tags = useMemo(() => application.items.getDisplayableTags(), [application, refreshToken])
-  const folders = useMemo(
-    () => application.items.getItems<SNFolder>(FOLDER_CONTENT_TYPE),
-    [application, refreshToken],
-  )
+  const folders = useMemo(() => application.items.getItems<SNFolder>(FOLDER_CONTENT_TYPE), [application, refreshToken])
 
   // Resolve source notes into rows (depends on the source + the live items).
   const rows = useMemo(() => {
@@ -337,15 +327,12 @@ export const BaseEditor: FunctionComponent<Props> = ({
     return [...builtins, ...parsed]
   }, [parsedKeys])
 
-  const typeForTarget = useCallback(
-    (target: string): 'text' | 'date' | 'number' | 'boolean' | 'list' => {
-      if (target.startsWith('parsed:')) {
-        return 'text'
-      }
-      return builtinPropertyType(target as BuiltinPropertyId)
-    },
-    [],
-  )
+  const typeForTarget = useCallback((target: string): 'text' | 'date' | 'number' | 'boolean' | 'list' => {
+    if (target.startsWith('parsed:')) {
+      return 'text'
+    }
+    return builtinPropertyType(target as BuiltinPropertyId)
+  }, [])
 
   const usedColumnKeys = useMemo(() => {
     const set = new Set<string>()
@@ -374,11 +361,11 @@ export const BaseEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="hashtag" className="flex-shrink-0 text-info" />
+          <Icon type="hashtag" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">Base</span>
-          <span className="truncate text-xs text-neutral">
+          <span className="text-neutral truncate text-xs">
             {sourceLabel} · {visibleRows.length}
             {visibleRows.length !== rows.length ? `/${rows.length}` : ''} notes
           </span>
@@ -386,7 +373,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
         <div className="ml-auto flex items-center gap-1">
           <button
             className={classNames(
-              'flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-default',
+              'hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-sm',
               showConfig && 'bg-default text-info',
             )}
             onClick={() => setShowConfig((value) => !value)}
@@ -399,7 +386,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a Base and a new one was started. Your original text is preserved
             until you make a change.
@@ -435,12 +422,12 @@ export const BaseEditor: FunctionComponent<Props> = ({
       {/* Table (scrolls horizontally on small screens). */}
       <div className="min-h-0 flex-grow overflow-auto">
         {document.columns.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+          <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
             <p className="font-semibold">No columns yet</p>
             <p>Open Configure to add columns to this base.</p>
             {!isReadonly && (
               <button
-                className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+                className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
                 onClick={() => setShowConfig(true)}
               >
                 Configure
@@ -448,7 +435,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
             )}
           </div>
         ) : visibleRows.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+          <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
             <p className="font-semibold">No matching notes</p>
             <p>
               {rows.length === 0
@@ -458,17 +445,17 @@ export const BaseEditor: FunctionComponent<Props> = ({
           </div>
         ) : (
           <table className="w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-contrast">
+            <thead className="bg-contrast sticky top-0 z-10">
               <tr>
                 {document.columns.map((column) => {
                   const sorted = document.sort.columnId === column.id
                   return (
                     <th
                       key={column.id}
-                      className="select-none whitespace-nowrap border-b border-border px-3 py-2 text-left font-semibold"
+                      className="border-border border-b px-3 py-2 text-left font-semibold whitespace-nowrap select-none"
                     >
                       <button
-                        className="flex items-center gap-1 hover:text-info"
+                        className="hover:text-info flex items-center gap-1"
                         onClick={() => toggleSortForColumn(column)}
                         title="Sort by this column"
                         disabled={isReadonly}
@@ -478,7 +465,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
                           <Icon
                             type={document.sort.dir === 'asc' ? 'arrow-up' : 'arrow-down'}
                             size="small"
-                            className="flex-shrink-0 text-info"
+                            className="text-info flex-shrink-0"
                           />
                         )}
                       </button>
@@ -491,7 +478,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
               {visibleRows.map((row) => (
                 <tr
                   key={row.uuid}
-                  className="cursor-pointer border-b border-border hover:bg-contrast"
+                  className="border-border hover:bg-contrast cursor-pointer border-b"
                   onClick={() => openNote(row.uuid)}
                   tabIndex={0}
                   onKeyDown={(event) => {
@@ -503,9 +490,7 @@ export const BaseEditor: FunctionComponent<Props> = ({
                 >
                   {document.columns.map((column) => (
                     <td key={column.id} className="max-w-xs truncate px-3 py-2 align-top">
-                      {formatCellValue(getColumnValue(row, column)) || (
-                        <span className="text-passive-2">—</span>
-                      )}
+                      {formatCellValue(getColumnValue(row, column)) || <span className="text-passive-2">—</span>}
                     </td>
                   ))}
                 </tr>
@@ -561,14 +546,13 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
   onRemoveFilter,
   onSetSort,
 }) => {
-  const inputClass =
-    'min-w-0 rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50'
+  const inputClass = 'min-w-0 rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50'
 
   return (
-    <div className="max-h-[45%] overflow-auto border-b border-border bg-default px-3 py-3 text-xs">
+    <div className="border-border bg-default max-h-[45%] overflow-auto border-b px-3 py-3 text-xs">
       {/* Source */}
       <section className="mb-3">
-        <h3 className="mb-1 font-bold uppercase tracking-wide text-passive-1">Source</h3>
+        <h3 className="text-passive-1 mb-1 font-bold tracking-wide uppercase">Source</h3>
         <div className="flex flex-wrap items-center gap-2">
           <select
             className={inputClass}
@@ -619,13 +603,13 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
 
       {/* Columns */}
       <section className="mb-3">
-        <h3 className="mb-1 font-bold uppercase tracking-wide text-passive-1">Columns</h3>
+        <h3 className="text-passive-1 mb-1 font-bold tracking-wide uppercase">Columns</h3>
         <div className="flex flex-col gap-1">
           {document.columns.map((column, index) => (
             <div key={column.id} className="flex items-center gap-1">
-              <span className="min-w-0 flex-grow truncate rounded bg-contrast px-2 py-1">{columnLabel(column)}</span>
+              <span className="bg-contrast min-w-0 flex-grow truncate rounded px-2 py-1">{columnLabel(column)}</span>
               <button
-                className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly || index === 0}
                 onClick={() => onMoveColumn(column.id, -1)}
                 title="Move up"
@@ -634,7 +618,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
                 <Icon type="arrow-up" size="small" />
               </button>
               <button
-                className="rounded p-1 hover:bg-contrast disabled:opacity-30"
+                className="hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly || index === document.columns.length - 1}
                 onClick={() => onMoveColumn(column.id, 1)}
                 title="Move down"
@@ -643,7 +627,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
                 <Icon type="arrow-down" size="small" />
               </button>
               <button
-                className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                 disabled={isReadonly}
                 onClick={() => onRemoveColumn(column.id)}
                 title="Remove column"
@@ -698,7 +682,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
 
       {/* Filters */}
       <section className="mb-3">
-        <h3 className="mb-1 font-bold uppercase tracking-wide text-passive-1">Filters</h3>
+        <h3 className="text-passive-1 mb-1 font-bold tracking-wide uppercase">Filters</h3>
         <div className="flex flex-col gap-2">
           {document.filters.map((filter) => {
             const type = typeForTarget(filter.target)
@@ -746,7 +730,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
                   />
                 )}
                 <button
-                  className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                  className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                   disabled={isReadonly}
                   onClick={() => onRemoveFilter(filter.id)}
                   title="Remove filter"
@@ -759,7 +743,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
           })}
         </div>
         <button
-          className="mt-2 flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-contrast disabled:opacity-50"
+          className="border-border hover:bg-contrast mt-2 flex items-center gap-1 rounded border px-2 py-1 disabled:opacity-50"
           disabled={isReadonly}
           onClick={onAddFilter}
         >
@@ -770,7 +754,7 @@ const BaseConfigPanel: FunctionComponent<ConfigProps> = ({
 
       {/* Sort */}
       <section>
-        <h3 className="mb-1 font-bold uppercase tracking-wide text-passive-1">Sort</h3>
+        <h3 className="text-passive-1 mb-1 font-bold tracking-wide uppercase">Sort</h3>
         <div className="flex flex-wrap items-center gap-2">
           <select
             className={inputClass}

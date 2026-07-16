@@ -85,13 +85,13 @@ const CollaborationIDSection = () => {
         <Subtitle>Share your CollaborationID with collaborators to join their vaults.</Subtitle>
         {isCollaborationEnabled && collaborationID ? (
           <>
-            <code className="mt-2.5 overflow-hidden whitespace-pre-wrap break-words rounded border border-border bg-contrast p-3">
+            <code className="border-border bg-contrast mt-2.5 overflow-hidden rounded border p-3 break-words whitespace-pre-wrap">
               {collaborationID}
             </code>
             {isQRVisible && (
-              <div className="mt-3 flex w-fit items-center justify-center bg-info p-2">
+              <div className="bg-info mt-3 flex w-fit items-center justify-center p-2">
                 <QRCodeSVG
-                  className="border-2 border-solid border-neutral-contrast"
+                  className="border-neutral-contrast border-2 border-solid"
                   value={collaborationID}
                   size={180}
                 />

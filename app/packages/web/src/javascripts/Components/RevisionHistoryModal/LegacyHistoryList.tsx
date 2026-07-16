@@ -41,7 +41,7 @@ const LegacyHistoryList: FunctionComponent<Props> = ({ legacyHistory, noteHistor
           </HistoryListItem>
         )
       })}
-      {!legacyHistory?.length && <div className="select-none text-sm text-passive-0">No legacy history found</div>}
+      {!legacyHistory?.length && <div className="text-passive-0 text-sm select-none">No legacy history found</div>}
     </div>
   )
 }

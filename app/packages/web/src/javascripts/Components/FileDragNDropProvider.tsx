@@ -327,7 +327,7 @@ const FileDragNDropProvider = ({ application, children }: Props) => {
       <MemoizedChildren children={children} />
       {isDraggingFiles ? (
         <>
-          <div className="pointer-events-none absolute bottom-8 left-1/2 z-dropdown-menu -translate-x-1/2 rounded border-2 border-info bg-default px-5 py-3 shadow-main">
+          <div className="z-dropdown-menu border-info bg-default shadow-main pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded border-2 px-5 py-3">
             {tooltipText.length ? tooltipText : 'Drop your files to upload them'}
           </div>
         </>

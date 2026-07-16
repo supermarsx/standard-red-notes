@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 // libsodium-wrappers 0.8 stopped re-exporting named members via the package's
 // `exports` map and stopped attaching them to the default export at module
 // init time. They become available on the default export only after

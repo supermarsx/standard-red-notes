@@ -68,8 +68,6 @@ export class ComponentErrorBoundary extends Component<Props, State> {
     // Keep the component stack around so the fallback can display it; React only
     // provides it here (not in getDerivedStateFromError).
     this.setState({ error, componentStack: errorInfo.componentStack ?? undefined })
-
-    // eslint-disable-next-line no-console
     console.error(`[ComponentErrorBoundary] Error rendering ${context}:`, error, errorInfo.componentStack)
 
     if (!this.toastShownForError) {
@@ -109,10 +107,10 @@ export class ComponentErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <div className="text-base font-bold text-foreground">
+        <div className="text-foreground text-base font-bold">
           {chunkError ? `${context} couldn't load` : `Something went wrong in ${context}`}
         </div>
-        <div className="max-w-[40ch] text-sm text-passive-0">
+        <div className="text-passive-0 max-w-[40ch] text-sm">
           {chunkError
             ? "This part of the app couldn't load — it may have just been updated. Reload to get the latest."
             : 'Something went wrong, but the rest of the app is still usable. You can try again.'}
@@ -130,8 +128,8 @@ export class ComponentErrorBoundary extends Component<Props, State> {
           {chunkError && <Button onClick={this.reset}>Try again</Button>}
         </div>
         <details open={isDev} className="mt-2 w-full max-w-[60ch] text-left">
-          <summary className="cursor-pointer select-none text-sm text-passive-0">Details</summary>
-          <pre className="mt-2 max-h-64 w-full overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-contrast p-2 text-left font-mono text-xs text-passive-0">
+          <summary className="text-passive-0 cursor-pointer text-sm select-none">Details</summary>
+          <pre className="border-border bg-contrast text-passive-0 mt-2 max-h-64 w-full overflow-auto rounded border p-2 text-left font-mono text-xs break-words whitespace-pre-wrap">
             {details}
           </pre>
         </details>

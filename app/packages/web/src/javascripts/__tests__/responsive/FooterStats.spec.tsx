@@ -17,9 +17,8 @@
  * a minimal fake application rather than the full Footer (an AbstractComponent
  * needing the whole app).
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import NoteStats from '@/Components/Footer/NoteStats'
 import ConnectionStatusIndicator from '@/Components/Footer/ConnectionStatus'
 import { setViewport, TARGET_WIDTHS } from '@/TestUtils/viewport'
@@ -101,9 +100,7 @@ describe('ConnectionStatus chip (never gated by width)', () => {
       expect(dot).not.toBeNull()
       // ...but the textual label is gated to lg by a class contract (the only way
       // jsdom can observe "hide below lg" is the token, not computed display).
-      const label = Array.from(status?.querySelectorAll('span') ?? []).find((el) =>
-        el.className.includes('lg:inline'),
-      )
+      const label = Array.from(status?.querySelectorAll('span') ?? []).find((el) => el.className.includes('lg:inline'))
       expect(label?.className).toContain('hidden')
       expect(label?.className).toContain('lg:inline')
     })
@@ -165,8 +162,9 @@ describe('NoteStats chip class contract', () => {
  * the real controller class lazily to satisfy the instanceof guard.
  */
 function makeActiveNoteController(text: string) {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { NoteViewController } = require('@/Components/NoteView/Controller/NoteViewController')
+  const { NoteViewController } = jest.requireActual<
+    typeof import('@/Components/NoteView/Controller/NoteViewController')
+  >('@/Components/NoteView/Controller/NoteViewController')
   const controller = Object.create(NoteViewController.prototype)
   controller.addNoteInnerValueChangeObserver = (cb: (note: { text: string; noteType?: string }) => void) => {
     cb({ text, noteType: undefined })

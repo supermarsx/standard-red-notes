@@ -130,8 +130,7 @@ describe('publishNoteToGitHub', () => {
     content: '# Hi',
   }
 
-  const makeApp = (serverJsonRequest: jest.Mock) =>
-    ({ serverJsonRequest }) as unknown as WebApplication
+  const makeApp = (serverJsonRequest: jest.Mock) => ({ serverJsonRequest }) as unknown as WebApplication
 
   it('maps a successful response to an ok outcome', async () => {
     const req = jest.fn().mockResolvedValue({

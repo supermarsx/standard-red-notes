@@ -59,9 +59,7 @@ export function buildSearchRegExp(query: string, options: SearchOptions, global 
 /**
  * Result of validating/compiling a search query.
  */
-export type CompileResult =
-  | { regex: RegExp | null; error: null }
-  | { regex: null; error: string }
+export type CompileResult = { regex: RegExp | null; error: null } | { regex: null; error: string }
 
 /**
  * Safely compiles a query, returning either the RegExp (or null for empty queries) or

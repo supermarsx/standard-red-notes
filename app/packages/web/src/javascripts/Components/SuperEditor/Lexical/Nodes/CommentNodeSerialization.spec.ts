@@ -15,13 +15,7 @@
 
 import { createHeadlessEditor } from '@lexical/headless'
 
-import {
-  $createCommentNode,
-  CommentData,
-  CommentNode,
-  normalize,
-  SerializedCommentNode,
-} from './CommentNode'
+import { $createCommentNode, CommentData, CommentNode, normalize, SerializedCommentNode } from './CommentNode'
 
 const editor = createHeadlessEditor({
   namespace: 'CommentNodeSerializationTest',

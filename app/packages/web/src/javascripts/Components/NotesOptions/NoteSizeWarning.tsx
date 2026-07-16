@@ -11,8 +11,8 @@ export const NoteSizeWarning: FunctionComponent<{
     <>
       <HorizontalSeparator classes="mt-2" />
       <div className="bg-warning-faded relative flex items-center px-3 py-3.5">
-        <Icon type="warning" className="mr-3 flex-shrink-0 text-accessory-tint-3" />
-        <div className="leading-140% max-w-80% select-none text-warning">
+        <Icon type="warning" className="text-accessory-tint-3 mr-3 flex-shrink-0" />
+        <div className="leading-140% max-w-80% text-warning select-none">
           This note may have trouble syncing to the mobile application due to its size.
         </div>
       </div>

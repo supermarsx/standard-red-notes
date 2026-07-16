@@ -16,16 +16,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           fetch-depth: 0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Build
@@ -43,22 +54,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           fetch-depth: 0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Build
         run: yarn build:snjs
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4.4.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -76,7 +98,7 @@ jobs:
     steps:
       - name: Run E2E base test suite
         if: "${{ contains(github.event.head_commit.message, 'skip e2e') == false }}"
-        uses: convictional/trigger-workflow-and-wait@master
+        uses: convictional/trigger-workflow-and-wait@v1.6.5
         with:
           owner: standardnotes
           repo: server
@@ -96,7 +118,7 @@ jobs:
     steps:
       - name: Run E2E vaults test suite
         if: "${{ contains(github.event.head_commit.message, 'skip e2e') == false }}"
-        uses: convictional/trigger-workflow-and-wait@master
+        uses: convictional/trigger-workflow-and-wait@v1.6.5
         with:
           owner: standardnotes
           repo: server
@@ -114,17 +136,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           fetch-depth: 0
 
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
 
       - name: Install dependencies
         run: yarn install --immutable
@@ -133,7 +166,7 @@ jobs:
         run: yarn build:web
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4.4.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -152,26 +185,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           fetch-depth: 0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
       - name: Upgrade npm (trusted publishing requirement)
-        run: npm install -g npm@^11.5.1
-      - name: Enable Corepack (Yarn)
-        run: corepack enable
+        run: npm install --global npm@12.0.1
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Setup git config
         run: |
           git config --global user.name "standardci"
           git config --global user.email "ci@standardnotes.com"
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v4
+        uses: crazy-max/ghaction-import-gpg@v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
@@ -193,7 +235,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4.4.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}

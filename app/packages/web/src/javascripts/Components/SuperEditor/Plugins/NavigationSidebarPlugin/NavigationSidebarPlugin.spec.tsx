@@ -13,9 +13,8 @@
  *   (c) clicking a heading scrolls its editor element into view (getElementByKey);
  *   (d) the popover's DOM-event bridge toggles visibility live.
  */
-import { createElement, useEffect } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
@@ -39,7 +38,12 @@ const NOTE_UUID = 'note-under-test'
 const fakeNote = {
   uuid: NOTE_UUID,
   getAppDomainValue: (_key: unknown) => [
-    { id: 'bm-1', label: 'My Marked Spot', anchor: { kind: 'super', bookmarkId: 'bm-1' }, createdAt: '2020-01-01T00:00:00.000Z' },
+    {
+      id: 'bm-1',
+      label: 'My Marked Spot',
+      anchor: { kind: 'super', bookmarkId: 'bm-1' },
+      createdAt: '2020-01-01T00:00:00.000Z',
+    },
   ],
 }
 

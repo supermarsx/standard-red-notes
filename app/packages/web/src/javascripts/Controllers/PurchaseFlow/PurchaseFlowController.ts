@@ -76,9 +76,7 @@ export class PurchaseFlowController extends AbstractViewController {
     }
 
     const showGenericError = () => {
-      void this.alerts.alert(
-        'There was an error confirming your purchase. Please contact your administrator.',
-      )
+      void this.alerts.alert('There was an error confirming your purchase. Please contact your administrator.')
     }
 
     log(LoggingDomain.Purchasing, 'Confirming result with our server')

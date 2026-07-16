@@ -65,7 +65,7 @@ const ImportErroredAccordion = ({ errored }: { errored: ConversionResult['errore
     <DisclosureProvider>
       <Disclosure>
         <div className="flex items-center gap-1">
-          <Icon type="warning" className="flex-shrink-0 text-danger" size="small" />
+          <Icon type="warning" className="text-danger flex-shrink-0" size="small" />
           {ngettext(
             msgid`Could not import ${count} item (click for details)`,
             `Could not import ${count} items (click for details)`,
@@ -77,7 +77,7 @@ const ImportErroredAccordion = ({ errored }: { errored: ConversionResult['errore
         {errored.map((item, index) => (
           <div className="flex w-full items-center gap-1 overflow-hidden" key={index}>
             <span>{index + 1}.</span>
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap font-semibold">{item.name}:</span>
+            <span className="overflow-hidden font-semibold text-ellipsis whitespace-nowrap">{item.name}:</span>
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{item.error.message}</span>
           </div>
         ))}
@@ -102,7 +102,7 @@ const ImportFinishedStatus = ({ file }: { file: ImportModalFile }) => {
     <>
       {file.successful.length > 0 && (
         <div className="flex items-center gap-1">
-          <Icon type="check-circle-filled" className="flex-shrink-0 text-success" size="small" />
+          <Icon type="check-circle-filled" className="text-success flex-shrink-0" size="small" />
           <span>{c('Info').t`${status} imported`}</span>
         </div>
       )}
@@ -203,7 +203,7 @@ const ImportModalFileItem = ({
                 }}
               >
                 <select
-                  className="mr-2 rounded border border-border bg-default px-2 py-1 text-sm"
+                  className="border-border bg-default mr-2 rounded border px-2 py-1 text-sm"
                   defaultValue={file.service ? file.service : undefined}
                 >
                   <option value="evernote">Evernote</option>
@@ -222,14 +222,14 @@ const ImportModalFileItem = ({
                 <button
                   aria-label={c('AriaLabel').t`Choose service`}
                   type="submit"
-                  className="rounded border border-border bg-default p-1.5 hover:bg-contrast"
+                  className="border-border bg-default hover:bg-contrast rounded border p-1.5"
                 >
                   <Icon type="check" size="medium" />
                 </button>
               </form>
               <button
                 aria-label={c('AriaLabel').t`Cancel`}
-                className="ml-2 rounded border border-border bg-default p-1.5 hover:bg-contrast"
+                className="border-border bg-default hover:bg-contrast ml-2 rounded border p-1.5"
                 onClick={() => {
                   setChangingService(false)
                 }}
@@ -240,7 +240,7 @@ const ImportModalFileItem = ({
           ) : (
             <button
               aria-label={c('AriaLabel').t`Change service`}
-              className="rounded border border-border bg-default p-1.5 hover:bg-contrast"
+              className="border-border bg-default hover:bg-contrast rounded border p-1.5"
               onClick={() => {
                 setChangingService(true)
               }}
@@ -250,7 +250,7 @@ const ImportModalFileItem = ({
           )}
           <button
             aria-label={c('AriaLabel').t`Remove`}
-            className="ml-2 rounded border border-border bg-default p-1.5 hover:bg-contrast"
+            className="border-border bg-default hover:bg-contrast ml-2 rounded border p-1.5"
             onClick={() => {
               removeFile(file.id)
             }}
@@ -260,9 +260,9 @@ const ImportModalFileItem = ({
         </div>
       )}
       {file.status === 'finished' && file.successful.length > 0 && file.errored.length === 0 && (
-        <Icon type="check-circle-filled" className="flex-shrink-0 text-success" />
+        <Icon type="check-circle-filled" className="text-success flex-shrink-0" />
       )}
-      {file.status === 'error' && <Icon type="warning" className="flex-shrink-0 text-danger" />}
+      {file.status === 'error' && <Icon type="warning" className="text-danger flex-shrink-0" />}
     </div>
   )
 }

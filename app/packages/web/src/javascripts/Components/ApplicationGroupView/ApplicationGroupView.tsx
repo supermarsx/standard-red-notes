@@ -25,10 +25,10 @@ type State = {
 
 const renderDialog = (message: string) => {
   return (
-    <div className="flex h-full w-full items-center justify-center bg-passive-5" role="alert">
+    <div className="bg-passive-5 flex h-full w-full items-center justify-center" role="alert">
       <div
         className={
-          'challenge-modal shadow-overlay-light relative flex max-w-125 flex-col items-center rounded border border-solid border-border bg-default p-6'
+          'challenge-modal shadow-overlay-light border-border bg-default relative flex max-w-125 flex-col items-center rounded border border-solid p-6'
         }
       >
         <div className="text-base lg:text-xs">{message}</div>

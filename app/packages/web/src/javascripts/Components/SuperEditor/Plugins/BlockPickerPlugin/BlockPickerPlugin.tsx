@@ -44,8 +44,7 @@ export default function BlockPickerMenuPlugin({ popoverZIndex }: { popoverZIndex
       openInsertImageFromUrlDialog: () =>
         showModal(t('insertImageFromUrl'), (onClose) => <InsertRemoteImageDialog onClose={onClose} />),
       openFileUpload: () => editor.dispatchCommand(OPEN_FILE_UPLOAD_MODAL_COMMAND, undefined),
-      openInsertSymbolPicker: () =>
-        showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
+      openInsertSymbolPicker: () => showModal(t('insertSymbol'), (onClose) => <SymbolPickerDialog onClose={onClose} />),
     }
 
     // The slash picker shares the toolbar Insert menu's single source of truth

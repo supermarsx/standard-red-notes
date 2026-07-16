@@ -123,9 +123,9 @@ const fr: LocaleResource = {
     cut: 'Couper',
     copy: 'Copier',
     paste: 'Coller',
-    moreCutOptions: 'Plus d\'options de coupe',
-    moreCopyOptions: 'Plus d\'options de copie',
-    morePasteOptions: 'Plus d\'options de collage',
+    moreCutOptions: "Plus d'options de coupe",
+    moreCopyOptions: "Plus d'options de copie",
+    morePasteOptions: "Plus d'options de collage",
 
     // History / navigation
     tableOfContents: 'Table des matières',
@@ -137,10 +137,10 @@ const fr: LocaleResource = {
     redo: 'Rétablir',
     undoHistory: 'Historique des annulations',
     redoHistory: 'Historique des rétablissements',
-    undoHistoryEmpty: 'Historique des annulations — rien à annuler pour l\'instant',
-    undoHistoryAvailable: 'Historique des annulations — revenir plusieurs étapes en arrière d\'un coup',
+    undoHistoryEmpty: "Historique des annulations — rien à annuler pour l'instant",
+    undoHistoryAvailable: "Historique des annulations — revenir plusieurs étapes en arrière d'un coup",
     redoHistoryEmpty: 'Historique des rétablissements — rien à rétablir',
-    redoHistoryAvailable: 'Historique des rétablissements — avancer plusieurs étapes d\'un coup',
+    redoHistoryAvailable: "Historique des rétablissements — avancer plusieurs étapes d'un coup",
 
     // Text formatting
     formattingOptions: 'Options de mise en forme',
@@ -187,8 +187,8 @@ const fr: LocaleResource = {
     insertColumnRight: 'Insérer une colonne à droite',
     deleteRow: 'Supprimer la ligne',
     deleteColumn: 'Supprimer la colonne',
-    toggleRowHeader: 'Activer/désactiver l\'en-tête de ligne',
-    toggleColumnHeader: 'Activer/désactiver l\'en-tête de colonne',
+    toggleRowHeader: "Activer/désactiver l'en-tête de ligne",
+    toggleColumnHeader: "Activer/désactiver l'en-tête de colonne",
     deleteTable: 'Supprimer le tableau',
 
     // Contextual ribbon segment captions (Office-style grouping)
@@ -247,7 +247,7 @@ const fr: LocaleResource = {
     searchBlocksToInsert: 'Rechercher des blocs à insérer',
     clearSearch: 'Effacer la recherche',
     noBlocksMatch: 'Aucun bloc ne correspond à « {{query}} »',
-    customizeToolbar: 'Personnaliser la barre d\'outils',
+    customizeToolbar: "Personnaliser la barre d'outils",
 
     // Color popovers
     custom: 'Personnalisé',
@@ -269,7 +269,7 @@ const fr: LocaleResource = {
     sortAndDeduplicateLines: 'Trier et dédupliquer les lignes',
 
     // Typography popover
-    emphasisMarks: 'Marques d\'accentuation',
+    emphasisMarks: "Marques d'accentuation",
     outlineTextStroke: 'Contour (trait du texte)',
     letterSpacingKerning: 'Espacement des lettres (crénage)',
     wordSpacing: 'Espacement des mots',
@@ -293,7 +293,7 @@ const fr: LocaleResource = {
     pasteClean: 'Coller proprement (supprimer les caractères masqués)',
     keepSourceFormatting: 'Conserver la mise en forme source',
     matchDestinationFormatting: 'Adopter la mise en forme de destination',
-    pasteAsImage: 'Coller en tant qu\'image',
+    pasteAsImage: "Coller en tant qu'image",
     copyWithoutFormatting: 'Copier sans mise en forme',
     copyTextOnly: 'Copier le texte uniquement',
     copyImagesOnly: 'Copier les images uniquement',
@@ -322,7 +322,7 @@ const fr: LocaleResource = {
     bulletedListMarkers: 'Style de marqueur de puce',
     numberedListMarkers: 'Style de numérotation',
     multilevelList: 'Liste à plusieurs niveaux',
-    multilevelListHint: 'Choisir un marqueur par niveau d\'imbrication',
+    multilevelListHint: "Choisir un marqueur par niveau d'imbrication",
     multilevelLevelDefault: 'Par défaut',
     level: 'Niveau',
     apply: 'Appliquer',
@@ -384,7 +384,7 @@ const fr: LocaleResource = {
     dropToUploadTooltip: 'Déposez vos fichiers pour les téléverser et les lier au fichier actuel',
     fileAriaLabel: 'Fichier',
     fileReadonly: 'Ce fichier est en lecture seule',
-    fileInformationPanel: 'Panneau d\'informations du fichier',
+    fileInformationPanel: "Panneau d'informations du fichier",
     details: 'Détails',
 
     // MultipleSelectedFiles
@@ -404,8 +404,8 @@ const fr: LocaleResource = {
     attachToNote: 'Joindre à la note',
     passwordProtect: 'Protéger par mot de passe',
     downloadSeparately: 'Télécharger séparément',
-    downloadAsArchive: 'Télécharger sous forme d\'archive',
-    failedToDownloadArchive: 'Échec du téléchargement des fichiers sous forme d\'archive',
+    downloadAsArchive: "Télécharger sous forme d'archive",
+    failedToDownloadArchive: "Échec du téléchargement des fichiers sous forme d'archive",
     fileId: 'ID du fichier :',
     size: 'Taille :',
     totalSize: 'Taille totale :',
@@ -424,15 +424,17 @@ const fr: LocaleResource = {
     // FilePreview
     fileProtected: 'Ce fichier est protégé.',
     authenticateToView: 'Authentifiez-vous pour afficher ce fichier.',
-    addPasscodeToView: 'Ajoutez un code d\'accès ou créez un compte pour exiger une authentification afin d\'afficher ce fichier.',
+    addPasscodeToView:
+      "Ajoutez un code d'accès ou créez un compte pour exiger une authentification afin d'afficher ce fichier.",
     openAccountMenu: 'Ouvrir le menu du compte',
-    authenticate: 'S\'authentifier',
+    authenticate: "S'authentifier",
     viewFile: 'Afficher le fichier',
     loading: 'Chargement...',
 
     // FilePreviewError
     fileCannotBePreviewed: 'Ce fichier ne peut pas être prévisualisé.',
-    errorLoadingFile: 'Une erreur s\'est produite lors du chargement du fichier. Réessayez ou téléchargez le fichier et ouvrez-le avec une autre application.',
+    errorLoadingFile:
+      "Une erreur s'est produite lors du chargement du fichier. Réessayez ou téléchargez le fichier et ouvrez-le avec une autre application.",
     tryAgain: 'Réessayer',
     downloadToView: 'Pour afficher ce fichier, téléchargez-le et ouvrez-le avec une autre application.',
 
@@ -455,7 +457,7 @@ const fr: LocaleResource = {
     renameFile: 'Renommer le fichier',
     showLinkedItems: 'Afficher les éléments liés',
     closeModal: 'Fermer la fenêtre',
-    filePreviewModal: 'Fenêtre d\'aperçu du fichier',
+    filePreviewModal: "Fenêtre d'aperçu du fichier",
 
     // ImageAlignmentOptions
     leftAlign: 'Aligner à gauche',
@@ -471,7 +473,7 @@ const fr: LocaleResource = {
 
     // PreviewComponent
     externalAppOnly: 'Ce fichier ne peut être prévisualisé que dans une application externe',
-    openFilePreview: 'Ouvrir l\'aperçu du fichier',
+    openFilePreview: "Ouvrir l'aperçu du fichier",
     loadingPdfViewer: 'Chargement de la visionneuse PDF...',
 
     // ZoomableImage
@@ -479,10 +481,10 @@ const fr: LocaleResource = {
     zoomIn: 'Zoomer',
     resetToActualSize: 'Rétablir la taille réelle',
     resetTo100: 'Rétablir à 100 %',
-    fitToScreen: 'Ajuster à l\'écran',
+    fitToScreen: "Ajuster à l'écran",
 
     // PdfPreview
-    unableToRenderPdf: 'Impossible d\'afficher ce PDF.',
+    unableToRenderPdf: "Impossible d'afficher ce PDF.",
     pdfCorruptedOrProtected: 'Le fichier est peut-être corrompu ou protégé par mot de passe.',
     loadingPdf: 'Chargement du PDF...',
     previousPage: 'Page précédente',
@@ -494,19 +496,22 @@ const fr: LocaleResource = {
     copyLinkToPage: 'Copier le lien vers la page {{page}}',
     copyLinkToThisPage: 'Copier le lien vers cette page',
     copyLinkToSelectedText: 'Copier le lien vers le texte sélectionné',
-    cancelOcr: 'Annuler l\'OCR',
-    preparingOcr: 'Préparation de l\'OCR...',
+    cancelOcr: "Annuler l'OCR",
+    preparingOcr: "Préparation de l'OCR...",
     ocrProgress: 'OCR page {{current}} / {{total}} ({{percent}} %)',
-    ocrCachedReRunTooltip: 'Texte déjà extrait (en cache). Relancez l\'OCR dans votre navigateur (reste sur votre appareil).',
-    ocrExtractedReRunTooltip: 'Texte extrait. Relancez l\'OCR dans votre navigateur (reste sur votre appareil).',
-    ocrExtractTooltip: 'Extraire le texte des pages numérisées avec l\'OCR. S\'exécute dans votre navigateur ; rien ne quitte votre appareil (lent ; télécharge les données linguistiques).',
-    extractTextWithOcrBrowser: 'Extraire le texte avec l\'OCR dans votre navigateur',
-    reRunOcrBrowser: 'Relancer l\'OCR (navigateur)',
+    ocrCachedReRunTooltip:
+      "Texte déjà extrait (en cache). Relancez l'OCR dans votre navigateur (reste sur votre appareil).",
+    ocrExtractedReRunTooltip: "Texte extrait. Relancez l'OCR dans votre navigateur (reste sur votre appareil).",
+    ocrExtractTooltip:
+      "Extraire le texte des pages numérisées avec l'OCR. S'exécute dans votre navigateur ; rien ne quitte votre appareil (lent ; télécharge les données linguistiques).",
+    extractTextWithOcrBrowser: "Extraire le texte avec l'OCR dans votre navigateur",
+    reRunOcrBrowser: "Relancer l'OCR (navigateur)",
     extractTextOcr: 'Extraire le texte (OCR)',
     serverOcrTooltip:
-      'Exécuter l\'OCR sur le SERVEUR. Cela envoie les images des pages de ce PDF au serveur et QUITTE le chiffrement de bout en bout — le serveur peut lire ce contenu. L\'OCR du navigateur conserve tout sur votre appareil.',
-    runOcrOnServerAria: 'Exécuter l\'OCR sur le serveur (envoie les images des pages au serveur ; quitte le chiffrement de bout en bout)',
-    runOcrOnServer: 'Exécuter l\'OCR sur le serveur',
+      "Exécuter l'OCR sur le SERVEUR. Cela envoie les images des pages de ce PDF au serveur et QUITTE le chiffrement de bout en bout — le serveur peut lire ce contenu. L'OCR du navigateur conserve tout sur votre appareil.",
+    runOcrOnServerAria:
+      "Exécuter l'OCR sur le serveur (envoie les images des pages au serveur ; quitte le chiffrement de bout en bout)",
+    runOcrOnServer: "Exécuter l'OCR sur le serveur",
     copyAllExtractedText: 'Copier tout le texte extrait',
     copyExtractedTextAria: 'Copier le texte extrait',
     findInDocument: 'Rechercher dans le document',
@@ -516,14 +521,15 @@ const fr: LocaleResource = {
     previousMatch: 'Résultat précédent',
     nextMatch: 'Résultat suivant',
     closeSearch: 'Fermer la recherche',
-    serverOcrDisclosurePrefix: 'L\'OCR serveur est disponible pour votre compte. Il envoie les images des pages de ce PDF au serveur et',
+    serverOcrDisclosurePrefix:
+      "L'OCR serveur est disponible pour votre compte. Il envoie les images des pages de ce PDF au serveur et",
     serverOcrDisclosureBold: 'quitte le chiffrement de bout en bout',
     serverOcrDisclosureSuffix:
-      ' — le serveur (et quiconque le contrôle) peut lire ce contenu. L\'OCR du navigateur conserve tout sur votre appareil. Par défaut, l\'OCR du navigateur est utilisé.',
+      " — le serveur (et quiconque le contrôle) peut lire ce contenu. L'OCR du navigateur conserve tout sur votre appareil. Par défaut, l'OCR du navigateur est utilisé.",
     ocrRunningServer:
-      'OCR serveur : les images des pages de ce PDF sont en cours de téléversement vers le serveur, ce qui QUITTE le chiffrement de bout en bout — le serveur peut lire ce contenu. (L\'OCR du navigateur conserve tout sur votre appareil.)',
+      "OCR serveur : les images des pages de ce PDF sont en cours de téléversement vers le serveur, ce qui QUITTE le chiffrement de bout en bout — le serveur peut lire ce contenu. (L'OCR du navigateur conserve tout sur votre appareil.)",
     ocrRunningBrowser:
-      'L\'OCR s\'exécute dans votre navigateur sur cet appareil (vos fichiers restent chiffrés de bout en bout). Il est lent et télécharge les données linguistiques à la première utilisation.',
+      "L'OCR s'exécute dans votre navigateur sur cet appareil (vos fichiers restent chiffrés de bout en bout). Il est lent et télécharge les données linguistiques à la première utilisation.",
     ocrDoneServer:
       'OCR serveur terminé. Les images des pages ont été envoyées au serveur (cela a quitté le chiffrement de bout en bout). La précision varie selon la qualité de la numérisation ; le texte extrait est désormais recherchable et copiable, et est mis en cache sur cet appareil.',
     ocrDoneBrowser:
@@ -535,9 +541,9 @@ const fr: LocaleResource = {
     copiedLinkToSelectedText: 'Lien vers le texte sélectionné copié',
 
     // PdfPreview OCR errors (call-time)
-    serverOcrFailed: 'Échec de l\'OCR serveur : {{message}}',
+    serverOcrFailed: "Échec de l'OCR serveur : {{message}}",
     ocrUnknownError: 'erreur inconnue',
-    ocrFailed: 'Échec de l\'OCR. Le téléchargement des données linguistiques a peut-être échoué.',
+    ocrFailed: "Échec de l'OCR. Le téléchargement des données linguistiques a peut-être échoué.",
   },
   notes: {
     // ContentListView
@@ -553,7 +559,7 @@ const fr: LocaleResource = {
     dropFilesToUpload: 'Déposez vos fichiers pour les téléverser et les lier au sujet « {{title}} »',
 
     // EmptyFilesView
-    noFilesYet: 'Vous n\'avez pas encore de fichiers',
+    noFilesYet: "Vous n'avez pas encore de fichiers",
     filesAttachedAppearHere:
       'Les fichiers joints à vos notes apparaissent ici. Vous pouvez également téléverser des fichiers directement depuis cette page.',
     uploadFiles: 'Téléverser des fichiers',
@@ -562,9 +568,9 @@ const fr: LocaleResource = {
     syncing: 'Synchronisation...',
     loadingItemsProgress: 'Chargement de {{current}}/{{total}} éléments...',
     potentiallyOutOfSync: 'Potentiellement désynchronisé',
-    openDisplayOptionsMenu: 'Ouvrir le menu des options d\'affichage',
-    displayOptionsMenu: 'Menu des options d\'affichage',
-    displayOptions: 'Options d\'affichage',
+    openDisplayOptionsMenu: "Ouvrir le menu des options d'affichage",
+    displayOptionsMenu: "Menu des options d'affichage",
+    displayOptions: "Options d'affichage",
     expandTopicsPanel: 'Développer le panneau des sujets',
     collapseNotesPanel: 'Réduire le panneau des notes',
 
@@ -584,9 +590,9 @@ const fr: LocaleResource = {
     reset: 'Réinitialiser',
     upgradeForPerTopicPreferences: 'Passez à la version supérieure pour les préférences par sujet',
     perTopicPreferencesMessageWithDaily:
-      'Créez des flux de travail puissants et des dispositions organisationnelles grâce aux préférences d\'affichage par sujet et à la toute nouvelle disposition calendaire du carnet quotidien.',
+      "Créez des flux de travail puissants et des dispositions organisationnelles grâce aux préférences d'affichage par sujet et à la toute nouvelle disposition calendaire du carnet quotidien.",
     perTopicPreferencesMessage:
-      'Créez des flux de travail puissants et des dispositions organisationnelles grâce aux préférences d\'affichage par sujet.',
+      "Créez des flux de travail puissants et des dispositions organisationnelles grâce aux préférences d'affichage par sujet.",
     sortBy: 'Trier par',
     relevanceBestMatch: 'Pertinence (meilleure correspondance)',
     dateModified: 'Date de modification',
@@ -594,10 +600,10 @@ const fr: LocaleResource = {
     title: 'Titre',
     customDragToReorder: 'Personnalisé (glisser pour réorganiser)',
     view: 'Affichage',
-    showNotePreview: 'Afficher l\'aperçu de la note',
+    showNotePreview: "Afficher l'aperçu de la note",
     showDate: 'Afficher la date',
     showTags: 'Afficher les sujets',
-    showIcon: 'Afficher l\'icône',
+    showIcon: "Afficher l'icône",
     other: 'Autre',
     showPinned: 'Afficher les épinglées',
     showProtected: 'Afficher les protégées',
@@ -651,10 +657,10 @@ const fr: LocaleResource = {
   },
   auth: {
     // AdvancedOptions
-    unableToComputePrivateUsername: 'Impossible de calculer le nom d\'utilisateur privé.',
+    unableToComputePrivateUsername: "Impossible de calculer le nom d'utilisateur privé.",
     advancedOptions: 'Options avancées',
-    privateUsernameMode: 'Mode nom d\'utilisateur privé',
-    username: 'Nom d\'utilisateur',
+    privateUsernameMode: "Mode nom d'utilisateur privé",
+    username: "Nom d'utilisateur",
     useStrictSignIn: 'Utiliser la connexion stricte',
     useRecoveryCode: 'Utiliser un code de récupération',
     recoveryCode: 'Code de récupération',
@@ -667,9 +673,10 @@ const fr: LocaleResource = {
     deleteLocalDataAndContinue: 'Supprimer les données locales et continuer',
 
     // ConfirmPassword
-    passwordResetWarningPart1: 'Comme vos notes sont chiffrées à l\'aide de votre mot de passe,',
-    passwordResetWarningHighlight: 'Standard Red Notes ne propose pas d\'option de réinitialisation du mot de passe',
-    passwordResetWarningPart2: '. Si vous oubliez votre mot de passe, vous perdrez définitivement l\'accès à vos données.',
+    passwordResetWarningPart1: "Comme vos notes sont chiffrées à l'aide de votre mot de passe,",
+    passwordResetWarningHighlight: "Standard Red Notes ne propose pas d'option de réinitialisation du mot de passe",
+    passwordResetWarningPart2:
+      ". Si vous oubliez votre mot de passe, vous perdrez définitivement l'accès à vos données.",
     confirmPassword: 'Confirmer le mot de passe',
     creatingAccount: 'Création du compte...',
     createAccountAndSignIn: 'Créer un compte et se connecter',
@@ -680,7 +687,7 @@ const fr: LocaleResource = {
 
     // CreateAccount
     createAccount: 'Créer un compte',
-    workspaceNameOptional: 'Nom de l\'espace de travail (facultatif)',
+    workspaceNameOptional: "Nom de l'espace de travail (facultatif)",
 
     // GeneralAccountMenu
     generalAccountMenuLabel: 'Menu général du compte',
@@ -695,16 +702,16 @@ const fr: LocaleResource = {
     documentation: 'Documentation',
     keyboardShortcuts: 'Raccourcis clavier',
     commandPalette: 'Palette de commandes',
-    signOutWorkspace: 'Déconnecter l\'espace de travail',
+    signOutWorkspace: "Déconnecter l'espace de travail",
 
     // MergeLocalDataCheckbox
     mergeLocalData: 'Fusionner les données locales ({{count}} notes et sujets)',
     mergeLocalDataTooltip:
-      'Si cette case n\'est pas cochée, vos notes et sujets locaux seront définitivement supprimés et remplacés par les données de votre compte.',
+      "Si cette case n'est pas cochée, vos notes et sujets locaux seront définitivement supprimés et remplacés par les données de votre compte.",
 
     // ServerPicker
     homeServerNotRunning:
-      'Le serveur personnel n\'est pas en cours d\'exécution. Veuillez ouvrir les préférences et l\'onglet du serveur personnel pour le démarrer.',
+      "Le serveur personnel n'est pas en cours d'exécution. Veuillez ouvrir les préférences et l'onglet du serveur personnel pour le démarrer.",
     serverDefault: 'Par défaut',
     serverCustom: 'Personnalisé',
     serverHomeServer: 'Serveur personnel',
@@ -718,8 +725,9 @@ const fr: LocaleResource = {
     syncUnreachableMessage: 'Hmm... nous ne parvenons pas à synchroniser votre compte. La raison : {{reason}}',
 
     // WorkspaceSwitcherMenu
-    workspaceSwitcherMenuLabel: 'Menu de changement d\'espace de travail',
-    signOutAllWorkspacesConfirm: 'Voulez-vous vraiment vous déconnecter de tous les espaces de travail sur cet appareil ?',
+    workspaceSwitcherMenuLabel: "Menu de changement d'espace de travail",
+    signOutAllWorkspacesConfirm:
+      'Voulez-vous vraiment vous déconnecter de tous les espaces de travail sur cet appareil ?',
     signOutAll: 'Tout déconnecter',
     addAnotherWorkspace: 'Ajouter un autre espace de travail',
     signOutAllWorkspaces: 'Déconnecter tous les espaces de travail',
@@ -733,13 +741,14 @@ const fr: LocaleResource = {
     signInOrRegisterToSync:
       'Connectez-vous ou inscrivez-vous pour synchroniser vos notes sur vos autres appareils avec un chiffrement de bout en bout.',
     openAccountMenu: 'Ouvrir le menu du compte',
-    ignoreWarning: 'Ignorer l\'avertissement',
+    ignoreWarning: "Ignorer l'avertissement",
 
     // U2FAuthIframe
     waitingForSecurityKey: 'En attente de la clé de sécurité...',
     authenticationSuccessful: 'Authentification réussie !',
-    insertSecurityKeyPrompt: 'Insérez votre clé de sécurité matérielle, puis appuyez sur le bouton ci-dessous pour vous authentifier.',
-    authenticate: 'S\'authentifier',
+    insertSecurityKeyPrompt:
+      'Insérez votre clé de sécurité matérielle, puis appuyez sur le bouton ci-dessous pour vous authentifier.',
+    authenticate: "S'authentifier",
   },
   search: {
     // SearchBar
@@ -751,18 +760,18 @@ const fr: LocaleResource = {
     trashed: 'Supprimées',
 
     // AiContextualSearch
-    aiUnavailable: 'Le reclassement par IA est indisponible ou n\'a renvoyé aucun résultat.',
+    aiUnavailable: "Le reclassement par IA est indisponible ou n'a renvoyé aucun résultat.",
     aiUnavailableTooltip: 'La recherche contextuelle par IA est indisponible.',
-    aiTypeQueryFirst: 'Saisissez d\'abord une requête de recherche.',
+    aiTypeQueryFirst: "Saisissez d'abord une requête de recherche.",
     aiTooltip:
-      'Reclassez les meilleurs résultats par pertinence sémantique à l\'aide de votre fournisseur d\'IA configuré. ' +
+      "Reclassez les meilleurs résultats par pertinence sémantique à l'aide de votre fournisseur d'IA configuré. " +
       'Envoie les titres et de courts extraits de ces candidats, ainsi que votre requête, au fournisseur.',
-    aiSearchWithAi: 'Rechercher avec l\'IA',
+    aiSearchWithAi: "Rechercher avec l'IA",
     aiRanking: 'Classement…',
     aiRankedByRelevance: 'Classé par pertinence IA',
     aiPrivacyNotice:
-      'Envoie les titres et extraits des meilleurs résultats ainsi que votre requête à votre fournisseur d\'IA. Les fournisseurs cloud les verront — ' +
-      'un modèle local conserve tout sur l\'appareil.',
+      "Envoie les titres et extraits des meilleurs résultats ainsi que votre requête à votre fournisseur d'IA. Les fournisseurs cloud les verront — " +
+      "un modèle local conserve tout sur l'appareil.",
 
     // AdvancedSearchOptions
     advancedFilters: 'Filtres de recherche avancés',
@@ -817,14 +826,15 @@ const fr: LocaleResource = {
     sharedInVault: 'Partagé dans le coffre',
     copiedToClipboard: 'Copié dans le presse-papiers',
     failedToCopyToClipboard: 'Échec de la copie dans le presse-papiers',
-    copyExampleToClipboard: 'Copier l\'exemple dans le presse-papiers',
+    copyExampleToClipboard: "Copier l'exemple dans le presse-papiers",
     copiedExclaim: 'Copié !',
     shareUnavailableTitle: 'Partage indisponible',
-    shareUnavailableMessage: 'Ce lien de partage n\'est plus disponible.',
+    shareUnavailableMessage: "Ce lien de partage n'est plus disponible.",
     invalidLinkTitle: 'Lien invalide',
     invalidLinkMessage: 'Ce lien de partage est invalide ou la clé est manquante.',
-    selfDestructTitle: 'Cette note s\'autodétruit après consultation',
-    oneTimeViewConsumed: 'Vous consultez un lien à usage unique. Il a maintenant été consommé et ne peut plus être rouvert',
+    selfDestructTitle: "Cette note s'autodétruit après consultation",
+    oneTimeViewConsumed:
+      'Vous consultez un lien à usage unique. Il a maintenant été consommé et ne peut plus être rouvert',
     oneTimeViewExpiresClause_one: ', et expire complètement {{count}} minute après la première ouverture',
     oneTimeViewExpiresClause_many: ', et expire complètement {{count}} minutes après la première ouverture',
     oneTimeViewExpiresClause_other: ', et expire complètement {{count}} minutes après la première ouverture',
@@ -833,7 +843,8 @@ const fr: LocaleResource = {
     linkExpires_other: 'Ce lien expire {{count}} minutes après sa première ouverture.',
     untitled: 'Sans titre',
     tagHasNoNotes: 'Ce sujet ne contient aucune note.',
-    publicReadOnlyFooter: 'Il s\'agit d\'un lien partagé public en lecture seule. Le contenu a été déchiffré dans votre navigateur.',
+    publicReadOnlyFooter:
+      "Il s'agit d'un lien partagé public en lecture seule. Le contenu a été déchiffré dans votre navigateur.",
     confidentialWatermark: 'Confidentiel · {{datetime}}',
     contentHiddenTitle: 'Contenu masqué',
     contentHiddenMessage: 'Redonnez le focus à cette fenêtre pour afficher le contenu partagé.',

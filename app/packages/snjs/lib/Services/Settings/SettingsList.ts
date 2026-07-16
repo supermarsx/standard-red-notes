@@ -7,11 +7,7 @@ import {
   MuteMarketingEmailsOption,
 } from '@standardnotes/settings'
 
-type SettingType =
-  | EmailBackupFrequency
-  | LogSessionUserAgentOption
-  | MuteSignInEmailsOption
-  | MuteMarketingEmailsOption
+type SettingType = EmailBackupFrequency | LogSessionUserAgentOption | MuteSignInEmailsOption | MuteMarketingEmailsOption
 
 export class SettingsList {
   private map: Partial<Record<string, SettingData>> = {}

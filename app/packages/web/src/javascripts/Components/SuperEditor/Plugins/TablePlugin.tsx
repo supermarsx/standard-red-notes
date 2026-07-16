@@ -33,11 +33,7 @@ export const TABLE_GRID_PICKER_ROWS = 8
  * Parses a user-entered size and validates it against the given bounds.
  * Returns the parsed value plus a flag indicating whether it is valid.
  */
-export function parseTableDimension(
-  value: string,
-  min: number,
-  max: number,
-): { value: number; isValid: boolean } {
+export function parseTableDimension(value: string, min: number, max: number): { value: number; isValid: boolean } {
   const trimmed = value.trim()
   // Only accept whole, non-negative numbers (the number input can still
   // produce things like "" or "1e3", which we reject here).
@@ -67,10 +63,7 @@ export function InsertTableDialog({
   const [columns, setColumns] = useState('5')
 
   const parsedRows = useMemo(() => parseTableDimension(rows, MIN_TABLE_ROWS, MAX_TABLE_ROWS), [rows])
-  const parsedColumns = useMemo(
-    () => parseTableDimension(columns, MIN_TABLE_COLUMNS, MAX_TABLE_COLUMNS),
-    [columns],
-  )
+  const parsedColumns = useMemo(() => parseTableDimension(columns, MIN_TABLE_COLUMNS, MAX_TABLE_COLUMNS), [columns])
 
   const isValid = parsedRows.isValid && parsedColumns.isValid
 
@@ -105,20 +98,14 @@ export function InsertTableDialog({
       <TableGridPicker onSelect={insertTable} />
       <label className="mb-2.5 flex items-center justify-between gap-3">
         Columns:
-        <DecoratedInput
-          type="number"
-          value={columns}
-          onChange={setColumns}
-          onEnter={onClick}
-          ref={focusOnMount}
-        />
+        <DecoratedInput type="number" value={columns} onChange={setColumns} onEnter={onClick} ref={focusOnMount} />
       </label>
       <label className="mb-1 flex items-center justify-between gap-3">
         Rows:
         <DecoratedInput type="number" value={rows} onChange={setRows} onEnter={onClick} />
       </label>
       {!isValid && (
-        <div className="mb-2.5 text-xs text-danger" role="alert">
+        <div className="text-danger mb-2.5 text-xs" role="alert">
           {!parsedColumns.isValid && (
             <div>
               Columns must be a whole number between {MIN_TABLE_COLUMNS} and {MAX_TABLE_COLUMNS}.
@@ -174,9 +161,7 @@ function TableGridPicker({ onSelect }: { onSelect: (rows: number, columns: numbe
             <button
               type="button"
               key={`${row}x${column}`}
-              className={`h-4 w-4 border ${
-                isActive ? 'border-info bg-info' : 'border-border bg-default'
-              }`}
+              className={`h-4 w-4 border ${isActive ? 'border-info bg-info' : 'border-border bg-default'}`}
               onMouseEnter={() => setHovered({ rows: row, columns: column })}
               onFocus={() => setHovered({ rows: row, columns: column })}
               onClick={() => onSelect(row, column)}
@@ -185,7 +170,7 @@ function TableGridPicker({ onSelect }: { onSelect: (rows: number, columns: numbe
           )
         })}
       </div>
-      <div className="mt-1 text-xs text-passive-1">{label}</div>
+      <div className="text-passive-1 mt-1 text-xs">{label}</div>
     </div>
   )
 }

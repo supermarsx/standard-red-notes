@@ -87,13 +87,13 @@ function CommandPaletteListItem({
       focusOnHover={true}
       blurOnHoverEnd={false}
       className={classNames(
-        'flex scroll-m-2 items-center gap-2 whitespace-nowrap rounded-md px-2 py-2 text-[0.8rem] data-[active-item]:bg-info data-[active-item]:text-info-contrast [&>svg]:flex-shrink-0',
+        'data-[active-item]:bg-info data-[active-item]:text-info-contrast flex scroll-m-2 items-center gap-2 rounded-md px-2 py-2 text-[0.8rem] whitespace-nowrap [&>svg]:flex-shrink-0',
         index === 0 && 'scroll-m-8',
       )}
       onClick={() => handleClick(item)}
     >
       {item.icon}
-      <div className="mr-auto overflow-hidden text-ellipsis whitespace-nowrap leading-none">
+      <div className="mr-auto overflow-hidden leading-none text-ellipsis whitespace-nowrap">
         <ListItemDescription item={item} />
       </div>
       {item.shortcut && <KeyboardShortcutIndicator className="ml-auto" shortcut={item.shortcut} small={false} />}
@@ -376,7 +376,7 @@ function CommandPalette() {
   return (
     <Dialog
       store={dialog}
-      className="fixed inset-3 bottom-[10vh] top-[10vh] z-modal m-auto mt-0 flex h-fit max-h-[70vh] w-[min(45rem,90vw)] flex-col gap-3 overflow-auto rounded-xl border border-[--popover-border-color] bg-[--popover-background-color] px-3 py-3 shadow-main [backdrop-filter:var(--popover-backdrop-filter)]"
+      className="z-modal shadow-main fixed inset-3 top-[10vh] bottom-[10vh] m-auto mt-0 flex h-fit max-h-[70vh] w-[min(45rem,90vw)] flex-col gap-3 overflow-auto rounded-xl border border-[--popover-border-color] bg-[--popover-background-color] px-3 py-3 [backdrop-filter:var(--popover-backdrop-filter)]"
       backdrop={<div className="bg-passive-5 opacity-50 transition-opacity duration-75 data-[enter]:opacity-85" />}
     >
       <ComboboxProvider
@@ -396,7 +396,7 @@ function CommandPalette() {
               <Tab
                 key={id}
                 id={id}
-                className="rounded-full px-3 py-1 capitalize disabled:opacity-65 aria-selected:bg-info aria-selected:text-info-contrast data-[active-item]:ring-1 data-[active-item]:ring-info data-[active-item]:ring-offset-1 data-[active-item]:ring-offset-transparent"
+                className="aria-selected:bg-info aria-selected:text-info-contrast data-[active-item]:ring-info rounded-full px-3 py-1 capitalize disabled:opacity-65 data-[active-item]:ring-1 data-[active-item]:ring-offset-1 data-[active-item]:ring-offset-transparent"
                 disabled={hasNoItemsAtAll || (id !== 'all' && itemCountsPerTab[id] === 0)}
                 accessibleWhenDisabled={false}
               >

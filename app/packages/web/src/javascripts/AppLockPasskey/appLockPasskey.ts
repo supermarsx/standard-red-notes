@@ -72,9 +72,7 @@ export function normalizeAppLockPasskeyCredential(
 }
 
 /** True iff a usable app-lock passkey credential is registered. */
-export function hasRegisteredAppLockPasskey(
-  value: Partial<AppLockPasskeyCredential> | undefined | null,
-): boolean {
+export function hasRegisteredAppLockPasskey(value: Partial<AppLockPasskeyCredential> | undefined | null): boolean {
   return normalizeAppLockPasskeyCredential(value) !== null
 }
 
@@ -120,7 +118,11 @@ function bufferToBase64Fallback(binary: string): string {
     const enc2 = ((a & 3) << 4) | (Number.isNaN(b) ? 0 : b >> 4)
     const enc3 = Number.isNaN(b) ? 64 : ((b & 15) << 2) | (Number.isNaN(c) ? 0 : c >> 6)
     const enc4 = Number.isNaN(c) ? 64 : c & 63
-    output += chars.charAt(enc1) + chars.charAt(enc2) + (enc3 === 64 ? '=' : chars.charAt(enc3)) + (enc4 === 64 ? '=' : chars.charAt(enc4))
+    output +=
+      chars.charAt(enc1) +
+      chars.charAt(enc2) +
+      (enc3 === 64 ? '=' : chars.charAt(enc3)) +
+      (enc4 === 64 ? '=' : chars.charAt(enc4))
   }
   return output
 }

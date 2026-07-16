@@ -61,8 +61,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
       navigationController.contextMenuFolder === folder &&
       navigationController.contextMenuOpen &&
       navigationController.contextMenuTagSection === TYPE
-    const isSelected =
-      navigationController.selectedFolder === folder && navigationController.selectedLocation === TYPE
+    const isSelected = navigationController.selectedFolder === folder && navigationController.selectedLocation === TYPE
     const isEditing = navigationController.editingFolder === folder
     const isAddingSubfolder = navigationController.addingSubfolderTo === folder
     const noteCounts = computed(() => folder.noteCount)
@@ -287,7 +286,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
             'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
             (isSelected || isContextMenuOpenForFolder) && 'selected',
             isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
-            isReorderBefore && 'border-t-2 !border-t-info',
+            isReorderBefore && '!border-t-info border-t-2',
           )}
           onClick={selectCurrentFolder}
           onKeyDown={(event) => {
@@ -317,7 +316,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
         >
           {folder.color && (
             <div
-              className="absolute bottom-0 left-0 top-0 w-1 rounded-r"
+              className="absolute top-0 bottom-0 left-0 w-1 rounded-r"
               style={{ backgroundColor: folder.color }}
               aria-hidden="true"
             />
@@ -339,7 +338,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
             {isEditing && (
               <input
-                className="title editing min-w-0 overflow-hidden text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                className="title editing text-mobile-navigation-list-item lg:text-navigation-list-item min-w-0 overflow-hidden focus:shadow-none focus:outline-none"
                 id={`react-folder-${folder.uuid}`}
                 onBlur={onBlur}
                 onInput={onInput}
@@ -352,7 +351,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
             {!isEditing && (
               <div
-                className="title overflow-hidden text-left text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                className="title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left focus:shadow-none focus:outline-none"
                 id={`react-folder-${folder.uuid}`}
               >
                 {title}
@@ -364,7 +363,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
                 <a
                   role="button"
                   className={
-                    'mr-2 flex cursor-pointer items-center justify-center rounded border-0 bg-transparent hover:bg-contrast focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem]'
+                    'hover:bg-contrast mr-2 flex cursor-pointer items-center justify-center rounded border-0 bg-transparent focus:shadow-inner pointer-coarse:min-h-[2rem] pointer-coarse:min-w-[2rem]'
                   }
                   onClick={toggleContextMenu}
                   onMouseDown={(e) => {
@@ -413,10 +412,10 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
             <div className="tag-info">
               <div className="flex h-full min-w-[22px] items-center border-0 bg-transparent p-0" />
               <div className="tag-icon mr-1">
-                <Icon type="folder" className="mr-1 text-neutral" />
+                <Icon type="folder" className="text-neutral mr-1" />
               </div>
               <input
-                className="title w-full text-mobile-navigation-list-item focus:shadow-none focus:outline-none lg:text-navigation-list-item"
+                className="title text-mobile-navigation-list-item lg:text-navigation-list-item w-full focus:shadow-none focus:outline-none"
                 type="text"
                 ref={subfolderInputRef}
                 onBlur={onSubfolderInputBlur}

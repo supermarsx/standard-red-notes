@@ -426,7 +426,8 @@ const de: LocaleResource = {
     // FilePreview
     fileProtected: 'Diese Datei ist geschützt.',
     authenticateToView: 'Authentifizieren Sie sich, um diese Datei anzuzeigen.',
-    addPasscodeToView: 'Fügen Sie einen Zugangscode hinzu oder erstellen Sie ein Konto, um für die Anzeige dieser Datei eine Authentifizierung zu verlangen.',
+    addPasscodeToView:
+      'Fügen Sie einen Zugangscode hinzu oder erstellen Sie ein Konto, um für die Anzeige dieser Datei eine Authentifizierung zu verlangen.',
     openAccountMenu: 'Kontomenü öffnen',
     authenticate: 'Authentifizieren',
     viewFile: 'Datei anzeigen',
@@ -434,7 +435,8 @@ const de: LocaleResource = {
 
     // FilePreviewError
     fileCannotBePreviewed: 'Diese Datei kann nicht in der Vorschau angezeigt werden.',
-    errorLoadingFile: 'Beim Laden der Datei ist ein Fehler aufgetreten. Versuchen Sie es erneut oder laden Sie die Datei herunter und öffnen Sie sie mit einer anderen Anwendung.',
+    errorLoadingFile:
+      'Beim Laden der Datei ist ein Fehler aufgetreten. Versuchen Sie es erneut oder laden Sie die Datei herunter und öffnen Sie sie mit einer anderen Anwendung.',
     tryAgain: 'Erneut versuchen',
     downloadToView: 'Um diese Datei anzuzeigen, laden Sie sie herunter und öffnen Sie sie mit einer anderen Anwendung.',
 
@@ -469,7 +471,8 @@ const de: LocaleResource = {
 
     // AudioPreview
     audioCannotBePlayed: 'Diese Audiodatei kann nicht abgespielt werden.',
-    downloadToListen: 'Um diese Datei anzuhören, laden Sie sie herunter und öffnen Sie sie mit einer anderen Anwendung.',
+    downloadToListen:
+      'Um diese Datei anzuhören, laden Sie sie herunter und öffnen Sie sie mit einer anderen Anwendung.',
 
     // PreviewComponent
     externalAppOnly: 'Diese Datei kann nur in einer externen App in der Vorschau angezeigt werden',
@@ -499,15 +502,18 @@ const de: LocaleResource = {
     cancelOcr: 'OCR abbrechen',
     preparingOcr: 'OCR wird vorbereitet...',
     ocrProgress: 'OCR Seite {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Text bereits extrahiert (zwischengespeichert). OCR in Ihrem Browser erneut ausführen (bleibt auf Ihrem Gerät).',
+    ocrCachedReRunTooltip:
+      'Text bereits extrahiert (zwischengespeichert). OCR in Ihrem Browser erneut ausführen (bleibt auf Ihrem Gerät).',
     ocrExtractedReRunTooltip: 'Text extrahiert. OCR in Ihrem Browser erneut ausführen (bleibt auf Ihrem Gerät).',
-    ocrExtractTooltip: 'Text aus gescannten Seiten mit OCR extrahieren. Läuft in Ihrem Browser; nichts verlässt Ihr Gerät (langsam; lädt Sprachdaten herunter).',
+    ocrExtractTooltip:
+      'Text aus gescannten Seiten mit OCR extrahieren. Läuft in Ihrem Browser; nichts verlässt Ihr Gerät (langsam; lädt Sprachdaten herunter).',
     extractTextWithOcrBrowser: 'Text mit OCR in Ihrem Browser extrahieren',
     reRunOcrBrowser: 'OCR erneut ausführen (Browser)',
     extractTextOcr: 'Text extrahieren (OCR)',
     serverOcrTooltip:
       'OCR auf dem SERVER ausführen. Dabei werden die Seitenbilder dieses PDFs an den Server gesendet und die Ende-zu-Ende-Verschlüsselung VERLASSEN — der Server kann diesen Inhalt lesen. Browser-OCR belässt alles auf Ihrem Gerät.',
-    runOcrOnServerAria: 'OCR auf dem Server ausführen (sendet Seitenbilder an den Server; verlässt die Ende-zu-Ende-Verschlüsselung)',
+    runOcrOnServerAria:
+      'OCR auf dem Server ausführen (sendet Seitenbilder an den Server; verlässt die Ende-zu-Ende-Verschlüsselung)',
     runOcrOnServer: 'OCR auf Server ausführen',
     copyAllExtractedText: 'Gesamten extrahierten Text kopieren',
     copyExtractedTextAria: 'Extrahierten Text kopieren',
@@ -518,7 +524,8 @@ const de: LocaleResource = {
     previousMatch: 'Vorheriger Treffer',
     nextMatch: 'Nächster Treffer',
     closeSearch: 'Suche schließen',
-    serverOcrDisclosurePrefix: 'Server-OCR ist für Ihr Konto verfügbar. Dabei werden die Seitenbilder dieses PDFs an den Server gesendet und',
+    serverOcrDisclosurePrefix:
+      'Server-OCR ist für Ihr Konto verfügbar. Dabei werden die Seitenbilder dieses PDFs an den Server gesendet und',
     serverOcrDisclosureBold: 'verlässt die Ende-zu-Ende-Verschlüsselung',
     serverOcrDisclosureSuffix:
       ' — der Server (und jeder, der ihn kontrolliert) kann diesen Inhalt lesen. Browser-OCR belässt alles auf Ihrem Gerät. Standard ist Browser-OCR.',
@@ -739,7 +746,8 @@ const de: LocaleResource = {
     // U2FAuthIframe
     waitingForSecurityKey: 'Warten auf Sicherheitsschlüssel...',
     authenticationSuccessful: 'Authentifizierung erfolgreich!',
-    insertSecurityKeyPrompt: 'Stecken Sie Ihren Hardware-Sicherheitsschlüssel ein und drücken Sie dann die Schaltfläche unten, um sich zu authentifizieren.',
+    insertSecurityKeyPrompt:
+      'Stecken Sie Ihren Hardware-Sicherheitsschlüssel ein und drücken Sie dann die Schaltfläche unten, um sich zu authentifizieren.',
     authenticate: 'Authentifizieren',
   },
   search: {
@@ -825,14 +833,16 @@ const de: LocaleResource = {
     invalidLinkTitle: 'Ungültiger Link',
     invalidLinkMessage: 'Dieser Freigabelink ist ungültig oder der Schlüssel fehlt.',
     selfDestructTitle: 'Diese Notiz zerstört sich nach dem Ansehen selbst',
-    oneTimeViewConsumed: 'Sie lesen einen Einmalansicht-Link. Er wurde nun verbraucht und kann nicht erneut geöffnet werden',
+    oneTimeViewConsumed:
+      'Sie lesen einen Einmalansicht-Link. Er wurde nun verbraucht und kann nicht erneut geöffnet werden',
     oneTimeViewExpiresClause_one: ' und läuft {{count}} Minute nach dem ersten Öffnen vollständig ab',
     oneTimeViewExpiresClause_other: ' und läuft {{count}} Minuten nach dem ersten Öffnen vollständig ab',
     linkExpires_one: 'Dieser Link läuft {{count}} Minute nach dem ersten Öffnen ab.',
     linkExpires_other: 'Dieser Link läuft {{count}} Minuten nach dem ersten Öffnen ab.',
     untitled: 'Ohne Titel',
     tagHasNoNotes: 'Dieses Thema hat keine Notizen.',
-    publicReadOnlyFooter: 'Dies ist ein öffentlicher, schreibgeschützter Freigabelink. Der Inhalt wurde in Ihrem Browser entschlüsselt.',
+    publicReadOnlyFooter:
+      'Dies ist ein öffentlicher, schreibgeschützter Freigabelink. Der Inhalt wurde in Ihrem Browser entschlüsselt.',
     confidentialWatermark: 'Vertraulich · {{datetime}}',
     contentHiddenTitle: 'Inhalt verborgen',
     contentHiddenMessage: 'Geben Sie diesem Fenster den Fokus zurück, um den geteilten Inhalt anzuzeigen.',

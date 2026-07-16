@@ -126,7 +126,12 @@ describe('nextNodeId', () => {
   })
 
   it('skips taken ids', () => {
-    expect(nextNodeId([{ id: 'A', label: '' }, { id: 'B', label: '' }])).toBe('C')
+    expect(
+      nextNodeId([
+        { id: 'A', label: '' },
+        { id: 'B', label: '' },
+      ]),
+    ).toBe('C')
   })
 
   it('wraps past Z into A1, B1, ...', () => {
@@ -155,7 +160,9 @@ describe('createEmptyGraphModel', () => {
 describe('MERMAID_TEMPLATES', () => {
   it('includes the required starter diagrams', () => {
     const ids = MERMAID_TEMPLATES.map((t) => t.id)
-    expect(ids).toEqual(expect.arrayContaining(['org-chart', 'shareholders', 'process-workflow', 'flowchart', 'sequence']))
+    expect(ids).toEqual(
+      expect.arrayContaining(['org-chart', 'shareholders', 'process-workflow', 'flowchart', 'sequence']),
+    )
   })
 
   it('every template has a non-empty source and label', () => {

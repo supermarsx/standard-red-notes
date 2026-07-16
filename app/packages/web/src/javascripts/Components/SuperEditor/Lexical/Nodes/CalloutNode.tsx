@@ -44,7 +44,7 @@ function CalloutComponent({ data, nodeKey }: { data: CalloutData; nodeKey: NodeK
   const style = VARIANT_STYLES[data.variant]
 
   return (
-    <div className={`my-3 flex gap-2 rounded border-l-4 bg-contrast p-2 ${style.border}`} data-callout-block="true">
+    <div className={`bg-contrast my-3 flex gap-2 rounded border-l-4 p-2 ${style.border}`} data-callout-block="true">
       <div className="flex flex-col items-center gap-1">
         {VARIANTS.map((variant) => (
           <button
@@ -60,7 +60,7 @@ function CalloutComponent({ data, nodeKey }: { data: CalloutData; nodeKey: NodeK
       </div>
       <textarea
         key={`callout-${nodeKey}`}
-        className="min-h-[2rem] w-full resize-none bg-transparent text-sm text-foreground outline-none"
+        className="text-foreground min-h-[2rem] w-full resize-none bg-transparent text-sm outline-none"
         rows={Math.max(2, data.text.split('\n').length)}
         defaultValue={data.text}
         placeholder={`${style.label}…`}

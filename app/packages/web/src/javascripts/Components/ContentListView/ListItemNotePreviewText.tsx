@@ -23,10 +23,7 @@ const ListItemNotePreviewText: FunctionComponent<Props> = ({ item, hidePreview, 
 
   return (
     <div
-      className={classNames(
-        'overflow-hidden overflow-ellipsis text-sm lg:text-xs',
-        item.archived ? 'opacity-60' : '',
-      )}
+      className={classNames('overflow-hidden text-sm overflow-ellipsis lg:text-xs', item.archived ? 'opacity-60' : '')}
     >
       {item.preview_html && sanitizedPreviewHtml !== undefined && (
         <div

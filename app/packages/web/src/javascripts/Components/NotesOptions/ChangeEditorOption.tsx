@@ -48,7 +48,7 @@ const ChangeEditorOption: FunctionComponent<ChangeEditorOptionProps> = ({
         ref={buttonRef}
       >
         <div className="flex items-center">
-          <Icon type="dashboard" className={`${iconClassName} mr-2 text-neutral`} />
+          <Icon type="dashboard" className={`${iconClassName} text-neutral mr-2`} />
           Change note type
         </div>
         <div className="flex">

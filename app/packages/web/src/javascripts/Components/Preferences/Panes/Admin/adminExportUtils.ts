@@ -124,8 +124,9 @@ const auditTarget = (entry: AuditExportEntry): string => {
 }
 
 /** Compact JSON string for the metadata cell, or '' when there is none. */
-const auditMetadataCell = (metadata: Record<string, unknown> | null): string =>
-  metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : ''
+const auditMetadataCell = (metadata: Record<string, unknown> | null): string => {
+  return metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : ''
+}
 
 /** One CSV data row (already escaped) for an audit entry. */
 export const auditEntryToCSVRow = (entry: AuditExportEntry): string =>

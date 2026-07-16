@@ -20,12 +20,12 @@ const CopyableCodeBlock = ({ code }: Props) => {
       onMouseEnter={() => setIsCopyButtonVisible(true)}
       onMouseLeave={() => setIsCopyButtonVisible(false)}
     >
-      <pre className="overflow-auto rounded-md bg-default px-2.5 py-1.5">{code}</pre>
-      <div className="absolute right-1.5 top-1.5">
+      <pre className="bg-default overflow-auto rounded-md px-2.5 py-1.5">{code}</pre>
+      <div className="absolute top-1.5 right-1.5">
         <button
           ref={buttonRef}
           className={classNames(
-            'peer rounded border border-border bg-default p-2 text-text hover:bg-contrast',
+            'peer border-border bg-default text-text hover:bg-contrast rounded border p-2',
             !isCopyButtonVisible && 'hidden',
           )}
           onClick={() => {
@@ -56,7 +56,7 @@ const CopyableCodeBlock = ({ code }: Props) => {
         <div
           className={classNames(
             didCopy && isCopyButtonVisible ? '' : 'hidden',
-            'absolute right-0 top-full min-w-max translate-x-2 translate-y-1 select-none rounded border border-border bg-default px-3 py-1.5 text-left md:peer-hover:block',
+            'border-border bg-default absolute top-full right-0 min-w-max translate-x-2 translate-y-1 rounded border px-3 py-1.5 text-left select-none md:peer-hover:block',
           )}
         >
           {didCopy ? t('copiedExclaim') : t('copyExampleToClipboard')}

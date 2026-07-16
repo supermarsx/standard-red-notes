@@ -8,6 +8,7 @@ const CopyPlugin = require('copy-webpack-plugin')
 const webpack = require('webpack')
 const { DefinePlugin } = require('webpack')
 const TerserPlugin = require('terser-webpack-plugin')
+const runtimeDependencyCopyPatterns = require('./runtime-dependency-copy-patterns')
 
 module.exports = function ({ onlyTranspileTypescript = false, experimentalFeatures = false, snap = false } = {}) {
   const moduleConfig = {
@@ -87,13 +88,7 @@ module.exports = function ({ onlyTranspileTypescript = false, experimentalFeatur
             from: '../web/dist',
             to: 'web',
           },
-          {
-            from: 'app/node_modules',
-            to: 'node_modules',
-            globOptions: {
-              ignore: ['**/@standardnotes/inner-desktop/**'],
-            },
-          },
+          ...runtimeDependencyCopyPatterns(path.resolve(__dirname, 'app/package.json')),
           {
             from: 'app/stylesheets/renderer.css',
             to: 'stylesheets/renderer.css',

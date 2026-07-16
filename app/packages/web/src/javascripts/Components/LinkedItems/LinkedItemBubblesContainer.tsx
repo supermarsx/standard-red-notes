@@ -230,7 +230,7 @@ const LinkedItemBubblesContainer = ({
     >
       <div
         className={classNames(
-          'note-view-linking-container flex min-w-0 max-w-full items-center gap-2 bg-transparent md:min-w-80',
+          'note-view-linking-container flex max-w-full min-w-0 items-center gap-2 bg-transparent md:min-w-80',
           allItemsLinkedToItem.length || notesLinkingToItem.length ? 'mt-1' : 'mt-0.5',
           isCollapsed ? 'overflow-x-auto' : 'flex-wrap',
           !shouldHideToggle && 'mr-2',
@@ -242,23 +242,25 @@ const LinkedItemBubblesContainer = ({
         {noteFolder && (
           <button
             className={classNames(
-              'group flex h-6 flex-shrink-0 cursor-pointer items-center rounded border border-border py-2 pl-1 pr-2',
-              'align-middle text-sm text-text hover:bg-contrast focus:bg-contrast lg:text-xs',
+              'group border-border flex h-6 flex-shrink-0 cursor-pointer items-center rounded border py-2 pr-2 pl-1',
+              'text-text hover:bg-contrast focus:bg-contrast align-middle text-sm lg:text-xs',
             )}
             title={`Folder: ${noteFolder.title}`}
             onClick={() => {
               void navigationController.setSelectedFolder(noteFolder, { userTriggered: true })
             }}
           >
-            <Icon type="folder" className="mr-1 flex-shrink-0 text-info" size="small" />
+            <Icon type="folder" className="text-info mr-1 flex-shrink-0" size="small" />
             <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">{noteFolder.title}</span>
           </button>
         )}
 
         {(visibleOutgoingLinks.length > 0 || !readonly) && (
           <span className="flex flex-shrink-0 items-center gap-1" title="Items this note links to">
-            <Icon type="link" className="flex-shrink-0 text-passive-1" size="small" />
-            <span className={groupLabelClassName}>Links{outgoingLinks.length > 0 ? ` (${outgoingLinks.length})` : ''}</span>
+            <Icon type="link" className="text-passive-1 flex-shrink-0" size="small" />
+            <span className={groupLabelClassName}>
+              Links{outgoingLinks.length > 0 ? ` (${outgoingLinks.length})` : ''}
+            </span>
           </span>
         )}
         {visibleOutgoingLinks.map(renderBubble)}
@@ -276,10 +278,10 @@ const LinkedItemBubblesContainer = ({
 
         {backlinks.length > 0 && (
           <span
-            className="ml-1 flex flex-shrink-0 items-center gap-1 border-l border-border pl-2"
+            className="border-border ml-1 flex flex-shrink-0 items-center gap-1 border-l pl-2"
             title="Notes and files that link to this note"
           >
-            <Icon type="link-off" className="flex-shrink-0 text-passive-1" size="small" />
+            <Icon type="link-off" className="text-passive-1 flex-shrink-0" size="small" />
             <span className={groupLabelClassName}>Linked By ({backlinks.length})</span>
           </span>
         )}

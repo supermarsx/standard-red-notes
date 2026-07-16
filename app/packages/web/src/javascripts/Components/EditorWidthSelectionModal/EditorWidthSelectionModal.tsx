@@ -17,8 +17,8 @@ const DoubleSidedArrow = ({ className }: { className?: string }) => {
     <div
       className={classNames(
         'relative h-[2px] w-full bg-current',
-        'before:absolute before:-left-px before:top-1/2 before:h-0 before:w-0 before:-translate-y-1/2 before:border-b-[6px] before:border-r-[6px] before:border-t-[6px] before:border-current before:border-b-transparent before:border-t-transparent',
-        'after:absolute after:-right-px after:top-1/2 after:h-0 after:w-0 after:-translate-y-1/2 after:border-b-[6px] after:border-l-[6px] after:border-t-[6px] after:border-current after:border-b-transparent after:border-t-transparent',
+        'before:absolute before:top-1/2 before:-left-px before:h-0 before:w-0 before:-translate-y-1/2 before:border-t-[6px] before:border-r-[6px] before:border-b-[6px] before:border-current before:border-t-transparent before:border-b-transparent',
+        'after:absolute after:top-1/2 after:-right-px after:h-0 after:w-0 after:-translate-y-1/2 after:border-t-[6px] after:border-b-[6px] after:border-l-[6px] after:border-current after:border-t-transparent after:border-b-transparent',
         className,
       )}
     />
@@ -87,7 +87,7 @@ const EditorWidthSelectionModal = ({
   )
 
   const DynamicMargin = (
-    <div className="text-center text-sm text-passive-2">
+    <div className="text-passive-2 text-center text-sm">
       <div className={value !== EditorLineWidth.Dynamic ? 'hidden' : ''}>
         <div className="mb-2">{EditorMargins[value]}</div>
         <DoubleSidedArrow />
@@ -105,10 +105,10 @@ const EditorWidthSelectionModal = ({
       actions={actions}
       className="flex min-h-[50vh] flex-col"
     >
-      <div className="flex min-h-0 flex-grow flex-col overflow-hidden rounded bg-passive-5 p-4 pb-0">
+      <div className="bg-passive-5 flex min-h-0 flex-grow flex-col overflow-hidden rounded p-4 pb-0">
         <div
           className={classNames(
-            'grid flex-grow grid-cols-[0fr_1fr_0fr] gap-3 rounded rounded-b-none bg-default px-2 pt-4 shadow-[0_1px_4px_rgba(0,0,0,0.12),0_2px_8px_rgba(0,0,0,0.04)] transition-all duration-200 md:px-4',
+            'bg-default grid flex-grow grid-cols-[0fr_1fr_0fr] gap-3 rounded rounded-b-none px-2 pt-4 shadow-[0_1px_4px_rgba(0,0,0,0.12),0_2px_8px_rgba(0,0,0,0.04)] transition-all duration-200 md:px-4',
             value === EditorLineWidth.Narrow && 'md:grid-cols-[1fr_60%_1fr]',
             value === EditorLineWidth.Wide && 'md:grid-cols-[1fr_70%_1fr]',
             value === EditorLineWidth.Dynamic && 'md:grid-cols-[1fr_80%_1fr]',
@@ -116,7 +116,7 @@ const EditorWidthSelectionModal = ({
           )}
         >
           {DynamicMargin}
-          <div className="flex flex-col text-info">
+          <div className="text-info flex flex-col">
             <div className="mb-2 text-center text-sm">
               {value === EditorLineWidth.Narrow || value === EditorLineWidth.Wide
                 ? `Max. ${EditorMaxWidths[value]}`
@@ -129,7 +129,7 @@ const EditorWidthSelectionModal = ({
         </div>
       </div>
       {!!note && (
-        <div className="border-t border-border bg-default px-4 py-2">
+        <div className="border-border bg-default border-t px-4 py-2">
           <label className="flex items-center gap-2">
             <Switch checked={setGlobally} onChange={setSetGlobally} />
             Set globally {note.editorWidth != undefined && '(will not apply to current note)'}

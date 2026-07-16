@@ -91,9 +91,7 @@ describe('SandboxDocument', () => {
 
   describe('field sanitization', () => {
     it('coerces non-string panes to empty strings', () => {
-      const { document, recovered } = parseSandboxDocument(
-        JSON.stringify({ html: '<p>ok</p>', css: 42, js: null }),
-      )
+      const { document, recovered } = parseSandboxDocument(JSON.stringify({ html: '<p>ok</p>', css: 42, js: null }))
       // Recovered because at least one pane (html) is a string.
       expect(recovered).toBe(true)
       expect(document.html).toBe('<p>ok</p>')

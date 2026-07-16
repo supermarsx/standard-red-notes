@@ -59,7 +59,7 @@ function TableRow<Data>({
             aria-colindex={cell.colIndex + 1}
             key={index}
             className={classNames(
-              'relative flex items-center overflow-hidden border-b border-border px-3 py-4 focus:border-info',
+              'border-border focus:border-info relative flex items-center overflow-hidden border-b px-3 py-4',
               row.isSelected && 'bg-info-backdrop',
               canSelectRows && 'cursor-pointer',
               canSelectRows && isHoveredOrFocused && 'bg-contrast',
@@ -70,7 +70,7 @@ function TableRow<Data>({
             {row.rowActions && index === array.length - 1 && (
               <div
                 className={classNames(
-                  'absolute right-0 top-0 flex h-full items-center p-2',
+                  'absolute top-0 right-0 flex h-full items-center p-2',
                   row.isSelected ? '' : isHoveredOrFocused ? '' : 'invisible',
                   isFocused && 'visible',
                 )}
@@ -78,7 +78,7 @@ function TableRow<Data>({
                 <div className="z-[1]">{row.rowActions}</div>
                 <div
                   className={classNames(
-                    'absolute right-0 top-0 z-0 h-full w-full backdrop-blur-[2px]',
+                    'absolute top-0 right-0 z-0 h-full w-full backdrop-blur-[2px]',
                     row.isSelected ? '' : isHoveredOrFocused ? '' : 'invisible',
                   )}
                 />
@@ -387,7 +387,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
   return (
     <div className="block min-h-0 overflow-auto" onScroll={onScroll}>
       {showSelectionActions && selectedRows.length >= 2 && (
-        <div className="sticky top-0 z-[2] flex items-center justify-between border-b border-border bg-default px-3 py-2">
+        <div className="border-border bg-default sticky top-0 z-[2] flex items-center justify-between border-b px-3 py-2">
           <span className="text-info-0 text-sm font-medium">{selectedRows.length} selected</span>
           {selectedRows.length > 0 && selectionActions}
         </div>
@@ -414,9 +414,9 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
                   aria-colindex={header.colIndex + 1}
                   aria-sort={header.isSorting ? (header.sortReversed ? 'descending' : 'ascending') : 'none'}
                   className={classNames(
-                    'border-b border-border px-3 pb-2 pt-3 text-left text-sm font-medium text-passive-0',
+                    'border-border text-passive-0 border-b px-3 pt-3 pb-2 text-left text-sm font-medium',
                     header.sortBy &&
-                      'cursor-pointer hover:bg-info-backdrop hover:underline focus:border-info focus:bg-info-backdrop',
+                      'hover:bg-info-backdrop focus:border-info focus:bg-info-backdrop cursor-pointer hover:underline',
                   )}
                   style={{
                     gridColumn: index + 1,
@@ -432,7 +432,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
                       <Icon
                         type={header.sortReversed ? 'arrow-up' : 'arrow-down'}
                         size="custom"
-                        className="h-4.5 w-4.5 text-passive-1"
+                        className="text-passive-1 h-4.5 w-4.5"
                       />
                     )}
                   </div>

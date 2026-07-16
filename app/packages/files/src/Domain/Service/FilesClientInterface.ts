@@ -27,11 +27,7 @@ export interface FilesClientInterface {
    */
   beginNewLocalOnlyFileUpload(sizeInBytes: number): LocalOnlyFileUploadOperation
 
-  pushBytesForLocalOnlyUpload(
-    operation: LocalOnlyFileUploadOperation,
-    bytes: Uint8Array,
-    isFinalChunk: boolean,
-  ): void
+  pushBytesForLocalOnlyUpload(operation: LocalOnlyFileUploadOperation, bytes: Uint8Array, isFinalChunk: boolean): void
 
   /**
    * Persists the accumulated encrypted bytes via the local backend WITHOUT uploading to the

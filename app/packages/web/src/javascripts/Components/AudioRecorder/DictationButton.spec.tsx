@@ -12,9 +12,8 @@
  * renders at runtime, not merely that the name typechecks (repo memory: web
  * tsc/tests green != it renders).
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

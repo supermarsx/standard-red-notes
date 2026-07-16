@@ -16,22 +16,22 @@ const CompareControls = observer(({ noteHistoryController }: { noteHistoryContro
   const { isComparing, setIsComparing, compareTarget, setCompareTarget } = noteHistoryController
 
   return (
-    <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border bg-default px-4 py-2 text-sm">
+    <div className="border-border bg-default flex flex-shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm">
       <button
         className={
           isComparing
-            ? 'rounded border border-info bg-info px-3 py-1 text-info-contrast focus:shadow-none focus:outline-none'
-            : 'rounded border border-border bg-default px-3 py-1 text-text hover:bg-contrast focus:shadow-none focus:outline-none'
+            ? 'border-info bg-info text-info-contrast rounded border px-3 py-1 focus:shadow-none focus:outline-none'
+            : 'border-border bg-default text-text hover:bg-contrast rounded border px-3 py-1 focus:shadow-none focus:outline-none'
         }
         onClick={() => setIsComparing(!isComparing)}
       >
         {isComparing ? 'Comparing' : 'Compare'}
       </button>
       {isComparing && (
-        <label className="flex items-center gap-2 text-text">
+        <label className="text-text flex items-center gap-2">
           <span className="text-passive-1">Compare with</span>
           <select
-            className="rounded border border-border bg-default px-2 py-1 text-text focus:shadow-none focus:outline-none"
+            className="border-border bg-default text-text rounded border px-2 py-1 focus:shadow-none focus:outline-none"
             value={compareTarget}
             onChange={(event) => setCompareTarget(event.target.value as 'current' | 'previous')}
           >
@@ -51,12 +51,12 @@ const HistoryModalContentPane = ({ noteHistoryController, note }: Props) => {
     switch (contentState) {
       case RevisionContentState.Idle:
         return (
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 select-none text-sm text-passive-0">
+          <div className="text-passive-0 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-sm select-none">
             No revision selected
           </div>
         )
       case RevisionContentState.Loading:
-        return <Spinner className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2" />
+        return <Spinner className="absolute top-1/2 left-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2" />
       case RevisionContentState.Loaded:
         if (!selectedRevision) {
           return null
@@ -64,10 +64,8 @@ const HistoryModalContentPane = ({ noteHistoryController, note }: Props) => {
         if (isComparing) {
           if (!comparisonContent) {
             return (
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 select-none text-sm text-passive-0">
-                {compareTarget === 'previous'
-                  ? 'No previous revision available to compare.'
-                  : 'Loading comparison…'}
+              <div className="text-passive-0 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-sm select-none">
+                {compareTarget === 'previous' ? 'No previous revision available to compare.' : 'Loading comparison…'}
               </div>
             )
           }
@@ -79,12 +77,7 @@ const HistoryModalContentPane = ({ noteHistoryController, note }: Props) => {
           const oldLabel = isComparingWithPrevious ? 'Previous revision' : 'Selected revision'
           const newLabel = isComparingWithPrevious ? 'Selected revision' : 'Current note'
           return (
-            <RevisionDiffView
-              oldContent={oldContent}
-              newContent={newContent}
-              oldLabel={oldLabel}
-              newLabel={newLabel}
-            />
+            <RevisionDiffView oldContent={oldContent} newContent={newContent} oldLabel={oldLabel} newLabel={newLabel} />
           )
         }
         return <ReadonlyNoteContent note={note} content={selectedRevision.payload.content} showLinkedItems={false} />

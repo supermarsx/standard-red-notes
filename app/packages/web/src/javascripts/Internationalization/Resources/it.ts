@@ -390,16 +390,18 @@ const it: LocaleResource = {
 
     fileProtected: 'Questo file è protetto.',
     authenticateToView: 'Autenticati per visualizzare questo file.',
-    addPasscodeToView: 'Aggiungi un codice di accesso o crea un account per richiedere l\'autenticazione alla visualizzazione di questo file.',
+    addPasscodeToView:
+      "Aggiungi un codice di accesso o crea un account per richiedere l'autenticazione alla visualizzazione di questo file.",
     openAccountMenu: 'Apri menu account',
     authenticate: 'Autenticati',
     viewFile: 'Visualizza file',
     loading: 'Caricamento...',
 
-    fileCannotBePreviewed: 'Impossibile visualizzare l\'anteprima di questo file.',
-    errorLoadingFile: 'Si è verificato un errore durante il caricamento del file. Riprova oppure scarica il file e aprilo con un\'altra applicazione.',
+    fileCannotBePreviewed: "Impossibile visualizzare l'anteprima di questo file.",
+    errorLoadingFile:
+      "Si è verificato un errore durante il caricamento del file. Riprova oppure scarica il file e aprilo con un'altra applicazione.",
     tryAgain: 'Riprova',
-    downloadToView: 'Per visualizzare questo file, scaricalo e aprilo con un\'altra applicazione.',
+    downloadToView: "Per visualizzare questo file, scaricalo e aprilo con un'altra applicazione.",
 
     fileInformation: 'Informazioni file',
     type: 'Tipo:',
@@ -424,12 +426,12 @@ const it: LocaleResource = {
     centerAlign: 'Allinea al centro',
     rightAlign: 'Allinea a destra',
 
-    videoCannotBePreviewed: 'Impossibile visualizzare l\'anteprima di questo video.',
+    videoCannotBePreviewed: "Impossibile visualizzare l'anteprima di questo video.",
 
     audioCannotBePlayed: 'Impossibile riprodurre questo audio.',
-    downloadToListen: 'Per ascoltare questo file, scaricalo e aprilo con un\'altra applicazione.',
+    downloadToListen: "Per ascoltare questo file, scaricalo e aprilo con un'altra applicazione.",
 
-    externalAppOnly: 'Questo file può essere visualizzato in anteprima solo in un\'app esterna',
+    externalAppOnly: "Questo file può essere visualizzato in anteprima solo in un'app esterna",
     openFilePreview: 'Apri anteprima file',
     loadingPdfViewer: 'Caricamento visualizzatore PDF...',
 
@@ -454,15 +456,17 @@ const it: LocaleResource = {
     cancelOcr: 'Annulla OCR',
     preparingOcr: 'Preparazione OCR...',
     ocrProgress: 'OCR pagina {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Testo già estratto (in cache). Riesegui l\'OCR nel browser (rimane sul dispositivo).',
-    ocrExtractedReRunTooltip: 'Testo estratto. Riesegui l\'OCR nel browser (rimane sul dispositivo).',
-    ocrExtractTooltip: 'Estrai il testo dalle pagine scansionate con l\'OCR. Viene eseguito nel browser; nulla lascia il tuo dispositivo (lento; scarica i dati della lingua).',
+    ocrCachedReRunTooltip: "Testo già estratto (in cache). Riesegui l'OCR nel browser (rimane sul dispositivo).",
+    ocrExtractedReRunTooltip: "Testo estratto. Riesegui l'OCR nel browser (rimane sul dispositivo).",
+    ocrExtractTooltip:
+      "Estrai il testo dalle pagine scansionate con l'OCR. Viene eseguito nel browser; nulla lascia il tuo dispositivo (lento; scarica i dati della lingua).",
     extractTextWithOcrBrowser: 'Estrai testo con OCR nel browser',
     reRunOcrBrowser: 'Riesegui OCR (browser)',
     extractTextOcr: 'Estrai testo (OCR)',
     serverOcrTooltip:
-      'Esegui l\'OCR sul SERVER. Questo invia le immagini delle pagine di questo PDF al server e ABBANDONA la crittografia end-to-end — il server può leggere quel contenuto. L\'OCR nel browser mantiene tutto sul tuo dispositivo.',
-    runOcrOnServerAria: 'Esegui l\'OCR sul server (invia le immagini delle pagine al server; abbandona la crittografia end-to-end)',
+      "Esegui l'OCR sul SERVER. Questo invia le immagini delle pagine di questo PDF al server e ABBANDONA la crittografia end-to-end — il server può leggere quel contenuto. L'OCR nel browser mantiene tutto sul tuo dispositivo.",
+    runOcrOnServerAria:
+      "Esegui l'OCR sul server (invia le immagini delle pagine al server; abbandona la crittografia end-to-end)",
     runOcrOnServer: 'Esegui OCR sul server',
     copyAllExtractedText: 'Copia tutto il testo estratto',
     copyExtractedTextAria: 'Copia testo estratto',
@@ -473,14 +477,15 @@ const it: LocaleResource = {
     previousMatch: 'Corrispondenza precedente',
     nextMatch: 'Corrispondenza successiva',
     closeSearch: 'Chiudi ricerca',
-    serverOcrDisclosurePrefix: 'L\'OCR sul server è disponibile per il tuo account. Invia le immagini delle pagine di questo PDF al server e',
+    serverOcrDisclosurePrefix:
+      "L'OCR sul server è disponibile per il tuo account. Invia le immagini delle pagine di questo PDF al server e",
     serverOcrDisclosureBold: 'abbandona la crittografia end-to-end',
     serverOcrDisclosureSuffix:
-      ' — il server (e chiunque lo controlli) può leggere quel contenuto. L\'OCR nel browser mantiene tutto sul tuo dispositivo. L\'impostazione predefinita è l\'OCR nel browser.',
+      " — il server (e chiunque lo controlli) può leggere quel contenuto. L'OCR nel browser mantiene tutto sul tuo dispositivo. L'impostazione predefinita è l'OCR nel browser.",
     ocrRunningServer:
-      'OCR sul server: le immagini delle pagine di questo PDF vengono caricate sul server, il che ABBANDONA la crittografia end-to-end — il server può leggere quel contenuto. (L\'OCR nel browser mantiene tutto sul tuo dispositivo.)',
+      "OCR sul server: le immagini delle pagine di questo PDF vengono caricate sul server, il che ABBANDONA la crittografia end-to-end — il server può leggere quel contenuto. (L'OCR nel browser mantiene tutto sul tuo dispositivo.)",
     ocrRunningBrowser:
-      'L\'OCR viene eseguito nel browser su questo dispositivo (i tuoi file restano crittografati end-to-end). È lento e scarica i dati della lingua al primo utilizzo.',
+      "L'OCR viene eseguito nel browser su questo dispositivo (i tuoi file restano crittografati end-to-end). È lento e scarica i dati della lingua al primo utilizzo.",
     ocrDoneServer:
       'OCR sul server completato. Le immagini delle pagine sono state inviate al server (questo ha abbandonato la crittografia end-to-end). La precisione varia in base alla qualità della scansione; il testo estratto è ora ricercabile e copiabile ed è memorizzato nella cache su questo dispositivo.',
     ocrDoneBrowser:
@@ -503,7 +508,7 @@ const it: LocaleResource = {
     noItems: 'Nessun elemento.',
     loading: 'Caricamento...',
     uploadFileWithShortcut: 'Carica file {{shortcut}}',
-    createNoteInTopicWithShortcut: 'Crea una nuova nota nell\'argomento selezionato {{shortcut}}',
+    createNoteInTopicWithShortcut: "Crea una nuova nota nell'argomento selezionato {{shortcut}}",
     dropFilesToUpload: 'Trascina i tuoi file per caricarli e collegarli all\'argomento "{{title}}"',
 
     noFilesYet: 'Non hai ancora nessun file',
@@ -531,7 +536,7 @@ const it: LocaleResource = {
     preferencesFor: 'Preferenze per',
     global: 'Globale',
     reset: 'Reimposta',
-    upgradeForPerTopicPreferences: 'Esegui l\'upgrade per le preferenze per argomento',
+    upgradeForPerTopicPreferences: "Esegui l'upgrade per le preferenze per argomento",
     perTopicPreferencesMessageWithDaily:
       'Crea potenti flussi di lavoro e layout organizzativi con le preferenze di visualizzazione per argomento e il nuovissimo layout calendario Daily Notebook.',
     perTopicPreferencesMessage:
@@ -556,7 +561,7 @@ const it: LocaleResource = {
     labs: 'Labs',
     dailyNotebookDescription: 'Acquisisci nuove note ogni giorno con un layout basato sul calendario',
     tableView: 'Vista tabella',
-    tableViewDescription: 'Mostra le note e i file dell\'argomento corrente in un layout a tabella',
+    tableViewDescription: "Mostra le note e i file dell'argomento corrente in un layout a tabella",
     newNoteDefaults: 'Valori predefiniti nuova nota',
 
     noteType: 'Tipo di nota',
@@ -608,8 +613,8 @@ const it: LocaleResource = {
     deleteLocalDataAndContinue: 'Elimina i dati locali e continua',
 
     passwordResetWarningPart1: 'Poiché le tue note sono crittografate con la tua password,',
-    passwordResetWarningHighlight: 'Standard Red Notes non dispone di un\'opzione di reimpostazione della password',
-    passwordResetWarningPart2: '. Se dimentichi la password, perderai definitivamente l\'accesso ai tuoi dati.',
+    passwordResetWarningHighlight: "Standard Red Notes non dispone di un'opzione di reimpostazione della password",
+    passwordResetWarningPart2: ". Se dimentichi la password, perderai definitivamente l'accesso ai tuoi dati.",
     confirmPassword: 'Conferma password',
     creatingAccount: 'Creazione account...',
     createAccountAndSignIn: 'Crea account e accedi',
@@ -622,7 +627,7 @@ const it: LocaleResource = {
     workspaceNameOptional: 'Nome area di lavoro (facoltativo)',
 
     generalAccountMenuLabel: 'Menu generale account',
-    signedInAs: 'Hai effettuato l\'accesso come:',
+    signedInAs: "Hai effettuato l'accesso come:",
     syncing: 'Sincronizzazione...',
     lastSynced: 'Ultima sincronizzazione:',
     offlineSignInPrompt:
@@ -633,7 +638,7 @@ const it: LocaleResource = {
     documentation: 'Documentazione',
     keyboardShortcuts: 'Scorciatoie da tastiera',
     commandPalette: 'Riquadro comandi',
-    signOutWorkspace: 'Esci dall\'area di lavoro',
+    signOutWorkspace: "Esci dall'area di lavoro",
 
     mergeLocalData: 'Unisci dati locali ({{count}} note e argomenti)',
     mergeLocalDataTooltip:
@@ -654,10 +659,10 @@ const it: LocaleResource = {
     workspaceSwitcherMenuLabel: 'Menu selezione area di lavoro',
     signOutAllWorkspacesConfirm: 'Sei sicuro di voler uscire da tutte le aree di lavoro su questo dispositivo?',
     signOutAll: 'Esci da tutte',
-    addAnotherWorkspace: 'Aggiungi un\'altra area di lavoro',
+    addAnotherWorkspace: "Aggiungi un'altra area di lavoro",
     signOutAllWorkspaces: 'Esci da tutte le aree di lavoro',
 
-    deleteAccountTitle: 'Eliminare l\'account?',
+    deleteAccountTitle: "Eliminare l'account?",
     deleteMyAccountForGood: 'Elimina definitivamente il mio account',
 
     dataNotBackedUp: 'Dati senza backup',
@@ -668,7 +673,8 @@ const it: LocaleResource = {
 
     waitingForSecurityKey: 'In attesa della chiave di sicurezza...',
     authenticationSuccessful: 'Autenticazione riuscita!',
-    insertSecurityKeyPrompt: 'Inserisci la tua chiave di sicurezza hardware, quindi premi il pulsante qui sotto per autenticarti.',
+    insertSecurityKeyPrompt:
+      'Inserisci la tua chiave di sicurezza hardware, quindi premi il pulsante qui sotto per autenticarti.',
     authenticate: 'Autenticati',
   },
   search: {
@@ -684,7 +690,7 @@ const it: LocaleResource = {
     aiTooltip:
       'Riclassifica i migliori risultati per pertinenza semantica utilizzando il provider AI configurato. ' +
       'Invia i titoli e brevi estratti di quei candidati, insieme alla tua query, al provider.',
-    aiSearchWithAi: 'Cerca con l\'AI',
+    aiSearchWithAi: "Cerca con l'AI",
     aiRanking: 'Classificazione…',
     aiRankedByRelevance: 'Classificati per pertinenza AI',
     aiPrivacyNotice:
@@ -750,7 +756,8 @@ const it: LocaleResource = {
     invalidLinkTitle: 'Link non valido',
     invalidLinkMessage: 'Questo link di condivisione non è valido o la chiave è mancante.',
     selfDestructTitle: 'Questa nota si autodistrugge dopo la visualizzazione',
-    oneTimeViewConsumed: 'Stai leggendo un link a visualizzazione singola. È stato ora consumato e non può essere riaperto',
+    oneTimeViewConsumed:
+      'Stai leggendo un link a visualizzazione singola. È stato ora consumato e non può essere riaperto',
     oneTimeViewExpiresClause_one: ', e scade completamente {{count}} minuto dalla prima apertura',
     oneTimeViewExpiresClause_many: ', e scade completamente {{count}} minuti dalla prima apertura',
     oneTimeViewExpiresClause_other: ', e scade completamente {{count}} minuti dalla prima apertura',
@@ -759,7 +766,8 @@ const it: LocaleResource = {
     linkExpires_other: 'Questo link scade {{count}} minuti dopo la prima apertura.',
     untitled: 'Senza titolo',
     tagHasNoNotes: 'Questo argomento non ha note.',
-    publicReadOnlyFooter: 'Questo è un link condiviso pubblico e di sola lettura. Il contenuto è stato decrittato nel tuo browser.',
+    publicReadOnlyFooter:
+      'Questo è un link condiviso pubblico e di sola lettura. Il contenuto è stato decrittato nel tuo browser.',
     confidentialWatermark: 'Riservato · {{datetime}}',
     contentHiddenTitle: 'Contenuto nascosto',
     contentHiddenMessage: 'Riporta il focus su questa finestra per visualizzare il contenuto condiviso.',

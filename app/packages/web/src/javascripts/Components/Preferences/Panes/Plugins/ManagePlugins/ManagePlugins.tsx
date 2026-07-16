@@ -54,7 +54,7 @@ const ManagePlugins: FunctionComponent<Props> = ({ pluginsLatestVersions, classN
     <div className={className}>
       {visiblePlugins.length === 0 && <div className="text-neutral">No plugins installed.</div>}
       {visiblePlugins.length > 0 && (
-        <div className="divide-y divide-border">
+        <div className="divide-border divide-y">
           {visiblePlugins
             .sort((e1, e2) => e1.displayName?.toLowerCase().localeCompare(e2.displayName?.toLowerCase()))
             .map((extension) => {

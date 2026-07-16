@@ -72,11 +72,7 @@ const isChatTab = (value: unknown): value is ChatTab => {
     return false
   }
   const tab = value as Record<string, unknown>
-  return (
-    typeof tab.id === 'string' &&
-    typeof tab.title === 'string' &&
-    typeof tab.userRenamed === 'boolean'
-  )
+  return typeof tab.id === 'string' && typeof tab.title === 'string' && typeof tab.userRenamed === 'boolean'
 }
 
 /**

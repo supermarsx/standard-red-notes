@@ -25,8 +25,7 @@ export type FormatPainterTogglePayload = { lock?: boolean } | undefined
  * Toggle the format painter. When fired with no capture pending it captures the
  * current selection's inline formatting and arms; when already armed it disarms.
  */
-export const FORMAT_PAINTER_TOGGLE: LexicalCommand<FormatPainterTogglePayload> =
-  createCommand('FORMAT_PAINTER_TOGGLE')
+export const FORMAT_PAINTER_TOGGLE: LexicalCommand<FormatPainterTogglePayload> = createCommand('FORMAT_PAINTER_TOGGLE')
 
 export default function FormatPainterPlugin(): null {
   const [editor] = useLexicalComposerContext()

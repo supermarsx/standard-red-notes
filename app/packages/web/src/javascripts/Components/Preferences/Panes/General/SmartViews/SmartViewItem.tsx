@@ -15,7 +15,7 @@ const SmartViewItem = ({ view, onEdit, onDelete }: Props) => {
   return (
     <div className="flex items-center gap-2 py-1.5">
       <Icon type={view.iconString} size="custom" className="h-5.5 w-5.5 flex-shrink-0" />
-      <span className="mr-auto overflow-hidden text-ellipsis text-sm">{view.title}</span>
+      <span className="mr-auto overflow-hidden text-sm text-ellipsis">{view.title}</span>
       <Button small onClick={onEdit}>
         Edit
       </Button>

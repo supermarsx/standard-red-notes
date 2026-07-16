@@ -1,12 +1,5 @@
 type DiagnosticValue =
-  | string
-  | number
-  | Date
-  | boolean
-  | null
-  | undefined
-  | DiagnosticValue[]
-  | { [key: string]: DiagnosticValue }
+  string | number | Date | boolean | null | undefined | DiagnosticValue[] | { [key: string]: DiagnosticValue }
 
 export type DiagnosticInfo = {
   [key: string]: Record<string, DiagnosticValue>

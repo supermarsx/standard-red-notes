@@ -1,5 +1,6 @@
 import path from 'path'
 import os from 'os'
+import { randomBytes } from 'crypto'
 
 import {
   HomeServerManagerInterface,
@@ -215,7 +216,7 @@ export class HomeServerManager implements HomeServerManagerInterface {
   }
 
   private generateRandomKey(length: number): string {
-    return require('crypto').randomBytes(length).toString('hex')
+    return randomBytes(length).toString('hex')
   }
 
   private getLocalIP() {

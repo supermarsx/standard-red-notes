@@ -81,10 +81,7 @@ const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, ''
  * host outside the trusted base). PURE + exported so the containment check is
  * unit-testable in isolation.
  */
-export const rewriteComponentUrlForSameOrigin = (
-  url: string,
-  config: PluginsSameOriginConfig | undefined,
-): string => {
+export const rewriteComponentUrlForSameOrigin = (url: string, config: PluginsSameOriginConfig | undefined): string => {
   if (!config || !config.sameOriginRendering || !url) {
     return url
   }

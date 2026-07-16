@@ -38,9 +38,7 @@ beforeAll(() => {
 
 /** Extract the `content` value of `.Lexical__listStyle--<value> > li::marker`. */
 const markerContentFor = (value: string): string | null => {
-  const block = new RegExp(
-    `\\.Lexical__listStyle--${value}\\s*>\\s*li::marker\\s*\\{([^}]*)\\}`,
-  ).exec(compiledCss)
+  const block = new RegExp(`\\.Lexical__listStyle--${value}\\s*>\\s*li::marker\\s*\\{([^}]*)\\}`).exec(compiledCss)
   if (!block) {
     return null
   }
@@ -55,18 +53,15 @@ const unquote = (raw: string): string => {
 }
 
 describe('custom list-marker glyph CSS', () => {
-  it.each(CUSTOM_GLYPH_MARKERS)(
-    '$value marker renders the bare glyph with no literal quotes',
-    ({ value, glyph }) => {
-      const raw = markerContentFor(value)
-      expect(raw).not.toBeNull()
+  it.each(CUSTOM_GLYPH_MARKERS)('$value marker renders the bare glyph with no literal quotes', ({ value, glyph }) => {
+    const raw = markerContentFor(value)
+    expect(raw).not.toBeNull()
 
-      const inner = unquote(raw as string)
-      // The actual marker string the browser shows must NOT contain quote chars.
-      expect(inner).not.toContain('"')
-      expect(inner).not.toContain("'")
-      // ...and it must still contain the intended glyph.
-      expect(inner).toContain(glyph)
-    },
-  )
+    const inner = unquote(raw as string)
+    // The actual marker string the browser shows must NOT contain quote chars.
+    expect(inner).not.toContain('"')
+    expect(inner).not.toContain("'")
+    // ...and it must still contain the intended glyph.
+    expect(inner).toContain(glyph)
+  })
 })

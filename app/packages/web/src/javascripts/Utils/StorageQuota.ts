@@ -29,9 +29,7 @@ export type StorageEstimateResult = {
 }
 
 function storageManagerAvailable(): boolean {
-  return (
-    typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.estimate === 'function'
-  )
+  return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.estimate === 'function'
 }
 
 /**
@@ -120,7 +118,10 @@ export function formatBytes(bytes: number): string {
   }
 
   const decimals = value < 10 ? 2 : value < 100 ? 1 : 0
-  const formatted = value.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+  const formatted = value
+    .toFixed(decimals)
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*?)0+$/, '$1')
   return `${formatted} ${BYTE_UNITS[unitIndex]}`
 }
 

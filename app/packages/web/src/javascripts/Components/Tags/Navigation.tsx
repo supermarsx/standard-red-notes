@@ -80,7 +80,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       className={classNames(
         className,
         'sn-component section pb-[50px] md:pb-0',
-        'h-full max-h-full overflow-hidden pt-safe-top md:h-full md:max-h-full md:min-h-0',
+        'pt-safe-top h-full max-h-full overflow-hidden md:h-full md:max-h-full md:min-h-0',
       )}
       ref={mergeRefs([ref, setElement])}
     >
@@ -92,7 +92,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           expanded={true}
         />
       </div>
-      <div id="navigation-content" className="flex-grow overflow-y-auto overflow-x-hidden">
+      <div id="navigation-content" className="flex-grow overflow-x-hidden overflow-y-auto">
         <TagSearchBar navigationController={application.navigationController} />
         <HomeSectionButton application={application} />
         <NotificationsSectionButton application={application} />
@@ -117,13 +117,13 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
       </div>
       <div
         className={classNames(
-          'fixed bottom-0 flex min-h-[50px] w-full items-center border-t border-border bg-contrast',
+          'border-border bg-contrast fixed bottom-0 flex min-h-[50px] w-full items-center border-t',
           'px-3.5 pt-2.5 md:hidden',
           hasBottomInset ? 'pb-safe-bottom' : 'pb-2.5',
         )}
       >
         <RoundIconButton
-          className="mr-auto bg-default"
+          className="bg-default mr-auto"
           onClick={() => {
             setPaneLayout(PaneLayout.ItemSelection)
           }}
@@ -131,7 +131,7 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
           icon="chevron-left"
         />
         <RoundIconButton
-          className="ml-2.5 bg-default"
+          className="bg-default ml-2.5"
           onClick={() => {
             application.accountMenuController.toggleShow()
           }}
@@ -143,12 +143,12 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
             id="lock-item"
             onClick={() => application.lock()}
             label="Locks application and wipes unencrypted data from memory."
-            className="ml-2.5 bg-default"
+            className="bg-default ml-2.5"
             icon="lock-filled"
           />
         )}
         <RoundIconButton
-          className="ml-2.5 bg-default"
+          className="bg-default ml-2.5"
           onClick={() => presentPane(AppPaneId.Assistant)}
           label="Open AI assistant"
           icon="dashboard"

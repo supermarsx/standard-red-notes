@@ -10,9 +10,8 @@
  * store stays empty (depth 0) and the dropdown arrows are greyed out while single
  * undo/redo still flows through the Yjs binding.
  */
-import { $getRoot, LexicalEditor, REDO_COMMAND, UNDO_COMMAND } from 'lexical'
+import { $getRoot, LexicalEditor, REDO_COMMAND, UNDO_COMMAND, type EditorState } from 'lexical'
 import { createEmptyHistoryState, HistoryState } from '@lexical/history'
-import type { EditorState } from 'lexical'
 
 export const MAX_HISTORY = 500
 export const HISTORY_DROPDOWN_LIMIT = 25

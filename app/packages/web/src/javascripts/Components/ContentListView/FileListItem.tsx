@@ -84,8 +84,8 @@ const FileListItemCard: FunctionComponent<DisplayableListItemProps<FileItem>> = 
       ref={listItemRef}
       role="button"
       className={classNames(
-        'content-list-item flex w-full cursor-pointer items-stretch text-text',
-        selected && 'selected border-l-2px border-solid border-info',
+        'content-list-item text-text flex w-full cursor-pointer items-stretch',
+        selected && 'selected border-l-2px border-info border-solid',
       )}
       id={file.uuid}
       onClick={onClick}
@@ -97,8 +97,8 @@ const FileListItemCard: FunctionComponent<DisplayableListItemProps<FileItem>> = 
       ) : (
         <div className="pr-4" />
       )}
-      <div className="min-w-0 flex-grow border-b border-solid border-border px-0 py-4">
-        <div className="flex items-start justify-between overflow-hidden text-base font-semibold leading-[1.3]">
+      <div className="border-border min-w-0 flex-grow border-b border-solid px-0 py-4">
+        <div className="flex items-start justify-between overflow-hidden text-base leading-[1.3] font-semibold">
           <div className="break-word mr-2">{file.title}</div>
         </div>
         <ListItemMetadata item={file} hideDate={hideDate} sortBy={sortBy} />

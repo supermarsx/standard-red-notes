@@ -17,8 +17,7 @@ import { Subtitle, Title, Text } from '../../PreferencesComponents/Content'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import { CHANGE_EDITOR_WIDTH_COMMAND } from '@standardnotes/ui-services'
-import { useLocalPreference } from '../../../../Hooks/usePreference'
-import usePreference from '../../../../Hooks/usePreference'
+import usePreference, { useLocalPreference } from '../../../../Hooks/usePreference'
 import {
   BuiltInEditorFonts,
   getGoogleFontName,
@@ -71,10 +70,10 @@ const EditorFontSelector = ({ application }: Props) => {
   }, [])
 
   const [mode, setMode] = useState<FontMode>(initialMode)
-  const [googleFontInput, setGoogleFontInput] = useState(isGoogleFontValue(fontFamily) ? getGoogleFontName(fontFamily) : '')
-  const [localFontInput, setLocalFontInput] = useState(
-    fontFamily && !isGoogleFontValue(fontFamily) ? fontFamily : '',
+  const [googleFontInput, setGoogleFontInput] = useState(
+    isGoogleFontValue(fontFamily) ? getGoogleFontName(fontFamily) : '',
   )
+  const [localFontInput, setLocalFontInput] = useState(fontFamily && !isGoogleFontValue(fontFamily) ? fontFamily : '')
 
   const modeOptions = useMemo(() => {
     const options = [
@@ -308,8 +307,8 @@ const EditorDefaults = ({ application }: Props) => {
               <div className="flex flex-col">
                 <Subtitle>Font ligatures</Subtitle>
                 <Text>
-                  Enables OpenType ligatures in the plaintext, Super and code editors (including coding ligatures such as
-                  =&gt;, != and === for monospace fonts). Ligatures only appear if the active editor font actually
+                  Enables OpenType ligatures in the plaintext, Super and code editors (including coding ligatures such
+                  as =&gt;, != and === for monospace fonts). Ligatures only appear if the active editor font actually
                   contains them; this setting does not bundle a ligature font.
                 </Text>
               </div>
@@ -347,7 +346,7 @@ const EditorDefaults = ({ application }: Props) => {
               <Text>Sets the max editor width for all notes</Text>
               <div className="mt-2">
                 <button
-                  className="flex w-full min-w-55 items-center justify-between rounded border border-border bg-default px-3.5 py-1.5 text-left text-base text-foreground md:w-fit lg:text-sm"
+                  className="border-border bg-default text-foreground flex w-full min-w-55 items-center justify-between rounded border px-3.5 py-1.5 text-left text-base md:w-fit lg:text-sm"
                   onClick={toggleEditorWidthModal}
                 >
                   {editorWidth === EditorLineWidth.FullWidth ? 'Full width' : editorWidth}

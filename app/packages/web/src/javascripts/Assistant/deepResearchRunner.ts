@@ -18,12 +18,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
 import { isDeepResearchEnabled } from './deepResearchSettings'
-import {
-  DeepResearchOptions,
-  DeepResearchReport,
-  ResearchNote,
-  runDeepResearch,
-} from './deepResearch'
+import { DeepResearchOptions, DeepResearchReport, ResearchNote, runDeepResearch } from './deepResearch'
 
 export interface DeepResearchAvailability {
   /** Whether a deep-research run can start right now. */

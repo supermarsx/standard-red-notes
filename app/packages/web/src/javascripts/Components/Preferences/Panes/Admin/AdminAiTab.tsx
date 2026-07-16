@@ -48,7 +48,7 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
   return (
     <span
       title="A saved override wins over the server environment; 'Default' means neither is set."
-      className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${settingSourceChipClass(source)}`}
+      className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${settingSourceChipClass(source)}`}
     >
       {settingSourceLabel(source)}
     </span>
@@ -58,7 +58,7 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
 /** Green/neutral "Configured" badge for a provider whose secret is write-only. */
 const ConfiguredBadge: FunctionComponent<{ configured: boolean | undefined }> = ({ configured }) => (
   <span
-    className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold ${
+    className={`inline-block rounded px-2 py-0.5 text-xs font-bold whitespace-nowrap ${
       configured ? 'bg-success text-success-contrast' : 'bg-passive-4 text-foreground'
     }`}
   >
@@ -332,8 +332,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
       <PreferencesSegment>
         <Title>AI configuration</Title>
         <Text className="mt-2">
-          Server-side AI configuration is not available on this server. Update the server to a version that provides
-          the /v1/admin/server-settings endpoint to manage AI providers from here.
+          Server-side AI configuration is not available on this server. Update the server to a version that provides the
+          /v1/admin/server-settings endpoint to manage AI providers from here.
         </Text>
       </PreferencesSegment>
     )
@@ -343,7 +343,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
     return (
       <PreferencesSegment>
         <Title>AI configuration</Title>
-        <Text className="mt-2 text-danger">{loadError}</Text>
+        <Text className="text-danger mt-2">{loadError}</Text>
         <div className="mt-3">
           <Button label="Retry" onClick={() => void load()} />
         </div>
@@ -362,8 +362,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
           <Button label="Refresh" onClick={() => void load()} disabled={busy} />
         </div>
         <Text>
-          Server-wide AI provider settings for the assistant. API keys are write-only: the server reports only whether
-          a key is configured and never returns the key itself. Values saved here are persisted on the server and{' '}
+          Server-wide AI provider settings for the assistant. API keys are write-only: the server reports only whether a
+          key is configured and never returns the key itself. Values saved here are persisted on the server and{' '}
           <strong>override the corresponding environment variables</strong>; use Clear to remove an override and fall
           back to the environment value.
         </Text>
@@ -397,7 +397,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       <PreferencesSegment>
         <Subtitle>Single-provider settings (back-compatible)</Subtitle>
-        <Text className="mt-1 text-passive-1">
+        <Text className="text-passive-1 mt-1">
           The original per-provider fields below still work and map to a default profile when no named profiles are
           defined. Prefer the profiles above for multiple providers.
         </Text>
@@ -405,7 +405,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       {/* Anthropic */}
       <PreferencesSegment>
-        <div className="rounded border border-border p-4">
+        <div className="border-border rounded border p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Subtitle>Anthropic (Claude)</Subtitle>
             <div className="flex items-center gap-2">
@@ -414,8 +414,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
             </div>
           </div>
           <Text className="mt-1">
-            API key for Anthropic's Claude models. Set a new key below to save (or replace) it; the current key is
-            never displayed.
+            API key for Anthropic's Claude models. Set a new key below to save (or replace) it; the current key is never
+            displayed.
           </Text>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <DecoratedInput
@@ -445,7 +445,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       {/* OpenAI-compatible */}
       <PreferencesSegment>
-        <div className="rounded border border-border p-4">
+        <div className="border-border rounded border p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Subtitle>OpenAI-compatible</Subtitle>
             <div className="flex items-center gap-2">
@@ -501,9 +501,8 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
               />
             </div>
             <Text className="mt-1 text-xs">
-              Examples: LM Studio <code>http://localhost:1234/v1</code>, Ollama{' '}
-              <code>http://localhost:11434/v1</code>, OpenRouter <code>https://openrouter.ai/api/v1</code>. Leave empty
-              and save to clear the override.
+              Examples: LM Studio <code>http://localhost:1234/v1</code>, Ollama <code>http://localhost:11434/v1</code>,
+              OpenRouter <code>https://openrouter.ai/api/v1</code>. Leave empty and save to clear the override.
             </Text>
           </div>
         </div>
@@ -511,7 +510,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
 
       {/* Ollama native */}
       <PreferencesSegment>
-        <div className="rounded border border-border p-4">
+        <div className="border-border rounded border p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Subtitle>Ollama (native API)</Subtitle>
             <div className="flex items-center gap-2">
@@ -582,7 +581,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
         </Text>
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <div>
-            <div className="mb-1 text-sm text-passive-1">5-hour window (tokens)</div>
+            <div className="text-passive-1 mb-1 text-sm">5-hour window (tokens)</div>
             <div className="flex flex-wrap items-center gap-2">
               <DecoratedInput
                 className={{ container: 'w-40' }}
@@ -601,7 +600,7 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
             </div>
           </div>
           <div>
-            <div className="mb-1 text-sm text-passive-1">Weekly window (tokens)</div>
+            <div className="text-passive-1 mb-1 text-sm">Weekly window (tokens)</div>
             <div className="flex flex-wrap items-center gap-2">
               <DecoratedInput
                 className={{ container: 'w-40' }}
@@ -621,7 +620,6 @@ const AdminAiTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) 
           </div>
         </div>
       </PreferencesSegment>
-
     </>
   )
 }

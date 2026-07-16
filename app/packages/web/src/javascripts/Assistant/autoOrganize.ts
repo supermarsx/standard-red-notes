@@ -119,7 +119,7 @@ export function buildOrganizeDigest(
 const ALL_NOTES_SYSTEM_PROMPT =
   'You are an organization assistant for a note-taking app. You are given a list of notes, each prefixed with an ' +
   'id in square brackets like [n3]. Propose a clean folder structure and a small set of topic tags, and assign ' +
-  'each note to exactly one folder plus zero or more tags. Prefer reusing the user\'s existing folders and tags ' +
+  "each note to exactly one folder plus zero or more tags. Prefer reusing the user's existing folders and tags " +
   '(listed below) over inventing near-duplicates. Reply with ONLY a JSON object of the shape: ' +
   '{"folders":["Work","Personal"],"tags":["budget","travel"],"assignments":[{"id":"n3","folder":"Work","tags":["budget"]}]}. ' +
   'Use the exact ids from the list. Do not include notes you were not given. ' +
@@ -140,11 +140,10 @@ const existingBlock = (label: string, names: string[]): string => {
 }
 
 /** Build the {system,user} messages for the all-notes plan. PURE. */
-export function buildAllNotesPrompt(input: {
-  digest: string
-  existingFolders: string[]
-  existingTags: string[]
-}): { system: string; user: string } {
+export function buildAllNotesPrompt(input: { digest: string; existingFolders: string[]; existingTags: string[] }): {
+  system: string
+  user: string
+} {
   const user =
     'Organize the following notes.\n\n' +
     existingBlock('folders', input.existingFolders) +

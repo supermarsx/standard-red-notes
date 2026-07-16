@@ -12,9 +12,8 @@
  * 1000px, so all 16 squares — grown from the 7 new block styles in task t40 —
  * still fit inline at GALLERY_SQUARE_WIDTH=88+gap.)
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import BlockStyleGalleryBar from '@/Components/SuperEditor/Plugins/ToolbarPlugin/BlockStyleGallery'
 import {
   GALLERY_BLOCKS,
@@ -67,7 +66,17 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
   originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
   Element.prototype.getBoundingClientRect = function () {
-    return { width: 2000, height: 40, top: 0, left: 0, right: 2000, bottom: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    return {
+      width: 2000,
+      height: 40,
+      top: 0,
+      left: 0,
+      right: 2000,
+      bottom: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect
   }
   container = document.createElement('div')
   document.body.appendChild(container)

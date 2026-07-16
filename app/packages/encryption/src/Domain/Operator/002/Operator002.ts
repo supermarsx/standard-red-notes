@@ -1,10 +1,8 @@
 import * as Common from '@standardnotes/common'
 import * as Models from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
-// eslint-disable-next-line no-duplicate-imports
 import { ItemContent, PayloadTimestampDefaults } from '@standardnotes/models'
 import * as Utils from '@standardnotes/utils'
-// eslint-disable-next-line no-duplicate-imports
 import { UuidGenerator } from '@standardnotes/utils'
 import { V002Algorithm } from '../../Algorithm'
 import { isItemsKey } from '../../Keys/ItemsKey/ItemsKey'

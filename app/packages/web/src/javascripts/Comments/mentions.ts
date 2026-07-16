@@ -80,9 +80,7 @@ export function textMentionsUser(text: string, userUuid: string): boolean {
  * text runs and mention chips. Lets the UI render chips without dangerouslySet
  * HTML. Pure.
  */
-export type CommentTextSegment =
-  | { type: 'text'; value: string }
-  | { type: 'mention'; userUuid: string; name: string }
+export type CommentTextSegment = { type: 'text'; value: string } | { type: 'mention'; userUuid: string; name: string }
 
 export function segmentCommentText(text: string): CommentTextSegment[] {
   const segments: CommentTextSegment[] = []
@@ -144,7 +142,6 @@ export function filterMentionCandidates(candidates: MentionCandidate[], query: s
     return candidates
   }
   return candidates.filter(
-    (candidate) =>
-      candidate.name.toLowerCase().includes(trimmed) || candidate.userUuid.toLowerCase().includes(trimmed),
+    (candidate) => candidate.name.toLowerCase().includes(trimmed) || candidate.userUuid.toLowerCase().includes(trimmed),
   )
 }

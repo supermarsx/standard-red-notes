@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS build
+FROM node:26.5.0-bookworm-slim AS build
 
 WORKDIR /opt/standard-red-notes/app
 
@@ -10,16 +10,12 @@ ENV CI=true
 # only add noise to the build log. Affects the build stage only (final image is nginx).
 ENV NODE_OPTIONS=--no-deprecation
 
-# Insurance for any git-sourced dep that still packs via the bundled Yarn 1 (classic):
-# its engine pins predate Node 24. A classic ~/.yarnrc disables that check for the nested
-# pack process only; Yarn Berry (the outer install) reads .yarnrc.yml and ignores this file.
-RUN printf -- '--ignore-engines true\n' > /root/.yarnrc
-
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g corepack@latest && corepack enable
+RUN npm install --global corepack@0.35.0 \
+  && corepack enable
 
 # --- Dependency layer ---------------------------------------------------------
 # Copy ONLY what Yarn needs to resolve + install the workspace graph: every
@@ -54,7 +50,7 @@ COPY packages/web/package.json packages/web/
 
 # Install only the web workspace's dependency closure. A full `yarn install` also
 # packs the desktop (`decrypt` → node-sass) and mobile (react-native forks) git
-# deps, whose native builds don't compile on Node 24; focusing skips them.
+# deps, whose native builds aren't needed for the web image; focusing skips them.
 RUN --mount=type=cache,target=/opt/standard-red-notes/app/.yarn/cache,sharing=locked \
   yarn workspaces focus @standardnotes/web
 
@@ -77,7 +73,7 @@ RUN --mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache \
 # CAP_NET_BIND_SERVICE is required). Its /docker-entrypoint.d/ runs the same
 # templating/entrypoint scripts as the stock image, so the OCR drop-in below
 # still executes at container start.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.30.3-alpine3.23
 
 # nginx.conf below listens on 8080 (the unprivileged default) instead of :80 so
 # the worker can bind without root. Compose maps the host port to 8080.

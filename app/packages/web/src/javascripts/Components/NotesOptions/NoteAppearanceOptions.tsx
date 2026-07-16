@@ -3,11 +3,7 @@ import { FunctionComponent, useCallback } from 'react'
 import { SNNote } from '@standardnotes/snjs'
 import { NotesController } from '@/Controllers/NotesController/NotesController'
 import { iconClass } from './ClassNames'
-import {
-  getNoteAppearanceColors,
-  noteHasCustomAppearance,
-  NoteAppearancePresets,
-} from '@/Utils/NoteAppearance'
+import { getNoteAppearanceColors, noteHasCustomAppearance, NoteAppearancePresets } from '@/Utils/NoteAppearance'
 
 const DefaultBackgroundSwatch = '#ffffff'
 const DefaultTextSwatch = '#000000'
@@ -61,14 +57,14 @@ export const NoteAppearanceOptions: FunctionComponent<{
         <label className="flex items-center justify-between gap-2 text-sm">
           <span>Background color</span>
           <span className="flex items-center gap-2">
-            {backgroundColor && <span className="text-xs text-passive-1">{backgroundColor}</span>}
+            {backgroundColor && <span className="text-passive-1 text-xs">{backgroundColor}</span>}
             <input
               type="color"
               aria-label="Note background color"
               disabled={disabled}
               value={backgroundColor ?? DefaultBackgroundSwatch}
               onChange={(event) => setBackgroundColor(event.target.value)}
-              className="h-9 w-11 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-6 md:w-8"
+              className="border-border h-9 w-11 cursor-pointer touch-manipulation rounded border bg-transparent p-0 md:h-6 md:w-8"
             />
           </span>
         </label>
@@ -76,14 +72,14 @@ export const NoteAppearanceOptions: FunctionComponent<{
         <label className="flex items-center justify-between gap-2 text-sm">
           <span>Text color</span>
           <span className="flex items-center gap-2">
-            {textColor && <span className="text-xs text-passive-1">{textColor}</span>}
+            {textColor && <span className="text-passive-1 text-xs">{textColor}</span>}
             <input
               type="color"
               aria-label="Note text color"
               disabled={disabled}
               value={textColor ?? DefaultTextSwatch}
               onChange={(event) => setTextColor(event.target.value)}
-              className="h-9 w-11 cursor-pointer touch-manipulation rounded border border-border bg-transparent p-0 md:h-6 md:w-8"
+              className="border-border h-9 w-11 cursor-pointer touch-manipulation rounded border bg-transparent p-0 md:h-6 md:w-8"
             />
           </span>
         </label>
@@ -98,7 +94,7 @@ export const NoteAppearanceOptions: FunctionComponent<{
             aria-label={`Apply ${preset.name} colors`}
             disabled={disabled}
             onClick={() => applyPreset(preset)}
-            className="flex h-9 w-9 touch-manipulation items-center justify-center rounded border border-border disabled:cursor-not-allowed disabled:opacity-60 md:h-6 md:w-6"
+            className="border-border flex h-9 w-9 touch-manipulation items-center justify-center rounded border disabled:cursor-not-allowed disabled:opacity-60 md:h-6 md:w-6"
             style={{ backgroundColor: preset.backgroundColor, color: preset.textColor }}
           >
             <span className="text-xs font-bold">A</span>
@@ -110,7 +106,7 @@ export const NoteAppearanceOptions: FunctionComponent<{
         type="button"
         disabled={disabled || !hasOverride}
         onClick={resetToTheme}
-        className="mt-2.5 self-start touch-manipulation rounded px-2 py-2 text-sm text-info enabled:hover:underline disabled:cursor-not-allowed disabled:text-passive-1 md:py-1"
+        className="text-info disabled:text-passive-1 mt-2.5 touch-manipulation self-start rounded px-2 py-2 text-sm enabled:hover:underline disabled:cursor-not-allowed md:py-1"
       >
         Reset to theme
       </button>

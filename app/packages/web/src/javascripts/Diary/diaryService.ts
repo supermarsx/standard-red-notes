@@ -1,11 +1,6 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { ContentType, NoteContent, SNNote } from '@standardnotes/snjs'
-import {
-  DiarySettings,
-  dateKeyForDate,
-  diaryTitleForDate,
-  normalizeDiarySettings,
-} from './diary'
+import { DiarySettings, dateKeyForDate, diaryTitleForDate, normalizeDiarySettings } from './diary'
 
 /**
  * Standard Red Notes: Diary mode — application-bound side effects.

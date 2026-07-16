@@ -42,9 +42,7 @@ describe('tiled notes: narrow-tiling flag by width', () => {
 
     const expectNarrow = width < 1024
 
-    it(`isNarrowTilingViewport is ${expectNarrow} (single-column stacking ${
-      expectNarrow ? 'on' : 'off'
-    })`, () => {
+    it(`isNarrowTilingViewport is ${expectNarrow} (single-column stacking ${expectNarrow ? 'on' : 'off'})`, () => {
       expect(computeNarrowTiling()).toBe(expectNarrow)
       // Cross-check against the raw lg query the component reads.
       expect(evaluateMediaQuery(MediaQueryBreakpoints.lg, width, 'no-preference')).toBe(!expectNarrow)

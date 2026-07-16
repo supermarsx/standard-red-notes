@@ -83,7 +83,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
           {!files.length && <ImportModalInitialPage setFiles={setFiles} selectFiles={selectFiles} />}
           {files.length > 0 && (
             <>
-              <div className="divide-y divide-border">
+              <div className="divide-border divide-y">
                 {files.map((file) => (
                   <ImportModalFileItem
                     file={file}
@@ -109,7 +109,7 @@ const ImportModal = ({ importModalController }: { importModalController: ImportM
           )}
         </div>
         {files.length > 0 && (
-          <div className="flex flex-col gap-3 border-t border-border px-4 py-4 md:gap-2 md:py-3">
+          <div className="border-border flex flex-col gap-3 border-t px-4 py-4 md:gap-2 md:py-3">
             <Switch className="flex items-center gap-2" checked={addImportsToTag} onChange={setAddImportsToTag}>
               <span className="text-sm">{c('Label').t`Add all imported notes to topic`}</span>
             </Switch>

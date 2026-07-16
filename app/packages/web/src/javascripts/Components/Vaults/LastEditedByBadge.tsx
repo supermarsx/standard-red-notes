@@ -7,10 +7,10 @@ const LastEditedByBadge = ({ contact }: { contact: TrustedContactInterface }) =>
   return (
     <div
       title={t('lastEditedBy')}
-      className="flex select-none items-center rounded bg-info px-1.5 py-1 text-info-contrast"
+      className="bg-info text-info-contrast flex items-center rounded px-1.5 py-1 select-none"
     >
-      <Icon ariaLabel={t('sharedBy')} type="pencil" className="mr-1 text-info-contrast" size="medium" />
-      <span className="mr-auto overflow-hidden text-ellipsis text-sm font-semibold lg:text-xs">{contact.name}</span>
+      <Icon ariaLabel={t('sharedBy')} type="pencil" className="text-info-contrast mr-1" size="medium" />
+      <span className="mr-auto overflow-hidden text-sm font-semibold text-ellipsis lg:text-xs">{contact.name}</span>
     </div>
   )
 }

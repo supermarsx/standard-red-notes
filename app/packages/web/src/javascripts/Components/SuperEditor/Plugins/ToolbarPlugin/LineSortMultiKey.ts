@@ -43,8 +43,7 @@ export function splitFields(line: string, separator: MultiKeySortOptions['separa
  * sorter's "case-insensitive" intent while using Intl collation so accented and
  * non-Latin scripts order sensibly.
  */
-const compareText = (a: string, b: string): number =>
-  a.localeCompare(b, undefined, { sensitivity: 'accent' })
+const compareText = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'accent' })
 
 /**
  * Parse the leading numeric portion of a field (e.g. "12abc" → 12, "$3.50" → 3.5
@@ -104,9 +103,7 @@ export function multiKeySort(lines: string[], options: MultiKeySortOptions): str
   }
 
   // Drop null entries and keys targeting a negative field; nothing left ⇒ no-op.
-  const activeKeys = (options.keys ?? []).filter(
-    (key): key is SortKey => key != null && key.field >= 0,
-  )
+  const activeKeys = (options.keys ?? []).filter((key): key is SortKey => key != null && key.field >= 0)
   if (activeKeys.length === 0) {
     return copy
   }

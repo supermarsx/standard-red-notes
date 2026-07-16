@@ -58,10 +58,10 @@ export const LinkedItemsSectionItem = ({
   return (
     <div className="relative flex items-center justify-between">
       {isRenamingFile && item instanceof FileItem ? (
-        <div className="flex flex-grow items-center gap-4 py-2 pl-3 pr-12">
+        <div className="flex flex-grow items-center gap-4 py-2 pr-12 pl-3">
           <Icon type={icon} className={classNames('flex-shrink-0', className)} />
           <input
-            className="min-w-0 flex-grow bg-default text-sm"
+            className="bg-default min-w-0 flex-grow text-sm"
             defaultValue={title}
             onKeyDown={(event) => {
               if (event.key === KeyboardKey.Escape) {
@@ -80,7 +80,7 @@ export const LinkedItemsSectionItem = ({
         </div>
       ) : (
         <button
-          className="flex max-w-full flex-grow items-center justify-between gap-4 py-2 pl-3 pr-12 text-sm hover:bg-info-backdrop focus:bg-info-backdrop"
+          className="hover:bg-info-backdrop focus:bg-info-backdrop flex max-w-full flex-grow items-center justify-between gap-4 py-2 pr-12 pl-3 text-sm"
           onClick={() => activateItem(item)}
           onContextMenu={(event) => {
             event.preventDefault()
@@ -91,7 +91,7 @@ export const LinkedItemsSectionItem = ({
         </button>
       )}
       <button
-        className="absolute right-3 top-1/2 h-7 w-7 -translate-y-1/2 cursor-pointer rounded-full border-0 bg-transparent p-1 hover:bg-contrast"
+        className="hover:bg-contrast absolute top-1/2 right-3 h-7 w-7 -translate-y-1/2 cursor-pointer rounded-full border-0 bg-transparent p-1"
         onClick={toggleMenu}
         ref={menuButtonRef}
       >
@@ -112,7 +112,7 @@ export const LinkedItemsSectionItem = ({
             toggleMenu()
           }}
         >
-          <Icon type="link-off" className="mr-2 text-danger" />
+          <Icon type="link-off" className="text-danger mr-2" />
           Unlink
         </MenuItem>
         {item instanceof FileItem && (
@@ -124,7 +124,7 @@ export const LinkedItemsSectionItem = ({
           />
         )}
         <HorizontalSeparator classes="my-2" />
-        <div className="mt-1 px-3 py-1 text-xs font-medium text-neutral">
+        <div className="text-neutral mt-1 px-3 py-1 text-xs font-medium">
           <div className="mb-1">
             <span className="font-semibold">Created at:</span> {formatDateForContextMenu(item.created_at)}
           </div>

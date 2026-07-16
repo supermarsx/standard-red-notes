@@ -20,12 +20,12 @@ const layoutOptions: { layout: TileLayout; label: string }[] = [
 
 const TilesToolbar: FunctionComponent<Props> = ({ layout, onLayoutChange, tileCount, onAddTile, canAddTile }) => {
   return (
-    <div className="flex flex-shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-b border-border bg-default px-3 py-1.5">
-      <span className="text-xs font-semibold text-passive-1">
+    <div className="border-border bg-default flex flex-shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-b px-3 py-1.5">
+      <span className="text-passive-1 text-xs font-semibold">
         {tileCount} {tileCount === 1 ? 'tile' : 'tiles'}
       </span>
 
-      <div className="flex items-center overflow-hidden rounded border border-border">
+      <div className="border-border flex items-center overflow-hidden rounded border">
         {layoutOptions.map((option) => {
           const isActive = option.layout === layout
           return (
@@ -51,8 +51,8 @@ const TilesToolbar: FunctionComponent<Props> = ({ layout, onLayoutChange, tileCo
         onClick={onAddTile}
         disabled={!canAddTile}
         className={classNames(
-          'flex touch-manipulation items-center gap-1 rounded border border-border px-3 py-1.5 text-xs lg:px-2 lg:py-1',
-          canAddTile ? 'text-text hover:bg-contrast' : 'cursor-not-allowed text-passive-2',
+          'border-border flex touch-manipulation items-center gap-1 rounded border px-3 py-1.5 text-xs lg:px-2 lg:py-1',
+          canAddTile ? 'text-text hover:bg-contrast' : 'text-passive-2 cursor-not-allowed',
         )}
       >
         <Icon type="add" size="small" />

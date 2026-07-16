@@ -22,7 +22,9 @@ describe('WebProofOfWorkSolver', () => {
   it('rejects an unsupported algorithm rather than returning a wrong solution', async () => {
     const solver = new WebProofOfWorkSolver()
 
-    await expect(solver.solve('seed', 8, 'argon2-something-else')).rejects.toThrow(/unsupported proof-of-work algorithm/i)
+    await expect(solver.solve('seed', 8, 'argon2-something-else')).rejects.toThrow(
+      /unsupported proof-of-work algorithm/i,
+    )
 
     solver.destroy()
   })

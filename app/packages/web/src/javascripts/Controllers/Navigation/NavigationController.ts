@@ -1018,9 +1018,7 @@ export class NavigationController
     // re-run would re-create every folder, duplicating them. Matching on title
     // is the stable key available across the tag->folder boundary (folders carry
     // no back-reference to their source tag).
-    const existingFolderTitles = new Set(
-      this.items.getItems<SNFolder>(FolderContentType).map((folder) => folder.title),
-    )
+    const existingFolderTitles = new Set(this.items.getItems<SNFolder>(FolderContentType).map((folder) => folder.title))
     const legacyFolderTags = allLegacyFolderTags.filter((tag) => !existingFolderTitles.has(tag.title))
 
     if (legacyFolderTags.length === 0) {

@@ -24,8 +24,7 @@ const GOOGLE_FONT_LINK_ID = 'sn-editor-google-font'
 export const BuiltInEditorFonts = {
   Default: '',
   Sans: 'var(--sn-stylekit-sans-serif-font)',
-  Serif:
-    'Georgia, Cambria, "Times New Roman", Times, serif',
+  Serif: 'Georgia, Cambria, "Times New Roman", Times, serif',
   Monospace: 'var(--sn-stylekit-monospace-font)',
 } as const
 
@@ -33,11 +32,11 @@ export type EditorFontSelectionKind = 'builtin' | 'local' | 'google'
 
 export const isGoogleFontValue = (value: string): boolean => value.startsWith(GOOGLE_FONT_PREFIX)
 
-export const getGoogleFontName = (value: string): string =>
-  isGoogleFontValue(value) ? value.slice(GOOGLE_FONT_PREFIX.length).trim() : ''
+export const getGoogleFontName = (value: string): string => {
+  return isGoogleFontValue(value) ? value.slice(GOOGLE_FONT_PREFIX.length).trim() : ''
+}
 
-export const makeGoogleFontValue = (familyName: string): string =>
-  `${GOOGLE_FONT_PREFIX}${familyName.trim()}`
+export const makeGoogleFontValue = (familyName: string): string => `${GOOGLE_FONT_PREFIX}${familyName.trim()}`
 
 /**
  * Resolves a stored preference value into a CSS font-family string that can be
@@ -156,7 +155,8 @@ export type LocalFontEntry = {
 
 /** Feature-detect the Local Font Access API. */
 export const isLocalFontAccessSupported = (): boolean =>
-  typeof window !== 'undefined' && typeof (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts === 'function'
+  typeof window !== 'undefined' &&
+  typeof (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts === 'function'
 
 /**
  * Enumerates installed local fonts via the Local Font Access API. Returns a

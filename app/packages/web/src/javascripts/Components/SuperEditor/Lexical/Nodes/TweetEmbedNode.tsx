@@ -128,13 +128,13 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
 
   if (editing) {
     return (
-      <div className="my-2 w-full max-w-full rounded border border-border bg-default" data-tweet-embed-block="true">
-        <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+      <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-tweet-embed-block="true">
+        <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
           <span className="font-semibold">Tweet / X post</span>
         </div>
         <div className="p-2">
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Paste a tweet / X post URL (https://x.com/…/status/…)"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -146,11 +146,11 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
             autoFocus
           />
           {draft.trim() && !sanitizeTweetUrl(draft) ? (
-            <div className="mt-1 text-xs text-danger">Enter a valid twitter.com or x.com status URL.</div>
+            <div className="text-danger mt-1 text-xs">Enter a valid twitter.com or x.com status URL.</div>
           ) : null}
           <button
             type="button"
-            className="mt-2 rounded bg-info px-3 py-1 text-sm text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast mt-2 rounded px-3 py-1 text-sm disabled:opacity-50"
             disabled={!sanitizeTweetUrl(draft)}
             onClick={() => commit(draft)}
           >
@@ -162,15 +162,15 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
   }
 
   return (
-    <div className="my-2 w-full max-w-full rounded border border-border bg-default" data-tweet-embed-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-tweet-embed-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Tweet / X post</span>
-        <button type="button" className="rounded px-2 py-0.5 hover:bg-contrast" onClick={() => setEditing(true)}>
+        <button type="button" className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => setEditing(true)}>
           Edit
         </button>
       </div>
       {!safeUrl ? (
-        <div className="p-2 text-sm text-danger">Enter a valid twitter.com or x.com status URL.</div>
+        <div className="text-danger p-2 text-sm">Enter a valid twitter.com or x.com status URL.</div>
       ) : (
         <div className="p-2" ref={containerRef}>
           {/* widgets.js upgrades this blockquote in place. If the script fails
@@ -181,7 +181,7 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
             </a>
           </blockquote>
           {failed ? (
-            <p className="mt-1 text-xs text-passive-1">
+            <p className="text-passive-1 mt-1 text-xs">
               Could not load the embedded post.{' '}
               <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
                 Open it on X

@@ -426,9 +426,12 @@ describe('$setCustomListStyle', () => {
     seedListAndSelect(editor)
     editor.update(() => $setCustomListStyle($getSelection(), '★'), { discrete: true })
     let result: ListNode | null = {} as ListNode
-    editor.update(() => {
-      result = $setCustomListStyle($getSelection(), '   \n')
-    }, { discrete: true })
+    editor.update(
+      () => {
+        result = $setCustomListStyle($getSelection(), '   \n')
+      },
+      { discrete: true },
+    )
     expect(result).toBeNull()
     editor.getEditorState().read(() => {
       const node = $getListNodeFromSelection($getSelection()) as ListNode
@@ -467,9 +470,12 @@ describe('$setCustomListStyle', () => {
       { discrete: true },
     )
     let result: ListNode | null = {} as ListNode
-    editor.update(() => {
-      result = $setCustomListStyle($getSelection(), '✦')
-    }, { discrete: true })
+    editor.update(
+      () => {
+        result = $setCustomListStyle($getSelection(), '✦')
+      },
+      { discrete: true },
+    )
     expect(result).toBeNull()
   })
 })
@@ -502,7 +508,9 @@ describe('applyListStyleToDOM multilevel stale-marker clearing (BUG 3)', () => {
           elements.set(node.getKey(), document.createElement('ul'))
         }
         if ('getChildren' in node && typeof (node as { getChildren?: unknown }).getChildren === 'function') {
-          for (const child of (node as unknown as { getChildren: () => import('lexical').LexicalNode[] }).getChildren()) {
+          for (const child of (
+            node as unknown as { getChildren: () => import('lexical').LexicalNode[] }
+          ).getChildren()) {
             visit(child)
           }
         }
@@ -554,7 +562,9 @@ describe('applyListStyleToDOM multilevel stale-marker clearing (BUG 3)', () => {
           }
         }
         if ('getChildren' in node && typeof (node as { getChildren?: unknown }).getChildren === 'function') {
-          for (const child of (node as unknown as { getChildren: () => import('lexical').LexicalNode[] }).getChildren()) {
+          for (const child of (
+            node as unknown as { getChildren: () => import('lexical').LexicalNode[] }
+          ).getChildren()) {
             walk(child, levelHere)
           }
         }

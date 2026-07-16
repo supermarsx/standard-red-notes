@@ -27,7 +27,7 @@ const ListItemFlagIcons: FunctionComponent<Props> = ({
 }) => {
   const { t } = useTranslation('notes')
   return (
-    <div className={classNames('flex items-start pl-0', hasBorder && 'border-b border-solid border-border', className)}>
+    <div className={classNames('flex items-start pl-0', hasBorder && 'border-border border-b border-solid', className)}>
       {item.locked && (
         <span className="flex items-center" title={t('editingDisabled')}>
           <Icon ariaLabel={t('editingDisabled')} type="pencil-off" className="text-info" size="medium" />

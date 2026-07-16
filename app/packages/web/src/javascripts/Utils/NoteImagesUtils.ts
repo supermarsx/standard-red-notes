@@ -178,9 +178,7 @@ export function collectNoteImageFiles(application: WebApplication, note: SNNote)
   return Array.from(byUuid.values())
 }
 
-type CollectedImage =
-  | { kind: 'file'; file: FileItem }
-  | { kind: 'remote'; url: string; index: number }
+type CollectedImage = { kind: 'file'; file: FileItem } | { kind: 'remote'; url: string; index: number }
 
 /**
  * Downloads every image attached to a note and triggers a single ZIP download.

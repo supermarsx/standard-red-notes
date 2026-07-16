@@ -39,7 +39,7 @@ const PinNoteButton: FunctionComponent<Props> = ({ className = '', notesControll
       <button
         className={classNames(
           'sn-icon-button flex h-10 min-w-10 cursor-pointer items-center justify-center',
-          'focus:bg-contras rounded-full border border-solid border-border text-neutral hover:bg-contrast',
+          'focus:bg-contras border-border text-neutral hover:bg-contrast rounded-full border border-solid',
           `md:h-8 md:min-w-8 ${pinned ? 'toggled' : ''}`,
           className,
         )}

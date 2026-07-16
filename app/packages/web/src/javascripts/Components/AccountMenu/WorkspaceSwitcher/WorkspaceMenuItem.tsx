@@ -65,7 +65,7 @@ const WorkspaceMenuItem: FunctionComponent<Props> = ({
             <div className="flex items-center gap-3">
               <a
                 role="button"
-                className="flex h-5 w-5 cursor-pointer items-center justify-center border-0 bg-transparent p-0 hover:bg-contrast"
+                className="hover:bg-contrast flex h-5 w-5 cursor-pointer items-center justify-center border-0 bg-transparent p-0"
                 onClick={(e) => {
                   e.stopPropagation()
                   setIsRenaming((isRenaming) => !isRenaming)
@@ -75,7 +75,7 @@ const WorkspaceMenuItem: FunctionComponent<Props> = ({
               </a>
               <a
                 role="button"
-                className="flex h-5 w-5 cursor-pointer items-center justify-center border-0 bg-transparent p-0 hover:bg-contrast"
+                className="hover:bg-contrast flex h-5 w-5 cursor-pointer items-center justify-center border-0 bg-transparent p-0"
                 onClick={(e) => {
                   e.stopPropagation()
                   onDelete()
@@ -96,7 +96,7 @@ const WorkspaceMenuItem: FunctionComponent<Props> = ({
           onKeyDown={handleInputKeyDown}
           onBlur={handleInputBlur}
           onClick={(e) => e.stopPropagation()}
-          className="absolute left-11 top-1/2 -translate-y-1/2 bg-default"
+          className="bg-default absolute top-1/2 left-11 -translate-y-1/2"
         />
       )}
     </div>

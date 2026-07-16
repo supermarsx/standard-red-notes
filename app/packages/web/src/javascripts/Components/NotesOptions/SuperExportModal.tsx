@@ -93,28 +93,28 @@ const ModalContent = observer(() => {
           />
         </div>
         {superNoteExportFormat === 'md' && (
-          <div className="mt-2 text-xs text-passive-0">
+          <div className="text-passive-0 mt-2 text-xs">
             Note that conversion to Markdown is not lossless. Some features like collapsible blocks and formatting like
             superscript/subscript may not be correctly converted.
           </div>
         )}
         {superNoteExportFormat === 'docx' && (
-          <div className="mt-2 text-xs text-passive-0">
+          <div className="text-passive-0 mt-2 text-xs">
             Exports a Word document (.docx) with structured formatting that opens faithfully in Word, LibreOffice,
             Google Docs and Pages. Some interactive blocks (e.g. Mermaid, embeds) are included as text.
           </div>
         )}
         {superNoteExportFormat === 'odt' && (
-          <div className="mt-2 text-xs text-passive-0">
+          <div className="text-passive-0 mt-2 text-xs">
             Exports an OpenDocument Text file (.odt) that opens in LibreOffice, OpenOffice, Word and Google Docs. Some
             interactive blocks (e.g. Mermaid, embeds) are included as text.
           </div>
         )}
         {(superNoteExportFormat as string) === 'txt' && (
-          <div className="mt-2 text-xs text-passive-0">Exports plain text with all formatting removed.</div>
+          <div className="text-passive-0 mt-2 text-xs">Exports plain text with all formatting removed.</div>
         )}
         {['docx', 'odt', 'pdf'].includes(superNoteExportFormat) && (
-          <div className="mt-2 text-xs text-passive-0">
+          <div className="text-passive-0 mt-2 text-xs">
             Headers, footers and page numbers follow this note&apos;s Page layout (toolbar → Page → Header/Footer).
           </div>
         )}
@@ -166,7 +166,7 @@ const ModalContent = observer(() => {
         </div>
       )}
       {canShowEmbeddedFileOptions && someNotesHaveEmbeddedFiles && (
-        <div className="mb-2 mt-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="mt-4 mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="text-base">Embedded files</div>
           <Dropdown
             label="Embedded files"

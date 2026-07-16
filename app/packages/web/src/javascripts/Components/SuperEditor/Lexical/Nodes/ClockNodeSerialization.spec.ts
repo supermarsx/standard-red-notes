@@ -13,14 +13,7 @@
 
 import { createHeadlessEditor } from '@lexical/headless'
 
-import {
-  $createClockNode,
-  ClockData,
-  ClockNode,
-  DEFAULT_CLOCK_DATA,
-  normalize,
-  SerializedClockNode,
-} from './ClockNode'
+import { $createClockNode, ClockData, ClockNode, DEFAULT_CLOCK_DATA, normalize, SerializedClockNode } from './ClockNode'
 
 const editor = createHeadlessEditor({
   namespace: 'ClockNodeSerializationTest',

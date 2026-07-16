@@ -127,7 +127,7 @@ const EditContactModal: FunctionComponent<Props> = ({ onCloseDialog, fromInvite,
       close={handleDialogClose}
       actions={modalActions}
     >
-      <div className="mb-3 flex w-full flex-col gap-4 px-4.5 pb-1.5 pt-4">
+      <div className="mb-3 flex w-full flex-col gap-4 px-4.5 pt-4 pb-1.5">
         <label>
           <div className="mb-1">Contact Name</div>
           <DecoratedInput
@@ -157,7 +157,7 @@ const EditContactModal: FunctionComponent<Props> = ({ onCloseDialog, fromInvite,
                       <StyledTooltip label="Scan QR code">
                         <button
                           type="button"
-                          className="flex cursor-pointer border-0 bg-transparent p-0 text-neutral hover:text-info"
+                          className="text-neutral hover:text-info flex cursor-pointer border-0 bg-transparent p-0"
                           aria-label="Scan QR code"
                           onClick={() => setIsScanModalOpen(true)}
                         >

@@ -92,9 +92,7 @@ describe('summarizeSync', () => {
   })
 
   it('falls back to "Untitled" for empty titles in the local-only list', () => {
-    const summary = summarizeSync([
-      item({ uuid: 'n', content_type: NOTE_CONTENT_TYPE, localOnly: true, title: '' }),
-    ])
+    const summary = summarizeSync([item({ uuid: 'n', content_type: NOTE_CONTENT_TYPE, localOnly: true, title: '' })])
     expect(summary.localOnlyItems[0].title).toBe('Untitled')
   })
 
@@ -133,10 +131,7 @@ describe('summarizeSync', () => {
   })
 
   it('with an account, a synced-and-not-excluded item counts as synced', () => {
-    const summary = summarizeSync(
-      [item({ uuid: 'n', localOnly: false, neverSynced: false })],
-      { hasAccount: true },
-    )
+    const summary = summarizeSync([item({ uuid: 'n', localOnly: false, neverSynced: false })], { hasAccount: true })
     expect(summary.synced.total).toBe(1)
     expect(summary.localOnly.total).toBe(0)
   })

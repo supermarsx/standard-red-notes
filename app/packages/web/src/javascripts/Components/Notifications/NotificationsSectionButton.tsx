@@ -39,19 +39,14 @@ const NotificationsSectionButton: FunctionComponent<Props> = ({ application }) =
         <span className={classNames('flex-grow truncate font-semibold', open && 'text-info')}>Notifications</span>
         {count > 0 && (
           <span
-            className="flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-info px-1.5 text-xs font-bold text-info-contrast"
+            className="bg-info text-info-contrast flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-xs font-bold"
             aria-label={`${count} notification${count === 1 ? '' : 's'}`}
           >
             {count > 99 ? '99+' : count}
           </span>
         )}
       </button>
-      <NotificationsPanel
-        controller={controller}
-        open={open}
-        anchorElement={buttonRef}
-        togglePopover={toggle}
-      />
+      <NotificationsPanel controller={controller} open={open} anchorElement={buttonRef} togglePopover={toggle} />
     </>
   )
 }

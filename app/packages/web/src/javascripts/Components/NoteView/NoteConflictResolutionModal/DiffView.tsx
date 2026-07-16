@@ -117,7 +117,7 @@ export const DiffView = ({
         ))}
       </div>
       <pre
-        className="font-editor min-h-0 w-full flex-grow overflow-y-auto whitespace-pre-wrap p-4 pt-0 text-editor [&::-webkit-scrollbar]:bg-transparent"
+        className="font-editor text-editor min-h-0 w-full flex-grow overflow-y-auto p-4 pt-0 whitespace-pre-wrap [&::-webkit-scrollbar]:bg-transparent"
         ref={setPreElement}
       >
         {textDiff.map(([state, text], index) => (
@@ -125,7 +125,7 @@ export const DiffView = ({
         ))}
       </pre>
       {hasOverflow && (
-        <div className="absolute right-0 top-0 z-[-1] h-full w-[19px] border-l border-border" ref={setDiffVisualizer} />
+        <div className="border-border absolute top-0 right-0 z-[-1] h-full w-[19px] border-l" ref={setDiffVisualizer} />
       )}
     </div>
   )

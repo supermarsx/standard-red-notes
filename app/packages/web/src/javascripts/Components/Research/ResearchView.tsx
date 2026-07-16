@@ -144,13 +144,17 @@ const ReferenceForm = ({
 }) => {
   const update = (patch: Partial<FormState>) => setForm({ ...form, ...patch })
   return (
-    <div className="rounded-md border border-border bg-default p-4">
-      <h3 className="mb-3 text-sm font-bold text-text">{title}</h3>
+    <div className="border-border bg-default rounded-md border p-4">
+      <h3 className="text-text mb-3 text-sm font-bold">{title}</h3>
       {notePicker}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className={labelClass}>Type</label>
-          <select className={fieldClass} value={form.kind} onChange={(e) => update({ kind: e.target.value as ReferenceKind })}>
+          <select
+            className={fieldClass}
+            value={form.kind}
+            onChange={(e) => update({ kind: e.target.value as ReferenceKind })}
+          >
             {REFERENCE_KINDS.map((kind) => (
               <option key={kind} value={kind}>
                 {REFERENCE_KIND_LABELS[kind]}
@@ -160,15 +164,30 @@ const ReferenceForm = ({
         </div>
         <div>
           <label className={labelClass}>Year</label>
-          <input className={fieldClass} value={form.year} inputMode="numeric" onChange={(e) => update({ year: e.target.value })} placeholder="e.g. 2024" />
+          <input
+            className={fieldClass}
+            value={form.year}
+            inputMode="numeric"
+            onChange={(e) => update({ year: e.target.value })}
+            placeholder="e.g. 2024"
+          />
         </div>
         <div className="sm:col-span-2">
           <label className={labelClass}>Authors (comma-separated)</label>
-          <input className={fieldClass} value={form.authors} onChange={(e) => update({ authors: e.target.value })} placeholder="Knuth, D., Lamport, L." />
+          <input
+            className={fieldClass}
+            value={form.authors}
+            onChange={(e) => update({ authors: e.target.value })}
+            placeholder="Knuth, D., Lamport, L."
+          />
         </div>
         <div>
           <label className={labelClass}>Publisher</label>
-          <input className={fieldClass} value={form.publisher} onChange={(e) => update({ publisher: e.target.value })} />
+          <input
+            className={fieldClass}
+            value={form.publisher}
+            onChange={(e) => update({ publisher: e.target.value })}
+          />
         </div>
         <div>
           <label className={labelClass}>URL</label>
@@ -176,18 +195,30 @@ const ReferenceForm = ({
         </div>
         <div className="sm:col-span-2">
           <label className={labelClass}>Keywords / tags (comma-separated)</label>
-          <input className={fieldClass} value={form.tags} onChange={(e) => update({ tags: e.target.value })} placeholder="algorithms, ml" />
+          <input
+            className={fieldClass}
+            value={form.tags}
+            onChange={(e) => update({ tags: e.target.value })}
+            placeholder="algorithms, ml"
+          />
         </div>
         <div className="sm:col-span-2">
           <label className={labelClass}>Notes</label>
-          <textarea className={classNames(fieldClass, 'min-h-[60px] resize-y')} value={form.notes} onChange={(e) => update({ notes: e.target.value })} />
+          <textarea
+            className={classNames(fieldClass, 'min-h-[60px] resize-y')}
+            value={form.notes}
+            onChange={(e) => update({ notes: e.target.value })}
+          />
         </div>
       </div>
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button className="rounded px-3 py-1 text-sm text-neutral hover:bg-contrast" onClick={onCancel}>
+        <button className="text-neutral hover:bg-contrast rounded px-3 py-1 text-sm" onClick={onCancel}>
           Cancel
         </button>
-        <button className="rounded bg-info px-3 py-1 text-sm font-semibold text-info-contrast hover:brightness-110" onClick={onSubmit}>
+        <button
+          className="bg-info text-info-contrast rounded px-3 py-1 text-sm font-semibold hover:brightness-110"
+          onClick={onSubmit}
+        >
           {submitLabel}
         </button>
       </div>
@@ -204,10 +235,7 @@ type Mode = { type: 'browse' } | { type: 'add' } | { type: 'edit'; uuid: string 
 const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
   const { presentPane } = useResponsiveAppPane()
 
-  const readNotes = useCallback(
-    () => application.items.getItems<SNNote>(ContentType.TYPES.Note),
-    [application],
-  )
+  const readNotes = useCallback(() => application.items.getItems<SNNote>(ContentType.TYPES.Note), [application])
 
   const [library, setLibrary] = useState<ReferenceItem[]>(() => buildReferenceLibrary(readNotes()))
   const [selectedUuid, setSelectedUuid] = useState<string | undefined>(undefined)
@@ -285,10 +313,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
     return sortReferences(filterReferences(library, filter), sortKey, sortDir)
   }, [library, query, kindFilter, tagFilter, yearFilter, sortKey, sortDir])
 
-  const selected = useMemo(
-    () => library.find((item) => item.uuid === selectedUuid),
-    [library, selectedUuid],
-  )
+  const selected = useMemo(() => library.find((item) => item.uuid === selectedUuid), [library, selectedUuid])
 
   // Notes not yet marked as references — candidates for "Add reference".
   const candidateNotes = useMemo(
@@ -385,7 +410,11 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
     if (filteredSorted.length === 0) {
       return
     }
-    downloadText(referencesToBibTeX(filteredSorted), `references-${todayStamp()}.bib`, 'application/x-bibtex;charset=utf-8')
+    downloadText(
+      referencesToBibTeX(filteredSorted),
+      `references-${todayStamp()}.bib`,
+      'application/x-bibtex;charset=utf-8',
+    )
   }
 
   const exportCSV = () => {
@@ -395,8 +424,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
     downloadText(referencesToCSV(filteredSorted), `references-${todayStamp()}.csv`, 'text/csv;charset=utf-8')
   }
 
-  const sortIndicator = (key: ReferenceSortKey) =>
-    sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const sortIndicator = (key: ReferenceSortKey) => (sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
 
   const filtersActive = Boolean(query || kindFilter || tagFilter || yearFilter)
 
@@ -404,17 +432,17 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="toc" className="flex-shrink-0 text-info" />
+          <Icon type="toc" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Research</span>
-          <span className="text-xs text-passive-1">({library.length})</span>
+          <span className="text-passive-1 text-xs">({library.length})</span>
         </div>
         <div className="flex items-center gap-1">
           <button
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold text-info hover:bg-default"
+            className="text-info hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold"
             onClick={startAdd}
             title="Add an existing note as a reference"
           >
@@ -422,7 +450,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
             Add reference
           </button>
           <button
-            className="rounded p-1 hover:bg-default disabled:opacity-40"
+            className="hover:bg-default rounded p-1 disabled:opacity-40"
             onClick={exportBibTeX}
             disabled={filteredSorted.length === 0}
             aria-label="Export as BibTeX"
@@ -431,7 +459,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
             <Icon type="download" size="small" />
           </button>
           <button
-            className="rounded px-2 py-1 text-xs font-semibold text-neutral hover:bg-default disabled:opacity-40"
+            className="text-neutral hover:bg-default rounded px-2 py-1 text-xs font-semibold disabled:opacity-40"
             onClick={exportCSV}
             disabled={filteredSorted.length === 0}
             title="Export current list as CSV"
@@ -439,7 +467,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
             CSV
           </button>
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => application.paneController.closeViewTab(AppPaneId.Research)}
             aria-label="Close research"
             title="Close"
@@ -453,9 +481,9 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
         {/* Library column */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Search + filters */}
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+          <div className="border-border flex flex-wrap items-center gap-2 border-b px-4 py-2">
             <div className="relative flex min-w-[160px] flex-1 items-center">
-              <Icon type="search" size="small" className="pointer-events-none absolute left-2 text-neutral" />
+              <Icon type="search" size="small" className="text-neutral pointer-events-none absolute left-2" />
               <input
                 className={classNames(fieldClass, 'pl-7')}
                 value={query}
@@ -463,7 +491,11 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                 placeholder="Search references"
               />
             </div>
-            <select className={classNames(fieldClass, 'w-auto')} value={kindFilter} onChange={(e) => setKindFilter(e.target.value as ReferenceKind | '')}>
+            <select
+              className={classNames(fieldClass, 'w-auto')}
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value as ReferenceKind | '')}
+            >
               <option value="">All types</option>
               {kinds.map((kind) => (
                 <option key={kind} value={kind}>
@@ -471,7 +503,12 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                 </option>
               ))}
             </select>
-            <select className={classNames(fieldClass, 'w-auto')} value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} disabled={tags.length === 0}>
+            <select
+              className={classNames(fieldClass, 'w-auto')}
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              disabled={tags.length === 0}
+            >
               <option value="">All tags</option>
               {tags.map((tag) => (
                 <option key={tag} value={tag}>
@@ -479,7 +516,12 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                 </option>
               ))}
             </select>
-            <select className={classNames(fieldClass, 'w-auto')} value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} disabled={years.length === 0}>
+            <select
+              className={classNames(fieldClass, 'w-auto')}
+              value={yearFilter}
+              onChange={(e) => setYearFilter(e.target.value)}
+              disabled={years.length === 0}
+            >
               <option value="">All years</option>
               {years.map((year) => (
                 <option key={year} value={year}>
@@ -489,7 +531,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
             </select>
             {filtersActive && (
               <button
-                className="rounded px-2 py-1 text-xs text-neutral hover:bg-contrast"
+                className="text-neutral hover:bg-contrast rounded px-2 py-1 text-xs"
                 onClick={() => {
                   setQuery('')
                   setKindFilter('')
@@ -505,19 +547,22 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
           {/* Table */}
           <div className="min-h-0 flex-grow overflow-y-auto">
             {library.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-passive-1">
+              <div className="text-passive-1 px-4 py-10 text-center text-sm">
                 No references yet. Use “Add reference” to mark an existing note as a research source.
               </div>
             ) : filteredSorted.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-passive-1">No references match your filters.</div>
+              <div className="text-passive-1 px-4 py-10 text-center text-sm">No references match your filters.</div>
             ) : (
               <table className="w-full table-fixed border-collapse text-sm">
-                <thead className="sticky top-0 bg-contrast text-left text-xs uppercase tracking-wide text-neutral">
+                <thead className="bg-contrast text-neutral sticky top-0 text-left text-xs tracking-wide uppercase">
                   <tr>
                     <th className="w-[36%] cursor-pointer px-3 py-2 font-semibold" onClick={() => toggleSort('title')}>
                       Title{sortIndicator('title')}
                     </th>
-                    <th className="w-[28%] cursor-pointer px-3 py-2 font-semibold" onClick={() => toggleSort('authors')}>
+                    <th
+                      className="w-[28%] cursor-pointer px-3 py-2 font-semibold"
+                      onClick={() => toggleSort('authors')}
+                    >
                       Authors{sortIndicator('authors')}
                     </th>
                     <th className="w-[10%] cursor-pointer px-3 py-2 font-semibold" onClick={() => toggleSort('year')}>
@@ -534,22 +579,22 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                     <tr
                       key={item.uuid}
                       className={classNames(
-                        'cursor-pointer border-b border-border hover:bg-contrast',
+                        'border-border hover:bg-contrast cursor-pointer border-b',
                         item.uuid === selectedUuid && 'bg-contrast',
                       )}
                       onClick={() => setSelectedUuid(item.uuid)}
                     >
-                      <td className="truncate px-3 py-2 font-semibold text-text" title={item.title}>
+                      <td className="text-text truncate px-3 py-2 font-semibold" title={item.title}>
                         {item.title}
                       </td>
-                      <td className="truncate px-3 py-2 text-neutral" title={(item.metadata.authors ?? []).join(', ')}>
+                      <td className="text-neutral truncate px-3 py-2" title={(item.metadata.authors ?? []).join(', ')}>
                         {(item.metadata.authors ?? []).join(', ') || '—'}
                       </td>
-                      <td className="px-3 py-2 text-neutral">{item.metadata.year ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral">
+                      <td className="text-neutral px-3 py-2">{item.metadata.year ?? '—'}</td>
+                      <td className="text-neutral px-3 py-2">
                         {item.metadata.kind ? REFERENCE_KIND_LABELS[item.metadata.kind] : '—'}
                       </td>
-                      <td className="truncate px-3 py-2 text-passive-1" title={(item.metadata.tags ?? []).join(', ')}>
+                      <td className="text-passive-1 truncate px-3 py-2" title={(item.metadata.tags ?? []).join(', ')}>
                         {(item.metadata.tags ?? []).join(', ') || '—'}
                       </td>
                     </tr>
@@ -561,7 +606,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
         </div>
 
         {/* Detail / form column */}
-        <div className="hidden w-[340px] flex-shrink-0 flex-col overflow-y-auto border-l border-border p-4 md:flex">
+        <div className="border-border hidden w-[340px] flex-shrink-0 flex-col overflow-y-auto border-l p-4 md:flex">
           {mode.type === 'add' ? (
             <ReferenceForm
               title="Add reference"
@@ -577,7 +622,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                     ))}
                   </select>
                   {candidateNotes.length === 0 && (
-                    <p className="mt-1 text-xs text-passive-1">Every note is already a reference.</p>
+                    <p className="text-passive-1 mt-1 text-xs">Every note is already a reference.</p>
                   )}
                 </div>
               }
@@ -599,7 +644,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
           ) : selected ? (
             <div>
               <div className="mb-3 flex items-start justify-between gap-2">
-                <h3 className="text-base font-bold text-text">{selected.title}</h3>
+                <h3 className="text-text text-base font-bold">{selected.title}</h3>
               </div>
               <dl className="space-y-2 text-sm">
                 {selected.metadata.kind && (
@@ -612,7 +657,12 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                   <div>
                     <dt className={labelClass}>URL</dt>
                     <dd>
-                      <a className="break-all text-info hover:underline" href={selected.metadata.url} target="_blank" rel="noreferrer">
+                      <a
+                        className="text-info break-all hover:underline"
+                        href={selected.metadata.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         {selected.metadata.url}
                       </a>
                     </dd>
@@ -622,11 +672,11 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                 {selected.metadata.notes && <Detail label="Notes" value={selected.metadata.notes} />}
               </dl>
 
-              <div className="mt-4 rounded border border-border bg-contrast p-2">
+              <div className="border-border bg-contrast mt-4 rounded border p-2">
                 <div className="mb-1 flex items-center justify-between">
                   <span className={labelClass}>Citation</span>
                   <button
-                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-info hover:bg-default"
+                    className="text-info hover:bg-default flex items-center gap-1 rounded px-1.5 py-0.5 text-xs"
                     onClick={() => copyCitation(selected)}
                     title="Copy citation"
                   >
@@ -634,26 +684,26 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
                     Copy
                   </button>
                 </div>
-                <p className="text-sm text-text">{citationString(selected)}</p>
+                <p className="text-text text-sm">{citationString(selected)}</p>
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
-                  className="flex items-center gap-1 rounded bg-info px-3 py-1 text-sm font-semibold text-info-contrast hover:brightness-110"
+                  className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1 text-sm font-semibold hover:brightness-110"
                   onClick={() => openNote(selected.uuid)}
                 >
                   <Icon type="open-in" size="small" />
                   Open note
                 </button>
                 <button
-                  className="flex items-center gap-1 rounded px-3 py-1 text-sm text-neutral hover:bg-contrast"
+                  className="text-neutral hover:bg-contrast flex items-center gap-1 rounded px-3 py-1 text-sm"
                   onClick={() => startEdit(selected)}
                 >
                   <Icon type="pencil" size="small" />
                   Edit
                 </button>
                 <button
-                  className="flex items-center gap-1 rounded px-3 py-1 text-sm text-danger hover:bg-contrast"
+                  className="text-danger hover:bg-contrast flex items-center gap-1 rounded px-3 py-1 text-sm"
                   onClick={() => removeReference(selected)}
                   title="Remove reference metadata (the note itself is kept)"
                 >
@@ -663,7 +713,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
               </div>
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-center text-sm text-passive-1">
+            <div className="text-passive-1 flex h-full items-center justify-center text-center text-sm">
               Select a reference to see its details.
             </div>
           )}
@@ -677,7 +727,7 @@ const ResearchView = forwardRef<HTMLDivElement, Props>(({ application, className
 const Detail = ({ label, value }: { label: string; value: string }) => (
   <div>
     <dt className={labelClass}>{label}</dt>
-    <dd className="whitespace-pre-wrap break-words text-text">{value}</dd>
+    <dd className="text-text break-words whitespace-pre-wrap">{value}</dd>
   </div>
 )
 

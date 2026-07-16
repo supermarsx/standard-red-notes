@@ -89,7 +89,11 @@ export type BaseDocument = {
   sort: BaseSort
 }
 
-export const BUILTIN_PROPERTIES: { id: BuiltinPropertyId; label: string; type: 'text' | 'date' | 'number' | 'boolean' | 'list' }[] = [
+export const BUILTIN_PROPERTIES: {
+  id: BuiltinPropertyId
+  label: string
+  type: 'text' | 'date' | 'number' | 'boolean' | 'list'
+}[] = [
   { id: 'title', label: 'Title', type: 'text' },
   { id: 'createdAt', label: 'Created', type: 'date' },
   { id: 'updatedAt', label: 'Modified', type: 'date' },
@@ -233,9 +237,7 @@ const sanitizeSort = (raw: unknown, columnIds: Set<string>): BaseSort => {
  * value reports whether the input was recoverable Base JSON so the editor can
  * surface a non-destructive notice when content was discarded.
  */
-export const parseBaseDocument = (
-  text: string | undefined | null,
-): { document: BaseDocument; recovered: boolean } => {
+export const parseBaseDocument = (text: string | undefined | null): { document: BaseDocument; recovered: boolean } => {
   if (!text || text.trim().length === 0) {
     return { document: createEmptyBaseDocument(), recovered: true }
   }

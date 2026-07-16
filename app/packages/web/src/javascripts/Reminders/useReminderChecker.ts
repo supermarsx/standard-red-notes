@@ -31,10 +31,7 @@ import { showNotification } from './notificationService'
 export const REMINDER_CHECK_INTERVAL_MS = 30_000
 
 /** Pure scan used by both the hook and tests: which reminders are due now. */
-export function collectDueReminders(
-  notes: SNNote[],
-  now: number,
-): { note: SNNote; reminder: Reminder }[] {
+export function collectDueReminders(notes: SNNote[], now: number): { note: SNNote; reminder: Reminder }[] {
   const due: { note: SNNote; reminder: Reminder }[] = []
   for (const note of notes) {
     if (note.trashed || note.archived) {

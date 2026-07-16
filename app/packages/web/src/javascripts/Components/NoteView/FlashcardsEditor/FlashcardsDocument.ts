@@ -37,9 +37,7 @@ export const createEmptyFlashcardsDocument = (): FlashcardsDocument => ({
 /** A small starter deck so a fresh Flashcards note isn't a blank slate. */
 export const createFlashcardsStarter = (): FlashcardsDocument => ({
   version: FLASHCARDS_DOCUMENT_VERSION,
-  cards: [
-    { id: createFlashcardsId('card'), front: 'Front of the card', back: 'Back of the card' },
-  ],
+  cards: [{ id: createFlashcardsId('card'), front: 'Front of the card', back: 'Back of the card' }],
 })
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)

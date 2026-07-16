@@ -30,7 +30,7 @@ const PluginRowView: FunctionComponent<Props> = ({ plugin }) => {
   return (
     <div className="align-center my-2.5 flex items-center justify-between md:items-center">
       <div className="mr-5">
-        <Subtitle className="mb-0 text-info">{plugin.name}</Subtitle>
+        <Subtitle className="text-info mb-0">{plugin.name}</Subtitle>
         <SmallText className="mb-1">
           A <strong>{pluginType}</strong> by {plugin.publisher}
         </SmallText>

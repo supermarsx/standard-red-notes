@@ -70,7 +70,13 @@ let renderSeq = 0
  * if the code isn't a simple flowchart it starts from an empty model and notes
  * that hand-edited code isn't reverse-parsed.
  */
-function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: (next: string) => void }): React.JSX.Element {
+function GraphicalBuilder({
+  code,
+  onCodeChange,
+}: {
+  code: string
+  onCodeChange: (next: string) => void
+}): React.JSX.Element {
   // Parse once on mount (and whenever a parseable code arrives), then keep a
   // local model the form edits. We do not continuously re-parse outgoing code
   // to avoid fighting the user's typing in the builder.
@@ -154,15 +160,17 @@ function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: 
     [model, commit],
   )
 
-  const inputClass = 'min-w-0 flex-1 rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
-  const selectClass = 'rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
+  const inputClass =
+    'min-w-0 flex-1 rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
+  const selectClass =
+    'rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
 
   return (
     <div className="w-full p-2 text-sm" data-mermaid-graphical="true">
       {!parsedFromCode ? (
-        <div className="mb-2 rounded border border-warning bg-contrast p-1.5 text-xs text-foreground">
-          The current source isn’t a simple flowchart, so it can’t be loaded into the builder. Editing here will replace the
-          source with a generated flowchart.
+        <div className="border-warning bg-contrast text-foreground mb-2 rounded border p-1.5 text-xs">
+          The current source isn’t a simple flowchart, so it can’t be loaded into the builder. Editing here will replace
+          the source with a generated flowchart.
         </div>
       ) : null}
 
@@ -185,11 +193,15 @@ function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: 
       <div className="mb-3">
         <div className="mb-1 flex items-center justify-between">
           <span className="font-semibold">Nodes</span>
-          <button type="button" className="rounded border border-border px-2 py-0.5 hover:bg-contrast" onClick={addNode}>
+          <button
+            type="button"
+            className="border-border hover:bg-contrast rounded border px-2 py-0.5"
+            onClick={addNode}
+          >
             + Add node
           </button>
         </div>
-        {model.nodes.length === 0 ? <div className="text-xs text-passive-1">No nodes yet.</div> : null}
+        {model.nodes.length === 0 ? <div className="text-passive-1 text-xs">No nodes yet.</div> : null}
         <div className="flex flex-col gap-1">
           {model.nodes.map((node, index) => (
             <div key={index} className="flex items-center gap-1">
@@ -210,7 +222,7 @@ function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: 
               />
               <button
                 type="button"
-                className="rounded px-1.5 py-0.5 text-danger hover:bg-contrast"
+                className="text-danger hover:bg-contrast rounded px-1.5 py-0.5"
                 onClick={() => removeNode(index)}
                 aria-label={`Remove node ${index + 1}`}
                 title="Remove node"
@@ -227,14 +239,14 @@ function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: 
           <span className="font-semibold">Edges</span>
           <button
             type="button"
-            className="rounded border border-border px-2 py-0.5 hover:bg-contrast disabled:opacity-50"
+            className="border-border hover:bg-contrast rounded border px-2 py-0.5 disabled:opacity-50"
             onClick={addEdge}
             disabled={model.nodes.length === 0}
           >
             + Add edge
           </button>
         </div>
-        {model.edges.length === 0 ? <div className="text-xs text-passive-1">No edges yet.</div> : null}
+        {model.edges.length === 0 ? <div className="text-passive-1 text-xs">No edges yet.</div> : null}
         <div className="flex flex-col gap-1">
           {model.edges.map((edge, index) => (
             <div key={index} className="flex items-center gap-1">
@@ -272,7 +284,7 @@ function GraphicalBuilder({ code, onCodeChange }: { code: string; onCodeChange: 
               />
               <button
                 type="button"
-                className="rounded px-1.5 py-0.5 text-danger hover:bg-contrast"
+                className="text-danger hover:bg-contrast rounded px-1.5 py-0.5"
                 onClick={() => removeEdge(index)}
                 aria-label={`Remove edge ${index + 1}`}
                 title="Remove edge"
@@ -434,18 +446,17 @@ function MermaidComponent({
   const showGraphical = viewMode === 'graphical'
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-mermaid-block="true">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-mermaid-block="true">
+      <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Mermaid diagram</span>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex overflow-hidden rounded border border-border" role="group" aria-label="View mode">
+          <div className="border-border flex overflow-hidden rounded border" role="group" aria-label="View mode">
             {MERMAID_VIEW_MODES.map((mode) => (
               <button
                 key={mode}
                 type="button"
                 className={
-                  'px-2 py-0.5 capitalize ' +
-                  (viewMode === mode ? 'bg-info text-info-contrast' : 'hover:bg-contrast')
+                  'px-2 py-0.5 capitalize ' + (viewMode === mode ? 'bg-info text-info-contrast' : 'hover:bg-contrast')
                 }
                 aria-pressed={viewMode === mode}
                 onClick={() => setViewMode(mode)}
@@ -457,7 +468,7 @@ function MermaidComponent({
           <label className="flex items-center gap-1">
             Templates
             <select
-              className="rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
               value=""
               onChange={(e) => {
                 if (e.target.value) {
@@ -479,7 +490,7 @@ function MermaidComponent({
           <label className="flex items-center gap-1">
             Theme
             <select
-              className="rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
               value={theme}
               onChange={(e) => setTheme(e.target.value as MermaidTheme)}
               aria-label="Diagram theme"
@@ -493,7 +504,7 @@ function MermaidComponent({
           </label>
           <button
             type="button"
-            className="rounded px-2 py-0.5 hover:bg-contrast"
+            className="hover:bg-contrast rounded px-2 py-0.5"
             onClick={reload}
             title="Re-render the diagram"
           >
@@ -504,15 +515,17 @@ function MermaidComponent({
 
       <div className={'flex ' + (viewMode === 'split' ? 'flex-col md:flex-row' : 'flex-col')}>
         {showGraphical ? (
-          <div className="w-full border-b border-border md:border-b-0">
+          <div className="border-border w-full border-b md:border-b-0">
             <GraphicalBuilder code={draft} onCodeChange={onCodeChange} />
           </div>
         ) : null}
 
         {showCode ? (
-          <div className={'flex flex-col ' + (viewMode === 'split' ? 'md:w-1/2 md:border-r md:border-border' : 'w-full')}>
+          <div
+            className={'flex flex-col ' + (viewMode === 'split' ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}
+          >
             <textarea
-              className="w-full resize-y bg-default p-2 font-mono text-sm text-foreground outline-none"
+              className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
               rows={Math.max(6, draft.split('\n').length + 1)}
               value={draft}
               spellCheck={false}
@@ -528,10 +541,10 @@ function MermaidComponent({
             {svg ? (
               <div dangerouslySetInnerHTML={{ __html: svg }} />
             ) : (
-              !error && <div className="text-sm text-passive-1">Empty diagram</div>
+              !error && <div className="text-passive-1 text-sm">Empty diagram</div>
             )}
             {error ? (
-              <div className="mt-1 whitespace-pre-wrap text-xs text-danger" role="alert">
+              <div className="text-danger mt-1 text-xs whitespace-pre-wrap" role="alert">
                 {error}
               </div>
             ) : null}
@@ -560,7 +573,12 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     return new MermaidNode(node.__code, node.__theme, node.__viewMode, node.__key)
   }
 
-  constructor(code: string, theme: MermaidTheme = DEFAULT_MERMAID_THEME, viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE, key?: NodeKey) {
+  constructor(
+    code: string,
+    theme: MermaidTheme = DEFAULT_MERMAID_THEME,
+    viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE,
+    key?: NodeKey,
+  ) {
     super(key)
     this.__code = code
     this.__theme = theme
@@ -645,12 +663,7 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
     return (
-      <MermaidComponent
-        code={this.__code}
-        theme={this.__theme}
-        viewMode={this.__viewMode}
-        nodeKey={this.getKey()}
-      />
+      <MermaidComponent code={this.__code} theme={this.__theme} viewMode={this.__viewMode} nodeKey={this.getKey()} />
     )
   }
 }

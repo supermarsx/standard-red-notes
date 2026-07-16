@@ -1,8 +1,4 @@
-import {
-  DecryptedParameters,
-  EncryptedInputParameters,
-  ErrorDecryptingParameters,
-} from '@standardnotes/encryption'
+import { DecryptedParameters, EncryptedInputParameters, ErrorDecryptingParameters } from '@standardnotes/encryption'
 import { ItemContent } from '@standardnotes/models'
 
 /**

@@ -358,13 +358,15 @@ const nl: LocaleResource = {
     noFolder: 'Geen map',
     fileProtected: 'Dit bestand is beveiligd.',
     authenticateToView: 'Verifieer om dit bestand te bekijken.',
-    addPasscodeToView: 'Voeg een toegangscode toe of maak een account aan om verificatie te vereisen om dit bestand te bekijken.',
+    addPasscodeToView:
+      'Voeg een toegangscode toe of maak een account aan om verificatie te vereisen om dit bestand te bekijken.',
     openAccountMenu: 'Accountmenu openen',
     authenticate: 'Verifiëren',
     viewFile: 'Bestand bekijken',
     loading: 'Laden...',
     fileCannotBePreviewed: 'Dit bestand kan niet worden weergegeven.',
-    errorLoadingFile: 'Er is een fout opgetreden bij het laden van het bestand. Probeer het opnieuw of download het bestand en open het met een andere applicatie.',
+    errorLoadingFile:
+      'Er is een fout opgetreden bij het laden van het bestand. Probeer het opnieuw of download het bestand en open het met een andere applicatie.',
     tryAgain: 'Opnieuw proberen',
     downloadToView: 'Download dit bestand en open het met een andere applicatie om het te bekijken.',
     fileInformation: 'Bestandsinformatie',
@@ -413,15 +415,18 @@ const nl: LocaleResource = {
     cancelOcr: 'OCR annuleren',
     preparingOcr: 'OCR voorbereiden...',
     ocrProgress: 'OCR pagina {{current}} / {{total}} ({{percent}}%)',
-    ocrCachedReRunTooltip: 'Tekst al geëxtraheerd (gecachet). OCR opnieuw uitvoeren in je browser (blijft op je apparaat).',
+    ocrCachedReRunTooltip:
+      'Tekst al geëxtraheerd (gecachet). OCR opnieuw uitvoeren in je browser (blijft op je apparaat).',
     ocrExtractedReRunTooltip: 'Tekst geëxtraheerd. OCR opnieuw uitvoeren in je browser (blijft op je apparaat).',
-    ocrExtractTooltip: 'Tekst uit gescande pagina\'s halen met OCR. Draait in je browser; niets verlaat je apparaat (traag; downloadt taalgegevens).',
+    ocrExtractTooltip:
+      "Tekst uit gescande pagina's halen met OCR. Draait in je browser; niets verlaat je apparaat (traag; downloadt taalgegevens).",
     extractTextWithOcrBrowser: 'Tekst extraheren met OCR in je browser',
     reRunOcrBrowser: 'OCR opnieuw uitvoeren (browser)',
     extractTextOcr: 'Tekst extraheren (OCR)',
     serverOcrTooltip:
       'OCR op de SERVER uitvoeren. Hierbij worden de pagina-afbeeldingen van deze PDF naar de server verzonden en wordt eind-tot-eind-versleuteling VERLATEN — de server kan die inhoud lezen. Bij browser-OCR blijft alles op je apparaat.',
-    runOcrOnServerAria: 'OCR op de server uitvoeren (verzendt pagina-afbeeldingen naar de server; verlaat eind-tot-eind-versleuteling)',
+    runOcrOnServerAria:
+      'OCR op de server uitvoeren (verzendt pagina-afbeeldingen naar de server; verlaat eind-tot-eind-versleuteling)',
     runOcrOnServer: 'OCR op server uitvoeren',
     copyAllExtractedText: 'Alle geëxtraheerde tekst kopiëren',
     copyExtractedTextAria: 'Geëxtraheerde tekst kopiëren',
@@ -432,7 +437,8 @@ const nl: LocaleResource = {
     previousMatch: 'Vorige overeenkomst',
     nextMatch: 'Volgende overeenkomst',
     closeSearch: 'Zoeken sluiten',
-    serverOcrDisclosurePrefix: 'Server-OCR is beschikbaar voor je account. Het verzendt de pagina-afbeeldingen van deze PDF naar de server en',
+    serverOcrDisclosurePrefix:
+      'Server-OCR is beschikbaar voor je account. Het verzendt de pagina-afbeeldingen van deze PDF naar de server en',
     serverOcrDisclosureBold: 'verlaat eind-tot-eind-versleuteling',
     serverOcrDisclosureSuffix:
       ' — de server (en iedereen die deze beheert) kan die inhoud lezen. Bij browser-OCR blijft alles op je apparaat. Standaard is browser-OCR.',
@@ -601,7 +607,8 @@ const nl: LocaleResource = {
     ignoreWarning: 'Waarschuwing negeren',
     waitingForSecurityKey: 'Wachten op beveiligingssleutel...',
     authenticationSuccessful: 'Verificatie geslaagd!',
-    insertSecurityKeyPrompt: 'Steek je hardware-beveiligingssleutel in en druk op de onderstaande knop om te verifiëren.',
+    insertSecurityKeyPrompt:
+      'Steek je hardware-beveiligingssleutel in en druk op de onderstaande knop om te verifiëren.',
     authenticate: 'Verifiëren',
   },
   search: {
@@ -636,7 +643,7 @@ const nl: LocaleResource = {
     flagArchived: 'Gearchiveerd',
     flagStarred: 'Gemarkeerd',
     flagTrashed: 'In prullenbak',
-    topicsLabel: 'Onderwerpen (door komma\'s gescheiden)',
+    topicsLabel: "Onderwerpen (door komma's gescheiden)",
     topicsPlaceholder: 'werk, persoonlijk',
     noteTypeLabel: 'Notitietype',
     searchInLabel: 'Zoeken in',

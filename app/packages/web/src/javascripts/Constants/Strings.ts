@@ -5,9 +5,7 @@ import { c } from 'ttag'
 /** @generic */
 export const STRING_SESSION_EXPIRED = () =>
   c('Error').t`Your session has expired. New changes will not be pulled in. Please sign in to refresh your session.`
-export const STRING_DEFAULT_FILE_ERROR = () =>
-  c('Error')
-    .t`Please use the Bold Editor to attach images and files.`
+export const STRING_DEFAULT_FILE_ERROR = () => c('Error').t`Please use the Bold Editor to attach images and files.`
 export const STRING_GENERIC_SYNC_ERROR = () =>
   c('Error').t`There was an error syncing. Please try again. If all else fails, try signing out and signing back in.`
 export function StringSyncException(data: unknown) {

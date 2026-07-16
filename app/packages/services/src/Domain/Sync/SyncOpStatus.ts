@@ -108,7 +108,6 @@ export class SyncOpStatus {
     return !!this.error
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setError(error: any): void {
     this.error = error
   }

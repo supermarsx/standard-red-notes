@@ -13,9 +13,8 @@
  * at every target width to prove the structure is width-independent (the tab bar
  * is always present; only Tailwind sizing tokens differ, which jsdom can't see).
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import NoteTabBar from '@/Components/NoteGroupView/NoteTabBar'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import ApplicationProvider from '@/Components/ApplicationProvider'
@@ -253,9 +252,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
         canAddTab: false,
       }),
     )
-    const addButtonDisabled = container.querySelector(
-      'button[aria-label="New note tab"]',
-    ) as HTMLButtonElement
+    const addButtonDisabled = container.querySelector('button[aria-label="New note tab"]') as HTMLButtonElement
     expect(addButtonDisabled.disabled).toBe(true)
 
     mount(
@@ -271,9 +268,7 @@ describe('NoteTabBar interaction (switching active note)', () => {
         canAddTab: true,
       }),
     )
-    const addButtonEnabled = container.querySelector(
-      'button[aria-label="New note tab"]',
-    ) as HTMLButtonElement
+    const addButtonEnabled = container.querySelector('button[aria-label="New note tab"]') as HTMLButtonElement
     expect(addButtonEnabled.disabled).toBe(false)
     act(() => {
       addButtonEnabled.dispatchEvent(new MouseEvent('click', { bubbles: true }))

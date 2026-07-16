@@ -27,7 +27,7 @@ const NoAccountWarningContent = ({ accountMenuController, noAccountWarningContro
   }, [noAccountWarningController])
 
   return (
-    <div className="mt-4 grid grid-cols-1 rounded-md border border-border p-4">
+    <div className="border-border mt-4 grid grid-cols-1 rounded-md border p-4">
       <h1 className="sk-h3 m-0 text-base font-semibold lg:text-sm">{t('dataNotBackedUp')}</h1>
       <p className="col-start-1 col-end-3 m-0 mt-1 text-base lg:text-sm">{t('signInOrRegisterToSync')}</p>
       <Button
@@ -43,7 +43,7 @@ const NoAccountWarningContent = ({ accountMenuController, noAccountWarningContro
         title={t('ignoreWarning')}
         aria-label={t('ignoreWarning')}
         style={{ height: '20px' }}
-        className="col-start-2 row-start-1 m-0 cursor-pointer rounded-md border-0 bg-transparent p-0 text-neutral hover:text-info"
+        className="text-neutral hover:text-info col-start-2 row-start-1 m-0 cursor-pointer rounded-md border-0 bg-transparent p-0"
       >
         <Icon type="close" className="block" />
       </button>

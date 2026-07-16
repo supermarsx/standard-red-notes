@@ -176,7 +176,7 @@ const ContentListHeader = ({
 
   const FolderName = useMemo(() => {
     return (
-      <div className="flex min-w-0 flex-grow flex-col break-words pt-1 lg:pt-0">
+      <div className="flex min-w-0 flex-grow flex-col pt-1 break-words lg:pt-0">
         <div
           className={classNames('flex min-w-0 flex-grow', !optionsSubtitle && !showSyncSubtitle ? 'items-center' : '')}
         >
@@ -185,19 +185,19 @@ const ContentListHeader = ({
               type={icon}
               size="custom"
               className={classNames(
-                'ml-0.5 mr-2 h-7 w-7 flex-shrink-0 text-2xl text-neutral lg:h-6 lg:w-6 lg:text-lg',
+                'text-neutral mr-2 ml-0.5 h-7 w-7 flex-shrink-0 text-2xl lg:h-6 lg:w-6 lg:text-lg',
                 optionsSubtitle && 'md:mt-0.5',
               )}
             />
           )}
           <div className="mr-2 flex min-w-0 flex-col break-words">
-            <div className="text-2xl font-semibold text-text md:text-lg">{panelTitle}</div>
+            <div className="text-text text-2xl font-semibold md:text-lg">{panelTitle}</div>
             {showSyncSubtitle && (
               <div className={classNames('-mt-1 text-xs md:mt-0', outOfSync ? 'text-warning' : 'text-passive-0')}>
                 {outOfSync ? t('potentiallyOutOfSync') : syncSubtitle}
               </div>
             )}
-            {optionsSubtitle && <div className="text-xs text-passive-0">{optionsSubtitle}</div>}
+            {optionsSubtitle && <div className="text-passive-0 text-xs">{optionsSubtitle}</div>}
             <ListItemVaultInfo className="mt-1" item={selectedTag} />
           </div>
         </div>
@@ -215,7 +215,7 @@ const ContentListHeader = ({
             label={t('expandTopicsPanel')}
             icon="menu-variant"
             expanded={false}
-            className="mr-2 mt-1 lg:mt-0"
+            className="mt-1 mr-2 lg:mt-0"
           />
         )}
         {FolderName}

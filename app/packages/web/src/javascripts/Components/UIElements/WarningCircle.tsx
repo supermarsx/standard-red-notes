@@ -4,7 +4,7 @@ export const WarningCircle = () => {
   return (
     <button
       className={
-        'peer flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-warning text-warning-contrast'
+        'peer bg-warning text-warning-contrast flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full'
       }
     >
       <Icon type={'warning'} size="small" />

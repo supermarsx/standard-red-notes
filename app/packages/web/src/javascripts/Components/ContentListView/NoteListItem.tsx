@@ -169,15 +169,15 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
       ref={listItemRef}
       role="button"
       className={classNames(
-        'content-list-item flex w-full cursor-pointer items-stretch border-l-2 text-text',
+        'content-list-item text-text flex w-full cursor-pointer items-stretch border-l-2',
         selected
           ? `selected ${
               application.itemListController.isMultipleSelectionMode ? 'border-info' : `border-accessory-tint-${tint}`
             }`
           : 'border-transparent',
-        isPreviousItemTiled && 'mt-3 border-t border-t-border',
-        isNextItemTiled && 'mb-3 border-b border-b-border',
-        isReorderTarget && 'border-t-2 !border-t-info',
+        isPreviousItemTiled && 'border-t-border mt-3 border-t',
+        isNextItemTiled && 'border-b-border mb-3 border-b',
+        isReorderTarget && '!border-t-info border-t-2',
         isRecentlyCreated && 'note-just-created',
       )}
       id={item.uuid}
@@ -214,7 +214,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
       ) : (
         <div className="pr-4" />
       )}
-      <div className={`min-w-0 flex-grow ${hasOffsetBorder && 'border-b border-solid border-border'} px-0 py-3`}>
+      <div className={`min-w-0 flex-grow ${hasOffsetBorder && 'border-border border-b border-solid'} px-0 py-3`}>
         <ListItemTitle item={item} />
         <ListItemNotePreviewText item={item} hidePreview={hidePreview} />
         <ListItemMetadata item={item} hideDate={hideDate} sortBy={sortBy} />

@@ -28,11 +28,7 @@ import {
   createFootnoteId,
 } from './FootnoteReferenceNode'
 import { $createFootnotesNode, FootnotesNode, SerializedFootnotesNode } from './FootnotesNode'
-import {
-  $getOrderedFootnoteReferences,
-  computeFootnoteNumbering,
-  orderEntriesByReferences,
-} from './FootnoteShared'
+import { $getOrderedFootnoteReferences, computeFootnoteNumbering, orderEntriesByReferences } from './FootnoteShared'
 
 const editor = createHeadlessEditor({
   namespace: 'FootnoteNodeSerializationTest',
@@ -270,11 +266,7 @@ describe('Footnote serialization round-trip', () => {
       const dirty = {
         type: 'footnotes',
         version: 1,
-        entries: [
-          { footnoteId: 'ok', content: 'good' },
-          { content: 'no id - dropped' },
-          { footnoteId: 'no-content' },
-        ],
+        entries: [{ footnoteId: 'ok', content: 'good' }, { content: 'no id - dropped' }, { footnoteId: 'no-content' }],
       } as unknown as SerializedFootnotesNode
       const json = inEditor(() => FootnotesNode.importJSON(dirty).exportJSON())
       expect(json.entries).toEqual([

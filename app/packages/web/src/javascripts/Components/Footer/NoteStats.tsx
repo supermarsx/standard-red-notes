@@ -30,7 +30,7 @@ const NoteStats: FunctionComponent<Props> = ({ application }) => {
   return (
     <div
       title={tooltip}
-      className="flex select-none items-center whitespace-nowrap text-xs font-bold text-neutral"
+      className="text-neutral flex items-center text-xs font-bold whitespace-nowrap select-none"
       role="status"
       aria-label={`${stats.words} words, ${stats.characters} characters, ${stats.lines} lines, ${stats.paragraphs} paragraphs`}
     >

@@ -121,7 +121,9 @@ function $collectOtherTables(selfKey: NodeKey): IdentifiedTable[] {
 const typeSettingAt = (data: DataTableData, col: number): ColumnTypeSetting => data.columnTypes?.[col] ?? 'auto'
 
 const setTypeSetting = (data: DataTableData, col: number, setting: ColumnTypeSetting): void => {
-  const types = data.columnTypes ? [...data.columnTypes] : new Array<ColumnTypeSetting>(data.columns.length).fill('auto')
+  const types = data.columnTypes
+    ? [...data.columnTypes]
+    : new Array<ColumnTypeSetting>(data.columns.length).fill('auto')
   while (types.length < data.columns.length) {
     types.push('auto')
   }
@@ -171,11 +173,11 @@ function LinkCell({
 
   if (isEditing) {
     return (
-      <div className="flex flex-col gap-1 bg-contrast p-1">
+      <div className="bg-contrast flex flex-col gap-1 p-1">
         {options.length > 0 && (
           <select
             autoFocus
-            className="w-full rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-1 py-0.5 outline-none"
             defaultValue={options.some((o) => o.value === raw) ? raw : ''}
             onChange={(e) => onCommit(e.target.value)}
           >
@@ -188,7 +190,7 @@ function LinkCell({
           </select>
         )}
         <input
-          className="w-full rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+          className="border-border bg-default text-foreground focus:border-info w-full rounded border px-1 py-0.5 outline-none"
           placeholder="or type a key…"
           defaultValue={raw}
           autoFocus={options.length === 0}
@@ -209,7 +211,7 @@ function LinkCell({
     return (
       <button
         type="button"
-        className="block w-full px-2 py-1 text-left text-passive-2 outline-none hover:bg-contrast"
+        className="text-passive-2 hover:bg-contrast block w-full px-2 py-1 text-left outline-none"
         onClick={onStartEdit}
       >
         {' '}
@@ -220,18 +222,18 @@ function LinkCell({
   return (
     <button
       type="button"
-      className="flex w-full items-center gap-1 px-2 py-1 text-left outline-none hover:bg-contrast"
+      className="hover:bg-contrast flex w-full items-center gap-1 px-2 py-1 text-left outline-none"
       onClick={onStartEdit}
       onDoubleClick={() => resolution.matched && onScrollToTable(config.targetTableId)}
       title={resolution.matched ? 'Linked row — double-click to open target table' : 'Unresolved link (raw value)'}
     >
       {resolution.matched ? (
-        <span className="inline-flex items-center gap-1 rounded bg-info-backdrop px-1.5 py-px text-info">
+        <span className="bg-info-backdrop text-info inline-flex items-center gap-1 rounded px-1.5 py-px">
           <span aria-hidden>🔗</span>
           {resolution.display}
         </span>
       ) : (
-        <span className="text-foreground underline decoration-dotted decoration-passive-2">{resolution.display}</span>
+        <span className="text-foreground decoration-passive-2 underline decoration-dotted">{resolution.display}</span>
       )}
     </button>
   )
@@ -479,11 +481,11 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
   }
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-datatable-block="true">
-      <div className="flex flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-datatable-block="true">
+      <div className="border-border text-passive-1 flex flex-wrap items-center gap-1 border-b px-2 py-1 text-xs">
         <span className="mr-1 font-semibold">Data table</span>
         <input
-          className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-0.5 text-foreground outline-none focus:border-info"
+          className="border-border bg-default text-foreground focus:border-info min-w-0 flex-grow rounded border px-2 py-0.5 outline-none"
           placeholder="Search…"
           value={search}
           onChange={(e) => {
@@ -492,33 +494,33 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
           }}
         />
         <button
-          className={`rounded px-2 py-0.5 hover:bg-contrast ${showFilters ? 'bg-contrast text-info' : ''}`}
+          className={`hover:bg-contrast rounded px-2 py-0.5 ${showFilters ? 'bg-contrast text-info' : ''}`}
           onClick={() => setShowFilters((v) => !v)}
           type="button"
         >
           Filters
         </button>
         <button
-          className={`rounded px-2 py-0.5 hover:bg-contrast ${chart ? 'bg-contrast text-info' : ''}`}
+          className={`hover:bg-contrast rounded px-2 py-0.5 ${chart ? 'bg-contrast text-info' : ''}`}
           onClick={toggleChart}
           type="button"
         >
           Chart
         </button>
-        <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={addColumn} type="button">
+        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={addColumn} type="button">
           + Column
         </button>
-        <button className="rounded px-2 py-0.5 hover:bg-contrast" onClick={addRow} type="button">
+        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={addRow} type="button">
           + Row
         </button>
         {linkedIds.length > 0 && (
-          <span className="ml-auto flex items-center gap-1 text-info" title="Tables this base links to">
+          <span className="text-info ml-auto flex items-center gap-1" title="Tables this base links to">
             <span aria-hidden>🔗</span>
             {linkedIds.map((id, i) => (
               <button
                 key={id}
                 type="button"
-                className="rounded px-1 py-0.5 underline decoration-dotted hover:bg-contrast"
+                className="hover:bg-contrast rounded px-1 py-0.5 underline decoration-dotted"
                 onClick={() => scrollToTable(id)}
               >
                 {tableLabel(id)}
@@ -534,17 +536,17 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
           <thead>
             <tr>
               {columns.map((col, c) => (
-                <th key={`h-${c}`} className="border border-border bg-contrast p-0 align-top">
+                <th key={`h-${c}`} className="border-border bg-contrast border p-0 align-top">
                   <div className="flex flex-col">
                     <div className="flex items-center">
                       <input
-                        className="min-w-0 flex-grow bg-transparent px-2 py-1 text-left font-semibold text-text outline-none"
+                        className="text-text min-w-0 flex-grow bg-transparent px-2 py-1 text-left font-semibold outline-none"
                         defaultValue={col}
                         key={`hi-${c}-${col}`}
                         onBlur={(e) => setHeader(c, e.target.value)}
                       />
                       <button
-                        className="px-1 text-passive-1 hover:text-info"
+                        className="text-passive-1 hover:text-info px-1"
                         onClick={() => toggleSort(c)}
                         title="Sort by this column"
                         type="button"
@@ -552,7 +554,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                         {sortIndicator(c)}
                       </button>
                       <button
-                        className={`px-1 hover:text-info ${keyColumn === c ? 'text-info' : 'text-passive-2'}`}
+                        className={`hover:text-info px-1 ${keyColumn === c ? 'text-info' : 'text-passive-2'}`}
                         onClick={() => setKeyColumn(c)}
                         title={keyColumn === c ? 'Primary/label column' : 'Set as primary/label column'}
                         type="button"
@@ -560,7 +562,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                         {keyColumn === c ? '★' : '☆'}
                       </button>
                       <button
-                        className={`px-1 hover:text-info ${
+                        className={`hover:text-info px-1 ${
                           isLinkColumn(c) ? 'text-info' : linkConfigCol === c ? 'text-info' : 'text-passive-2'
                         }`}
                         onClick={() => setLinkConfigCol((v) => (v === c ? null : c))}
@@ -570,7 +572,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                         🔗
                       </button>
                       <button
-                        className="px-1 text-passive-1 hover:text-danger"
+                        className="text-passive-1 hover:text-danger px-1"
                         onClick={() => removeColumn(c)}
                         title="Delete column"
                         type="button"
@@ -580,7 +582,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                     </div>
                     <div className="flex items-center gap-1 px-2 pb-1">
                       <select
-                        className="rounded border border-border bg-default px-1 py-px text-[10px] uppercase tracking-wide text-passive-1 outline-none disabled:opacity-50"
+                        className="border-border bg-default text-passive-1 rounded border px-1 py-px text-[10px] tracking-wide uppercase outline-none disabled:opacity-50"
                         value={typeSettingAt(data, c)}
                         onChange={(e) => setColumnType(c, e.target.value as ColumnTypeSetting)}
                         title={isLinkColumn(c) ? 'Type ignored for link columns' : 'Column type'}
@@ -593,10 +595,10 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                           </option>
                         ))}
                       </select>
-                      {isLinkColumn(c) && <span className="text-[10px] uppercase tracking-wide text-info">Link</span>}
+                      {isLinkColumn(c) && <span className="text-info text-[10px] tracking-wide uppercase">Link</span>}
                     </div>
                     {linkConfigCol === c && (
-                      <div className="flex flex-col gap-1 border-t border-border bg-default px-2 py-1 text-[11px] font-normal normal-case text-passive-1">
+                      <div className="border-border bg-default text-passive-1 flex flex-col gap-1 border-t px-2 py-1 text-[11px] font-normal normal-case">
                         {(() => {
                           const cfg = linkConfigAt(links, c)
                           const targets = otherTables
@@ -609,7 +611,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                               <label className="flex items-center justify-between gap-1">
                                 <span>Link to</span>
                                 <select
-                                  className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                  className="border-border bg-default text-foreground min-w-0 flex-grow rounded border px-1 py-px outline-none"
                                   value={cfg?.targetTableId ?? ''}
                                   onChange={(e) => {
                                     const id = e.target.value
@@ -635,7 +637,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                                   <label className="flex items-center justify-between gap-1">
                                     <span>Key column</span>
                                     <select
-                                      className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                      className="border-border bg-default text-foreground min-w-0 flex-grow rounded border px-1 py-px outline-none"
                                       value={cfg.targetKeyColumn}
                                       onChange={(e) => setLink(c, { ...cfg, targetKeyColumn: Number(e.target.value) })}
                                     >
@@ -649,7 +651,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                                   <label className="flex items-center justify-between gap-1">
                                     <span>Display column</span>
                                     <select
-                                      className="min-w-0 flex-grow rounded border border-border bg-default px-1 py-px text-foreground outline-none"
+                                      className="border-border bg-default text-foreground min-w-0 flex-grow rounded border px-1 py-px outline-none"
                                       value={cfg.displayColumn ?? cfg.targetKeyColumn}
                                       onChange={(e) => setLink(c, { ...cfg, displayColumn: Number(e.target.value) })}
                                     >
@@ -670,7 +672,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                     {showFilters && (
                       <div className="px-2 pb-1">
                         <input
-                          className="w-full rounded border border-border bg-default px-1 py-px text-xs font-normal text-foreground outline-none focus:border-info"
+                          className="border-border bg-default text-foreground focus:border-info w-full rounded border px-1 py-px text-xs font-normal outline-none"
                           placeholder="Filter…"
                           value={filterFor(c)}
                           onChange={(e) => {
@@ -685,7 +687,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                   </div>
                 </th>
               ))}
-              <th className="w-6 border border-border bg-contrast" />
+              <th className="border-border bg-contrast w-6 border" />
             </tr>
           </thead>
           <tbody>
@@ -697,7 +699,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                   const type = effectiveTypes[c] ?? 'text'
                   const link = linkConfigAt(links, c)
                   return (
-                    <td key={`c-${idx}-${c}`} className="border border-border p-0 align-top">
+                    <td key={`c-${idx}-${c}`} className="border-border border p-0 align-top">
                       {link ? (
                         <LinkCell
                           raw={raw}
@@ -715,7 +717,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                       ) : isEditing ? (
                         <input
                           autoFocus
-                          className="w-full bg-contrast px-2 py-1 text-foreground outline-none"
+                          className="bg-contrast text-foreground w-full px-2 py-1 outline-none"
                           defaultValue={raw}
                           onBlur={(e) => {
                             setCell(idx, c, e.target.value)
@@ -733,7 +735,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                       ) : (
                         <button
                           type="button"
-                          className={`block w-full px-2 py-1 text-left outline-none hover:bg-contrast ${
+                          className={`hover:bg-contrast block w-full px-2 py-1 text-left outline-none ${
                             type === 'number' || type === 'currency' ? 'text-right tabular-nums' : ''
                           } ${raw.trim().length === 0 ? 'text-passive-2' : 'text-foreground'}`}
                           onClick={() => setEditing({ row: idx, col: c })}
@@ -744,9 +746,9 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                     </td>
                   )
                 })}
-                <td className="border border-border text-center align-middle">
+                <td className="border-border border text-center align-middle">
                   <button
-                    className="px-1 text-passive-1 hover:text-danger"
+                    className="text-passive-1 hover:text-danger px-1"
                     onClick={() => removeRow(idx)}
                     title="Delete row"
                     type="button"
@@ -758,7 +760,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
             ))}
             {pagedRows.length === 0 && (
               <tr>
-                <td className="px-2 py-3 text-center text-sm text-passive-1" colSpan={columns.length + 1}>
+                <td className="text-passive-1 px-2 py-3 text-center text-sm" colSpan={columns.length + 1}>
                   No matching rows
                 </td>
               </tr>
@@ -767,7 +769,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-border px-2 py-1 text-xs text-passive-1">
+      <div className="border-border text-passive-1 flex flex-wrap items-center gap-2 border-t px-2 py-1 text-xs">
         <span>
           {sortedRows.length} {sortedRows.length === 1 ? 'row' : 'rows'}
           {sortedRows.length !== rows.length ? ` (of ${rows.length})` : ''}
@@ -776,7 +778,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
           <label className="flex items-center gap-1">
             Rows
             <select
-              className="rounded border border-border bg-default px-1 py-px outline-none"
+              className="border-border bg-default rounded border px-1 py-px outline-none"
               value={rowsPerPage}
               onChange={(e) => setRowsPerPage(Number(e.target.value))}
             >
@@ -790,7 +792,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
           {rowsPerPage !== 0 && totalPages > 1 && (
             <div className="flex items-center gap-1">
               <button
-                className="rounded px-2 py-0.5 hover:bg-contrast disabled:opacity-40"
+                className="hover:bg-contrast rounded px-2 py-0.5 disabled:opacity-40"
                 onClick={() => setPage(Math.max(0, currentPage - 1))}
                 disabled={currentPage === 0}
                 type="button"
@@ -801,7 +803,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                 {currentPage + 1} / {totalPages}
               </span>
               <button
-                className="rounded px-2 py-0.5 hover:bg-contrast disabled:opacity-40"
+                className="hover:bg-contrast rounded px-2 py-0.5 disabled:opacity-40"
                 onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
                 disabled={currentPage >= totalPages - 1}
                 type="button"
@@ -814,12 +816,12 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       </div>
 
       {chart && (
-        <div className="border-t border-border p-2">
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-passive-1">
+        <div className="border-border border-t p-2">
+          <div className="text-passive-1 mb-2 flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-1">
               Type
               <select
-                className="rounded border border-border bg-default px-1 py-px outline-none"
+                className="border-border bg-default rounded border px-1 py-px outline-none"
                 value={chart.type}
                 onChange={(e) => setChart({ ...chart, type: e.target.value as DataTableChartType })}
               >
@@ -831,7 +833,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
             <label className="flex items-center gap-1">
               {chart.type === 'pie' ? 'Labels' : 'X axis'}
               <select
-                className="rounded border border-border bg-default px-1 py-px outline-none"
+                className="border-border bg-default rounded border px-1 py-px outline-none"
                 value={chart.xColumn}
                 onChange={(e) => setChart({ ...chart, xColumn: Number(e.target.value) })}
               >
@@ -869,9 +871,14 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
             </div>
           </div>
           {chart.yColumns.length > 0 ? (
-            <DataTableChart columns={columns} rows={sortedRows.map((r) => r.cells)} types={effectiveTypes} config={chart} />
+            <DataTableChart
+              columns={columns}
+              rows={sortedRows.map((r) => r.cells)}
+              types={effectiveTypes}
+              config={chart}
+            />
           ) : (
-            <div className="p-3 text-sm text-passive-1">Pick at least one series column to chart.</div>
+            <div className="text-passive-1 p-3 text-sm">Pick at least one series column to chart.</div>
           )}
         </div>
       )}

@@ -207,7 +207,6 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
     return <ProtectedUnauthorizedLabel />
   }
 
-  const areSomeNotesInSharedVault = notes.some((note) => application.vaults.getItemVault(note)?.isSharedVaultListing())
   const areSomeNotesInReadonlySharedVault = notes.some((note) => {
     const vault = application.vaults.getItemVault(note)
     return vault?.isSharedVaultListing() && application.vaultUsers.isCurrentUserReadonlyVaultMember(vault)
@@ -358,7 +357,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           <Icon type="cloud-off" className={iconClass} />
           <div className="flex flex-col">
             <div>Keep local only — don&apos;t sync to the server</div>
-            <div className="mt-1 text-xs text-passive-0">
+            <div className="text-passive-0 mt-1 text-xs">
               Stays on this device. Won&apos;t be backed up or appear on your other devices.
             </div>
           </div>
@@ -647,7 +646,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
                 closeMenuAndToggleNotesList()
               }}
             >
-              <Icon type="close" className="mr-2 text-danger" />
+              <Icon type="close" className="text-danger mr-2" />
               <span className="text-danger">Delete permanently</span>
             </MenuItem>
           ) : (
@@ -681,7 +680,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
                 closeMenuAndToggleNotesList()
               }}
             >
-              <Icon type="close" className="mr-2 text-danger" />
+              <Icon type="close" className="text-danger mr-2" />
               <span className="text-danger">Delete permanently</span>
             </MenuItem>
             <MenuItem
@@ -692,7 +691,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
               disabled={areSomeNotesInReadonlySharedVault}
             >
               <div className="flex items-start">
-                <Icon type="trash-sweep" className="mr-2 text-danger" />
+                <Icon type="trash-sweep" className="text-danger mr-2" />
                 <div className="flex-row">
                   <div className="text-danger">Empty Trash</div>
                   <div className="text-xs">{notesController.trashedNotesCount} notes in Trash</div>

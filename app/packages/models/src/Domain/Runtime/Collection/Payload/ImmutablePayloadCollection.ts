@@ -39,13 +39,7 @@ export class ImmutablePayloadCollection<
     const referenceMapCopy = Object.freeze(collection.referenceMap.makeCopy()) as UuidMap
     const conflictMapCopy = Object.freeze(collection.conflictMap.makeCopy()) as UuidMap
 
-    const result = new ImmutablePayloadCollection<T>(
-      true,
-      mapCopy,
-      typedMapCopy,
-      referenceMapCopy,
-      conflictMapCopy,
-    )
+    const result = new ImmutablePayloadCollection<T>(true, mapCopy, typedMapCopy, referenceMapCopy, conflictMapCopy)
 
     Object.freeze(result)
 

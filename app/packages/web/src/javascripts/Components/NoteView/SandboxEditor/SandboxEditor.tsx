@@ -32,8 +32,9 @@ export const WebSandboxEditorIdentifier = 'org.standardnotes.web-sandbox'
 export type SandboxMode = 'js' | 'web'
 
 /** Resolve the editor mode from a note's editorIdentifier. */
-export const sandboxModeForIdentifier = (identifier: string | undefined): SandboxMode =>
-  identifier === JsSandboxEditorIdentifier ? 'js' : 'web'
+export const sandboxModeForIdentifier = (identifier: string | undefined): SandboxMode => {
+  return identifier === JsSandboxEditorIdentifier ? 'js' : 'web'
+}
 
 const PERSIST_DEBOUNCE_MS = 400
 const AUTO_RUN_DEBOUNCE_MS = 600
@@ -74,7 +75,6 @@ const handleTabKey = (event: ReactKeyboardEvent<HTMLTextAreaElement>, onChange: 
 }
 
 export const SandboxEditor: FunctionComponent<Props> = ({
-  application,
   controller,
   mode,
   readonly,
@@ -256,20 +256,21 @@ export const SandboxEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="code" className="flex-shrink-0 text-info" />
-          <span className="truncate text-sm font-bold">
-            {mode === 'js' ? 'JS Sandbox' : 'Web App Sandbox'}
-          </span>
+          <Icon type="code" className="text-info flex-shrink-0" />
+          <span className="truncate text-sm font-bold">{mode === 'js' ? 'JS Sandbox' : 'Web App Sandbox'}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <span className="hidden items-center gap-1 text-xs text-passive-1 sm:flex" title="Your code runs in an isolated sandboxed iframe in your browser. It cannot reach this app, your cookies, or storage.">
+          <span
+            className="text-passive-1 hidden items-center gap-1 text-xs sm:flex"
+            title="Your code runs in an isolated sandboxed iframe in your browser. It cannot reach this app, your cookies, or storage."
+          >
             <Icon type="lock" size="small" />
             Isolated sandbox
           </span>
           <button
-            className="flex items-center gap-1 rounded bg-info px-3 py-1 text-sm font-semibold text-info-contrast hover:opacity-90"
+            className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1 text-sm font-semibold hover:opacity-90"
             onClick={run}
             title="Run code"
           >
@@ -280,7 +281,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a sandbox and a blank one was started. Your original text is
             preserved until you make a change.
@@ -294,8 +295,8 @@ export const SandboxEditor: FunctionComponent<Props> = ({
       {/* Editor + preview. Stacks vertically on mobile, side-by-side on md+. */}
       <div className="flex min-h-0 flex-grow flex-col md:flex-row">
         {/* Code panes */}
-        <div className="flex min-h-0 flex-1 flex-col border-b border-border md:border-b-0 md:border-r">
-          <div className="flex items-center gap-1 border-b border-border bg-contrast px-2 py-1">
+        <div className="border-border flex min-h-0 flex-1 flex-col border-b md:border-r md:border-b-0">
+          <div className="border-border bg-contrast flex items-center gap-1 border-b px-2 py-1">
             {panes.map((pane) => (
               <button
                 key={pane}
@@ -319,13 +320,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
                 autoCapitalize="off"
                 autoCorrect="off"
                 disabled={isReadonly}
-                placeholder={
-                  pane === 'js'
-                    ? '// JavaScript'
-                    : pane === 'css'
-                      ? '/* CSS */'
-                      : '<!-- HTML -->'
-                }
+                placeholder={pane === 'js' ? '// JavaScript' : pane === 'css' ? '/* CSS */' : '<!-- HTML -->'}
                 onChange={(event) => setPaneValue(pane, event.target.value)}
                 onKeyDown={(event) => handleTabKey(event, (value) => setPaneValue(pane, value))}
                 aria-label={`${paneLabel[pane]} code`}
@@ -338,7 +333,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
         <div className="flex min-h-[12rem] flex-1 flex-col md:min-h-0">
           {mode === 'js' ? (
             <>
-              <div className="flex items-center justify-between border-b border-border bg-contrast px-3 py-1 text-xs font-semibold text-passive-1">
+              <div className="border-border bg-contrast text-passive-1 flex items-center justify-between border-b px-3 py-1 text-xs font-semibold">
                 <span>Console</span>
                 {consoleEntries.length > 0 && (
                   <button className="text-info hover:underline" onClick={() => setConsoleEntries([])}>
@@ -346,7 +341,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
                   </button>
                 )}
               </div>
-              <div className="min-h-0 flex-grow overflow-auto bg-default p-2 font-mono text-xs">
+              <div className="bg-default min-h-0 flex-grow overflow-auto p-2 font-mono text-xs">
                 {consoleEntries.length === 0 ? (
                   <p className="text-passive-2">Press Run to execute your JavaScript and see console output here.</p>
                 ) : (
@@ -354,12 +349,8 @@ export const SandboxEditor: FunctionComponent<Props> = ({
                     <div
                       key={entry.id}
                       className={classNames(
-                        'whitespace-pre-wrap break-words border-b border-border py-1',
-                        entry.level === 'error'
-                          ? 'text-danger'
-                          : entry.level === 'warn'
-                            ? 'text-warning'
-                            : 'text-text',
+                        'border-border border-b py-1 break-words whitespace-pre-wrap',
+                        entry.level === 'error' ? 'text-danger' : entry.level === 'warn' ? 'text-warning' : 'text-text',
                       )}
                     >
                       {entry.message}
@@ -370,7 +361,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
             </>
           ) : (
             <>
-              <div className="border-b border-border bg-contrast px-3 py-1 text-xs font-semibold text-passive-1">
+              <div className="border-border bg-contrast text-passive-1 border-b px-3 py-1 text-xs font-semibold">
                 Preview
               </div>
               <div className="min-h-0 flex-grow bg-white">

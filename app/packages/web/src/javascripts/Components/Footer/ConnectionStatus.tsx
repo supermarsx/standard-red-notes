@@ -92,7 +92,7 @@ const ConnectionStatusIndicator: FunctionComponent<Props> = ({ application }) =>
         type="button"
         title={tooltip}
         onClick={() => application.accountMenuController.openSignIn()}
-        className="flex cursor-pointer select-none items-center text-xs font-bold text-warning hover:underline"
+        className="text-warning flex cursor-pointer items-center text-xs font-bold select-none hover:underline"
         aria-label={`${LABEL[status.kind]} — ${tooltip}`}
       >
         {dot}
@@ -104,7 +104,7 @@ const ConnectionStatusIndicator: FunctionComponent<Props> = ({ application }) =>
   return (
     <div
       title={tooltip}
-      className="flex select-none items-center text-xs font-bold text-neutral"
+      className="text-neutral flex items-center text-xs font-bold select-none"
       role="status"
       aria-label={`${LABEL[status.kind]} — ${tooltip}`}
     >

@@ -484,9 +484,7 @@ export class MutatorService extends AbstractService implements MutatorClientInte
 
     if (blobDeletionError) {
       const message =
-        isClientDisplayableError(blobDeletionError) && blobDeletionError.text
-          ? blobDeletionError.text
-          : 'unknown error'
+        isClientDisplayableError(blobDeletionError) && blobDeletionError.text ? blobDeletionError.text : 'unknown error'
       void this.alerts.alert(
         `The file "${file.name}" was removed, but its stored data could not be deleted from the server (${message}). ` +
           'It will be retried on your next sync.',
@@ -600,7 +598,7 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     let components = null
     try {
       components = JSON.parse(dsl.substring(1, dsl.length))
-    } catch (e) {
+    } catch {
       throw Error('Invalid smart view syntax')
     }
 

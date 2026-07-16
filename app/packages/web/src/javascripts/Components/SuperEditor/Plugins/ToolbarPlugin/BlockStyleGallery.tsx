@@ -135,9 +135,9 @@ const BlockStyleSquare = ({
       aria-pressed={isActive}
       style={{ width: GALLERY_SQUARE_WIDTH }}
       className={classNames(
-        'relative flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border bg-default p-1.5',
-        'transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
-        isActive ? 'border-info ring-2 ring-info' : 'border-border',
+        'bg-default relative flex flex-shrink-0 flex-col items-stretch gap-1 rounded border p-1.5 select-none',
+        'hover:border-info hover:bg-contrast focus-visible:border-info transition-colors duration-75 focus:outline-none',
+        isActive ? 'border-info ring-info ring-2' : 'border-border',
       )}
       onClick={() => onApply(descriptor)}
       onMouseDown={(event) => event.preventDefault()}
@@ -146,7 +146,7 @@ const BlockStyleSquare = ({
       {isActive && (
         <span
           aria-hidden
-          className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-info text-info-contrast shadow-sm"
+          className="bg-info text-info-contrast absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full shadow-sm"
         >
           <Icon type="check" size="custom" className="h-3 w-3" />
         </span>
@@ -165,15 +165,15 @@ const BlockStyleSquare = ({
       >
         <div
           ref={previewContentRef}
-          className="flex origin-left items-center whitespace-nowrap leading-snug"
+          className="flex origin-left items-center leading-snug whitespace-nowrap"
           style={{ transform: `scale(${previewScale})` }}
         >
           <BlockStylePreview descriptor={descriptor} style={inlineStyle} />
         </div>
       </div>
       <span className="flex items-center gap-1 overflow-hidden">
-        <Icon type={descriptor.iconName} size="custom" className="h-3.5 w-3.5 flex-shrink-0 text-passive-1" />
-        <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-0">
+        <Icon type={descriptor.iconName} size="custom" className="text-passive-1 h-3.5 w-3.5 flex-shrink-0" />
+        <span className="text-passive-0 overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
           {descriptor.label}
         </span>
       </span>
@@ -203,8 +203,8 @@ const OverflowSquares = ({
         onClick={() => setOpen((o) => !o)}
         onMouseDown={(event) => event.preventDefault()}
         className={classNames(
-          'relative flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border bg-default px-1.5',
-          'text-xs text-passive-0 transition-colors duration-75 hover:border-info hover:bg-contrast focus:outline-none focus-visible:border-info',
+          'bg-default relative flex h-full flex-shrink-0 items-center justify-center gap-0.5 rounded border px-1.5',
+          'text-passive-0 hover:border-info hover:bg-contrast focus-visible:border-info text-xs transition-colors duration-75 focus:outline-none',
           open ? 'border-info' : 'border-border',
           open ? 'bg-contrast' : '',
         )}
@@ -255,13 +255,13 @@ const LeadingActivePlaceholder = () => (
   <div
     aria-hidden
     style={{ width: GALLERY_SQUARE_WIDTH }}
-    className="flex flex-shrink-0 select-none flex-col items-stretch gap-1 rounded border border-dashed border-border bg-default p-1.5 opacity-60"
+    className="border-border bg-default flex flex-shrink-0 flex-col items-stretch gap-1 rounded border border-dashed p-1.5 opacity-60 select-none"
   >
-    <div className="flex h-[2.9rem] items-center justify-center overflow-hidden rounded-sm px-1.5 text-passive-1">
+    <div className="text-passive-1 flex h-[2.9rem] items-center justify-center overflow-hidden rounded-sm px-1.5">
       <span className="text-lg leading-none">—</span>
     </div>
     <span className="flex items-center justify-center overflow-hidden">
-      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.65rem] leading-none text-passive-1">
+      <span className="text-passive-1 overflow-hidden text-[0.65rem] leading-none text-ellipsis whitespace-nowrap">
         None
       </span>
     </span>
@@ -320,7 +320,7 @@ export const BlockStyleGalleryBar = ({
   // own descriptor when it maps to a gallery square, else null → neutral "None"
   // placeholder. Derived each render, so the leading square tracks the selection live.
   const activeDescriptor = useMemo(
-    () => (activeKey != null ? blocks.find((d) => d.key === activeKey) ?? null : null),
+    () => (activeKey != null ? (blocks.find((d) => d.key === activeKey) ?? null) : null),
     [activeKey, blocks],
   )
   // The active style is shown ONCE, in the persistent leading indicator, so drop
@@ -361,7 +361,7 @@ export const BlockStyleGalleryBar = ({
       ) : (
         <LeadingActivePlaceholder />
       )}
-      <span aria-hidden className="w-px flex-shrink-0 self-stretch bg-border" />
+      <span aria-hidden className="bg-border w-px flex-shrink-0 self-stretch" />
       {inlineBlocks.map((descriptor) => (
         <BlockStyleSquare key={descriptor.key} descriptor={descriptor} profile={profile} onApply={onApplyBlock} />
       ))}

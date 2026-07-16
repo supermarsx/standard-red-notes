@@ -65,10 +65,10 @@ const StatusChip = ({ paired }: { paired: boolean }) => (
 /** Simple loading skeleton shown while GET /v1/workflows/status is in flight. */
 const LoadingSkeleton = () => (
   <div className="flex flex-col gap-3 p-4" aria-label="Loading workflows status" role="status">
-    <div className="h-5 w-48 animate-pulse rounded bg-contrast" />
-    <div className="h-4 w-full animate-pulse rounded bg-contrast" />
-    <div className="h-4 w-5/6 animate-pulse rounded bg-contrast" />
-    <div className="h-24 w-full animate-pulse rounded bg-contrast" />
+    <div className="bg-contrast h-5 w-48 animate-pulse rounded" />
+    <div className="bg-contrast h-4 w-full animate-pulse rounded" />
+    <div className="bg-contrast h-4 w-5/6 animate-pulse rounded" />
+    <div className="bg-contrast h-24 w-full animate-pulse rounded" />
   </div>
 )
 
@@ -104,7 +104,11 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   const pair = useCallback(async () => {
     setPairing(true)
     try {
-      const { status: httpStatus, ok, data } = await application.serverJsonRequest<{
+      const {
+        status: httpStatus,
+        ok,
+        data,
+      } = await application.serverJsonRequest<{
         paired?: boolean
         editorUrl?: string
       }>('/v1/workflows/pair', {})
@@ -163,11 +167,7 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
 
   const renderBody = () => {
     if (!signedIn) {
-      return (
-        <div className="px-4 py-10 text-center text-sm text-passive-1">
-          Sign in to a server to use Workflows.
-        </div>
-      )
+      return <div className="text-passive-1 px-4 py-10 text-center text-sm">Sign in to a server to use Workflows.</div>
     }
 
     if (state.kind === 'unknown' || state.kind === 'loading') {
@@ -177,8 +177,8 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     if (state.kind === 'unavailable') {
       return (
         <div className="flex flex-col gap-3 p-4">
-          <p className="text-sm text-passive-0">{EXPLAINER}</p>
-          <p className="text-sm text-passive-1">
+          <p className="text-passive-0 text-sm">{EXPLAINER}</p>
+          <p className="text-passive-1 text-sm">
             Workflows are not available on this server (the server may not have the workflows service deployed yet).
           </p>
           <div>
@@ -191,8 +191,8 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     if (!status?.enabled) {
       return (
         <div className="flex flex-col gap-3 p-4">
-          <p className="text-sm text-passive-0">{EXPLAINER}</p>
-          <p className="text-sm font-semibold text-warning">{NOT_ENABLED_EXPLAINER}</p>
+          <p className="text-passive-0 text-sm">{EXPLAINER}</p>
+          <p className="text-warning text-sm font-semibold">{NOT_ENABLED_EXPLAINER}</p>
           <div>
             <Button label="Check again" onClick={() => void refresh()} />
           </div>
@@ -203,13 +203,18 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     if (!paired) {
       return (
         <div className="flex flex-col gap-3 p-4">
-          <p className="text-sm text-passive-0">{EXPLAINER}</p>
-          <p className="text-sm text-passive-1">
+          <p className="text-passive-0 text-sm">{EXPLAINER}</p>
+          <p className="text-passive-1 text-sm">
             Connecting provisions your personal automation workspace and a revocable, scoped access token. You can
             disconnect at any time.
           </p>
           <div>
-            <Button primary label={pairing ? 'Connecting…' : 'Connect workflows'} onClick={() => void pair()} disabled={pairing} />
+            <Button
+              primary
+              label={pairing ? 'Connecting…' : 'Connect workflows'}
+              onClick={() => void pair()}
+              disabled={pairing}
+            />
           </div>
         </div>
       )
@@ -218,28 +223,32 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     return (
       <div className="flex min-h-0 flex-grow flex-col gap-3 p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="min-w-0 flex-grow text-sm text-passive-1">
+          <p className="text-passive-1 min-w-0 flex-grow text-sm">
             Your workflows account is connected. Build and manage automations in the editor below.
           </p>
-          <Button label={unpairing ? 'Disconnecting…' : 'Disconnect'} onClick={() => void unpair()} disabled={unpairing} />
+          <Button
+            label={unpairing ? 'Disconnecting…' : 'Disconnect'}
+            onClick={() => void unpair()}
+            disabled={unpairing}
+          />
         </div>
 
         {!editorSrc ? (
-          <p className="text-sm text-danger">
+          <p className="text-danger text-sm">
             The server did not provide a usable workflow editor address. Try disconnecting and reconnecting.
           </p>
         ) : !editorLoaded ? (
           /* Click-to-load card: the editor is NEVER auto-loaded. */
-          <div className="rounded border border-border p-4">
+          <div className="border-border rounded border p-4">
             <div className="flex items-start gap-2">
-              <Icon type="tune" className="mt-0.5 flex-shrink-0 text-info" />
+              <Icon type="tune" className="text-info mt-0.5 flex-shrink-0" />
               <div>
                 <div className="font-semibold">Workflow editor</div>
-                <p className="mt-1 text-sm text-passive-0">
-                  The editor runs in an embedded, sandboxed frame served through your server. Load it when you are
-                  ready to build or manage automations.
+                <p className="text-passive-0 mt-1 text-sm">
+                  The editor runs in an embedded, sandboxed frame served through your server. Load it when you are ready
+                  to build or manage automations.
                 </p>
-                <p className="mt-1 break-all text-xs text-passive-1">{editorSrc}</p>
+                <p className="text-passive-1 mt-1 text-xs break-all">{editorSrc}</p>
               </div>
             </div>
             <div className="mt-3">
@@ -247,7 +256,7 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
             </div>
           </div>
         ) : (
-          <div className="min-h-[480px] w-full flex-grow overflow-hidden rounded border border-border">
+          <div className="border-border min-h-[480px] w-full flex-grow overflow-hidden rounded border">
             <iframe
               title="Workflow editor"
               src={editorSrc}
@@ -267,16 +276,16 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="tune" className="flex-shrink-0 text-info" />
+          <Icon type="tune" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Workflows</span>
           {state.kind === 'loaded' && status?.enabled ? <StatusChip paired={paired} /> : null}
         </div>
         <button
-          className="rounded p-1 hover:bg-default"
+          className="hover:bg-default rounded p-1"
           onClick={() => application.paneController.closeViewTab(AppPaneId.Workflows)}
           aria-label="Close workflows"
           title="Close"

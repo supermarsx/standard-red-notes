@@ -170,13 +170,7 @@ function prefersDark(): boolean {
 
 let renderSeq = 0
 
-function GanttChartComponent({
-  data,
-  nodeKey,
-}: {
-  data: GanttChartData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [editing, setEditing] = useState(data.tasks.length === 0)
   const [svg, setSvg] = useState<string>('')
@@ -235,29 +229,24 @@ function GanttChartComponent({
         d.tasks[index] = { ...d.tasks[index], [field]: value }
       }
     })
-  const addTask = () =>
-    mutate((d) => d.tasks.push({ name: 'New task', section: '', start: '', duration: '1d' }))
+  const addTask = () => mutate((d) => d.tasks.push({ name: 'New task', section: '', start: '', duration: '1d' }))
   const removeTask = (index: number) => mutate((d) => d.tasks.splice(index, 1))
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-gantt-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-gantt-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Gantt chart</span>
-        <button
-          className="rounded px-2 py-0.5 hover:bg-contrast"
-          onClick={() => setEditing((e) => !e)}
-          type="button"
-        >
+        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => setEditing((e) => !e)} type="button">
           {editing ? 'Done' : 'Edit'}
         </button>
       </div>
 
       {editing ? (
         <div className="flex flex-col gap-2 p-2">
-          <label className="flex flex-col gap-1 text-xs text-passive-1">
+          <label className="text-passive-1 flex flex-col gap-1 text-xs">
             Title
             <input
-              className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+              className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
               value={data.title}
               onChange={(e) => setTitle(e.target.value)}
             />
@@ -266,35 +255,35 @@ function GanttChartComponent({
             {data.tasks.map((task, index) => (
               <div
                 key={index}
-                className="grid grid-cols-[1fr_1fr_auto] gap-1 rounded border border-border p-1 sm:grid-cols-[2fr_1fr_1fr_1fr_auto]"
+                className="border-border grid grid-cols-[1fr_1fr_auto] gap-1 rounded border p-1 sm:grid-cols-[2fr_1fr_1fr_1fr_auto]"
               >
                 <input
-                  className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+                  className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
                   placeholder="Task name"
                   value={task.name}
                   onChange={(e) => setTaskField(index, 'name', e.target.value)}
                 />
                 <input
-                  className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+                  className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
                   placeholder="Section"
                   value={task.section}
                   onChange={(e) => setTaskField(index, 'section', e.target.value)}
                 />
                 <input
-                  className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+                  className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
                   placeholder="Start (YYYY-MM-DD)"
                   value={task.start}
                   onChange={(e) => setTaskField(index, 'start', e.target.value)}
                 />
                 <input
-                  className="rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+                  className="border-border bg-default text-foreground focus:border-info rounded border px-2 py-1 text-sm outline-none"
                   placeholder="Duration (3d)"
                   value={task.duration}
                   onChange={(e) => setTaskField(index, 'duration', e.target.value)}
                 />
                 <button
                   type="button"
-                  className="rounded px-2 text-danger hover:bg-contrast"
+                  className="text-danger hover:bg-contrast rounded px-2"
                   title="Remove task"
                   onClick={() => removeTask(index)}
                 >
@@ -305,7 +294,7 @@ function GanttChartComponent({
           </div>
           <button
             type="button"
-            className="self-start rounded border border-border px-2 py-1 text-xs hover:bg-contrast"
+            className="border-border hover:bg-contrast self-start rounded border px-2 py-1 text-xs"
             onClick={addTask}
           >
             Add task
@@ -317,9 +306,9 @@ function GanttChartComponent({
         {svg ? (
           <div dangerouslySetInnerHTML={{ __html: svg }} />
         ) : (
-          !error && <div className="text-sm text-passive-1">Add a task to render the chart.</div>
+          !error && <div className="text-passive-1 text-sm">Add a task to render the chart.</div>
         )}
-        {error ? <div className="mt-1 text-xs text-danger">{error}</div> : null}
+        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
       </div>
     </div>
   )

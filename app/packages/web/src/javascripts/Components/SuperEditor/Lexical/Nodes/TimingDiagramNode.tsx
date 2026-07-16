@@ -80,20 +80,16 @@ type WaveDromModule = {
 let wavedromPromise: Promise<WaveDromModule> | undefined
 function loadWaveDrom(): Promise<WaveDromModule> {
   if (!wavedromPromise) {
-    wavedromPromise = import('wavedrom').then((m) => (m as { default?: WaveDromModule }).default ?? (m as unknown as WaveDromModule))
+    wavedromPromise = import('wavedrom').then(
+      (m) => (m as { default?: WaveDromModule }).default ?? (m as unknown as WaveDromModule),
+    )
   }
   return wavedromPromise
 }
 
 let renderSeq = 0
 
-function TimingDiagramComponent({
-  data,
-  nodeKey,
-}: {
-  data: TimingDiagramData
-  nodeKey: NodeKey
-}): React.JSX.Element {
+function TimingDiagramComponent({ data, nodeKey }: { data: TimingDiagramData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(data.source)
@@ -104,45 +100,42 @@ function TimingDiagramComponent({
     setDraft(data.source)
   }, [data.source])
 
-  const render = useCallback(
-    async (source: string) => {
-      const output = outputRef.current
-      if (!output) {
-        return
+  const render = useCallback(async (source: string) => {
+    const output = outputRef.current
+    if (!output) {
+      return
+    }
+    const trimmed = source.trim()
+    if (!trimmed) {
+      output.innerHTML = ''
+      setError(null)
+      return
+    }
+    let parsed: object
+    try {
+      const value = JSON.parse(trimmed)
+      if (!value || typeof value !== 'object') {
+        throw new Error('WaveJSON must be an object')
       }
-      const trimmed = source.trim()
-      if (!trimmed) {
-        output.innerHTML = ''
-        setError(null)
-        return
-      }
-      let parsed: object
-      try {
-        const value = JSON.parse(trimmed)
-        if (!value || typeof value !== 'object') {
-          throw new Error('WaveJSON must be an object')
-        }
-        parsed = value
-      } catch (e) {
-        setError(`Invalid WaveJSON: ${e instanceof Error ? e.message : String(e)}`)
-        return
-      }
-      try {
-        const wavedrom = await loadWaveDrom()
-        // wavedrom renders into an element whose id matches `WaveDrom_Display_<n>`.
-        const seq = renderSeq++
-        const host = document.createElement('div')
-        host.id = `WaveDrom_Display_${seq}`
-        output.innerHTML = ''
-        output.appendChild(host)
-        wavedrom.renderWaveForm(seq, parsed, 'WaveDrom_Display_')
-        setError(null)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    },
-    [],
-  )
+      parsed = value
+    } catch (e) {
+      setError(`Invalid WaveJSON: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    try {
+      const wavedrom = await loadWaveDrom()
+      // wavedrom renders into an element whose id matches `WaveDrom_Display_<n>`.
+      const seq = renderSeq++
+      const host = document.createElement('div')
+      host.id = `WaveDrom_Display_${seq}`
+      output.innerHTML = ''
+      output.appendChild(host)
+      wavedrom.renderWaveForm(seq, parsed, 'WaveDrom_Display_')
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
 
   useEffect(() => {
     void render(data.source)
@@ -161,11 +154,11 @@ function TimingDiagramComponent({
   }, [draft, editor, nodeKey, render])
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-timing-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-timing-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Timing diagram</span>
         <button
-          className="rounded px-2 py-0.5 hover:bg-contrast"
+          className="hover:bg-contrast rounded px-2 py-0.5"
           onClick={() => (editing ? commit() : setEditing(true))}
           type="button"
         >
@@ -175,7 +168,7 @@ function TimingDiagramComponent({
 
       {editing ? (
         <textarea
-          className="w-full resize-y bg-default p-2 font-mono text-sm text-foreground outline-none"
+          className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
           rows={Math.max(6, draft.split('\n').length + 1)}
           value={draft}
           spellCheck={false}
@@ -187,7 +180,7 @@ function TimingDiagramComponent({
 
       <div className="overflow-auto p-2">
         <div ref={outputRef} />
-        {error ? <div className="mt-1 text-xs text-danger">{error}</div> : null}
+        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
       </div>
     </div>
   )

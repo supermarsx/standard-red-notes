@@ -111,14 +111,14 @@ const VaultItem = ({ vault }: Props) => {
 
       <EditVaultModal vault={vault} isVaultModalOpen={isVaultModalOpen} closeVaultModal={closeVaultModal} />
 
-      <div className="flex flex-row gap-3.5 rounded-lg border border-border px-3.5 py-2.5 shadow-sm">
+      <div className="border-border flex flex-row gap-3.5 rounded-lg border px-3.5 py-2.5 shadow-sm">
         <Icon type={vault.iconString} size="custom" className="mt-2.5 h-5.5 w-5.5 flex-shrink-0" />
         <div className="flex flex-col gap-1.5 py-1.5">
-          <span className="overflow-hidden text-ellipsis text-base font-bold">{vault.name}</span>
-          {vault.description && <span className="overflow-hidden text-ellipsis text-sm">{vault.description}</span>}
-          <span className="overflow-hidden text-ellipsis text-sm">Vault ID: {vault.systemIdentifier}</span>
+          <span className="overflow-hidden text-base font-bold text-ellipsis">{vault.name}</span>
+          {vault.description && <span className="overflow-hidden text-sm text-ellipsis">{vault.description}</span>}
+          <span className="overflow-hidden text-sm text-ellipsis">Vault ID: {vault.systemIdentifier}</span>
           {!!vault.sharing?.fileBytesUsed && (
-            <span className="overflow-hidden text-ellipsis text-sm">
+            <span className="overflow-hidden text-sm text-ellipsis">
               File storage used: {formatSizeToReadableString(vault.sharing?.fileBytesUsed ?? 0)}
             </span>
           )}

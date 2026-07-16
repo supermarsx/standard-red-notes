@@ -359,8 +359,7 @@ export type ServerOcrConfig = {
  * downgrade, so we never offer it unless the server clearly says yes).
  */
 export function parseServerOcrConfig(response: Partial<ServerOcrConfigResponse> | undefined): ServerOcrConfig {
-  const available =
-    response?.available === true || (response?.serverOcrEnabled === true && response?.allowed === true)
+  const available = response?.available === true || (response?.serverOcrEnabled === true && response?.allowed === true)
   const lang =
     typeof response?.defaultLanguage === 'string' && response.defaultLanguage.trim().length > 0
       ? response.defaultLanguage.trim()

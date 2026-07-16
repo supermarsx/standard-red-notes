@@ -55,7 +55,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
           Narrate a note from its options menu: the AI rewrites it into clean, listenable text and a player reads it
           aloud. Generating narration sends the note&rsquo;s content to your configured AI provider.
         </Text>
-        <Text className="mt-2 text-passive-1">
+        <Text className="text-passive-1 mt-2">
           {ttsAvailability.modelAvailable
             ? 'Playback prefers model voices via your Direct endpoint’s /audio/speech route (sending the narration text there), and falls back to your device’s built-in voices.'
             : 'Playback uses your device’s built-in voices (browser text-to-speech) — no network and no key required. Model voices need Direct mode with a base URL.'}
@@ -66,7 +66,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
         <Subtitle>Default narration style</Subtitle>
         <Text>Used when you narrate a note. Choose “Ask each time” to pick a style on every narration.</Text>
         <select
-          className="mt-2 rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 rounded border px-2 py-1.5 text-sm"
           value={narration.defaultStyle}
           onChange={(event) => updateNarration({ defaultStyle: event.target.value as NarrationStyleSetting })}
         >
@@ -86,7 +86,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
           it per narration. Any free text or a language code is accepted. Leave empty to let the voice decide.
         </Text>
         <input
-          className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
           type="text"
           list="narration-settings-language-list"
           value={narration.language}
@@ -107,7 +107,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
           device voices, which cannot follow free-text instructions. Override it per narration.
         </Text>
         <input
-          className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
           type="text"
           value={narration.clarification}
           placeholder="e.g. speak slowly and clearly"
@@ -120,7 +120,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
         <Text>Voice used for browser text-to-speech. Available voices depend on your OS and browser.</Text>
         {voices.length > 0 ? (
           <select
-            className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+            className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
             value={narration.voiceURI}
             onChange={(event) => updateNarration({ voiceURI: event.target.value })}
           >
@@ -132,7 +132,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
             ))}
           </select>
         ) : (
-          <Text className="mt-2 text-passive-1">No device voices detected yet.</Text>
+          <Text className="text-passive-1 mt-2">No device voices detected yet.</Text>
         )}
 
         <HorizontalSeparator classes="my-4" />
@@ -143,7 +143,7 @@ const NarrationSettings = ({ application }: { application: WebApplication }) => 
           onyx, nova, shimmer). Ignored when using device voices.
         </Text>
         <input
-          className="mt-2 w-full rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
           type="text"
           value={narration.modelVoice}
           placeholder="alloy"

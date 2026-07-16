@@ -2,10 +2,7 @@ import { FunctionComponent, useMemo } from 'react'
 import { DecryptedItemInterface } from '@standardnotes/snjs'
 import { usePresence } from '../SuperEditor/Collaboration/usePresence'
 import { PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
-import {
-  collaboratorColor,
-  collaboratorInitials,
-} from '../SuperEditor/Collaboration/collaboratorColor'
+import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collaboration/collaboratorColor'
 
 type Props = {
   item: DecryptedItemInterface
@@ -54,17 +51,12 @@ const PresenceBadge: FunctionComponent<Props> = ({ item, maxAvatars = 3 }) => {
   const label = `${uniquePeers.length} ${uniquePeers.length === 1 ? 'collaborator' : 'collaborators'} editing now: ${names}`
 
   return (
-    <div
-      className="ml-2 flex flex-shrink-0 items-center"
-      title={label}
-      aria-label={label}
-      role="img"
-    >
+    <div className="ml-2 flex flex-shrink-0 items-center" title={label} aria-label={label} role="img">
       <div className="flex -space-x-1.5">
         {shown.map((peer) => (
           <div
             key={peer.userUuid || peer.clientId}
-            className="flex h-6 w-6 select-none items-center justify-center rounded-full border-2 border-default text-[0.6rem] font-bold text-white"
+            className="border-default flex h-6 w-6 items-center justify-center rounded-full border-2 text-[0.6rem] font-bold text-white select-none"
             style={{ backgroundColor: peer.color || collaboratorColor(peer.userUuid || String(peer.clientId)) }}
             aria-hidden
           >
@@ -73,7 +65,7 @@ const PresenceBadge: FunctionComponent<Props> = ({ item, maxAvatars = 3 }) => {
         ))}
         {overflow > 0 && (
           <div
-            className="flex h-6 w-6 select-none items-center justify-center rounded-full border-2 border-default bg-passive-1 text-[0.6rem] font-bold text-default"
+            className="border-default bg-passive-1 text-default flex h-6 w-6 items-center justify-center rounded-full border-2 text-[0.6rem] font-bold select-none"
             aria-hidden
           >
             +{overflow}

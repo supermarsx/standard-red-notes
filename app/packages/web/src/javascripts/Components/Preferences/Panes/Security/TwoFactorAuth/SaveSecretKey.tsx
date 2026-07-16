@@ -13,7 +13,7 @@ type Props = {
 
 const SaveSecretKey: FunctionComponent<Props> = ({ activation: act }) => {
   return (
-    <div className="h-33 flex flex-row items-center px-4 py-4">
+    <div className="flex h-33 flex-row items-center px-4 py-4">
       <div className="flex flex-grow flex-col">
         <div className="flex flex-row flex-wrap items-center gap-1">
           <Bullet />

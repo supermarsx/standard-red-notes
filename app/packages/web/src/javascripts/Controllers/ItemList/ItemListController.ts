@@ -1,8 +1,5 @@
 import { ListableContentItem } from '@/Components/ContentListView/Types/ListableContentItem'
-import {
-  FilesFolderFilter,
-  FilesFolderFilterAll,
-} from '@/Components/ContentListView/FilesFolderBar'
+import { FilesFolderFilter, FilesFolderFilterAll } from '@/Components/ContentListView/FilesFolderBar'
 import { FilesSortBy, FilesSortDirection } from '@/Utils/Items/sortFiles'
 import { debounce, destroyAllObjectProperties, isMobileScreen } from '@/Utils'
 import { retrieve } from '@/Assistant/retrieval'
@@ -567,7 +564,6 @@ export class ItemListController
         },
       ),
     )
-
   }
 
   getPersistableValue = (): SelectionControllerPersistableValue => {
@@ -912,9 +908,7 @@ export class ItemListController
   private applyOperatorFilter(items: ListableContentItem[]): ListableContentItem[] {
     const parsed = this.parsedSearchQuery
     const needsPredicate =
-      parsed.hasOperators ||
-      parsed.freeTextTerms.some((term) => term.negated) ||
-      this.searchCaseSensitive
+      parsed.hasOperators || parsed.freeTextTerms.some((term) => term.negated) || this.searchCaseSensitive
     if (!needsPredicate || items.length === 0) {
       return items
     }
@@ -954,9 +948,7 @@ export class ItemListController
 
     const notes = this.itemManager.getDisplayableNotes()
 
-    const items = this.applySearchOrdering(
-      this.applyOperatorFilter(this.itemManager.getDisplayableNotesAndFiles()),
-    )
+    const items = this.applySearchOrdering(this.applyOperatorFilter(this.itemManager.getDisplayableNotesAndFiles()))
 
     const itemsIndexByUuid = new Map<string, number>()
     for (let i = 0; i < items.length; i++) {
@@ -1414,10 +1406,7 @@ export class ItemListController
         .catch(() => undefined)
     }
 
-    const rank = this.preferences.getValue(
-      PrefKey.AiPoweredSearchEnabled,
-      PrefDefaults[PrefKey.AiPoweredSearchEnabled],
-    )
+    const rank = this.preferences.getValue(PrefKey.AiPoweredSearchEnabled, PrefDefaults[PrefKey.AiPoweredSearchEnabled])
     const matchedUuids = this.searchIndex.search(query, { rank })
     if (matchedUuids === null) {
       // Index can't handle this query (e.g. only special chars); fall back.

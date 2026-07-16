@@ -114,7 +114,7 @@ const FilePreview = ({
       <div className="flex flex-grow flex-col items-center justify-center">
         <ProtectedIllustration className="mb-4 h-30 w-30" />
         <div className="mb-2 text-base font-bold">{t('fileProtected')}</div>
-        <p className="max-w-[35ch] text-center text-sm text-passive-0">
+        <p className="text-passive-0 max-w-[35ch] text-center text-sm">
           {hasProtectionSources ? t('authenticateToView') : t('addPasscodeToView')}
         </p>
         <div className="mt-3 flex gap-3">

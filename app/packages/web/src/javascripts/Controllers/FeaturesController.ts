@@ -2,7 +2,6 @@ import { FeaturesClientInterface, InternalEventHandlerInterface } from '@standar
 import { FeatureName } from './FeatureName'
 import { destroyAllObjectProperties } from '@/Utils'
 import {
-  ApplicationEvent,
   NativeFeatureIdentifier,
   FeatureStatus,
   InternalEventBusInterface,
@@ -82,11 +81,7 @@ export class FeaturesController extends AbstractViewController implements Intern
 
   isVaultsEnabled(): boolean {
     const enabled = this.features.isExperimentalFeatureEnabled(NativeFeatureIdentifier.TYPES.Vaults)
-    return (
-      featureTrunkVaultsEnabled() ||
-      enabled ||
-      this.features.hasRole(adminRoleName)
-    )
+    return featureTrunkVaultsEnabled() || enabled || this.features.hasRole(adminRoleName)
   }
 
   isEntitledToSharedVaults(): boolean {

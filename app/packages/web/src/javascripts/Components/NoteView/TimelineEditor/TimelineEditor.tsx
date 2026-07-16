@@ -176,18 +176,18 @@ export const TimelineEditor: FunctionComponent<Props> = ({
       style={{ backgroundColor: customBackgroundColor, color: customTextColor }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-contrast px-3 py-2">
+      <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="history" className="flex-shrink-0 text-info" />
+          <Icon type="history" className="text-info flex-shrink-0" />
           <span className="truncate text-sm font-bold">Timeline</span>
-          <span className="truncate text-xs text-neutral">
+          <span className="text-neutral truncate text-xs">
             {document.items.length} {document.items.length === 1 ? 'item' : 'items'}
             {layout.minDate && layout.maxDate ? ` · ${layout.minDate} → ${layout.maxDate}` : ''}
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
           <button
-            className="flex items-center gap-1 rounded px-2 py-1 text-sm hover:bg-default disabled:opacity-50"
+            className="hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-sm disabled:opacity-50"
             onClick={addItem}
             disabled={isReadonly}
             title="Add item"
@@ -199,7 +199,7 @@ export const TimelineEditor: FunctionComponent<Props> = ({
       </div>
 
       {recoveryNotice && (
-        <div className="flex items-center gap-2 border-b border-warning bg-warning-faded px-3 py-1.5 text-xs text-accessory-tint-3">
+        <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
           <span>
             This note's content wasn't recognized as a timeline and a new one was started. Your original text is
             preserved until you make a change.
@@ -212,12 +212,12 @@ export const TimelineEditor: FunctionComponent<Props> = ({
 
       <div className="min-h-0 flex-grow overflow-auto">
         {document.items.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-neutral">
+          <div className="text-neutral flex h-full flex-col items-center justify-center px-6 text-center text-sm">
             <p className="font-semibold">No items yet</p>
             <p>Add an item with a start and end date to plot the waterfall.</p>
             {!isReadonly && (
               <button
-                className="mt-3 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:opacity-90"
+                className="bg-info text-info-contrast mt-3 rounded px-3 py-1.5 text-sm font-semibold hover:opacity-90"
                 onClick={addItem}
               >
                 Add item
@@ -227,7 +227,7 @@ export const TimelineEditor: FunctionComponent<Props> = ({
         ) : (
           <>
             {/* Waterfall / Gantt chart. Scrolls horizontally on small screens. */}
-            <div className="overflow-x-auto border-b border-border p-3">
+            <div className="border-border overflow-x-auto border-b p-3">
               <div className="min-w-[28rem]">
                 {document.items.map((item) => {
                   const bar = barsById.get(item.id)
@@ -235,10 +235,10 @@ export const TimelineEditor: FunctionComponent<Props> = ({
                   const widthPct = `${Math.max((bar?.width ?? 0) * 100, 1)}%`
                   return (
                     <div key={item.id} className="mb-1.5 flex items-center gap-2">
-                      <div className="w-28 flex-shrink-0 truncate text-xs text-text sm:w-40" title={item.label}>
+                      <div className="text-text w-28 flex-shrink-0 truncate text-xs sm:w-40" title={item.label}>
                         {item.label || <span className="text-passive-2">Untitled</span>}
                       </div>
-                      <div className="relative h-5 flex-grow rounded bg-contrast">
+                      <div className="bg-contrast relative h-5 flex-grow rounded">
                         <div
                           className="absolute top-0 h-full rounded"
                           style={{
@@ -259,29 +259,29 @@ export const TimelineEditor: FunctionComponent<Props> = ({
             <div className="p-3">
               <ul className="flex flex-col gap-2">
                 {document.items.map((item) => (
-                  <li key={item.id} className="flex flex-wrap items-center gap-2 rounded border border-border p-2">
+                  <li key={item.id} className="border-border flex flex-wrap items-center gap-2 rounded border p-2">
                     <input
-                      className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm text-text disabled:opacity-50"
+                      className="border-border bg-default text-text min-w-0 flex-grow rounded border px-2 py-1 text-sm disabled:opacity-50"
                       value={item.label}
                       placeholder="Item label"
                       disabled={isReadonly}
                       onChange={(e) => updateItem(item.id, { label: e.target.value })}
                     />
-                    <label className="flex items-center gap-1 text-xs text-passive-1">
+                    <label className="text-passive-1 flex items-center gap-1 text-xs">
                       <span className="hidden sm:inline">Start</span>
                       <input
                         type="date"
-                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        className="border-border bg-default text-text rounded border px-2 py-1 text-xs disabled:opacity-50"
                         value={item.start}
                         disabled={isReadonly}
                         onChange={(e) => e.target.value && setItemStart(item, e.target.value)}
                       />
                     </label>
-                    <label className="flex items-center gap-1 text-xs text-passive-1">
+                    <label className="text-passive-1 flex items-center gap-1 text-xs">
                       <span className="hidden sm:inline">End</span>
                       <input
                         type="date"
-                        className="rounded border border-border bg-default px-2 py-1 text-xs text-text disabled:opacity-50"
+                        className="border-border bg-default text-text rounded border px-2 py-1 text-xs disabled:opacity-50"
                         value={item.end}
                         disabled={isReadonly}
                         onChange={(e) => e.target.value && setItemEnd(item, e.target.value)}
@@ -304,7 +304,7 @@ export const TimelineEditor: FunctionComponent<Props> = ({
                       ))}
                     </div>
                     <button
-                      className="rounded p-1 text-danger hover:bg-contrast disabled:opacity-30"
+                      className="text-danger hover:bg-contrast rounded p-1 disabled:opacity-30"
                       disabled={isReadonly}
                       onClick={() => deleteItem(item.id)}
                       title="Delete item"

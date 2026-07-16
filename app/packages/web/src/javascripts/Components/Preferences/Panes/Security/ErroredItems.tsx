@@ -80,14 +80,14 @@ const ErroredItems: FunctionComponent = () => {
         <Text>{`${erroredItems.length} items are errored and could not be decrypted.`}</Text>
         <div className="flex">
           <Button
-            className="mr-2 mt-3 min-w-20"
+            className="mt-3 mr-2 min-w-20"
             label="Export all"
             onClick={() => {
               void application.archiveService.downloadEncryptedItems(erroredItems)
             }}
           />
           <Button
-            className="mr-2 mt-3 min-w-20"
+            className="mt-3 mr-2 min-w-20"
             colorStyle="danger"
             label="Delete all"
             onClick={() => {
@@ -107,21 +107,21 @@ const ErroredItems: FunctionComponent = () => {
                   <Text>Last Modified: {item.updatedAtString}</Text>
                   <div className="flex">
                     <Button
-                      className="mr-2 mt-3 min-w-20"
+                      className="mt-3 mr-2 min-w-20"
                       label="Attempt decryption"
                       onClick={() => {
                         attemptDecryption(item)
                       }}
                     />
                     <Button
-                      className="mr-2 mt-3 min-w-20"
+                      className="mt-3 mr-2 min-w-20"
                       label="Export"
                       onClick={() => {
                         void application.archiveService.downloadEncryptedItem(item)
                       }}
                     />
                     <Button
-                      className="mr-2 mt-3 min-w-20"
+                      className="mt-3 mr-2 min-w-20"
                       colorStyle="danger"
                       label="Delete"
                       onClick={() => {

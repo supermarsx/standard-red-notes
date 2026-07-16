@@ -45,12 +45,12 @@ const HomeCardTile = observer(
     const label = card.label || defaultLabelForCard(application, card)
     return (
       <button
-        className="flex flex-col items-start gap-2 rounded-md border border-border bg-default p-4 text-left shadow-sm hover:bg-contrast focus:bg-contrast focus:outline-none"
+        className="border-border bg-default hover:bg-contrast focus:bg-contrast flex flex-col items-start gap-2 rounded-md border p-4 text-left shadow-sm focus:outline-none"
         onClick={() => onActivate(card)}
       >
-        <Icon type={icon} className="flex-shrink-0 text-info" size="medium" />
-        <span className="truncate text-sm font-semibold text-text">{label}</span>
-        <span className="text-xs text-passive-1">{card.kind === 'note' ? 'Note' : 'Topic / view'}</span>
+        <Icon type={icon} className="text-info flex-shrink-0" size="medium" />
+        <span className="text-text truncate text-sm font-semibold">{label}</span>
+        <span className="text-passive-1 text-xs">{card.kind === 'note' ? 'Note' : 'Topic / view'}</span>
       </button>
     )
   },
@@ -118,7 +118,6 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     }
     const item = application.items.findItem(config.noteUuid)
     return item && isNote(item) ? item : undefined
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application, config.mode, config.noteUuid])
 
   const activateCard = useCallback(
@@ -160,18 +159,18 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     if (config.mode === 'note') {
       if (!homeNote) {
         return (
-          <div className="rounded-md border border-border bg-default px-4 py-8 text-center text-sm text-passive-1">
+          <div className="border-border bg-default text-passive-1 rounded-md border px-4 py-8 text-center text-sm">
             No home note is set (or it was deleted). Use “Customize home” to pick one.
           </div>
         )
       }
       const text = homeNote.text || ''
       return (
-        <article className="rounded-md border border-border bg-default p-6">
+        <article className="border-border bg-default rounded-md border p-6">
           <div className="mb-4 flex items-center justify-between gap-2">
-            <h1 className="truncate text-xl font-bold text-text">{homeNote.title || 'Untitled note'}</h1>
+            <h1 className="text-text truncate text-xl font-bold">{homeNote.title || 'Untitled note'}</h1>
             <button
-              className="flex flex-shrink-0 items-center gap-1.5 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast hover:brightness-125"
+              className="bg-info text-info-contrast flex flex-shrink-0 items-center gap-1.5 rounded px-3 py-1.5 text-sm font-semibold hover:brightness-125"
               onClick={() => openHomeNoteInEditor(homeNote)}
             >
               <Icon type="pencil" size="small" />
@@ -179,9 +178,9 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
             </button>
           </div>
           {text.trim().length === 0 ? (
-            <div className="text-sm text-passive-1">This note is empty.</div>
+            <div className="text-passive-1 text-sm">This note is empty.</div>
           ) : (
-            <pre className="whitespace-pre-wrap break-words font-sans text-sm text-text">{text}</pre>
+            <pre className="text-text font-sans text-sm break-words whitespace-pre-wrap">{text}</pre>
           )}
         </article>
       )
@@ -190,7 +189,7 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     if (config.mode === 'cards') {
       if (config.cards.length === 0) {
         return (
-          <div className="rounded-md border border-border bg-default px-4 py-8 text-center text-sm text-passive-1">
+          <div className="border-border bg-default text-passive-1 rounded-md border px-4 py-8 text-center text-sm">
             No cards yet. Use “Customize home” to add note and tag cards.
           </div>
         )
@@ -206,15 +205,15 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
 
     // default mode
     return (
-      <div className="flex flex-col items-center justify-center rounded-md border border-border bg-default px-4 py-16 text-center">
-        <Icon type="window" className="mb-3 text-info" size="large" />
-        <h1 className="text-lg font-bold text-text">Welcome home</h1>
-        <p className="mt-1 max-w-md text-sm text-passive-1">
+      <div className="border-border bg-default flex flex-col items-center justify-center rounded-md border px-4 py-16 text-center">
+        <Icon type="window" className="text-info mb-3" size="large" />
+        <h1 className="text-text text-lg font-bold">Welcome home</h1>
+        <p className="text-passive-1 mt-1 max-w-md text-sm">
           Make this page yours: pin a note as your landing page, or build a grid of cards that jump straight to your
           favorite notes, folders, and views.
         </p>
         <button
-          className="mt-4 rounded bg-info px-4 py-2 text-sm font-semibold text-info-contrast hover:brightness-125"
+          className="bg-info text-info-contrast mt-4 rounded px-4 py-2 text-sm font-semibold hover:brightness-125"
           onClick={() => setIsEditing(true)}
         >
           Customize home
@@ -227,17 +226,17 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     <div
       id={id}
       ref={ref}
-      className={classNames(className, 'flex h-full flex-col overflow-hidden border-l border-border bg-default')}
+      className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
-      <div className="flex items-center justify-between border-b border-border bg-contrast px-4 py-3">
+      <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon type="window" className="flex-shrink-0 text-info" />
+          <Icon type="window" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Home</span>
         </div>
         <div className="flex items-center gap-1">
           {!isEditing && (
             <button
-              className="flex items-center gap-1.5 rounded px-2 py-1 text-sm hover:bg-default"
+              className="hover:bg-default flex items-center gap-1.5 rounded px-2 py-1 text-sm"
               onClick={() => setIsEditing(true)}
               title="Customize home"
             >
@@ -246,7 +245,7 @@ const HomeView = forwardRef<HTMLDivElement, Props>(({ application, className, id
             </button>
           )}
           <button
-            className="rounded p-1 hover:bg-default"
+            className="hover:bg-default rounded p-1"
             onClick={() => application.paneController.closeViewTab(AppPaneId.Home)}
             aria-label="Close home"
             title="Close"

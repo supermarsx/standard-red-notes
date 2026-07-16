@@ -31,9 +31,9 @@ if (isTesting()) {
 /**
  * Poll interval for the lightweight "notify me about updates" check. Kept
  * deliberately slow (a few hours) so we don't hammer the GitHub API. A check
- * also runs once on launch.
+ * also runs once on launch. The current interval is four hours.
  */
-const UPDATE_NOTIFY_INTERVAL_MS = 1000 * 60 * 60 * 4 // 4 hours
+const UPDATE_NOTIFY_INTERVAL_MS = 1000 * 60 * 60 * 4
 
 /**
  * Normalize a GitHub release tag (which can carry a `v` prefix or, for the
@@ -67,7 +67,7 @@ export function isRemoteVersionNewer(currentVersion: string, remoteTagOrVersion:
   }
   try {
     return compareVersions(remote, current) === 1
-  } catch (_error) {
+  } catch {
     return false
   }
 }
@@ -105,7 +105,7 @@ export function fetchLatestReleaseTag(): Promise<string | null> {
               const parsed = JSON.parse(body)
               const tag = typeof parsed?.tag_name === 'string' ? parsed.tag_name : null
               resolve(tag)
-            } catch (_error) {
+            } catch {
               resolve(null)
             }
           })
@@ -116,7 +116,7 @@ export function fetchLatestReleaseTag(): Promise<string | null> {
         request.destroy()
         resolve(null)
       })
-    } catch (_error) {
+    } catch {
       resolve(null)
     }
   })

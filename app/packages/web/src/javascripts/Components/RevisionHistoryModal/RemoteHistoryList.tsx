@@ -40,7 +40,7 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
         if (group.entries && group.entries.length) {
           return (
             <Fragment key={group.title}>
-              <div className="mb-1 mt-2.5 select-none px-3 text-sm font-semibold uppercase text-passive-0">
+              <div className="text-passive-0 mt-2.5 mb-1 px-3 text-sm font-semibold uppercase select-none">
                 {group.title}
               </div>
               {group.entries.map((entry) => (
@@ -56,7 +56,7 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
                     <div>
                       <div>{previewHistoryEntryTitle(entry)}</div>
                       {entry.edited_by_uuid && (
-                        <div className="mt-0.5 text-xs text-passive-0">
+                        <div className="text-passive-0 mt-0.5 text-xs">
                           edited by {entry.edited_by_uuid.slice(0, 8)}
                         </div>
                       )}
@@ -74,7 +74,7 @@ const RemoteHistoryList: FunctionComponent<RemoteHistoryListProps> = ({
         }
       })}
       {!remoteHistoryLength && !isFetchingRemoteHistory && (
-        <div className="select-none text-sm text-passive-0">No remote history found</div>
+        <div className="text-passive-0 text-sm select-none">No remote history found</div>
       )}
     </div>
   )

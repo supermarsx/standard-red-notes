@@ -99,7 +99,7 @@ export class RunWithPermissionsUseCase {
       this.promptForPermissionsWithDeferredRendering(
         uiFeature.asComponent,
         requiredPermissions,
-        // eslint-disable-next-line @typescript-eslint/require-await
+
         async (approved) => {
           if (approved) {
             runFunction()
@@ -187,7 +187,7 @@ export class RunWithPermissionsUseCase {
         this.permissionDialogs = this.permissionDialogs.filter((pendingDialog) => {
           /* Remove self */
           if (pendingDialog === params) {
-            pendingDialog.actionBlock && pendingDialog.actionBlock(approved)
+            pendingDialog.actionBlock?.(approved)
             return false
           }
           const containsObjectSubset = (source: ComponentPermission[], target: ComponentPermission[]) => {
@@ -202,7 +202,7 @@ export class RunWithPermissionsUseCase {
               /* If approved, run the action block. Otherwise, if canceled, cancel any
               pending ones as well, since the user was explicit in their intentions */
               if (approved) {
-                pendingDialog.actionBlock && pendingDialog.actionBlock(approved)
+                pendingDialog.actionBlock?.(approved)
               }
               return false
             }

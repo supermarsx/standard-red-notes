@@ -30,7 +30,7 @@ export function getPlatformString() {
     }
     /** Anything else (including empty) is treated as linux. */
     return trimmed + suffix
-  } catch (e) {
+  } catch {
     return 'linux' + suffix
   }
 }
@@ -59,7 +59,7 @@ export function isSameDay(dateA: Date, dateB: Date): boolean {
 export function debounce(this: unknown, func: any, wait: number, immediate = false) {
   let timeout: NodeJS.Timeout | null
   return () => {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias, no-invalid-this
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const context = this
     // eslint-disable-next-line prefer-rest-params
     const args = arguments
@@ -82,7 +82,6 @@ export function debounce(this: unknown, func: any, wait: number, immediate = fal
 
 // https://tc39.github.io/ecma262/#sec-array.prototype.includes
 if (!Array.prototype.includes) {
-  // eslint-disable-next-line no-extend-native
   Object.defineProperty(Array.prototype, 'includes', {
     value: function (searchElement: unknown, fromIndex: number) {
       if (this == null) {
@@ -152,7 +151,7 @@ export function destroyAllObjectProperties(object: any): void {
     try {
       delete object[prop]
       // eslint-disable-next-line no-empty
-    } catch (error) {}
+    } catch {}
   }
 }
 

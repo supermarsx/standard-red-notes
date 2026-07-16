@@ -28,11 +28,11 @@ const PurchaseFlowView: FunctionComponent<PurchaseFlowViewProps> = ({ applicatio
   const { currentPane } = application.purchaseFlowController
 
   return (
-    <div className="absolute left-0 top-0 z-purchase-flow flex h-full w-full items-center justify-center overflow-hidden bg-passive-super-light">
+    <div className="z-purchase-flow bg-passive-super-light absolute top-0 left-0 flex h-full w-full items-center justify-center overflow-hidden">
       <div className="relative w-fit">
-        <div className="rounded-0 relative mb-4 w-full border border-solid border-border bg-default px-8 py-8 md:rounded md:p-12">
+        <div className="rounded-0 border-border bg-default relative mb-4 w-full border border-solid px-8 py-8 md:rounded md:p-12">
           <button
-            className="absolute right-4 top-4 rounded-full p-1 hover:bg-info-backdrop"
+            className="hover:bg-info-backdrop absolute top-4 right-4 rounded-full p-1"
             onClick={() => {
               application.purchaseFlowController.closePurchaseFlow()
             }}

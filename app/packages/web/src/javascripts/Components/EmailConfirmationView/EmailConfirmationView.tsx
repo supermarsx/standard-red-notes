@@ -5,9 +5,7 @@ type Props = {
 }
 
 type VerifyState =
-  | { status: 'verifying' }
-  | { status: 'success'; alreadyConfirmed: boolean }
-  | { status: 'error'; message: string }
+  { status: 'verifying' } | { status: 'success'; alreadyConfirmed: boolean } | { status: 'error'; message: string }
 
 /**
  * Standard Red Notes: public, unauthenticated landing for the email-confirmation
@@ -96,29 +94,29 @@ const EmailConfirmationView = ({ token }: Props) => {
   }
 
   return (
-    <div className="flex h-full w-full justify-center overflow-auto bg-default px-4 py-16 text-foreground">
+    <div className="bg-default text-foreground flex h-full w-full justify-center overflow-auto px-4 py-16">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-2xl font-bold">Email confirmation</h1>
 
         {state.status === 'verifying' && (
-          <div className="rounded border border-solid border-border p-6 text-center text-passive-0">
+          <div className="border-border text-passive-0 rounded border border-solid p-6 text-center">
             Confirming your email address…
           </div>
         )}
 
         {state.status === 'success' && (
-          <div className="rounded border border-solid border-info bg-info-faded p-6 text-center">
-            <div className="text-lg font-bold text-info">
+          <div className="border-info bg-info-faded rounded border border-solid p-6 text-center">
+            <div className="text-info text-lg font-bold">
               {state.alreadyConfirmed ? 'Already confirmed' : 'Email confirmed'}
             </div>
-            <div className="mt-2 text-passive-0">
+            <div className="text-passive-0 mt-2">
               {state.alreadyConfirmed
                 ? 'Your email address was already confirmed. You can sign in.'
                 : 'Thank you — your email address is confirmed. You can now sign in.'}
             </div>
             <a
               href="/"
-              className="mt-5 inline-block rounded bg-info px-4 py-2 font-semibold text-info-contrast no-underline"
+              className="bg-info text-info-contrast mt-5 inline-block rounded px-4 py-2 font-semibold no-underline"
             >
               Continue to sign in
             </a>
@@ -126,12 +124,12 @@ const EmailConfirmationView = ({ token }: Props) => {
         )}
 
         {state.status === 'error' && (
-          <div className="rounded border border-solid border-border p-6">
-            <div className="text-center text-lg font-bold text-danger">Confirmation failed</div>
-            <div className="mt-2 text-center text-passive-0">{state.message}</div>
+          <div className="border-border rounded border border-solid p-6">
+            <div className="text-danger text-center text-lg font-bold">Confirmation failed</div>
+            <div className="text-passive-0 mt-2 text-center">{state.message}</div>
 
             {resendState === 'sent' ? (
-              <div className="mt-6 rounded border border-solid border-info bg-info-faded p-3 text-center text-sm">
+              <div className="border-info bg-info-faded mt-6 rounded border border-solid p-3 text-center text-sm">
                 If an account exists for that address and is not yet confirmed, a new confirmation link is on its way.
               </div>
             ) : (
@@ -144,12 +142,12 @@ const EmailConfirmationView = ({ token }: Props) => {
                   value={resendEmail}
                   onChange={(event) => setResendEmail(event.target.value)}
                   placeholder="you@example.com"
-                  className="w-full rounded border border-solid border-border bg-default px-3 py-2 text-foreground"
+                  className="border-border bg-default text-foreground w-full rounded border border-solid px-3 py-2"
                 />
                 <button
                   type="submit"
                   disabled={resendState === 'sending'}
-                  className="mt-3 w-full rounded bg-info px-4 py-2 font-semibold text-info-contrast disabled:opacity-50"
+                  className="bg-info text-info-contrast mt-3 w-full rounded px-4 py-2 font-semibold disabled:opacity-50"
                 >
                   {resendState === 'sending' ? 'Sending…' : 'Send new link'}
                 </button>

@@ -77,7 +77,7 @@ const DesignateSurvivorModal = ({
           return (
             <label className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5" key={member.uuid}>
               <input
-                className="h-4 w-4 self-center accent-info"
+                className="accent-info h-4 w-4 self-center"
                 type="radio"
                 name="survivor"
                 checked={isSelected}

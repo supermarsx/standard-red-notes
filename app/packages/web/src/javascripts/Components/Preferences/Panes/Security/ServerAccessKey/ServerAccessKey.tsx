@@ -64,9 +64,9 @@ const ServerAccessKey: FunctionComponent = () => {
         <Text className="mt-2">
           This is an instance-level obfuscation key set by the server operator — it is{' '}
           <span className="font-semibold">not</span> your account password, and it does{' '}
-          <span className="font-semibold">not</span> provide end-to-end security. Your note content is still protected by
-          end-to-end encryption regardless of this setting. The key is stored only on this device (it is never synced)
-          and is sent as a header with your requests.
+          <span className="font-semibold">not</span> provide end-to-end security. Your note content is still protected
+          by end-to-end encryption regardless of this setting. The key is stored only on this device (it is never
+          synced) and is sent as a header with your requests.
         </Text>
       </PreferencesSegment>
 

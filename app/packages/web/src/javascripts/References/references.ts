@@ -30,24 +30,9 @@ import { WebApplication } from '@/Application/WebApplication'
 export const NoteReferenceKey = 'reference' as unknown as AppDataField
 
 /** Kinds of reference, kept permissive so old/unknown values normalize to 'other'. */
-export type ReferenceKind =
-  | 'article'
-  | 'book'
-  | 'web'
-  | 'report'
-  | 'thesis'
-  | 'conference'
-  | 'other'
+export type ReferenceKind = 'article' | 'book' | 'web' | 'report' | 'thesis' | 'conference' | 'other'
 
-export const REFERENCE_KINDS: ReferenceKind[] = [
-  'article',
-  'book',
-  'web',
-  'report',
-  'thesis',
-  'conference',
-  'other',
-]
+export const REFERENCE_KINDS: ReferenceKind[] = ['article', 'book', 'web', 'report', 'thesis', 'conference', 'other']
 
 const REFERENCE_KIND_SET = new Set<string>(REFERENCE_KINDS)
 
@@ -400,8 +385,7 @@ function bibtexKey(item: ReferenceItem, index: number): string {
   return key.length > 0 ? key : `ref${index + 1}`
 }
 
-const bibtexField = (name: string, value: string): string =>
-  `  ${name} = {${value.replace(/[{}]/g, '')}},`
+const bibtexField = (name: string, value: string): string => `  ${name} = {${value.replace(/[{}]/g, '')}},`
 
 /** Export the library as a BibTeX string. Pure. */
 export function referencesToBibTeX(items: ReferenceItem[]): string {

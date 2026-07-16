@@ -1,10 +1,5 @@
 import * as Y from 'yjs'
-import {
-  Awareness,
-  applyAwarenessUpdate,
-  encodeAwarenessUpdate,
-  removeAwarenessStates,
-} from 'y-protocols/awareness'
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness'
 import type { Provider } from '@lexical/yjs'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
 import type { RoomCipher } from './RoomCrypto'
@@ -65,7 +60,9 @@ export class EncryptedYjsProvider implements Provider {
   // --- lifecycle ---------------------------------------------------------
 
   connect(): void {
-    if (this.connected) return
+    if (this.connected) {
+      return
+    }
     this.connected = true
 
     this.doc.on('update', this.onLocalDocUpdate)
@@ -91,7 +88,9 @@ export class EncryptedYjsProvider implements Provider {
       capability = undefined
     }
     // A concurrent disconnect() may have run while we awaited; don't join if so.
-    if (!this.connected) return
+    if (!this.connected) {
+      return
+    }
     if (!capability) {
       // Denied / unavailable: do not attempt to join. The gateway would reject a
       // capability-less join anyway; skipping avoids a pointless room-denied round trip.
@@ -101,7 +100,9 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   disconnect(): void {
-    if (!this.connected) return
+    if (!this.connected) {
+      return
+    }
     this.connected = false
     removeAwarenessStates(this.yAwareness, [this.doc.clientID], 'disconnect')
     this.channel.send({ t: 'room-leave', room: this.room })
@@ -127,7 +128,9 @@ export class EncryptedYjsProvider implements Provider {
   // --- outbound ----------------------------------------------------------
 
   private readonly onLocalDocUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === this) return // came from applying a remote update; don't loop
+    if (origin === this) {
+      return
+    } // came from applying a remote update; don't loop
     this.track(
       this.cipher.encrypt(update).then((payload) => {
         this.channel.send({ t: 'yjs', room: this.room, payload })
@@ -139,7 +142,9 @@ export class EncryptedYjsProvider implements Provider {
     changes: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
   ): void => {
-    if (origin === 'remote') return
+    if (origin === 'remote') {
+      return
+    }
     const changed = [...changes.added, ...changes.updated, ...changes.removed]
     const update = encodeAwarenessUpdate(this.yAwareness, changed)
     this.track(
@@ -157,7 +162,9 @@ export class EncryptedYjsProvider implements Provider {
   // --- inbound -----------------------------------------------------------
 
   private readonly onFrame = (frame: CollabFrame): void => {
-    if (frame.room !== this.room) return
+    if (frame.room !== this.room) {
+      return
+    }
     switch (frame.t) {
       case 'room-sync':
         this.track(this.broadcastFullState())

@@ -37,21 +37,21 @@ const FloatingNarrationPlayer = () => {
     <div
       role="region"
       aria-label="Narration player"
-      className="fixed bottom-4 right-4 z-footer-bar-item w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-default p-3 shadow-main"
+      className="z-footer-bar-item border-border bg-default shadow-main fixed right-4 bottom-4 w-80 max-w-[calc(100vw-2rem)] rounded-lg border p-3"
     >
       <div className="flex items-start gap-2">
-        <Icon type="file-music" className="mt-0.5 shrink-0 text-info" size="medium" />
+        <Icon type="file-music" className="text-info mt-0.5 shrink-0" size="medium" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold" title={title}>
             {title}
           </div>
-          <div className="text-xs text-passive-0">
+          <div className="text-passive-0 text-xs">
             {store.meta.backend === 'model' ? 'Model voice' : 'Device voice'}
             {isLoading ? ' · loading…' : ''}
           </div>
         </div>
         <button
-          className="shrink-0 rounded p-1 text-passive-0 hover:bg-passive-3 hover:text-text"
+          className="text-passive-0 hover:bg-passive-3 hover:text-text shrink-0 rounded p-1"
           title="Stop narration"
           aria-label="Stop narration"
           onClick={() => store.dismiss()}
@@ -62,7 +62,7 @@ const FloatingNarrationPlayer = () => {
 
       <div className="mt-2 flex items-center gap-2">
         <button
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-info text-info-contrast disabled:opacity-50"
+          className="bg-info text-info-contrast flex h-8 w-8 shrink-0 items-center justify-center rounded-full disabled:opacity-50"
           title={isPaused ? 'Resume' : 'Pause'}
           aria-label={isPaused ? 'Resume narration' : 'Pause narration'}
           onClick={() => (isPaused ? store.resume() : store.pause())}
@@ -71,7 +71,7 @@ const FloatingNarrationPlayer = () => {
           <Icon type={isPaused ? 'play' : 'pause'} size="small" />
         </button>
 
-        <span className="w-10 shrink-0 text-right text-xs tabular-nums text-passive-0">
+        <span className="text-passive-0 w-10 shrink-0 text-right text-xs tabular-nums">
           {formatTime(store.currentTime)}
         </span>
 
@@ -87,12 +87,12 @@ const FloatingNarrationPlayer = () => {
           aria-label="Seek"
         />
 
-        <span className="w-10 shrink-0 text-xs tabular-nums text-passive-0">
+        <span className="text-passive-0 w-10 shrink-0 text-xs tabular-nums">
           {canSeek ? formatTime(store.duration) : '--:--'}
         </span>
       </div>
 
-      {store.errorMessage && <p className="mt-2 text-xs text-danger">{store.errorMessage}</p>}
+      {store.errorMessage && <p className="text-danger mt-2 text-xs">{store.errorMessage}</p>}
     </div>
   )
 }

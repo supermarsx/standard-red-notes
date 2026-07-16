@@ -38,7 +38,7 @@ const SortIcon = ({ enabled, reverse }: { enabled: boolean; reverse: boolean | u
   return (
     <Icon
       type={reverse ? 'arrows-sort-up' : 'arrows-sort-down'}
-      className="h-6 w-6 text-neutral md:h-5 md:w-6"
+      className="text-neutral h-6 w-6 md:h-5 md:w-6"
       size="custom"
     />
   )
@@ -56,10 +56,10 @@ const TabButton: FunctionComponent<{
   return (
     <button
       className={classNames(
-        'relative cursor-pointer rounded-full border-2 border-solid border-transparent px-2 py-1 text-mobile-menu-item focus:shadow-none md:py-0 lg:text-sm',
+        'text-mobile-menu-item relative cursor-pointer rounded-full border-2 border-solid border-transparent px-2 py-1 focus:shadow-none md:py-0 lg:text-sm',
         isSelected
           ? 'bg-info text-info-contrast'
-          : 'bg-transparent text-text hover:bg-info-backdrop focus:bg-info-backdrop',
+          : 'text-text hover:bg-info-backdrop focus:bg-info-backdrop bg-transparent',
       )}
       onClick={() => {
         setCurrentMode(mode)
@@ -320,7 +320,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
 
   return (
     <Menu className="text-sm" a11yLabel={t('notesListOptionsMenu')}>
-      <div className="my-1 px-3 text-base font-semibold uppercase text-text lg:text-xs">{t('preferencesFor')}</div>
+      <div className="text-text my-1 px-3 text-base font-semibold uppercase lg:text-xs">{t('preferencesFor')}</div>
       <div className={classNames('mt-1.5 flex w-full justify-between px-3', !controlsDisabled && 'mb-3')}>
         <div className="flex items-center gap-1.5">
           <TabButton label={t('global')} mode="global" currentMode={currentMode} setCurrentMode={setCurrentMode} />
@@ -341,14 +341,10 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
 
       {controlsDisabled && (
         <NoSubscriptionBanner
-          className="m-2 mb-3 mt-2"
+          className="m-2 mt-2 mb-3"
           application={application}
           title={t('upgradeForPerTopicPreferences')}
-          message={
-            DailyEntryModeEnabled
-              ? t('perTopicPreferencesMessageWithDaily')
-              : t('perTopicPreferencesMessage')
-          }
+          message={DailyEntryModeEnabled ? t('perTopicPreferencesMessageWithDaily') : t('perTopicPreferencesMessage')}
         />
       )}
 
@@ -435,16 +431,16 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         {!shouldHideNonApplicableOptions && !isFilesSmartView && (
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={!preferences.hideNotePreview}
             onChange={toggleHidePreview}
           >
-            <div className="max-w-3/4 flex flex-col">{t('showNotePreview')}</div>
+            <div className="flex max-w-3/4 flex-col">{t('showNotePreview')}</div>
           </MenuSwitchButtonItem>
         )}
         <MenuSwitchButtonItem
           disabled={controlsDisabled}
-          className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+          className="hover:bg-contrast focus:bg-info-backdrop py-1"
           checked={!preferences.hideDate}
           onChange={toggleHideDate}
         >
@@ -452,7 +448,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         </MenuSwitchButtonItem>
         <MenuSwitchButtonItem
           disabled={controlsDisabled}
-          className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+          className="hover:bg-contrast focus:bg-info-backdrop py-1"
           checked={!preferences.hideTags}
           onChange={toggleHideTags}
         >
@@ -460,7 +456,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         </MenuSwitchButtonItem>
         <MenuSwitchButtonItem
           disabled={controlsDisabled}
-          className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+          className="hover:bg-contrast focus:bg-info-backdrop py-1"
           checked={!preferences.hideEditorIcon}
           onChange={toggleEditorIcon}
         >
@@ -472,7 +468,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         <MenuSection title={t('other')}>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={!preferences.hidePinned}
             onChange={toggleHidePinned}
           >
@@ -480,7 +476,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={!preferences.hideProtected}
             onChange={toggleHideProtected}
           >
@@ -488,7 +484,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={Boolean(preferences.showArchived)}
             onChange={toggleShowArchived}
           >
@@ -496,7 +492,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
           </MenuSwitchButtonItem>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={Boolean(preferences.showTrashed)}
             onChange={toggleShowTrashed}
           >
@@ -509,14 +505,14 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         <MenuSection>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={isDailyEntry}
             onChange={toggleEntryMode}
           >
             <div className="flex flex-col pr-5">
               <div className="flex flex-row items-center">
-                <div className="text-base font-semibold uppercase text-text lg:text-xs">{t('dailyNotebook')}</div>
-                <Pill className="!py-0.5 px-1.5" style="success">
+                <div className="text-text text-base font-semibold uppercase lg:text-xs">{t('dailyNotebook')}</div>
+                <Pill className="px-1.5 !py-0.5" style="success">
                   {t('labs')}
                 </Pill>
               </div>
@@ -530,14 +526,14 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
         <MenuSection>
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
-            className="py-1 hover:bg-contrast focus:bg-info-backdrop"
+            className="hover:bg-contrast focus:bg-info-backdrop py-1"
             checked={isTableViewEnabled}
             onChange={toggleTableView}
           >
             <div className="flex flex-col pr-5">
               <div className="flex flex-row items-center">
-                <div className="text-base font-semibold uppercase text-text lg:text-xs">{t('tableView')}</div>
-                <Pill className="!py-0.5 px-1.5" style="success">
+                <div className="text-text text-base font-semibold uppercase lg:text-xs">{t('tableView')}</div>
+                <Pill className="px-1.5 !py-0.5" style="success">
                   {t('labs')}
                 </Pill>
               </div>

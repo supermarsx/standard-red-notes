@@ -63,8 +63,7 @@ export function mathPlaceholder(tex: string, displayMode: boolean): string {
  * (KaTeX needs the real `<`, `>`, `&`).
  */
 export function replaceInlineMath(escapedText: string): string {
-  const unescape = (s: string): string =>
-    s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  const unescape = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 
   let out = escapedText
 
@@ -76,9 +75,7 @@ export function replaceInlineMath(escapedText: string): string {
   // elsewhere). The negative lookbehind/lookahead on `$` avoids matching `$$`.
   // The inner group `[^$\n]*?[^\s$]` allows a single character (`$x$`) up to a
   // multi-character span, always ending in a non-space so `5 $` isn't matched.
-  out = out.replace(/(?<![$\\])\$(?!\s)([^$\n]*?[^\s$])\$(?!\$)/g, (_m, tex) =>
-    mathPlaceholder(unescape(tex), false),
-  )
+  out = out.replace(/(?<![$\\])\$(?!\s)([^$\n]*?[^\s$])\$(?!\$)/g, (_m, tex) => mathPlaceholder(unescape(tex), false))
 
   return out
 }

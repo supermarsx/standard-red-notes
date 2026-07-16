@@ -182,15 +182,15 @@ const Invite: FunctionComponent<Props> = ({ application }: Props) => {
           {quota !== undefined ? (
             <Text className="mt-1">
               Using <span className="font-bold">{activeCount}</span> of <span className="font-bold">{quota}</span>{' '}
-              active invite link{quota === 1 ? '' : 's'}.
-              {quotaReached ? ' Revoke one to create another.' : ''}
+              active invite link{quota === 1 ? '' : 's'}.{quotaReached ? ' Revoke one to create another.' : ''}
             </Text>
           ) : (
             <Text className="mt-1">
-              You have <span className="font-bold">{activeCount}</span> active invite link{activeCount === 1 ? '' : 's'}.
+              You have <span className="font-bold">{activeCount}</span> active invite link{activeCount === 1 ? '' : 's'}
+              .
             </Text>
           )}
-          <Text className="mt-1 text-passive-1">
+          <Text className="text-passive-1 mt-1">
             You’ve invited <span className="font-bold">{state.invitedCount}</span> person
             {state.invitedCount === 1 ? '' : 's'} so far.
           </Text>
@@ -210,21 +210,21 @@ const Invite: FunctionComponent<Props> = ({ application }: Props) => {
               <span className="text-sm font-medium lg:text-xs">Max uses</span>
               <input
                 type="number"
-                className="w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                className="border-border bg-default w-32 rounded border px-2 py-1.5 text-sm"
                 min={1}
                 step={1}
                 value={form.maxUses}
                 aria-label="Maximum number of signups this link allows"
                 onChange={(event) => updateForm({ maxUses: event.target.value })}
               />
-              <span className="text-xs text-passive-1">1 = single-use. Up to 100000.</span>
+              <span className="text-passive-1 text-xs">1 = single-use. Up to 100000.</span>
             </label>
 
             <label className="flex flex-col gap-1">
               <span className="text-sm font-medium lg:text-xs">Expires in (hours)</span>
               <input
                 type="number"
-                className="w-32 rounded border border-border bg-default px-2 py-1.5 text-sm"
+                className="border-border bg-default w-32 rounded border px-2 py-1.5 text-sm"
                 min={1}
                 step={1}
                 value={form.expiresInHours}
@@ -232,14 +232,14 @@ const Invite: FunctionComponent<Props> = ({ application }: Props) => {
                 aria-label="Hours until this link expires (blank for never)"
                 onChange={(event) => updateForm({ expiresInHours: event.target.value })}
               />
-              <span className="text-xs text-passive-1">Blank = never expires. Up to 8760 (1 year).</span>
+              <span className="text-passive-1 text-xs">Blank = never expires. Up to 8760 (1 year).</span>
             </label>
 
             <label className="flex flex-col gap-1">
               <span className="text-sm font-medium lg:text-xs">Label (optional)</span>
               <input
                 type="text"
-                className="w-full max-w-sm rounded border border-border bg-default px-2 py-1.5 text-sm"
+                className="border-border bg-default w-full max-w-sm rounded border px-2 py-1.5 text-sm"
                 value={form.label}
                 placeholder="e.g. For my study group"
                 aria-label="An optional label to remember this link"
@@ -253,26 +253,26 @@ const Invite: FunctionComponent<Props> = ({ application }: Props) => {
             label={creating ? 'Creating…' : 'Create invite link'}
             primary
             disabled={creating || quotaReached}
-            disabledReason={quotaReached ? 'You’ve reached your invite-link quota. Revoke one to create another.' : undefined}
+            disabledReason={
+              quotaReached ? 'You’ve reached your invite-link quota. Revoke one to create another.' : undefined
+            }
             onClick={handleCreate}
           />
 
           {justCreatedUrl && (
-            <div className="mt-3 rounded border border-solid border-info bg-info-faded p-3">
+            <div className="border-info bg-info-faded mt-3 rounded border border-solid p-3">
               <Text className="font-semibold">Your invite link is ready — copy it now.</Text>
-              <Text className="mt-1 text-passive-1">
+              <Text className="text-passive-1 mt-1">
                 This is the only time the full link is shown. If you lose it, revoke it and create a new one.
               </Text>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <code className="min-w-0 flex-1 truncate rounded bg-passive-4 px-2 py-1.5 text-xs" title={justCreatedUrl}>
+                <code
+                  className="bg-passive-4 min-w-0 flex-1 truncate rounded px-2 py-1.5 text-xs"
+                  title={justCreatedUrl}
+                >
                   {justCreatedUrl}
                 </code>
-                <Button
-                  className="flex-shrink-0"
-                  label="Copy link"
-                  small
-                  onClick={() => handleCopy(justCreatedUrl)}
-                />
+                <Button className="flex-shrink-0" label="Copy link" small onClick={() => handleCopy(justCreatedUrl)} />
               </div>
             </div>
           )}
@@ -287,14 +287,14 @@ const Invite: FunctionComponent<Props> = ({ application }: Props) => {
             <Text className="mt-2">You haven’t created any invite links yet.</Text>
           )}
           {!loading && state.links.length > 0 && (
-            <div className="mt-2 flex flex-col divide-y divide-border">
+            <div className="divide-border mt-2 flex flex-col divide-y">
               {state.links.map((link) => (
                 <div key={link.uuid} className="flex items-center justify-between gap-3 py-2">
                   <div className="flex min-w-0 flex-col">
                     <span className="truncate text-sm font-medium lg:text-xs" title={link.label ?? undefined}>
                       {link.label && link.label.trim() !== '' ? link.label : 'Invite link'}
                     </span>
-                    <span className="truncate text-xs text-passive-1">
+                    <span className="text-passive-1 truncate text-xs">
                       Uses {inviteLinkUsesLabel(link.usedCount, link.maxUses)} · Created{' '}
                       {formatInviteLinkDate(link.createdAt)} · Expires {formatInviteLinkDate(link.expiresAt, 'Never')}
                     </span>

@@ -109,8 +109,7 @@ export function toEmbedUrl(raw: string): string | null {
   const host = parsed.hostname.toLowerCase()
 
   // Extract a timestamp from either a `t=` or `start=` query/param if present.
-  const start =
-    parseYouTubeStart(parsed.searchParams.get('t')) ?? parseYouTubeStart(parsed.searchParams.get('start'))
+  const start = parseYouTubeStart(parsed.searchParams.get('t')) ?? parseYouTubeStart(parsed.searchParams.get('start'))
 
   const isYouTubeHost = host === 'youtube.com' || host === 'www.youtube.com' || host === 'm.youtube.com'
   const isYouTubeNoCookieHost = host === 'youtube-nocookie.com' || host === 'www.youtube-nocookie.com'

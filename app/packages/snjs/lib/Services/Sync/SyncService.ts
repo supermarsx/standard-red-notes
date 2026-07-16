@@ -1013,7 +1013,9 @@ export class SyncService
       return true
     })
 
-    const itemsWithoutBackoffPenalty = nonLiteDirtyItems.filter((item) => !this.syncBackoffService.isItemInBackoff(item))
+    const itemsWithoutBackoffPenalty = nonLiteDirtyItems.filter(
+      (item) => !this.syncBackoffService.isItemInBackoff(item),
+    )
 
     /**
      * NOTE: local-only items are intentionally NOT excluded here. They must remain in the set that
@@ -1031,9 +1033,7 @@ export class SyncService
    * edit is not lost. Empty in normal operation (and always empty with the flag off).
    */
   private dirtyLiteItems(): DecryptedItemInterface[] {
-    return this.itemManager
-      .getDirtyItems()
-      .filter((item) => isLitePayload(item.payload)) as DecryptedItemInterface[]
+    return this.itemManager.getDirtyItems().filter((item) => isLitePayload(item.payload)) as DecryptedItemInterface[]
   }
 
   /**
@@ -2131,13 +2131,12 @@ export class SyncService
     return Promise.all(
       payloads.map(async (encrypted) => {
         const previouslyProcessedItemsKey:
-          | DecryptedPayloadInterface<ItemsKeyContent | KeySystemItemsKeyContent>
-          | undefined = map[encrypted.items_key_id as string]
+          DecryptedPayloadInterface<ItemsKeyContent | KeySystemItemsKeyContent> | undefined =
+          map[encrypted.items_key_id as string]
 
         const itemsKey = previouslyProcessedItemsKey
           ? (CreateDecryptedItemFromPayload(previouslyProcessedItemsKey) as
-              | ItemsKeyInterface
-              | KeySystemItemsKeyInterface)
+              ItemsKeyInterface | KeySystemItemsKeyInterface)
           : undefined
 
         const keyedSplit: KeyedDecryptionSplit = {}
@@ -2650,19 +2649,19 @@ export class SyncService
   }
 
   /** @e2e_testing */
-  // eslint-disable-next-line camelcase
+
   ut_setDatabaseLoaded(loaded: boolean): void {
     this.databaseLoaded = loaded
   }
 
   /** @e2e_testing */
-  // eslint-disable-next-line camelcase
+
   ut_clearLastSyncDate(): void {
     this.lastSyncDate = undefined
   }
 
   /** @e2e_testing */
-  // eslint-disable-next-line camelcase
+
   ut_beginLatencySimulator(latency: number): void {
     this._simulate_latency = {
       latency: latency || 1000,
@@ -2671,7 +2670,7 @@ export class SyncService
   }
 
   /** @e2e_testing */
-  // eslint-disable-next-line camelcase
+
   ut_endLatencySimulator(): void {
     this._simulate_latency = undefined
   }

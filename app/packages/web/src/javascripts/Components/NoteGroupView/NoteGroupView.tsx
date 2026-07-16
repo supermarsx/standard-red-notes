@@ -39,12 +39,7 @@ import { loadTabCustomNames, saveTabCustomNames, setTabCustomName, TabCustomName
  * instead of forcing them back to a multi-column tiling each time.
  */
 const TILE_LAYOUT_STORAGE_KEY = 'srn_editor_tile_layout'
-const VALID_TILE_LAYOUTS = new Set<string>([
-  TileLayout.Single,
-  TileLayout.Columns,
-  TileLayout.Rows,
-  TileLayout.Grid,
-])
+const VALID_TILE_LAYOUTS = new Set<string>([TileLayout.Single, TileLayout.Columns, TileLayout.Rows, TileLayout.Grid])
 
 const loadPersistedTileLayout = (): TileLayout => {
   try {
@@ -114,8 +109,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
 
   constructor(props: Props) {
     super(props, props.application)
-    const lgMatches =
-      typeof window !== 'undefined' ? window.matchMedia(MediaQueryBreakpoints.lg).matches : true
+    const lgMatches = typeof window !== 'undefined' ? window.matchMedia(MediaQueryBreakpoints.lg).matches : true
     this.state = {
       showMultipleSelectedNotes: false,
       showMultipleSelectedFiles: false,
@@ -299,11 +293,11 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       ...controllers.map((controller): TabTarget => ({ kind: 'controller', runtimeId: controller.runtimeId })),
     ]
 
-    const targetIndex = combined.findIndex((entry) =>
-      target.kind === 'view'
+    const targetIndex = combined.findIndex((entry) => {
+      return target.kind === 'view'
         ? entry.kind === 'view' && entry.id === target.id
-        : entry.kind === 'controller' && entry.runtimeId === target.runtimeId,
-    )
+        : entry.kind === 'controller' && entry.runtimeId === target.runtimeId
+    })
     if (targetIndex < 0) {
       return
     }
@@ -427,7 +421,7 @@ class NoteGroupView extends AbstractComponent<Props, State> {
         <NoteConflictResolutionView
           currentNote={note as SNNote}
           conflictedNotes={conflicted}
-          className="flex-grow min-h-0"
+          className="min-h-0 flex-grow"
           onClose={() => this.application.paneController.closeViewTab(tab.id)}
         />
       )
@@ -515,76 +509,74 @@ class NoteGroupView extends AbstractComponent<Props, State> {
             )}
 
             {!activeViewTab &&
-              (isTiling ? (
-              (() => {
-                /**
-                 * On tablet-sized viewports (below `lg`) side-by-side tiles are
-                 * too narrow to use, so stack them into a single scrollable
-                 * column. `Single` layout still shows just the active tile.
-                 * Desktop (`lg`+) keeps the user-selected layout untouched.
-                 */
-                const effectiveLayout =
-                  this.state.isNarrowTilingViewport && this.state.tileLayout !== TileLayout.Single
-                    ? TileLayout.Rows
-                    : this.state.tileLayout
-                const stackVertically = this.state.isNarrowTilingViewport && effectiveLayout === TileLayout.Rows
-                return (
-                  <div
-                    className={classNames(
-                      'grid w-full flex-grow gap-1 bg-border',
-                      stackVertically ? 'min-h-0 overflow-y-auto' : 'min-h-0',
-                    )}
-                    style={
-                      stackVertically
-                        ? { gridTemplateColumns: '1fr', gridAutoRows: 'minmax(60vh, 1fr)' }
-                        : getTileGridStyle(effectiveLayout, controllers.length)
-                    }
-                  >
-                {controllers.map((controller) => {
-                  const isActive = controller.runtimeId === this.state.activeControllerRuntimeId
-                  const isHidden = effectiveLayout === TileLayout.Single && !isActive
-                  return (
-                    <div
-                      key={controller.runtimeId}
-                      onMouseDownCapture={() => this.setActiveController(controller)}
-                      className={classNames(
-                        'relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-default',
-                        isHidden && 'hidden',
-                        isActive ? 'ring-2 ring-inset ring-info' : 'ring-1 ring-inset ring-transparent',
-                      )}
-                    >
-                      <button
-                        type="button"
-                        title="Close tile"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          this.closeTile(controller)
-                        }}
-                        className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded bg-default text-text opacity-70 shadow-sm hover:opacity-100"
+              (isTiling
+                ? (() => {
+                    /**
+                     * On tablet-sized viewports (below `lg`) side-by-side tiles are
+                     * too narrow to use, so stack them into a single scrollable
+                     * column. `Single` layout still shows just the active tile.
+                     * Desktop (`lg`+) keeps the user-selected layout untouched.
+                     */
+                    const effectiveLayout =
+                      this.state.isNarrowTilingViewport && this.state.tileLayout !== TileLayout.Single
+                        ? TileLayout.Rows
+                        : this.state.tileLayout
+                    const stackVertically = this.state.isNarrowTilingViewport && effectiveLayout === TileLayout.Rows
+                    return (
+                      <div
+                        className={classNames(
+                          'bg-border grid w-full flex-grow gap-1',
+                          stackVertically ? 'min-h-0 overflow-y-auto' : 'min-h-0',
+                        )}
+                        style={
+                          stackVertically
+                            ? { gridTemplateColumns: '1fr', gridAutoRows: 'minmax(60vh, 1fr)' }
+                            : getTileGridStyle(effectiveLayout, controllers.length)
+                        }
                       >
-                        <Icon type="close" size="small" />
-                      </button>
-                      <div className="min-h-0 flex-grow overflow-auto">{this.renderController(controller)}</div>
-                    </div>
-                  )
-                })}
-                  </div>
-                )
-              })()
-            ) : (
-              /**
-               * Non-tiling branch: only one tile is shown (single open note, or mobile
-               * where the tile grid is gated off). Render just the active tab's controller
-               * so the tab bar behaves like true browser tabs (switching the visible note).
-               */
-              controllers
-                .filter((controller) =>
-                  this.state.activeControllerRuntimeId
-                    ? controller.runtimeId === this.state.activeControllerRuntimeId
-                    : controller === controllers[0],
-                )
-                .map((controller) => this.renderController(controller))
-            ))}
+                        {controllers.map((controller) => {
+                          const isActive = controller.runtimeId === this.state.activeControllerRuntimeId
+                          const isHidden = effectiveLayout === TileLayout.Single && !isActive
+                          return (
+                            <div
+                              key={controller.runtimeId}
+                              onMouseDownCapture={() => this.setActiveController(controller)}
+                              className={classNames(
+                                'bg-default relative flex min-h-0 min-w-0 flex-col overflow-hidden',
+                                isHidden && 'hidden',
+                                isActive ? 'ring-info ring-2 ring-inset' : 'ring-1 ring-transparent ring-inset',
+                              )}
+                            >
+                              <button
+                                type="button"
+                                title="Close tile"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  this.closeTile(controller)
+                                }}
+                                className="bg-default text-text absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded opacity-70 shadow-sm hover:opacity-100"
+                              >
+                                <Icon type="close" size="small" />
+                              </button>
+                              <div className="min-h-0 flex-grow overflow-auto">{this.renderController(controller)}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()
+                : /**
+                   * Non-tiling branch: only one tile is shown (single open note, or mobile
+                   * where the tile grid is gated off). Render just the active tab's controller
+                   * so the tab bar behaves like true browser tabs (switching the visible note).
+                   */
+                  controllers
+                    .filter((controller) => {
+                      return this.state.activeControllerRuntimeId
+                        ? controller.runtimeId === this.state.activeControllerRuntimeId
+                        : controller === controllers[0]
+                    })
+                    .map((controller) => this.renderController(controller)))}
           </div>
         )}
       </>

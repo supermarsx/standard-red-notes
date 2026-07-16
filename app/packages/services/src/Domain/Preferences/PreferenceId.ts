@@ -1,28 +1,25 @@
-const PREFERENCE_PANE_IDS = [
-  'general',
-  'account',
-  'security',
-  'home-server',
-  'vaults',
-  'appearance',
-  'assistant',
-  'backups',
-  'plugins',
-  'shortcuts',
-  'accessibility',
-  'help-feedback',
-  'whats-new',
-  'admin',
-  'shares',
-  'survivor-switch',
-  'recent-notes',
-  'search-index',
-  'searchIndexing',
-  'achievements',
-  'sharing',
-  'sync',
-  'storage',
-  'invite',
-] as const
-
-export type PreferencePaneId = (typeof PREFERENCE_PANE_IDS)[number]
+export type PreferencePaneId =
+  | 'general'
+  | 'account'
+  | 'security'
+  | 'home-server'
+  | 'vaults'
+  | 'appearance'
+  | 'assistant'
+  | 'backups'
+  | 'plugins'
+  | 'shortcuts'
+  | 'accessibility'
+  | 'help-feedback'
+  | 'whats-new'
+  | 'admin'
+  | 'shares'
+  | 'survivor-switch'
+  | 'recent-notes'
+  | 'search-index'
+  | 'searchIndexing'
+  | 'achievements'
+  | 'sharing'
+  | 'sync'
+  | 'storage'
+  | 'invite'

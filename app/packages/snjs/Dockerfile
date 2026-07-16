@@ -1,7 +1,9 @@
-FROM node:16.15.1-alpine AS builder
+FROM node:26.5.0-alpine3.23 AS builder
 
 # Install dependencies for building native libraries
-RUN apk add --update git openssh-client python3 alpine-sdk
+RUN apk add --no-cache git openssh-client python3 alpine-sdk \
+  && npm install --global corepack@0.35.0 \
+  && corepack enable
 
 WORKDIR /workspace
 
@@ -10,9 +12,11 @@ COPY manifests ./
 
 RUN yarn install --immutable
 
-FROM node:16.15.1-alpine
+FROM node:26.5.0-alpine3.23
 
-RUN apk add --update curl
+RUN apk add --no-cache curl \
+  && npm install --global corepack@0.35.0 \
+  && corepack enable
 
 WORKDIR /workspace
 

@@ -19,8 +19,7 @@ export const DEFAULT_NEW_TAB_BEHAVIOR: NewTabBehavior = 'new-note'
 
 export const loadNewTabBehavior = (): NewTabBehavior => {
   try {
-    const stored =
-      typeof localStorage !== 'undefined' ? localStorage.getItem(NEW_TAB_BEHAVIOR_STORAGE_KEY) : null
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(NEW_TAB_BEHAVIOR_STORAGE_KEY) : null
     if (stored && VALID_NEW_TAB_BEHAVIORS.has(stored)) {
       return stored as NewTabBehavior
     }

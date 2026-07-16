@@ -292,8 +292,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'table',
             rows: [
-              ['Encrypted backup', 'Ciphertext. Safe to store anywhere. Requires your password (or the backup’s key) to restore.'],
-              ['Decrypted backup', 'Plain, readable content. Convenient but unprotected — anyone with the file can read everything.'],
+              [
+                'Encrypted backup',
+                'Ciphertext. Safe to store anywhere. Requires your password (or the backup’s key) to restore.',
+              ],
+              [
+                'Decrypted backup',
+                'Plain, readable content. Convenient but unprotected — anyone with the file can read everything.',
+              ],
             ],
           },
           {
@@ -977,10 +983,16 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'table',
             rows: [
-              ['COOKIE_DOMAIN', 'Leave empty for a host-only cookie that works on localhost, a bare hostname, or an IP. Set it only for an HTTPS deployment behind a real domain.'],
+              [
+                'COOKIE_DOMAIN',
+                'Leave empty for a host-only cookie that works on localhost, a bare hostname, or an IP. Set it only for an HTTPS deployment behind a real domain.',
+              ],
               ['COOKIE_SECURE', 'false for plain HTTP self-hosting; true when serving over HTTPS.'],
               ['COOKIE_SAME_SITE', 'Lax is appropriate for a same-site app+API; None requires Secure.'],
-              ['CORS', 'The server echoes your app’s origin and allows credentials so cookies flow across the app/API ports.'],
+              [
+                'CORS',
+                'The server echoes your app’s origin and allows credentials so cookies flow across the app/API ports.',
+              ],
             ],
           },
           {
@@ -1048,7 +1060,13 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'The assistant operates within your account and acts on your decrypted notes locally in the browser session.',
           },
         ],
-        related: ['assistant/providers', 'assistant/connection', 'assistant/capabilities', 'assistant/retrieval-search', 'assistant/privacy'],
+        related: [
+          'assistant/providers',
+          'assistant/connection',
+          'assistant/capabilities',
+          'assistant/retrieval-search',
+          'assistant/privacy',
+        ],
       },
       {
         id: 'assistant/providers',
@@ -1109,8 +1127,14 @@ export const DOC_CATEGORIES: DocCategory[] = [
             type: 'table',
             rows: [
               ['Mode', 'Where the key lives / Who pays & limits'],
-              ['Direct', 'Key (if any) is in your encrypted synced preferences and sent only to the endpoint; you connect to and pay the provider directly, with no app-enforced limits.'],
-              ['Server proxy', 'Key is held by the server, never on client devices; the server account pays the provider and can enforce per-user daily request limits, with usage shown in the app.'],
+              [
+                'Direct',
+                'Key (if any) is in your encrypted synced preferences and sent only to the endpoint; you connect to and pay the provider directly, with no app-enforced limits.',
+              ],
+              [
+                'Server proxy',
+                'Key is held by the server, never on client devices; the server account pays the provider and can enforce per-user daily request limits, with usage shown in the app.',
+              ],
             ],
           },
         ],
@@ -1183,7 +1207,12 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'If privacy is the priority, use a local model. Be deliberate about which notes you share with a hosted provider.',
           },
         ],
-        related: ['assistant/providers', 'assistant/connection', 'assistant/retrieval-search', 'encryption/how-it-works'],
+        related: [
+          'assistant/providers',
+          'assistant/connection',
+          'assistant/retrieval-search',
+          'encryption/how-it-works',
+        ],
       },
     ],
   },
@@ -1340,7 +1369,8 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'shortcuts/common',
         title: 'Common shortcuts',
-        summary: 'Frequently used keyboard shortcuts; see Preferences → Shortcuts for the full, platform-specific list.',
+        summary:
+          'Frequently used keyboard shortcuts; see Preferences → Shortcuts for the full, platform-specific list.',
         blocks: [
           {
             type: 'paragraph',

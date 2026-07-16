@@ -1,9 +1,8 @@
-import { ContentType } from '@standardnotes/domain-core'
+import { ContentType, RoleName } from '@standardnotes/domain-core'
 import { PermissionName } from '../Permission/PermissionName'
 import { NativeFeatureIdentifier } from '../Feature/NativeFeatureIdentifier'
 import { NoteType } from '../Component/NoteType'
 import { FillIframeEditorDefaults } from './Utilities/FillEditorComponentDefaults'
-import { RoleName } from '@standardnotes/domain-core'
 import { IframeComponentFeatureDescription } from '../Feature/IframeComponentFeatureDescription'
 import { ComponentAction } from '../Component/ComponentAction'
 

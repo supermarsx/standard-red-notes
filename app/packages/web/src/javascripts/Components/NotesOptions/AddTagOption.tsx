@@ -84,19 +84,23 @@ const AddTagOption: FunctionComponent<Props> = ({
               <MenuItem
                 key={tag.uuid}
                 onClick={() => {
-                  isTagLinkedToSelectedItems(tag) ? unlinkTagFromSelectedItems(tag) : linkTagToSelectedItems(tag)
+                  if (isTagLinkedToSelectedItems(tag)) {
+                    unlinkTagFromSelectedItems(tag)
+                  } else {
+                    linkTagToSelectedItems(tag)
+                  }
                 }}
               >
                 {tag.iconString && (
                   <Icon
                     type={tag.iconString as IconType}
                     size={'custom'}
-                    className={'ml-0.5 mr-1.5 h-7 w-7 text-2xl text-neutral lg:h-6 lg:w-6 lg:text-lg'}
+                    className={'text-neutral mr-1.5 ml-0.5 h-7 w-7 text-2xl lg:h-6 lg:w-6 lg:text-lg'}
                   />
                 )}
                 <div>
                   {!!tagTitlePrefix && (
-                    <p className="overflow-hidden overflow-ellipsis whitespace-nowrap text-neutral">{tagTitlePrefix}</p>
+                    <p className="text-neutral overflow-hidden overflow-ellipsis whitespace-nowrap">{tagTitlePrefix}</p>
                   )}
                   <p
                     className={classNames(

@@ -24,13 +24,7 @@ import {
 import { COMMON_LANGUAGES } from '@/Assistant/languages'
 import { saveNarrationToNote } from '@/Assistant/narrationAudio'
 import { narrationPlayerStore } from '../Narration/NarrationPlayerStore'
-import {
-  getTtsAvailability,
-  listWebSpeechVoices,
-  playNarration,
-  TtsHandle,
-  TtsState,
-} from '@/Assistant/tts'
+import { getTtsAvailability, listWebSpeechVoices, playNarration, TtsHandle, TtsState } from '@/Assistant/tts'
 
 type Props = {
   application: WebApplication
@@ -49,9 +43,9 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
 
   // Whether to ask for a style each time, or use the saved default.
   const askEachTime = settings.defaultStyle === 'ask'
-  const [styleId, setStyleId] = useState<NarrationStyleId>(() =>
-    askEachTime ? NARRATION_STYLES[0].id : (settings.defaultStyle as NarrationStyleId),
-  )
+  const [styleId, setStyleId] = useState<NarrationStyleId>(() => {
+    return askEachTime ? NARRATION_STYLES[0].id : (settings.defaultStyle as NarrationStyleId)
+  })
 
   const [narration, setNarration] = useState<string>('')
   const [generating, setGenerating] = useState(false)
@@ -220,7 +214,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
     >
       <div className="flex flex-col gap-3">
         {/* Data-exposure notice — compact one-liner. */}
-        <p className="rounded border border-warning bg-warning-faded px-2.5 py-1.5 text-xs text-warning">
+        <p className="border-warning bg-warning-faded text-warning rounded border px-2.5 py-1.5 text-xs">
           Generating narration (and model voices) sends this note&rsquo;s text to your configured AI provider.
           Device-voice playback stays local.
         </p>
@@ -229,7 +223,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
         <div className="flex flex-col gap-1">
           <label className="text-sm font-semibold">Narration style</label>
           <select
-            className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+            className="border-border bg-default rounded border px-2 py-1.5 text-sm"
             value={styleId}
             onChange={(event) => setStyleId(event.target.value as NarrationStyleId)}
           >
@@ -239,7 +233,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
               </option>
             ))}
           </select>
-          <span className="text-xs text-passive-0">{getNarrationStyle(styleId).description}</span>
+          <span className="text-passive-0 text-xs">{getNarrationStyle(styleId).description}</span>
         </div>
 
         {/* Language / dialect + free-text clarification (override the saved default). */}
@@ -247,7 +241,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <label className="text-sm font-semibold">Language / dialect</label>
             <input
-              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              className="border-border bg-default rounded border px-2 py-1.5 text-sm"
               type="text"
               list="narration-language-list"
               value={language}
@@ -259,27 +253,27 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
                 <option key={name} value={name} />
               ))}
             </datalist>
-            <span className="text-xs text-passive-0">
+            <span className="text-passive-0 text-xs">
               Hints the voice/accent. Any free text or a language code is accepted.
             </span>
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <label className="text-sm font-semibold">Clarification (optional)</label>
             <input
-              className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+              className="border-border bg-default rounded border px-2 py-1.5 text-sm"
               type="text"
               value={clarification}
               placeholder="e.g. speak slowly and clearly"
               onChange={(event) => setClarification(event.target.value)}
             />
-            <span className="text-xs text-passive-0">Delivery instruction sent to a model voice.</span>
+            <span className="text-passive-0 text-xs">Delivery instruction sent to a model voice.</span>
           </div>
         </div>
 
         {/* Generate / raw note actions */}
         <div className="flex flex-wrap gap-2">
           <button
-            className="flex items-center gap-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast disabled:opacity-50"
+            className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             onClick={() => void handleGenerate()}
             disabled={!aiAvailability.available || generating}
           >
@@ -287,7 +281,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
             {generating ? 'Generating…' : 'Rewrite with AI'}
           </button>
           <button
-            className="flex items-center gap-1 rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+            className="border-border flex items-center gap-1 rounded border px-3 py-1.5 text-sm disabled:opacity-50"
             onClick={() => speak(rawText)}
             disabled={!rawText.trim()}
             title="Skip the AI rewrite and read the note text as-is"
@@ -297,29 +291,27 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
           </button>
         </div>
 
-        {!aiAvailability.available && (
-          <p className="text-xs text-passive-0">{aiAvailability.reason}</p>
-        )}
-        {genError && <p className="text-sm text-danger">Could not generate narration: {genError}</p>}
+        {!aiAvailability.available && <p className="text-passive-0 text-xs">{aiAvailability.reason}</p>}
+        {genError && <p className="text-danger text-sm">Could not generate narration: {genError}</p>}
 
         {/* Narration text view */}
         {(narration || generating) && (
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <label className="text-sm font-semibold">Narration text</label>
-              <button className="text-xs text-info hover:underline" onClick={() => void copyNarration()}>
+              <button className="text-info text-xs hover:underline" onClick={() => void copyNarration()}>
                 Copy
               </button>
             </div>
             <textarea
-              className="max-h-48 w-full resize-y rounded border border-border bg-default px-2 py-1.5 text-sm"
+              className="border-border bg-default max-h-48 w-full resize-y rounded border px-2 py-1.5 text-sm"
               rows={6}
               value={narration}
               onChange={(event) => setNarration(event.target.value)}
               placeholder={generating ? 'Generating narration…' : ''}
             />
             {truncated && (
-              <span className="text-xs text-warning">
+              <span className="text-warning text-xs">
                 The note was longer than the narration limit and was truncated.
               </span>
             )}
@@ -327,10 +319,10 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
         )}
 
         {/* Player */}
-        <div className="flex flex-col gap-3 rounded border border-border p-3">
+        <div className="border-border flex flex-col gap-3 rounded border p-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className="flex items-center gap-1 rounded bg-info px-3 py-1.5 text-sm font-semibold text-info-contrast disabled:opacity-50"
+              className="bg-info text-info-contrast flex items-center gap-1 rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
               onClick={() => speak(narration || rawText)}
               disabled={!(narration || rawText).trim() || isPlaying}
             >
@@ -338,7 +330,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
               Play
             </button>
             <button
-              className="flex items-center gap-1 rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+              className="border-border flex items-center gap-1 rounded border px-3 py-1.5 text-sm disabled:opacity-50"
               onClick={() => (isPaused ? handleRef.current?.resume() : handleRef.current?.pause())}
               disabled={ttsState === 'idle' || ttsState === 'ended' || ttsState === 'error'}
             >
@@ -346,20 +338,20 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
               {isPaused ? 'Resume' : 'Pause'}
             </button>
             <button
-              className="flex items-center gap-1 rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+              className="border-border flex items-center gap-1 rounded border px-3 py-1.5 text-sm disabled:opacity-50"
               onClick={stopPlayback}
               disabled={ttsState === 'idle'}
             >
               <Icon type="stop" size="small" />
               Stop
             </button>
-            <span className="ml-auto text-xs text-passive-0">
+            <span className="text-passive-0 ml-auto text-xs">
               {ttsState === 'loading' ? 'Loading audio…' : activeBackend === 'model' ? 'Model voice' : 'Device voice'}
             </span>
           </div>
 
-          <p className="text-xs text-passive-0">{ttsModeLabel}</p>
-          {ttsError && <p className="text-xs text-danger">{ttsError}</p>}
+          <p className="text-passive-0 text-xs">{ttsModeLabel}</p>
+          {ttsError && <p className="text-danger text-xs">{ttsError}</p>}
 
           {/* Voice + speed controls */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -367,7 +359,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <label className="text-xs font-semibold">Device voice</label>
                 <select
-                  className="w-full rounded border border-border bg-default px-2 py-1 text-sm"
+                  className="border-border bg-default w-full rounded border px-2 py-1 text-sm"
                   value={settings.voiceURI}
                   onChange={(event) => persist({ ...settings, voiceURI: event.target.value })}
                 >
@@ -401,12 +393,7 @@ const NarrationModalContent = observer(({ application, filesController, note, cl
 const NarrationModal = ({ application, filesController, note, isOpen, close }: Props) => {
   return (
     <ModalOverlay isOpen={isOpen} close={close} className="md:max-w-[36rem]">
-      <NarrationModalContent
-        application={application}
-        filesController={filesController}
-        note={note}
-        close={close}
-      />
+      <NarrationModalContent application={application} filesController={filesController} note={note} close={close} />
     </ModalOverlay>
   )
 }

@@ -1,9 +1,4 @@
-import {
-  extractTitle,
-  RESEARCH_MODE_SYSTEM_PROMPT,
-  RESEARCH_NO_WEB_DISCLAIMER,
-  runResearchMode,
-} from './researchMode'
+import { extractTitle, RESEARCH_MODE_SYSTEM_PROMPT, RESEARCH_NO_WEB_DISCLAIMER, runResearchMode } from './researchMode'
 
 describe('extractTitle', () => {
   it('uses the first Markdown H1 as the title', () => {

@@ -19,7 +19,13 @@ import {
 import { expose } from 'comlink'
 import { FontFamily, registerPDFFonts } from './FontConfig'
 import { PDF_BASE_FONT_SIZE, PDF_BLOCK_GAP, PDF_PAGE_PADDING } from './PDFLayoutConstants'
-import { hasBandAt, pageStartOffset, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from '../DocExport/PageLayoutOptions'
+import {
+  hasBandAt,
+  pageStartOffset,
+  resolveFont,
+  type HeaderFooterStyle,
+  type PageLayoutOptions,
+} from '../DocExport/PageLayoutOptions'
 import { formatPdfPageNumber, substitutePageTokens } from './pageLayoutRender'
 
 /** Fixed-position font styling for the running header/footer bands. */

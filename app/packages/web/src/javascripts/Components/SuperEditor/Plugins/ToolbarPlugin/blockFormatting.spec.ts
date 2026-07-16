@@ -95,9 +95,9 @@ describe('mergeBlockStyle', () => {
   })
 
   it('removes a property when the value is empty or whitespace', () => {
-    expect(parseStyleString(mergeBlockStyle('line-height: 2; margin-top: 8px', 'margin-top', '')).has('margin-top')).toBe(
-      false,
-    )
+    expect(
+      parseStyleString(mergeBlockStyle('line-height: 2; margin-top: 8px', 'margin-top', '')).has('margin-top'),
+    ).toBe(false)
     expect(parseStyleString(mergeBlockStyle('margin-top: 8px', 'margin-top', '   ')).has('margin-top')).toBe(false)
   })
 
@@ -140,9 +140,16 @@ const seedThreeParagraphsSelectFirstTwo = (editor: ReturnType<typeof makeEditor>
 }
 
 const blockStyles = (editor: ReturnType<typeof makeEditor>): string[] =>
-  editor.getEditorState().read(() => $getRoot().getChildren().map((c) => (c as ElementNode).getStyle()))
+  editor.getEditorState().read(() =>
+    $getRoot()
+      .getChildren()
+      .map((c) => (c as ElementNode).getStyle()),
+  )
 
-const runOnSelection = (editor: ReturnType<typeof makeEditor>, fn: (sel: ReturnType<typeof $createRangeSelection>) => void): void => {
+const runOnSelection = (
+  editor: ReturnType<typeof makeEditor>,
+  fn: (sel: ReturnType<typeof $createRangeSelection>) => void,
+): void => {
   editor.update(
     () => {
       const selection = $getSelection()

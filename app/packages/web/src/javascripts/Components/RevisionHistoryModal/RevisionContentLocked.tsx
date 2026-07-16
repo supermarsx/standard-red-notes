@@ -33,8 +33,8 @@ const RevisionContentLocked: FunctionComponent = () => {
     <div className="flex h-full w-full items-center justify-center">
       <div className="max-w-40% flex flex-col items-center px-8 text-center">
         <HistoryLockedIllustration />
-        <div className="mb-1 mt-2 text-lg font-bold">Can't access this version</div>
-        <div className="leading-140% mb-4 text-passive-0">
+        <div className="mt-2 mb-1 text-lg font-bold">Can't access this version</div>
+        <div className="leading-140% text-passive-0 mb-4">
           {getPremiumContentCopy(planName)}. Learn more about our other plans to upgrade your history capacity.
         </div>
         <Button

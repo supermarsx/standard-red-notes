@@ -42,7 +42,7 @@ const AutoEmptyTrash: FunctionComponent = () => {
         <Title>Auto-empty trash</Title>
         <Subtitle>Permanently delete trashed notes after they reach a chosen age</Subtitle>
 
-        <Text className="mb-3 mt-2">
+        <Text className="mt-2 mb-3">
           When set, this device permanently deletes notes that have been in the Trash longer than the selected age.
           Because your notes are end-to-end encrypted, the server cannot do this for you — the cleanup runs on this
           device on app start and roughly once an hour while open. Only items already in the Trash are affected.

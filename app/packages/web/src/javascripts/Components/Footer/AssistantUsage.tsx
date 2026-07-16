@@ -34,9 +34,7 @@ const AssistantUsage: FunctionComponent<Props> = ({ application }) => {
     )
   }
   if (session.requests > 0 && session.requestsWithTokens < session.requests) {
-    lines.push(
-      `${session.requests - session.requestsWithTokens} of this session's requests reported no token usage.`,
-    )
+    lines.push(`${session.requests - session.requestsWithTokens} of this session's requests reported no token usage.`)
   }
   lines.push('Token counts come from the AI provider and are approximate.')
   const tooltip = lines.join('\n')
@@ -46,7 +44,7 @@ const AssistantUsage: FunctionComponent<Props> = ({ application }) => {
   return (
     <div
       title={tooltip}
-      className={classNames('flex select-none items-center whitespace-nowrap text-xs font-bold', colorClass)}
+      className={classNames('flex items-center text-xs font-bold whitespace-nowrap select-none', colorClass)}
       role="status"
       aria-label={`AI usage — ${chip.label.replace(/^AI:\s*/, '')}`}
     >

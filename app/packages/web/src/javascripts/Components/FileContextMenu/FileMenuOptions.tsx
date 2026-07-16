@@ -118,7 +118,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
       <div className="flex items-center gap-2 px-3 py-2">
         <Icon type="pencil" className={`text-neutral ${MenuItemIconSize}`} />
         <input
-          className="min-w-0 flex-grow rounded border border-border bg-default px-2 py-1 text-sm"
+          className="border-border bg-default min-w-0 flex-grow rounded border px-2 py-1 text-sm"
           defaultValue={fileToRename.name}
           autoFocus
           onFocus={(event) => event.currentTarget.select()}
@@ -145,12 +145,12 @@ const FileMenuOptions: FunctionComponent<Props> = ({
         <MenuSection>
           {isFileAttachedToNote ? (
             <MenuItem onClick={onDetach}>
-              <Icon type="link-off" className="mr-2 text-neutral" />
+              <Icon type="link-off" className="text-neutral mr-2" />
               {t('detachFromNote')}
             </MenuItem>
           ) : shouldShowAttachOption ? (
             <MenuItem onClick={onAttach}>
-              <Icon type="link" className="mr-2 text-neutral" />
+              <Icon type="link" className="text-neutral mr-2" />
               {t('attachToNote')}
             </MenuItem>
           ) : null}
@@ -186,7 +186,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           }}
           disabled={areSomeFilesInReadonlySharedVault}
         >
-          <Icon type="lock" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
+          <Icon type="lock" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
           {t('passwordProtect')}
         </MenuSwitchButtonItem>
       </MenuSection>
@@ -197,7 +197,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
             closeMenu()
           }}
         >
-          <Icon type="download" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
+          <Icon type="download" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
           {canShowZipDownloadOption ? t('downloadSeparately') : t('common:download')}
         </MenuItem>
         {canShowZipDownloadOption && (
@@ -216,13 +216,13 @@ const FileMenuOptions: FunctionComponent<Props> = ({
               closeMenu()
             }}
           >
-            <Icon type="download" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
+            <Icon type="download" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
             {t('downloadAsArchive')}
           </MenuItem>
         )}
         {shouldShowRenameOption && fileToRename && (
           <MenuItem onClick={beginRename} disabled={areSomeFilesInReadonlySharedVault}>
-            <Icon type="pencil" className={`mr-2 text-neutral ${MenuItemIconSize}`} />
+            <Icon type="pencil" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
             {t('common:rename')}
           </MenuItem>
         )}
@@ -233,14 +233,14 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           }}
           disabled={areSomeFilesInReadonlySharedVault}
         >
-          <Icon type="trash" className={`mr-2 text-danger ${MenuItemIconSize}`} />
+          <Icon type="trash" className={`text-danger mr-2 ${MenuItemIconSize}`} />
           <span className="text-danger">{t('common:deletePermanently')}</span>
         </MenuItem>
       </MenuSection>
 
       <FileContextMenuBackupOption file={selectedFiles[0]} />
 
-      <div className="px-3 pb-0.5 pt-1 text-xs font-medium text-neutral">
+      <div className="text-neutral px-3 pt-1 pb-0.5 text-xs font-medium">
         {!hasSelectedMultipleFiles && (
           <div className="mb-1">
             <span className="font-semibold">{t('fileId')}</span> {selectedFiles[0].uuid}

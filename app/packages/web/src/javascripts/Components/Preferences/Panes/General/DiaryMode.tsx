@@ -64,9 +64,9 @@ const DiaryMode: FunctionComponent<Props> = ({ application }: Props) => {
         <Subtitle>A once-a-day nudge to write your diary entry</Subtitle>
 
         <Text className="mt-2">
-          When enabled, you'll be reminded once each day to write that day's diary entry. Clicking the reminder
-          creates or opens today's entry (filed under a "Diary" tag). You can also open today's entry anytime from the
-          command palette via "Open today's diary entry".
+          When enabled, you'll be reminded once each day to write that day's diary entry. Clicking the reminder creates
+          or opens today's entry (filed under a "Diary" tag). You can also open today's entry anytime from the command
+          palette via "Open today's diary entry".
         </Text>
 
         {settings.enabled && (
@@ -77,7 +77,7 @@ const DiaryMode: FunctionComponent<Props> = ({ application }: Props) => {
             <input
               id="diary-prompt-time"
               type="time"
-              className="rounded border border-border bg-default px-2 py-1 text-sm"
+              className="border-border bg-default rounded border px-2 py-1 text-sm"
               value={formatPromptTime(settings.hour, settings.minute)}
               onChange={(event) => onTimeChange(event.target.value)}
             />

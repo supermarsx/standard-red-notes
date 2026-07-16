@@ -1,9 +1,5 @@
 import { predicateFromJson } from '@standardnotes/snjs'
-import {
-  getPredicatePresets,
-  presetToJsonString,
-  validatePredicateJsonString,
-} from './PredicateGuidance'
+import { getPredicatePresets, presetToJsonString, validatePredicateJsonString } from './PredicateGuidance'
 
 describe('PredicateGuidance', () => {
   describe('presets', () => {

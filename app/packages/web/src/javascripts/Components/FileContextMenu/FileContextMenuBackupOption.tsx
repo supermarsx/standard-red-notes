@@ -50,10 +50,10 @@ export const FileContextMenuBackupOption: FunctionComponent<{ file: FileItem }> 
           onClick={openFileBackup}
         >
           <div className="ml-2">
-            <div className="font-semibold text-success">
+            <div className="text-success font-semibold">
               {t('backedUpOn', { date: dateToStringStyle1(backupInfo.backedUpOn) })}
             </div>
-            <div className="text-xs text-neutral">{backupAbsolutePath}</div>
+            <div className="text-neutral text-xs">{backupAbsolutePath}</div>
           </div>
         </MenuItem>
       )}
@@ -67,7 +67,7 @@ export const FileContextMenuBackupOption: FunctionComponent<{ file: FileItem }> 
         >
           <div className="ml-2">
             <div>{t('configureFileBackups')}</div>
-            <div className="text-xs text-neutral">{t('fileNotBackedUpLocally')}</div>
+            <div className="text-neutral text-xs">{t('fileNotBackedUpLocally')}</div>
           </div>
         </MenuItem>
       )}

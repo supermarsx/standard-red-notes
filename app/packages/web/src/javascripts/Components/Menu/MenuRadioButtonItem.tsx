@@ -76,7 +76,7 @@ const MenuRadioButtonItem = forwardRef(
           className={classNames(
             'flex w-full cursor-pointer gap-2 border-0 bg-transparent px-3 py-2.5 text-left md:py-1.5',
             'text-mobile-menu-item text-text hover:bg-passive-3 hover:text-foreground',
-            'focus:bg-info-backdrop focus:shadow-none md:text-tablet-menu-item lg:text-menu-item',
+            'focus:bg-info-backdrop md:text-tablet-menu-item lg:text-menu-item focus:shadow-none',
             className,
             className?.includes('items-') ? '' : 'items-center',
           )}

@@ -138,9 +138,7 @@ export const normalizeMapDocument = (nodes: MapNode[], edges: MapEdge[], version
  * value reports whether the input was recoverable map JSON so the editor can
  * surface a non-destructive notice when content was discarded.
  */
-export const parseMapDocument = (
-  text: string | undefined | null,
-): { document: MapDocument; recovered: boolean } => {
+export const parseMapDocument = (text: string | undefined | null): { document: MapDocument; recovered: boolean } => {
   if (!text || text.trim().length === 0) {
     return { document: createEmptyMapDocument(), recovered: true }
   }
@@ -233,11 +231,7 @@ export const addChildNode = (doc: MapDocument, parentId: string, text = ''): Map
     y: parent.y + 120,
     parentId,
   }
-  return normalizeMapDocument(
-    [...doc.nodes, child],
-    [...doc.edges, { from: parentId, to: child.id }],
-    doc.version,
-  )
+  return normalizeMapDocument([...doc.nodes, child], [...doc.edges, { from: parentId, to: child.id }], doc.version)
 }
 
 /** Update a node's text. */
@@ -269,9 +263,7 @@ export const setNodeColor = (doc: MapDocument, id: string, color: string | undef
  * children, and pruning every edge that touched it (dangling-edge cleanup).
  */
 export const deleteNode = (doc: MapDocument, id: string): MapDocument => {
-  const nodes = doc.nodes
-    .filter((n) => n.id !== id)
-    .map((n) => (n.parentId === id ? { ...n, parentId: undefined } : n))
+  const nodes = doc.nodes.filter((n) => n.id !== id).map((n) => (n.parentId === id ? { ...n, parentId: undefined } : n))
   const edges = doc.edges.filter((e) => e.from !== id && e.to !== id)
   return normalizeMapDocument(nodes, edges, doc.version)
 }

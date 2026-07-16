@@ -133,9 +133,7 @@ const makeApplication = (
     adminListServices: jest.fn().mockResolvedValue({ data: { available: false, programs: [], docker: {} } }),
     adminSetServerSettings: jest.fn().mockResolvedValue({ data: { settings: SETTINGS, sources: {} } }),
     // t69 invite-link management + approval queue.
-    adminListInviteLinks: jest
-      .fn()
-      .mockResolvedValue({ data: { inviteLinks: options.inviteLinks ?? [] } }),
+    adminListInviteLinks: jest.fn().mockResolvedValue({ data: { inviteLinks: options.inviteLinks ?? [] } }),
     adminCreateInviteLink: jest.fn().mockResolvedValue({
       data: {
         inviteLink: options.createdInviteLink ?? {
@@ -199,13 +197,11 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
 
 const buttonWithExactText = (text: string): HTMLButtonElement | undefined =>
   Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim() === text) as
-    | HTMLButtonElement
-    | undefined
+    HTMLButtonElement | undefined
 
 const tabWithText = (text: string): HTMLButtonElement | undefined =>
   Array.from(container.querySelectorAll('button[role="tab"]')).find((b) => (b.textContent ?? '').includes(text)) as
-    | HTMLButtonElement
-    | undefined
+    HTMLButtonElement | undefined
 
 const clickSubtab = async (label: string) => {
   const tab = tabWithText(label)

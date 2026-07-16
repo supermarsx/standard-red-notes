@@ -47,7 +47,7 @@ export const NoteAttributes: FunctionComponent<{
   const canShowWordCount = typeof words === 'number' && (format === 'txt' || format === 'md')
 
   return (
-    <div className={classNames('select-text px-3 py-1.5 text-sm font-medium text-neutral lg:text-xs', className)}>
+    <div className={classNames('text-neutral px-3 py-1.5 text-sm font-medium select-text lg:text-xs', className)}>
       {canShowWordCount ? (
         <>
           <div className="mb-1">

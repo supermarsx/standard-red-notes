@@ -48,7 +48,7 @@ function BookmarkAnchorComponent({ bookmarkId }: { bookmarkId: string }): React.
       style={{ width: '0.55em', userSelect: 'none' }}
     >
       <span
-        className="inline-block rounded-sm align-middle text-info"
+        className="text-info inline-block rounded-sm align-middle"
         style={{
           width: '0.45em',
           height: '1em',

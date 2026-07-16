@@ -17,11 +17,7 @@ import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { ConflictPair, useConflicts } from './useConflicts'
 import { autoMergeText, buildManualMergeStartingText } from './mergeText'
 import { runAiConflictMerge } from './conflictMerge'
-import {
-  ConflictAiSettings,
-  loadConflictAiSettings,
-  saveConflictAiSettings,
-} from './conflictAiSettings'
+import { ConflictAiSettings, loadConflictAiSettings, saveConflictAiSettings } from './conflictAiSettings'
 
 type Props = {
   application: WebApplication
@@ -72,21 +68,18 @@ const ConflictRow: FunctionComponent<{
   // is configured. We surface the reason when it is unavailable.
   const aiMergeEnabled = aiSettings.enabled && aiAvailability.available
 
-  const run = useCallback(
-    async (action: () => Promise<void>, successMessage: string) => {
-      setBusy(true)
-      try {
-        await action()
-        addToast({ type: ToastType.Success, message: successMessage })
-      } catch (error) {
-        console.error(error)
-        addToast({ type: ToastType.Error, message: 'Failed to resolve the conflict.' })
-      } finally {
-        setBusy(false)
-      }
-    },
-    [],
-  )
+  const run = useCallback(async (action: () => Promise<void>, successMessage: string) => {
+    setBusy(true)
+    try {
+      await action()
+      addToast({ type: ToastType.Success, message: successMessage })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to resolve the conflict.' })
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   const openManualMerge = useCallback(() => {
     setMergeFromAi(false)
@@ -161,13 +154,13 @@ const ConflictRow: FunctionComponent<{
   }, [mergeText, controller, pair, run])
 
   return (
-    <div className="mt-4 rounded border border-solid border-border p-3">
+    <div className="border-border mt-4 rounded border border-solid p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <Subtitle>{pair.original.title || 'Untitled note'}</Subtitle>
-        <span className="rounded bg-danger px-1.5 py-0.5 text-xs font-bold text-danger-contrast">Conflict</span>
+        <span className="bg-danger text-danger-contrast rounded px-1.5 py-0.5 text-xs font-bold">Conflict</span>
       </div>
 
-      <div className="h-64 overflow-hidden rounded border border-border">
+      <div className="border-border h-64 overflow-hidden rounded border">
         <RevisionDiffView
           oldContent={pair.original.content}
           newContent={pair.conflictedCopy.content}
@@ -199,20 +192,22 @@ const ConflictRow: FunctionComponent<{
             disabled={busy || aiMerging || !aiMergeEnabled}
             label={aiMerging ? 'AI merging…' : 'AI merge'}
             onClick={() => void openAiMerge()}
-            title={aiMergeEnabled ? 'Send both versions to the AI and review its proposed merge' : aiAvailability.reason}
+            title={
+              aiMergeEnabled ? 'Send both versions to the AI and review its proposed merge' : aiAvailability.reason
+            }
           />
         )}
       </div>
 
       {aiSettings.enabled && !aiAvailability.available && (
-        <Text className="mt-2 text-xs text-passive-0">{aiAvailability.reason}</Text>
+        <Text className="text-passive-0 mt-2 text-xs">{aiAvailability.reason}</Text>
       )}
 
       {mergeText !== null && (
         <div className="mt-3">
           {mergeFromAi && (
-            <div className="mb-2 rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-              <div className="font-semibold text-warning">Review the AI&rsquo;s proposed merge</div>
+            <div className="border-warning bg-warning-faded mb-2 rounded border border-solid p-3 text-sm">
+              <div className="text-warning font-semibold">Review the AI&rsquo;s proposed merge</div>
               <p className="mt-1">
                 Both versions&rsquo; content were sent to the AI provider you configured to produce this merge. The
                 merge may be imperfect or may drop or alter content &mdash; read it carefully and edit it before saving.
@@ -226,7 +221,7 @@ const ConflictRow: FunctionComponent<{
             becomes the note title.
           </Text>
           <textarea
-            className="block h-48 w-full rounded border border-solid border-border bg-default px-2 py-1.5 font-mono text-sm text-text"
+            className="border-border bg-default text-text block h-48 w-full rounded border border-solid px-2 py-1.5 font-mono text-sm"
             value={mergeText}
             onChange={(event) => setMergeText(event.target.value)}
             disabled={busy}
@@ -262,135 +257,131 @@ const Conflicts: FunctionComponent<Props> = ({ application }: Props) => {
     <PreferencesGroup>
       <PreferencesSegment>
         <Title>Sync Conflicts</Title>
-          <Text>
-            When the same note is edited on two devices before they sync, Standard Notes keeps both copies and flags the
-            divergent one as a "Conflicted Copy". Review each conflict below: see a git-style diff of the two versions
-            and choose how to resolve it.
-          </Text>
-        </PreferencesSegment>
+        <Text>
+          When the same note is edited on two devices before they sync, Standard Notes keeps both copies and flags the
+          divergent one as a "Conflicted Copy". Review each conflict below: see a git-style diff of the two versions and
+          choose how to resolve it.
+        </Text>
+      </PreferencesSegment>
 
-        <HorizontalSeparator classes="my-4" />
+      <HorizontalSeparator classes="my-4" />
 
-        <PreferencesSegment>
-          <Subtitle>Default resolution strategy</Subtitle>
-          <Text className="mb-2">
-            The client preference below always wins. When it is set to "Ask me", the server-provided default (if any) is
-            used; otherwise conflicts are surfaced here for manual review.
-            {controller.serverDefaultStrategy
-              ? ` Your server's default is "${controller.serverDefaultStrategy}".`
-              : ''}
-          </Text>
+      <PreferencesSegment>
+        <Subtitle>Default resolution strategy</Subtitle>
+        <Text className="mb-2">
+          The client preference below always wins. When it is set to "Ask me", the server-provided default (if any) is
+          used; otherwise conflicts are surfaced here for manual review.
+          {controller.serverDefaultStrategy ? ` Your server's default is "${controller.serverDefaultStrategy}".` : ''}
+        </Text>
 
-          <label className="block">
-            <span className="text-sm font-medium lg:text-xs">Strategy</span>
-            <select
-              className="mt-1 block w-full rounded border border-solid border-border bg-default px-2 py-1.5 text-base text-text lg:text-sm"
-              value={controller.clientStrategy}
-              onChange={(event) => controller.setStrategy(event.target.value as ConflictResolutionStrategyValue)}
-            >
-              {STRATEGY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        <label className="block">
+          <span className="text-sm font-medium lg:text-xs">Strategy</span>
+          <select
+            className="border-border bg-default text-text mt-1 block w-full rounded border border-solid px-2 py-1.5 text-base lg:text-sm"
+            value={controller.clientStrategy}
+            onChange={(event) => controller.setStrategy(event.target.value as ConflictResolutionStrategyValue)}
+          >
+            {STRATEGY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
 
-          <div className="mt-3 flex items-center justify-between">
-            <div className="mr-4 flex flex-col">
-              <Subtitle>Auto-resolve future conflicts</Subtitle>
-              <Text>
-                When enabled, new conflicts are resolved automatically using the effective strategy above (only applies
-                when the strategy is not "Ask me").
-              </Text>
-            </div>
-            <Switch
-              checked={controller.autoResolveEnabled}
-              onChange={(checked) => controller.setAutoResolveEnabled(checked)}
-            />
+        <div className="mt-3 flex items-center justify-between">
+          <div className="mr-4 flex flex-col">
+            <Subtitle>Auto-resolve future conflicts</Subtitle>
+            <Text>
+              When enabled, new conflicts are resolved automatically using the effective strategy above (only applies
+              when the strategy is not "Ask me").
+            </Text>
           </div>
-        </PreferencesSegment>
+          <Switch
+            checked={controller.autoResolveEnabled}
+            onChange={(checked) => controller.setAutoResolveEnabled(checked)}
+          />
+        </div>
+      </PreferencesSegment>
 
-        <HorizontalSeparator classes="my-4" />
+      <HorizontalSeparator classes="my-4" />
 
-        <PreferencesSegment>
-          <Subtitle>AI-assisted merge</Subtitle>
-          <Text className="mb-2">
-            Use the AI assistant to reconcile a conflict&rsquo;s two versions into a single merged note. This is
-            disabled by default and always lets you review the proposed merge before it is applied.
-          </Text>
+      <PreferencesSegment>
+        <Subtitle>AI-assisted merge</Subtitle>
+        <Text className="mb-2">
+          Use the AI assistant to reconcile a conflict&rsquo;s two versions into a single merged note. This is disabled
+          by default and always lets you review the proposed merge before it is applied.
+        </Text>
 
-          {/* Privacy / security note — same border-warning callout pattern as the
+        {/* Privacy / security note — same border-warning callout pattern as the
               Assistant pane, Suggest tags, and Narrate. */}
-          <div className="mb-3 rounded border border-solid border-warning bg-warning-faded p-3 text-sm">
-            <div className="font-semibold text-warning">AI merge sends both versions to an AI provider</div>
-            <p className="mt-1">
-              Enabling AI merge means that, when you use it, the full content of BOTH conflicting versions of a note is
-              sent to the AI provider you configured. That content may not be end-to-end encrypted in transit to that
-              provider. The AI merge may be imperfect and should always be reviewed before it is applied. Leave this off
-              if either version may contain sensitive information you do not want to send to an AI.
-            </p>
-          </div>
+        <div className="border-warning bg-warning-faded mb-3 rounded border border-solid p-3 text-sm">
+          <div className="text-warning font-semibold">AI merge sends both versions to an AI provider</div>
+          <p className="mt-1">
+            Enabling AI merge means that, when you use it, the full content of BOTH conflicting versions of a note is
+            sent to the AI provider you configured. That content may not be end-to-end encrypted in transit to that
+            provider. The AI merge may be imperfect and should always be reviewed before it is applied. Leave this off
+            if either version may contain sensitive information you do not want to send to an AI.
+          </p>
+        </div>
 
-          <div className="flex items-center justify-between">
-            <div className="mr-4 flex flex-col">
-              <Subtitle>Enable AI merge</Subtitle>
-              <Text>
-                Adds an &ldquo;AI merge&rdquo; action to each conflict below. The proposed merge is always shown for
-                review and editing before anything is applied.
-              </Text>
-            </div>
-            <Switch
-              checked={aiSettings.enabled}
-              onChange={(checked) =>
-                // Turning AI off also clears the fully-automatic apply opt-in.
-                updateAiSettings({ enabled: checked, autoApply: checked ? aiSettings.autoApply : false })
-              }
+        <div className="flex items-center justify-between">
+          <div className="mr-4 flex flex-col">
+            <Subtitle>Enable AI merge</Subtitle>
+            <Text>
+              Adds an &ldquo;AI merge&rdquo; action to each conflict below. The proposed merge is always shown for
+              review and editing before anything is applied.
+            </Text>
+          </div>
+          <Switch
+            checked={aiSettings.enabled}
+            onChange={(checked) =>
+              // Turning AI off also clears the fully-automatic apply opt-in.
+              updateAiSettings({ enabled: checked, autoApply: checked ? aiSettings.autoApply : false })
+            }
+          />
+        </div>
+
+        {aiSettings.enabled && !aiAvailability.available && (
+          <Text className="text-passive-0 mt-2 text-xs">{aiAvailability.reason}</Text>
+        )}
+
+        <div className="mt-3 flex items-center justify-between">
+          <div className="mr-4 flex flex-col">
+            <Subtitle>Apply AI merges automatically (advanced)</Subtitle>
+            <Text>
+              When auto-resolution is on, allow an AI merge to be applied WITHOUT review. Off by default and strongly
+              discouraged: an AI merge can be wrong and silently overwrite your note. Requires AI merge to be enabled.
+            </Text>
+          </div>
+          <Switch
+            disabled={!aiSettings.enabled}
+            checked={aiSettings.autoApply}
+            onChange={(checked) => updateAiSettings({ ...aiSettings, autoApply: checked })}
+          />
+        </div>
+      </PreferencesSegment>
+
+      <HorizontalSeparator classes="my-4" />
+
+      <PreferencesSegment>
+        <Subtitle>Current conflicts {controller.count > 0 ? `(${controller.count})` : ''}</Subtitle>
+        {controller.count === 0 ? (
+          <Text className="mt-2">You have no unresolved sync conflicts.</Text>
+        ) : (
+          controller.pairs.map((pair) => (
+            <ConflictRow
+              key={pair.id}
+              pair={pair}
+              controller={controller}
+              application={application}
+              aiSettings={aiSettings}
+              aiAvailability={aiAvailability}
             />
-          </div>
-
-          {aiSettings.enabled && !aiAvailability.available && (
-            <Text className="mt-2 text-xs text-passive-0">{aiAvailability.reason}</Text>
-          )}
-
-          <div className="mt-3 flex items-center justify-between">
-            <div className="mr-4 flex flex-col">
-              <Subtitle>Apply AI merges automatically (advanced)</Subtitle>
-              <Text>
-                When auto-resolution is on, allow an AI merge to be applied WITHOUT review. Off by default and strongly
-                discouraged: an AI merge can be wrong and silently overwrite your note. Requires AI merge to be enabled.
-              </Text>
-            </div>
-            <Switch
-              disabled={!aiSettings.enabled}
-              checked={aiSettings.autoApply}
-              onChange={(checked) => updateAiSettings({ ...aiSettings, autoApply: checked })}
-            />
-          </div>
-        </PreferencesSegment>
-
-        <HorizontalSeparator classes="my-4" />
-
-        <PreferencesSegment>
-          <Subtitle>
-            Current conflicts {controller.count > 0 ? `(${controller.count})` : ''}
-          </Subtitle>
-          {controller.count === 0 ? (
-            <Text className="mt-2">You have no unresolved sync conflicts.</Text>
-          ) : (
-            controller.pairs.map((pair) => (
-              <ConflictRow
-                key={pair.id}
-                pair={pair}
-                controller={controller}
-                application={application}
-                aiSettings={aiSettings}
-                aiAvailability={aiAvailability}
-              />
-            ))
-          )}
-        </PreferencesSegment>
-      </PreferencesGroup>
+          ))
+        )}
+      </PreferencesSegment>
+    </PreferencesGroup>
   )
 }
 

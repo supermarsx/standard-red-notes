@@ -42,9 +42,9 @@ const ConfirmSignoutModal: FunctionComponent<Props> = ({ application, applicatio
     try {
       const controllers = application.itemControllerGroup.itemControllers
       await Promise.all(
-        controllers.map((controller) =>
-          controller instanceof NoteViewController ? controller.flushAndAwaitPendingSave() : Promise.resolve(),
-        ),
+        controllers.map((controller) => {
+          return controller instanceof NoteViewController ? controller.flushAndAwaitPendingSave() : Promise.resolve()
+        }),
       )
     } catch (error) {
       console.error(error)
@@ -64,17 +64,17 @@ const ConfirmSignoutModal: FunctionComponent<Props> = ({ application, applicatio
     <AlertDialog closeDialog={closeDialog}>
       <div className="flex items-center justify-between text-lg font-bold">
         {c('Title').t`Sign out workspace?`}
-        <button className="rounded p-1 font-bold hover:bg-contrast" onClick={closeDialog}>
+        <button className="hover:bg-contrast rounded p-1 font-bold" onClick={closeDialog}>
           <Icon type="close" />
         </button>
       </div>
       <div className="sk-panel-row">
         <div>
-          <p className="text-base text-foreground lg:text-sm">{STRING_SIGN_OUT_CONFIRMATION()}</p>
+          <p className="text-foreground text-base lg:text-sm">{STRING_SIGN_OUT_CONFIRMATION()}</p>
           {showWorkspaceWarning && (
             <>
               <br />
-              <p className="text-base text-foreground lg:text-sm">
+              <p className="text-foreground text-base lg:text-sm">
                 <strong>{c('Label').t`Note:`} </strong>
                 {c('Info')
                   .t`Because you have other workspaces signed in, this sign out may leave logs and other metadata of your session on this device. For a more robust sign out that performs a hard clear of all app-related data, use the "Sign out all workspaces" option under "Switch workspace".`}
@@ -90,7 +90,7 @@ const ConfirmSignoutModal: FunctionComponent<Props> = ({ application, applicatio
           <div className="flex">
             <div className="sk-panel-row"></div>
             <div>
-              <p className="text-base text-foreground lg:text-sm">
+              <p className="text-foreground text-base lg:text-sm">
                 {c('Info')
                   .t`Local backups are enabled for this workspace. Review your backup files manually to decide what to keep.`}
               </p>

@@ -88,7 +88,9 @@ describe('computeGalleryFit', () => {
 
 describe('GALLERY_LEADING_INDICATOR_WIDTH (leading "current style" slot reservation)', () => {
   it('is one square + a 1px divider, each flanked by the flex gap (88 + 1 + 12 = 101)', () => {
-    expect(GALLERY_LEADING_INDICATOR_WIDTH).toBe(GALLERY_SQUARE_WIDTH + GALLERY_LEADING_DIVIDER_WIDTH + 2 * GALLERY_SQUARE_GAP)
+    expect(GALLERY_LEADING_INDICATOR_WIDTH).toBe(
+      GALLERY_SQUARE_WIDTH + GALLERY_LEADING_DIVIDER_WIDTH + 2 * GALLERY_SQUARE_GAP,
+    )
     expect(GALLERY_LEADING_INDICATOR_WIDTH).toBe(101)
   })
 

@@ -13,9 +13,9 @@ import {
   parseSelfServeInviteState,
 } from './inviteLinks'
 
-const ok = (data: unknown): HttpResponse => ({ status: 200, data } as unknown as HttpResponse)
+const ok = (data: unknown): HttpResponse => ({ status: 200, data }) as unknown as HttpResponse
 const err = (status: number, message = 'nope'): HttpResponse =>
-  ({ status, data: { error: { message } } } as unknown as HttpResponse)
+  ({ status, data: { error: { message } } }) as unknown as HttpResponse
 
 const link = (overrides: Record<string, unknown> = {}) => ({
   uuid: 'u1',
@@ -82,9 +82,7 @@ describe('parseInviteLink', () => {
 
   it('derives a status when the server omits it (revoked > expired > exhausted > active)', () => {
     expect(parseInviteLink(link({ status: undefined, revoked: true }))?.status).toBe('revoked')
-    expect(
-      parseInviteLink(link({ status: undefined, expiresAt: '2000-01-01T00:00:00.000Z' }))?.status,
-    ).toBe('expired')
+    expect(parseInviteLink(link({ status: undefined, expiresAt: '2000-01-01T00:00:00.000Z' }))?.status).toBe('expired')
     expect(parseInviteLink(link({ status: undefined, remainingUses: 0 }))?.status).toBe('exhausted')
     expect(parseInviteLink(link({ status: undefined }))?.status).toBe('active')
   })

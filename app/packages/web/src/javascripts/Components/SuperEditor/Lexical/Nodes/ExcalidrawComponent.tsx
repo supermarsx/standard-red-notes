@@ -40,14 +40,10 @@ export default function ExcalidrawComponent({
   )
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-excalidraw-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-excalidraw-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Drawing</span>
-        <button
-          className="rounded px-2 py-0.5 hover:bg-contrast"
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-        >
+        <button className="hover:bg-contrast rounded px-2 py-0.5" type="button" onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'Collapse' : 'Expand'}
         </button>
       </div>

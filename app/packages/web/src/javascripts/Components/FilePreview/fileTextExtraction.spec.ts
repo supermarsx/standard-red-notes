@@ -25,7 +25,9 @@ type MockApp = {
   files: { downloadFile: jest.Mock }
 }
 
-const makeApp = (impl?: (cb: (chunk: Uint8Array) => Promise<void>) => Promise<unknown>): { app: MockApp; downloadFile: jest.Mock } => {
+const makeApp = (
+  impl?: (cb: (chunk: Uint8Array) => Promise<void>) => Promise<unknown>,
+): { app: MockApp; downloadFile: jest.Mock } => {
   const downloadFile = jest.fn(async (_file: unknown, cb: (chunk: Uint8Array, progress?: unknown) => Promise<void>) => {
     if (impl) {
       return impl((chunk) => cb(chunk))

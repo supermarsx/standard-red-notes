@@ -97,8 +97,7 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
 
 const buttonWithText = (text: string): HTMLButtonElement | undefined =>
   Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes(text)) as
-    | HTMLButtonElement
-    | undefined
+    HTMLButtonElement | undefined
 
 const setInputValue = async (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set

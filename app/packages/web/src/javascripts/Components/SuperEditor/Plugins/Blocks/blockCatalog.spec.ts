@@ -55,9 +55,7 @@ describe('buildInsertSections', () => {
   it('folds the Embeds and Advanced categories into "Others"', () => {
     // Embed is an Embeds-category block; Equation / Footnote / Table of Contents
     // are Advanced. All must surface under the single trailing Others section.
-    expect(namesIn('others')).toEqual(
-      expect.arrayContaining(['Embed', 'Equation', 'Footnote', 'Table of Contents']),
-    )
+    expect(namesIn('others')).toEqual(expect.arrayContaining(['Embed', 'Equation', 'Footnote', 'Table of Contents']))
     // Nothing from Embeds/Advanced leaks into an earlier section.
     const nonOthers = sections.filter((section) => section.id !== 'others')
     for (const section of nonOthers) {

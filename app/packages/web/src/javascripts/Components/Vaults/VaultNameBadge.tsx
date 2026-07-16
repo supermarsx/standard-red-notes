@@ -10,9 +10,9 @@ type Props = {
 const VaultNameBadge: FunctionComponent<Props> = ({ vault }) => {
   const { t } = useTranslation('sharing')
   return (
-    <div title={t('vaultName')} className="flex select-none items-center rounded border border-passive-2 px-1.5 py-1">
+    <div title={t('vaultName')} className="border-passive-2 flex items-center rounded border px-1.5 py-1 select-none">
       <Icon ariaLabel={t('sharedInVault')} type={vault.iconString} className="mr-1" size="medium" emojiSize="small" />
-      <span className="mr-auto overflow-hidden text-ellipsis text-sm font-semibold lg:text-xs">{vault.name}</span>
+      <span className="mr-auto overflow-hidden text-sm font-semibold text-ellipsis lg:text-xs">{vault.name}</span>
     </div>
   )
 }

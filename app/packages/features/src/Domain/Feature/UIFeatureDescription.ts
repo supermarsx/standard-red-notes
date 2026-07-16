@@ -4,7 +4,4 @@ import { IframeComponentFeatureDescription } from './IframeComponentFeatureDescr
 import { ThemeFeatureDescription } from './ThemeFeatureDescription'
 
 export type UIFeatureDescriptionTypes =
-  | IframeComponentFeatureDescription
-  | ThemeFeatureDescription
-  | EditorFeatureDescription
-  | ComponentFeatureDescription
+  IframeComponentFeatureDescription | ThemeFeatureDescription | EditorFeatureDescription | ComponentFeatureDescription

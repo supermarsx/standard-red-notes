@@ -280,7 +280,11 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
       { id: ToolbarButtonId.AlignJustify, label: 'Align justify', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.Indent, label: 'Indent', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.Outdent, label: 'Outdent', group: ToolbarGroupId.ParagraphList },
-      { id: ToolbarButtonId.ParagraphLayout, label: 'Paragraph layout (spacing, indent, shading)', group: ToolbarGroupId.ParagraphList },
+      {
+        id: ToolbarButtonId.ParagraphLayout,
+        label: 'Paragraph layout (spacing, indent, shading)',
+        group: ToolbarGroupId.ParagraphList,
+      },
       { id: ToolbarButtonId.ListStyle, label: 'List style', group: ToolbarGroupId.ParagraphList },
       { id: ToolbarButtonId.FormattingMarks, label: 'Formatting marks', group: ToolbarGroupId.ParagraphList },
     ],
@@ -508,16 +512,13 @@ export const DEFAULT_SUPER_TOOLBAR_CONFIG: SuperToolbarConfig = {
 }
 
 const ALL_GROUP_IDS = new Set<string>(DEFAULT_TOOLBAR_GROUPS.map((g) => g.id))
-const ALL_BUTTON_IDS = new Set<string>(
-  DEFAULT_TOOLBAR_GROUPS.flatMap((g) => g.buttons.map((b) => b.id)),
-)
+const ALL_BUTTON_IDS = new Set<string>(DEFAULT_TOOLBAR_GROUPS.flatMap((g) => g.buttons.map((b) => b.id)))
 /** group id -> set of button ids that legitimately belong to that group. */
 const BUTTON_IDS_BY_GROUP = new Map<string, Set<string>>(
   DEFAULT_TOOLBAR_GROUPS.map((g) => [g.id, new Set<string>(g.buttons.map((b) => b.id))]),
 )
 
-const clampRows = (value: number): number =>
-  Math.min(MAX_GROUP_ROWS, Math.max(MIN_GROUP_ROWS, Math.round(value)))
+const clampRows = (value: number): number => Math.min(MAX_GROUP_ROWS, Math.max(MIN_GROUP_ROWS, Math.round(value)))
 
 /**
  * Coerce an arbitrary (possibly malformed / partially-known) persisted value

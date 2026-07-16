@@ -5,7 +5,6 @@ import { NavigationController } from '@/Controllers/Navigation/NavigationControl
 import { KeyboardKey } from '@standardnotes/ui-services'
 import Popover from '../Popover/Popover'
 import { classNames, SNFolder, SNNote } from '@standardnotes/snjs'
-import { useApplication } from '../ApplicationProvider'
 import MenuItem from '../Menu/MenuItem'
 import Menu from '../Menu/Menu'
 
@@ -22,7 +21,6 @@ type FolderListEntry = {
 }
 
 const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, note, iconClassName, disabled }) => {
-  const application = useApplication()
   const menuContainerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -83,7 +81,7 @@ const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, no
           <Icon type="folder" className={iconClassName} />
           <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">
             Move to folder
-            {currentFolder && <span className="ml-1 text-neutral">({currentFolder.title})</span>}
+            {currentFolder && <span className="text-neutral ml-1">({currentFolder.title})</span>}
           </span>
         </div>
         <Icon type="chevron-right" className="text-neutral" />
@@ -101,7 +99,12 @@ const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, no
         <Menu a11yLabel="Folder selection menu" className="!px-0">
           <MenuItem onClick={() => moveToFolder(undefined)}>
             <Icon type="close" className={iconClassName} />
-            <span className={classNames('overflow-hidden overflow-ellipsis whitespace-nowrap', !currentFolder && 'font-bold')}>
+            <span
+              className={classNames(
+                'overflow-hidden overflow-ellipsis whitespace-nowrap',
+                !currentFolder && 'font-bold',
+              )}
+            >
               No folder
             </span>
           </MenuItem>
@@ -119,7 +122,7 @@ const MoveToFolderOption: FunctionComponent<Props> = ({ navigationController, no
                 >
                   {folder.title}
                 </span>
-                {isCurrent && <Icon type="check" className="ml-auto text-info" />}
+                {isCurrent && <Icon type="check" className="text-info ml-auto" />}
               </MenuItem>
             )
           })}

@@ -552,7 +552,7 @@ function TableCellActionMenuContainer({
   }, [prevTableCellDOM, tableCellNode])
 
   return (
-    <div className="absolute left-0 top-0 will-change-transform" ref={menuButtonRef}>
+    <div className="absolute top-0 left-0 will-change-transform" ref={menuButtonRef}>
       {tableCellNode != null && (
         <>
           <RoundIconButton
@@ -561,7 +561,7 @@ function TableCellActionMenuContainer({
             iconProps={{
               size: 'small',
             }}
-            className="!h-6 !min-w-6 bg-default md:!h-5 md:!min-w-5"
+            className="bg-default !h-6 !min-w-6 md:!h-5 md:!min-w-5"
             onClick={(e) => {
               e.stopPropagation()
               setIsMenuOpen(!isMenuOpen)

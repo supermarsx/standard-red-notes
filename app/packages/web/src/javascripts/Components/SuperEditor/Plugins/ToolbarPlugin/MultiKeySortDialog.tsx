@@ -62,7 +62,7 @@ const MultiKeySortDialog = ({
       <label className="flex items-center justify-between gap-2">
         <span className="font-semibold">Separate fields by</span>
         <select
-          className="rounded border border-border bg-default px-2 py-1"
+          className="border-border bg-default rounded border px-2 py-1"
           value={separator}
           onChange={(event) => setSeparator(event.target.value as Separator)}
         >
@@ -76,7 +76,7 @@ const MultiKeySortDialog = ({
 
       <div className="flex flex-col gap-2">
         {rows.map((row, index) => (
-          <div key={index} className="flex flex-wrap items-center gap-2 rounded border border-border p-2">
+          <div key={index} className="border-border flex flex-wrap items-center gap-2 rounded border p-2">
             <label className="flex items-center gap-1.5">
               <input
                 type="checkbox"
@@ -90,14 +90,14 @@ const MultiKeySortDialog = ({
               <input
                 type="number"
                 min={1}
-                className="w-16 rounded border border-border bg-default px-1.5 py-1 disabled:opacity-50"
+                className="border-border bg-default w-16 rounded border px-1.5 py-1 disabled:opacity-50"
                 value={row.field}
                 disabled={!row.enabled}
                 onChange={(event) => updateRow(index, { field: Math.max(1, Number(event.target.value) || 1) })}
               />
             </label>
             <select
-              className="rounded border border-border bg-default px-1.5 py-1 disabled:opacity-50"
+              className="border-border bg-default rounded border px-1.5 py-1 disabled:opacity-50"
               value={row.type}
               disabled={!row.enabled}
               onChange={(event) => updateRow(index, { type: event.target.value as SortKeyType })}
@@ -106,7 +106,7 @@ const MultiKeySortDialog = ({
               <option value="number">Number</option>
             </select>
             <select
-              className="rounded border border-border bg-default px-1.5 py-1 disabled:opacity-50"
+              className="border-border bg-default rounded border px-1.5 py-1 disabled:opacity-50"
               value={row.direction}
               disabled={!row.enabled}
               onChange={(event) => updateRow(index, { direction: event.target.value as SortKey['direction'] })}
@@ -119,12 +119,12 @@ const MultiKeySortDialog = ({
       </div>
 
       <div className="mt-1 flex justify-end gap-2">
-        <button type="button" className="rounded border border-border px-3 py-1.5 hover:bg-contrast" onClick={onClose}>
+        <button type="button" className="border-border hover:bg-contrast rounded border px-3 py-1.5" onClick={onClose}>
           Cancel
         </button>
         <button
           type="button"
-          className="rounded bg-info px-3 py-1.5 font-semibold text-info-contrast hover:brightness-110"
+          className="bg-info text-info-contrast rounded px-3 py-1.5 font-semibold hover:brightness-110"
           onClick={apply}
         >
           Sort

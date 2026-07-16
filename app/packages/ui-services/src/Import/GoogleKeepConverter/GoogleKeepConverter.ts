@@ -143,7 +143,10 @@ export const keepNoteToImported = (json: unknown): ImportedKeepNote => {
   const text = sections.join('\n\n')
 
   const explicitTitle = typeof note.title === 'string' ? note.title.trim() : ''
-  const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0)
+  const firstLine = text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
   const title = explicitTitle.length > 0 ? explicitTitle : firstLine && firstLine.length > 0 ? firstLine : 'Untitled'
 
   const updatedAt = usecToDate(note.userEditedTimestampUsec) || new Date()
@@ -202,7 +205,13 @@ export class GoogleKeepConverter implements Converter {
   ) => {
     const content = await readFileAsText(file)
 
-    const jsonResult = await this.tryParseAsJsonCollection(content, insertNote, insertTag, linkItems, convertMarkdownToSuper)
+    const jsonResult = await this.tryParseAsJsonCollection(
+      content,
+      insertNote,
+      insertTag,
+      linkItems,
+      convertMarkdownToSuper,
+    )
     if (jsonResult) {
       return jsonResult
     }

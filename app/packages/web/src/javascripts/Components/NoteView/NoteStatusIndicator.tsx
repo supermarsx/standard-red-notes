@@ -100,7 +100,7 @@ const NoteStatusIndicator = ({
         isTooltipVisible={isTooltipVisible}
         setIsTooltipVisible={setIsTooltipVisible}
       >
-        <div className="text-sm font-bold text-danger">{status.message}</div>
+        <div className="text-danger text-sm font-bold">{status.message}</div>
         {status.description && <div className="mt-0.5">{status.description}</div>}
       </IndicatorWithTooltip>
     )
@@ -117,11 +117,11 @@ const NoteStatusIndicator = ({
       >
         {status ? (
           <>
-            <div className="text-sm font-bold text-warning">{status.message}</div>
+            <div className="text-warning text-sm font-bold">{status.message}</div>
             {status.description && <div className="mt-0.5">{status.description}</div>}
           </>
         ) : (
-          <div className="text-sm font-bold text-warning">Sync taking too long</div>
+          <div className="text-warning text-sm font-bold">Sync taking too long</div>
         )}
       </IndicatorWithTooltip>
     )

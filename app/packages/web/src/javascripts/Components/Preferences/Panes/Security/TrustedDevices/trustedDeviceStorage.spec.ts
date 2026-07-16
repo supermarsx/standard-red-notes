@@ -1,8 +1,4 @@
-import {
-  clearTrustedDeviceToken,
-  getTrustedDeviceToken,
-  persistTrustedDeviceToken,
-} from './trustedDeviceStorage'
+import { clearTrustedDeviceToken, getTrustedDeviceToken, persistTrustedDeviceToken } from './trustedDeviceStorage'
 
 /**
  * Standard Red Notes: tests for the trusted-device-token local store.

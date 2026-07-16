@@ -17,9 +17,8 @@
  * PreferencesView uses) inside a minimal harness component. jsdom cannot verify
  * the resulting single- vs two-column CSS.
  */
-import { createElement, useCallback, useEffect, useState } from 'react'
+import { act, createElement, useCallback, useEffect, useState } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { setViewport, resizeViewport, TARGET_WIDTHS } from '@/TestUtils/viewport'
 
@@ -44,7 +43,11 @@ afterEach(() => {
 })
 
 // Replicates PreferencesView's phone single-column state machine exactly.
-const DrillInHarness = ({ onState }: { onState: (s: { isMobile: boolean; showContent: boolean; backTo: string }) => void }) => {
+const DrillInHarness = ({
+  onState,
+}: {
+  onState: (s: { isMobile: boolean; showContent: boolean; backTo: string }) => void
+}) => {
   const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
   const [mobileShowContent, setMobileShowContent] = useState(false)
 

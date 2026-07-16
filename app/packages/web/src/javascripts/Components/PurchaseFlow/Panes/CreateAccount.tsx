@@ -158,9 +158,9 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
           disabled={isCreatingAccount}
           isInvalid={isEmailInvalid}
         />
-        {isEmailInvalid ? <div className="mb-4 text-danger">{c('Error').t`Please provide a valid email.`}</div> : null}
+        {isEmailInvalid ? <div className="text-danger mb-4">{c('Error').t`Please provide a valid email.`}</div> : null}
         <FloatingLabelInput
-          className="min-w-auto mb-4 md:min-w-90"
+          className="mb-4 min-w-auto md:min-w-90"
           id="purchase-create-account-password"
           type="password"
           label={c('Label').t`Password`}
@@ -181,7 +181,7 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
           isInvalid={isPasswordNotMatching}
         />
         {isPasswordNotMatching ? (
-          <div className="mb-4 text-danger">{c('Error').t`Passwords don't match. Please try again.`}</div>
+          <div className="text-danger mb-4">{c('Error').t`Passwords don't match. Please try again.`}</div>
         ) : null}
       </div>
     </form>
@@ -189,18 +189,18 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
 
   return (
     <div className="flex items-center">
-      <CircleIcon className="absolute -left-28 top-[40%] h-8 w-8" />
-      <BlueDotIcon className="absolute -left-10 top-[35%] h-4 w-4" />
+      <CircleIcon className="absolute top-[40%] -left-28 h-8 w-8" />
+      <BlueDotIcon className="absolute top-[35%] -left-10 h-4 w-4" />
       <DiamondIcon className="absolute -bottom-5 left-0 -z-[1] h-26 w-26 -translate-x-1/2" />
 
       <CircleIcon className="absolute -right-20 bottom-[35%] h-8 w-8" />
       <BlueDotIcon className="absolute -right-10 bottom-[25%] h-4 w-4" />
-      <DiamondIcon className="absolute -right-2 top-0 -z-[1] h-18 w-18 translate-x-1/2" />
+      <DiamondIcon className="absolute top-0 -right-2 -z-[1] h-18 w-18 translate-x-1/2" />
 
       <div className="mr-0 lg:mr-12">
         {
           // translator: Full sentence: "Create your free account"
-          <h1 className="mb-2 mt-0 text-2xl font-bold">{c('Title').t`Create your free account`}</h1>
+          <h1 className="mt-0 mb-2 text-2xl font-bold">{c('Title').t`Create your free account`}</h1>
         }
         {
           // translator: Full sentence: "Create your free account to continue to Standard Red Notes."
@@ -212,7 +212,7 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
             <button
               onClick={handleSignInInstead}
               disabled={isCreatingAccount}
-              className="mb-2 flex cursor-pointer items-start border-0 bg-default p-0 font-medium text-info hover:underline"
+              className="bg-default text-info mb-2 flex cursor-pointer items-start border-0 p-0 font-medium hover:underline"
             >
               {
                 // translator: "Instead" here refers to "instead of creating an account"
@@ -223,7 +223,7 @@ const CreateAccount: FunctionComponent<Props> = ({ application }) => {
               <button
                 onClick={subscribeWithoutAccount}
                 disabled={isCreatingAccount}
-                className="flex cursor-pointer items-start border-0 bg-default p-0 font-medium text-info hover:underline"
+                className="bg-default text-info flex cursor-pointer items-start border-0 p-0 font-medium hover:underline"
               >
                 {c('Action').t`Subscribe without account`}
               </button>

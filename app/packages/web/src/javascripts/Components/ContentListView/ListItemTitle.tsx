@@ -7,12 +7,12 @@ export const ListItemTitle: FunctionComponent<{ item: ListableContentItem }> = (
   return (
     <div
       className={classNames(
-        'break-word mr-2 overflow-hidden text-base font-semibold leading-[1.25] lg:text-sm lg:leading-[1.25]',
+        'break-word mr-2 overflow-hidden text-base leading-[1.25] font-semibold lg:text-sm lg:leading-[1.25]',
         item.archived ? 'opacity-60' : '',
       )}
     >
       {item.pinned && (
-        <span className="mr-1.5 inline-flex rounded-full bg-info p-0.5 text-info-contrast">
+        <span className="bg-info text-info-contrast mr-1.5 inline-flex rounded-full p-0.5">
           <Icon type="pin-filled" size="custom" className="h-3 w-3" />
         </span>
       )}

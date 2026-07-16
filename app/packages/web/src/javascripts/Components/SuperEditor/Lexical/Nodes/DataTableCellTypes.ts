@@ -10,7 +10,6 @@ export type ColumnTypeSetting = ColumnType | 'auto'
 
 export const COLUMN_TYPES: ColumnType[] = ['text', 'number', 'currency', 'date', 'boolean']
 
-const CURRENCY_SYMBOLS = '$€£¥₹₽₩₪₺R$'
 // One symbol char OR the "R$" pair; matched as a whole below.
 const CURRENCY_SYMBOL_RE = /(R\$|[$€£¥₹₽₩₪₺])/
 

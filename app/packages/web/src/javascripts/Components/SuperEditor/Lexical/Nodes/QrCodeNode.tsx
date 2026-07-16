@@ -1,14 +1,5 @@
 import * as React from 'react'
-import {
-  ComponentType,
-  Component,
-  ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import { ComponentType, Component, ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { lazyWithRetry } from '@/Utils/lazyWithRetry'
 import {
   $getNodeByKey,
@@ -63,7 +54,9 @@ function isErrorCorrection(value: unknown): value is QrErrorCorrection {
 /** Clamp an incoming size to a sane range; non-numbers fall back to the default. */
 function coerceSize(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(n)) return QR_DEFAULT_SIZE
+  if (!Number.isFinite(n)) {
+    return QR_DEFAULT_SIZE
+  }
   return Math.min(Math.max(Math.round(n), 64), 512)
 }
 
@@ -80,9 +73,7 @@ export function normalize(data: Partial<QrCodeData> | undefined | null): QrCodeD
     version: QR_VERSION,
     text: typeof data.text === 'string' ? data.text : '',
     size: coerceSize(data.size),
-    errorCorrection: isErrorCorrection(data.errorCorrection)
-      ? data.errorCorrection
-      : QR_DEFAULT_ERROR_CORRECTION,
+    errorCorrection: isErrorCorrection(data.errorCorrection) ? data.errorCorrection : QR_DEFAULT_ERROR_CORRECTION,
   }
 }
 
@@ -116,10 +107,7 @@ const QRCodeSVG = lazyWithRetry(() =>
  * level. This boundary turns that crash into a friendly inline message instead
  * of taking down the editor, and resets whenever the encoded text changes.
  */
-class QrRenderBoundary extends Component<
-  { resetKey: string; children: ReactNode },
-  { failed: boolean }
-> {
+class QrRenderBoundary extends Component<{ resetKey: string; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
 
   static getDerivedStateFromError(): { failed: boolean } {
@@ -135,9 +123,8 @@ class QrRenderBoundary extends Component<
   render(): ReactNode {
     if (this.state.failed) {
       return (
-        <div className="text-sm text-danger">
-          The text is too long to fit in a QR code. Try shortening it or lowering the error correction
-          level.
+        <div className="text-danger text-sm">
+          The text is too long to fit in a QR code. Try shortening it or lowering the error correction level.
         </div>
       )
     }
@@ -183,7 +170,9 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
 
   const downloadPng = useCallback(() => {
     const svgEl = svgWrapRef.current?.querySelector('svg')
-    if (!svgEl) return
+    if (!svgEl) {
+      return
+    }
     const serialized = new XMLSerializer().serializeToString(svgEl)
     const svgBlob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' })
     const url = URL.createObjectURL(svgBlob)
@@ -209,15 +198,15 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
   }, [data.size])
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-qr-block="true">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-qr-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">QR Code</span>
         <div className="flex items-center gap-1">
           {QR_SIZE_PRESETS.map((preset) => (
             <button
               key={preset}
               type="button"
-              className="rounded px-2 py-0.5 hover:bg-contrast aria-pressed:bg-contrast aria-pressed:text-text"
+              className="hover:bg-contrast aria-pressed:bg-contrast aria-pressed:text-text rounded px-2 py-0.5"
               aria-pressed={data.size === preset}
               title={`Set size to ${preset}px`}
               onClick={() => setSize(preset)}
@@ -231,7 +220,7 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
       <div className="flex flex-col gap-3 p-2 sm:flex-row sm:items-start">
         <div className="flex flex-1 flex-col gap-2">
           <textarea
-            className="w-full resize-y rounded border border-border bg-default p-2 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full resize-y rounded border p-2 text-sm outline-none"
             rows={Math.max(2, Math.min(6, draft.split('\n').length + 1))}
             value={draft}
             placeholder="Enter a URL or any text to encode…"
@@ -240,11 +229,11 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
             onChange={(e) => setDraft(e.target.value)}
             onBlur={(e) => commitText(e.target.value)}
           />
-          <div className="flex flex-wrap items-center gap-2 text-xs text-passive-1">
+          <div className="text-passive-1 flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-1">
               Error correction
               <select
-                className="rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info"
+                className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
                 value={data.errorCorrection}
                 aria-label="Error correction level"
                 onChange={(e) => setErrorCorrection(e.target.value as QrErrorCorrection)}
@@ -258,7 +247,7 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
             </label>
             <button
               type="button"
-              className="rounded px-2 py-0.5 hover:bg-contrast disabled:opacity-40"
+              className="hover:bg-contrast rounded px-2 py-0.5 disabled:opacity-40"
               disabled={!trimmed}
               onClick={downloadPng}
               title="Download the QR code as a PNG image"
@@ -270,13 +259,9 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
 
         <div className="flex flex-shrink-0 items-center justify-center self-center sm:self-start">
           {trimmed ? (
-            <div
-              ref={svgWrapRef}
-              className="rounded bg-white p-2"
-              style={{ width: data.size + 16, maxWidth: '100%' }}
-            >
+            <div ref={svgWrapRef} className="rounded bg-white p-2" style={{ width: data.size + 16, maxWidth: '100%' }}>
               <QrRenderBoundary resetKey={`${trimmed}|${data.errorCorrection}`}>
-                <Suspense fallback={<div className="text-xs text-passive-1">Rendering…</div>}>
+                <Suspense fallback={<div className="text-passive-1 text-xs">Rendering…</div>}>
                   <QRCodeSVG
                     value={data.text}
                     level={data.errorCorrection}
@@ -291,7 +276,7 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
               </QrRenderBoundary>
             </div>
           ) : (
-            <div className="flex h-32 w-32 items-center justify-center rounded border border-dashed border-border text-center text-xs text-passive-1">
+            <div className="border-border text-passive-1 flex h-32 w-32 items-center justify-center rounded border border-dashed text-center text-xs">
               Enter text to generate a QR code
             </div>
           )}

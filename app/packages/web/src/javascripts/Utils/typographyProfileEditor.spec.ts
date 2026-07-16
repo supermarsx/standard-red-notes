@@ -5,7 +5,11 @@
  * and the edit → BlockStyle → setPreference round-trip (writing an edited block
  * back into the active profile, immutably).
  */
-import { DEFAULT_TYPOGRAPHY_PROFILE, DEFAULT_TYPOGRAPHY_PROFILE_ID, type TypographyProfile } from '@standardnotes/models'
+import {
+  DEFAULT_TYPOGRAPHY_PROFILE,
+  DEFAULT_TYPOGRAPHY_PROFILE_ID,
+  type TypographyProfile,
+} from '@standardnotes/models'
 import {
   canDeleteProfile,
   createProfile,

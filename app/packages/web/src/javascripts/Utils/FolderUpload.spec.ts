@@ -38,10 +38,7 @@ const makeControllers = () => {
   // uploadFiles invokes onFileUploaded for each file with its path, mimicking the
   // real FilesController fan-out.
   const uploadFiles = jest.fn(
-    async (
-      files: FileWithPath[],
-      opts: { onFileUploaded: (file: unknown, path?: string) => Promise<void> },
-    ) => {
+    async (files: FileWithPath[], opts: { onFileUploaded: (file: unknown, path?: string) => Promise<void> }) => {
       for (const { file, path } of files) {
         await opts.onFileUploaded(file, path)
       }

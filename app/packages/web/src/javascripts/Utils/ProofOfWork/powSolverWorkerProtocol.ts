@@ -8,5 +8,4 @@ export type PowSolverWorkerRequest = { type: 'solve'; requestId: number; seed: s
 
 /** Messages posted FROM the worker BACK TO the main thread. */
 export type PowSolverWorkerResponse =
-  | { type: 'solved'; requestId: number; nonce: string }
-  | { type: 'error'; requestId: number; message: string }
+  { type: 'solved'; requestId: number; nonce: string } | { type: 'error'; requestId: number; message: string }

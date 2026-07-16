@@ -15,13 +15,7 @@
  * collection mirrors LineTransform.ts's `isLineBlock` predicate (replicated here
  * intentionally — that file is not edited).
  */
-import {
-  $isElementNode,
-  $isRootOrShadowRoot,
-  ElementNode,
-  LexicalNode,
-  RangeSelection,
-} from 'lexical'
+import { $isElementNode, $isRootOrShadowRoot, ElementNode, LexicalNode, RangeSelection } from 'lexical'
 import { $findMatchingParent } from '@lexical/utils'
 import { $patchStyleText } from '@lexical/selection'
 
@@ -37,14 +31,7 @@ export const SPACING_PRESETS = ['0', '4px', '8px', '12px', '16px', '24px'] as co
 export const INDENT_STEP = '40px'
 
 /** Text-shading swatches; `null` clears the highlight. */
-export const TEXT_SHADING_PRESETS = [
-  null,
-  '#fff3a3',
-  '#c2f5c2',
-  '#bfe3ff',
-  '#ffd1dc',
-  '#e4d4ff',
-] as const
+export const TEXT_SHADING_PRESETS = [null, '#fff3a3', '#c2f5c2', '#bfe3ff', '#ffd1dc', '#e4d4ff'] as const
 
 /* --------------------------------------------------------------- block leaf */
 
@@ -188,10 +175,7 @@ export const $applyBlockStyleEntries = (
  * Set block left / right margins on each spanned block. Either field may be
  * omitted to leave that side untouched; an empty string clears that side.
  */
-export const $setBlockMargins = (
-  selection: RangeSelection,
-  margins: { left?: string; right?: string },
-): number => {
+export const $setBlockMargins = (selection: RangeSelection, margins: { left?: string; right?: string }): number => {
   const blocks = $collectFormatBlocks(selection)
   for (const block of blocks) {
     let style = block.getStyle()

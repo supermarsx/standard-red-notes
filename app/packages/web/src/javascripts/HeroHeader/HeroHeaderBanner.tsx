@@ -146,8 +146,8 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
           onClick={openPicker}
           disabled={busy}
           className={
-            'flex items-center gap-1.5 rounded px-2 py-1 text-xs text-passive-1 transition-opacity hover:bg-contrast focus:opacity-100 focus-visible:opacity-100 group-hover/hero:opacity-100 ' +
-            (dragOver ? 'opacity-100 ring-2 ring-info' : 'opacity-0')
+            'text-passive-1 hover:bg-contrast flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-opacity group-hover/hero:opacity-100 focus:opacity-100 focus-visible:opacity-100 ' +
+            (dragOver ? 'ring-info opacity-100 ring-2' : 'opacity-0')
           }
         >
           <Icon type="file-image" size="small" />
@@ -168,8 +168,8 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
     >
       {selectorModal}
       {dragOver && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-info-backdrop/80 ring-2 ring-inset ring-info">
-          <span className="rounded bg-default/90 px-3 py-1.5 text-sm font-semibold text-text shadow">
+        <div className="bg-info-backdrop/80 ring-info pointer-events-none absolute inset-0 z-10 flex items-center justify-center ring-2 ring-inset">
+          <span className="bg-default/90 text-text rounded px-3 py-1.5 text-sm font-semibold shadow">
             Drop image to set cover
           </span>
         </div>
@@ -185,13 +185,13 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
       </div>
 
       {!disabled && (
-        <div className="absolute right-3 top-3 flex items-center gap-2 opacity-0 transition-opacity group-hover/hero:opacity-100 focus-within:opacity-100">
+        <div className="absolute top-3 right-3 flex items-center gap-2 opacity-0 transition-opacity group-hover/hero:opacity-100 focus-within:opacity-100">
           <button
             type="button"
             onClick={openPicker}
             disabled={busy}
             title="Change cover"
-            className="flex items-center gap-1 rounded bg-default/90 px-2 py-1 text-xs text-text shadow hover:bg-default"
+            className="bg-default/90 text-text hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-xs shadow"
           >
             <Icon type="pencil" size="small" />
             {busy ? 'Working…' : 'Change'}
@@ -200,7 +200,7 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
             type="button"
             onClick={() => setAdjusting((value) => !value)}
             title="Adjust cover"
-            className="flex items-center gap-1 rounded bg-default/90 px-2 py-1 text-xs text-text shadow hover:bg-default"
+            className="bg-default/90 text-text hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-xs shadow"
           >
             <Icon type="more" size="small" />
             Adjust
@@ -209,7 +209,7 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
             type="button"
             onClick={removeCover}
             title="Remove cover"
-            className="flex items-center gap-1 rounded bg-default/90 px-2 py-1 text-xs text-danger shadow hover:bg-default"
+            className="bg-default/90 text-danger hover:bg-default flex items-center gap-1 rounded px-2 py-1 text-xs shadow"
           >
             <Icon type="trash" size="small" />
             Remove
@@ -218,7 +218,7 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
       )}
 
       {!disabled && adjusting && (
-        <div className="absolute bottom-3 left-1/2 flex w-[min(90%,28rem)] -translate-x-1/2 flex-col gap-2 rounded bg-default/95 px-3 py-2 text-xs text-text shadow">
+        <div className="bg-default/95 text-text absolute bottom-3 left-1/2 flex w-[min(90%,28rem)] -translate-x-1/2 flex-col gap-2 rounded px-3 py-2 text-xs shadow">
           <label className="flex items-center gap-2">
             <span className="w-16 shrink-0">Height</span>
             <input

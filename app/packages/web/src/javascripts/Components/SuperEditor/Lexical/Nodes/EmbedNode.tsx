@@ -45,12 +45,12 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
   const safeRawHref = /^https?:\/\//i.test(rawUrl) ? rawUrl : null
 
   return (
-    <div className="my-2 rounded border border-border bg-default" data-embed-block="true">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1 text-xs text-passive-1">
+    <div className="border-border bg-default my-2 rounded border" data-embed-block="true">
+      <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Embed</span>
         <button
           type="button"
-          className="rounded px-2 py-0.5 hover:bg-contrast"
+          className="hover:bg-contrast rounded px-2 py-0.5"
           onClick={() => (editing ? commit(draft) : setEditing(true))}
         >
           {editing ? 'Embed' : 'Edit'}
@@ -59,7 +59,7 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
       {editing ? (
         <div className="p-2">
           <input
-            className="w-full rounded border border-border bg-default px-2 py-1 text-sm text-foreground outline-none focus:border-info"
+            className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Paste a YouTube or Vimeo URL…"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -98,28 +98,26 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
            an "Open in new tab" link, and point at the click-to-load website
            embed for arbitrary pages. */
         <div className="p-3 text-sm">
-          <p className="text-foreground">
-            This URL is not a supported video embed (YouTube or Vimeo).
-          </p>
-          <p className="mt-1 break-all text-xs text-passive-1">{rawUrl}</p>
+          <p className="text-foreground">This URL is not a supported video embed (YouTube or Vimeo).</p>
+          <p className="text-passive-1 mt-1 text-xs break-all">{rawUrl}</p>
           {safeRawHref ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <a
                 href={safeRawHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded border border-border px-3 py-1 text-sm hover:bg-contrast"
+                className="border-border hover:bg-contrast rounded border px-3 py-1 text-sm"
               >
                 Open in a new tab
               </a>
             </div>
           ) : null}
-          <p className="mt-2 text-xs text-passive-1">
+          <p className="text-passive-1 mt-2 text-xs">
             To embed an arbitrary web page, use the “Embed website” block, which loads only after you confirm.
           </p>
         </div>
       ) : (
-        <div className="p-2 text-sm text-danger">Enter a YouTube or Vimeo URL to embed.</div>
+        <div className="text-danger p-2 text-sm">Enter a YouTube or Vimeo URL to embed.</div>
       )}
     </div>
   )

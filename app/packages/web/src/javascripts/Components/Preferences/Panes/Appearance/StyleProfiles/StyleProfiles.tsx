@@ -149,8 +149,8 @@ const StyleProfiles: FunctionComponent = () => {
       <PreferencesSegment>
         <Subtitle>Active profile</Subtitle>
         <Text>
-          The typography profile applied to Super notes — the editor, the read-only viewer and previews all update
-          live. Profiles are synced across your devices.
+          The typography profile applied to Super notes — the editor, the read-only viewer and previews all update live.
+          Profiles are synced across your devices.
         </Text>
         <div className="mt-2 max-w-xs">
           <Dropdown
@@ -180,7 +180,7 @@ const StyleProfiles: FunctionComponent = () => {
             return (
               <div
                 key={profile.id}
-                className="flex flex-col gap-2 rounded border border-border px-3 py-2 md:flex-row md:items-center md:justify-between"
+                className="border-border flex flex-col gap-2 rounded border px-3 py-2 md:flex-row md:items-center md:justify-between"
               >
                 <div className="flex min-w-0 items-center gap-2">
                   {isRenaming ? (
@@ -198,13 +198,13 @@ const StyleProfiles: FunctionComponent = () => {
                           setRenameValue('')
                         }
                       }}
-                      className="min-w-0 rounded border border-border bg-default px-2 py-1 text-sm text-text focus:border-info focus:outline-none"
+                      className="border-border bg-default text-text focus:border-info min-w-0 rounded border px-2 py-1 text-sm focus:outline-none"
                     />
                   ) : (
-                    <span className="truncate text-sm font-medium text-text">{profile.name}</span>
+                    <span className="text-text truncate text-sm font-medium">{profile.name}</span>
                   )}
-                  {profile.isDefault && <span className="flex-shrink-0 text-xs font-bold text-passive-0">default</span>}
-                  {isActive && <span className="flex-shrink-0 text-xs font-bold text-info">active</span>}
+                  {profile.isDefault && <span className="text-passive-0 flex-shrink-0 text-xs font-bold">default</span>}
+                  {isActive && <span className="text-info flex-shrink-0 text-xs font-bold">active</span>}
                 </div>
 
                 <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">

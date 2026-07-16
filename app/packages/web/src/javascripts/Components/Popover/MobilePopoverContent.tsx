@@ -179,12 +179,12 @@ const MobilePopoverContent = ({
   return (
     <Portal>
       <DisableScroll />
-      <div className="fixed left-0 top-0 z-modal h-full max-h-[var(--ios-viewport-height,_none)] w-full">
-        <div className="absolute z-0 h-full w-full bg-passive-4 opacity-0" ref={setUnderlayElement} />
+      <div className="z-modal fixed top-0 left-0 h-full max-h-[var(--ios-viewport-height,_none)] w-full">
+        <div className="bg-passive-4 absolute z-0 h-full w-full opacity-0" ref={setUnderlayElement} />
         <div
           ref={mergeRefs([setPopoverElement, addCloseMethod])}
           className={classNames(
-            'z-1 absolute bottom-0 flex max-h-[calc(100%_-_max(var(--safe-area-inset-top),2rem))] min-h-[40%] w-full flex-col rounded-t-xl bg-passive-5',
+            'bg-passive-5 absolute bottom-0 z-1 flex max-h-[calc(100%_-_max(var(--safe-area-inset-top),2rem))] min-h-[40%] w-full flex-col rounded-t-xl',
             hasBottomInset && 'pb-safe-bottom',
             forceFullHeightOnMobile && 'h-full',
           )}
@@ -195,17 +195,17 @@ const MobilePopoverContent = ({
           data-popover={id}
           data-mobile-popover
         >
-          <div className="w-full rounded-t-xl bg-default">
-            <div className="mx-auto mt-2 min-h-[0.3rem] w-12 rounded-full bg-passive-2" />
+          <div className="bg-default w-full rounded-t-xl">
+            <div className="bg-passive-2 mx-auto mt-2 min-h-[0.3rem] w-12 rounded-full" />
           </div>
-          <MobileModalHeader className="border-b border-border bg-default px-2 py-1.5 text-lg">
+          <MobileModalHeader className="border-border bg-default border-b px-2 py-1.5 text-lg">
             <div />
             <div className="flex items-center justify-center font-semibold">{title}</div>
             <MobileModalAction type="primary" slot="right" action={requestClose}>
               Done
             </MobileModalAction>
           </MobileModalHeader>
-          <div className={classNames('h-full overflow-y-auto overscroll-none bg-passive-5', className)}>{children}</div>
+          <div className={classNames('bg-passive-5 h-full overflow-y-auto overscroll-none', className)}>{children}</div>
         </div>
       </div>
     </Portal>

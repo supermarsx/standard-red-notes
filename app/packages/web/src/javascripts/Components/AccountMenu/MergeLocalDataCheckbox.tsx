@@ -16,7 +16,7 @@ const MergeLocalDataCheckbox: FunctionComponent<Props> = ({ checked, onChange, d
   return (
     <label htmlFor="should-merge-local" className="fit-content mb-2 flex items-center text-sm">
       <input
-        className="mr-2 accent-danger"
+        className="accent-danger mr-2"
         type="checkbox"
         name="should-merge-local"
         id="should-merge-local"
@@ -30,7 +30,7 @@ const MergeLocalDataCheckbox: FunctionComponent<Props> = ({ checked, onChange, d
         showOnMobile
         className="!z-modal !max-w-[30ch] whitespace-normal"
       >
-        <button type="button" className="ml-1 rounded-full p-0.5 hover:bg-contrast">
+        <button type="button" className="hover:bg-contrast ml-1 rounded-full p-0.5">
           <Icon type="info" className="text-danger" size="small" />
         </button>
       </StyledTooltip>

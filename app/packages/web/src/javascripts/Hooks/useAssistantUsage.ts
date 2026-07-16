@@ -1,11 +1,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { PrefKey } from '@standardnotes/snjs'
 import { useEffect, useState } from 'react'
-import {
-  AssistantUsage,
-  assistantUsageService,
-  EMPTY_USAGE,
-} from '@/Assistant/AssistantUsageService'
+import { AssistantUsage, assistantUsageService, EMPTY_USAGE } from '@/Assistant/AssistantUsageService'
 import { ServerCap } from '@/Components/Footer/assistantUsageFormat'
 
 export interface AssistantUsageState {
@@ -60,11 +56,11 @@ export function useAssistantUsage(application: WebApplication): AssistantUsageSt
           return
         }
         if (typeof result?.used === 'number' && typeof result?.limit === 'number') {
-          setCap((prev) =>
-            prev && prev.used === result.used && prev.limit === result.limit
+          setCap((prev) => {
+            return prev && prev.used === result.used && prev.limit === result.limit
               ? prev
-              : { used: result.used, limit: result.limit },
-          )
+              : { used: result.used, limit: result.limit }
+          })
         }
       } catch {
         // Best-effort; leave the previous value in place.

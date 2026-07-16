@@ -153,7 +153,7 @@ export const validatePredicateJsonString = (rawJson: string | undefined): Predic
   let parsed: unknown
   try {
     parsed = JSON.parse(rawJson)
-  } catch (error) {
+  } catch {
     return {
       isValid: false,
       error: 'This is not valid JSON. Check for missing quotes, commas, or braces.',

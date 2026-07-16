@@ -84,7 +84,11 @@ function encryptWith(payloadObj: SharePayload, crypto: ShareCrypto): EncryptShar
  * malformed or the key is wrong (so the viewer can show an "invalid link"
  * message). Pass a `crypto` to reuse one; omit it to have one created internally.
  */
-export async function decryptShare(encryptedPayload: string, keyHex: string, crypto?: ShareCrypto): Promise<SharePayload> {
+export async function decryptShare(
+  encryptedPayload: string,
+  keyHex: string,
+  crypto?: ShareCrypto,
+): Promise<SharePayload> {
   if (crypto) {
     return decryptWith(encryptedPayload, keyHex, crypto)
   }

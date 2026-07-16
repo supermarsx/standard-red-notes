@@ -30,55 +30,52 @@ export const useConflictWarnings = (application: WebApplication): void => {
   useEffect(() => {
     const warnedConflictUuids = new Set<string>()
 
-    return application.items.streamItems<SNNote>(
-      ContentType.TYPES.Note,
-      ({ changed, inserted, source }) => {
-        // Ignore the synchronous push of existing items when the observer is
-        // first registered and the local DB load — those represent conflicts
-        // that already existed before this session, which we don't re-warn for.
-        if (
-          source === PayloadEmitSource.InitialObserverRegistrationPush ||
-          source === PayloadEmitSource.LocalDatabaseLoaded
-        ) {
-          for (const note of changed.concat(inserted)) {
-            if (note.conflictOf) {
-              warnedConflictUuids.add(note.uuid)
-            }
-          }
-          return
-        }
-
+    return application.items.streamItems<SNNote>(ContentType.TYPES.Note, ({ changed, inserted, source }) => {
+      // Ignore the synchronous push of existing items when the observer is
+      // first registered and the local DB load — those represent conflicts
+      // that already existed before this session, which we don't re-warn for.
+      if (
+        source === PayloadEmitSource.InitialObserverRegistrationPush ||
+        source === PayloadEmitSource.LocalDatabaseLoaded
+      ) {
         for (const note of changed.concat(inserted)) {
-          if (!note.conflictOf || warnedConflictUuids.has(note.uuid)) {
-            continue
+          if (note.conflictOf) {
+            warnedConflictUuids.add(note.uuid)
           }
-
-          // Match the Conflicts pane predicate exactly: only surface a conflict
-          // when the original item it diverged from still exists.
-          const original = application.items.findItem(note.conflictOf)
-          if (!original) {
-            continue
-          }
-
-          warnedConflictUuids.add(note.uuid)
-
-          addToast({
-            type: ToastType.Error,
-            title: 'Sync conflict',
-            message:
-              'A sync conflict occurred — your edit and the server’s version were both kept as separate copies. Review them in Preferences → Sync.',
-            actions: [
-              {
-                label: 'Review',
-                handler: (toastId) => {
-                  application.preferencesController.openPreferences('sync')
-                  dismissToast(toastId)
-                },
-              },
-            ],
-          })
         }
-      },
-    )
+        return
+      }
+
+      for (const note of changed.concat(inserted)) {
+        if (!note.conflictOf || warnedConflictUuids.has(note.uuid)) {
+          continue
+        }
+
+        // Match the Conflicts pane predicate exactly: only surface a conflict
+        // when the original item it diverged from still exists.
+        const original = application.items.findItem(note.conflictOf)
+        if (!original) {
+          continue
+        }
+
+        warnedConflictUuids.add(note.uuid)
+
+        addToast({
+          type: ToastType.Error,
+          title: 'Sync conflict',
+          message:
+            'A sync conflict occurred — your edit and the server’s version were both kept as separate copies. Review them in Preferences → Sync.',
+          actions: [
+            {
+              label: 'Review',
+              handler: (toastId) => {
+                application.preferencesController.openPreferences('sync')
+                dismissToast(toastId)
+              },
+            },
+          ],
+        })
+      }
+    })
   }, [application])
 }

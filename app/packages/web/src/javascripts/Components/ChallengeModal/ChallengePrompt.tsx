@@ -103,21 +103,21 @@ const ChallengeModalPrompt: FunctionComponent<Props> = ({
       {prompt.validation === ChallengeValidation.ProtectionSessionDuration ? (
         <div className="min-w-76">
           <div className="mb-2 text-sm font-medium">Allow protected access for</div>
-          <div className="flex items-center justify-between rounded bg-passive-4 p-1">
+          <div className="bg-passive-4 flex items-center justify-between rounded p-1">
             {ProtectionSessionDurations.map((option) => {
               const selected = option.valueInSeconds === values[prompt.id].value
               return (
                 <label
                   key={option.label}
-                  className={`relative flex cursor-pointer items-center justify-center rounded px-2 py-1.5 text-center focus-within:ring-2 focus-within:ring-info ${
-                    selected ? 'bg-default font-semibold text-foreground' : 'text-passive-0 hover:bg-passive-3'
+                  className={`focus-within:ring-info relative flex cursor-pointer items-center justify-center rounded px-2 py-1.5 text-center focus-within:ring-2 ${
+                    selected ? 'bg-default text-foreground font-semibold' : 'text-passive-0 hover:bg-passive-3'
                   }`}
                 >
                   <input
                     type="radio"
                     name={`session-duration-${prompt.id}`}
                     className={
-                      'absolute left-0 top-0 m-0 h-px w-px appearance-none focus:shadow-none focus:outline-none'
+                      'absolute top-0 left-0 m-0 h-px w-px appearance-none focus:shadow-none focus:outline-none'
                     }
                     style={{
                       marginRight: 0,
@@ -164,7 +164,7 @@ const ChallengeModalPrompt: FunctionComponent<Props> = ({
           onChange={(value) => onValueChange(value, prompt)}
         />
       )}
-      {isInvalid && <div className="mt-2 text-sm text-danger">Invalid authentication, please try again.</div>}
+      {isInvalid && <div className="text-danger mt-2 text-sm">Invalid authentication, please try again.</div>}
     </div>
   )
 }

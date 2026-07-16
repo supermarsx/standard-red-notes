@@ -9,9 +9,8 @@
  * guard: given fake `sections`, EVERY caption and a representative button from
  * each section MUST appear in the DOM.
  */
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import InsertSectionsBar from '@/Components/SuperEditor/Plugins/ToolbarPlugin/InsertSectionsBar'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

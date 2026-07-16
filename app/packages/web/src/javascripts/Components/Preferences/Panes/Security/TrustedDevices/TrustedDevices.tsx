@@ -153,8 +153,8 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
           required every time, and it never unlocks your encrypted data on its own.
         </Text>
         <Text className="mt-2">
-          Revoke a device to immediately require two-factor again on its next sign-in. Trust also expires
-          automatically after the server-configured period.
+          Revoke a device to immediately require two-factor again on its next sign-in. Trust also expires automatically
+          after the server-configured period.
         </Text>
       </PreferencesSegment>
 
@@ -169,7 +169,13 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
             <Text className="mt-2">
               Mark this device as trusted to skip the two-factor prompt on future sign-ins from this browser.
             </Text>
-            <Button className="mt-3" label="Trust this device" primary disabled={trusting} onClick={handleTrustThisDevice} />
+            <Button
+              className="mt-3"
+              label="Trust this device"
+              primary
+              disabled={trusting}
+              onClick={handleTrustThisDevice}
+            />
           </>
         )}
       </PreferencesSegment>
@@ -184,11 +190,11 @@ const TrustedDevices: FunctionComponent<Props> = ({ application }: Props) => {
           trustedDevices.map((device) => (
             <div
               key={device.uuid}
-              className="mt-2 flex flex-col gap-2 rounded border border-solid border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+              className="border-border mt-2 flex flex-col gap-2 rounded border border-solid p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="break-words text-base font-medium lg:text-sm">{device.label}</span>
-                <span className="break-words text-sm text-passive-0 lg:text-xs">
+                <span className="text-base font-medium break-words lg:text-sm">{device.label}</span>
+                <span className="text-passive-0 text-sm break-words lg:text-xs">
                   Trusted {formatDate(device.createdAt)} · Last used {formatDate(device.lastUsedAt)} · Expires{' '}
                   {formatDate(device.expiresAt)}
                 </span>

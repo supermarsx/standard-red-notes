@@ -81,7 +81,13 @@ describe('CanvasDocument', () => {
   describe('node sanitization', () => {
     it('drops nodes without a valid id', () => {
       const { document } = parseCanvasDocument(
-        JSON.stringify({ nodes: [{ x: 1, y: 2 }, { id: 'ok', x: 0, y: 0 }], edges: [] }),
+        JSON.stringify({
+          nodes: [
+            { x: 1, y: 2 },
+            { id: 'ok', x: 0, y: 0 },
+          ],
+          edges: [],
+        }),
       )
       expect(document.nodes).toHaveLength(1)
       expect(document.nodes[0].id).toBe('ok')

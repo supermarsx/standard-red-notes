@@ -50,7 +50,7 @@ const SmartViewsSection: FunctionComponent<Props> = ({ application, navigationCo
               focusable={true}
               icon="add"
               title="Create a new smart view"
-              className="p-0 text-neutral"
+              className="text-neutral p-0"
               onClick={createNewSmartView}
             />
           )}

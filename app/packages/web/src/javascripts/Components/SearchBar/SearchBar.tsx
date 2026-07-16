@@ -50,20 +50,20 @@ const SearchBar = ({ application, itemListController, searchOptionsController, h
   }, [clearFilterText])
 
   return (
-    <div className="group pb-0.5 pt-3" role="search" ref={searchBarRef}>
+    <div className="group pt-3 pb-0.5" role="search" ref={searchBarRef}>
       <DecoratedInput
         autocomplete={false}
         id={ElementIds.SearchBar}
         className={{
           container: 'px-1',
-          input: 'text-base placeholder:text-passive-0 lg:text-sm',
+          input: 'placeholder:text-passive-0 text-base lg:text-sm',
         }}
         placeholder={t('placeholder')}
         value={noteFilterText}
         ref={searchInputRef}
         onChange={onNoteFilterTextChange}
         onKeyUp={onNoteFilterKeyUp}
-        left={[<Icon type="search" className="mr-1 h-4.5 w-4.5 flex-shrink-0 text-passive-1" />]}
+        left={[<Icon type="search" className="text-passive-1 mr-1 h-4.5 w-4.5 flex-shrink-0" />]}
         right={[noteFilterText && <ClearInputButton onClick={onClearSearch} />]}
         roundedFull
       />

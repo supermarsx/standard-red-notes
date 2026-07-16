@@ -43,27 +43,27 @@ export function ImageAlignmentOptions({
   return Options.map(({ alignment, labelKey }) => {
     const label = t(labelKey)
     return (
-    <StyledTooltip label={label} key={alignment}>
-      <IconButton
-        className={classNames(
-          alignment === currentAlignment && '!bg-info text-info-contrast',
-          'rounded p-1 hover:bg-contrast',
-        )}
-        icon={`format-align-${alignment}` as IconType}
-        title={label}
-        focusable={true}
-        onClick={(e) => {
-          // the preventDefault and stopPropagation for these events are required
-          // so that the keyboard doesn't jump when you select another option
-          e.preventDefault()
-          e.stopPropagation()
-          changeAlignment(alignment as ElementFormatType)
-        }}
-        onMouseDown={(e) => {
-          e.preventDefault()
-        }}
-      />
-    </StyledTooltip>
+      <StyledTooltip label={label} key={alignment}>
+        <IconButton
+          className={classNames(
+            alignment === currentAlignment && '!bg-info text-info-contrast',
+            'hover:bg-contrast rounded p-1',
+          )}
+          icon={`format-align-${alignment}` as IconType}
+          title={label}
+          focusable={true}
+          onClick={(e) => {
+            // the preventDefault and stopPropagation for these events are required
+            // so that the keyboard doesn't jump when you select another option
+            e.preventDefault()
+            e.stopPropagation()
+            changeAlignment(alignment as ElementFormatType)
+          }}
+          onMouseDown={(e) => {
+            e.preventDefault()
+          }}
+        />
+      </StyledTooltip>
     )
   })
 }

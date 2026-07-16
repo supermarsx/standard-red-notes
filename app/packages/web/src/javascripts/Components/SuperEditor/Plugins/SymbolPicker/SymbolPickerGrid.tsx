@@ -38,14 +38,14 @@ const SymbolButton = ({ char, name, onInsert }: { char: string; name: string; on
     title={name}
     data-symbol={char}
     onClick={() => onInsert(char)}
-    className="flex h-9 w-9 items-center justify-center rounded text-lg leading-none hover:bg-contrast focus-visible:bg-contrast"
+    className="hover:bg-contrast focus-visible:bg-contrast flex h-9 w-9 items-center justify-center rounded text-lg leading-none"
   >
     {char}
   </button>
 )
 
 const CategoryCaption = ({ children }: { children: string }) => (
-  <div className="mb-1 mt-3 text-[10px] uppercase tracking-wide text-passive-1 first:mt-0">{children}</div>
+  <div className="text-passive-1 mt-3 mb-1 text-[10px] tracking-wide uppercase first:mt-0">{children}</div>
 )
 
 export default function SymbolPickerGrid({
@@ -74,7 +74,7 @@ export default function SymbolPickerGrid({
         aria-label={labels.search}
         placeholder={labels.search}
         ref={focusOnMount}
-        className="mb-2 w-full rounded border border-border bg-default px-3 py-1.5 text-base focus-visible:border-info"
+        className="border-border bg-default focus-visible:border-info mb-2 w-full rounded border px-3 py-1.5 text-base"
       />
 
       <div className="max-h-[50vh] overflow-y-auto">
@@ -106,7 +106,7 @@ export default function SymbolPickerGrid({
             </div>
           ))
         ) : (
-          <div className="py-6 text-center text-passive-1">{labels.noResults}</div>
+          <div className="text-passive-1 py-6 text-center">{labels.noResults}</div>
         )}
       </div>
     </div>

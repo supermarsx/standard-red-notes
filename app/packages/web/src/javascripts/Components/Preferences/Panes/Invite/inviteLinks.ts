@@ -51,11 +51,13 @@ export type SelfServeInviteState = {
 
 export type SelfServeFormResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+}
 
-const numberOr = (value: unknown, fallback: number): number =>
-  typeof value === 'number' && Number.isFinite(value) ? value : fallback
+const numberOr = (value: unknown, fallback: number): number => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -133,17 +135,13 @@ export const parseSelfServeInviteState = (response: HttpResponse): SelfServeInvi
     return { enabled: false, links: [], invitedCount: 0 }
   }
 
-  const links = rawLinks
-    .map(parseInviteLink)
-    .filter((link): link is SelfServeInviteLinkView => link !== undefined)
+  const links = rawLinks.map(parseInviteLink).filter((link): link is SelfServeInviteLinkView => link !== undefined)
 
   const invitesPerUser = typeof data?.invitesPerUser === 'number' ? data.invitesPerUser : undefined
   const enabled = invitesPerUser === undefined ? true : invitesPerUser > 0
 
   const invitedCount =
-    typeof data?.invitedCount === 'number'
-      ? data.invitedCount
-      : links.reduce((sum, link) => sum + link.usedCount, 0)
+    typeof data?.invitedCount === 'number' ? data.invitedCount : links.reduce((sum, link) => sum + link.usedCount, 0)
 
   return { enabled, invitesPerUser, links, invitedCount }
 }

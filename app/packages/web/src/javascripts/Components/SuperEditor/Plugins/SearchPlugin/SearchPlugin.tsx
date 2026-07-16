@@ -21,7 +21,14 @@ import Button from '../../../Button/Button'
 import { canUseCSSHiglights, SearchHighlightRenderer, SearchHighlightRendererMethods } from './SearchHighlightRenderer'
 import { useStateRef } from '../../../../Hooks/useStateRef'
 import { createPortal } from 'react-dom'
-import { $createRangeSelection, $getSelection, $nodesOfType, $setSelection, COMMAND_PRIORITY_LOW, TextNode } from 'lexical'
+import {
+  $createRangeSelection,
+  $getSelection,
+  $nodesOfType,
+  $setSelection,
+  COMMAND_PRIORITY_LOW,
+  TextNode,
+} from 'lexical'
 import {
   OPEN_SUPER_SEARCH_COMMAND,
   OPEN_SUPER_SEARCH_REPLACE_COMMAND,
@@ -464,13 +471,11 @@ export function SearchPlugin() {
               }
             }}
             title="Find — click to expand, drag to move"
-            className="flex cursor-grab items-center gap-2 rounded-full border border-border bg-default px-3 py-2 shadow-lg active:cursor-grabbing"
+            className="border-border bg-default flex cursor-grab items-center gap-2 rounded-full border px-3 py-2 shadow-lg active:cursor-grabbing"
           >
             <Icon type="search" size="medium" className="text-info" />
             {query.length > 0 && (
-              <span className="text-sm font-semibold">
-                {getMatchCounter(currentResultIndex, results.length).label}
-              </span>
+              <span className="text-sm font-semibold">{getMatchCounter(currentResultIndex, results.length).label}</span>
             )}
           </button>
         </div>
@@ -489,18 +494,18 @@ export function SearchPlugin() {
         style={containerStyle}
         className={classNames(containerClassName, 'max-w-[calc(100vw-1rem)]')}
       >
-        <div className="overflow-hidden rounded border border-border bg-default shadow-lg">
+        <div className="border-border bg-default overflow-hidden rounded border shadow-lg">
           <div
             onPointerDown={startDrag}
             onPointerMove={onDrag}
             onPointerUp={endDrag}
-            className="flex cursor-grab touch-none items-center justify-between gap-4 border-b border-border px-2 py-1 active:cursor-grabbing"
+            className="border-border flex cursor-grab touch-none items-center justify-between gap-4 border-b px-2 py-1 active:cursor-grabbing"
           >
             <span className="text-sm font-semibold">{isReplaceMode ? 'Find & Replace' : 'Find'}</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                className="flex items-center rounded p-1 hover:bg-contrast"
+                className="hover:bg-contrast flex items-center rounded p-1"
                 onClick={() => setIsMinimized(true)}
                 title="Minimize to bubble"
               >
@@ -508,25 +513,25 @@ export function SearchPlugin() {
               </button>
               <button
                 type="button"
-                className="flex items-center rounded p-1 hover:bg-contrast"
+                className="hover:bg-contrast flex items-center rounded p-1"
                 onClick={closeDialog}
                 title={`Close (${searchToggleShortcut})`}
               >
-                <CloseIcon className="h-4 w-4 fill-current text-text" />
+                <CloseIcon className="text-text h-4 w-4 fill-current" />
               </button>
             </div>
           </div>
           <div className="flex">
             {editor.isEditable() && (
               <button
-                className="focus:ring-none border-r border-border px-1 hover:bg-contrast focus:shadow-inner focus:shadow-info"
+                className="focus:ring-none border-border hover:bg-contrast focus:shadow-info border-r px-1 focus:shadow-inner"
                 onClick={toggleReplaceMode}
                 title={`Toggle Replace Mode (${toggleReplaceShortcut})`}
               >
                 {isReplaceMode ? (
-                  <ArrowDownIcon className="h-4 w-4 fill-text" />
+                  <ArrowDownIcon className="fill-text h-4 w-4" />
                 ) : (
-                  <ArrowRightIcon className="h-4 w-4 fill-text" />
+                  <ArrowRightIcon className="fill-text h-4 w-4" />
                 )}
               </button>
             )}
@@ -538,167 +543,167 @@ export function SearchPlugin() {
                 }
               }}
             >
-          <div className="flex items-center gap-2">
-            <DecoratedInput
-              placeholder="Search"
-              className={{
-                container: classNames('flex-grow !text-[length:inherit]', !query.length && '!py-1'),
-                right: '!py-1',
-              }}
-              value={query}
-              onChange={setQuery}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && results.length) {
-                  if (event.shiftKey) {
-                    goToPrevResult()
-                    return
-                  }
-                  goToNextResult()
-                }
-              }}
-              ref={focusOnMount}
-              right={[
-                <div className="min-w-[7ch] max-w-[7ch] flex-shrink-0 whitespace-nowrap text-right">
-                  {query.length > 0 && getMatchCounter(currentResultIndex, results.length).label}
-                </div>,
-              ]}
-            />
-            <label
-              className={classNames(
-                'relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-info focus-within:ring-offset-2 focus-within:ring-offset-default',
-                isCaseSensitive ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
-              )}
-              title={`Case sensitive (${caseSensitivityShortcut})`}
-            >
-              <input
-                type="checkbox"
-                className="absolute left-0 top-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
-                checked={isCaseSensitive}
-                onChange={toggleCaseSensitivity}
-              />
-              <span aria-hidden>Aa</span>
-              <span className="sr-only">Case sensitive</span>
-            </label>
-            <label
-              className={classNames(
-                'relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-info focus-within:ring-offset-2 focus-within:ring-offset-default',
-                isWholeWord ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
-              )}
-              title="Whole word"
-            >
-              <input
-                type="checkbox"
-                className="absolute left-0 top-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
-                checked={isWholeWord}
-                onChange={toggleWholeWord}
-              />
-              <span aria-hidden>ab</span>
-              <span className="sr-only">Whole word</span>
-            </label>
-            <label
-              className={classNames(
-                'relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-info focus-within:ring-offset-2 focus-within:ring-offset-default',
-                isRegex ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
-              )}
-              title="Use regular expression"
-            >
-              <input
-                type="checkbox"
-                className="absolute left-0 top-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
-                checked={isRegex}
-                onChange={toggleRegex}
-              />
-              <span aria-hidden>.*</span>
-              <span className="sr-only">Use regular expression</span>
-            </label>
-            <button
-              className="flex items-center rounded border border-border p-1.5 hover:bg-contrast disabled:cursor-not-allowed"
-              onClick={goToPrevResult}
-              disabled={results.length < 1}
-              title="Previous result (Shift + Enter)"
-            >
-              <ArrowUpIcon className="h-4 w-4 fill-current text-text" />
-            </button>
-            <button
-              className="flex items-center rounded border border-border p-1.5 hover:bg-contrast disabled:cursor-not-allowed"
-              onClick={goToNextResult}
-              disabled={results.length < 1}
-              title="Next result (Enter)"
-            >
-              <ArrowDownIcon className="h-4 w-4 fill-current text-text" />
-            </button>
-          </div>
-          {regexError && (
-            <div className="text-sm text-danger" role="alert">
-              {regexError}
-            </div>
-          )}
-          {isReplaceMode && (
-            <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
-              <input
-                type="text"
-                placeholder="Replace"
-                value={replaceQuery}
-                onChange={(e) => {
-                  setReplaceQuery(e.target.value)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && results.length) {
-                    if (event.ctrlKey && event.altKey) {
-                      replaceAllResults()
-                      event.preventDefault()
-                      return
+              <div className="flex items-center gap-2">
+                <DecoratedInput
+                  placeholder="Search"
+                  className={{
+                    container: classNames('flex-grow !text-[length:inherit]', !query.length && '!py-1'),
+                    right: '!py-1',
+                  }}
+                  value={query}
+                  onChange={setQuery}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && results.length) {
+                      if (event.shiftKey) {
+                        goToPrevResult()
+                        return
+                      }
+                      goToNextResult()
                     }
-                    replaceCurrentResult()
-                    event.preventDefault()
-                  }
-                }}
-                className="rounded border border-border bg-default p-1 px-2"
-                ref={focusOnMount}
-              />
-              <Button
-                small
-                onClick={replaceCurrentResult}
-                disabled={results.length < 1}
-                title="Replace (Ctrl + Enter)"
-              >
-                Replace
-              </Button>
-              <Button
-                small
-                onClick={replaceAllResults}
-                disabled={results.length < 1}
-                title="Replace all (Ctrl + Alt + Enter)"
-              >
-                Replace all
-              </Button>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <label className="inline-flex items-center gap-2">
-              <input
-                className="h-4 w-4 rounded accent-info"
-                type="checkbox"
-                checked={shouldHighlightAll}
-                onChange={(e) => setShouldHighlightAll(e.target.checked)}
-              />
-              <div>Highlight all results</div>
-            </label>
-            {!canUseCSSHiglights && (
-              <StyledTooltip
-                label="May lead to performance degradation, especially on large documents."
-                className="!z-modal"
-                showOnMobile
-              >
-                <button className="cursor-default">
-                  <Icon type="info" size="medium" />
+                  }}
+                  ref={focusOnMount}
+                  right={[
+                    <div className="max-w-[7ch] min-w-[7ch] flex-shrink-0 text-right whitespace-nowrap">
+                      {query.length > 0 && getMatchCounter(currentResultIndex, results.length).label}
+                    </div>,
+                  ]}
+                />
+                <label
+                  className={classNames(
+                    'focus-within:ring-info focus-within:ring-offset-default relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-offset-2',
+                    isCaseSensitive ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
+                  )}
+                  title={`Case sensitive (${caseSensitivityShortcut})`}
+                >
+                  <input
+                    type="checkbox"
+                    className="absolute top-0 left-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
+                    checked={isCaseSensitive}
+                    onChange={toggleCaseSensitivity}
+                  />
+                  <span aria-hidden>Aa</span>
+                  <span className="sr-only">Case sensitive</span>
+                </label>
+                <label
+                  className={classNames(
+                    'focus-within:ring-info focus-within:ring-offset-default relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-offset-2',
+                    isWholeWord ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
+                  )}
+                  title="Whole word"
+                >
+                  <input
+                    type="checkbox"
+                    className="absolute top-0 left-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
+                    checked={isWholeWord}
+                    onChange={toggleWholeWord}
+                  />
+                  <span aria-hidden>ab</span>
+                  <span className="sr-only">Whole word</span>
+                </label>
+                <label
+                  className={classNames(
+                    'focus-within:ring-info focus-within:ring-offset-default relative flex items-center rounded border px-1.5 py-1 focus-within:ring-2 focus-within:ring-offset-2',
+                    isRegex ? 'border-info bg-info text-info-contrast' : 'border-border hover:bg-contrast',
+                  )}
+                  title="Use regular expression"
+                >
+                  <input
+                    type="checkbox"
+                    className="absolute top-0 left-0 z-[1] m-0 h-full w-full cursor-pointer border border-transparent p-0 opacity-0 shadow-none outline-none"
+                    checked={isRegex}
+                    onChange={toggleRegex}
+                  />
+                  <span aria-hidden>.*</span>
+                  <span className="sr-only">Use regular expression</span>
+                </label>
+                <button
+                  className="border-border hover:bg-contrast flex items-center rounded border p-1.5 disabled:cursor-not-allowed"
+                  onClick={goToPrevResult}
+                  disabled={results.length < 1}
+                  title="Previous result (Shift + Enter)"
+                >
+                  <ArrowUpIcon className="text-text h-4 w-4 fill-current" />
                 </button>
-              </StyledTooltip>
-            )}
+                <button
+                  className="border-border hover:bg-contrast flex items-center rounded border p-1.5 disabled:cursor-not-allowed"
+                  onClick={goToNextResult}
+                  disabled={results.length < 1}
+                  title="Next result (Enter)"
+                >
+                  <ArrowDownIcon className="text-text h-4 w-4 fill-current" />
+                </button>
+              </div>
+              {regexError && (
+                <div className="text-danger text-sm" role="alert">
+                  {regexError}
+                </div>
+              )}
+              {isReplaceMode && (
+                <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+                  <input
+                    type="text"
+                    placeholder="Replace"
+                    value={replaceQuery}
+                    onChange={(e) => {
+                      setReplaceQuery(e.target.value)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && results.length) {
+                        if (event.ctrlKey && event.altKey) {
+                          replaceAllResults()
+                          event.preventDefault()
+                          return
+                        }
+                        replaceCurrentResult()
+                        event.preventDefault()
+                      }
+                    }}
+                    className="border-border bg-default rounded border p-1 px-2"
+                    ref={focusOnMount}
+                  />
+                  <Button
+                    small
+                    onClick={replaceCurrentResult}
+                    disabled={results.length < 1}
+                    title="Replace (Ctrl + Enter)"
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    small
+                    onClick={replaceAllResults}
+                    disabled={results.length < 1}
+                    title="Replace all (Ctrl + Alt + Enter)"
+                  >
+                    Replace all
+                  </Button>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    className="accent-info h-4 w-4 rounded"
+                    type="checkbox"
+                    checked={shouldHighlightAll}
+                    onChange={(e) => setShouldHighlightAll(e.target.checked)}
+                  />
+                  <div>Highlight all results</div>
+                </label>
+                {!canUseCSSHiglights && (
+                  <StyledTooltip
+                    label="May lead to performance degradation, especially on large documents."
+                    className="!z-modal"
+                    showOnMobile
+                  >
+                    <button className="cursor-default">
+                      <Icon type="info" size="medium" />
+                    </button>
+                  </StyledTooltip>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </div>
       </div>
       {createPortal(
         <SearchHighlightRenderer shouldHighlightAll={shouldHighlightAll} ref={highlightRendererRef} />,

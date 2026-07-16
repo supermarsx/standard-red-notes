@@ -10,7 +10,13 @@
  */
 import { DocBlock, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
-import { PAGE_TOKEN, TOTAL_TOKEN, resolveFont, type HeaderFooterStyle, type PageLayoutOptions } from './PageLayoutOptions'
+import {
+  PAGE_TOKEN,
+  TOTAL_TOKEN,
+  resolveFont,
+  type HeaderFooterStyle,
+  type PageLayoutOptions,
+} from './PageLayoutOptions'
 
 export const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
@@ -27,9 +33,7 @@ type Docx = typeof import('docx')
 type DocxParagraph = InstanceType<Docx['Paragraph']>
 type DocxTable = InstanceType<Docx['Table']>
 type DocxRunChild =
-  | InstanceType<Docx['TextRun']>
-  | InstanceType<Docx['ExternalHyperlink']>
-  | InstanceType<Docx['ImageRun']>
+  InstanceType<Docx['TextRun']> | InstanceType<Docx['ExternalHyperlink']> | InstanceType<Docx['ImageRun']>
 
 interface NumberingLevel {
   level: number
@@ -398,7 +402,11 @@ const hfRunOpts = (style: HeaderFooterStyle): Record<string, unknown> => {
  * fields (CURRENT / TOTAL_PAGES) so the live page number renders in Word. Every
  * run also carries the band's style opts (empty ⇒ unchanged baseline output).
  */
-const headerFooterTextRuns = (docx: Docx, text: string, style: HeaderFooterStyle = {}): InstanceType<Docx['TextRun']>[] => {
+const headerFooterTextRuns = (
+  docx: Docx,
+  text: string,
+  style: HeaderFooterStyle = {},
+): InstanceType<Docx['TextRun']>[] => {
   const { TextRun, PageNumber } = docx
   const opts = hfRunOpts(style)
   const runs: InstanceType<Docx['TextRun']>[] = []

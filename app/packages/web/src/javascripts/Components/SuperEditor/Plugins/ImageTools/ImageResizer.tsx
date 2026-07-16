@@ -103,7 +103,7 @@ export default function ImageResizer({ active, targetRef, onResize, onResizeEnd 
           key={corner}
           role="presentation"
           aria-label={`Resize image (${corner})`}
-          className={`absolute z-20 h-3.5 w-3.5 rounded-full border-2 border-info bg-default ${className}`}
+          className={`border-info bg-default absolute z-20 h-3.5 w-3.5 rounded-full border-2 ${className}`}
           style={{ cursor, touchAction: 'none' }}
           onPointerDown={beginDrag(corner)}
           onClick={(e) => {

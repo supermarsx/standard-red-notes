@@ -44,7 +44,7 @@ const ThemePreview: FunctionComponent<{ colors: CustomThemeColors }> = ({ colors
   const variables = useMemo(() => generateCustomThemeVariables(colors), [colors])
   return (
     <div
-      className="overflow-hidden rounded border border-border"
+      className="border-border overflow-hidden rounded border"
       style={{ background: colors.background, color: colors.foreground }}
     >
       <div className="flex items-center justify-between px-3 py-2" style={{ background: colors.contrast }}>
@@ -74,16 +74,16 @@ const ColorInput: FunctionComponent<{
   <label className="flex items-center justify-between gap-3 py-1">
     <span className="flex flex-col">
       <span className="text-sm font-medium">{field.label}</span>
-      <span className="text-xs text-passive-0">{field.hint}</span>
+      <span className="text-passive-0 text-xs">{field.hint}</span>
     </span>
     <span className="flex items-center gap-2">
-      <span className="font-mono text-xs text-passive-0">{value}</span>
+      <span className="text-passive-0 font-mono text-xs">{value}</span>
       <input
         type="color"
         aria-label={field.label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-8 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
+        className="border-border h-8 w-10 cursor-pointer rounded border bg-transparent p-0"
       />
     </span>
   </label>
@@ -106,7 +106,7 @@ const ThemeEditor: FunctionComponent<{
   const readable = hasReadableContrast(colors.foreground, colors.background)
 
   return (
-    <div className="mt-3 rounded border border-border p-3">
+    <div className="border-border mt-3 rounded border p-3">
       <label className="mb-3 flex flex-col gap-1">
         <span className="text-sm font-medium">Theme name</span>
         <input
@@ -114,7 +114,7 @@ const ThemeEditor: FunctionComponent<{
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="My custom theme"
-          className="rounded border border-border bg-default px-2 py-1.5 text-sm text-text"
+          className="border-border bg-default text-text rounded border px-2 py-1.5 text-sm"
         />
       </label>
 
@@ -132,7 +132,7 @@ const ThemeEditor: FunctionComponent<{
         <div className="mt-3 md:mt-0">
           <ThemePreview colors={colors} />
           {!readable && (
-            <SmallText className="mt-2 text-warning">
+            <SmallText className="text-warning mt-2">
               Low contrast between text and background — this may be hard to read.
             </SmallText>
           )}
@@ -204,16 +204,16 @@ const CustomThemesSection: FunctionComponent = () => {
             return (
               <div
                 key={theme.id}
-                className="flex items-center justify-between gap-2 rounded border border-border px-3 py-2"
+                className="border-border flex items-center justify-between gap-2 rounded border px-3 py-2"
               >
                 <div className="flex items-center gap-2 overflow-hidden">
                   <span
-                    className="h-5 w-5 flex-shrink-0 rounded-full border border-border"
+                    className="border-border h-5 w-5 flex-shrink-0 rounded-full border"
                     style={{ background: theme.colors.accent }}
                     aria-hidden
                   />
                   <span className="truncate text-sm font-medium">{theme.name}</span>
-                  {isSelected && <span className="text-xs font-bold text-info">Active</span>}
+                  {isSelected && <span className="text-info text-xs font-bold">Active</span>}
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-2">
                   <Button

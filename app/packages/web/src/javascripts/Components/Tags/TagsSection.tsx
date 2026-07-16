@@ -38,7 +38,7 @@ const TagsSection: FunctionComponent = () => {
                 focusable={true}
                 icon="list-bulleted"
                 title="Organize folders & tags"
-                className="p-0 text-neutral mr-2"
+                className="text-neutral mr-2 p-0"
                 onClick={() => setIsOrganizeOpen(true)}
               />
             )}
@@ -59,7 +59,7 @@ const TagsSection: FunctionComponent = () => {
                 focusable={true}
                 icon="list-bulleted"
                 title="Organize folders & tags"
-                className="p-0 text-neutral mr-2"
+                className="text-neutral mr-2 p-0"
                 onClick={() => setIsOrganizeOpen(true)}
               />
             )}

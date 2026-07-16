@@ -44,14 +44,14 @@ const LinkedItemSearchResults = ({
         return (
           <button
             key={result.uuid}
-            className="flex w-full items-center justify-between gap-4 overflow-hidden px-3 py-2 hover:bg-contrast hover:text-foreground focus:bg-info-backdrop"
+            className="hover:bg-contrast hover:text-foreground focus:bg-info-backdrop flex w-full items-center justify-between gap-4 overflow-hidden px-3 py-2"
             onClick={() => {
               void linkItems(item, result)
               onClickCallback?.()
             }}
           >
             <LinkedItemMeta item={result} searchQuery={searchQuery} />
-            {cannotLinkItem && <Icon type={PremiumFeatureIconName} className="ml-auto flex-shrink-0 text-info" />}
+            {cannotLinkItem && <Icon type={PremiumFeatureIconName} className="text-info ml-auto flex-shrink-0" />}
           </button>
         )
       })}

@@ -12,9 +12,8 @@
  * the separate collab-yjs.e2e.mjs proves the same flow over the LIVE gateway
  * with real encryption.
  */
-import { createElement, useEffect } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { act } from 'react'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
@@ -53,7 +52,11 @@ class LoopbackHub {
       const set = this.rooms.get(frame.room) ?? new Set<symbol>()
       set.add(from)
       this.rooms.set(frame.room, set)
-      for (const m of set) if (m !== from) this.handlers.get(m)?.({ t: 'room-sync', room: frame.room })
+      for (const m of set) {
+        if (m !== from) {
+          this.handlers.get(m)?.({ t: 'room-sync', room: frame.room })
+        }
+      }
       return
     }
     if (frame.t === 'room-leave') {
@@ -61,8 +64,14 @@ class LoopbackHub {
       return
     }
     const members = this.rooms.get(frame.room)
-    if (!members) return
-    for (const m of members) if (m !== from) this.handlers.get(m)?.(frame)
+    if (!members) {
+      return
+    }
+    for (const m of members) {
+      if (m !== from) {
+        this.handlers.get(m)?.(frame)
+      }
+    }
   }
 }
 
@@ -93,7 +102,15 @@ function CollabEditor(props: { hub: LoopbackHub; room: string; bootstrap: boolea
     null,
     createElement(
       LexicalComposer,
-      { initialConfig: { namespace: 'Test', editorState: null, onError: (e: Error) => { throw e } } },
+      {
+        initialConfig: {
+          namespace: 'Test',
+          editorState: null,
+          onError: (e: Error) => {
+            throw e
+          },
+        },
+      },
       createElement(PlainTextPlugin, {
         contentEditable: createElement(ContentEditable, {}),
         placeholder: null,

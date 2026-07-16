@@ -183,7 +183,7 @@ const SuperNoteConverter = ({
       className="flex flex-col !overflow-hidden"
     >
       {format === 'txt' || format === 'md' ? (
-        <div className="flex items-start border-b border-border p-4 text-sm">
+        <div className="border-border flex items-start border-b p-4 text-sm">
           <Icon type="warning" className="mr-2 flex-shrink-0" />
           Conversion from Super's format to Markdown/Plaintext can be lossy. Please review the converted note before
           saving.
@@ -202,7 +202,7 @@ const SuperNoteConverter = ({
         <div className="h-full min-h-0 overflow-hidden">
           <textarea
             readOnly={true}
-            className="font-editor h-full w-full resize-none border-0 bg-default p-4 text-editor text-text"
+            className="font-editor bg-default text-editor text-text h-full w-full resize-none border-0 p-4"
             value={convertedContent}
           />
         </div>

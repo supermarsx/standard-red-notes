@@ -1,6 +1,5 @@
 package com.standardnotes
 
-
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
@@ -11,44 +10,30 @@ import android.webkit.WebView
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
-import com.facebook.react.ReactNativeHost
-import com.facebook.react.ReactPackage
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
+import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
-import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.modules.network.OkHttpClientProvider
-import com.facebook.react.soloader.OpenSourceMergedSoMapping
-import com.facebook.soloader.SoLoader
 import com.kristiansorens.flagsecure.FlagSecure
-import java.io.IOException
 import java.lang.reflect.Field
 
 class MainApplication : Application(), ReactApplication {
-
-    override val reactNativeHost: ReactNativeHost = object : DefaultReactNativeHost(this) {
-        override fun getPackages(): List<ReactPackage> =
-            PackageList(this).packages.apply {
+    override val reactHost: ReactHost by lazy {
+        getDefaultReactHost(
+            context = applicationContext,
+            packageList = PackageList(this).packages.apply {
                 // Packages that cannot be autolinked yet can be added manually here, for example:
                 // add(MyReactNativePackage())
                 add(Fido2ApiPackage())
                 add(CustomWebViewPackage())
                 add(ReceiveSharingIntentPackage())
-            }
-
-        override fun getJSMainModuleName(): String = "index"
-
-        override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
-
-        override val isNewArchEnabled: Boolean = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
-        override val isHermesEnabled: Boolean = BuildConfig.IS_HERMES_ENABLED
+            },
+        )
     }
-
-    override val reactHost: ReactHost
-        get() = getDefaultReactHost(applicationContext, reactNativeHost)
 
     @SuppressLint("NewApi")
     override fun onCreate() {
         super.onCreate()
+        loadReactNative(this)
 
         // Enable Remote debugging for WebViews
         val packageName = applicationContext.packageName
@@ -57,16 +42,6 @@ class MainApplication : Application(), ReactApplication {
         }
 
         rebuildOkHttp()
-
-        try {
-            SoLoader.init(this, OpenSourceMergedSoMapping)
-        } catch (e: IOException) {
-            throw RuntimeException(e)
-        }
-
-        if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
-            load()
-        }
 
         try {
             // Increase CursorWindow size to avoid "Row too big" issue
@@ -85,9 +60,8 @@ class MainApplication : Application(), ReactApplication {
             override fun onActivityStarted(activity: Activity) {
                 if (FlagSecure.instance != null && FlagSecure.instance!!.enabled) {
                     activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                }
-            }
-
+    }
+}
             override fun onActivityResumed(activity: Activity) {}
 
             override fun onActivityPaused(activity: Activity) {}

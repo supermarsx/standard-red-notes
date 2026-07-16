@@ -38,7 +38,9 @@ const AccountMenuButton = ({ hasError, controller, mainApplicationGroup, onClick
             'flex h-full w-8 cursor-pointer items-center justify-center rounded-full',
           )}
         >
-          <div className={classNames('hover:text-info', hasError ? 'text-danger' : user ? 'text-info' : 'text-neutral')}>
+          <div
+            className={classNames('hover:text-info', hasError ? 'text-danger' : user ? 'text-info' : 'text-neutral')}
+          >
             <Avatar email={email} size={20} />
           </div>
         </button>

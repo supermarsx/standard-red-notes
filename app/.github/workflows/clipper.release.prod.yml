@@ -14,13 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Export version from package.json
@@ -46,7 +57,7 @@ jobs:
           yarn web-ext sign --source-dir dist --api-key $WEB_EXT_API_KEY --api-secret $WEB_EXT_API_SECRET --channel=listed --use-submission-api
           mv web-ext-artifacts/*.xpi standard-notes-clipper-$PACKAGE_VERSION.firefox.xpi
       - name: Upload
-        uses: actions/upload-artifact@v4.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: assets
           path: |
@@ -61,19 +72,30 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.0
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+      - name: Enable Corepack
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          yarn --version
+      - name: Cache Yarn
+        uses: actions/cache@v6.1.0
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Export version from package.json
         run:
           echo "PACKAGE_VERSION=$(grep '"version"' ./package.json | cut -d '"' -f 4 | cut -d "-" -f 1)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: assets
           path: packages/clipper/artifacts
@@ -84,7 +106,7 @@ jobs:
         id: release-notes
         continue-on-error: true
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3.0.2
         with:
           token: ${{ secrets.CI_PAT_TOKEN }}
           tag_name: "@standardnotes/clipper@${{ env.PACKAGE_VERSION }}"

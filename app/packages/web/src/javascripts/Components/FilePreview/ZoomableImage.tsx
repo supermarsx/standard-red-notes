@@ -242,7 +242,7 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
     <div className="relative flex h-full w-full flex-col">
       <div
         ref={viewportRef}
-        className="relative flex-grow touch-none select-none overflow-hidden bg-passive-5"
+        className="bg-passive-5 relative flex-grow touch-none overflow-hidden select-none"
         style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
         onDoubleClick={onDoubleClick}
         onPointerDown={onPointerDown}
@@ -259,7 +259,7 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
             src={objectUrl}
             alt=""
             draggable={false}
-            className="absolute left-0 top-0 max-w-none origin-top-left"
+            className="absolute top-0 left-0 max-w-none origin-top-left"
             style={{
               width: `${imageNaturalSize.current.width}px`,
               height: `${imageNaturalSize.current.height}px`,
@@ -270,10 +270,10 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
       </div>
 
       {/* Controls */}
-      <div className="pointer-events-none absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded border border-solid border-border bg-default px-2 py-1 shadow-main">
+      <div className="border-border bg-default shadow-main pointer-events-none absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded border border-solid px-2 py-1">
         <StyledTooltip label={t('zoomOut')} className="!z-modal">
           <button
-            className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+            className="hover:bg-contrast pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
             onClick={() => zoomAtCenter(1 / ZOOM_BUTTON_FACTOR)}
             disabled={transform.scale <= MIN_IMAGE_SCALE}
             aria-label={t('zoomOut')}
@@ -282,7 +282,7 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
           </button>
         </StyledTooltip>
         <button
-          className="pointer-events-auto min-w-[3.5rem] rounded px-1.5 py-1 text-center text-sm text-neutral hover:bg-contrast"
+          className="text-neutral hover:bg-contrast pointer-events-auto min-w-[3.5rem] rounded px-1.5 py-1 text-center text-sm"
           onClick={resetToActualSize}
           aria-label={t('resetToActualSize')}
           title={t('resetTo100')}
@@ -291,7 +291,7 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
         </button>
         <StyledTooltip label={t('zoomIn')} className="!z-modal">
           <button
-            className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast disabled:opacity-40"
+            className="hover:bg-contrast pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 disabled:opacity-40"
             onClick={() => zoomAtCenter(ZOOM_BUTTON_FACTOR)}
             disabled={transform.scale >= MAX_IMAGE_SCALE}
             aria-label={t('zoomIn')}
@@ -299,14 +299,14 @@ const ZoomableImage: FunctionComponent<Props> = ({ objectUrl }) => {
             <Icon type="add" className="text-neutral" />
           </button>
         </StyledTooltip>
-        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="bg-border mx-1 h-5 w-px" />
         <StyledTooltip label={t('fitToScreen')} className="!z-modal">
           <button
-            className="pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5 hover:bg-contrast"
+            className="hover:bg-contrast pointer-events-auto flex cursor-pointer rounded border-0 bg-transparent p-1.5"
             onClick={fitAndResume}
             aria-label={t('fitToScreen')}
           >
-            <Icon type="arrows-vertical" className="rotate-45 text-neutral" />
+            <Icon type="arrows-vertical" className="text-neutral rotate-45" />
           </button>
         </StyledTooltip>
       </div>

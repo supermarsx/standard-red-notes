@@ -24,7 +24,7 @@ export function BlockPickerMenuItem({
       key={option.key}
       tabIndex={-1}
       className={classNames(
-        'gap-3 border-b-[0.5px] border-border px-3 py-2',
+        'border-border gap-3 border-b-[0.5px] px-3 py-2',
         isSelected && 'bg-info-backdrop',
         PopoverItemClassNames,
       )}

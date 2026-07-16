@@ -48,17 +48,14 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
     })
   }, [])
 
-  const handleUnitChange = useCallback(
-    (unit: RunTimeUnit) => {
-      setSampling((prev) => {
-        // Re-clamp the existing value under the new unit so it stays in [1min, 200h].
-        const next = { ...prev, maxRunTimeUnit: unit, maxRunTime: clampMaxRunTime(prev.maxRunTime, unit) }
-        saveSamplingSettings(next)
-        return next
-      })
-    },
-    [],
-  )
+  const handleUnitChange = useCallback((unit: RunTimeUnit) => {
+    setSampling((prev) => {
+      // Re-clamp the existing value under the new unit so it stays in [1min, 200h].
+      const next = { ...prev, maxRunTimeUnit: unit, maxRunTime: clampMaxRunTime(prev.maxRunTime, unit) }
+      saveSamplingSettings(next)
+      return next
+    })
+  }, [])
 
   const stepsUnlimited = sampling.maxSteps <= 0
 
@@ -79,7 +76,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
           {MAX_STEPS_MAX}. <strong>0 = unlimited (not recommended)</strong>.
         </Text>
         <input
-          className="mt-2 w-28 rounded border border-border bg-default px-2 py-1.5 text-sm"
+          className="border-border bg-default mt-2 w-28 rounded border px-2 py-1.5 text-sm"
           type="number"
           min={0}
           max={MAX_STEPS_MAX}
@@ -87,7 +84,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
           onChange={(event) => updateSampling({ maxSteps: clampMaxSteps(Number(event.target.value)) })}
         />
         {stepsUnlimited && (
-          <Text className="mt-1 text-warning">
+          <Text className="text-warning mt-1">
             Unlimited steps means a run can loop indefinitely until the time limit or you stop it. Not recommended.
           </Text>
         )}
@@ -101,7 +98,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
         </Text>
         <div className="mt-2 flex items-center gap-2">
           <input
-            className="w-28 rounded border border-border bg-default px-2 py-1.5 text-sm"
+            className="border-border bg-default w-28 rounded border px-2 py-1.5 text-sm"
             type="number"
             min={sampling.maxRunTimeUnit === 'hours' ? 0 : 1}
             max={sampling.maxRunTimeUnit === 'hours' ? 200 : 200 * 60}
@@ -112,7 +109,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
             }
           />
           <select
-            className="rounded border border-border bg-default px-2 py-1.5 text-sm"
+            className="border-border bg-default rounded border px-2 py-1.5 text-sm"
             value={sampling.maxRunTimeUnit}
             onChange={(event) => handleUnitChange(event.target.value as RunTimeUnit)}
           >
@@ -125,11 +122,13 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
 
         <div className="flex items-center justify-between">
           <div className="mr-4 flex flex-col">
-            <Subtitle>Temperature: {sampling.useServerTemperature ? 'server default' : sampling.temperature.toFixed(2)}</Subtitle>
+            <Subtitle>
+              Temperature: {sampling.useServerTemperature ? 'server default' : sampling.temperature.toFixed(2)}
+            </Subtitle>
             <Text>
-              Higher values make output more random/creative; lower values make it more focused. Range {TEMPERATURE_MIN}–
-              {TEMPERATURE_MAX}. Turn on “Use server default” to omit this parameter entirely so the provider/server picks
-              its own.
+              Higher values make output more random/creative; lower values make it more focused. Range {TEMPERATURE_MIN}
+              –{TEMPERATURE_MAX}. Turn on “Use server default” to omit this parameter entirely so the provider/server
+              picks its own.
             </Text>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
@@ -155,11 +154,13 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
 
         <div className="flex items-center justify-between">
           <div className="mr-4 flex flex-col">
-            <Subtitle>Top-p (nucleus sampling): {sampling.useServerTopP ? 'server default' : sampling.topP.toFixed(2)}</Subtitle>
+            <Subtitle>
+              Top-p (nucleus sampling): {sampling.useServerTopP ? 'server default' : sampling.topP.toFixed(2)}
+            </Subtitle>
             <Text>
               Limits sampling to the most probable tokens whose cumulative probability reaches this value. Range{' '}
-              {TOP_P_MIN}–{TOP_P_MAX}. Turn on “Use server default” to omit this parameter entirely so the provider/server
-              picks its own.
+              {TOP_P_MIN}–{TOP_P_MAX}. Turn on “Use server default” to omit this parameter entirely so the
+              provider/server picks its own.
             </Text>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
