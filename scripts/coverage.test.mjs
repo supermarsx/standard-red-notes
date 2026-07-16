@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   activateWorkspacePnp,
+  buildWorkspaceCoverageArgs,
   computeCoverageMetrics,
   coverageColor,
   createZeroCoverageForSource,
@@ -24,6 +25,25 @@ import {
   validateWorkspaceInventory,
   workspaceSlug,
 } from "./coverage.mjs";
+
+test("normalizes package Jest arguments to one bounded worker count", () => {
+  const args = buildWorkspaceCoverageArgs(
+    "coverage-output",
+    "effective-config.cjs",
+    1,
+    "jest spec --coverage --no-cache --config ./jest.config.js --maxWorkers=2",
+  );
+
+  assert.deepEqual(args.slice(0, 4), ["exec", "jest", "spec", "--no-cache"]);
+  assert.deepEqual(
+    args.filter((argument) => /^(?:--maxWorkers|-w)(?:=|$)/.test(argument)),
+    ["--maxWorkers=1"],
+  );
+  assert.deepEqual(
+    args.filter((argument) => argument.startsWith("--config")),
+    ["--config=effective-config.cjs"],
+  );
+});
 
 async function temporaryRepository(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "srn-coverage-"));
@@ -644,7 +664,7 @@ test("suppresses inherited collectCoverageFrom through a unique effective config
         location: "packages/only",
         slug: "packages-only",
         directory,
-        testScript: "jest",
+        testScript: "jest --coverage --no-cache --maxWorkers=2",
         sourceFiles: [{ absolute, repositoryPath }],
       },
       outputRoot,
@@ -676,7 +696,16 @@ test("suppresses inherited collectCoverageFrom through a unique effective config
 
   assert.equal(spawned.timeoutMs, 1234);
   assert.equal(spawned.captureOutput, true);
+  assert.ok(spawned.args.includes("exec"));
+  assert.ok(spawned.args.includes("jest"));
+  assert.ok(spawned.args.includes("--no-cache"));
   assert.ok(spawned.args.includes("--coverage"));
+  assert.deepEqual(
+    spawned.args.filter((argument) =>
+      /^(?:--maxWorkers|-w)(?:=|$)/.test(argument),
+    ),
+    ["--maxWorkers=1"],
+  );
   assert.equal(
     spawned.args.some((argument) => argument.includes("collectCoverageFrom")),
     false,

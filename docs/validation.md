@@ -57,13 +57,16 @@ package-specific coverage exclusions and thresholds are cleared for this
 descriptive report. For each workspace, the collector loads its real CJS or
 JSON Jest config through a unique temporary config beside the original,
 preserves the package settings, and overrides inherited `collectCoverageFrom`
-with an empty array. The temporary config is the final `--config` argument and
-is removed after success, failure, or timeout; no spawned argument contains
-`collectCoverageFrom`. Function, async, and Promise config exports fail as
-unsupported instead of being evaluated with changed semantics. Jest therefore
-transforms and reports only files executed or imported by the existing tests,
-and any `Failed to collect coverage` diagnostic is fatal. Collection and test
-failures remain fatal.
+with an empty array. The runner validates a direct Jest package script, removes
+package-script coverage, config, and worker options, preserves non-owned options
+such as `--no-cache` and positional selectors, then invokes `yarn exec jest`
+with one authoritative `--maxWorkers=1` and the temporary config. The temporary
+config is removed after success, failure, or timeout; no spawned argument
+contains `collectCoverageFrom`. Function, async, and Promise config exports fail
+as unsupported instead of being evaluated with changed semantics. Jest
+therefore transforms and reports only files executed or imported by the
+existing tests, and any `Failed to collect coverage` diagnostic is fatal.
+Collection and test failures remain fatal.
 
 Source files missing from Jest's output are materialized as zero-covered maps
 directly from their TS, TSX, JS, or JSX text with `istanbul-lib-instrument`
@@ -122,16 +125,20 @@ yarn coverage
 `collect` enforces a hard timeout for each workspace and terminates its full
 process tree on Windows and Linux. The default is 900000 ms (15 minutes), which
 the `app-core` shard uses; the server shard also passes 900000 ms explicitly.
-The isolated `app-web` shard passes 1800000 ms (30 minutes) explicitly. A Web
-coverage run has been observed to pass in 17m44s with roughly 7.5 GB peak memory,
-so its runner must retain that timeout and enough memory headroom. Override the
-default with `--timeout-ms <milliseconds>` or
+The isolated `app-web` shard passes 1800000 ms (30 minutes) explicitly. With the
+enforced one-worker command line, the verified Web run passed in 1607.488 seconds
+(26m47.488s) with about 3.4 GB observed Jest working set. This current bounded
+result supersedes the earlier 17m44s and roughly 7.5 GB observation from the old
+worker configuration, so the runner must retain its 30-minute timeout. Override
+the default with `--timeout-ms <milliseconds>` or
 `COVERAGE_WORKSPACE_TIMEOUT_MS`; the CLI option takes precedence. Parallel
-failures are printed as an ordered workspace ledger.
+failures are printed as an ordered workspace ledger. Every collector explicitly
+limits the pool to two active Jest processes and each Jest process to
+`--maxWorkers=1`, with no more than one worker child per process.
 
 `yarn coverage` writes ignored reports and the JSON summary to `coverage/`. The
 tracked `docs/assets/coverage.svg` contains the most recently verified numeric
-baseline, currently **40.4%**. A local full run overwrites it, and CI regenerates
+baseline, currently **40.7%**. A local full run overwrites it, and CI regenerates
 it before building and publishing the Pages site.
 
 Aggregation uses `istanbul-lib-coverage`. Every source path is canonicalized to

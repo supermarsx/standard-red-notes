@@ -11,6 +11,7 @@ const COVERAGE_FILE = "coverage-final.json";
 const MANIFEST_FILE = "manifest.json";
 const METRIC_NAMES = ["statements", "branches", "functions", "lines"];
 export const DEFAULT_WORKSPACE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_JEST_WORKERS = 1;
 const PROCESS_TERMINATION_GRACE_MS = 5 * 1000;
 const EFFECTIVE_JEST_CONFIG_PREFIX = ".coverage-effective-jest-";
 const FAILED_COVERAGE_DIAGNOSTIC = "Failed to collect coverage";
@@ -848,6 +849,153 @@ function yarnCommand(args) {
   return { command: "yarn", args };
 }
 
+function tokenizePackageTestScript(testScript) {
+  const tokens = [];
+  let token = "";
+  let quote;
+  let tokenStarted = false;
+
+  for (let index = 0; index < testScript.length; index += 1) {
+    const character = testScript[index];
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      } else if (
+        quote === '"' &&
+        character === "\\" &&
+        ['"', "\\"].includes(testScript[index + 1])
+      ) {
+        index += 1;
+        token += testScript[index];
+      } else {
+        token += character;
+      }
+      tokenStarted = true;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      tokenStarted = true;
+    } else if (/\s/.test(character)) {
+      if (tokenStarted) {
+        tokens.push(token);
+        token = "";
+        tokenStarted = false;
+      }
+    } else if (
+      character === "\\" &&
+      /[\s'"\\]/.test(testScript[index + 1] ?? "")
+    ) {
+      index += 1;
+      token += testScript[index];
+      tokenStarted = true;
+    } else {
+      token += character;
+      tokenStarted = true;
+    }
+  }
+
+  if (quote) {
+    throw new Error(
+      `Unterminated quote in Jest package test script: ${testScript}`,
+    );
+  }
+  if (tokenStarted) {
+    tokens.push(token);
+  }
+  return tokens;
+}
+
+function packageJestArguments(testScript) {
+  const tokens = tokenizePackageTestScript(testScript);
+  let jestIndex = 0;
+  if (tokens[jestIndex]?.toLowerCase() === "yarn") {
+    jestIndex += 1;
+    if (["exec", "run"].includes(tokens[jestIndex]?.toLowerCase())) {
+      jestIndex += 1;
+    }
+  }
+
+  const command = path.basename(tokens[jestIndex] ?? "").toLowerCase();
+  if (!["jest", "jest.cmd", "jest.js"].includes(command)) {
+    throw new Error(
+      `Coverage collection requires a direct Jest package test script; received: ${testScript}`,
+    );
+  }
+
+  const args = tokens.slice(jestIndex + 1);
+  const shellOperators = new Set(["&", "&&", "|", "||", ";", ">", ">>", "<"]);
+  if (args.some((argument) => shellOperators.has(argument))) {
+    throw new Error(
+      `Coverage collection does not support shell operators in Jest package test scripts: ${testScript}`,
+    );
+  }
+  return args;
+}
+
+function normalizedPackageJestArguments(testScript) {
+  const args = packageJestArguments(testScript);
+  const collectorBooleanOptions = new Set([
+    "collectcoverage",
+    "coverage",
+    "nocoverage",
+    "passwithnotests",
+    "runinband",
+  ]);
+  const collectorValueOptions = new Set([
+    "config",
+    "coveragedirectory",
+    "coveragepathignorepatterns",
+    "coveragereporters",
+    "coveragethreshold",
+    "maxworkers",
+  ]);
+  const normalized = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "-w") {
+      if (args[index + 1] === undefined) {
+        throw new Error(
+          `Missing value for Jest -w in package test script: ${testScript}`,
+        );
+      }
+      index += 1;
+      continue;
+    }
+    if (/^-w(?:=)?.+/.test(argument)) {
+      continue;
+    }
+    if (!argument.startsWith("--")) {
+      normalized.push(argument);
+      continue;
+    }
+
+    const equals = argument.indexOf("=");
+    const option = (equals === -1 ? argument : argument.slice(0, equals))
+      .slice(2)
+      .replaceAll("-", "")
+      .toLowerCase();
+    if (collectorBooleanOptions.has(option)) {
+      continue;
+    }
+    if (!collectorValueOptions.has(option)) {
+      normalized.push(argument);
+      continue;
+    }
+    if (equals === -1) {
+      if (args[index + 1] === undefined) {
+        throw new Error(
+          `Missing value for Jest --${option} in package test script: ${testScript}`,
+        );
+      }
+      index += 1;
+    }
+  }
+  return normalized;
+}
+
 function packageScriptConfigArgument(testScript) {
   if (typeof testScript !== "string") {
     return undefined;
@@ -1426,17 +1574,20 @@ export async function normalizeWorkspaceReport(
 export function buildWorkspaceCoverageArgs(
   reportDirectory,
   effectiveConfigFile,
+  jestWorkers = DEFAULT_JEST_WORKERS,
+  testScript = "jest",
 ) {
   return [
-    "run",
-    "test",
+    "exec",
+    "jest",
+    ...normalizedPackageJestArguments(testScript),
     "--coverage",
     "--coverageReporters=json",
     `--coverageDirectory=${reportDirectory}`,
     "--coveragePathIgnorePatterns=\\b\\B",
     "--coverageThreshold={}",
     "--passWithNoTests",
-    "--maxWorkers=2",
+    `--maxWorkers=${jestWorkers}`,
     `--config=${effectiveConfigFile}`,
   ];
 }
@@ -1447,6 +1598,7 @@ export async function runWorkspaceCoverage(
   repository,
   {
     timeoutMs = DEFAULT_WORKSPACE_TIMEOUT_MS,
+    jestWorkers = DEFAULT_JEST_WORKERS,
     runProcess = runProcessWithTimeout,
   } = {},
 ) {
@@ -1463,6 +1615,8 @@ export async function runWorkspaceCoverage(
     const args = buildWorkspaceCoverageArgs(
       reportDirectory,
       effectiveConfigFile,
+      jestWorkers,
+      workspace.testScript,
     );
     const yarn = yarnCommand(args);
     const outcome = await runProcess({
@@ -1593,6 +1747,7 @@ export async function collectCoverage({
   workspaceRoot,
   output,
   jobs = 2,
+  jestWorkers = DEFAULT_JEST_WORKERS,
   timeoutMs = DEFAULT_WORKSPACE_TIMEOUT_MS,
   workspaceSelectors = [],
   expectedWorkspaces,
@@ -1604,6 +1759,9 @@ export async function collectCoverage({
   }
   if (!Number.isInteger(jobs) || jobs < 1) {
     throw new Error("Coverage jobs must be a positive integer");
+  }
+  if (!Number.isInteger(jestWorkers) || jestWorkers < 1) {
+    throw new Error("Coverage Jest workers must be a positive integer");
   }
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error("Coverage workspace timeout must be a positive integer");
@@ -1625,7 +1783,10 @@ export async function collectCoverage({
   await fs.rm(outputRoot, { recursive: true, force: true });
   await fs.mkdir(outputRoot, { recursive: true });
   const results = await runPool(selected, jobs, (workspace) =>
-    runWorkspaceCoverage(workspace, outputRoot, repository, { timeoutMs }),
+    runWorkspaceCoverage(workspace, outputRoot, repository, {
+      timeoutMs,
+      jestWorkers,
+    }),
   );
   assertUniqueValues(
     results.map(({ reportFile }) => fileSystemKey(reportFile)),
@@ -2405,6 +2566,11 @@ async function main(argv = process.argv.slice(2)) {
       jobs: positiveInteger(
         optionalOption(options, "--jobs") ?? "2",
         "Coverage jobs",
+      ),
+      jestWorkers: positiveInteger(
+        optionalOption(options, "--jest-workers") ??
+          String(DEFAULT_JEST_WORKERS),
+        "Coverage Jest workers",
       ),
       timeoutMs: positiveInteger(timeoutValue, "Coverage workspace timeout"),
       workspaceSelectors: options.get("--workspace") ?? [],
