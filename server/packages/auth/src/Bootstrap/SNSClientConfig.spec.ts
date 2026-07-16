@@ -11,12 +11,15 @@ import { Env } from './Env'
 import {
   buildSnsClientConfig,
   CUSTOM_SNS_CONNECTION_TIMEOUT_MS,
+  CUSTOM_SNS_REQUEST_TIMEOUT_MS,
   CUSTOM_SNS_SOCKET_TIMEOUT_MS,
 } from './LazyDomainEventPublisher'
 
 type ResolvedHandlerConfig = {
   connectionTimeout?: number
+  requestTimeout?: number
   socketTimeout?: number
+  throwOnRequestTimeout?: boolean
   httpAgentProvider: () => Promise<HttpAgent>
   httpsAgent?: HttpsAgent
 }
@@ -59,13 +62,16 @@ describe('buildSnsClientConfig', () => {
     )
 
     expect(config.endpoint).toBe('http://floci:4566')
+    expect(config.maxAttempts).toBe(1)
     expect(config.requestHandler).toBeInstanceOf(NodeHttpHandler)
 
     const handlerConfig = await resolvedHandlerConfig(config.requestHandler as NodeHttpHandler)
     const agent = await handlerConfig.httpAgentProvider()
 
     expect(handlerConfig.connectionTimeout).toBe(CUSTOM_SNS_CONNECTION_TIMEOUT_MS)
+    expect(handlerConfig.requestTimeout).toBe(CUSTOM_SNS_REQUEST_TIMEOUT_MS)
     expect(handlerConfig.socketTimeout).toBe(CUSTOM_SNS_SOCKET_TIMEOUT_MS)
+    expect(handlerConfig.throwOnRequestTimeout).toBe(true)
     expect(agent).toBeInstanceOf(HttpAgent)
     expect(agent.keepAlive).toBe(false)
   })
@@ -144,6 +150,65 @@ describe('buildSnsClientConfig', () => {
 
       expect(requests).toHaveLength(2)
       expect(sockets.size).toBe(2)
+    } finally {
+      client.destroy()
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => {
+          if (error) {
+            reject(error)
+          } else {
+            resolve()
+          }
+        }),
+      )
+    }
+  })
+
+  it('times out an incomplete response without retrying an accepted publish', async () => {
+    let requestCount = 0
+    const publishResponse = [
+      '<PublishResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/">',
+      '<PublishResult><MessageId>00000000-0000-0000-0000-000000000001</MessageId></PublishResult>',
+      '<ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000002</RequestId></ResponseMetadata>',
+      '</PublishResponse>',
+    ].join('')
+    const server: Server = createServer((request, response) => {
+      request.setEncoding('utf8')
+      request.resume()
+      request.on('end', () => {
+        requestCount += 1
+        response.writeHead(200, {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'Transfer-Encoding': 'chunked',
+        })
+        response.write(publishResponse)
+      })
+    })
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    const config = buildSnsClientConfig(
+      envWith({
+        SNS_AWS_REGION: 'us-east-1',
+        SNS_ENDPOINT: `http://127.0.0.1:${port}`,
+        SNS_ACCESS_KEY_ID: 'test',
+        SNS_SECRET_ACCESS_KEY: 'test',
+      }),
+    )
+    const requestHandler = config.requestHandler as NodeHttpHandler
+    requestHandler.updateHttpClientConfig('socketTimeout', 100)
+    const client = new SNSClient(config)
+    const publisher = new SNSDomainEventPublisher(client, 'arn:aws:sns:us-east-1:000000000000:events')
+    const event = {
+      type: 'TEST_EVENT',
+      payload: { value: true },
+      meta: { origin: 'auth' },
+    } as DomainEventInterface
+
+    try {
+      await expect(settleWithin(publisher.publish(event), 2_000)).rejects.toThrow(/aborted|timed out/i)
+      expect(requestCount).toBe(1)
     } finally {
       client.destroy()
       server.closeAllConnections()

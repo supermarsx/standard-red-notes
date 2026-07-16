@@ -613,13 +613,20 @@ export class BaseAuthController extends BaseHttpController {
 
     await this.clearLoginAttempts.execute({ email: registeredUser.email })
 
-    await this.domainEventPublisher.publish(
-      this.domainEventFactory.createUserRegisteredEvent({
+    try {
+      await this.domainEventPublisher.publish(
+        this.domainEventFactory.createUserRegisteredEvent({
+          userUuid: registeredUser.uuid,
+          email: registeredUser.email,
+          protocolVersion: registeredUser.protocolVersion as ProtocolVersion,
+        }),
+      )
+    } catch (error) {
+      this.logger.error('Failed to publish USER_REGISTERED event after registration was committed.', {
         userUuid: registeredUser.uuid,
-        email: registeredUser.email,
-        protocolVersion: registeredUser.protocolVersion as ProtocolVersion,
-      }),
-    )
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     if (registerResult.result.response === undefined) {
       return this.json(registerResult.result.legacyResponse)

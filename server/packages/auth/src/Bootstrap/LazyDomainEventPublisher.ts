@@ -8,6 +8,7 @@ import { DomainEventInterface, DomainEventPublisherInterface } from '@standardno
 import { Env } from './Env'
 
 export const CUSTOM_SNS_CONNECTION_TIMEOUT_MS = 3_000
+export const CUSTOM_SNS_REQUEST_TIMEOUT_MS = 5_000
 export const CUSTOM_SNS_SOCKET_TIMEOUT_MS = 5_000
 
 /**
@@ -57,9 +58,12 @@ export function buildSnsClientConfig(env: Env): SNSClientConfig {
     }
 
     snsConfig.endpoint = endpoint
+    snsConfig.maxAttempts = 1
     snsConfig.requestHandler = new NodeHttpHandler({
       connectionTimeout: CUSTOM_SNS_CONNECTION_TIMEOUT_MS,
+      requestTimeout: CUSTOM_SNS_REQUEST_TIMEOUT_MS,
       socketTimeout: CUSTOM_SNS_SOCKET_TIMEOUT_MS,
+      throwOnRequestTimeout: true,
       ...agent,
     })
   }
