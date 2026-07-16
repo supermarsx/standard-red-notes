@@ -19,7 +19,8 @@
   },
   "scripts": {
     "lint": "yarn workspaces foreach -A -t --verbose run lint",
-    "test": "yarn workspaces foreach -A -pt --jobs 10 --verbose run test",
+    "test": "node --test scripts/test-orchestrator.test.mjs && node scripts/test-orchestrator.mjs",
+    "test:orchestrator": "node --test scripts/test-orchestrator.test.mjs",
     "format": "prettier --write \"packages/*/{src,lib,app}/**/*.{ts,tsx,js,jsx,json,md,html,css,scss}\" \"packages/*/*.{js,ts,json,md}\"",
     "format:check": "prettier --check \"packages/*/{src,lib,app}/**/*.{ts,tsx,js,jsx,json,md,html,css,scss}\" \"packages/*/*.{js,ts,json,md}\"",
     "clean": "lerna run clean",

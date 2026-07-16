@@ -160,13 +160,14 @@ describe('SuperHistoryStore action labels', () => {
 })
 
 describe('SuperHistoryStore edge cases', () => {
-  it('a new edit after an undo discards the redo stack', () => {
+  it('a new edit after an undo discards the redo stack', async () => {
     const { store, unregister, typeLine } = makeEditorWithStore()
     typeLine('a')
     typeLine('b')
     typeLine('c')
     store.undo(2)
     expect(store.getSnapshot().redoDepth).toBeGreaterThan(0)
+    await new Promise((resolve) => setTimeout(resolve, 0))
     typeLine('divergent') // a fresh edit invalidates the redo branch
     expect(store.getSnapshot().redoDepth).toBe(0)
     unregister()

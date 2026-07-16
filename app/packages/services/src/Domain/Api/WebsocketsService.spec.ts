@@ -12,12 +12,16 @@ describe('webSocketsService', () => {
   let storageService: StorageServiceInterface
   let webSocketApiService: WebSocketApiServiceInterface
   let internalEventBus: InternalEventBusInterface
+  let services: WebSocketsService[]
 
   const createService = () => {
-    return new WebSocketsService(storageService, webSocketUrl, webSocketApiService, internalEventBus)
+    const service = new WebSocketsService(storageService, webSocketUrl, webSocketApiService, internalEventBus)
+    services.push(service)
+    return service
   }
 
   beforeEach(() => {
+    services = []
     storageService = {} as jest.Mocked<StorageServiceInterface>
     storageService.setValue = jest.fn()
 
@@ -26,6 +30,10 @@ describe('webSocketsService', () => {
 
     webSocketApiService = {} as jest.Mocked<WebSocketApiServiceInterface>
     webSocketApiService.createConnectionToken = jest.fn().mockReturnValue({ token: 'foobar' })
+  })
+
+  afterEach(() => {
+    services.forEach((service) => service.deinit())
   })
 
   describe('setWebSocketUrl()', () => {

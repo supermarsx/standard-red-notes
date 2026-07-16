@@ -185,10 +185,8 @@ describe('Header/Footer styled subsections (t59, static source assertion)', () =
   const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
 
   it('renders each band as a bordered subsection card', () => {
-    // The Page-numbers card + the Header/Footer card (emitted once in source but
-    // mapped over ['header','footer'] at runtime) both use the bordered card class.
-    const cardMatches = source.match(/rounded-md border border-border p-3/g) || []
-    expect(cardMatches.length).toBeGreaterThanOrEqual(2)
+    expect(source).toContain('className="border-border rounded-md border p-3"')
+    expect(source).toContain('className="border-border mt-3 rounded-md border p-3"')
     // The two styled bands are produced by mapping over header + footer.
     expect(source).toContain("(['header', 'footer'] as const).map")
   })

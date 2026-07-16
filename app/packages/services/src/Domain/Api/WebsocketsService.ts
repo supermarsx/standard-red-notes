@@ -227,12 +227,21 @@ export class WebSocketsService extends AbstractService<
     // socket the app just asked us to tear down (e.g. on sign-out).
     this.clearReconnectTimeout()
     this.clearStableConnectionTimeout()
+    this.clearWebSocketHeartbeat()
     this.reconnectAttempts = 0
     this.webSocket?.close(this.CLOSE_CONNECTION_CODE, 'Closing application')
   }
 
   private beginWebSocketHeartbeat(): void {
+    this.clearWebSocketHeartbeat()
     this.webSocketHeartbeatInterval = setInterval(this.websocketHeartbeat.bind(this), this.HEARTBEAT_DELAY)
+  }
+
+  private clearWebSocketHeartbeat(): void {
+    if (this.webSocketHeartbeatInterval) {
+      clearInterval(this.webSocketHeartbeatInterval)
+      this.webSocketHeartbeatInterval = undefined
+    }
   }
 
   private websocketHeartbeat(): void {
@@ -335,10 +344,7 @@ export class WebSocketsService extends AbstractService<
   }
 
   private onWebSocketClose(event: { code: number }) {
-    if (this.webSocketHeartbeatInterval) {
-      clearInterval(this.webSocketHeartbeatInterval)
-    }
-    this.webSocketHeartbeatInterval = undefined
+    this.clearWebSocketHeartbeat()
     // The socket didn't survive: cancel the pending "stable" reset so a flapping
     // server can't reset our backoff.
     this.clearStableConnectionTimeout()

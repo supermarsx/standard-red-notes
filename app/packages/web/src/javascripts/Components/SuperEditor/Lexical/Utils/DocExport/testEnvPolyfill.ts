@@ -61,7 +61,7 @@ const drain = async (body: unknown): Promise<Uint8Array[]> => {
   return [await toBytes(body)]
 }
 
-const concat = (chunks: Uint8Array[]): Uint8Array => {
+const concat = (chunks: Uint8Array[]): Uint8Array<ArrayBuffer> => {
   const total = chunks.reduce((n, c) => n + c.byteLength, 0)
   const out = new Uint8Array(total)
   let offset = 0
@@ -113,7 +113,7 @@ export const installExportTestEnv = (): void => {
     }
     async blob(): Promise<Blob> {
       const chunks = await drain(this.body)
-      return new NodeBlob(chunks)
+      return new NodeBlob([concat(chunks)])
     }
     async text(): Promise<string> {
       return new TextDecoder().decode(concat(await drain(this.body)))
