@@ -1,0 +1,5 @@
+paths:
+  app/.github/workflows/publish.yml:
+    ignore:
+      # These two legacy publishing jobs are deliberately disabled in source.
+      - 'constant expression "false" in condition'

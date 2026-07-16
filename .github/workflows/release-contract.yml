@@ -1,0 +1,51 @@
+name: Release Contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-contract.yml'
+      - '.github/workflows/srn-client.yml'
+      - '.github/workflows/srn-server.yml'
+      - '.github/workflows/srn-mcp.yml'
+      - '.github/workflows/srn-home-server.yml'
+      - '.github/workflows/srn-desktop.yml'
+      - 'app/.github/workflows/desktop.release.reuse.yml'
+      - 'app/.github/workflows/mobile.release.prod.yml'
+      - 'app/packages/mobile/android/gradle.properties'
+      - 'package.json'
+      - 'scripts/validate-release-contract.mjs'
+      - 'scripts/validate-release-contract.test.mjs'
+  pull_request:
+    paths:
+      - '.github/workflows/release-contract.yml'
+      - '.github/workflows/srn-client.yml'
+      - '.github/workflows/srn-server.yml'
+      - '.github/workflows/srn-mcp.yml'
+      - '.github/workflows/srn-home-server.yml'
+      - '.github/workflows/srn-desktop.yml'
+      - 'app/.github/workflows/desktop.release.reuse.yml'
+      - 'app/.github/workflows/mobile.release.prod.yml'
+      - 'app/packages/mobile/android/gradle.properties'
+      - 'package.json'
+      - 'scripts/validate-release-contract.mjs'
+      - 'scripts/validate-release-contract.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate release contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - name: Test validator failure cases
+        run: node --test scripts/validate-release-contract.test.mjs
+      - name: Validate release targets and artifacts
+        run: node scripts/validate-release-contract.mjs

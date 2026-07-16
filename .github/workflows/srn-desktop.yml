@@ -3,9 +3,9 @@
 # Electron apps are built on native runners (no cross-compile). Stages:
 #   version -> build (matrix) + snap -> release
 #
-# Trigger: push to `main` touching the desktop package, or manual dispatch (use
-# dispatch to ship a desktop build that picks up the latest web UI — web changes
-# do NOT auto-trigger this heavy matrix).
+# Trigger: push to `main` touching any packaged app workspace or dependency
+# manifest, or manual dispatch. The desktop embeds the web UI and its shared
+# workspace graph, so those inputs must release together with shell changes.
 #
 # Versioning: rolling semver `YY.M.<run>` (e.g. 25.6.123) injected via
 # electron-builder's extraMetadata and used as the release tag `vYY.M.<run>`.
@@ -22,7 +22,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'app/packages/desktop/**'
+      - 'app/packages/**'
+      - 'app/package.json'
+      - 'app/yarn.lock'
+      - 'app/.nvmrc'
+      - 'app/.yarnrc.yml'
+      - 'app/.yarn/releases/**'
       - '.github/workflows/srn-desktop.yml'
   workflow_dispatch:
 

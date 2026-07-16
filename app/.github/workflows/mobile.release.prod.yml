@@ -67,6 +67,33 @@ jobs:
           lane: 'android prod'
           subdirectory: 'packages/mobile'
 
+      - name: Verify universal Android release architectures
+        run: |
+          set -euo pipefail
+          apk='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
+          aab='android/app/build/outputs/bundle/prodRelease/app-prod-release.aab'
+          test -s "$apk"
+          test -s "$aab"
+
+          configured="$(sed -n 's/^reactNativeArchitectures=//p' android/gradle.properties)"
+          unzip -Z1 "$apk" > "$RUNNER_TEMP/android-apk-entries.txt"
+          unzip -Z1 "$aab" > "$RUNNER_TEMP/android-aab-entries.txt"
+
+          for arch in arm64-v8a x86_64; do
+            case ",$configured," in
+              *",$arch,"*) ;;
+              *) echo "reactNativeArchitectures is missing $arch" >&2; exit 1 ;;
+            esac
+            grep -Eq "^lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-apk-entries.txt" || {
+              echo "Universal APK is missing native $arch payloads" >&2
+              exit 1
+            }
+            grep -Eq "^base/lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-aab-entries.txt" || {
+              echo "App Bundle is missing native $arch payloads" >&2
+              exit 1
+            }
+          done
+
       - name: Generate Release Notes
         uses: ./actions/release-notes
         with:
@@ -164,4 +191,28 @@ jobs:
         with:
           lane: 'ios prod'
           subdirectory: 'packages/mobile'
+
+      - name: Verify iOS device arm64 artifact
+        run: |
+          set -euo pipefail
+          ipa="$(find . -type f -name 'StandardNotes.ipa' -print -quit)"
+          test -n "$ipa"
+          test -s "$ipa"
+
+          extract_dir="$RUNNER_TEMP/standard-notes-ios-release"
+          rm -rf "$extract_dir"
+          unzip -q "$ipa" -d "$extract_dir"
+          app_bundle="$(find "$extract_dir/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app_bundle"
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Info.plist")"
+          archs="$(lipo -archs "$app_bundle/$executable")"
+          echo "iOS device architectures: $archs"
+
+          case " $archs " in
+            *' arm64 '*) ;;
+            *) echo 'iOS device artifact is missing arm64' >&2; exit 1 ;;
+          esac
+          case " $archs " in
+            *' x86_64 '*|*' i386 '*) echo 'Simulator architecture found in iOS device artifact' >&2; exit 1 ;;
+          esac
 
