@@ -13,6 +13,7 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   ".github/workflows/srn-mcp.yml",
   ".github/workflows/srn-home-server.yml",
   ".github/workflows/srn-desktop.yml",
+  ".github/workflows/srn-mobile.yml",
   ".github/workflows/release-contract.yml",
   "app/.github/workflows/desktop.release.reuse.yml",
   "app/.github/workflows/mobile.release.prod.yml",
@@ -95,6 +96,28 @@ export function validateReleaseContract(files) {
     requireFragment(errors, rootDesktopFile, rootDesktop, fragment, description);
   }
 
+  const rootSnap = jobBlock(rootDesktop, "snap");
+  if (!rootSnap) {
+    errors.push(`${rootDesktopFile}: missing release-blocking Snap job`);
+  } else {
+    if (rootSnap.includes("continue-on-error: true")) {
+      errors.push(`${rootDesktopFile}: Snap job must block a broken desktop release`);
+    }
+    requireFragment(errors, rootDesktopFile, rootSnap, "if-no-files-found: error", "required Snap artifact upload");
+  }
+
+  const rootDesktopRelease = jobBlock(rootDesktop, "release");
+  for (const [fragment, description] of [
+    ["mapfile -d '' files", "bounded desktop checksum input collection"],
+    ['sha256sum "${files[@]}" > SHA256SUMS.txt', "strict desktop checksum generation"],
+    ["sha256sum --check SHA256SUMS.txt", "desktop checksum verification"],
+  ]) {
+    requireFragment(errors, rootDesktopFile, rootDesktopRelease, fragment, description);
+  }
+  if (/sha256sum[^\n]*\|\|\s*true/.test(rootDesktopRelease)) {
+    errors.push(`${rootDesktopFile}: desktop checksum failures must not be suppressed`);
+  }
+
   const appDesktopFile = "app/.github/workflows/desktop.release.reuse.yml";
   const appDesktop = files.get(appDesktopFile) ?? "";
   const windows = jobBlock(appDesktop, "Windows");
@@ -134,6 +157,76 @@ export function validateReleaseContract(files) {
   requireFragment(errors, appDesktopFile, publish, "Windows,", "Windows Publish dependency");
   requireFragment(errors, appDesktopFile, publish, "pattern: dist-*", "all-platform artifact fan-in");
 
+  const rootMobileFile = ".github/workflows/srn-mobile.yml";
+  const rootMobile = files.get(rootMobileFile) ?? "";
+  for (const [fragment, description] of [
+    ["- '@standardnotes/web@*'", "mobile release tag trigger"],
+    ["workflow_dispatch:", "manual mobile release trigger"],
+    ["node-version-file: app/.nvmrc", "app-relative Node version path"],
+    ["path: app/.yarn/cache", "app-relative Yarn cache path"],
+    ["hashFiles('app/yarn.lock')", "app-relative Yarn lock hash"],
+  ]) {
+    requireFragment(errors, rootMobileFile, rootMobile, fragment, description);
+  }
+
+  const rootAndroid = jobBlock(rootMobile, "android");
+  if (!rootAndroid) {
+    errors.push(`${rootMobileFile}: missing Android release job`);
+  } else {
+    for (const [fragment, description] of [
+      ["working-directory: app/packages/mobile", "Android app-relative working directory"],
+      ["bundle exec fastlane android prod", "Android production release lane"],
+      ["Verify universal Android release architectures", "Android architecture assertion step"],
+      ["for arch in arm64-v8a x86_64", "required Android native architectures"],
+      ["^lib/$arch/.+\\\\.so$", "APK native payload assertion"],
+      ["^base/lib/$arch/.+\\\\.so$", "AAB native payload assertion"],
+      ["name: srn-mobile-android", "validated Android artifact upload"],
+      ["if-no-files-found: error", "required Android artifacts"],
+    ]) {
+      requireFragment(errors, rootMobileFile, rootAndroid, fragment, description);
+    }
+  }
+
+  const rootIos = jobBlock(rootMobile, "ios");
+  if (!rootIos) {
+    errors.push(`${rootMobileFile}: missing iOS release job`);
+  } else {
+    for (const [fragment, description] of [
+      ["runs-on: macos-15", "iOS macOS runner"],
+      ["working-directory: app/packages/mobile", "iOS app-relative working directory"],
+      ["bundle exec fastlane ios prod", "iOS production release lane"],
+      ["Verify iOS device arm64 artifact", "iOS device architecture assertion step"],
+      ["lipo -archs", "iOS binary architecture inspection"],
+      ["iOS device artifact is missing arm64", "iOS arm64 requirement"],
+      ["Simulator architecture found in iOS device artifact", "iOS simulator-architecture rejection"],
+      ["name: srn-mobile-ios", "validated iOS artifact upload"],
+      ["if-no-files-found: error", "required iOS artifact"],
+    ]) {
+      requireFragment(errors, rootMobileFile, rootIos, fragment, description);
+    }
+  }
+
+  const rootMobileRelease = jobBlock(rootMobile, "release");
+  if (!rootMobileRelease) {
+    errors.push(`${rootMobileFile}: missing mobile release fan-in job`);
+  } else {
+    for (const [fragment, description] of [
+      ["needs: [version, android, ios]", "validated Android and iOS release dependencies"],
+      ["pattern: srn-mobile-*", "mobile artifact fan-in"],
+      ["standard-red-notes-android-universal-${VERSION}.apk", "Android APK release assertion"],
+      ["standard-red-notes-android-${VERSION}.aab", "Android AAB release assertion"],
+      ["standard-red-notes-ios-arm64-${VERSION}.ipa", "iOS IPA release assertion"],
+      ['sha256sum "${files[@]}" > SHA256SUMS.txt', "strict mobile checksum generation"],
+      ["sha256sum --check SHA256SUMS.txt", "mobile checksum verification"],
+      ["uses: softprops/action-gh-release@v3", "mobile GitHub release"],
+    ]) {
+      requireFragment(errors, rootMobileFile, rootMobileRelease, fragment, description);
+    }
+    if (/sha256sum[^\n]*\|\|\s*true/.test(rootMobileRelease)) {
+      errors.push(`${rootMobileFile}: mobile checksum failures must not be suppressed`);
+    }
+  }
+
   const mobileFile = "app/.github/workflows/mobile.release.prod.yml";
   const mobile = files.get(mobileFile) ?? "";
   for (const [fragment, description] of [
@@ -162,6 +255,7 @@ export function validateReleaseContract(files) {
 
   const ciFile = ".github/workflows/release-contract.yml";
   const ci = files.get(ciFile) ?? "";
+  requireFragment(errors, ciFile, ci, ".github/workflows/srn-mobile.yml", "root mobile workflow trigger path");
   requireFragment(errors, ciFile, ci, "node --test scripts/validate-release-contract.test.mjs", "validator tests");
   requireFragment(errors, ciFile, ci, "node scripts/validate-release-contract.mjs", "release-contract validation");
 
@@ -184,6 +278,7 @@ export function runReleaseContractValidation(repositoryRoot = defaultRepositoryR
 
   return {
     desktopLegs: 6,
+    mobilePlatforms: 2,
     toolTargets: TOOL_WORKFLOWS.length * TOOL_TARGETS.length,
     toolWorkflows: TOOL_WORKFLOWS.length,
   };
@@ -194,7 +289,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
     const result = runReleaseContractValidation();
     console.log(
       `Release contract valid: ${result.toolWorkflows} tools x 6 targets (${result.toolTargets}), ` +
-        `${result.desktopLegs} desktop OS/arch legs, Android arm64-v8a+x86_64, iOS device arm64.`,
+        `${result.desktopLegs} desktop OS/arch legs, ${result.mobilePlatforms} executable mobile release jobs, ` +
+        "Android arm64-v8a+x86_64, iOS device arm64.",
     );
     console.log("The architecture-independent web/shared app graph is covered by the desktop release trigger.");
   } catch (error) {

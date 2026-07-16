@@ -34,6 +34,54 @@ test("a missing app Windows release job is rejected", () => {
   assert.match(validateReleaseContract(files).join("\n"), /desktop\.release\.reuse\.yml: missing Windows job/);
 });
 
+test("a best-effort desktop Snap release is rejected", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "  snap:\n    name: snap (linux-x64)\n    needs: version\n    runs-on: ubuntu-latest\n",
+      "  snap:\n    name: snap (linux-x64)\n    needs: version\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
+    ),
+  );
+
+  assert.match(validateReleaseContract(files).join("\n"), /Snap job must block a broken desktop release/);
+});
+
+test("suppressed desktop checksum failures are rejected", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace('sha256sum "${files[@]}" > SHA256SUMS.txt', 'sha256sum "${files[@]}" > SHA256SUMS.txt || true'),
+  );
+
+  assert.match(validateReleaseContract(files).join("\n"), /desktop checksum failures must not be suppressed/);
+});
+
+test("root mobile release paths must be monorepo-relative", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replaceAll("node-version-file: app/.nvmrc", "node-version-file: .nvmrc"),
+  );
+
+  assert.match(validateReleaseContract(files).join("\n"), /missing app-relative Node version path/);
+});
+
+test("root Android architecture validation is required", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("for arch in arm64-v8a x86_64", "for arch in arm64-v8a"),
+  );
+
+  assert.match(validateReleaseContract(files).join("\n"), /missing required Android native architectures/);
+});
+
+test("root iOS release artifact upload is required", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("name: srn-mobile-ios", "name: removed-ios-artifact"),
+  );
+
+  assert.match(validateReleaseContract(files).join("\n"), /missing validated iOS artifact upload/);
+});
+
 test("missing Android release architectures are rejected", () => {
   const file = "app/packages/mobile/android/gradle.properties";
   const files = withFileChanged(file, (content) => content.replace(",x86_64", ""));

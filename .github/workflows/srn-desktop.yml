@@ -152,13 +152,11 @@ jobs:
           if-no-files-found: error
 
   # 3) SNAP — needs a separate webpack pass (IS_SNAP define) before the snap
-  # target, plus snapcraft on the runner. x64 only. Best-effort: does not block
-  # the release.
+  # target, plus snapcraft on the runner. x64 only and release-blocking.
   snap:
     name: snap (linux-x64)
     needs: version
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -198,7 +196,7 @@ jobs:
           name: srn-desktop-linux-snap
           path: app/packages/desktop/dist/*.snap
           retention-days: 2
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
   # rolling GitHub Release (non-draft, so electron-updater can read it).
@@ -219,8 +217,10 @@ jobs:
         run: |
           set -euo pipefail
           ls -la
-          sha256sum ./* > SHA256SUMS.txt || true
-          cat SHA256SUMS.txt
+          mapfile -d '' files < <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z)
+          test "${#files[@]}" -gt 0
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
