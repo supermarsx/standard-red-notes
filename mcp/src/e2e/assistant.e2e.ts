@@ -6,50 +6,64 @@
 // helpers/polyfill (loading libsodium then process.exit trips a libuv assertion
 // on Windows). Keep it dependency-free.
 
-const SERVER = process.env.STANDARD_RED_NOTES_SERVER_URL ?? 'http://localhost:3001'
+const SERVER =
+  process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3001";
 
-let failures = 0
+let failures = 0;
 function check(name: string, cond: boolean): void {
-  if (cond) console.log(`  ok   - ${name}`)
+  if (cond) console.log(`  ok   - ${name}`);
   else {
-    console.log(`  FAIL - ${name}`)
-    failures++
+    console.log(`  FAIL - ${name}`);
+    failures++;
   }
 }
 
 async function main(): Promise<void> {
   // `connection: close` so undici doesn't keep a socket alive (a lingering
   // keep-alive handle + process exit trips a libuv assertion on Node/Windows).
-  const noKeepAlive = { headers: { connection: 'close' } as Record<string, string> }
+  const noKeepAlive = {
+    headers: { connection: "close" } as Record<string, string>,
+  };
 
-  const up = await fetch(`${SERVER}/healthcheck`, noKeepAlive).then((r) => r.status === 200).catch(() => false)
+  const up = await fetch(`${SERVER}/healthcheck`, noKeepAlive)
+    .then((r) => r.status === 200)
+    .catch(() => false);
   if (!up) {
-    console.log('SKIP: server not reachable on', SERVER)
-    process.exitCode = 0
-    return
+    console.log("SKIP: server not reachable on", SERVER);
+    process.exitCode = 0;
+    return;
   }
 
   // Public config endpoint — no auth header — must NOT 401/403.
-  const cfg = await fetch(`${SERVER}/v1/assistant/config`, { method: 'GET', ...noKeepAlive })
-  await cfg.text()
-  check('GET /v1/assistant/config is reachable without auth (not 401/403)', cfg.status !== 401 && cfg.status !== 403)
-  check('GET /v1/assistant/config returns success', cfg.status === 200)
+  const cfg = await fetch(`${SERVER}/v1/assistant/config`, {
+    method: "GET",
+    ...noKeepAlive,
+  });
+  await cfg.text();
+  check(
+    "GET /v1/assistant/config is reachable without auth (not 401/403)",
+    cfg.status !== 401 && cfg.status !== 403,
+  );
+  check("GET /v1/assistant/config returns success", cfg.status === 200);
 
   // Protected stream endpoint — no auth — must be rejected.
   const stream = await fetch(`${SERVER}/v1/assistant/stream`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', connection: 'close' },
+    method: "POST",
+    headers: { "content-type": "application/json", connection: "close" },
     body: JSON.stringify({ messages: [] }),
-  })
-  await stream.text()
-  check('POST /v1/assistant/stream requires auth (401/403)', stream.status === 401 || stream.status === 403)
+  });
+  await stream.text();
+  check(
+    "POST /v1/assistant/stream requires auth (401/403)",
+    stream.status === 401 || stream.status === 403,
+  );
 
-  console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
+  console.log(failures === 0 ? "\nE2E PASSED" : `\nE2E FAILED (${failures})`);
   // Let the event loop drain and exit naturally (no abrupt process.exit).
-  process.exitCode = failures === 0 ? 0 : 1
+  process.exitCode = failures === 0 ? 0 : 1;
 }
 
 main().catch((e) => {
-  console.error('E2E ERROR:', e instanceof Error ? e.message : e)
-  process.exitCode = 1
-})
+  console.error("E2E ERROR:", e instanceof Error ? e.message : e);
+  process.exitCode = 1;
+});

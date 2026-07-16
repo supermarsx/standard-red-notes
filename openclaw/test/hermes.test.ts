@@ -23,7 +23,9 @@ const toolCalls = (evs: HermesEvent[]) =>
   evs.filter((e) => e.kind === "tool-call");
 const text = (evs: HermesEvent[]) =>
   evs
-    .filter((e): e is Extract<HermesEvent, { kind: "text" }> => e.kind === "text")
+    .filter(
+      (e): e is Extract<HermesEvent, { kind: "text" }> => e.kind === "text",
+    )
     .map((e) => e.text)
     .join("");
 
@@ -44,7 +46,7 @@ describe("HermesParser", () => {
   it("parses multiple tool_calls in one turn", () => {
     const evs = parseHermes(
       '<tool_call>{"name": "a", "arguments": {"x": 1}}</tool_call>' +
-        'some prose between' +
+        "some prose between" +
         '<tool_call>{"name": "b", "arguments": {"y": 2}}</tool_call>',
     );
     const calls = toolCalls(evs);
@@ -88,7 +90,7 @@ describe("HermesParser", () => {
 
   it("recovers gracefully from malformed JSON without throwing", () => {
     const evs = parseHermes(
-      '<tool_call>{not valid json}</tool_call>and more text',
+      "<tool_call>{not valid json}</tool_call>and more text",
     );
     expect(toolCalls(evs)).toHaveLength(0);
     // The malformed block is surfaced as text, never dropped.
@@ -97,9 +99,7 @@ describe("HermesParser", () => {
   });
 
   it("recovers an unterminated tool_call at end of stream", () => {
-    const evs = streamParse([
-      '<tool_call>{"name": "z", "arguments": {}}',
-    ]);
+    const evs = streamParse(['<tool_call>{"name": "z", "arguments": {}}']);
     const calls = toolCalls(evs);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ name: "z" });

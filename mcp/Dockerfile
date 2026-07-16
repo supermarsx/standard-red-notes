@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.25.0
 
-FROM node:22-alpine AS build
+FROM node:26.5.0-alpine3.23 AS build
 
 WORKDIR /opt/standard-red-notes
 
-RUN npm install -g corepack@latest && corepack enable
+RUN npm install -g corepack@0.35.0 && corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY mcp/package.json ./mcp/
@@ -20,7 +20,7 @@ COPY mcp/src ./mcp/src
 # globals shimmed via the esbuild banner / libsodium sumo alias).
 RUN yarn workspace @standard-red-notes/mcp build
 
-FROM node:22-alpine
+FROM node:26.5.0-alpine3.23
 
 WORKDIR /opt/standard-red-notes
 

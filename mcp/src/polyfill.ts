@@ -1,25 +1,25 @@
 // snjs and @standardnotes/sncrypto-web are built for the browser and reference
 // a few browser globals at module-load time (`self`, occasionally `window`).
 // Import this module FIRST (before any @standardnotes/* import) so those
-// globals exist when their bundles evaluate. Node 22 already provides global
+// globals exist when their bundles evaluate. Node 24 already provides global
 // `crypto` (WebCrypto), `fetch`, and `WebSocket`, so only `self`/`window` need
 // shimming for headless use.
 
-const g = globalThis as unknown as Record<string, unknown>
+const g = globalThis as unknown as Record<string, unknown>;
 
 if (g.self === undefined) {
-  g.self = globalThis
+  g.self = globalThis;
 }
 if (g.window === undefined) {
-  g.window = globalThis
+  g.window = globalThis;
 }
 // snjs probes `document.documentMode` and `navigator.userAgent` when detecting
 // WebCrypto support. A minimal stub is enough; we never touch the DOM.
 if (g.document === undefined) {
-  g.document = {}
+  g.document = {};
 }
 if (g.navigator === undefined) {
-  g.navigator = { userAgent: 'node' }
+  g.navigator = { userAgent: "node" };
 }
 
 // Cookie jar around fetch. The Standard Notes server uses COOKIE-BASED sessions
@@ -29,74 +29,86 @@ if (g.navigator === undefined) {
 // token." We capture Set-Cookie and replay Cookie on subsequent requests so the
 // headless bridge authenticates exactly like a browser.
 if (!g.__srnCookieJarInstalled) {
-  g.__srnCookieJarInstalled = true
+  g.__srnCookieJarInstalled = true;
   // Cookies are scoped PER ORIGIN (scheme://host:port). A flat jar would replay a
   // host's session cookies to every other host the process talks to (a redirect,
   // a proxy, the magic-link endpoint, or — in tests — a second account), leaking
   // the session. Keying by origin keeps each host's cookies to that host.
-  const jarByOrigin = new Map<string, Map<string, string>>()
-  const originalFetch = globalThis.fetch.bind(globalThis)
+  const jarByOrigin = new Map<string, Map<string, string>>();
+  const originalFetch = globalThis.fetch.bind(globalThis);
 
   const originOf = (input: RequestInfo | URL): string | undefined => {
     try {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      return new URL(url).origin
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      return new URL(url).origin;
     } catch {
-      return undefined
+      return undefined;
     }
-  }
+  };
 
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const origin = originOf(input)
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
-    const jar = origin ? jarByOrigin.get(origin) : undefined
-    if (jar && jar.size > 0 && !headers.has('cookie')) {
+  globalThis.fetch = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const origin = originOf(input);
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    );
+    const jar = origin ? jarByOrigin.get(origin) : undefined;
+    if (jar && jar.size > 0 && !headers.has("cookie")) {
       headers.set(
-        'cookie',
+        "cookie",
         Array.from(jar.entries())
           .map(([k, v]) => `${k}=${v}`)
-          .join('; '),
-      )
+          .join("; "),
+      );
     }
-    const response = await originalFetch(input, { ...init, headers })
+    const response = await originalFetch(input, { ...init, headers });
     const setCookies =
-      (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? []
+      (
+        response.headers as Headers & { getSetCookie?: () => string[] }
+      ).getSetCookie?.() ?? [];
     if (origin && setCookies.length > 0) {
-      let store = jarByOrigin.get(origin)
+      let store = jarByOrigin.get(origin);
       if (!store) {
-        store = new Map<string, string>()
-        jarByOrigin.set(origin, store)
+        store = new Map<string, string>();
+        jarByOrigin.set(origin, store);
       }
       for (const cookie of setCookies) {
-        const parts = cookie.split(';')
-        const pair = parts[0]
-        const eq = pair.indexOf('=')
-        if (eq <= 0) continue
-        const name = pair.slice(0, eq).trim()
-        const value = pair.slice(eq + 1).trim()
+        const parts = cookie.split(";");
+        const pair = parts[0];
+        const eq = pair.indexOf("=");
+        if (eq <= 0) continue;
+        const name = pair.slice(0, eq).trim();
+        const value = pair.slice(eq + 1).trim();
         // Honor cookie DELETION (logout / rotation) — a flat jar that only ever
         // stored name=value would keep replaying a cleared/empty session cookie
         // forever, breaking re-auth after the server rotates the session.
-        let isDeletion = value === ''
+        let isDeletion = value === "";
         for (const attr of parts.slice(1)) {
-          const a = attr.trim().toLowerCase()
-          if (a.startsWith('max-age=')) {
-            const n = Number(a.slice('max-age='.length))
-            if (!Number.isNaN(n) && n <= 0) isDeletion = true
-          } else if (a.startsWith('expires=')) {
-            const exp = Date.parse(a.slice('expires='.length))
-            if (!Number.isNaN(exp) && exp <= Date.now()) isDeletion = true
+          const a = attr.trim().toLowerCase();
+          if (a.startsWith("max-age=")) {
+            const n = Number(a.slice("max-age=".length));
+            if (!Number.isNaN(n) && n <= 0) isDeletion = true;
+          } else if (a.startsWith("expires=")) {
+            const exp = Date.parse(a.slice("expires=".length));
+            if (!Number.isNaN(exp) && exp <= Date.now()) isDeletion = true;
           }
         }
         if (isDeletion) {
-          store.delete(name)
+          store.delete(name);
         } else {
-          store.set(name, value)
+          store.set(name, value);
         }
       }
     }
-    return response
-  }
+    return response;
+  };
 }
 
-export {}
+export {};

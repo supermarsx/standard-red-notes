@@ -18,7 +18,7 @@ node dist/index.js --help
 
 Run it from inside the repo so it can auto-locate the repo root (the directory
 containing `docker-compose.yml`); or pass `--repo <path>` from anywhere.
-Requires Node 22+ and, for the docker-wrapping commands, Docker with the Compose
+Requires Node 24+ and, for the docker-wrapping commands, Docker with the Compose
 plugin on your PATH.
 
 ## Commands

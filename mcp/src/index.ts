@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import "./polyfill.js";
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -84,7 +88,10 @@ function getClient(): Promise<SnjsBackedClient> {
       // Continuously pick up collaborators' changes (shared vaults, other
       // sessions) without waiting for the next tool call.
       headless.startSyncLoop();
-      client = new SnjsBackedClient(headless, { allowWrites, baseUrl: serverUrl });
+      client = new SnjsBackedClient(headless, {
+        allowWrites,
+        baseUrl: serverUrl,
+      });
       return client;
     })().catch((error) => {
       // Don't cache a rejected init — a transient sign-in/network failure would
@@ -117,256 +124,279 @@ function buildServer(): McpServer {
   );
 
   server.registerTool(
-  "standard_red_notes_status",
-  {
-    title: "Standard Red Notes Status",
-    description: "Report MCP bridge status, server URL, and account sign-in state.",
-    inputSchema: {},
-    outputSchema: {
-      status: z.string(),
-      transport: z.string(),
-      serverUrl: z.string(),
-      writes: z.boolean(),
-      accountConfigured: z.boolean(),
-      signedIn: z.boolean(),
-      syncHealthy: z.boolean(),
-      consecutiveSyncFailures: z.number(),
-      lastSyncError: z.string().optional(),
+    "standard_red_notes_status",
+    {
+      title: "Standard Red Notes Status",
+      description:
+        "Report MCP bridge status, server URL, and account sign-in state.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.string(),
+        transport: z.string(),
+        serverUrl: z.string(),
+        writes: z.boolean(),
+        accountConfigured: z.boolean(),
+        signedIn: z.boolean(),
+        syncHealthy: z.boolean(),
+        consecutiveSyncFailures: z.number(),
+        lastSyncError: z.string().optional(),
+      },
     },
-  },
-  async () => {
-    const accountConfigured = Boolean(mcpToken || (email && password));
-    let signedIn = false;
-    try {
-      if (accountConfigured) {
-        await getClient();
-        signedIn = headless?.isSignedIn() ?? false;
+    async () => {
+      const accountConfigured = Boolean(mcpToken || (email && password));
+      let signedIn = false;
+      try {
+        if (accountConfigured) {
+          await getClient();
+          signedIn = headless?.isSignedIn() ?? false;
+        }
+      } catch {
+        signedIn = false;
       }
-    } catch {
-      signedIn = false;
-    }
-    const health = headless?.getSyncHealth() ?? { consecutiveFailures: 0 };
-    const structuredContent = {
-      status: "ready",
-      transport: transportMode,
-      serverUrl,
-      writes: allowWrites,
-      accountConfigured,
-      signedIn,
-      // A signed-in bridge whose background sync keeps failing is a "zombie":
-      // it looks fine but no data moves. Surface that explicitly.
-      syncHealthy: signedIn && health.consecutiveFailures < 3,
-      consecutiveSyncFailures: health.consecutiveFailures,
-      ...(health.lastError ? { lastSyncError: health.lastError } : {}),
-    };
-    return {
-      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
-      structuredContent,
-    };
-  },
-);
+      const health = headless?.getSyncHealth() ?? { consecutiveFailures: 0 };
+      const structuredContent = {
+        status: "ready",
+        transport: transportMode,
+        serverUrl,
+        writes: allowWrites,
+        accountConfigured,
+        signedIn,
+        // A signed-in bridge whose background sync keeps failing is a "zombie":
+        // it looks fine but no data moves. Surface that explicitly.
+        syncHealthy: signedIn && health.consecutiveFailures < 3,
+        consecutiveSyncFailures: health.consecutiveFailures,
+        ...(health.lastError ? { lastSyncError: health.lastError } : {}),
+      };
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+        ],
+        structuredContent,
+      };
+    },
+  );
 
-server.registerTool(
-  "notes.list",
-  {
-    title: "List Notes",
-    description:
-      "List recent notes (UUID, title, updatedAt), newest first. Bodies are not included.",
-    inputSchema: {
-      limit: z.number().int().positive().max(200).default(50),
-      cursor: z.string().optional(),
+  server.registerTool(
+    "notes.list",
+    {
+      title: "List Notes",
+      description:
+        "List recent notes (UUID, title, updatedAt), newest first. Bodies are not included.",
+      inputSchema: {
+        limit: z.number().int().positive().max(200).default(50),
+        cursor: z.string().optional(),
+      },
+      outputSchema: {
+        notes: z.array(
+          z.object({
+            uuid: z.string(),
+            title: z.string(),
+            updatedAt: z.string(),
+          }),
+        ),
+        cursor: z.string().optional(),
+      },
     },
-    outputSchema: {
-      notes: z.array(
-        z.object({ uuid: z.string(), title: z.string(), updatedAt: z.string() }),
-      ),
-      cursor: z.string().optional(),
+    async ({ limit, cursor }) => {
+      const result = await (await getClient()).listNotes(limit, cursor);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
     },
-  },
-  async ({ limit, cursor }) => {
-    const result = await (await getClient()).listNotes(limit, cursor);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      structuredContent: result as unknown as Record<string, unknown>,
-    };
-  },
-);
+  );
 
-server.registerTool(
-  "notes.search",
-  {
-    title: "Search Notes",
-    description: "Search notes by title or body keywords. Returns UUID, title, snippet.",
-    inputSchema: {
-      query: z.string().min(1),
-      limit: z.number().int().positive().max(50).default(10),
+  server.registerTool(
+    "notes.search",
+    {
+      title: "Search Notes",
+      description:
+        "Search notes by title or body keywords. Returns UUID, title, snippet.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().positive().max(50).default(10),
+      },
+      outputSchema: {
+        hits: z.array(
+          z.object({
+            uuid: z.string(),
+            title: z.string(),
+            snippet: z.string(),
+          }),
+        ),
+      },
     },
-    outputSchema: {
-      hits: z.array(
-        z.object({ uuid: z.string(), title: z.string(), snippet: z.string() }),
-      ),
+    async ({ query, limit }) => {
+      const result = await (await getClient()).searchNotes(query, limit);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
     },
-  },
-  async ({ query, limit }) => {
-    const result = await (await getClient()).searchNotes(query, limit);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      structuredContent: result as unknown as Record<string, unknown>,
-    };
-  },
-);
+  );
 
-server.registerTool(
-  "notes.read",
-  {
-    title: "Read Note",
-    description: "Fetch a single note by UUID: title, body, tags, timestamps.",
-    inputSchema: { uuid: z.string().uuid() },
-    outputSchema: {
-      uuid: z.string(),
-      title: z.string(),
-      body: z.string(),
-      tags: z.array(z.string()),
-      vault: z.string().optional(),
-      createdAt: z.string(),
-      updatedAt: z.string(),
+  server.registerTool(
+    "notes.read",
+    {
+      title: "Read Note",
+      description:
+        "Fetch a single note by UUID: title, body, tags, timestamps.",
+      inputSchema: { uuid: z.string().uuid() },
+      outputSchema: {
+        uuid: z.string(),
+        title: z.string(),
+        body: z.string(),
+        tags: z.array(z.string()),
+        vault: z.string().optional(),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+      },
     },
-  },
-  async ({ uuid }) => {
-    const note = await (await getClient()).readNote(uuid);
-    return {
-      content: [{ type: "text", text: JSON.stringify(note, null, 2) }],
-      structuredContent: note as unknown as Record<string, unknown>,
-    };
-  },
-);
-
-server.registerTool(
-  "notes.create",
-  {
-    title: "Create Note",
-    description:
-      "Create a new note. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
-    inputSchema: {
-      title: z.string().min(1),
-      body: z.string().default(""),
-      tags: z.array(z.string()).default([]),
-      vault: z
-        .string()
-        .optional()
-        .describe("Optional vault UUID to place the note in (use vaults.list)."),
+    async ({ uuid }) => {
+      const note = await (await getClient()).readNote(uuid);
+      return {
+        content: [{ type: "text", text: JSON.stringify(note, null, 2) }],
+        structuredContent: note as unknown as Record<string, unknown>,
+      };
     },
-    outputSchema: { uuid: z.string(), title: z.string() },
-  },
-  async ({ title, body, tags, vault }) => {
-    const created = await (await getClient()).createNote({ title, body, tags, vault });
-    return {
-      content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
-      structuredContent: created as unknown as Record<string, unknown>,
-    };
-  },
-);
+  );
 
-server.registerTool(
-  "notes.update",
-  {
-    title: "Update Note",
-    description: "Update an existing note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
-    inputSchema: {
-      uuid: z.string().uuid(),
-      title: z.string().optional(),
-      body: z.string().optional(),
-      tags: z.array(z.string()).optional(),
+  server.registerTool(
+    "notes.create",
+    {
+      title: "Create Note",
+      description:
+        "Create a new note. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+      inputSchema: {
+        title: z.string().min(1),
+        body: z.string().default(""),
+        tags: z.array(z.string()).default([]),
+        vault: z
+          .string()
+          .optional()
+          .describe(
+            "Optional vault UUID to place the note in (use vaults.list).",
+          ),
+      },
+      outputSchema: { uuid: z.string(), title: z.string() },
     },
-    outputSchema: { uuid: z.string(), updatedAt: z.string() },
-  },
-  async ({ uuid, title, body, tags }) => {
-    const updated = await (await getClient()).updateNote(uuid, { title, body, tags });
-    return {
-      content: [{ type: "text", text: JSON.stringify(updated, null, 2) }],
-      structuredContent: updated as unknown as Record<string, unknown>,
-    };
-  },
-);
-
-server.registerTool(
-  "notes.delete",
-  {
-    title: "Delete Note",
-    description: "Delete a note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
-    inputSchema: { uuid: z.string().uuid() },
-    outputSchema: { uuid: z.string(), deleted: z.boolean() },
-  },
-  async ({ uuid }) => {
-    await (await getClient()).deleteNote(uuid);
-    return {
-      content: [{ type: "text", text: JSON.stringify({ uuid, deleted: true }) }],
-      structuredContent: { uuid, deleted: true },
-    };
-  },
-);
-
-server.registerTool(
-  "tags.list",
-  {
-    title: "List Tags",
-    description: "List tags in the account.",
-    inputSchema: {},
-    outputSchema: {
-      tags: z.array(z.object({ uuid: z.string(), title: z.string() })),
+    async ({ title, body, tags, vault }) => {
+      const created = await (
+        await getClient()
+      ).createNote({ title, body, tags, vault });
+      return {
+        content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
+        structuredContent: created as unknown as Record<string, unknown>,
+      };
     },
-  },
-  async () => {
-    const tags = await (await getClient()).listTags();
-    return {
-      content: [{ type: "text", text: JSON.stringify({ tags }, null, 2) }],
-      structuredContent: { tags },
-    };
-  },
-);
+  );
 
-server.registerTool(
-  "vaults.list",
-  {
-    title: "List Vaults",
-    description:
-      "List vaults in the account (UUID, name, and whether it is a shared/collaborative vault).",
-    inputSchema: {},
-    outputSchema: {
-      vaults: z.array(
-        z.object({ uuid: z.string(), name: z.string(), shared: z.boolean() }),
-      ),
+  server.registerTool(
+    "notes.update",
+    {
+      title: "Update Note",
+      description:
+        "Update an existing note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+      inputSchema: {
+        uuid: z.string().uuid(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+      },
+      outputSchema: { uuid: z.string(), updatedAt: z.string() },
     },
-  },
-  async () => {
-    const vaults = await (await getClient()).listVaults();
-    return {
-      content: [{ type: "text", text: JSON.stringify({ vaults }, null, 2) }],
-      structuredContent: { vaults },
-    };
-  },
-);
+    async ({ uuid, title, body, tags }) => {
+      const updated = await (
+        await getClient()
+      ).updateNote(uuid, { title, body, tags });
+      return {
+        content: [{ type: "text", text: JSON.stringify(updated, null, 2) }],
+        structuredContent: updated as unknown as Record<string, unknown>,
+      };
+    },
+  );
 
-server.registerTool(
-  "vaults.create",
-  {
-    title: "Create Vault",
-    description:
-      "Create a new vault (for grouping/collaborating on notes). Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
-    inputSchema: {
-      name: z.string().min(1),
-      description: z.string().optional(),
+  server.registerTool(
+    "notes.delete",
+    {
+      title: "Delete Note",
+      description:
+        "Delete a note by UUID. Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+      inputSchema: { uuid: z.string().uuid() },
+      outputSchema: { uuid: z.string(), deleted: z.boolean() },
     },
-    outputSchema: { uuid: z.string(), name: z.string(), shared: z.boolean() },
-  },
-  async ({ name, description }) => {
-    const vault = await (await getClient()).createVault(name, description);
-    return {
-      content: [{ type: "text", text: JSON.stringify(vault, null, 2) }],
-      structuredContent: vault as unknown as Record<string, unknown>,
-    };
-  },
-);
+    async ({ uuid }) => {
+      await (await getClient()).deleteNote(uuid);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify({ uuid, deleted: true }) },
+        ],
+        structuredContent: { uuid, deleted: true },
+      };
+    },
+  );
+
+  server.registerTool(
+    "tags.list",
+    {
+      title: "List Tags",
+      description: "List tags in the account.",
+      inputSchema: {},
+      outputSchema: {
+        tags: z.array(z.object({ uuid: z.string(), title: z.string() })),
+      },
+    },
+    async () => {
+      const tags = await (await getClient()).listTags();
+      return {
+        content: [{ type: "text", text: JSON.stringify({ tags }, null, 2) }],
+        structuredContent: { tags },
+      };
+    },
+  );
+
+  server.registerTool(
+    "vaults.list",
+    {
+      title: "List Vaults",
+      description:
+        "List vaults in the account (UUID, name, and whether it is a shared/collaborative vault).",
+      inputSchema: {},
+      outputSchema: {
+        vaults: z.array(
+          z.object({ uuid: z.string(), name: z.string(), shared: z.boolean() }),
+        ),
+      },
+    },
+    async () => {
+      const vaults = await (await getClient()).listVaults();
+      return {
+        content: [{ type: "text", text: JSON.stringify({ vaults }, null, 2) }],
+        structuredContent: { vaults },
+      };
+    },
+  );
+
+  server.registerTool(
+    "vaults.create",
+    {
+      title: "Create Vault",
+      description:
+        "Create a new vault (for grouping/collaborating on notes). Requires STANDARD_RED_NOTES_ALLOW_WRITES=1.",
+      inputSchema: {
+        name: z.string().min(1),
+        description: z.string().optional(),
+      },
+      outputSchema: { uuid: z.string(), name: z.string(), shared: z.boolean() },
+    },
+    async ({ name, description }) => {
+      const vault = await (await getClient()).createVault(name, description);
+      return {
+        content: [{ type: "text", text: JSON.stringify(vault, null, 2) }],
+        structuredContent: vault as unknown as Record<string, unknown>,
+      };
+    },
+  );
 
   return server;
 }
@@ -429,7 +459,9 @@ async function startHttp(): Promise<void> {
     process.exit(1);
   }
   if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
-    console.error(`[mcp] FATAL: invalid MCP_HTTP_PORT: ${process.env.MCP_HTTP_PORT}`);
+    console.error(
+      `[mcp] FATAL: invalid MCP_HTTP_PORT: ${process.env.MCP_HTTP_PORT}`,
+    );
     process.exit(1);
   }
 
@@ -489,12 +521,18 @@ async function handleHttpRequest(
 
   // Auth gate FIRST, before any MCP/session processing.
   if (!isAuthorized(req)) {
-    sendJsonError(res, 401, -32001, "Unauthorized: missing or invalid bearer token");
+    sendJsonError(
+      res,
+      401,
+      -32001,
+      "Unauthorized: missing or invalid bearer token",
+    );
     return;
   }
 
   const sessionId = req.headers["mcp-session-id"];
-  const existing = typeof sessionId === "string" ? transports.get(sessionId) : undefined;
+  const existing =
+    typeof sessionId === "string" ? transports.get(sessionId) : undefined;
 
   if (existing) {
     await existing.handleRequest(req, res);

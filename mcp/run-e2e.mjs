@@ -35,7 +35,7 @@ if (snjsDistOverride) {
 const commonBuild = {
   bundle: true,
   platform: 'node',
-  target: 'node22',
+  target: 'node24',
   format: 'cjs',
   legalComments: 'none',
   plugins: snjsOverridePlugin,

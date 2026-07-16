@@ -25,7 +25,7 @@ node dist/index.cjs --help
 Run it anywhere with `node /path/to/cli/srn-client/dist/index.cjs <command>`, or
 `npm link` / add `dist/index.cjs` (the `bin`) to your PATH as `srn-client`.
 
-Requires Node 22+.
+Requires Node 24+.
 
 ## Commands
 

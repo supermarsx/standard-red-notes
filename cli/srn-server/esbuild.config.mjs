@@ -11,7 +11,7 @@ await build({
   outfile: fileURLToPath(new URL('./dist/index.cjs', import.meta.url)),
   bundle: true,
   platform: 'node',
-  target: 'node22',
+  target: 'node24',
   format: 'cjs',
   sourcemap: false,
   legalComments: 'none',

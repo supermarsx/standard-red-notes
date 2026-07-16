@@ -4,14 +4,17 @@
   "private": true,
   "description": "Standard Red Notes monorepo for the app, server, and MCP bridge.",
   "license": "AGPL-3.0-only",
-  "packageManager": "yarn@4.15.0",
+  "packageManager": "yarn@4.17.1",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=26.0.0"
   },
   "workspaces": [
     "mcp",
     "openclaw"
   ],
+  "resolutions": {
+    "uuid": "11.1.1"
+  },
   "scripts": {
     "build": "yarn build:mcp && yarn build:openclaw && yarn build:app && yarn build:server",
     "build:app": "cd app && yarn build:all",
@@ -25,9 +28,14 @@
     "coverage:collect:app-web": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-web --jobs 2 --timeout-ms 1800000 --workspace packages/web",
     "coverage:collect:server": "node scripts/coverage.mjs collect --workspace-root server --output coverage/raw/server --jobs 2 --timeout-ms 900000",
     "coverage:report": "node scripts/coverage.mjs report --input coverage/raw --expect app --expect server --output docs/assets/coverage.svg --summary coverage/summary.json",
-    "deps:audit": "yarn deps:audit:app && yarn deps:audit:server",
-    "deps:audit:app": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd app",
-    "deps:audit:server": "npx npm-check-updates@22.2.1 --workspaces --root --format group --target latest --cwd server",
+    "deps:audit": "yarn deps:audit:owned && yarn deps:audit:app && yarn deps:audit:server",
+    "deps:audit:app": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest --cwd app",
+    "deps:audit:cli-client": "npx npm-check-updates@22.2.9 --packageFile cli/srn-client/package.json --format group --target latest",
+    "deps:audit:cli-server": "npx npm-check-updates@22.2.9 --packageFile cli/srn-server/package.json --format group --target latest",
+    "deps:audit:e2e": "npx npm-check-updates@22.2.9 --packageFile e2e/package.json --format group --target latest",
+    "deps:audit:owned": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest && yarn deps:audit:cli-client && yarn deps:audit:cli-server && yarn deps:audit:e2e",
+    "deps:audit:server": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest --cwd server",
+    "deps:security:owned": "yarn npm audit --all --recursive",
     "docker:config": "docker compose config",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build",
@@ -62,9 +70,9 @@
     "typecheck:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck"
   },
   "devDependencies": {
-    "istanbul-lib-coverage": "^3.2.0",
+    "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-instrument": "^6.0.3",
-    "npm-check-updates": "^22.2.1",
-    "turbo": "^2.9.16"
+    "npm-check-updates": "^22.2.9",
+    "turbo": "^2.10.5"
   }
 }

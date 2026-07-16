@@ -100,7 +100,10 @@ export class HermesParser {
     const json = stripFence(raw).trim();
     if (!json) return [];
     try {
-      const parsed = JSON.parse(json) as { name?: unknown; arguments?: unknown };
+      const parsed = JSON.parse(json) as {
+        name?: unknown;
+        arguments?: unknown;
+      };
       if (parsed && typeof parsed.name === "string") {
         return [
           {

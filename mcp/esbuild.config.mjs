@@ -22,7 +22,7 @@ await build({
   outfile,
   bundle: true,
   platform: 'node',
-  target: 'node22',
+  target: 'node24',
   format: 'cjs',
   sourcemap: false,
   legalComments: 'none',
